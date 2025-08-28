@@ -102,7 +102,7 @@ class Shelly:
                             continue
 
                         powers = powermeter.get_powermeter_watts()
-
+                        logger.debug(f"Powers: {powers}")
                         if request.get("method") == "EM.GetStatus":
                             response = self._create_em_response(request["id"], powers)
                         elif request.get("method") == "EM1.GetStatus":
