@@ -178,6 +178,7 @@ class CT002:
         self._values_lock = threading.Lock()
         self._last_response_time = {}
         self._smoothed_target = None
+        self._last_smooth_sample = None
 
     def _consumer_key(self, addr, fields):
         battery_mac = fields[1] if len(fields) > 1 else ""
@@ -274,21 +275,30 @@ class CT002:
             return values
         raw_total = sum(parse_int(v, 0) for v in values)
         alpha = self.smooth_target_alpha
+
+        # Apply smoothing only once per meter sample.  Multiple consumers
+        # call this method with the same grid reading; the sample ID
+        # (tuple of values) prevents compounding the update.
+        sample_id = tuple(values)
         if self._smoothed_target is None:
             self._smoothed_target = raw_total
-        elif self.deadband > 0 and abs(raw_total) < self.deadband:
-            # Within deadband: decay toward zero to avoid locking in stale
-            # targets (the battery's integral controller would otherwise
-            # keep integrating a non-zero smoothed value even though the
-            # grid is balanced).
-            self._smoothed_target *= 1 - alpha
-        else:
-            # When meter and smoothed cross zero, catch up faster to avoid
-            # sending wrong-sign target (e.g. 0 when we need discharge)
-            catchup_alpha = alpha
-            if (raw_total > 0) != (self._smoothed_target > 0):
-                catchup_alpha = min(0.5, alpha * 4)
-            delta = catchup_alpha * (raw_total - self._smoothed_target)
+            self._last_smooth_sample = sample_id
+        elif sample_id != self._last_smooth_sample:
+            self._last_smooth_sample = sample_id
+            if self.deadband > 0 and abs(raw_total) < self.deadband:
+                # Within deadband: decay toward zero to avoid locking in
+                # stale targets (the battery's integral controller would
+                # otherwise keep integrating a non-zero smoothed value
+                # even though the grid is balanced).
+                delta = -alpha * self._smoothed_target
+            else:
+                # When meter and smoothed cross zero, catch up faster to
+                # avoid sending wrong-sign target (e.g. 0 when we need
+                # discharge)
+                catchup_alpha = alpha
+                if (raw_total > 0) != (self._smoothed_target > 0):
+                    catchup_alpha = min(0.5, alpha * 4)
+                delta = catchup_alpha * (raw_total - self._smoothed_target)
             if self.max_smooth_step > 0:
                 delta = max(
                     -self.max_smooth_step,

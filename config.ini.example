@@ -63,8 +63,10 @@ THROTTLE_INTERVAL = 0
 ## Cap on the per-cycle balance correction (W). Limits how fast a single
 ## battery's target can deviate from its fair share.
 #MAX_CORRECTION_PER_STEP = 80
-## When imbalance exceeds this (W), the balance gain is amplified by up
-## to (1 + ERROR_BOOST_MAX * gain). Helps large imbalances converge faster.
+## When imbalance exceeds ERROR_BOOST_THRESHOLD (W), the balance gain is
+## multiplied by up to (1 + ERROR_BOOST_MAX). For example with the defaults
+## (gain=0.2, threshold=150, max=0.5): at 150 W imbalance the effective gain
+## is 0.2 * 1.5 = 0.3; below the threshold gain stays at 0.2.
 #ERROR_BOOST_THRESHOLD = 150
 #ERROR_BOOST_MAX = 0.5
 ## Below this imbalance (W), the gain is scaled down proportionally for

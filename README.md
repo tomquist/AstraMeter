@@ -202,8 +202,9 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **MAX_CORRECTION_PER_STEP** (default 80 W) — Cap on the per-cycle balance correction.
   Limits how much a single battery's target can deviate from its fair share in one step.
 - **ERROR_BOOST_THRESHOLD** / **ERROR_BOOST_MAX** (defaults 150 W / 0.5) — When the
-  imbalance exceeds the threshold, the balance gain is amplified (up to 1 + ERROR_BOOST_MAX ×
-  gain). Helps large imbalances converge faster.
+  imbalance exceeds the threshold, the balance gain is multiplied by up to
+  (1 + ERROR_BOOST_MAX). With the defaults, effective gain rises from 0.2 to at most 0.3
+  at ≥ 150 W imbalance. Helps large imbalances converge faster.
 - **ERROR_REDUCE_THRESHOLD** (default 20 W) — Below this imbalance, the gain is scaled
   down proportionally, producing gentler corrections as batteries approach equilibrium.
 - **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
