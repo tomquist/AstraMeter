@@ -34,7 +34,7 @@ class SimulationConfig:
     ct_mac: str = "112233445566"
     ct_host: str = "127.0.0.1"
     ct_port: int = 12345
-    http_host: str = "0.0.0.0"
+    http_host: str = "127.0.0.1"
     http_port: int = 8080
     base_load: list[float] = field(default_factory=lambda: [100.0, 100.0, 100.0])
     base_noise: float = 20.0
@@ -138,7 +138,9 @@ class SimulationRunner:
     @staticmethod
     def from_config_file(path: str | Path) -> SimulationRunner:
         data = json.loads(Path(path).read_text())
-        return SimulationRunner(parse_config(data))
+        cfg = parse_config(data)
+        validate_config(cfg)
+        return SimulationRunner(cfg)
 
 
 def parse_config(data: dict) -> SimulationConfig:
@@ -202,6 +204,10 @@ def validate_config(cfg: SimulationConfig) -> None:
         if mac in seen_macs:
             raise ValueError(f"Duplicate battery MAC: {bc.mac}")
         seen_macs.add(mac)
+
+    for ld in cfg.loads:
+        if ld.phase not in ("A", "B", "C"):
+            raise ValueError(f"Load {ld.name!r}: invalid phase {ld.phase!r}")
 
     for phase in cfg.solar_phases:
         if phase not in ("A", "B", "C"):

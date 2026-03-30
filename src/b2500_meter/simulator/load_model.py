@@ -61,8 +61,9 @@ class LoadModel:
     def toggle_load(self, index: int) -> None:
         """Toggle load at *1-based* index (matching TUI key bindings)."""
         idx = index - 1
-        if 0 <= idx < len(self.loads):
-            self.loads[idx].active = not self.loads[idx].active
+        if not (0 <= idx < len(self.loads)):
+            raise IndexError(f"Load index out of range: {index}")
+        self.loads[idx].active = not self.loads[idx].active
 
     def set_solar(self, watts: float) -> None:
         self.solar_power = max(0.0, min(watts, self.solar_max))

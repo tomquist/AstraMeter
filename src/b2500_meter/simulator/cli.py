@@ -199,10 +199,16 @@ def cmd_solar(args: argparse.Namespace) -> None:
 def cmd_battery(args: argparse.Namespace) -> None:
     port = args.http_port or DEFAULT_HTTP_PORT
     if args.action == "soc":
+        if len(args.params) != 1:
+            print("Usage: b2500-sim battery <mac> soc <value>")
+            sys.exit(1)
         result = _http_post(
             port, f"/batteries/{args.mac}/soc", {"soc": float(args.params[0])}
         )
     elif args.action == "max-power":
+        if len(args.params) != 2:
+            print("Usage: b2500-sim battery <mac> max-power <charge> <discharge>")
+            sys.exit(1)
         result = _http_post(
             port,
             f"/batteries/{args.mac}/max_power",
@@ -224,6 +230,8 @@ def cmd_auto(args: argparse.Namespace) -> None:
 def cmd_config(args: argparse.Namespace) -> None:
     port = args.http_port or DEFAULT_HTTP_PORT
     ct_port = args.ct_port or 12345
+    phases = getattr(args, "phases", 3) or 3
+    json_paths = "$.phase_a" if phases == 1 else "$.phase_a,$.phase_b,$.phase_c"
     print(f"""\
 [GENERAL]
 DEVICE_TYPE = ct002
@@ -234,7 +242,7 @@ ACTIVE_CONTROL = True
 
 [JSON_HTTP]
 URL = http://localhost:{port}/power
-JSON_PATHS = $.phase_a,$.phase_b,$.phase_c""")
+JSON_PATHS = {json_paths}""")
 
 
 # -- TUI -------------------------------------------------------------------
@@ -354,6 +362,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cfg = sub.add_parser("config", help="Output b2500-meter config.ini snippet")
     p_cfg.add_argument("--http-port", type=int)
     p_cfg.add_argument("--ct-port", type=int)
+    p_cfg.add_argument("--phases", type=int, choices=[1, 3], default=3)
 
     return parser
 

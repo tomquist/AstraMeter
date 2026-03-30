@@ -29,7 +29,7 @@ class PowermeterSimulator:
         self,
         batteries: list[BatterySimulator],
         load_model: LoadModel,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         port: int = 8080,
     ) -> None:
         self.batteries = batteries
@@ -82,7 +82,10 @@ class PowermeterSimulator:
             index = int(request.match_info["index"])
         except (ValueError, KeyError):
             return web.json_response({"error": "invalid index"}, status=400)
-        self.load_model.toggle_load(index)
+        try:
+            self.load_model.toggle_load(index)
+        except IndexError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         return web.json_response(self._build_status())
 
     async def _handle_set_solar(self, request: web.Request) -> web.Response:
@@ -118,10 +121,19 @@ class PowermeterSimulator:
         if battery is None:
             return web.json_response({"error": "battery not found"}, status=404)
         body = await request.json()
-        if "charge" in body:
-            battery.max_charge_power = int(body["charge"])
-        if "discharge" in body:
-            battery.max_discharge_power = int(body["discharge"])
+        try:
+            charge = int(body["charge"]) if "charge" in body else None
+            discharge = int(body["discharge"]) if "discharge" in body else None
+        except (ValueError, TypeError):
+            return web.json_response({"error": "invalid max power"}, status=400)
+        if (charge is not None and charge < 0) or (
+            discharge is not None and discharge < 0
+        ):
+            return web.json_response({"error": "max power must be >= 0"}, status=400)
+        if charge is not None:
+            battery.max_charge_power = charge
+        if discharge is not None:
+            battery.max_discharge_power = discharge
         return web.json_response(self._build_status())
 
     async def _handle_set_auto(self, request: web.Request) -> web.Response:

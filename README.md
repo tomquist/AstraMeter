@@ -749,8 +749,10 @@ ACTIVE_CONTROL = True
 
 [JSON_HTTP]
 URL = http://localhost:8080/power
-JSON_PATHS = $.phase_a,$.phase_b,$.phase_c
+JSON_PATHS = $.phase_a
 ```
+
+For three-phase setups, use `JSON_PATHS = $.phase_a,$.phase_b,$.phase_c`.
 
 ### Multi-Battery 3-Phase Setup
 

@@ -68,7 +68,7 @@ class SimulatorApp(App):
         Binding("6", "toggle_load(6)", "Load 6", show=False),
         Binding("7", "toggle_load(7)", "Load 7", show=False),
         Binding("8", "toggle_load(8)", "Load 8", show=False),
-        Binding("9", "toggle_load(9)", "Load 9", show=False),
+        Binding("9", "set_soc(1)", "SOC 100%", show=False),
         Binding("up", "solar_adjust(100)", "Solar +100W", show=False),
         Binding("down", "solar_adjust(-100)", "Solar -100W", show=False),
         Binding("s", "solar_max", "Solar Max"),
@@ -94,6 +94,7 @@ class SimulatorApp(App):
         self._selected_battery: int = 0
         self._status: dict = {}
         self._auto_task: asyncio.Task | None = None
+        self._bg_task: asyncio.Task | None = None
         self._grid_history: deque[float] = deque(maxlen=_GRAPH_HISTORY)
         self.title = "b2500-sim"
 
@@ -144,23 +145,25 @@ class SimulatorApp(App):
 
     async def _sse_listener(self) -> None:
         """Connect to daemon SSE endpoint and update status."""
-        import urllib.request
+        import aiohttp
 
         url = f"http://localhost:{self._daemon_port}/events"
         try:
-            resp = urllib.request.urlopen(url, timeout=30)
-            buffer = ""
-            while True:
-                chunk = resp.read(1).decode("utf-8", errors="replace")
-                if not chunk:
-                    break
-                buffer += chunk
-                while "\n\n" in buffer:
-                    event, buffer = buffer.split("\n\n", 1)
-                    for line in event.split("\n"):
-                        if line.startswith("data: "):
-                            with contextlib.suppress(json.JSONDecodeError):
-                                self._status = json.loads(line[6:])
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=None, sock_read=60)
+                ) as resp,
+            ):
+                buffer = ""
+                async for chunk_bytes in resp.content.iter_any():
+                    buffer += chunk_bytes.decode("utf-8", errors="replace")
+                    while "\n\n" in buffer:
+                        event, buffer = buffer.split("\n\n", 1)
+                        for line in event.split("\n"):
+                            if line.startswith("data: "):
+                                with contextlib.suppress(json.JSONDecodeError):
+                                    self._status = json.loads(line[6:])
         except Exception as exc:
             logger.error("SSE connection lost: %s", exc)
 
@@ -290,7 +293,8 @@ class SimulatorApp(App):
 
     def action_toggle_load(self, index: int) -> None:
         if self._runner:
-            self._runner.load_model.toggle_load(index)
+            with contextlib.suppress(IndexError):
+                self._runner.load_model.toggle_load(index)
         elif self._daemon_port:
             self._post(f"/loads/{index}/toggle")
 
@@ -360,7 +364,11 @@ class SimulatorApp(App):
             lm = self._runner.load_model
             lm.auto_mode = not lm.auto_mode
             if lm.auto_mode:
-                self._auto_task = asyncio.ensure_future(self._runner._auto_loop())
+                if self._auto_task is None or self._auto_task.done():
+                    self._auto_task = asyncio.ensure_future(self._runner._auto_loop())
+            elif self._auto_task is not None and not self._auto_task.done():
+                self._auto_task.cancel()
+                self._auto_task = None
         elif self._daemon_port:
             current = self._status.get("auto_mode", False)
             self._post("/auto", {"enabled": not current})
@@ -381,15 +389,22 @@ class SimulatorApp(App):
     def _post(self, path: str, body: dict | None = None) -> None:
         """Fire-and-forget HTTP POST to daemon (runs in background)."""
         if self._daemon_port:
-            import urllib.request
+            self._bg_task = asyncio.create_task(self._async_post(path, body))
 
-            url = f"http://localhost:{self._daemon_port}{path}"
-            data = json.dumps(body or {}).encode()
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with contextlib.suppress(Exception):
-                urllib.request.urlopen(req, timeout=2)
+    async def _async_post(self, path: str, body: dict | None = None) -> None:
+        """Non-blocking HTTP POST to daemon."""
+        import aiohttp
+
+        url = f"http://localhost:{self._daemon_port}{path}"
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    url,
+                    json=body or {},
+                    timeout=aiohttp.ClientTimeout(total=2),
+                ) as resp,
+            ):
+                await resp.read()
+        except Exception:
+            pass
