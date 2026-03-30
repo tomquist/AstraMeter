@@ -77,9 +77,7 @@ class PowermeterSimulator:
         try:
             return await request.json()
         except (json.JSONDecodeError, Exception):
-            return web.json_response(
-                {"error": "invalid or missing JSON"}, status=400
-            )
+            return web.json_response({"error": "invalid or missing JSON"}, status=400)
 
     # -- handlers ----------------------------------------------------------
 
