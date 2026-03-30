@@ -47,6 +47,7 @@ class SimulatorApp(App):
     #grid-graph {
         height: 12;
         margin: 0 1;
+        can-focus: false;
     }
     .section-title {
         text-style: bold;

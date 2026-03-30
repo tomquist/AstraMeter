@@ -1,6 +1,7 @@
 # Changelog
 
 ## Next
+- Fixed simulator TUI arrow keys being captured by the plot widget instead of controlling SOC/Solar
 - Reduced CT002 active-steering oscillation with multiple batteries by decaying the smoothed target toward zero inside the deadband (instead of holding stale values) and raising the default `SMOOTH_TARGET_ALPHA` from 0.08 to 0.9
 - Added support for emulating a *CT002/CT003*, which is recommended to steer multiple devices
 - Added HomeWizard P1 powermeter support via the device WebSocket API with token and serial configuration ([#231](https://github.com/tomquist/b2500-meter/pull/231)), including optional `VERIFY_SSL` to disable TLS certificate verification on trusted networks when needed ([#254](https://github.com/tomquist/b2500-meter/pull/254))
