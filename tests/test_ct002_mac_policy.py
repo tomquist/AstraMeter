@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from b2500_meter.ct002.ct002 import CT002, build_payload
 
 
@@ -6,19 +8,28 @@ def make_request(ct_mac):
     return build_payload(fields)
 
 
-def test_ct002_accepts_any_when_no_mac():
+async def test_ct002_accepts_any_when_no_mac():
     device = CT002(ct_mac="")
-    response = device._handle_request(make_request("DEADBEEF0001"), ("1.1.1.1", 12345))
-    assert response is not None
+    transport = MagicMock()
+    await device._handle_request(
+        make_request("DEADBEEF0001"), ("1.1.1.1", 12345), transport
+    )
+    transport.sendto.assert_called_once()
 
 
-def test_ct002_configured_mac_rejects_mismatch():
+async def test_ct002_configured_mac_rejects_mismatch():
     device = CT002(ct_mac="AABBCCDDEEFF")
-    response = device._handle_request(make_request("DEADBEEF0001"), ("1.1.1.1", 12345))
-    assert response is None
+    transport = MagicMock()
+    await device._handle_request(
+        make_request("DEADBEEF0001"), ("1.1.1.1", 12345), transport
+    )
+    transport.sendto.assert_not_called()
 
 
-def test_ct002_configured_mac_accepts_match():
+async def test_ct002_configured_mac_accepts_match():
     device = CT002(ct_mac="AABBCCDDEEFF")
-    response = device._handle_request(make_request("AABBCCDDEEFF"), ("1.1.1.1", 12345))
-    assert response is not None
+    transport = MagicMock()
+    await device._handle_request(
+        make_request("AABBCCDDEEFF"), ("1.1.1.1", 12345), transport
+    )
+    transport.sendto.assert_called_once()

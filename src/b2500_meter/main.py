@@ -1,14 +1,13 @@
 import argparse
+import asyncio
 import configparser
 import os
-import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 
 from b2500_meter.config.config_loader import ClientFilter, read_all_powermeter_configs
 from b2500_meter.config.logger import logger, setLogLevel
 from b2500_meter.ct002 import CT002, UDP_PORT
-from b2500_meter.health_service import start_health_service, stop_health_service
+from b2500_meter.health_service import HealthCheckService
 from b2500_meter.marstek_api import (
     MarstekApiError,
     MarstekConfig,
@@ -28,7 +27,7 @@ def get_ct_section(device_type: str, cfg: configparser.ConfigParser) -> str:
     return section
 
 
-def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
+async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
     """Test powermeter configuration with minimal retry logic for edge cases."""
     max_retries = 3
     retry_delay = 5  # seconds
@@ -38,10 +37,8 @@ def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
             logger.debug(
                 f"Testing powermeter configuration... (attempt {attempt + 1}/{max_retries + 1})"
             )
-            powermeter.wait_for_message(
-                timeout=30
-            )  # Reduced timeout since HA should be ready
-            value = powermeter.get_powermeter_watts()
+            await powermeter.wait_for_message_async(timeout=30)
+            value = await powermeter.get_powermeter_watts_async()
             value_with_units = " | ".join([f"{v}W" for v in value])
             powermeter_name = powermeter.__class__.__name__
             filter_description = ", ".join([str(n) for n in client_filter.netmasks])
@@ -54,7 +51,7 @@ def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
 
             if attempt < max_retries:
                 logger.info(f"Retrying powermeter test in {retry_delay} seconds...")
-                time.sleep(retry_delay)
+                await asyncio.sleep(retry_delay)
                 continue
             else:
                 # Last attempt failed
@@ -64,7 +61,7 @@ def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
                 exit(1)
 
 
-def run_device(
+async def run_device(
     device_type: str,
     cfg: configparser.ConfigParser,
     args: argparse.Namespace,
@@ -166,7 +163,7 @@ def run_device(
             min_target_for_saturation=min_target_for_saturation,
         )
 
-        def update_readings(addr, _fields=None, _consumer_id=None):
+        async def update_readings(addr, _fields=None, _consumer_id=None):
             powermeter = None
             for pm, client_filter in powermeters:
                 if client_filter.matches(addr[0]):
@@ -175,7 +172,7 @@ def run_device(
             if powermeter is None:
                 logger.debug(f"No powermeter found for client {addr[0]}")
                 return None
-            values = powermeter.get_powermeter_watts()
+            values = await powermeter.get_powermeter_watts_async()
             value1 = values[0] if len(values) > 0 else 0
             value2 = values[1] if len(values) > 1 else 0
             value3 = values[2] if len(values) > 2 else 0
@@ -207,11 +204,61 @@ def run_device(
     else:
         raise ValueError(f"Unsupported device type: {device_type}")
 
+    await device.start()
     try:
-        device.start()
-        device.join()
+        await device.wait()
     finally:
-        device.stop()
+        await device.stop()
+
+
+async def async_main(
+    cfg: configparser.ConfigParser,
+    args: argparse.Namespace,
+    device_types: list[str],
+    device_ids: list[str],
+    skip_test: bool,
+):
+    # Start health check server
+    health = None
+    if cfg.getboolean("GENERAL", "ENABLE_HEALTH_CHECK", fallback=True):
+        logger.info("Starting health check service...")
+        health = HealthCheckService()
+        if await health.start():
+            logger.info("Health check service started successfully")
+        else:
+            logger.error("Failed to start health check service")
+            health = None
+
+    # Create powermeters
+    powermeters = read_all_powermeter_configs(cfg)
+
+    # Start powermeter lifecycle
+    for pm, _ in powermeters:
+        await pm.start()
+
+    if not skip_test:
+        for powermeter, client_filter in powermeters:
+            await test_powermeter(powermeter, client_filter)
+
+    try:
+        if not device_types:
+            logger.warning("No runnable device types configured after filtering.")
+            return
+
+        await asyncio.gather(
+            *(
+                run_device(device_type, cfg, args, powermeters, device_id)
+                for device_type, device_id in zip(
+                    device_types, device_ids, strict=False
+                )
+            )
+        )
+    finally:
+        for pm, _ in powermeters:
+            await pm.stop()
+        if health:
+            logger.info("Stopping health check service...")
+            await asyncio.wait_for(health.stop(), timeout=5.0)
 
 
 def main():
@@ -329,15 +376,7 @@ def main():
             cfg.add_section("GENERAL")
         cfg.set("GENERAL", "THROTTLE_INTERVAL", str(args.throttle_interval))
 
-    # Start health check server for watchdog monitoring
-    if cfg.getboolean("GENERAL", "ENABLE_HEALTH_CHECK", fallback=True):
-        logger.info("Starting health check service...")
-        if start_health_service():
-            logger.info("Health check service started successfully")
-        else:
-            logger.error("Failed to start health check service")
-
-    # Optional Marstek cloud registration for managed fake CT devices
+    # Optional Marstek cloud registration for managed fake CT devices (sync, before event loop)
     marstek_enabled = cfg.getboolean("MARSTEK", "ENABLE", fallback=False)
     if marstek_enabled:
         mailbox = cfg.get("MARSTEK", "MAILBOX", fallback="")
@@ -388,40 +427,7 @@ def main():
             except Exception as exc:
                 logger.error("Unexpected Marstek auto-registration error: %s", exc)
 
-    runtime_device_types = list(device_types)
-    runtime_device_ids = list(device_ids)
-
-    # Create powermeter
-    powermeters = read_all_powermeter_configs(cfg)
-    if not skip_test:
-        for powermeter, client_filter in powermeters:
-            test_powermeter(powermeter, client_filter)
-
-    # Run devices in parallel
-    try:
-        if not runtime_device_types:
-            logger.warning("No runnable device types configured after filtering.")
-            return
-
-        with ThreadPoolExecutor(max_workers=len(runtime_device_types)) as executor:
-            futures = []
-            for device_type, device_id in zip(
-                runtime_device_types, runtime_device_ids, strict=False
-            ):
-                futures.append(
-                    executor.submit(
-                        run_device, device_type, cfg, args, powermeters, device_id
-                    )
-                )
-            # end for
-
-            # Wait for all devices to complete
-            for future in futures:
-                future.result()
-    finally:
-        # Ensure health service is properly stopped on exit
-        logger.info("Stopping health check service...")
-        stop_health_service()
+    asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
 
 
 # end main

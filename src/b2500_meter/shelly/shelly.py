@@ -1,14 +1,29 @@
+import asyncio
+import contextlib
 import json
-import socket
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from b2500_meter.config import ClientFilter
 from b2500_meter.config.logger import logger
 from b2500_meter.powermeter import Powermeter
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
+
+
+class _ShellyProtocol(asyncio.DatagramProtocol):
+    def __init__(self, shelly: "Shelly"):
+        self.shelly = shelly
+        self._tasks: set[asyncio.Task] = set()
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        task = asyncio.create_task(
+            self.shelly._safe_handle_request(self.transport, data, addr)
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
 
 class Shelly:
@@ -21,14 +36,12 @@ class Shelly:
         self._udp_port = udp_port
         self._device_id = device_id
         self._powermeters = powermeters
-        self._udp_thread: threading.Thread | None = None
-        self._stop = False
-        self._value_mutex = threading.Lock()
-        self._executor = ThreadPoolExecutor(max_workers=5)
-        self._send_lock = threading.Lock()
-        self._battery_state_lock = threading.Lock()
+        self._transport = None
+        self._protocol = None
         self._battery_last_seen: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
+        self._stopped = asyncio.Event()
+        self._inactive_check_task = None
 
     def _calculate_derived_values(self, power):
         decimal_point_enforcer = 0.001
@@ -89,12 +102,11 @@ class Shelly:
         battery_ip = addr[0]
         now = time.time()
 
-        with self._battery_state_lock:
-            first_seen = battery_ip not in self._battery_last_seen
-            was_inactive = battery_ip in self._inactive_batteries
-            self._battery_last_seen[battery_ip] = now
-            if was_inactive:
-                self._inactive_batteries.remove(battery_ip)
+        first_seen = battery_ip not in self._battery_last_seen
+        was_inactive = battery_ip in self._inactive_batteries
+        self._battery_last_seen[battery_ip] = now
+        if was_inactive:
+            self._inactive_batteries.remove(battery_ip)
 
         if first_seen:
             logger.info(
@@ -113,14 +125,13 @@ class Shelly:
         now = time.time()
         newly_inactive_batteries = []
 
-        with self._battery_state_lock:
-            for battery_ip, last_seen in self._battery_last_seen.items():
-                if (
-                    now - last_seen >= BATTERY_INACTIVE_TIMEOUT_SECONDS
-                    and battery_ip not in self._inactive_batteries
-                ):
-                    self._inactive_batteries.add(battery_ip)
-                    newly_inactive_batteries.append(battery_ip)
+        for battery_ip, last_seen in self._battery_last_seen.items():
+            if (
+                now - last_seen >= BATTERY_INACTIVE_TIMEOUT_SECONDS
+                and battery_ip not in self._inactive_batteries
+            ):
+                self._inactive_batteries.add(battery_ip)
+                newly_inactive_batteries.append(battery_ip)
 
         for battery_ip in newly_inactive_batteries:
             logger.info(
@@ -130,7 +141,13 @@ class Shelly:
                 battery_ip,
             )
 
-    def _handle_request(self, sock, data, addr):
+    async def _safe_handle_request(self, transport, data, addr):
+        try:
+            await self._handle_request(transport, data, addr)
+        except Exception:
+            logger.exception("Error handling Shelly request from %s", addr)
+
+    async def _handle_request(self, transport, data, addr):
         request_str = data.decode()
         self._track_battery_seen(addr)
         logger.debug(f"Received UDP message: {request_str}")
@@ -149,7 +166,7 @@ class Shelly:
                     logger.warning(f"No powermeter found for client {addr[0]}")
                     return
 
-                powers = powermeter.get_powermeter_watts()
+                powers = await powermeter.get_powermeter_watts_async()
 
                 if request.get("method") == "EM.GetStatus":
                     response = self._create_em_response(request["id"], powers)
@@ -161,47 +178,42 @@ class Shelly:
                 response_json = json.dumps(response, separators=(",", ":"))
                 logger.debug(f"Sending response: {response_json}")
                 response_data = response_json.encode()
-                with self._send_lock:
-                    sock.sendto(response_data, addr)
+                transport.sendto(response_data, addr)
         except json.JSONDecodeError:
             logger.error("Error: Invalid JSON")
         except Exception as e:
             logger.error(f"Error processing message: {e}")
 
-    def udp_server(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(1.0)
-        sock.bind(("", self._udp_port))
+    async def _inactive_check_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                self._log_inactive_batteries()
+        except asyncio.CancelledError:
+            pass
+
+    async def start(self):
+        loop = asyncio.get_running_loop()
+        transport, protocol = await loop.create_datagram_endpoint(
+            lambda: _ShellyProtocol(self),
+            local_addr=("0.0.0.0", self._udp_port),
+        )
+        self._transport = transport
+        self._protocol = protocol
+        self._stopped.clear()
+        self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
         logger.info(f"Shelly emulator listening on UDP port {self._udp_port}...")
 
-        try:
-            while not self._stop:
-                try:
-                    data, addr = sock.recvfrom(1024)
-                except TimeoutError:
-                    self._log_inactive_batteries()
-                    continue
+    async def wait(self):
+        await self._stopped.wait()
 
-                self._executor.submit(self._handle_request, sock, data, addr)
-                self._log_inactive_batteries()
-
-        finally:
-            sock.close()
-
-    def start(self):
-        if self._udp_thread:
-            return
-        self._stop = False
-        self._udp_thread = threading.Thread(target=self.udp_server)
-        self._udp_thread.start()
-
-    def join(self):
-        if self._udp_thread:
-            self._udp_thread.join()
-
-    def stop(self):
-        self._stop = True
-        if self._udp_thread:
-            self._udp_thread.join()
-            self._udp_thread = None
-        self._executor.shutdown(wait=True)
+    async def stop(self):
+        if self._inactive_check_task:
+            self._inactive_check_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._inactive_check_task
+            self._inactive_check_task = None
+        if self._transport:
+            self._transport.close()
+            self._transport = None
+        self._stopped.set()
