@@ -130,7 +130,7 @@ class CT002:
         consumer_ttl=120,
         debug_status=False,
         active_control=True,
-        smooth_target_alpha=0.3,
+        smooth_target_alpha=0.5,
         max_smooth_step=0,
         fair_distribution=True,
         balance_gain=0.2,
