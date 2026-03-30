@@ -88,7 +88,7 @@ def run_device(
             debug_status = True
         active_control = cfg.getboolean(ct_section, "ACTIVE_CONTROL", fallback=True)
         smooth_target_alpha = cfg.getfloat(
-            ct_section, "SMOOTH_TARGET_ALPHA", fallback=0.5
+            ct_section, "SMOOTH_TARGET_ALPHA", fallback=0.8
         )
         max_smooth_step = cfg.getint(ct_section, "MAX_SMOOTH_STEP", fallback=0)
         fair_distribution = cfg.getboolean(

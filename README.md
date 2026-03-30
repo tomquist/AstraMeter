@@ -178,7 +178,7 @@ Per-powermeter options (e.g. in `[TASMOTA]`):
 CT002/CT003 options:
 - **ACTIVE_CONTROL** — When true (default), emulator computes per-consumer targets from meter data.
   When false, emulator relays consumer aggregates (batteries decide their own charge/discharge).
-- **SMOOTH_TARGET_ALPHA** — EMA alpha for target smoothing (0.1–0.8 typical; default 0.5; lower = smoother but slower)
+- **SMOOTH_TARGET_ALPHA** — EMA alpha for target smoothing (0.3–1.0 typical; default 0.8; lower = smoother but slower)
 - **FAIR_DISTRIBUTION** — Balance load across consumers (default: true)
 - **BALANCE_GAIN** — Correction strength for fair distribution (0.3 typical)
 - **ERROR_BOOST_THRESHOLD** / **ERROR_BOOST_MAX** — Faster correction when offset is large
