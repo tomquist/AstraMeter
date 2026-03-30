@@ -31,17 +31,56 @@ THROTTLE_INTERVAL = 0
 #CONSUMER_TTL = 120
 ## Log concise status (phase consumption + consumer charge/discharge) on each request when enabled
 #DEBUG_STATUS = False
-## Active control: smooth raw grid reading and split target across consumers (reduces oscillation). Default: True
+## --- Active control ---
+## When True (default), the emulator smooths the grid reading, splits the target
+## across batteries, and balances their load. When False, raw meter values are
+## relayed and batteries decide on their own.
 #ACTIVE_CONTROL = True
-## EMA alpha for target smoothing (0.3-1.0 typical; default 0.9; lower = smoother but slower)
-## Reduce toward 0.3 if your powermeter updates significantly slower than 1 Hz
+
+## --- Smoothing ---
+## EMA alpha for the grid reading (0.0-1.0). Higher = tracks load changes faster;
+## lower = filters noise but adds lag that can cause overshoot with multiple batteries.
+## The battery's own ramp rate already filters noise, so 0.9 works well when the
+## powermeter updates at >= 1 Hz. Reduce toward 0.3 for slower powermeters.
 #SMOOTH_TARGET_ALPHA = 0.9
-## Max change to smoothed target per step (W); 0 disables
-#MAX_SMOOTH_STEP = 0
-## Balance deadband (W): skip fair-distribution correction when consumer imbalance below this
-#BALANCE_DEADBAND = 15
-## Deadband (W): no target change when |meter| below this; reduces oscillation near zero
+## When |grid total| is within this band (W), the smoothed target decays toward zero
+## instead of chasing noise. Keeps batteries from hunting around the zero-crossing.
+## 10-30 W is sensible; 0 disables.
 #DEADBAND = 20
+## Maximum watts the smoothed target may change per cycle. Acts as a slew-rate limit.
+## 0 disables (default). Rarely needed at high alpha.
+#MAX_SMOOTH_STEP = 0
+
+## --- Fair distribution (multi-battery balancing) ---
+## Adjust each battery's target so they share the load evenly.
+## Only matters with 2+ batteries.
+#FAIR_DISTRIBUTION = True
+## How aggressively to correct imbalance between batteries.
+## 0 = no correction (equal split only); 0.3-0.5 = faster rebalancing.
+#BALANCE_GAIN = 0.2
+## Ignore imbalance smaller than this (W). Prevents micro-corrections.
+#BALANCE_DEADBAND = 15
+## Cap on the per-cycle balance correction (W). Limits how fast a single
+## battery's target can deviate from its fair share.
+#MAX_CORRECTION_PER_STEP = 80
+## When imbalance exceeds this (W), the balance gain is amplified by up
+## to (1 + ERROR_BOOST_MAX * gain). Helps large imbalances converge faster.
+#ERROR_BOOST_THRESHOLD = 150
+#ERROR_BOOST_MAX = 0.5
+## Below this imbalance (W), the gain is scaled down proportionally for
+## gentler corrections as batteries approach equilibrium.
+#ERROR_REDUCE_THRESHOLD = 20
+## Hard clamp on target change relative to current battery output (W). 0 disables.
+#MAX_TARGET_STEP = 0
+
+## --- Saturation detection (full/empty battery handling) ---
+## Track how well each battery follows its target. When a battery can't deliver
+## (full or empty), its share is reduced and redistributed to others.
+#SATURATION_DETECTION = True
+## EMA factor for the saturation score. Lower = slower to declare saturated.
+#SATURATION_ALPHA = 0.15
+## Ignore saturation tracking when target is below this (W).
+#MIN_TARGET_FOR_SATURATION = 20
 
 #[MARSTEK]
 ## Optional: auto-register managed fake CT devices in Marstek cloud on startup.

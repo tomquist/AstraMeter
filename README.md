@@ -175,15 +175,48 @@ THROTTLE_INTERVAL = 0
 Per-powermeter options (e.g. in `[TASMOTA]`):
 - **THROTTLE_INTERVAL** — Override global throttling for this powermeter
 
-CT002/CT003 options:
-- **ACTIVE_CONTROL** — When true (default), emulator computes per-consumer targets from meter data.
-  When false, emulator relays consumer aggregates (batteries decide their own charge/discharge).
-- **SMOOTH_TARGET_ALPHA** — EMA alpha for target smoothing (0.3–1.0 typical; default 0.9; lower = smoother but slower; reduce toward 0.3 if your powermeter updates slower than 1 Hz)
-- **FAIR_DISTRIBUTION** — Balance load across consumers (default: true)
-- **BALANCE_GAIN** — Correction strength for fair distribution (0.3 typical)
-- **ERROR_BOOST_THRESHOLD** / **ERROR_BOOST_MAX** — Faster correction when offset is large
-- **ERROR_REDUCE_THRESHOLD** — Smaller corrections when offset is small (avoids oscillation)
-- **SATURATION_DETECTION** — Reduce share for full/empty batteries (default: true)
+CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
+- **ACTIVE_CONTROL** — When true (default), the emulator smooths the grid reading, splits
+  the target across batteries, and balances their load.
+  When false, the emulator relays raw meter values and batteries decide on their own.
+
+*Smoothing — how fast the emulator tracks grid changes:*
+- **SMOOTH_TARGET_ALPHA** (default 0.9) — EMA factor for the grid reading. Higher values
+  track load changes faster; lower values filter noise but add lag. The battery's own ramp
+  rate already filters noise, so values close to 1.0 work well when the powermeter updates
+  at ≥ 1 Hz. Reduce toward 0.3 if your powermeter updates significantly slower than 1 Hz
+  (higher lag in readings needs heavier smoothing to avoid oscillation).
+- **DEADBAND** (default 20 W) — When the grid total is within ± this value, the smoothed
+  target decays toward zero instead of chasing noise. Keeps batteries from hunting around
+  the zero-crossing. 10–30 W is a sensible range; set to 0 to disable.
+- **MAX_SMOOTH_STEP** (default 0 = unlimited) — Maximum watts the smoothed target may
+  change per request cycle. Acts as a slew-rate limit. Rarely needed at high alpha.
+
+*Fair distribution — balancing load across multiple batteries:*
+- **FAIR_DISTRIBUTION** (default true) — Adjust each battery's target so they share the
+  load evenly. Only matters with two or more batteries.
+- **BALANCE_GAIN** (default 0.2) — How aggressively to correct imbalance between batteries.
+  0.0 = no correction (equal split only); 0.3–0.5 = faster rebalancing but may overshoot.
+- **BALANCE_DEADBAND** (default 15 W) — Ignore imbalance smaller than this.
+  Prevents micro-corrections when batteries are already close.
+- **MAX_CORRECTION_PER_STEP** (default 80 W) — Cap on the per-cycle balance correction.
+  Limits how much a single battery's target can deviate from its fair share in one step.
+- **ERROR_BOOST_THRESHOLD** / **ERROR_BOOST_MAX** (defaults 150 W / 0.5) — When the
+  imbalance exceeds the threshold, the balance gain is amplified (up to 1 + ERROR_BOOST_MAX ×
+  gain). Helps large imbalances converge faster.
+- **ERROR_REDUCE_THRESHOLD** (default 20 W) — Below this imbalance, the gain is scaled
+  down proportionally, producing gentler corrections as batteries approach equilibrium.
+- **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
+  relative to its current output. A hard clamp on per-cycle change.
+
+*Saturation detection — handling full/empty batteries:*
+- **SATURATION_DETECTION** (default true) — Track how well each battery follows its
+  target. When a battery cannot deliver (full or empty), its share is reduced and
+  redistributed to others.
+- **SATURATION_ALPHA** (default 0.15) — EMA factor for the saturation score.
+  Lower = slower to declare a battery saturated (and slower to recover).
+- **MIN_TARGET_FOR_SATURATION** (default 20 W) — Ignore saturation tracking when
+  the target is below this value (avoids false positives at low power).
 
 ### CT002 / CT003
 
