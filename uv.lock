@@ -191,7 +191,6 @@ dev = [
     { name = "ruff" },
 ]
 sim = [
-    { name = "aiohttp" },
     { name = "textual" },
     { name = "textual-plot" },
 ]
@@ -199,7 +198,6 @@ sim = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "aiohttp", marker = "extra == 'sim'", specifier = ">=3.9.0" },
     { name = "jsonpath-ng" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
     { name = "paho-mqtt" },

@@ -31,10 +31,9 @@ class HealthCheckService:
 
     async def start(self):
         app = web.Application()
-        app.router.add_get("/health", self._handle_get)
-        app.router.add_get("/api", self._handle_get)
-        app.router.add_head("/health", self._handle_head)
-        app.router.add_head("/api", self._handle_head)
+        for path in ("/health", "/health/", "/api", "/api/"):
+            app.router.add_get(path, self._handle_get)
+            app.router.add_head(path, self._handle_head)
         # Catch-all for unknown paths
         app.router.add_route("*", "/{path:.*}", self._handle_not_found)
 

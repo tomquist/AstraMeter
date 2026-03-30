@@ -30,7 +30,6 @@ dev = [
     "mypy>=1.13.0",
 ]
 sim = [
-    "aiohttp>=3.9.0",
     "textual>=1.0.0",
     "textual-plot>=0.10.1",
 ]

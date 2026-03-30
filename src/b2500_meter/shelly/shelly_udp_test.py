@@ -62,8 +62,7 @@ async def test_multiple_requests_with_throttling():
 
 class _ClientProtocol(asyncio.DatagramProtocol):
     def __init__(self):
-        self._loop = asyncio.get_event_loop()
-        self.received: asyncio.Future = self._loop.create_future()
+        self.received: asyncio.Future = asyncio.get_running_loop().create_future()
 
     def datagram_received(self, data, addr):
         if not self.received.done():

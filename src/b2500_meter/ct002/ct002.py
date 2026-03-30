@@ -192,10 +192,9 @@ class CT002:
         self._smoothed_target = None
         self._last_smooth_sample = None
         self._transport = None
-        self._protocol = None
+        self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
         self._stopped = asyncio.Event()
-        self._request_lock = asyncio.Lock()
 
     def _consumer_key(self, addr, fields):
         battery_mac = fields[1] if len(fields) > 1 else ""
@@ -532,97 +531,96 @@ class CT002:
             logger.exception("Error handling CT002 request from %s", addr)
 
     async def _handle_request(self, data, addr, transport):
-        async with self._request_lock:
-            logger.debug("CT002 request from %s: %s", addr, data.hex())
-            fields, error = parse_request(data)
-            if error:
-                logger.debug("Invalid CT002 request from %s: %s", addr, error)
-                return
-            if len(fields) < 4:
-                logger.debug("CT002 request from %s missing required fields", addr)
-                return
-            if not self._validate_ct_mac(fields):
-                logger.debug(
-                    "Ignoring CT002 request from %s due to CT MAC mismatch (req=%s, cfg=%s)",
-                    addr,
-                    fields[3] if len(fields) > 3 else None,
-                    self.ct_mac,
-                )
-                return
-            consumer_id = self._consumer_key(addr, fields)
-            reported_phase = (fields[4] if len(fields) > 4 else "").strip().upper()
-            reported_power = parse_int(fields[5] if len(fields) > 5 else 0)
-
-            if reported_phase not in ("A", "B", "C", "0", ""):
-                logger.debug(
-                    "CT002 request from %s has invalid phase '%s'",
-                    addr,
-                    reported_phase,
-                )
-                return
-
-            in_inspection_mode = reported_phase in ("0", "")
-
+        logger.debug("CT002 request from %s: %s", addr, data.hex())
+        fields, error = parse_request(data)
+        if error:
+            logger.debug("Invalid CT002 request from %s: %s", addr, error)
+            return
+        if len(fields) < 4:
+            logger.debug("CT002 request from %s missing required fields", addr)
+            return
+        if not self._validate_ct_mac(fields):
             logger.debug(
-                "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s ct_mac=%s phase=%s power=%s consumer_id=%s%s",
+                "Ignoring CT002 request from %s due to CT MAC mismatch (req=%s, cfg=%s)",
                 addr,
-                fields[0] if len(fields) > 0 else None,
-                fields[1] if len(fields) > 1 else None,
-                fields[2] if len(fields) > 2 else None,
                 fields[3] if len(fields) > 3 else None,
-                reported_phase or "(inspection)",
-                reported_power,
-                consumer_id,
-                " in inspection mode" if in_inspection_mode else "",
+                self.ct_mac,
             )
+            return
+        consumer_id = self._consumer_key(addr, fields)
+        reported_phase = (fields[4] if len(fields) > 4 else "").strip().upper()
+        reported_power = parse_int(fields[5] if len(fields) > 5 else 0)
 
-            # Deduplication check
-            current_time = time.time()
-            last_time = self._last_response_time.get(addr)
-            if last_time and (current_time - last_time) < self.dedupe_time_window:
-                logger.debug("Ignoring request from %s due to dedupe window", addr)
-                return
-
-            if not in_inspection_mode:
-                self._update_consumer_report(
-                    consumer_id, phase=reported_phase, power=reported_power
-                )
-
-            updated = await self._call_before_send(addr, fields, consumer_id)
-            if updated is not None:
-                self.set_consumer_value(consumer_id, updated)
-
-            values = self._get_consumer_value(consumer_id)
-            if values is None:
-                values = [0, 0, 0]
-            meter_value = sum(parse_int(v, 0) for v in values)
-            if self.active_control and not in_inspection_mode:
-                values = self._compute_smooth_target(values, consumer_id)
-            try:
-                response_fields = self._build_response_fields(fields, values)
-                response = build_payload(response_fields)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to build CT002 response for %s (%s): %s",
-                    addr,
-                    fields,
-                    exc,
-                )
-                return
+        if reported_phase not in ("A", "B", "C", "0", ""):
             logger.debug(
-                "CT002 response to %s: %s (fields=%s)",
+                "CT002 request from %s has invalid phase '%s'",
                 addr,
-                response.hex(),
-                response_fields,
+                reported_phase,
             )
-            if self.debug_status:
-                phase_values = self._collect_reports_by_phase()
-                logger.info(
-                    "CT002 status: %s",
-                    self._format_status(values, phase_values, consumer_id, meter_value),
-                )
-            transport.sendto(response, addr)
-            self._last_response_time[addr] = current_time
+            return
+
+        in_inspection_mode = reported_phase in ("0", "")
+
+        logger.debug(
+            "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s ct_mac=%s phase=%s power=%s consumer_id=%s%s",
+            addr,
+            fields[0] if len(fields) > 0 else None,
+            fields[1] if len(fields) > 1 else None,
+            fields[2] if len(fields) > 2 else None,
+            fields[3] if len(fields) > 3 else None,
+            reported_phase or "(inspection)",
+            reported_power,
+            consumer_id,
+            " in inspection mode" if in_inspection_mode else "",
+        )
+
+        # Deduplication check
+        current_time = time.time()
+        last_time = self._last_response_time.get(addr)
+        if last_time and (current_time - last_time) < self.dedupe_time_window:
+            logger.debug("Ignoring request from %s due to dedupe window", addr)
+            return
+
+        if not in_inspection_mode:
+            self._update_consumer_report(
+                consumer_id, phase=reported_phase, power=reported_power
+            )
+
+        updated = await self._call_before_send(addr, fields, consumer_id)
+        if updated is not None:
+            self.set_consumer_value(consumer_id, updated)
+
+        values = self._get_consumer_value(consumer_id)
+        if values is None:
+            values = [0, 0, 0]
+        meter_value = sum(parse_int(v, 0) for v in values)
+        if self.active_control and not in_inspection_mode:
+            values = self._compute_smooth_target(values, consumer_id)
+        try:
+            response_fields = self._build_response_fields(fields, values)
+            response = build_payload(response_fields)
+        except Exception as exc:
+            logger.warning(
+                "Failed to build CT002 response for %s (%s): %s",
+                addr,
+                fields,
+                exc,
+            )
+            return
+        logger.debug(
+            "CT002 response to %s: %s (fields=%s)",
+            addr,
+            response.hex(),
+            response_fields,
+        )
+        if self.debug_status:
+            phase_values = self._collect_reports_by_phase()
+            logger.info(
+                "CT002 status: %s",
+                self._format_status(values, phase_values, consumer_id, meter_value),
+            )
+        transport.sendto(response, addr)
+        self._last_response_time[addr] = current_time
 
     async def _cleanup_loop(self):
         try:
@@ -653,7 +651,12 @@ class CT002:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
             self._cleanup_task = None
+        if self._protocol:
+            for task in list(self._protocol._tasks):
+                task.cancel()
+            await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
         if self._transport:
             self._transport.close()
             self._transport = None
+        self._protocol = None
         self._stopped.set()
