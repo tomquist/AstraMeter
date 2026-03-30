@@ -130,7 +130,7 @@ class CT002:
         consumer_ttl=120,
         debug_status=False,
         active_control=True,
-        smooth_target_alpha=0.08,
+        smooth_target_alpha=0.3,
         max_smooth_step=0,
         fair_distribution=True,
         balance_gain=0.2,
@@ -277,8 +277,11 @@ class CT002:
         if self._smoothed_target is None:
             self._smoothed_target = raw_total
         elif self.deadband > 0 and abs(raw_total) < self.deadband:
-            # Within deadband: hold target, no correction
-            pass
+            # Within deadband: decay toward zero to avoid locking in stale
+            # targets (the battery's integral controller would otherwise
+            # keep integrating a non-zero smoothed value even though the
+            # grid is balanced).
+            self._smoothed_target *= 1 - alpha
         else:
             # When meter and smoothed cross zero, catch up faster to avoid
             # sending wrong-sign target (e.g. 0 when we need discharge)

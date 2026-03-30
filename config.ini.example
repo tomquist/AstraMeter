@@ -33,8 +33,8 @@ THROTTLE_INTERVAL = 0
 #DEBUG_STATUS = False
 ## Active control: smooth raw grid reading and split target across consumers (reduces oscillation). Default: True
 #ACTIVE_CONTROL = True
-## EMA alpha for target smoothing (0.05-0.2 typical; lower = smoother)
-#SMOOTH_TARGET_ALPHA = 0.08
+## EMA alpha for target smoothing (0.1-0.5 typical; default 0.3; lower = smoother but slower)
+#SMOOTH_TARGET_ALPHA = 0.3
 ## Max change to smoothed target per step (W); 0 disables
 #MAX_SMOOTH_STEP = 0
 ## Balance deadband (W): skip fair-distribution correction when consumer imbalance below this

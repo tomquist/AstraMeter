@@ -52,6 +52,43 @@ class TestActiveControl:
         assert out[1] == 100
         assert out[2] == 0
 
+    def test_deadband_decays_smoothed_toward_zero(self):
+        """When raw total is within deadband, smoothed target should decay
+        toward zero rather than holding stale values."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            smooth_target_alpha=0.3,
+            deadband=20,
+        )
+        device._update_consumer_report("a", "A", 0)
+        # Set a large initial smoothed target
+        device._compute_smooth_target([500, 0, 0], "a")
+        assert device._smoothed_target == 500
+
+        # Feed readings within deadband (grid balanced)
+        for _ in range(20):
+            device._compute_smooth_target([5, 0, 0], "a")
+
+        # Smoothed should have decayed significantly toward zero
+        assert device._smoothed_target < 10
+
+    def test_deadband_decay_does_not_overshoot_zero(self):
+        """Deadband decay should not make smoothed target cross zero."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            smooth_target_alpha=0.5,
+            deadband=20,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._compute_smooth_target([100, 0, 0], "a")
+        # Decay multiple times
+        for _ in range(50):
+            device._compute_smooth_target([5, 0, 0], "a")
+        # Should approach zero but stay non-negative
+        assert device._smoothed_target >= 0
+
 
 class TestFairDistribution:
     """Tests for fair load distribution across consumers."""
