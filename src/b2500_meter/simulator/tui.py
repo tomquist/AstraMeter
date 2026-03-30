@@ -134,7 +134,8 @@ class SimulatorApp(App):
         await runner.powermeter.start()
         tasks = [asyncio.create_task(b.run()) for b in runner.batteries]
         if runner.load_model.auto_mode:
-            tasks.append(asyncio.create_task(runner._auto_loop()))
+            self._auto_task = asyncio.create_task(runner._auto_loop())
+            tasks.append(self._auto_task)
         try:
             await runner.powermeter.shutdown_event.wait()
         finally:

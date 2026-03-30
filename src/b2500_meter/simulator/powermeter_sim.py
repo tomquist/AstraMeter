@@ -69,6 +69,18 @@ class PowermeterSimulator:
             grid[f"phase_{phase.lower()}"] = round(contribution[i] - battery_sum, 1)
         return grid
 
+    # -- helpers -----------------------------------------------------------
+
+    @staticmethod
+    async def _parse_json(request: web.Request) -> dict | web.Response:
+        """Parse JSON body, returning a dict or a 400 error response."""
+        try:
+            return await request.json()
+        except (json.JSONDecodeError, Exception):
+            return web.json_response(
+                {"error": "invalid or missing JSON"}, status=400
+            )
+
     # -- handlers ----------------------------------------------------------
 
     async def _handle_power(self, _request: web.Request) -> web.Response:
@@ -89,7 +101,9 @@ class PowermeterSimulator:
         return web.json_response(self._build_status())
 
     async def _handle_set_solar(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._parse_json(request)
+        if isinstance(body, web.Response):
+            return body
         watts = body.get("watts")
         if watts is None:
             return web.json_response({"error": "missing 'watts'"}, status=400)
@@ -108,11 +122,19 @@ class PowermeterSimulator:
         battery = self._find_battery(mac)
         if battery is None:
             return web.json_response({"error": "battery not found"}, status=404)
-        body = await request.json()
-        soc = body.get("soc")
-        if soc is None:
+        body = await self._parse_json(request)
+        if isinstance(body, web.Response):
+            return body
+        raw = body.get("soc")
+        if raw is None:
             return web.json_response({"error": "missing 'soc'"}, status=400)
-        battery.soc = float(soc)
+        try:
+            soc = float(raw)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "invalid 'soc'"}, status=400)
+        if not (0.0 <= soc <= 1.0):
+            return web.json_response({"error": "invalid 'soc'"}, status=400)
+        battery.soc = soc
         return web.json_response(self._build_status())
 
     async def _handle_set_battery_max_power(self, request: web.Request) -> web.Response:
@@ -120,7 +142,9 @@ class PowermeterSimulator:
         battery = self._find_battery(mac)
         if battery is None:
             return web.json_response({"error": "battery not found"}, status=404)
-        body = await request.json()
+        body = await self._parse_json(request)
+        if isinstance(body, web.Response):
+            return body
         try:
             charge = int(body["charge"]) if "charge" in body else None
             discharge = int(body["discharge"]) if "discharge" in body else None
@@ -137,7 +161,9 @@ class PowermeterSimulator:
         return web.json_response(self._build_status())
 
     async def _handle_set_auto(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._parse_json(request)
+        if isinstance(body, web.Response):
+            return body
         self.load_model.auto_mode = bool(body.get("enabled", False))
         return web.json_response(self._build_status())
 

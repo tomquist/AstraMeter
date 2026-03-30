@@ -173,7 +173,7 @@ def parse_config(data: dict) -> SimulationConfig:
         ct_mac=ct.get("mac", "112233445566"),
         ct_host=ct.get("host", "127.0.0.1"),
         ct_port=ct.get("port", 12345),
-        http_host=http.get("host", "0.0.0.0"),
+        http_host=http.get("host", "127.0.0.1"),
         http_port=http.get("port", 8080),
         base_load=pm.get("base_load", [100.0, 100.0, 100.0]),
         base_noise=pm.get("base_noise", 20.0),
