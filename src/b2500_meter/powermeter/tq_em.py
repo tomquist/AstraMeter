@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import aiohttp
@@ -39,6 +40,7 @@ class TQEnergyManager(Powermeter):
         self._sess: aiohttp.ClientSession | None = None
         self._serial: str | None = None
         self._last_use = 0.0
+        self._auth_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._sess:
@@ -58,13 +60,14 @@ class TQEnergyManager(Powermeter):
     async def get_powermeter_watts_async(self) -> list[float]:
         if not self._sess:
             raise RuntimeError("Session not started; call start() first")
-        await self._ensure_session()
+        async with self._auth_lock:
+            await self._ensure_session()
 
-        try:
-            data = await self._read_live_json()
-        except _SessionExpired:
-            await self._login()
-            data = await self._read_live_json()
+            try:
+                data = await self._read_live_json()
+            except _SessionExpired:
+                await self._login()
+                data = await self._read_live_json()
 
         if any(k in data for k in self._PHASE_KEYS):
             return [

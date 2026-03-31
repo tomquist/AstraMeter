@@ -39,6 +39,7 @@ async def test_headers_and_auth(mock_aiohttp_session):
             headers={"X-Test": "1"},
             timeout=ClientTimeout(total=10),
         )
-        await meter.get_powermeter_watts_async()
-        mock_aiohttp_session.get.assert_called_with("http://localhost")
+        result = await meter.get_powermeter_watts_async()
+        assert result == [50.0]
+        mock_aiohttp_session.get.assert_called_once_with("http://localhost")
         await meter.stop()
