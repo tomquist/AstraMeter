@@ -324,6 +324,7 @@ def main():
             for dt in cfg.get("GENERAL", "DEVICE_TYPE", fallback="shellypro3em").split(
                 ","
             )
+            if dt.strip()
         ]
     )
     skip_test = (
