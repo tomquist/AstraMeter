@@ -31,9 +31,9 @@ class HealthCheckService:
 
     async def start(self):
         app = web.Application()
+        # aiohttp auto-handles HEAD for GET routes.
         for path in ("/health", "/health/", "/api", "/api/"):
             app.router.add_get(path, self._handle_get)
-            app.router.add_head(path, self._handle_head)
         # Catch-all for unknown paths
         app.router.add_route("*", "/{path:.*}", self._handle_not_found)
 
@@ -72,12 +72,6 @@ class HealthCheckService:
         )
         return web.Response(
             body=_health_json_bytes(),
-            content_type="application/json",
-            headers={"Cache-Control": "no-cache"},
-        )
-
-    async def _handle_head(self, request):
-        return web.Response(
             content_type="application/json",
             headers={"Cache-Control": "no-cache"},
         )
