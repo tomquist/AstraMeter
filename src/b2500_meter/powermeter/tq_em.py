@@ -88,7 +88,8 @@ class TQEnergyManager(Powermeter):
     # INTERNALS                                                          #
     # ------------------------------------------------------------------ #
     async def _ensure_session(self) -> None:
-        assert self._sess is not None
+        if self._sess is None:
+            raise RuntimeError("Session not started; call start() first")
         now = time.time()
         if self._serial is None or (now - self._last_use) > self._MAX_IDLE:
             await self._login()
@@ -96,7 +97,8 @@ class TQEnergyManager(Powermeter):
 
     async def _login(self) -> None:
         """Authenticate lazily with the device."""
-        assert self._sess is not None
+        if self._sess is None:
+            raise RuntimeError("Session not started; call start() first")
         async with self._sess.get(f"http://{self._host}/start.php") as r1:
             r1.raise_for_status()
             j1 = await r1.json(content_type=None)
@@ -121,7 +123,8 @@ class TQEnergyManager(Powermeter):
                 raise RuntimeError("Authentication failed")
 
     async def _read_live_json(self) -> dict:
-        assert self._sess is not None
+        if self._sess is None:
+            raise RuntimeError("Session not started; call start() first")
         async with self._sess.get(f"http://{self._host}/mum-webservice/data.php") as r:
             if r.status in (401, 403):
                 raise _SessionExpired

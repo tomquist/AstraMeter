@@ -45,6 +45,7 @@ class Tasmota(Powermeter):
             raise RuntimeError("Session not started; call start() first")
         url = f"http://{self.ip}{path}"
         async with self.session.get(url) as resp:
+            resp.raise_for_status()
             return await resp.json(content_type=None)
 
     async def get_powermeter_watts_async(self) -> list[float]:

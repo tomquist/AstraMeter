@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from aiohttp import BasicAuth
+from aiohttp import BasicAuth, ClientTimeout
 
 from b2500_meter.powermeter import JsonHttpPowermeter
 
@@ -25,7 +25,7 @@ async def test_three_phase(mock_aiohttp_session):
 
 async def test_headers_and_auth(mock_aiohttp_session):
     mock_aiohttp_session.set_json({"power": 50})
-    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session) as mock_cls:
         meter = JsonHttpPowermeter(
             "http://localhost",
             "$.power",
@@ -34,8 +34,11 @@ async def test_headers_and_auth(mock_aiohttp_session):
             headers={"X-Test": "1"},
         )
         await meter.start()
+        mock_cls.assert_called_once_with(
+            auth=BasicAuth("user", "pass"),
+            headers={"X-Test": "1"},
+            timeout=ClientTimeout(total=10),
+        )
         await meter.get_powermeter_watts_async()
         mock_aiohttp_session.get.assert_called_with("http://localhost")
-        assert meter.auth == BasicAuth("user", "pass")
-        assert meter.headers == {"X-Test": "1"}
         await meter.stop()
