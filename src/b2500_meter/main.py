@@ -204,7 +204,11 @@ async def run_device(
     else:
         raise ValueError(f"Unsupported device type: {device_type}")
 
-    await device.start()
+    try:
+        await device.start()
+    except Exception:
+        logger.exception("Device %s (%s) failed to start", device_type, device_id)
+        return
     try:
         await device.wait()
     finally:
@@ -258,7 +262,10 @@ async def async_main(
             await pm.stop()
         if health:
             logger.info("Stopping health check service...")
-            await asyncio.wait_for(health.stop(), timeout=5.0)
+            try:
+                await asyncio.wait_for(health.stop(), timeout=5.0)
+            except TimeoutError:
+                logger.warning("Health check service stop timed out")
 
 
 def main():

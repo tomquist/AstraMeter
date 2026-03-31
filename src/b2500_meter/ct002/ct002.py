@@ -574,12 +574,14 @@ class CT002:
             " in inspection mode" if in_inspection_mode else "",
         )
 
-        # Deduplication check
+        # Deduplication check — stamp immediately (before any await) so a
+        # second rapid packet from the same addr sees the updated time.
         current_time = time.time()
         last_time = self._last_response_time.get(addr)
         if last_time and (current_time - last_time) < self.dedupe_time_window:
             logger.debug("Ignoring request from %s due to dedupe window", addr)
             return
+        self._last_response_time[addr] = current_time
 
         if not in_inspection_mode:
             self._update_consumer_report(
@@ -620,7 +622,6 @@ class CT002:
                 self._format_status(values, phase_values, consumer_id, meter_value),
             )
         transport.sendto(response, addr)
-        self._last_response_time[addr] = current_time
 
     async def _cleanup_loop(self):
         try:

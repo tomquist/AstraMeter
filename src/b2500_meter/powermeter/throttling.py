@@ -120,6 +120,9 @@ class ThrottledPowermeter(Powermeter):
             self._pending_fetch.set_result(values)
             return list(values)
         except BaseException as e:
+            # Update timestamp even on failure so we respect the throttle
+            # interval before retrying — avoids hammering a failing source.
+            self._async_last_update_time = time.time()
             if not self._pending_fetch.done():
                 self._pending_fetch.set_exception(e)
             raise

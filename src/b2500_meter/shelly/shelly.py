@@ -181,8 +181,8 @@ class Shelly:
                 transport.sendto(response_data, addr)
         except json.JSONDecodeError:
             logger.error("Error: Invalid JSON")
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
+        except Exception:
+            logger.exception("Error processing message")
 
     async def _inactive_check_loop(self):
         try:
