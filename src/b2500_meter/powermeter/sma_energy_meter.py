@@ -1,7 +1,7 @@
+import asyncio
 import contextlib
 import socket
 import struct
-import threading
 
 from b2500_meter.config.logger import logger
 
@@ -57,6 +57,24 @@ def _get_channel_data_length(identifier):
     return 4
 
 
+class _SmaProtocol(asyncio.DatagramProtocol):
+    def __init__(self, meter: "SmaEnergyMeter"):
+        self.meter = meter
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        try:
+            self.meter._handle_packet(data)
+        except Exception as e:
+            logger.debug(f"SMA Energy Meter: dropping invalid packet: {e}")
+
+    def error_received(self, exc: Exception) -> None:
+        logger.debug(f"SMA Energy Meter: OS error: {exc}")
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        if exc:
+            logger.warning(f"SMA Energy Meter: connection lost: {exc}")
+
+
 class SmaEnergyMeter(Powermeter):
     def __init__(
         self,
@@ -69,17 +87,15 @@ class SmaEnergyMeter(Powermeter):
         self.port = port
         self.serial_number = serial_number
         self.interface = interface
-        self.values = None
-        self._lock = threading.Lock()
-        self._message_event = threading.Event()
-        self._detected_serial = None
+        self.values: list[float] | None = None
+        self._async_message_event: asyncio.Event | None = None
+        self._detected_serial: int | None = None
+        self._transport: asyncio.DatagramTransport | None = None
 
-        thread = threading.Thread(target=self._listen, daemon=True)
-        thread.start()
-
-    def _listen(self):
+    async def start(self):
+        self._async_message_event = asyncio.Event()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if hasattr(socket, "SO_REUSEPORT"):
                 with contextlib.suppress(OSError):
@@ -94,18 +110,23 @@ class SmaEnergyMeter(Powermeter):
             )
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
-            logger.info(
-                f"SMA Energy Meter: listening on {self.multicast_group}:{self.port}"
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _SmaProtocol(self),
+                sock=sock,
             )
+        except BaseException:
+            sock.close()
+            raise
+        self._transport = transport
+        logger.info(
+            f"SMA Energy Meter: listening on {self.multicast_group}:{self.port}"
+        )
 
-            while True:
-                data, _addr = sock.recvfrom(1024)
-                try:
-                    self._handle_packet(data)
-                except Exception as e:
-                    logger.debug(f"SMA Energy Meter: dropping invalid packet: {e}")
-        except Exception as e:
-            logger.error(f"SMA Energy Meter: listener failed: {e}")
+    async def stop(self):
+        if self._transport:
+            self._transport.close()
+            self._transport = None
 
     def _handle_packet(self, data):
         if len(data) < 28:
@@ -133,18 +154,17 @@ class SmaEnergyMeter(Powermeter):
             if serial != self.serial_number:
                 return
         else:
-            with self._lock:
-                if self._detected_serial is None:
-                    device_name = SMA_SUSY_IDS.get(susy_id)
-                    if device_name is None:
-                        return
-                    self._detected_serial = serial
-                    logger.info(
-                        f"SMA Energy Meter: auto-detected {device_name} "
-                        f"with serial {serial}"
-                    )
-                elif serial != self._detected_serial:
+            if self._detected_serial is None:
+                device_name = SMA_SUSY_IDS.get(susy_id)
+                if device_name is None:
                     return
+                self._detected_serial = serial
+                logger.info(
+                    f"SMA Energy Meter: auto-detected {device_name} "
+                    f"with serial {serial}"
+                )
+            elif serial != self._detected_serial:
+                return
 
         self._parse_channels(data)
 
@@ -202,16 +222,21 @@ class SmaEnergyMeter(Powermeter):
         else:
             return
 
-        with self._lock:
-            self.values = values
-            self._message_event.set()
+        self.values = values
+        if self._async_message_event is not None:
+            self._async_message_event.set()
 
-    def get_powermeter_watts(self):
-        with self._lock:
-            if self.values is not None:
-                return list(self.values)
+    async def get_powermeter_watts_async(self) -> list[float]:
+        if self.values is not None:
+            return list(self.values)
         raise ValueError("No value received from SMA Energy Meter")
 
-    def wait_for_message(self, timeout=5):
-        if not self._message_event.wait(timeout):
-            raise TimeoutError("Timeout waiting for SMA Energy Meter data")
+    async def wait_for_message_async(self, timeout=5):
+        if self._async_message_event is None:
+            raise RuntimeError("start() must be called before wait_for_message_async()")
+        try:
+            await asyncio.wait_for(self._async_message_event.wait(), timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                "Timeout waiting for SMA Energy Meter data"
+            ) from None
