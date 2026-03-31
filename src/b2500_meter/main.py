@@ -55,10 +55,9 @@ async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
                 continue
             else:
                 # Last attempt failed
-                logger.error(
+                raise RuntimeError(
                     f"Failed to test powermeter after {max_retries + 1} attempts: {e}"
-                )
-                exit(1)
+                ) from e
 
 
 async def run_device(
@@ -459,7 +458,11 @@ def main():
             except Exception as exc:
                 logger.error("Unexpected Marstek auto-registration error: %s", exc)
 
-    asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
+    try:
+        asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        exit(1)
 
 
 # end main
