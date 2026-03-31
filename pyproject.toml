@@ -16,7 +16,7 @@ dependencies = [
     "paho-mqtt",
     "jsonpath-ng",
     "pymodbus==3.6.5",
-"smllib",
+    "smllib",
     "pyserial",
 ]
 
