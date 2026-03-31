@@ -13,7 +13,7 @@ dependencies = [
     "aiohttp>=3.9.0",
     "requests",
     "urllib3",
-    "paho-mqtt",
+    "aiomqtt>=2.0.0,<3",
     "jsonpath-ng",
     "pymodbus==3.6.5",
     "websocket-client==1.8.0",

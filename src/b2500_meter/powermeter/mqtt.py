@@ -1,12 +1,15 @@
+import asyncio
+import contextlib
 import json
-import time
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from jsonpath_ng import parse
 
 from b2500_meter.config.logger import logger
 
 from .base import Powermeter
+
+RECONNECT_DELAY = 5
 
 
 def extract_json_value(data, path):
@@ -34,44 +37,62 @@ class MqttPowermeter(Powermeter):
         self.json_path = json_path
         self.username = username
         self.password = password
-        self.value = None
+        self.value: float | None = None
+        self._run_task: asyncio.Task[None] | None = None
+        self._message_event = asyncio.Event()
+        self._connected_event = asyncio.Event()
 
-        # Initialize MQTT client
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-        if self.username and self.password:
-            self.client.username_pw_set(self.username, self.password)
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
+    async def start(self) -> None:
+        self._run_task = asyncio.create_task(self._run())
 
-        # Connect to the broker
-        self.client.connect(self.broker, self.port, 60)
-        self.client.loop_start()
-
-    def on_connect(self, client, userdata, flags, reason_code, properties):
-        logger.info(f"Connected with result code {reason_code}")
-        # Subscribe to the topic
-        client.subscribe(self.topic)
-
-    def on_message(self, client, userdata, msg):
-        payload = msg.payload.decode()
-        if self.json_path:
+    async def _run(self) -> None:
+        while True:
             try:
-                data = json.loads(payload)
-                self.value = extract_json_value(data, self.json_path)
-            except json.JSONDecodeError:
-                logger.error("Failed to decode JSON")
-        else:
-            self.value = float(payload)
+                async with aiomqtt.Client(
+                    hostname=self.broker,
+                    port=self.port,
+                    username=self.username,
+                    password=self.password,
+                    keepalive=60,
+                ) as client:
+                    logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")
+                    await client.subscribe(self.topic)
+                    self._connected_event.set()
+                    async for message in client.messages:
+                        raw = message.payload
+                        payload = raw.decode() if isinstance(raw, bytes) else str(raw)
+                        try:
+                            if self.json_path:
+                                data = json.loads(payload)
+                                self.value = extract_json_value(data, self.json_path)
+                            else:
+                                self.value = float(payload)
+                            self._message_event.set()
+                        except (json.JSONDecodeError, ValueError) as e:
+                            logger.error(f"Failed to parse MQTT payload: {e}")
+            except aiomqtt.MqttError as e:
+                self._connected_event.clear()
+                logger.warning(
+                    f"MQTT connection error: {e}. Reconnecting in {RECONNECT_DELAY}s..."
+                )
+                await asyncio.sleep(RECONNECT_DELAY)
 
-    def get_powermeter_watts(self):
+    async def stop(self) -> None:
+        if self._run_task:
+            self._run_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._run_task
+            self._run_task = None
+
+    async def get_powermeter_watts_async(self) -> list[float]:
         if self.value is not None:
             return [self.value]
-        else:
-            raise ValueError("No value received from MQTT")
+        raise ValueError("No value received from MQTT")
 
-    def wait_for_message(self, timeout=5):
-        start_time = time.time()
-        while self.value is None:
-            if time.time() - start_time > timeout:
-                raise TimeoutError("Timeout waiting for MQTT message")
-            time.sleep(1)
+    async def wait_for_message_async(self, timeout=5):
+        if self.value is not None:
+            return
+        try:
+            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError("Timeout waiting for MQTT message") from None
