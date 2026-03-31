@@ -1,5 +1,5 @@
-import requests
-from requests.auth import HTTPDigestAuth
+import aiohttp
+from aiohttp import BasicAuth, ClientTimeout, DigestAuthMiddleware
 
 from .base import Powermeter
 
@@ -10,60 +10,77 @@ class Shelly(Powermeter):
         self.user = user
         self.password = password
         self.emeterindex = emeterindex
-        self.session = requests.Session()
+        self._session: aiohttp.ClientSession | None = None
+        self._rpc_session: aiohttp.ClientSession | None = None
 
-    def get_json(self, path):
+    async def start(self) -> None:
+        timeout = ClientTimeout(total=10)
+        auth = BasicAuth(self.user, self.password) if self.user else None
+        self._session = aiohttp.ClientSession(auth=auth, timeout=timeout)
+        self._rpc_session = aiohttp.ClientSession(
+            timeout=timeout,
+            middlewares=[DigestAuthMiddleware(self.user, self.password)],
+        )
+
+    async def stop(self) -> None:
+        if self._session:
+            await self._session.close()
+            self._session = None
+        if self._rpc_session:
+            await self._rpc_session.close()
+            self._rpc_session = None
+
+    async def _get_json(self, path: str) -> dict:
+        assert self._session is not None
         url = f"http://{self.ip}{path}"
-        headers = {"content-type": "application/json"}
-        return self.session.get(
-            url, headers=headers, auth=(self.user, self.password), timeout=10
-        ).json()
+        async with self._session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json(content_type=None)
 
-    def get_rpc_json(self, path):
+    async def _get_rpc_json(self, path: str) -> dict:
+        assert self._rpc_session is not None
         url = f"http://{self.ip}/rpc{path}"
-        headers = {"content-type": "application/json"}
-        return self.session.get(
-            url,
-            headers=headers,
-            auth=HTTPDigestAuth(self.user, self.password),
-            timeout=10,
-        ).json()
+        async with self._rpc_session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json(content_type=None)
 
-    def get_powermeter_watts(self):
+    async def get_powermeter_watts_async(self) -> list[float]:
         raise NotImplementedError()
 
 
 class Shelly1PM(Shelly):
-    def get_powermeter_watts(self):
-        status = self.get_json("/status")
+    async def get_powermeter_watts_async(self) -> list[float]:
+        status = await self._get_json("/status")
         if self.emeterindex:
-            return [int(self.get_json(f"/meter/{self.emeterindex}")["power"])]
+            meter = await self._get_json(f"/meter/{self.emeterindex}")
+            return [int(meter["power"])]
         else:
             return [int(meter["power"]) for meter in status["meters"]]
 
 
 class ShellyPlus1PM(Shelly):
-    def get_powermeter_watts(self):
-        return [int(self.get_rpc_json("/Switch.GetStatus?id=0")["apower"])]
+    async def get_powermeter_watts_async(self) -> list[float]:
+        response = await self._get_rpc_json("/Switch.GetStatus?id=0")
+        return [int(response["apower"])]
 
 
 class ShellyEM(Shelly):
-    def get_powermeter_watts(self):
+    async def get_powermeter_watts_async(self) -> list[float]:
         if self.emeterindex:
-            return [int(self.get_json(f"/emeter/{self.emeterindex}")["power"])]
+            emeter = await self._get_json(f"/emeter/{self.emeterindex}")
+            return [int(emeter["power"])]
         else:
-            status = self.get_json("/status")
+            status = await self._get_json("/status")
             return [int(emeter["power"]) for emeter in status["emeters"]]
 
 
 class Shelly3EM(Shelly):
-    def get_powermeter_watts(self):
-        status = self.get_json("/status")
-        # Return an array of all power values
+    async def get_powermeter_watts_async(self) -> list[float]:
+        status = await self._get_json("/status")
         return [int(emeter["power"]) for emeter in status["emeters"]]
 
 
 class Shelly3EMPro(Shelly):
-    def get_powermeter_watts(self):
-        response = self.get_rpc_json("/EM.GetStatus?id=0")
+    async def get_powermeter_watts_async(self) -> list[float]:
+        response = await self._get_rpc_json("/EM.GetStatus?id=0")
         return [int(response["total_act_power"])]

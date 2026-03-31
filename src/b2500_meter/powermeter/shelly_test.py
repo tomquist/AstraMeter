@@ -1,5 +1,4 @@
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from b2500_meter.powermeter import (
     Shelly1PM,
@@ -10,56 +9,55 @@ from b2500_meter.powermeter import (
 )
 
 
-class TestShelly(unittest.TestCase):
-    @patch("requests.Session.get")
-    def test_shelly1pm_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"meters": [{"power": 456}]}
-        mock_get.return_value = mock_response
+def _mock_session(json_data: dict) -> MagicMock:
+    """Create a mock aiohttp.ClientSession whose .get() returns *json_data*."""
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value=json_data)
 
-        shelly1pm = Shelly1PM("192.168.1.2", "user", "pass", "")
-        self.assertEqual(shelly1pm.get_powermeter_watts(), [456])
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    ctx.__aexit__ = AsyncMock(return_value=False)
 
-    @patch("requests.Session.get")
-    def test_shellyem_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "emeters": [{"power": 789}, {"power": 1011}, {"power": 1213}]
-        }
-        mock_get.return_value = mock_response
-
-        shellyem = ShellyEM("192.168.1.3", "user", "pass", "")
-        self.assertEqual(shellyem.get_powermeter_watts(), [789, 1011, 1213])
-
-    @patch("requests.Session.get")
-    def test_shellyplus1pm_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"apower": 150}
-        mock_get.return_value = mock_response
-
-        shellyplus1pm = ShellyPlus1PM("192.168.1.11", "user", "pass", "")
-        self.assertEqual(shellyplus1pm.get_powermeter_watts(), [150])
-
-    @patch("requests.Session.get")
-    def test_shelly3em_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "emeters": [{"power": 100}, {"power": 200}, {"power": 300}]
-        }
-        mock_get.return_value = mock_response
-
-        shellyem = Shelly3EM("192.168.1.12", "user", "pass", "")
-        self.assertEqual(shellyem.get_powermeter_watts(), [100, 200, 300])
-
-    @patch("requests.Session.get")
-    def test_shelly3empro_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"total_act_power": 450}
-        mock_get.return_value = mock_response
-
-        shelly3empro = Shelly3EMPro("192.168.1.13", "user", "pass", "")
-        self.assertEqual(shelly3empro.get_powermeter_watts(), [450])
+    session = MagicMock()
+    session.get.return_value = ctx
+    return session
 
 
-if __name__ == "__main__":
-    unittest.main()
+async def test_shelly1pm_get_powermeter_watts() -> None:
+    shelly = Shelly1PM("192.168.1.2", "user", "pass", "")
+    shelly._session = _mock_session({"meters": [{"power": 456}]})
+
+    assert await shelly.get_powermeter_watts_async() == [456]
+
+
+async def test_shellyem_get_powermeter_watts() -> None:
+    shelly = ShellyEM("192.168.1.3", "user", "pass", "")
+    shelly._session = _mock_session(
+        {"emeters": [{"power": 789}, {"power": 1011}, {"power": 1213}]}
+    )
+
+    assert await shelly.get_powermeter_watts_async() == [789, 1011, 1213]
+
+
+async def test_shellyplus1pm_get_powermeter_watts() -> None:
+    shelly = ShellyPlus1PM("192.168.1.11", "user", "pass", "")
+    shelly._rpc_session = _mock_session({"apower": 150})
+
+    assert await shelly.get_powermeter_watts_async() == [150]
+
+
+async def test_shelly3em_get_powermeter_watts() -> None:
+    shelly = Shelly3EM("192.168.1.12", "user", "pass", "")
+    shelly._session = _mock_session(
+        {"emeters": [{"power": 100}, {"power": 200}, {"power": 300}]}
+    )
+
+    assert await shelly.get_powermeter_watts_async() == [100, 200, 300]
+
+
+async def test_shelly3empro_get_powermeter_watts() -> None:
+    shelly = Shelly3EMPro("192.168.1.13", "user", "pass", "")
+    shelly._rpc_session = _mock_session({"total_act_power": 450})
+
+    assert await shelly.get_powermeter_watts_async() == [450]
