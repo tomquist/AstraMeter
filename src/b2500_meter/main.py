@@ -460,6 +460,8 @@ def main():
 
     try:
         asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
+    except KeyboardInterrupt:
+        pass
     except RuntimeError as exc:
         logger.error("%s", exc)
         exit(1)
