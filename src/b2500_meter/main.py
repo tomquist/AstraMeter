@@ -250,10 +250,12 @@ async def async_main(
                 await health.stop()
             health = None
 
-    # Create powermeters
-    powermeters = read_all_powermeter_configs(cfg)
+    powermeters: list[tuple[Powermeter, ClientFilter]] = []
 
     try:
+        # Create powermeters
+        powermeters = read_all_powermeter_configs(cfg)
+
         # Start powermeter lifecycle
         for pm, _ in powermeters:
             await pm.start()
