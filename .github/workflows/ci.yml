@@ -65,6 +65,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install mosquitto (for MQTT integration tests)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto
+
       - name: Install dependencies
         run: uv sync --frozen --extra dev
 
