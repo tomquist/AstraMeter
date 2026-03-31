@@ -210,12 +210,20 @@ async def run_device(
         # Log but don't re-raise: a single device failing to start (e.g. port
         # conflict) should not take down other healthy devices in the gather.
         logger.exception("Device %s (%s) failed to start", device_type, device_id)
-        await device.stop()
+        try:
+            await device.stop()
+        except Exception:
+            logger.exception(
+                "Device %s (%s) cleanup also failed", device_type, device_id
+            )
         return
     try:
         await device.wait()
     finally:
-        await device.stop()
+        try:
+            await device.stop()
+        except Exception:
+            logger.exception("Device %s (%s) failed to stop", device_type, device_id)
 
 
 async def async_main(
