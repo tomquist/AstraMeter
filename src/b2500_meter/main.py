@@ -236,15 +236,15 @@ async def async_main(
     # Create powermeters
     powermeters = read_all_powermeter_configs(cfg)
 
-    # Start powermeter lifecycle
-    for pm, _ in powermeters:
-        await pm.start()
-
-    if not skip_test:
-        for powermeter, client_filter in powermeters:
-            await test_powermeter(powermeter, client_filter)
-
     try:
+        # Start powermeter lifecycle
+        for pm, _ in powermeters:
+            await pm.start()
+
+        if not skip_test:
+            for powermeter, client_filter in powermeters:
+                await test_powermeter(powermeter, client_filter)
+
         if not device_types:
             logger.warning("No runnable device types configured after filtering.")
             return
@@ -258,8 +258,13 @@ async def async_main(
             )
         )
     finally:
+        # Best-effort shutdown: each resource gets a stop attempt even if
+        # an earlier one fails.
         for pm, _ in powermeters:
-            await pm.stop()
+            try:
+                await pm.stop()
+            except Exception:
+                logger.exception("Error stopping powermeter %s", pm)
         if health:
             logger.info("Stopping health check service...")
             try:

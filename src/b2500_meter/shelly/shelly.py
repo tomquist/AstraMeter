@@ -148,8 +148,14 @@ class Shelly:
             logger.exception("Error handling Shelly request from %s", addr)
 
     async def _handle_request(self, transport, data, addr):
-        request_str = data.decode()
         self._track_battery_seen(addr)
+
+        try:
+            request_str = data.decode()
+        except UnicodeDecodeError:
+            logger.debug("Ignoring non-UTF-8 datagram from %s:%s", addr[0], addr[1])
+            return
+
         logger.debug(f"Received UDP message: {request_str}")
         logger.debug(f"From: {addr[0]}:{addr[1]}")
 
@@ -202,7 +208,14 @@ class Shelly:
         self._protocol = protocol
         self._stopped.clear()
         self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
+        bound = self._transport.get_extra_info("sockname")
+        if bound:
+            self._udp_port = bound[1]
         logger.info(f"Shelly emulator listening on UDP port {self._udp_port}...")
+
+    @property
+    def udp_port(self) -> int:
+        return self._udp_port
 
     async def wait(self):
         await self._stopped.wait()

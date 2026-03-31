@@ -5,6 +5,7 @@ Provides HTTP health check endpoints for monitoring service health.
 Compatible with both Home Assistant addon watchdog and Docker health checks.
 """
 
+import errno
 import json
 
 from aiohttp import web
@@ -43,7 +44,7 @@ class HealthCheckService:
         try:
             await site.start()
         except OSError as e:
-            if e.errno == 98:
+            if e.errno == errno.EADDRINUSE:
                 logger.error(
                     f"Port {self.port} is already in use. Health check service not started."
                 )
