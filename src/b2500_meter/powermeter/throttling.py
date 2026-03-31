@@ -91,16 +91,32 @@ class ThrottledPowermeter(Powermeter):
         await self.wrapped_powermeter.stop()
 
     async def get_powermeter_watts_async(self) -> list[float]:
-        async with self._async_lock:
-            current_time = time.time()
-
-            if self.throttle_interval <= 0:
+        if self.throttle_interval <= 0:
+            async with self._async_lock:
                 values = await self.wrapped_powermeter.get_powermeter_watts_async()
                 self._async_last_values = values
-                self._async_last_update_time = current_time
+                self._async_last_update_time = time.time()
                 return values
 
+        # Fast path: return cached values if still fresh (no lock needed).
+        current_time = time.time()
+        if (
+            self._async_last_values is not None
+            and (current_time - self._async_last_update_time) < self.throttle_interval
+        ):
+            return self._async_last_values
+
+        # Slow path: acquire lock, wait for throttle window, fetch fresh values.
+        async with self._async_lock:
+            # Re-check after acquiring lock — another coroutine may have
+            # fetched while we waited.
+            current_time = time.time()
             time_since_last_update = current_time - self._async_last_update_time
+            if (
+                self._async_last_values is not None
+                and time_since_last_update < self.throttle_interval
+            ):
+                return self._async_last_values
 
             if time_since_last_update < self.throttle_interval:
                 wait_time = self.throttle_interval - time_since_last_update
