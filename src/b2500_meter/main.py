@@ -208,6 +208,7 @@ async def run_device(
         await device.start()
     except Exception:
         logger.exception("Device %s (%s) failed to start", device_type, device_id)
+        await device.stop()
         return
     try:
         await device.wait()
@@ -277,6 +278,8 @@ async def async_main(
                 await asyncio.wait_for(health.stop(), timeout=5.0)
             except TimeoutError:
                 logger.warning("Health check service stop timed out")
+            except Exception:
+                logger.exception("Error stopping health check service")
 
 
 def main():

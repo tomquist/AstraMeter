@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import time
+from collections.abc import Awaitable, Callable
 
 from b2500_meter.config.logger import logger
 
@@ -119,7 +122,7 @@ def parse_request(data):
 
 
 class _CT002Protocol(asyncio.DatagramProtocol):
-    def __init__(self, ct002: "CT002"):
+    def __init__(self, ct002: CT002):
         self.ct002 = ct002
         self._tasks: set[asyncio.Task] = set()
 
@@ -182,7 +185,9 @@ class CT002:
         self.saturation_detection = saturation_detection
         self.saturation_alpha = max(0.01, min(1.0, saturation_alpha))
         self.min_target_for_saturation = max(1, min_target_for_saturation)
-        self.before_send = None
+        self.before_send: (
+            Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
+        ) = None
         self._info_idx_counter = 0
         self._values_by_consumer = {}
         self._reports_by_consumer = {}
