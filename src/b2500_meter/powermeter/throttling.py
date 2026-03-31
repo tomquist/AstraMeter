@@ -25,10 +25,11 @@ class ThrottledPowermeter(Powermeter):
         self.last_values: list[float] | None = None
         self.lock = threading.Lock()
 
-        # Async path has its own state so the two paths are independent.
-        self._async_lock = asyncio.Lock()
+        # Async path: coalescing fetch pattern.  When a fetch is in flight
+        # (including the throttle sleep), concurrent callers await the same
+        # future so every consumer gets fresh data without hammering the source.
         self._async_last_update_time = 0.0
-        self._async_last_values: list[float] | None = None
+        self._pending_fetch: asyncio.Future[list[float]] | None = None
 
     # --- Sync path (unchanged, for non-migrated callers / tests) ---
 
@@ -92,60 +93,35 @@ class ThrottledPowermeter(Powermeter):
 
     async def get_powermeter_watts_async(self) -> list[float]:
         if self.throttle_interval <= 0:
-            async with self._async_lock:
-                values = await self.wrapped_powermeter.get_powermeter_watts_async()
-                self._async_last_values = values
-                self._async_last_update_time = time.time()
-                return values
+            return await self.wrapped_powermeter.get_powermeter_watts_async()
 
-        # Fast path: return cached values if still fresh (no lock needed).
-        current_time = time.time()
-        if (
-            self._async_last_values is not None
-            and (current_time - self._async_last_update_time) < self.throttle_interval
-        ):
-            return self._async_last_values
+        # If a fetch (including its throttle sleep) is already in progress,
+        # coalesce: wait for the same result so every consumer gets fresh
+        # data from the same read.
+        if self._pending_fetch is not None:
+            return list(await asyncio.shield(self._pending_fetch))
 
-        # Slow path: acquire lock, wait for throttle window, fetch fresh values.
-        async with self._async_lock:
-            # Re-check after acquiring lock — another coroutine may have
-            # fetched while we waited.
-            current_time = time.time()
-            time_since_last_update = current_time - self._async_last_update_time
-            if (
-                self._async_last_values is not None
-                and time_since_last_update < self.throttle_interval
-            ):
-                return self._async_last_values
-
-            if time_since_last_update < self.throttle_interval:
-                wait_time = self.throttle_interval - time_since_last_update
+        # We are the leader — other callers that arrive while we sleep or
+        # fetch will coalesce behind our future.
+        self._pending_fetch = asyncio.get_running_loop().create_future()
+        try:
+            now = time.time()
+            remaining = self.throttle_interval - (now - self._async_last_update_time)
+            if remaining > 0:
                 logger.debug(
                     "Throttling: Waiting %.1fs before fetching fresh values...",
-                    wait_time,
+                    remaining,
                 )
-                await asyncio.sleep(wait_time)
-                current_time = time.time()
+                await asyncio.sleep(remaining)
 
-            try:
-                values = await self.wrapped_powermeter.get_powermeter_watts_async()
-                self._async_last_values = values
-                prev_update_time = self._async_last_update_time
-                self._async_last_update_time = current_time
-                total_interval = current_time - prev_update_time
-                logger.debug(
-                    "Throttling: Fetched fresh values after %.1fs interval: %s",
-                    total_interval,
-                    values,
-                )
-                return values
-            except Exception as e:
-                if self._async_last_values is not None:
-                    logger.warning("Throttling: Error getting fresh values: %s", e)
-                    logger.debug(
-                        "Throttling: Using cached values due to error: %s",
-                        self._async_last_values,
-                    )
-                    return self._async_last_values
-                logger.error("Throttling: Error getting fresh values: %s", e)
-                raise
+            values = await self.wrapped_powermeter.get_powermeter_watts_async()
+            self._async_last_update_time = time.time()
+            logger.debug("Throttling: Fetched fresh values: %s", values)
+            self._pending_fetch.set_result(values)
+            return list(values)
+        except BaseException as e:
+            if not self._pending_fetch.done():
+                self._pending_fetch.set_exception(e)
+            raise
+        finally:
+            self._pending_fetch = None
