@@ -1,4 +1,4 @@
-from pymodbus.client import ModbusTcpClient
+from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadDecoder
 
@@ -57,11 +57,26 @@ class ModbusPowermeter(Powermeter):
         if not self._read_method:
             raise ValueError(f"Unsupported register type: {register_type}")
 
-        self.client = ModbusTcpClient(host, port=port)
+        self.client: AsyncModbusTcpClient | None = None
 
-    def get_powermeter_watts(self):
+    async def start(self) -> None:
+        if self.client:
+            return
+        self.client = AsyncModbusTcpClient(self.host, port=self.port)
+        if not await self.client.connect():
+            self.client = None
+            raise ConnectionError(f"Failed to connect to {self.host}:{self.port}")
+
+    async def stop(self) -> None:
+        if self.client:
+            self.client.close()
+            self.client = None
+
+    async def get_powermeter_watts_async(self) -> list[float]:
+        if not self.client:
+            raise RuntimeError("Client not started; call start() first")
         read = getattr(self.client, self._read_method)
-        result = read(self.address, self.count, slave=self.unit_id)
+        result = await read(self.address, self.count, slave=self.unit_id)
         if result.isError():
             raise Exception("Error reading Modbus data")
         decoder = BinaryPayloadDecoder.fromRegisters(
