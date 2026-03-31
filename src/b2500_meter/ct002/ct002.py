@@ -316,12 +316,12 @@ class CT002:
 
         reports = dict(self._reports_by_consumer)
         last_target = self._last_target_by_consumer.get(consumer_id)
-        saturation = dict(self._saturation_by_consumer)
 
         if consumer_id and consumer_id in reports:
             actual_self = parse_int(reports.get(consumer_id, {}).get("power", 0))
             self._update_saturation(consumer_id, last_target, actual_self)
 
+        # Snapshot after _update_saturation may have modified the dict.
         saturation = dict(self._saturation_by_consumer)
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}

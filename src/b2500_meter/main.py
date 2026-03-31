@@ -207,6 +207,8 @@ async def run_device(
     try:
         await device.start()
     except Exception:
+        # Log but don't re-raise: a single device failing to start (e.g. port
+        # conflict) should not take down other healthy devices in the gather.
         logger.exception("Device %s (%s) failed to start", device_type, device_id)
         await device.stop()
         return
