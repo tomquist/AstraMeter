@@ -2,6 +2,8 @@ import time
 import unittest
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from .throttling import ThrottledPowermeter
 
 
@@ -130,8 +132,6 @@ async def test_async_exception_raises_without_cache():
     throttled = ThrottledPowermeter(mock_pm, throttle_interval=0.1)
 
     # No cached values -- should raise
-    import pytest
-
     with pytest.raises(Exception, match="Network error"):
         await throttled.get_powermeter_watts_async()
 

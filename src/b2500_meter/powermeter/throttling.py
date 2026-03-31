@@ -21,14 +21,18 @@ class ThrottledPowermeter(Powermeter):
     def __init__(self, wrapped_powermeter: Powermeter, throttle_interval: float = 0.0):
         self.wrapped_powermeter = wrapped_powermeter
         self.throttle_interval = throttle_interval
+
+        # Sync path state (protected by self.lock).
         self.last_update_time = 0.0
-        self.last_values: list[float] | None = None
+        self._sync_last_values: list[float] | None = None
         self.lock = threading.Lock()
 
-        # Async path: coalescing fetch pattern.  When a fetch is in flight
-        # (including the throttle sleep), concurrent callers await the same
-        # future so every consumer gets fresh data without hammering the source.
+        # Async path state (single-threaded in the event loop).
+        # Coalescing fetch pattern: when a fetch is in flight (including the
+        # throttle sleep), concurrent callers await the same future so every
+        # consumer gets fresh data without hammering the source.
         self._async_last_update_time = 0.0
+        self._async_last_values: list[float] | None = None
         self._pending_fetch: asyncio.Future[list[float]] | None = None
 
     # --- Sync path (unchanged, for non-migrated callers / tests) ---
@@ -42,7 +46,7 @@ class ThrottledPowermeter(Powermeter):
 
             if self.throttle_interval <= 0:
                 values = self.wrapped_powermeter.get_powermeter_watts()
-                self.last_values = values
+                self._sync_last_values = values
                 self.last_update_time = current_time
                 return values
 
@@ -59,7 +63,7 @@ class ThrottledPowermeter(Powermeter):
 
             try:
                 values = self.wrapped_powermeter.get_powermeter_watts()
-                self.last_values = values
+                self._sync_last_values = values
                 prev_update_time = self.last_update_time
                 self.last_update_time = current_time
                 total_interval = current_time - prev_update_time
@@ -70,13 +74,13 @@ class ThrottledPowermeter(Powermeter):
                 )
                 return values
             except Exception as e:
-                if self.last_values is not None:
+                if self._sync_last_values is not None:
                     logger.warning("Throttling: Error getting fresh values: %s", e)
                     logger.debug(
                         "Throttling: Using cached values due to error: %s",
-                        self.last_values,
+                        self._sync_last_values,
                     )
-                    return self.last_values
+                    return self._sync_last_values
                 logger.error("Throttling: Error getting fresh values: %s", e)
                 raise
 
@@ -115,7 +119,7 @@ class ThrottledPowermeter(Powermeter):
                 await asyncio.sleep(remaining)
 
             values = await self.wrapped_powermeter.get_powermeter_watts_async()
-            self.last_values = values
+            self._async_last_values = values
             self._async_last_update_time = time.time()
             logger.debug("Throttling: Fetched fresh values: %s", values)
             self._pending_fetch.set_result(values)
@@ -124,15 +128,15 @@ class ThrottledPowermeter(Powermeter):
             # Update timestamp even on failure so we respect the throttle
             # interval before retrying — avoids hammering a failing source.
             self._async_last_update_time = time.time()
-            if self.last_values is not None and not isinstance(
+            if self._async_last_values is not None and not isinstance(
                 e, (KeyboardInterrupt, SystemExit)
             ):
                 logger.warning("Throttling: Error getting fresh values: %s", e)
                 logger.debug(
                     "Throttling: Using cached values due to error: %s",
-                    self.last_values,
+                    self._async_last_values,
                 )
-                cached = list(self.last_values)
+                cached = list(self._async_last_values)
                 if not self._pending_fetch.done():
                     self._pending_fetch.set_result(cached)
                 return cached

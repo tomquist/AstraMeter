@@ -21,6 +21,8 @@ class VZLogger(Powermeter):
             self.session = None
 
     async def get_json(self):
+        if not self.session:
+            raise RuntimeError("Session not started; call start() first")
         url = f"http://{self.ip}:{self.port}/{self.uuid}"
         async with self.session.get(url) as resp:
             return await resp.json(content_type=None)

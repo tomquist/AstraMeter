@@ -19,6 +19,8 @@ class AmisReader(Powermeter):
             self.session = None
 
     async def get_json(self, path):
+        if not self.session:
+            raise RuntimeError("Session not started; call start() first")
         url = f"http://{self.ip}{path}"
         async with self.session.get(url) as resp:
             return await resp.json(content_type=None)

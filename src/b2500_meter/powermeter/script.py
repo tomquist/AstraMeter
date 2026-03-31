@@ -20,5 +20,5 @@ class Script(Powermeter):
                 f"Script exited with code {proc.returncode}: {self.script}"
                 + (f"\n{err}" if err else "")
             )
-        power = stdout.decode().strip().split("\n")
-        return [float(p) for p in power]
+        lines = [line for line in stdout.decode().splitlines() if line.strip()]
+        return [float(line) for line in lines]
