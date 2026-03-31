@@ -1,6 +1,7 @@
 # Changelog
 
 ## Next
+- Migrated powermeters to native asyncio, replacing blocking `requests`/threading with `aiohttp` and async lifecycle management for improved concurrency
 - Added support for emulating a *CT002/CT003*, which is recommended to steer multiple devices
 - Added HomeWizard P1 powermeter support via the device WebSocket API with token and serial configuration ([#231](https://github.com/tomquist/b2500-meter/pull/231)), including optional `VERIFY_SSL` to disable TLS certificate verification on trusted networks when needed ([#254](https://github.com/tomquist/b2500-meter/pull/254))
 - Added SMA Energy Meter / Sunny Home Manager support via Speedwire multicast protocol with auto-detection and per-phase power readings ([#231](https://github.com/tomquist/b2500-meter/pull/252))

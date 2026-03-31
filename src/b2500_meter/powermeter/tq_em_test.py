@@ -1,128 +1,117 @@
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from b2500_meter.powermeter.tq_em import TQEnergyManager
 
 
-class TestTQEnergyManager(unittest.TestCase):
-    @patch("requests.Session.post")
-    @patch("requests.Session.get")
-    def test_three_phase(self, mock_get, mock_post):
-        # login GET
-        mock_get.side_effect = [
-            MagicMock(
-                status_code=200,
-                json=lambda: {"serial": "123", "authentication": False},
-            ),
-            MagicMock(
-                status_code=200,
-                json=lambda: {
-                    "1-0:21.4.0*255": 1,
-                    "1-0:22.4.0*255": 0,
-                    "1-0:41.4.0*255": 2,
-                    "1-0:42.4.0*255": 0,
-                    "1-0:61.4.0*255": 3,
-                    "1-0:62.4.0*255": 0,
-                },
-            ),
-        ]
-        mock_post.return_value = MagicMock(
-            status_code=200, json=lambda: {"authentication": True}
-        )
+def _make_resp(data, status=200):
+    """Create a mock aiohttp response with async context manager support."""
+    resp = MagicMock()
+    resp.json = AsyncMock(return_value=data)
+    resp.raise_for_status = MagicMock()
+    resp.status = status
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    return resp
 
+
+def _make_session(get_responses, post_responses=None):
+    """Create a mock aiohttp session with sequenced GET/POST responses."""
+    session = MagicMock()
+    session.get = MagicMock(side_effect=[_make_resp(d) for d in get_responses])
+    if post_responses:
+        session.post = MagicMock(side_effect=[_make_resp(d) for d in post_responses])
+    else:
+        session.post = MagicMock()
+    session.close = AsyncMock()
+    return session
+
+
+async def test_three_phase():
+    session = _make_session(
+        get_responses=[
+            {"serial": "123", "authentication": False},
+            {
+                "1-0:21.4.0*255": 1,
+                "1-0:22.4.0*255": 0,
+                "1-0:41.4.0*255": 2,
+                "1-0:42.4.0*255": 0,
+                "1-0:61.4.0*255": 3,
+                "1-0:62.4.0*255": 0,
+            },
+        ],
+        post_responses=[{"authentication": True}],
+    )
+    with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.10")
-        self.assertEqual(meter.get_powermeter_watts(), [1.0, 2.0, 3.0])
+        await meter.start()
+        assert await meter.get_powermeter_watts_async() == [1.0, 2.0, 3.0]
+        await meter.stop()
 
-    @patch("requests.Session.post")
-    @patch("requests.Session.get")
-    def test_total_only(self, mock_get, mock_post):
-        mock_get.side_effect = [
-            MagicMock(
-                status_code=200,
-                json=lambda: {"serial": "321", "authentication": False},
-            ),
-            MagicMock(
-                status_code=200,
-                json=lambda: {"1-0:1.4.0*255": 9, "1-0:2.4.0*255": 0},
-            ),
-        ]
-        mock_post.return_value = MagicMock(
-            status_code=200, json=lambda: {"authentication": True}
-        )
 
+async def test_total_only():
+    session = _make_session(
+        get_responses=[
+            {"serial": "321", "authentication": False},
+            {"1-0:1.4.0*255": 9, "1-0:2.4.0*255": 0},
+        ],
+        post_responses=[{"authentication": True}],
+    )
+    with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.12")
-        self.assertEqual(meter.get_powermeter_watts(), [9.0])
+        await meter.start()
+        assert await meter.get_powermeter_watts_async() == [9.0]
+        await meter.stop()
 
-    @patch("requests.Session.post")
-    @patch("requests.Session.get")
-    def test_relogin_on_expired_session(self, mock_get, mock_post):
-        mock_get.side_effect = [
-            MagicMock(
-                status_code=200,
-                json=lambda: {"serial": "123", "authentication": False},
-            ),
-            MagicMock(status_code=200, json=lambda: {"status": 901}),
-            MagicMock(
-                status_code=200,
-                json=lambda: {"serial": "123", "authentication": False},
-            ),
-            MagicMock(
-                status_code=200,
-                json=lambda: {"1-0:1.4.0*255": 5, "1-0:2.4.0*255": 0},
-            ),
-        ]
-        mock_post.side_effect = [
-            MagicMock(status_code=200, json=lambda: {"authentication": True}),
-            MagicMock(status_code=200, json=lambda: {"authentication": True}),
-        ]
 
+async def test_relogin_on_expired_session():
+    session = _make_session(
+        get_responses=[
+            {"serial": "123", "authentication": False},
+            {"status": 901},
+            {"serial": "123", "authentication": False},
+            {"1-0:1.4.0*255": 5, "1-0:2.4.0*255": 0},
+        ],
+        post_responses=[
+            {"authentication": True},
+            {"authentication": True},
+        ],
+    )
+    with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.11")
-        self.assertEqual(meter.get_powermeter_watts(), [5.0])
+        await meter.start()
+        assert await meter.get_powermeter_watts_async() == [5.0]
+        await meter.stop()
 
-    @patch("requests.Session.post")
-    @patch("requests.Session.get")
-    def test_missing_export(self, mock_get, mock_post):
-        mock_get.side_effect = [
-            MagicMock(
-                status_code=200,
-                json=lambda: {"serial": "111", "authentication": False},
-            ),
-            MagicMock(
-                status_code=200,
-                json=lambda: {"1-0:1.4.0*255": 4},
-            ),
-        ]
-        mock_post.return_value = MagicMock(
-            status_code=200, json=lambda: {"authentication": True}
-        )
 
+async def test_missing_export():
+    session = _make_session(
+        get_responses=[
+            {"serial": "111", "authentication": False},
+            {"1-0:1.4.0*255": 4},
+        ],
+        post_responses=[{"authentication": True}],
+    )
+    with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.15")
-        self.assertEqual(meter.get_powermeter_watts(), [4.0])
+        await meter.start()
+        assert await meter.get_powermeter_watts_async() == [4.0]
+        await meter.stop()
 
-    @patch("requests.Session.post")
-    @patch("requests.Session.get")
-    def test_three_phase_missing_export(self, mock_get, mock_post):
-        mock_get.side_effect = [
-            MagicMock(
-                status_code=200,
-                json=lambda: {"serial": "777", "authentication": False},
-            ),
-            MagicMock(
-                status_code=200,
-                json=lambda: {
-                    "1-0:21.4.0*255": 1,
-                    "1-0:41.4.0*255": 2,
-                    "1-0:61.4.0*255": 3,
-                },
-            ),
-        ]
-        mock_post.return_value = MagicMock(
-            status_code=200, json=lambda: {"authentication": True}
-        )
 
+async def test_three_phase_missing_export():
+    session = _make_session(
+        get_responses=[
+            {"serial": "777", "authentication": False},
+            {
+                "1-0:21.4.0*255": 1,
+                "1-0:41.4.0*255": 2,
+                "1-0:61.4.0*255": 3,
+            },
+        ],
+        post_responses=[{"authentication": True}],
+    )
+    with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.16")
-        self.assertEqual(meter.get_powermeter_watts(), [1.0, 2.0, 3.0])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        await meter.start()
+        assert await meter.get_powermeter_watts_async() == [1.0, 2.0, 3.0]
+        await meter.stop()

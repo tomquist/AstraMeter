@@ -1,8 +1,8 @@
 import json
 
-import requests
+import aiohttp
+from aiohttp import BasicAuth, ClientTimeout
 from jsonpath_ng import parse
-from requests.auth import HTTPBasicAuth
 
 from b2500_meter.config.logger import logger
 
@@ -29,27 +29,42 @@ class JsonHttpPowermeter(Powermeter):
     ):
         self.url = url
         self.json_paths = [json_path] if isinstance(json_path, str) else list(json_path)
-        self.auth = HTTPBasicAuth(username, password) if username or password else None
+        self.auth = (
+            BasicAuth(username or "", password or "") if username or password else None
+        )
         self.headers = headers or {}
-        self.session = requests.Session()
+        self.session: aiohttp.ClientSession | None = None
 
-    def get_json(self):
+    async def start(self) -> None:
+        if self.session:
+            return
+        self.session = aiohttp.ClientSession(
+            auth=self.auth,
+            headers=self.headers,
+            timeout=ClientTimeout(total=10),
+        )
+
+    async def stop(self) -> None:
+        if self.session:
+            await self.session.close()
+            self.session = None
+
+    async def get_json(self):
+        if not self.session:
+            raise RuntimeError("Session not started; call start() first")
         try:
-            response = self.session.get(
-                self.url, headers=self.headers, auth=self.auth, timeout=10
-            )
-            response.raise_for_status()
-            return response.json()
+            async with self.session.get(self.url) as resp:
+                resp.raise_for_status()
+                return await resp.json(content_type=None)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON: {e}")
-            logger.error(f"Response content: {response.text[:200]}...")
             raise ValueError(f"Invalid JSON response: {e}") from e
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             logger.error(f"HTTP request error: {e}")
             raise ValueError(f"HTTP request error: {e}") from e
 
-    def get_powermeter_watts(self) -> list[float]:
-        data = self.get_json()
+    async def get_powermeter_watts_async(self) -> list[float]:
+        data = await self.get_json()
         values = []
         for path in self.json_paths:
             values.append(extract_json_value(data, path))

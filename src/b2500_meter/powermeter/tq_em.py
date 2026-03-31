@@ -1,6 +1,7 @@
 import time
 
-import requests
+import aiohttp
+from aiohttp import ClientTimeout
 
 from .base import Powermeter
 
@@ -35,21 +36,35 @@ class TQEnergyManager(Powermeter):
 
     def __init__(self, host: str, password: str = "", *, timeout: float = 5.0) -> None:
         self._host, self._pw, self._timeout = host.rstrip("/"), password, timeout
-        self._sess = requests.Session()
+        self._sess: aiohttp.ClientSession | None = None
         self._serial: str | None = None
         self._last_use = 0.0
+
+    async def start(self) -> None:
+        if self._sess:
+            return
+        self._sess = aiohttp.ClientSession(
+            timeout=ClientTimeout(total=self._timeout),
+        )
+
+    async def stop(self) -> None:
+        if self._sess:
+            await self._sess.close()
+            self._sess = None
 
     # ------------------------------------------------------------------ #
     # PUBLIC                                                             #
     # ------------------------------------------------------------------ #
-    def get_powermeter_watts(self) -> list[float]:
-        self._ensure_session()
+    async def get_powermeter_watts_async(self) -> list[float]:
+        if not self._sess:
+            raise RuntimeError("Session not started; call start() first")
+        await self._ensure_session()
 
         try:
-            data = self._read_live_json()
+            data = await self._read_live_json()
         except _SessionExpired:
-            self._login()
-            data = self._read_live_json()
+            await self._login()
+            data = await self._read_live_json()
 
         if any(k in data for k in self._PHASE_KEYS):
             return [
@@ -72,17 +87,19 @@ class TQEnergyManager(Powermeter):
     # ------------------------------------------------------------------ #
     # INTERNALS                                                          #
     # ------------------------------------------------------------------ #
-    def _ensure_session(self) -> None:
+    async def _ensure_session(self) -> None:
+        assert self._sess is not None
         now = time.time()
         if self._serial is None or (now - self._last_use) > self._MAX_IDLE:
-            self._login()
+            await self._login()
         self._last_use = now
 
-    def _login(self) -> None:
+    async def _login(self) -> None:
         """Authenticate lazily with the device."""
-        r1 = self._sess.get(f"http://{self._host}/start.php", timeout=self._timeout)
-        r1.raise_for_status()
-        j1 = r1.json()
+        assert self._sess is not None
+        async with self._sess.get(f"http://{self._host}/start.php") as r1:
+            r1.raise_for_status()
+            j1 = await r1.json(content_type=None)
 
         self._serial = j1.get("serial") or j1.get("ieq_serial")
         if not self._serial:
@@ -95,25 +112,25 @@ class TQEnergyManager(Powermeter):
         if self._pw:
             payload["password"] = self._pw
 
-        r2 = self._sess.post(
-            f"http://{self._host}/start.php", data=payload, timeout=self._timeout
-        )
-        r2.raise_for_status()
-        if r2.json().get("authentication") is not True:
-            raise RuntimeError("Authentication failed")
+        async with self._sess.post(
+            f"http://{self._host}/start.php", data=payload
+        ) as r2:
+            r2.raise_for_status()
+            j2 = await r2.json(content_type=None)
+            if j2.get("authentication") is not True:
+                raise RuntimeError("Authentication failed")
 
-    def _read_live_json(self) -> dict:
-        r = self._sess.get(
-            f"http://{self._host}/mum-webservice/data.php", timeout=self._timeout
-        )
-        if r.status_code in (401, 403):
-            raise _SessionExpired
+    async def _read_live_json(self) -> dict:
+        assert self._sess is not None
+        async with self._sess.get(f"http://{self._host}/mum-webservice/data.php") as r:
+            if r.status in (401, 403):
+                raise _SessionExpired
 
-        r.raise_for_status()
-        data = r.json()
-        if data.get("status", 0) >= 900:
-            raise _SessionExpired
-        return data
+            r.raise_for_status()
+            data = await r.json(content_type=None)
+            if data.get("status", 0) >= 900:
+                raise _SessionExpired
+            return data
 
 
 class _SessionExpired(RuntimeError):
