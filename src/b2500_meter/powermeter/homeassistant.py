@@ -1,12 +1,19 @@
 import asyncio
 import contextlib
 import json
+import logging
+from typing import Any
 
 import aiohttp
 
-from b2500_meter.config.logger import logger
-
 from .base import Powermeter
+
+# Stdlib logger: avoid importing b2500_meter.config (config_loader imports powermeter).
+logger = logging.getLogger("b2500-meter")
+
+# Home Assistant websocket subscribe_entities compressed state (homeassistant.const)
+_HA_S = "s"
+_HA_DIFF_ADD = "+"
 
 
 class HomeAssistant(Powermeter):
@@ -47,7 +54,7 @@ class HomeAssistant(Powermeter):
         self._entity_values: dict[str, float | None] = {}
         self._tracked_entities = self._collect_entities()
         self._msg_id = 0
-        self._get_states_id: int | None = None
+        self._subscribe_entities_id: int | None = None
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._entities_ready = asyncio.Event()
@@ -108,10 +115,35 @@ class HomeAssistant(Powermeter):
                 logger.error(f"Home Assistant WebSocket error: {e}")
             # Reset protocol state for reconnection; keep _entity_values
             # (stale values are preferable to ValueError during brief disconnect;
-            # get_states on reconnect will refresh them)
+            # subscribe_entities re-sends initial states on reconnect)
             self._msg_id = 0
-            self._get_states_id = None
+            self._subscribe_entities_id = None
             await asyncio.sleep(5)
+
+    def _handle_compressed_entity_event(self, ev: dict[str, Any]) -> None:
+        """Apply subscribe_entities payloads (initial + diffs)."""
+        additions = ev.get("a")
+        if isinstance(additions, dict):
+            for eid, st in additions.items():
+                if (
+                    eid in self._tracked_entities
+                    and isinstance(st, dict)
+                    and _HA_S in st
+                ):
+                    self._update_entity_value(eid, st.get(_HA_S))
+        changes = ev.get("c")
+        if isinstance(changes, dict):
+            for eid, diff in changes.items():
+                if eid not in self._tracked_entities or not isinstance(diff, dict):
+                    continue
+                plus = diff.get(_HA_DIFF_ADD)
+                if isinstance(plus, dict) and _HA_S in plus:
+                    self._update_entity_value(eid, plus.get(_HA_S))
+        removals = ev.get("r")
+        if isinstance(removals, list):
+            for eid in removals:
+                if eid in self._tracked_entities:
+                    self._update_entity_value(eid, None)
 
     async def _handle_message(
         self, ws: aiohttp.ClientWebSocketResponse, raw: str
@@ -125,49 +157,37 @@ class HomeAssistant(Powermeter):
         msg_type = msg.get("type")
 
         if msg_type == "auth_required":
+            logger.debug("Home Assistant: auth required, sending token")
             await ws.send_json({"type": "auth", "access_token": self.access_token})
         elif msg_type == "auth_ok":
             logger.info("Home Assistant: authenticated")
-            self._get_states_id = self._next_id()
-            await ws.send_json({"id": self._get_states_id, "type": "get_states"})
-            subscribe_id = self._next_id()
+            if not self._tracked_entities:
+                logger.error(
+                    "Home Assistant: no entity IDs configured for subscription"
+                )
+                return
+            self._subscribe_entities_id = self._next_id()
             await ws.send_json(
                 {
-                    "id": subscribe_id,
-                    "type": "subscribe_trigger",
-                    "trigger": {
-                        "platform": "state",
-                        "entity_id": sorted(self._tracked_entities),
-                    },
+                    "id": self._subscribe_entities_id,
+                    "type": "subscribe_entities",
+                    "entity_ids": sorted(self._tracked_entities),
                 }
             )
         elif msg_type == "auth_invalid":
             logger.error(f"Home Assistant auth failed: {msg.get('message', '')}")
         elif msg_type == "result":
-            if msg.get("id") == self._get_states_id:
-                if msg.get("success"):
-                    self._handle_states(msg.get("result", []))
-                else:
-                    logger.error(
-                        f"Home Assistant get_states failed: {msg.get('error')}"
-                    )
+            if msg.get("id") == self._subscribe_entities_id and not msg.get("success"):
+                logger.error(
+                    f"Home Assistant subscribe_entities failed: {msg.get('error')}"
+                )
         elif msg_type == "event":
-            event = msg.get("event", {})
-            trigger = event.get("variables", {}).get("trigger", {})
-            to_state = trigger.get("to_state")
-            if to_state:
-                entity_id = to_state.get("entity_id")
-                if entity_id in self._tracked_entities:
-                    self._update_entity_value(entity_id, to_state.get("state"))
-
-    def _handle_states(self, states: list[dict]) -> None:
-        for state in states:
-            entity_id = state.get("entity_id")
-            if entity_id in self._tracked_entities:
-                self._update_entity_value(entity_id, state.get("state"))
-        self._check_entities_ready()
+            ev = msg.get("event")
+            if isinstance(ev, dict):
+                self._handle_compressed_entity_event(ev)
 
     def _update_entity_value(self, entity_id: str, state_val: object) -> None:
+        logger.debug(f"Home Assistant: update_entity_value: {entity_id}, {state_val}")
         if state_val is None:
             self._entity_values[entity_id] = None
             self._check_entities_ready()
@@ -218,6 +238,4 @@ class HomeAssistant(Powermeter):
         try:
             await asyncio.wait_for(self._entities_ready.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            raise TimeoutError(
-                "Timeout waiting for Home Assistant state"
-            ) from None
+            raise TimeoutError("Timeout waiting for Home Assistant state") from None

@@ -22,18 +22,29 @@ def _create_powermeter(**overrides):
     return HomeAssistant(**defaults)
 
 
+def _compressed_initial_payload(states: list[dict]) -> dict:
+    """Build subscribe_entities initial `event.a` map (entity_id -> {s: ...})."""
+    a: dict = {}
+    for s in states:
+        eid = s.get("entity_id")
+        if not eid:
+            continue
+        a[eid] = {"s": s.get("state")}
+    return {"a": a}
+
+
 async def _simulate_auth_and_states(pm, states):
     ws = AsyncMock()
     await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    sid = pm._subscribe_entities_id
     await pm._handle_message(
         ws,
         json.dumps(
             {
-                "id": pm._get_states_id,
-                "type": "result",
-                "success": True,
-                "result": states,
+                "id": sid,
+                "type": "event",
+                "event": _compressed_initial_payload(states),
             }
         ),
     )
@@ -50,7 +61,7 @@ async def test_auth_required_sends_token():
     ws.send_json.assert_called_once_with({"type": "auth", "access_token": "token"})
 
 
-async def test_auth_ok_sends_get_states_and_subscribe():
+async def test_auth_ok_subscribes_entities():
     pm = _create_powermeter()
     ws = AsyncMock()
     await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
@@ -59,15 +70,11 @@ async def test_auth_ok_sends_get_states_and_subscribe():
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
 
     calls = ws.send_json.call_args_list
-    assert len(calls) == 2
+    assert len(calls) == 1
 
-    get_states_msg = calls[0][0][0]
-    assert get_states_msg["type"] == "get_states"
-
-    subscribe_msg = calls[1][0][0]
-    assert subscribe_msg["type"] == "subscribe_trigger"
-    assert subscribe_msg["trigger"]["platform"] == "state"
-    assert "sensor.current_power" in subscribe_msg["trigger"]["entity_id"]
+    subscribe_msg = calls[0][0][0]
+    assert subscribe_msg["type"] == "subscribe_entities"
+    assert "sensor.current_power" in subscribe_msg["entity_ids"]
 
 
 async def test_auth_invalid_does_not_crash():
@@ -80,10 +87,10 @@ async def test_auth_invalid_does_not_crash():
     # Should not raise
 
 
-# get_states tests
+# subscribe_entities initial snapshot tests
 
 
-async def test_get_states_populates_value():
+async def test_initial_snapshot_populates_value():
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "1000"}]
@@ -91,28 +98,17 @@ async def test_get_states_populates_value():
     assert await pm.get_powermeter_watts_async() == [1000.0]
 
 
-async def test_get_states_failure():
+async def test_no_initial_event_leaves_values_missing():
     pm = _create_powermeter()
     ws = AsyncMock()
     await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
-    await pm._handle_message(
-        ws,
-        json.dumps(
-            {
-                "id": pm._get_states_id,
-                "type": "result",
-                "success": False,
-                "error": {"code": "unknown", "message": "something broke"},
-            }
-        ),
-    )
 
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts_async()
 
 
-async def test_get_states_ignores_untracked_entities():
+async def test_initial_snapshot_only_updates_tracked_entities():
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm,
@@ -142,13 +138,9 @@ async def test_trigger_event_updates_value():
                 "id": 2,
                 "type": "event",
                 "event": {
-                    "variables": {
-                        "trigger": {
-                            "entity_id": "sensor.current_power",
-                            "to_state": {
-                                "entity_id": "sensor.current_power",
-                                "state": "200",
-                            },
+                    "c": {
+                        "sensor.current_power": {
+                            "+": {"s": "200"},
                         }
                     }
                 },
@@ -172,13 +164,9 @@ async def test_trigger_event_ignores_untracked_entity():
                 "id": 2,
                 "type": "event",
                 "event": {
-                    "variables": {
-                        "trigger": {
-                            "entity_id": "sensor.other",
-                            "to_state": {
-                                "entity_id": "sensor.other",
-                                "state": "999",
-                            },
+                    "c": {
+                        "sensor.other": {
+                            "+": {"s": "999"},
                         }
                     }
                 },
@@ -371,10 +359,10 @@ async def test_wait_for_message_timeout():
         await pm.wait_for_message_async(timeout=0)
 
 
-# Subscribe trigger entity list test
+# subscribe_entities entity list test
 
 
-async def test_subscribe_trigger_contains_all_entities_calculate_mode():
+async def test_subscribe_entities_contains_all_entities_calculate_mode():
     pm = _create_powermeter(
         current_power_entity="",
         power_calculate=True,
@@ -386,8 +374,8 @@ async def test_subscribe_trigger_contains_all_entities_calculate_mode():
     ws.send_json.reset_mock()
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
 
-    subscribe_msg = ws.send_json.call_args_list[1][0][0]
-    entity_ids = subscribe_msg["trigger"]["entity_id"]
+    subscribe_msg = ws.send_json.call_args_list[0][0][0]
+    entity_ids = subscribe_msg["entity_ids"]
     assert "sensor.power_input" in entity_ids
     assert "sensor.power_output" in entity_ids
 
@@ -458,12 +446,9 @@ async def test_entities_ready_cleared_when_value_becomes_none():
             {
                 "type": "event",
                 "event": {
-                    "variables": {
-                        "trigger": {
-                            "to_state": {
-                                "entity_id": "sensor.current_power",
-                                "state": "unavailable",
-                            },
+                    "c": {
+                        "sensor.current_power": {
+                            "+": {"s": "unavailable"},
                         }
                     }
                 },
