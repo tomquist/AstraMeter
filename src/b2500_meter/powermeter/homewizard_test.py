@@ -209,6 +209,20 @@ async def test_stop_without_start():
     await pm.stop()
 
 
+async def test_start_resets_stale_state():
+    pm = _create_powermeter()
+    # Simulate leftover state from a previous session
+    pm.values = [999.0]
+    pm._message_event.set()
+
+    with patch.object(pm, "_ws_loop", new_callable=AsyncMock) as mock_loop:
+        mock_loop.return_value = None
+        await pm.start()
+        assert pm.values is None
+        assert not pm._message_event.is_set()
+        await pm.stop()
+
+
 # --- Category G: Full WS flow ---
 
 

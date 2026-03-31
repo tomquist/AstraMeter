@@ -50,6 +50,8 @@ class HomeWizardPowermeter(Powermeter):
     async def start(self) -> None:
         if self._session:
             return
+        self.values = None
+        self._message_event = asyncio.Event()
         self._session = aiohttp.ClientSession()
         self._ws_task = asyncio.create_task(self._ws_loop())
 
