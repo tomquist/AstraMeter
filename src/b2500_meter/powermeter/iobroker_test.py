@@ -1,62 +1,40 @@
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from b2500_meter.powermeter import IoBroker
 
 
-class TestIoBroker(unittest.TestCase):
-    def setUp(self):
-        self.ip = "127.0.0.1"
-        self.port = "8080"
-        self.current_power_alias = "alias1"
-        self.power_input_alias = "input_alias"
-        self.power_output_alias = "output_alias"
-
-    @patch("requests.Session.get")
-    def test_get_powermeter_watts_no_calculate(self, mock_get):
-        # Prepare the mocked response for no power calculation
-        mock_response = MagicMock()
-        mock_response.json.return_value = [{"id": self.current_power_alias, "val": 100}]
-        mock_get.return_value = mock_response
-
-        # Initialize IoBroker with power_calculate = False
+async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
+    mock_aiohttp_session.set_json([{"id": "alias1", "val": 100}])
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         iobroker = IoBroker(
-            self.ip,
-            self.port,
-            self.current_power_alias,
+            "127.0.0.1",
+            "8080",
+            "alias1",
             power_calculate=False,
-            power_input_alias=self.power_input_alias,
-            power_output_alias=self.power_output_alias,
+            power_input_alias="input_alias",
+            power_output_alias="output_alias",
         )
+        await iobroker.start()
+        assert await iobroker.get_powermeter_watts_async() == [100]
+        await iobroker.stop()
 
-        # Call the method and check the result
-        result = iobroker.get_powermeter_watts()
-        self.assertEqual(result, [100])
 
-    @patch("requests.Session.get")
-    def test_get_powermeter_watts_with_calculate(self, mock_get):
-        # Prepare the mocked response for power calculation
-        mock_response = MagicMock()
-        mock_response.json.return_value = [
-            {"id": self.power_input_alias, "val": 300},
-            {"id": self.power_output_alias, "val": 150},
+async def test_get_powermeter_watts_with_calculate(mock_aiohttp_session):
+    mock_aiohttp_session.set_json(
+        [
+            {"id": "input_alias", "val": 300},
+            {"id": "output_alias", "val": 150},
         ]
-        mock_get.return_value = mock_response
-
-        # Initialize IoBroker with power_calculate = True
+    )
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         iobroker = IoBroker(
-            self.ip,
-            self.port,
-            self.current_power_alias,
+            "127.0.0.1",
+            "8080",
+            "alias1",
             power_calculate=True,
-            power_input_alias=self.power_input_alias,
-            power_output_alias=self.power_output_alias,
+            power_input_alias="input_alias",
+            power_output_alias="output_alias",
         )
-
-        # Call the method and check the result
-        result = iobroker.get_powermeter_watts()
-        self.assertEqual(result, [150])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        await iobroker.start()
+        assert await iobroker.get_powermeter_watts_async() == [150]
+        await iobroker.stop()

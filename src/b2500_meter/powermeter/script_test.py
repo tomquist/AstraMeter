@@ -1,17 +1,11 @@
-import unittest
-
 from .script import Script
 
 
-class TestScript(unittest.TestCase):
-    def test_script_get_powermeter_watts_integer(self):
-        script = Script('echo "456"')
-        self.assertEqual(script.get_powermeter_watts(), [456])
-
-    def test_script_get_powermeter_watts_float(self):
-        script = Script('echo "456.7"')
-        self.assertEqual(script.get_powermeter_watts(), [456.7])
+async def test_script_get_powermeter_watts_integer():
+    script = Script('echo "456"')
+    assert await script.get_powermeter_watts_async() == [456]
 
 
-if __name__ == "__main__":
-    unittest.main()
+async def test_script_get_powermeter_watts_float():
+    script = Script('echo "456.7"')
+    assert await script.get_powermeter_watts_async() == [456.7]

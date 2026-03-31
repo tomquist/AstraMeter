@@ -1,19 +1,12 @@
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from b2500_meter.powermeter import Shrdzm
 
 
-class TestShrdzm(unittest.TestCase):
-    @patch("requests.Session.get")
-    def test_shrdzm_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"1.7.0": 5000, "2.7.0": 2000}
-        mock_get.return_value = mock_response
-
+async def test_shrdzm_get_powermeter_watts(mock_aiohttp_session):
+    mock_aiohttp_session.set_json({"1.7.0": 5000, "2.7.0": 2000})
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         shrdzm = Shrdzm("192.168.1.5", "user", "pass")
-        self.assertEqual(shrdzm.get_powermeter_watts(), [3000])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        await shrdzm.start()
+        assert await shrdzm.get_powermeter_watts_async() == [3000]
+        await shrdzm.stop()

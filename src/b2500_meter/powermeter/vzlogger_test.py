@@ -1,19 +1,12 @@
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from b2500_meter.powermeter import VZLogger
 
 
-class TestVZLogger(unittest.TestCase):
-    @patch("requests.Session.get")
-    def test_vzlogger_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"data": [{"tuples": [[None, 900]]}]}
-        mock_get.return_value = mock_response
-
+async def test_vzlogger_get_powermeter_watts(mock_aiohttp_session):
+    mock_aiohttp_session.set_json({"data": [{"tuples": [[None, 900]]}]})
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         vzlogger = VZLogger("192.168.1.9", "8088", "uuid")
-        self.assertEqual(vzlogger.get_powermeter_watts(), [900])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        await vzlogger.start()
+        assert await vzlogger.get_powermeter_watts_async() == [900]
+        await vzlogger.stop()

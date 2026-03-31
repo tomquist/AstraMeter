@@ -1,19 +1,12 @@
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from b2500_meter.powermeter import AmisReader
 
 
-class TestAmisreader(unittest.TestCase):
-    @patch("requests.Session.get")
-    def test_amisreader_get_powermeter_watts(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"saldo": 1200}
-        mock_get.return_value = mock_response
-
+async def test_amisreader_get_powermeter_watts(mock_aiohttp_session):
+    mock_aiohttp_session.set_json({"saldo": 1200})
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         amisreader = AmisReader("192.168.1.10")
-        self.assertEqual(amisreader.get_powermeter_watts(), [1200])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        await amisreader.start()
+        assert await amisreader.get_powermeter_watts_async() == [1200]
+        await amisreader.stop()

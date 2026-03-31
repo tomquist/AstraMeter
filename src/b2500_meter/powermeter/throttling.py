@@ -115,6 +115,7 @@ class ThrottledPowermeter(Powermeter):
                 await asyncio.sleep(remaining)
 
             values = await self.wrapped_powermeter.get_powermeter_watts_async()
+            self.last_values = values
             self._async_last_update_time = time.time()
             logger.debug("Throttling: Fetched fresh values: %s", values)
             self._pending_fetch.set_result(values)
@@ -123,6 +124,18 @@ class ThrottledPowermeter(Powermeter):
             # Update timestamp even on failure so we respect the throttle
             # interval before retrying — avoids hammering a failing source.
             self._async_last_update_time = time.time()
+            if self.last_values is not None and not isinstance(
+                e, (KeyboardInterrupt, SystemExit)
+            ):
+                logger.warning("Throttling: Error getting fresh values: %s", e)
+                logger.debug(
+                    "Throttling: Using cached values due to error: %s",
+                    self.last_values,
+                )
+                cached = list(self.last_values)
+                if not self._pending_fetch.done():
+                    self._pending_fetch.set_result(cached)
+                return cached
             if not self._pending_fetch.done():
                 self._pending_fetch.set_exception(e)
             raise

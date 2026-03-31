@@ -1,6 +1,6 @@
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from .throttling import ThrottledPowermeter
 
@@ -95,6 +95,45 @@ class TestThrottledPowermeter(unittest.TestCase):
         # Next call should wait for interval, then fail and return cached values
         result2 = throttled.get_powermeter_watts()
         self.assertEqual(result2, [100.0, 200.0, 300.0])
+
+
+async def test_async_exception_handling_with_cache():
+    """Test that async path returns cached values on error, matching sync behavior."""
+    mock_pm = Mock()
+    mock_pm.start = AsyncMock()
+    mock_pm.stop = AsyncMock()
+    mock_pm.get_powermeter_watts_async = AsyncMock(return_value=[100.0, 200.0])
+
+    throttled = ThrottledPowermeter(mock_pm, throttle_interval=0.1)
+
+    # First successful call to populate cache
+    result1 = await throttled.get_powermeter_watts_async()
+    assert result1 == [100.0, 200.0]
+
+    # Make the mock raise on next call
+    mock_pm.get_powermeter_watts_async.side_effect = Exception("Network error")
+
+    # Should return cached values instead of raising
+    result2 = await throttled.get_powermeter_watts_async()
+    assert result2 == [100.0, 200.0]
+
+
+async def test_async_exception_raises_without_cache():
+    """Test that async path raises if no cached values exist."""
+    mock_pm = Mock()
+    mock_pm.start = AsyncMock()
+    mock_pm.stop = AsyncMock()
+    mock_pm.get_powermeter_watts_async = AsyncMock(
+        side_effect=Exception("Network error")
+    )
+
+    throttled = ThrottledPowermeter(mock_pm, throttle_interval=0.1)
+
+    # No cached values -- should raise
+    import pytest
+
+    with pytest.raises(Exception, match="Network error"):
+        await throttled.get_powermeter_watts_async()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import requests
+import aiohttp
 
 from .base import Powermeter
 
@@ -9,12 +9,23 @@ class ESPHome(Powermeter):
         self.port = port
         self.domain = domain
         self.id = id
-        self.session = requests.Session()
+        self.session: aiohttp.ClientSession | None = None
 
-    def get_json(self, path):
+    async def start(self) -> None:
+        if self.session:
+            return
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+
+    async def stop(self) -> None:
+        if self.session:
+            await self.session.close()
+            self.session = None
+
+    async def get_json(self, path):
         url = f"http://{self.ip}:{self.port}{path}"
-        return self.session.get(url, timeout=10).json()
+        async with self.session.get(url) as resp:
+            return await resp.json(content_type=None)
 
-    def get_powermeter_watts(self):
-        ParsedData = self.get_json(f"/{self.domain}/{self.id}")
-        return [int(ParsedData["value"])]
+    async def get_powermeter_watts_async(self) -> list[float]:
+        parsed_data = await self.get_json(f"/{self.domain}/{self.id}")
+        return [int(parsed_data["value"])]
