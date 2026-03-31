@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import configparser
 import os
+import signal
 from collections import OrderedDict
 
 from b2500_meter.config.config_loader import ClientFilter, read_all_powermeter_configs
@@ -457,6 +458,10 @@ def main():
                 logger.error("Marstek auto-registration failed: %s", exc)
             except Exception as exc:
                 logger.error("Unexpected Marstek auto-registration error: %s", exc)
+
+    # Map SIGTERM to KeyboardInterrupt so asyncio.run cancels tasks and
+    # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
 
     try:
         asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
