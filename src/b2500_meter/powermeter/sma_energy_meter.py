@@ -237,6 +237,4 @@ class SmaEnergyMeter(Powermeter):
         try:
             await asyncio.wait_for(self._async_message_event.wait(), timeout)
         except asyncio.TimeoutError:
-            raise TimeoutError(
-                "Timeout waiting for SMA Energy Meter data"
-            ) from None
+            raise TimeoutError("Timeout waiting for SMA Energy Meter data") from None
