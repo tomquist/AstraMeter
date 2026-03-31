@@ -226,11 +226,17 @@ async def async_main(
     health = None
     if cfg.getboolean("GENERAL", "ENABLE_HEALTH_CHECK", fallback=True):
         logger.info("Starting health check service...")
-        health = HealthCheckService()
-        if await health.start():
-            logger.info("Health check service started successfully")
-        else:
-            logger.error("Failed to start health check service")
+        try:
+            health = HealthCheckService()
+            if await health.start():
+                logger.info("Health check service started successfully")
+            else:
+                logger.error("Failed to start health check service")
+                health = None
+        except Exception:
+            logger.exception("Health check service failed to initialize")
+            if health:
+                await health.stop()
             health = None
 
     # Create powermeters

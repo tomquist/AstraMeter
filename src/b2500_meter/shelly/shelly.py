@@ -226,12 +226,14 @@ class Shelly:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._inactive_check_task
             self._inactive_check_task = None
+        # Close transport first to stop new datagrams from spawning tasks,
+        # then cancel and await any in-flight handler tasks.
+        if self._transport:
+            self._transport.close()
+            self._transport = None
         if self._protocol:
             for task in list(self._protocol._tasks):
                 task.cancel()
             await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
-        if self._transport:
-            self._transport.close()
-            self._transport = None
         self._protocol = None
         self._stopped.set()
