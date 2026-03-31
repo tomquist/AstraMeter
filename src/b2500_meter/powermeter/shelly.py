@@ -50,11 +50,11 @@ class Shelly(Powermeter):
 
 class Shelly1PM(Shelly):
     async def get_powermeter_watts_async(self) -> list[float]:
-        status = await self._get_json("/status")
         if self.emeterindex:
             meter = await self._get_json(f"/meter/{self.emeterindex}")
             return [int(meter["power"])]
         else:
+            status = await self._get_json("/status")
             return [int(meter["power"]) for meter in status["meters"]]
 
 
