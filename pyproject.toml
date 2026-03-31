@@ -18,7 +18,7 @@ dependencies = [
     "pymodbus==3.6.5",
     "websocket-client==1.8.0",
     "smllib",
-    "pyserial",
+    "pyserial-asyncio-fast",
 ]
 
 [project.optional-dependencies]

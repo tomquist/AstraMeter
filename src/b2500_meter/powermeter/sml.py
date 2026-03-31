@@ -1,12 +1,10 @@
+import asyncio
 import configparser
 import datetime
 import re
-import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-import serial
+import serial_asyncio_fast
 import smllib.errors
 from smllib import SmlFrame, SmlStreamReader
 from smllib.const import UNITS
@@ -80,13 +78,6 @@ def _expect_unit(ov, expected: str, label: str) -> None:
         )
 
 
-@contextmanager
-def _open_serial_endpoint(endpoint: str) -> Iterator[serial.Serial]:
-    """Open serial transport for a local device path."""
-    with serial.Serial(endpoint, 9600, timeout=10) as ser:
-        yield ser
-
-
 class Sml(Powermeter):
     def __init__(
         self,
@@ -105,19 +96,60 @@ class Sml(Powermeter):
         self._obis_l2 = obis_power_l2
         self._obis_l3 = obis_power_l3
         self._current = EnergyStats()
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
 
     @property
     def current(self) -> EnergyStats:
         return self._current
 
-    def get_powermeter_watts(self) -> list[float]:
-        self.read_serial()
-        return [float(x) for x in self._current.powers]
+    async def start(self) -> None:
+        if self._reader is not None:
+            return
+        self._reader, self._writer = await serial_asyncio_fast.open_serial_connection(
+            url=self._serial_device, baudrate=9600
+        )
 
-    def _try_read_frame(
-        self, ser: serial.Serial, stream: SmlStreamReader
-    ) -> SmlFrame | None:
+    async def stop(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            await self._writer.wait_closed()
+            self._reader = None
+            self._writer = None
+
+    async def get_powermeter_watts_async(self) -> list[float]:
+        if self._lock.locked():
+            return [float(x) for x in self._current.powers]
+        async with self._lock:
+            await self._read_serial()
+            return [float(x) for x in self._current.powers]
+
+    async def _read_serial(self) -> None:
+        if self._reader is None:
+            raise RuntimeError("Sml not started; call start() first")
+        stream = SmlStreamReader()
+        try:
+            data = await asyncio.wait_for(self._reader.read(512), timeout=10)
+        except asyncio.TimeoutError:
+            logger.error("serial read timed out")
+            return
+        stream.add(data)
+        for i in range(10):
+            sml_frame = await self._try_read_frame(stream)
+            if sml_frame is not None:
+                self._current = EnergyStats.from_sml_frame(
+                    sml_frame,
+                    self._obis_current,
+                    self._obis_l1,
+                    self._obis_l2,
+                    self._obis_l3,
+                )
+                logger.debug("got sml frame: %s after %s attempts", self._current, i)
+                return
+        logger.error("failed to read SML frame after 10 attempts")
+
+    async def _try_read_frame(self, stream: SmlStreamReader) -> SmlFrame | None:
         try:
             sml_frame = stream.get_frame()
         except smllib.errors.CrcError as e:
@@ -127,39 +159,18 @@ class Sml(Powermeter):
             logger.error("error reading frame: %s", e)
             sml_frame = None
         if sml_frame is None:
-            data = ser.read(512)
-            if not data:
+            assert self._reader is not None
+            try:
+                data = await asyncio.wait_for(self._reader.read(512), timeout=10)
+            except asyncio.TimeoutError:
                 logger.error("serial read timed out")
+                return None
+            if not data:
+                logger.error("serial connection closed")
                 return None
             # May buffer partial SML; frame may parse on a later loop iteration.
             stream.add(data)
         return sml_frame
-
-    def read_serial(self) -> None:
-        if not self._lock.acquire(blocking=False):
-            return
-        try:
-            stream = SmlStreamReader()
-            with _open_serial_endpoint(self._serial_device) as ser:
-                data = ser.read(512)
-                stream.add(data)
-                for i in range(10):
-                    sml_frame = self._try_read_frame(ser, stream)
-                    if sml_frame is not None:
-                        self._current = EnergyStats.from_sml_frame(
-                            sml_frame,
-                            self._obis_current,
-                            self._obis_l1,
-                            self._obis_l2,
-                            self._obis_l3,
-                        )
-                        logger.debug(
-                            "got sml frame: %s after %s attempts", self._current, i
-                        )
-                        return
-                logger.error("failed to read SML frame after 10 attempts")
-        finally:
-            self._lock.release()
 
 
 def parse_sml_obis_config(
