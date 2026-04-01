@@ -376,3 +376,70 @@ async def test_ws_loop_reconnects_on_client_error():
 
     assert call_count == 2
     mock_sleep.assert_called_with(5)
+
+
+# --- Category I: E2E SSL verification through ws_connect ---
+
+
+async def test_ws_loop_passes_verify_ssl_context_to_ws_connect():
+    """SSL context built with verify_ssl=True is forwarded to ws_connect."""
+    pm = _create_powermeter(verify_ssl=True)
+    pm._session = MagicMock(spec=aiohttp.ClientSession)
+
+    captured_kwargs: dict = {}
+
+    def fake_ws_connect(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise asyncio.CancelledError
+
+    pm._session.ws_connect = fake_ws_connect
+
+    with pytest.raises(asyncio.CancelledError):
+        await pm._ws_loop()
+
+    ctx = captured_kwargs["ssl"]
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True
+    assert captured_kwargs["server_hostname"] == "appliance/p1dongle/aabbccddee"
+
+
+async def test_ws_loop_passes_no_verify_ssl_context_to_ws_connect():
+    """SSL context built with verify_ssl=False is forwarded to ws_connect."""
+    pm = _create_powermeter(verify_ssl=False)
+    pm._session = MagicMock(spec=aiohttp.ClientSession)
+
+    captured_kwargs: dict = {}
+
+    def fake_ws_connect(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise asyncio.CancelledError
+
+    pm._session.ws_connect = fake_ws_connect
+
+    with pytest.raises(asyncio.CancelledError):
+        await pm._ws_loop()
+
+    ctx = captured_kwargs["ssl"]
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_NONE
+    assert ctx.check_hostname is False
+
+
+async def test_ws_loop_connects_to_wss_url():
+    """ws_loop connects to wss://<ip>/api/ws."""
+    pm = _create_powermeter(ip="10.0.0.42")
+    pm._session = MagicMock(spec=aiohttp.ClientSession)
+
+    captured_args: list = []
+
+    def fake_ws_connect(*args, **kwargs):
+        captured_args.extend(args)
+        raise asyncio.CancelledError
+
+    pm._session.ws_connect = fake_ws_connect
+
+    with pytest.raises(asyncio.CancelledError):
+        await pm._ws_loop()
+
+    assert captured_args[0] == "wss://10.0.0.42/api/ws"

@@ -344,6 +344,31 @@ def test_create_homewizard_powermeter():
             raise
 
 
+def test_create_homewizard_powermeter_verify_ssl_default():
+    """VERIFY_SSL defaults to True when not specified in config."""
+    config = configparser.ConfigParser()
+    config["HOMEWIZARD"] = {
+        "IP": "127.0.0.1",
+        "TOKEN": "ABCDEF1234567890ABCDEF1234567890",
+        "SERIAL": "aabbccddee",
+    }
+    pm = create_homewizard_powermeter("HOMEWIZARD", config)
+    assert pm._verify_ssl is True
+
+
+def test_create_homewizard_powermeter_verify_ssl_false():
+    """VERIFY_SSL=False in config disables SSL verification on the powermeter."""
+    config = configparser.ConfigParser()
+    config["HOMEWIZARD"] = {
+        "IP": "127.0.0.1",
+        "TOKEN": "ABCDEF1234567890ABCDEF1234567890",
+        "SERIAL": "aabbccddee",
+        "VERIFY_SSL": "False",
+    }
+    pm = create_homewizard_powermeter("HOMEWIZARD", config)
+    assert pm._verify_ssl is False
+
+
 def test_create_sml_powermeter():
     """Test SML powermeter creation: SERIAL required, OBIS overrides applied."""
     config = configparser.ConfigParser()
