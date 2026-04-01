@@ -2,7 +2,6 @@
 
 ## Next
 - Added multi-phase support for MQTT powermeter: multiple topics (`TOPICS`) or multiple JSON paths (`JSON_PATHS`) from a single topic ([#208](https://github.com/tomquist/b2500-meter/issues/208), [#280](https://github.com/tomquist/b2500-meter/pull/280))
-- **Breaking:** removed the legacy blocking powermeter API and the `_async` method suffix. All powermeter methods are now async-only: `get_powermeter_watts_async()` → `get_powermeter_watts()`, `wait_for_message_async()` → `wait_for_message()`. The former sync `get_powermeter_watts()` / `wait_for_message()` methods and the `asyncio.to_thread` wrappers have been removed. Downstream consumers should `await` the renamed methods and remove any `_async` suffixes from their calls
 - Added support for emulating a *CT002/CT003*, which is recommended to steer multiple devices
 - Added HomeWizard P1 powermeter support via the device WebSocket API with token and serial configuration ([#231](https://github.com/tomquist/b2500-meter/pull/231)), including optional `VERIFY_SSL` to disable TLS certificate verification on trusted networks when needed ([#254](https://github.com/tomquist/b2500-meter/pull/254))
 - Added SMA Energy Meter / Sunny Home Manager support via Speedwire multicast protocol with auto-detection and per-phase power readings ([#231](https://github.com/tomquist/b2500-meter/pull/252))
