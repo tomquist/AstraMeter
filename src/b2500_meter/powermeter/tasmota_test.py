@@ -66,7 +66,7 @@ async def test_tasmota_three_phase(mock_aiohttp_session):
             False,
         )
         await tasmota.start()
-        assert await tasmota.get_powermeter_watts_async() == [100, 200, 300]
+        assert await tasmota.get_powermeter_watts() == [100, 200, 300]
         await tasmota.stop()
 
 
@@ -98,7 +98,7 @@ async def test_tasmota_three_phase_calculate(mock_aiohttp_session):
             True,
         )
         await tasmota.start()
-        assert await tasmota.get_powermeter_watts_async() == [900, 1800, 2700]
+        assert await tasmota.get_powermeter_watts() == [900, 1800, 2700]
         await tasmota.stop()
 
 
