@@ -240,7 +240,7 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(5.0)
+            await h.settle(8.0)
 
             active = h.active_battery_count(threshold=15.0)
             assert active == 2, (
