@@ -13,6 +13,7 @@ ETX = 0x03
 SEPARATOR = "|"
 UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
+EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 
 RESPONSE_LABELS = [
     "meter_dev_type",
@@ -162,6 +163,8 @@ class CT002:
         saturation_detection=True,
         saturation_alpha=0.15,
         min_target_for_saturation=20,
+        min_efficient_power=0,
+        efficiency_rotation_interval=300,
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -185,6 +188,8 @@ class CT002:
         self.saturation_detection = saturation_detection
         self.saturation_alpha = max(0.01, min(1.0, saturation_alpha))
         self.min_target_for_saturation = max(1, min_target_for_saturation)
+        self.min_efficient_power = max(0, min_efficient_power)
+        self.efficiency_rotation_interval = max(10, efficiency_rotation_interval)
         self.before_send: (
             Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
         ) = None
@@ -196,6 +201,11 @@ class CT002:
         self._last_response_time: dict[tuple, float] = {}
         self._smoothed_target = None
         self._last_smooth_sample = None
+        self._efficiency_deprioritized: set[str] = set()
+        self._efficiency_priority: list[str] = []
+        self._efficiency_last_rotation: float = 0.0
+        self._efficiency_cache_sample: tuple | None = None
+        self._efficiency_cache_result: dict[str, float] | None = None
         self._transport = None
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
@@ -213,7 +223,7 @@ class CT002:
     def _get_consumer_value(self, consumer_id):
         return self._values_by_consumer.get(consumer_id)
 
-    def _update_consumer_report(self, consumer_id, phase, power):
+    def _update_consumer_report(self, consumer_id, phase, power, device_type=""):
         normalized_phase = str(phase).upper() if phase else "A"
         previous = self._reports_by_consumer.get(consumer_id, {})
         previous_phase = previous.get("phase")
@@ -221,6 +231,7 @@ class CT002:
             "phase": normalized_phase,
             "power": parse_int(power, 0),
             "timestamp": time.time(),
+            "device_type": device_type,
         }
 
         if normalized_phase in ("A", "B", "C") and previous_phase != normalized_phase:
@@ -250,6 +261,9 @@ class CT002:
             self._values_by_consumer.pop(key, None)
             self._last_target_by_consumer.pop(key, None)
             self._saturation_by_consumer.pop(key, None)
+            self._efficiency_deprioritized.discard(key)
+            if key in self._efficiency_priority:
+                self._efficiency_priority.remove(key)
         stale_addrs = [
             addr
             for addr, ts in self._last_response_time.items()
@@ -269,6 +283,12 @@ class CT002:
         if target_abs < self.min_target_for_saturation:
             return
         if (last_target > 0 and actual < 0) or (last_target < 0 and actual > 0):
+            inst_saturation = 1.0
+            alpha = self.saturation_alpha
+            prev = self._saturation_by_consumer.get(consumer_id, 0.0)
+            self._saturation_by_consumer[consumer_id] = (
+                alpha * inst_saturation + (1 - alpha) * prev
+            )
             return
         follow_ratio = min(1.0, abs(actual) / target_abs)
         inst_saturation = 1.0 - follow_ratio
@@ -277,6 +297,91 @@ class CT002:
         self._saturation_by_consumer[consumer_id] = (
             alpha * inst_saturation + (1 - alpha) * prev
         )
+
+    def _compute_efficiency_deprioritized(self, reports, sample_id):
+        """Decide which consumers to deprioritize for efficiency.
+
+        At low demand, concentrates power on fewer consumers by reducing
+        excess consumers' effective participation weight.  Uses hysteresis
+        to prevent oscillation and rotates priority for fairness.
+
+        Returns a dict mapping consumer_id -> weight (0.0 = fully
+        deprioritized).  Empty dict means no deprioritization.  Future
+        strategies (SOC-based, device-type-aware, proportional) can change
+        the weights without modifying the integration point.
+        """
+        if self.min_efficient_power <= 0 or len(reports) < 2:
+            self._efficiency_deprioritized = set()
+            return {}
+
+        # Cache per sample for consistency across consumer calls
+        if sample_id == self._efficiency_cache_sample:
+            return self._efficiency_cache_result or {}
+
+        now = time.time()
+
+        # Rotate priority for fairness
+        if (
+            self._efficiency_priority
+            and now - self._efficiency_last_rotation
+            >= self.efficiency_rotation_interval
+        ):
+            self._efficiency_last_rotation = now
+            self._efficiency_priority.append(self._efficiency_priority.pop(0))
+
+        # Sync priority list with current consumers (prune stale, add new at end)
+        current = set(reports)
+        self._efficiency_priority = [
+            c for c in self._efficiency_priority if c in current
+        ]
+        for cid in sorted(current):
+            if cid not in self._efficiency_priority:
+                self._efficiency_priority.append(cid)
+
+        abs_target = abs(self._smoothed_target or 0)
+        n = len(self._efficiency_priority)
+        per_consumer = abs_target / n
+
+        # Hysteresis: require HIGHER per-consumer demand to EXIT limiting
+        # than to ENTER it, preventing oscillation at the boundary.
+        was_limiting = len(self._efficiency_deprioritized) > 0
+        if was_limiting:
+            enter_limiting = per_consumer < (
+                self.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR
+            )
+        else:
+            enter_limiting = per_consumer < self.min_efficient_power
+
+        if enter_limiting and n > 1:
+            # Cap at n-1 to ensure at least one consumer is deprioritized
+            # when hysteresis says we should be limiting.
+            slots = max(1, min(n - 1, int(abs_target / self.min_efficient_power)))
+        else:
+            slots = n
+
+        # First `slots` by priority are active, rest deprioritized
+        deprioritized = set(self._efficiency_priority[slots:])
+        result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
+
+        for cid in deprioritized - self._efficiency_deprioritized:
+            logger.info(
+                "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
+                cid[:16],
+                abs_target,
+                slots,
+            )
+        for cid in self._efficiency_deprioritized - deprioritized:
+            logger.info(
+                "Efficiency: activating consumer %s (demand %.0fW, %d active)",
+                cid[:16],
+                abs_target,
+                slots,
+            )
+
+        self._efficiency_deprioritized = deprioritized
+        self._efficiency_cache_sample = sample_id
+        self._efficiency_cache_result = result
+        return result
 
     def _compute_smooth_target(self, values, consumer_id=None):
         """
@@ -325,6 +430,13 @@ class CT002:
         saturation = dict(self._saturation_by_consumer)
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
+        # Efficiency optimization: deprioritize excess consumers at low demand
+        efficiency_adjustments = self._compute_efficiency_deprioritized(
+            reports, sample_id
+        )
+        for cid, weight in efficiency_adjustments.items():
+            if cid in eff_part:
+                eff_part[cid] = weight
         total_effective = sum(eff_part.values())
         fair_share = (
             (self._smoothed_target / total_effective) * eff_part.get(consumer_id, 1.0)
@@ -589,8 +701,12 @@ class CT002:
         self._last_response_time[addr] = current_time
 
         if not in_inspection_mode:
+            meter_dev_type = fields[0] if len(fields) > 0 else ""
             self._update_consumer_report(
-                consumer_id, phase=reported_phase, power=reported_power
+                consumer_id,
+                phase=reported_phase,
+                power=reported_power,
+                device_type=meter_dev_type,
             )
 
         updated = await self._call_before_send(addr, fields, consumer_id)

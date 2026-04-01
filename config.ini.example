@@ -84,6 +84,15 @@ THROTTLE_INTERVAL = 0
 ## Ignore saturation tracking when target is below this (W).
 #MIN_TARGET_FOR_SATURATION = 20
 
+## --- Efficiency optimization (opt-in low-demand power concentration) ---
+## At low total demand, concentrates power on fewer batteries to avoid
+## inefficient low-power operation. Each active battery gets at least this
+## many watts. 0 disables (default). Batteries rotate for fairness.
+## Example: 2 batteries, 200W demand, threshold 150 → one gets 200W, other 0W.
+#MIN_EFFICIENT_POWER = 0
+## Seconds between rotating which battery has priority.
+#EFFICIENCY_ROTATION_INTERVAL = 300
+
 #[MARSTEK]
 ## Optional: auto-register managed fake CT devices in Marstek cloud on startup.
 #ENABLE = False

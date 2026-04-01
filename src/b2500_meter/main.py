@@ -112,6 +112,10 @@ async def run_device(
         min_target_for_saturation = cfg.getint(
             ct_section, "MIN_TARGET_FOR_SATURATION", fallback=20
         )
+        min_efficient_power = cfg.getint(ct_section, "MIN_EFFICIENT_POWER", fallback=0)
+        efficiency_rotation_interval = cfg.getint(
+            ct_section, "EFFICIENCY_ROTATION_INTERVAL", fallback=300
+        )
 
         logger.debug(f"{device_type.upper()} Settings for {device_id}:")
         logger.debug(f"CT Type: {ct_type}")
@@ -132,6 +136,8 @@ async def run_device(
                 extras.append("fair distribution")
             if saturation_detection:
                 extras.append("saturation detection")
+            if min_efficient_power > 0:
+                extras.append(f"efficiency optimization ({min_efficient_power}W)")
             logger.info(
                 "Active control enabled (alpha=%.2f): smooth target + load split%s",
                 smooth_target_alpha,
@@ -161,6 +167,8 @@ async def run_device(
             saturation_detection=saturation_detection,
             saturation_alpha=saturation_alpha,
             min_target_for_saturation=min_target_for_saturation,
+            min_efficient_power=min_efficient_power,
+            efficiency_rotation_interval=efficiency_rotation_interval,
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):

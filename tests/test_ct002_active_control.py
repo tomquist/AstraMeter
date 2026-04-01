@@ -374,7 +374,9 @@ class TestSaturationDetection:
         out_b = device._compute_smooth_target([400, 0, 0], "b")
         assert out_a[0] == out_b[0] == 200
 
-    def test_saturation_skips_opposite_sign(self):
+    def test_saturation_opposite_sign_increases_saturation(self):
+        """When target and actual have opposite signs (e.g. DC-only battery
+        ignoring a charge command), saturation should increase."""
         device = CT002(
             active_control=True,
             fair_distribution=False,
@@ -387,7 +389,10 @@ class TestSaturationDetection:
         device._last_target_by_consumer["a"] = 200
         device._last_target_by_consumer["b"] = 200
         out = device._compute_smooth_target([400, 0, 0], "a")
-        assert out[0] == 200
+        # Consumer "a" has opposite sign (actual=-100, target=200), so it
+        # should be detected as saturated and get a reduced share.
+        assert out[0] < 200
+        assert device._saturation_by_consumer.get("a", 0) > 0
 
 
 class TestCleanup:
@@ -402,3 +407,192 @@ class TestCleanup:
         device._cleanup_consumers()
         assert "a" not in device._saturation_by_consumer
         assert "a" not in device._last_target_by_consumer
+
+    def test_cleanup_removes_efficiency_state(self):
+        device = CT002(min_efficient_power=150, consumer_ttl=0.01)
+        device._update_consumer_report("a", "A", 0)
+        device._efficiency_deprioritized.add("a")
+        device._efficiency_priority.append("a")
+        time.sleep(0.02)
+        device._cleanup_consumers()
+        assert "a" not in device._efficiency_deprioritized
+        assert "a" not in device._efficiency_priority
+
+
+class TestEfficiencyOptimization:
+    """Tests for efficiency optimization (low-demand power concentration)."""
+
+    def test_disabled_by_default(self):
+        """With min_efficient_power=0, output is identical to current behavior."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=0,
+        )
+        device._update_consumer_report("a", "A", 100)
+        device._update_consumer_report("b", "A", 100)
+        out = device._compute_smooth_target([400, 0, 0], "a")
+        assert out[0] == 200
+
+    def test_low_demand_concentrates_on_one_consumer(self):
+        """200W with 2 consumers and threshold=150 → one gets ~200W, other ~0W."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        out_a = device._compute_smooth_target([200, 0, 0], "a")
+        out_b = device._compute_smooth_target([200, 0, 0], "b")
+        # One should get ~200W, the other ~0W
+        assert (out_a[0] > 150 and out_b[0] < 10) or (out_b[0] > 150 and out_a[0] < 10)
+
+    def test_high_demand_activates_all_consumers(self):
+        """600W with 2 consumers and threshold=150 → both get ~300W."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        out_a = device._compute_smooth_target([600, 0, 0], "a")
+        out_b = device._compute_smooth_target([600, 0, 0], "b")
+        assert out_a[0] == 300
+        assert out_b[0] == 300
+
+    def test_hysteresis_prevents_oscillation(self):
+        """At steady 250W with threshold=150, system should stay at 1 active
+        (not oscillate between 1 and 2)."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # First call: enters limiting (250/2=125 < 150)
+        device._compute_smooth_target([250, 0, 0], "a")
+        device._compute_smooth_target([250, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+        # Second call with same demand: should stay limiting (hysteresis)
+        device._compute_smooth_target([251, 0, 0], "a")
+        device._compute_smooth_target([251, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+
+    def test_exits_limiting_at_higher_threshold(self):
+        """Hysteresis requires higher per-consumer demand to exit limiting."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Enter limiting
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+        # At 340W: per_consumer=170 < 180 (150*1.2), stays limiting
+        device._compute_smooth_target([340, 0, 0], "a")
+        device._compute_smooth_target([340, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+        # At 370W: per_consumer=185 >= 180, exits limiting
+        device._compute_smooth_target([370, 0, 0], "a")
+        device._compute_smooth_target([370, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 0
+
+    def test_priority_rotation(self):
+        """After rotation interval, the deprioritized consumer changes."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_rotation_interval=10,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        first_deprioritized = set(device._efficiency_deprioritized)
+        assert len(first_deprioritized) == 1
+        # Simulate time passing beyond rotation interval
+        device._efficiency_last_rotation -= 11
+        device._efficiency_cache_sample = None  # Clear cache to force recompute
+        device._compute_smooth_target([201, 0, 0], "a")
+        device._compute_smooth_target([201, 0, 0], "b")
+        second_deprioritized = set(device._efficiency_deprioritized)
+        assert len(second_deprioritized) == 1
+        assert first_deprioritized != second_deprioritized
+
+    def test_single_consumer_always_active(self):
+        """With only 1 consumer, it's always active regardless of threshold."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        out = device._compute_smooth_target([50, 0, 0], "a")
+        assert out[0] == 50
+        assert len(device._efficiency_deprioritized) == 0
+
+    def test_three_consumers_demand_supports_two(self):
+        """350W with 3 consumers and threshold=150 → 2 active, 1 deprioritized."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._update_consumer_report("c", "A", 0)
+        device._compute_smooth_target([350, 0, 0], "a")
+        device._compute_smooth_target([350, 0, 0], "b")
+        device._compute_smooth_target([350, 0, 0], "c")
+        assert len(device._efficiency_deprioritized) == 1
+
+    def test_negative_target_concentrates(self):
+        """Charging (negative target) should also concentrate on fewer batteries."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        out_a = device._compute_smooth_target([-200, 0, 0], "a")
+        out_b = device._compute_smooth_target([-200, 0, 0], "b")
+        # One should get ~-200W, the other ~0W
+        total = abs(out_a[0]) + abs(out_b[0])
+        assert total > 150
+        assert min(abs(out_a[0]), abs(out_b[0])) < 10
+
+    def test_cache_consistency_across_consumers(self):
+        """Same sample should produce consistent deprioritized set."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._compute_smooth_target([200, 0, 0], "a")
+        deprioritized_after_a = set(device._efficiency_deprioritized)
+        device._compute_smooth_target([200, 0, 0], "b")
+        deprioritized_after_b = set(device._efficiency_deprioritized)
+        assert deprioritized_after_a == deprioritized_after_b
+
+    def test_works_with_fair_distribution_off(self):
+        """Efficiency optimization should work even with fair_distribution=False."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 100)
+        device._update_consumer_report("b", "A", 100)
+        out_a = device._compute_smooth_target([200, 0, 0], "a")
+        out_b = device._compute_smooth_target([200, 0, 0], "b")
+        assert (out_a[0] > 150 and out_b[0] < 10) or (out_b[0] > 150 and out_a[0] < 10)
