@@ -24,7 +24,7 @@ class ThrottledPowermeter(Powermeter):
         # Coalescing fetch pattern: when a fetch is in flight (including the
         # throttle sleep), concurrent callers await the same future so every
         # consumer gets fresh data without hammering the source.
-        self._last_update_time = time.monotonic()
+        self._last_update_time: float | None = None
         self._last_values: list[float] | None = None
         self._pending_fetch: asyncio.Future[list[float]] | None = None
 
@@ -51,8 +51,11 @@ class ThrottledPowermeter(Powermeter):
         # fetch will coalesce behind our future.
         self._pending_fetch = asyncio.get_running_loop().create_future()
         try:
-            now = time.monotonic()
-            remaining = self.throttle_interval - (now - self._last_update_time)
+            if self._last_update_time is not None:
+                now = time.monotonic()
+                remaining = self.throttle_interval - (now - self._last_update_time)
+            else:
+                remaining = 0.0
             if remaining > 0:
                 logger.debug(
                     "Throttling: Waiting %.1fs before fetching fresh values...",
