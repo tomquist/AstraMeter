@@ -31,4 +31,4 @@ class Shrdzm(Powermeter):
         response = await self.get_json(
             f"/getLastData?user={self.user}&password={self.password}"
         )
-        return [int(int(response["1.7.0"]) - int(response["2.7.0"]))]
+        return [int(response["1.7.0"]) - int(response["2.7.0"])]

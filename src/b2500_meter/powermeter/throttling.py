@@ -24,7 +24,7 @@ class ThrottledPowermeter(Powermeter):
         # Coalescing fetch pattern: when a fetch is in flight (including the
         # throttle sleep), concurrent callers await the same future so every
         # consumer gets fresh data without hammering the source.
-        self._last_update_time = 0.0
+        self._last_update_time = time.monotonic()
         self._last_values: list[float] | None = None
         self._pending_fetch: asyncio.Future[list[float]] | None = None
 
@@ -51,7 +51,7 @@ class ThrottledPowermeter(Powermeter):
         # fetch will coalesce behind our future.
         self._pending_fetch = asyncio.get_running_loop().create_future()
         try:
-            now = time.time()
+            now = time.monotonic()
             remaining = self.throttle_interval - (now - self._last_update_time)
             if remaining > 0:
                 logger.debug(
@@ -62,17 +62,19 @@ class ThrottledPowermeter(Powermeter):
 
             values = await self.wrapped_powermeter.get_powermeter_watts()
             self._last_values = values
-            self._last_update_time = time.time()
+            self._last_update_time = time.monotonic()
             logger.debug("Throttling: Fetched fresh values: %s", values)
             self._pending_fetch.set_result(values)
             return list(values)
-        except BaseException as e:
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+            if not self._pending_fetch.done():
+                self._pending_fetch.cancel()
+            raise
+        except Exception as e:
             # Update timestamp even on failure so we respect the throttle
             # interval before retrying — avoids hammering a failing source.
-            self._last_update_time = time.time()
-            if self._last_values is not None and not isinstance(
-                e, (KeyboardInterrupt, SystemExit)
-            ):
+            self._last_update_time = time.monotonic()
+            if self._last_values is not None:
                 logger.warning("Throttling: Error getting fresh values: %s", e)
                 logger.debug(
                     "Throttling: Using cached values due to error: %s",

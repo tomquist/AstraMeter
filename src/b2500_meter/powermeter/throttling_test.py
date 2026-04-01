@@ -26,14 +26,14 @@ async def test_throttling_waits_for_interval():
     mock_pm.get_powermeter_watts = AsyncMock(return_value=[100.0, 200.0, 300.0])
     throttled = ThrottledPowermeter(mock_pm, throttle_interval=0.2)
 
-    loop = asyncio.get_running_loop()
-    start_time = loop.time()
     result1 = await throttled.get_powermeter_watts()
     assert result1 == [100.0, 200.0, 300.0]
     assert mock_pm.get_powermeter_watts.call_count == 1
 
     mock_pm.get_powermeter_watts.return_value = [400.0, 500.0, 600.0]
 
+    loop = asyncio.get_running_loop()
+    start_time = loop.time()
     result2 = await throttled.get_powermeter_watts()
     elapsed = loop.time() - start_time
 
