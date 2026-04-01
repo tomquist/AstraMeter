@@ -44,7 +44,7 @@ async def test_three_phase():
     with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.10")
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [1.0, 2.0, 3.0]
+        assert await meter.get_powermeter_watts() == [1.0, 2.0, 3.0]
         await meter.stop()
 
 
@@ -59,7 +59,7 @@ async def test_total_only():
     with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.12")
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [9.0]
+        assert await meter.get_powermeter_watts() == [9.0]
         await meter.stop()
 
 
@@ -79,7 +79,7 @@ async def test_relogin_on_expired_session():
     with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.11")
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [5.0]
+        assert await meter.get_powermeter_watts() == [5.0]
         await meter.stop()
 
 
@@ -94,7 +94,7 @@ async def test_missing_export():
     with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.15")
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [4.0]
+        assert await meter.get_powermeter_watts() == [4.0]
         await meter.stop()
 
 
@@ -113,5 +113,5 @@ async def test_three_phase_missing_export():
     with patch("aiohttp.ClientSession", return_value=session):
         meter = TQEnergyManager("192.168.0.16")
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [1.0, 2.0, 3.0]
+        assert await meter.get_powermeter_watts() == [1.0, 2.0, 3.0]
         await meter.stop()

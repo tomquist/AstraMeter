@@ -67,31 +67,31 @@ def _make_pm(
     )
 
 
-async def test_get_powermeter_watts_async_returns_value():
+async def test_get_powermeter_watts_returns_value():
     pm = _make_pm()
     pm.value = 42.0
-    assert await pm.get_powermeter_watts_async() == [42.0]
+    assert await pm.get_powermeter_watts() == [42.0]
 
 
-async def test_get_powermeter_watts_async_raises_when_no_value():
+async def test_get_powermeter_watts_raises_when_no_value():
     pm = _make_pm()
     with pytest.raises(ValueError, match="No value received"):
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
 
-async def test_wait_for_message_async_returns_immediately():
+async def test_wait_for_message_returns_immediately():
     pm = _make_pm()
     pm.value = 1.0
-    await pm.wait_for_message_async(timeout=0.1)
+    await pm.wait_for_message(timeout=0.1)
 
 
-async def test_wait_for_message_async_times_out():
+async def test_wait_for_message_times_out():
     pm = _make_pm()
     with pytest.raises(TimeoutError, match="Timeout waiting"):
-        await pm.wait_for_message_async(timeout=0.1)
+        await pm.wait_for_message(timeout=0.1)
 
 
-async def test_wait_for_message_async_wakes_on_event():
+async def test_wait_for_message_wakes_on_event():
     pm = _make_pm()
 
     async def _set_later():
@@ -100,7 +100,7 @@ async def test_wait_for_message_async_wakes_on_event():
         pm._message_event.set()
 
     task = asyncio.create_task(_set_later())
-    await pm.wait_for_message_async(timeout=2)
+    await pm.wait_for_message(timeout=2)
     await task
     assert pm.value == 99.0
 
@@ -174,7 +174,7 @@ async def test_get_watts_raises_when_partial_values():
     pm = _make_pm(topic=["t1", "t2"])
     pm.values[0] = 100.0
     with pytest.raises(ValueError, match="No value received"):
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
 
 async def test_get_watts_returns_all_phases():
@@ -182,7 +182,7 @@ async def test_get_watts_returns_all_phases():
     pm.values[0] = 100.0
     pm.values[1] = 200.0
     pm.values[2] = 300.0
-    assert await pm.get_powermeter_watts_async() == [100.0, 200.0, 300.0]
+    assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
 
 
 async def test_wait_for_message_returns_when_all_set():
@@ -197,9 +197,9 @@ async def test_wait_for_message_returns_when_all_set():
         pm._message_event.set()
 
     task = asyncio.create_task(_set_later())
-    await pm.wait_for_message_async(timeout=2)
+    await pm.wait_for_message(timeout=2)
     await task
-    assert await pm.get_powermeter_watts_async() == [10.0, 20.0]
+    assert await pm.get_powermeter_watts() == [10.0, 20.0]
 
 
 async def test_wait_for_message_times_out_with_partial():
@@ -207,7 +207,7 @@ async def test_wait_for_message_times_out_with_partial():
     pm.values[0] = 10.0
     # values[1] is still None
     with pytest.raises(TimeoutError, match="Timeout waiting"):
-        await pm.wait_for_message_async(timeout=0.2)
+        await pm.wait_for_message(timeout=0.2)
 
 
 async def test_value_property_backward_compat():
@@ -282,8 +282,8 @@ async def test_receives_plain_value(mqtt_broker):
         await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(topic, payload=b"42.5")
-        await pm.wait_for_message_async(timeout=5)
-        assert await pm.get_powermeter_watts_async() == [42.5]
+        await pm.wait_for_message(timeout=5)
+        assert await pm.get_powermeter_watts() == [42.5]
     finally:
         await pm.stop()
 
@@ -300,8 +300,8 @@ async def test_receives_json_value(mqtt_broker):
         await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(topic, payload=json.dumps({"power": 123.4}).encode())
-        await pm.wait_for_message_async(timeout=5)
-        assert await pm.get_powermeter_watts_async() == [123.4]
+        await pm.wait_for_message(timeout=5)
+        assert await pm.get_powermeter_watts() == [123.4]
     finally:
         await pm.stop()
 
@@ -315,7 +315,7 @@ async def test_wait_for_message_timeout_with_no_publish(mqtt_broker):
     try:
         await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
         with pytest.raises(TimeoutError):
-            await pm.wait_for_message_async(timeout=0.5)
+            await pm.wait_for_message(timeout=0.5)
     finally:
         await pm.stop()
 
@@ -335,7 +335,7 @@ async def test_receives_multiple_messages_returns_latest(mqtt_broker):
                 await pub.publish(topic, payload=str(val).encode())
         # Give the listener time to process all messages
         await asyncio.sleep(0.5)
-        assert await pm.get_powermeter_watts_async() == [30.0]
+        assert await pm.get_powermeter_watts() == [30.0]
     finally:
         await pm.stop()
 
@@ -354,8 +354,8 @@ async def test_receives_multi_topic_values(mqtt_broker):
             await pub.publish(topics[0], payload=b"100.0")
             await pub.publish(topics[1], payload=b"200.0")
             await pub.publish(topics[2], payload=b"300.0")
-        await pm.wait_for_message_async(timeout=5)
-        assert await pm.get_powermeter_watts_async() == [100.0, 200.0, 300.0]
+        await pm.wait_for_message(timeout=5)
+        assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
     finally:
         await pm.stop()
 
@@ -380,7 +380,7 @@ async def test_receives_single_topic_multi_json_paths(mqtt_broker):
         }
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(topic, payload=json.dumps(payload).encode())
-        await pm.wait_for_message_async(timeout=5)
-        assert await pm.get_powermeter_watts_async() == [110.5, 220.3, 330.1]
+        await pm.wait_for_message(timeout=5)
+        assert await pm.get_powermeter_watts() == [110.5, 220.3, 330.1]
     finally:
         await pm.stop()

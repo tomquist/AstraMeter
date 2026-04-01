@@ -44,12 +44,12 @@ class Shelly(Powermeter):
             resp.raise_for_status()
             return await resp.json(content_type=None)
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         raise NotImplementedError()
 
 
 class Shelly1PM(Shelly):
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if self.emeterindex:
             meter = await self._get_json(f"/meter/{self.emeterindex}")
             return [int(meter["power"])]
@@ -59,13 +59,13 @@ class Shelly1PM(Shelly):
 
 
 class ShellyPlus1PM(Shelly):
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         response = await self._get_rpc_json("/Switch.GetStatus?id=0")
         return [int(response["apower"])]
 
 
 class ShellyEM(Shelly):
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if self.emeterindex:
             emeter = await self._get_json(f"/emeter/{self.emeterindex}")
             return [int(emeter["power"])]
@@ -75,12 +75,12 @@ class ShellyEM(Shelly):
 
 
 class Shelly3EM(Shelly):
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         status = await self._get_json("/status")
         return [int(emeter["power"]) for emeter in status["emeters"]]
 
 
 class Shelly3EMPro(Shelly):
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         response = await self._get_rpc_json("/EM.GetStatus?id=0")
         return [int(response["total_act_power"])]

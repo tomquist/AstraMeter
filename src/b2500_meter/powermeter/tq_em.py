@@ -57,7 +57,7 @@ class TQEnergyManager(Powermeter):
     # ------------------------------------------------------------------ #
     # PUBLIC                                                             #
     # ------------------------------------------------------------------ #
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if not self._sess:
             raise RuntimeError("Session not started; call start() first")
         async with self._auth_lock:

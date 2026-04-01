@@ -95,7 +95,7 @@ async def test_initial_snapshot_populates_value():
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "1000"}]
     )
-    assert await pm.get_powermeter_watts_async() == [1000.0]
+    assert await pm.get_powermeter_watts() == [1000.0]
 
 
 async def test_no_initial_event_leaves_values_missing():
@@ -105,7 +105,7 @@ async def test_no_initial_event_leaves_values_missing():
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
 
     with pytest.raises(ValueError):
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
 
 async def test_initial_snapshot_only_updates_tracked_entities():
@@ -117,7 +117,7 @@ async def test_initial_snapshot_only_updates_tracked_entities():
             {"entity_id": "sensor.temperature", "state": "22"},
         ],
     )
-    assert await pm.get_powermeter_watts_async() == [500.0]
+    assert await pm.get_powermeter_watts() == [500.0]
 
 
 # Trigger event tests
@@ -128,7 +128,7 @@ async def test_trigger_event_updates_value():
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
     )
-    assert await pm.get_powermeter_watts_async() == [100.0]
+    assert await pm.get_powermeter_watts() == [100.0]
 
     ws = AsyncMock()
     await pm._handle_message(
@@ -147,7 +147,7 @@ async def test_trigger_event_updates_value():
             }
         ),
     )
-    assert await pm.get_powermeter_watts_async() == [200.0]
+    assert await pm.get_powermeter_watts() == [200.0]
 
 
 async def test_trigger_event_ignores_untracked_entity():
@@ -173,7 +173,7 @@ async def test_trigger_event_ignores_untracked_entity():
             }
         ),
     )
-    assert await pm.get_powermeter_watts_async() == [100.0]
+    assert await pm.get_powermeter_watts() == [100.0]
 
 
 # Error condition tests
@@ -182,7 +182,7 @@ async def test_trigger_event_ignores_untracked_entity():
 async def test_sensor_has_no_state():
     pm = _create_powermeter()
     with pytest.raises(ValueError) as exc_info:
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
     assert (
         str(exc_info.value) == "Home Assistant sensor sensor.current_power has no state"
@@ -196,7 +196,7 @@ async def test_sensor_state_none():
     )
 
     with pytest.raises(ValueError) as exc_info:
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
     assert (
         str(exc_info.value) == "Home Assistant sensor sensor.current_power has no state"
@@ -211,7 +211,7 @@ async def test_sensor_state_not_numeric():
     )
 
     with pytest.raises(ValueError) as exc_info:
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
     assert (
         str(exc_info.value) == "Home Assistant sensor sensor.current_power has no state"
@@ -224,7 +224,7 @@ async def test_malformed_json_message():
     await pm._handle_message(ws, "not valid json")
     # Should not raise; value stays absent
     with pytest.raises(ValueError):
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
 
 # Three-phase tests
@@ -246,7 +246,7 @@ async def test_three_phase_direct():
             {"entity_id": "sensor.power_phase3", "state": "300"},
         ],
     )
-    assert await pm.get_powermeter_watts_async() == [100.0, 200.0, 300.0]
+    assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
 
 
 # Power calculate tests
@@ -266,7 +266,7 @@ async def test_power_calculate_mode():
             {"entity_id": "sensor.power_output", "state": "200"},
         ],
     )
-    assert await pm.get_powermeter_watts_async() == [800.0]
+    assert await pm.get_powermeter_watts() == [800.0]
 
 
 async def test_three_phase_calculated():
@@ -295,7 +295,7 @@ async def test_three_phase_calculated():
             {"entity_id": "sensor.power_out_3", "state": "400"},
         ],
     )
-    assert await pm.get_powermeter_watts_async() == [800.0, 1700.0, 2600.0]
+    assert await pm.get_powermeter_watts() == [800.0, 1700.0, 2600.0]
 
 
 async def test_power_alias_length_mismatch():
@@ -315,7 +315,7 @@ async def test_power_alias_length_mismatch():
     )
 
     with pytest.raises(ValueError) as exc_info:
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
     assert (
         str(exc_info.value)
@@ -350,13 +350,13 @@ async def test_wait_for_message_returns_when_data_available():
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
     )
     # Should return immediately, not raise
-    await pm.wait_for_message_async(timeout=1)
+    await pm.wait_for_message(timeout=1)
 
 
 async def test_wait_for_message_timeout():
     pm = _create_powermeter()
     with pytest.raises(TimeoutError):
-        await pm.wait_for_message_async(timeout=0)
+        await pm.wait_for_message(timeout=0)
 
 
 # subscribe_entities entity list test

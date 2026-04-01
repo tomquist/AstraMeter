@@ -72,7 +72,7 @@ class ModbusPowermeter(Powermeter):
             self.client.close()
             self.client = None
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if not self.client:
             raise RuntimeError("Client not started; call start() first")
         read = getattr(self.client, self._read_method)

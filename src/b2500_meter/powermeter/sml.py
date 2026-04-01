@@ -118,7 +118,7 @@ class Sml(Powermeter):
             self._reader = None
             self._writer = None
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if self._lock.locked():
             return [float(x) for x in self._current.powers]
         async with self._lock:

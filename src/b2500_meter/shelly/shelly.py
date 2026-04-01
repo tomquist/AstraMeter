@@ -172,7 +172,7 @@ class Shelly:
                     logger.warning(f"No powermeter found for client {addr[0]}")
                     return
 
-                powers = await powermeter.get_powermeter_watts_async()
+                powers = await powermeter.get_powermeter_watts()
 
                 if request.get("method") == "EM.GetStatus":
                     response = self._create_em_response(request["id"], powers)

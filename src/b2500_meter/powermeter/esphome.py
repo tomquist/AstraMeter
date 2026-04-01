@@ -28,6 +28,6 @@ class ESPHome(Powermeter):
         async with self.session.get(url) as resp:
             return await resp.json(content_type=None)
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         parsed_data = await self.get_json(f"/{self.domain}/{self.id}")
         return [int(parsed_data["value"])]

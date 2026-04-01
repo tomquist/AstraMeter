@@ -48,7 +48,7 @@ class Tasmota(Powermeter):
             resp.raise_for_status()
             return await resp.json(content_type=None)
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if not self.user:
             response = await self.get_json("/cm?cmnd=status%2010")
         else:

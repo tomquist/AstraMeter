@@ -137,12 +137,12 @@ class HomeWizardPowermeter(Powermeter):
         self.values = values
         self._message_event.set()
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if self.values is not None:
             return list(self.values)
         raise ValueError("No value received from HomeWizard")
 
-    async def wait_for_message_async(self, timeout: float = 5) -> None:
+    async def wait_for_message(self, timeout: float = 5) -> None:
         try:
             await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:

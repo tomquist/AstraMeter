@@ -136,7 +136,7 @@ async def test_measurement_message_stores_values():
         ws,
         json.dumps({"type": "measurement", "data": {"power_w": 500}}),
     )
-    assert await pm.get_powermeter_watts_async() == [500]
+    assert await pm.get_powermeter_watts() == [500]
 
 
 # --- Category C: SSL context ---
@@ -156,36 +156,36 @@ def test_ssl_context_verify_disabled():
     assert ctx.check_hostname is False
 
 
-# --- Category D: get_powermeter_watts_async ---
+# --- Category D: get_powermeter_watts ---
 
 
 async def test_get_watts_no_data_raises():
     pm = _create_powermeter()
     with pytest.raises(ValueError):
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
 
 async def test_get_watts_returns_copy():
     pm = _create_powermeter()
     pm._handle_measurement({"power_w": 100})
-    result = await pm.get_powermeter_watts_async()
+    result = await pm.get_powermeter_watts()
     result.append(999)
-    assert await pm.get_powermeter_watts_async() == [100]
+    assert await pm.get_powermeter_watts() == [100]
 
 
-# --- Category E: wait_for_message_async ---
+# --- Category E: wait_for_message ---
 
 
 async def test_wait_for_message_returns_when_data_available():
     pm = _create_powermeter()
     pm._handle_measurement({"power_w": 100})
-    await pm.wait_for_message_async(timeout=1)
+    await pm.wait_for_message(timeout=1)
 
 
 async def test_wait_for_message_timeout():
     pm = _create_powermeter()
     with pytest.raises(TimeoutError):
-        await pm.wait_for_message_async(timeout=0)
+        await pm.wait_for_message(timeout=0)
 
 
 # --- Category F: Lifecycle ---
@@ -272,7 +272,7 @@ async def test_full_auth_subscribe_measurement_flow():
 
     ws.send_json.assert_any_call({"type": "authorization", "data": "ABCD1234"})
     ws.send_json.assert_any_call({"type": "subscribe", "data": "measurement"})
-    assert await pm.get_powermeter_watts_async() == [500]
+    assert await pm.get_powermeter_watts() == [500]
 
 
 async def test_close_message_exits_iteration():

@@ -285,12 +285,12 @@ class TestGetPowermeterWattsAsync:
     async def test_no_data_raises(self):
         meter = _create_meter()
         with pytest.raises(ValueError):
-            await meter.get_powermeter_watts_async()
+            await meter.get_powermeter_watts()
 
     async def test_returns_copy(self):
         meter = _create_meter()
         meter.values = [100.0, 200.0, 300.0]
-        result = await meter.get_powermeter_watts_async()
+        result = await meter.get_powermeter_watts()
         result[0] = 999
         assert meter.values[0] == 100.0
 
@@ -300,7 +300,7 @@ class TestWaitForMessageAsync:
         meter = _create_meter()
         meter._async_message_event = asyncio.Event()
         with pytest.raises(TimeoutError):
-            await meter.wait_for_message_async(timeout=0)
+            await meter.wait_for_message(timeout=0)
 
     async def test_returns_when_data_available(self):
         meter = _create_meter()
@@ -312,14 +312,14 @@ class TestWaitForMessageAsync:
             ]
         )
         meter._handle_packet(packet)
-        await meter.wait_for_message_async(timeout=1)
-        result = await meter.get_powermeter_watts_async()
+        await meter.wait_for_message(timeout=1)
+        result = await meter.get_powermeter_watts()
         assert result == [100.0]
 
     async def test_not_started_raises(self):
         meter = _create_meter()
         with pytest.raises(RuntimeError):
-            await meter.wait_for_message_async(timeout=0)
+            await meter.wait_for_message(timeout=0)
 
 
 class TestLifecycle:

@@ -12,7 +12,7 @@ class DummyPowermeter(Powermeter):
     def __init__(self):
         self.call_count = 0
 
-    def get_powermeter_watts(self):
+    async def get_powermeter_watts(self):
         self.call_count += 1
         return [1.0]
 

@@ -31,11 +31,8 @@ class TransformedPowermeter(Powermeter):
         self._offsets_mismatch_warned = False
         self._multipliers_mismatch_warned = False
 
-    def wait_for_message(self, timeout=5):
-        return self.wrapped_powermeter.wait_for_message(timeout)
-
-    async def wait_for_message_async(self, timeout=5):
-        return await self.wrapped_powermeter.wait_for_message_async(timeout)
+    async def wait_for_message(self, timeout=5):
+        return await self.wrapped_powermeter.wait_for_message(timeout)
 
     async def start(self):
         await self.wrapped_powermeter.start()
@@ -74,10 +71,6 @@ class TransformedPowermeter(Powermeter):
 
         return result
 
-    def get_powermeter_watts(self) -> list[float]:
-        values = self.wrapped_powermeter.get_powermeter_watts()
-        return self._apply_transform(values)
-
-    async def get_powermeter_watts_async(self) -> list[float]:
-        values = await self.wrapped_powermeter.get_powermeter_watts_async()
+    async def get_powermeter_watts(self) -> list[float]:
+        values = await self.wrapped_powermeter.get_powermeter_watts()
         return self._apply_transform(values)

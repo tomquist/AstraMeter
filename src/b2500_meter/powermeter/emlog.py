@@ -27,7 +27,7 @@ class Emlog(Powermeter):
         async with self.session.get(url) as resp:
             return await resp.json(content_type=None)
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         response = await self.get_json(
             f"/pages/getinformation.php?heute&meterindex={self.meterindex}"
         )

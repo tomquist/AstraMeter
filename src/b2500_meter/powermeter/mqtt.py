@@ -142,12 +142,12 @@ class MqttPowermeter(Powermeter):
                 await self._run_task
             self._run_task = None
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if all(v is not None for v in self.values):
             return list(self.values)  # type: ignore[arg-type]
         raise ValueError("No value received from MQTT")
 
-    async def wait_for_message_async(self, timeout=5):
+    async def wait_for_message(self, timeout=5):
         if all(v is not None for v in self.values):
             return
         loop = asyncio.get_running_loop()

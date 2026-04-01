@@ -63,7 +63,7 @@ class JsonHttpPowermeter(Powermeter):
             logger.error(f"HTTP request error: {e}")
             raise ValueError(f"HTTP request error: {e}") from e
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         data = await self.get_json()
         values = []
         for path in self.json_paths:

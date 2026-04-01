@@ -38,7 +38,7 @@ class IoBroker(Powermeter):
         async with self.session.get(url) as resp:
             return await resp.json(content_type=None)
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if not self.power_calculate:
             response = await self.get_json(f"/getBulk/{self.current_power_alias}")
             for item in response:

@@ -38,8 +38,8 @@ async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
             logger.debug(
                 f"Testing powermeter configuration... (attempt {attempt + 1}/{max_retries + 1})"
             )
-            await powermeter.wait_for_message_async(timeout=30)
-            value = await powermeter.get_powermeter_watts_async()
+            await powermeter.wait_for_message(timeout=30)
+            value = await powermeter.get_powermeter_watts()
             value_with_units = " | ".join([f"{v}W" for v in value])
             powermeter_name = powermeter.__class__.__name__
             filter_description = ", ".join([str(n) for n in client_filter.netmasks])
@@ -172,7 +172,7 @@ async def run_device(
             if powermeter is None:
                 logger.debug(f"No powermeter found for client {addr[0]}")
                 return None
-            values = await powermeter.get_powermeter_watts_async()
+            values = await powermeter.get_powermeter_watts()
             value1 = values[0] if len(values) > 0 else 0
             value2 = values[1] if len(values) > 1 else 0
             value3 = values[2] if len(values) > 2 else 0

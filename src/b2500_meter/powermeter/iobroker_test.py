@@ -15,7 +15,7 @@ async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
             power_output_alias="output_alias",
         )
         await iobroker.start()
-        assert await iobroker.get_powermeter_watts_async() == [100]
+        assert await iobroker.get_powermeter_watts() == [100]
         await iobroker.stop()
 
 
@@ -36,5 +36,5 @@ async def test_get_powermeter_watts_with_calculate(mock_aiohttp_session):
             power_output_alias="output_alias",
         )
         await iobroker.start()
-        assert await iobroker.get_powermeter_watts_async() == [150]
+        assert await iobroker.get_powermeter_watts() == [150]
         await iobroker.stop()

@@ -8,5 +8,5 @@ async def test_shrdzm_get_powermeter_watts(mock_aiohttp_session):
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         shrdzm = Shrdzm("192.168.1.5", "user", "pass")
         await shrdzm.start()
-        assert await shrdzm.get_powermeter_watts_async() == [3000]
+        assert await shrdzm.get_powermeter_watts() == [3000]
         await shrdzm.stop()

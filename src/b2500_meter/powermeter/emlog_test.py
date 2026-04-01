@@ -8,7 +8,7 @@ async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         emlog = Emlog("127.0.0.1", "1", json_power_calculate=False)
         await emlog.start()
-        assert await emlog.get_powermeter_watts_async() == [200]
+        assert await emlog.get_powermeter_watts() == [200]
         await emlog.stop()
 
 
@@ -17,5 +17,5 @@ async def test_get_powermeter_watts_with_calculate(mock_aiohttp_session):
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         emlog = Emlog("127.0.0.1", "1", json_power_calculate=True)
         await emlog.start()
-        assert await emlog.get_powermeter_watts_async() == [250]
+        assert await emlog.get_powermeter_watts() == [250]
         await emlog.stop()

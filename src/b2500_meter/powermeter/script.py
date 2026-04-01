@@ -7,7 +7,7 @@ class Script(Powermeter):
     def __init__(self, command: str):
         self.script = command
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         proc = await asyncio.create_subprocess_shell(
             self.script,
             stdout=asyncio.subprocess.PIPE,

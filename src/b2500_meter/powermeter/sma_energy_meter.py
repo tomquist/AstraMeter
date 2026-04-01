@@ -226,14 +226,14 @@ class SmaEnergyMeter(Powermeter):
         if self._async_message_event is not None:
             self._async_message_event.set()
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if self.values is not None:
             return list(self.values)
         raise ValueError("No value received from SMA Energy Meter")
 
-    async def wait_for_message_async(self, timeout=5):
+    async def wait_for_message(self, timeout=5):
         if self._async_message_event is None:
-            raise RuntimeError("start() must be called before wait_for_message_async()")
+            raise RuntimeError("start() must be called before wait_for_message()")
         try:
             await asyncio.wait_for(self._async_message_event.wait(), timeout)
         except asyncio.TimeoutError:

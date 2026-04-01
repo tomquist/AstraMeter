@@ -139,7 +139,7 @@ async def test_async_read_returns_updated_powers():
         sml._current = EnergyStats(powers=[500])
 
     with patch.object(sml, "_read_serial", side_effect=fake_read):
-        result = await sml.get_powermeter_watts_async()
+        result = await sml.get_powermeter_watts()
     assert result == [500.0]
 
 
@@ -157,7 +157,7 @@ async def test_async_skip_if_busy_returns_cached():
         # Hold the lock externally to simulate a read in progress
         await sml._lock.acquire()
         try:
-            result = await sml.get_powermeter_watts_async()
+            result = await sml.get_powermeter_watts()
         finally:
             sml._lock.release()
 
@@ -179,7 +179,7 @@ async def test_async_lock_released_on_exception():
         patch.object(sml, "_read_serial", side_effect=failing_read),
         pytest.raises(OSError, match="serial port error"),
     ):
-        await sml.get_powermeter_watts_async()
+        await sml.get_powermeter_watts()
 
     # Lock should be released; current should be unchanged
     assert not sml._lock.locked()
@@ -187,7 +187,7 @@ async def test_async_lock_released_on_exception():
 
     # Subsequent call should succeed
     with patch.object(sml, "_read_serial", side_effect=successful_read):
-        result = await sml.get_powermeter_watts_async()
+        result = await sml.get_powermeter_watts()
     assert result == [42.0]
 
 
@@ -195,7 +195,7 @@ async def test_async_cold_start_skip_returns_zero():
     sml = Sml("/dev/ttyUSB0")
     await sml._lock.acquire()
     try:
-        result = await sml.get_powermeter_watts_async()
+        result = await sml.get_powermeter_watts()
     finally:
         sml._lock.release()
     assert result == [0.0]
@@ -217,7 +217,7 @@ async def test_async_concurrent_callers():
     with patch.object(sml, "_read_serial", side_effect=slow_read):
         # Launch 3 concurrent callers
         async def caller():
-            return await sml.get_powermeter_watts_async()
+            return await sml.get_powermeter_watts()
 
         task1 = asyncio.create_task(caller())
         # Wait for the first caller to acquire the lock and start reading
@@ -349,7 +349,7 @@ async def test_e2e_pty_serial_read():
     sml = Sml(slave_name)
     try:
         await sml.start()
-        result = await sml.get_powermeter_watts_async()
+        result = await sml.get_powermeter_watts()
         # 3-phase preferred over aggregate when all three present
         assert result == [400.0, 500.0, 334.0]
     finally:

@@ -10,7 +10,7 @@ async def test_single_phase(mock_aiohttp_session):
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         meter = JsonHttpPowermeter("http://localhost", "$.power")
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [100.0]
+        assert await meter.get_powermeter_watts() == [100.0]
         await meter.stop()
 
 
@@ -19,7 +19,7 @@ async def test_three_phase(mock_aiohttp_session):
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         meter = JsonHttpPowermeter("http://localhost", ["$.p1", "$.p2", "$.p3"])
         await meter.start()
-        assert await meter.get_powermeter_watts_async() == [100.0, 200.0, 300.0]
+        assert await meter.get_powermeter_watts() == [100.0, 200.0, 300.0]
         await meter.stop()
 
 
@@ -39,7 +39,7 @@ async def test_headers_and_auth(mock_aiohttp_session):
             headers={"X-Test": "1"},
             timeout=ClientTimeout(total=10),
         )
-        result = await meter.get_powermeter_watts_async()
+        result = await meter.get_powermeter_watts()
         assert result == [50.0]
         mock_aiohttp_session.get.assert_called_once_with("http://localhost")
         await meter.stop()

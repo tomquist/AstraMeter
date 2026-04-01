@@ -214,7 +214,7 @@ class HomeAssistant(Powermeter):
             raise ValueError(f"Home Assistant sensor {entity_id} has no state")
         return val
 
-    async def get_powermeter_watts_async(self) -> list[float]:
+    async def get_powermeter_watts(self) -> list[float]:
         if not self.power_calculate:
             return [
                 self._get_entity_value(entity) for entity in self.current_power_entity
@@ -234,7 +234,7 @@ class HomeAssistant(Powermeter):
                 results.append(power_in - power_out)
             return results
 
-    async def wait_for_message_async(self, timeout: float = 5) -> None:
+    async def wait_for_message(self, timeout: float = 5) -> None:
         try:
             await asyncio.wait_for(self._entities_ready.wait(), timeout=timeout)
         except asyncio.TimeoutError:

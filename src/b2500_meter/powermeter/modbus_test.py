@@ -29,7 +29,7 @@ async def test_get_powermeter_watts():
 
         pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1)
         await pm.start()
-        assert await pm.get_powermeter_watts_async() == [500.0]
+        assert await pm.get_powermeter_watts() == [500.0]
         MockClient.assert_called_with("192.168.1.14", port=502)
         mock_client.read_holding_registers.assert_called_once_with(0, 1, slave=1)
         await pm.stop()
@@ -57,7 +57,7 @@ async def test_float32():
             word_order="BIG",
         )
         await pm.start()
-        assert await pm.get_powermeter_watts_async() == [10.0]
+        assert await pm.get_powermeter_watts() == [10.0]
         mock_client.read_holding_registers.assert_called_once_with(0, 2, slave=1)
         await pm.stop()
 
@@ -75,7 +75,7 @@ async def test_input_registers():
 
         pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1, register_type="INPUT")
         await pm.start()
-        assert await pm.get_powermeter_watts_async() == [500.0]
+        assert await pm.get_powermeter_watts() == [500.0]
         mock_client.read_input_registers.assert_called_once_with(0, 1, slave=1)
         await pm.stop()
 
@@ -95,7 +95,7 @@ async def test_start_creates_client_and_connects():
 async def test_read_before_start_raises():
     pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1)
     with pytest.raises(RuntimeError, match="Client not started"):
-        await pm.get_powermeter_watts_async()
+        await pm.get_powermeter_watts()
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ async def test_read_error_raises():
         pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1)
         await pm.start()
         with pytest.raises(Exception, match="Error reading Modbus data"):
-            await pm.get_powermeter_watts_async()
+            await pm.get_powermeter_watts()
         await pm.stop()
 
 
@@ -188,7 +188,7 @@ async def test_e2e_uint16_holding(modbus_server: int):
     pm = ModbusPowermeter("127.0.0.1", modbus_server, 1, 0, 1)
     await pm.start()
     try:
-        result = await pm.get_powermeter_watts_async()
+        result = await pm.get_powermeter_watts()
         assert result == [500.0]
     finally:
         await pm.stop()
@@ -207,7 +207,7 @@ async def test_e2e_float32(modbus_server: int):
     )
     await pm.start()
     try:
-        result = await pm.get_powermeter_watts_async()
+        result = await pm.get_powermeter_watts()
         assert result == [10.0]
     finally:
         await pm.stop()
@@ -224,7 +224,7 @@ async def test_e2e_input_registers(modbus_server: int):
     )
     await pm.start()
     try:
-        result = await pm.get_powermeter_watts_async()
+        result = await pm.get_powermeter_watts()
         assert result == [750.0]
     finally:
         await pm.stop()
