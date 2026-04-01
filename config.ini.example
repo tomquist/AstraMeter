@@ -90,7 +90,7 @@ THROTTLE_INTERVAL = 0
 ## many watts. 0 disables (default). Batteries rotate for fairness.
 ## Example: 2 batteries, 200W demand, threshold 150 → one gets 200W, other 0W.
 #MIN_EFFICIENT_POWER = 0
-## Seconds between rotating which battery has priority.
+## Seconds between rotating which battery has priority (minimum 10).
 #EFFICIENCY_ROTATION_INTERVAL = 300
 
 #[MARSTEK]

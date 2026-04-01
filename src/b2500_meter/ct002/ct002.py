@@ -328,10 +328,6 @@ class CT002:
             self._efficiency_priority.append(self._efficiency_priority.pop(0))
             self._efficiency_cache_sample = None  # force recompute
 
-        # Cache per sample for consistency across consumer calls
-        if sample_id == self._efficiency_cache_sample:
-            return self._efficiency_cache_result or {}
-
         # Sync priority list with current consumers (prune stale, add new at end)
         current = set(reports)
         self._efficiency_priority = [
@@ -340,6 +336,13 @@ class CT002:
         for cid in sorted(current):
             if cid not in self._efficiency_priority:
                 self._efficiency_priority.append(cid)
+
+        # Cache per sample for consistency across consumer calls.
+        # Checked AFTER consumer sync so topology changes (new/removed
+        # consumers) invalidate stale cached results.
+        cache_key = (sample_id, tuple(self._efficiency_priority))
+        if cache_key == self._efficiency_cache_sample:
+            return self._efficiency_cache_result or {}
 
         # Estimate total demand from battery outputs + grid residual.
         # smoothed_target alone is wrong: it's the grid residual which
@@ -389,7 +392,7 @@ class CT002:
             )
 
         self._efficiency_deprioritized = deprioritized
-        self._efficiency_cache_sample = sample_id
+        self._efficiency_cache_sample = cache_key
         self._efficiency_cache_result = result
         return result
 

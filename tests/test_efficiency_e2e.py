@@ -20,13 +20,13 @@ BASE_HTTP_PORT = 18080
 
 
 def _find_free_ports(n: int = 2) -> list[int]:
-    """Return *n* free TCP/UDP port numbers."""
+    """Return *n* free UDP port numbers."""
     import socket
 
     ports: list[int] = []
     socks: list[socket.socket] = []
     for _ in range(n):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind(("127.0.0.1", 0))
         ports.append(s.getsockname()[1])
         socks.append(s)

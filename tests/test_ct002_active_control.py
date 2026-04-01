@@ -517,11 +517,12 @@ class TestEfficiencyOptimization:
         device._compute_smooth_target([200, 0, 0], "b")
         first_deprioritized = set(device._efficiency_deprioritized)
         assert len(first_deprioritized) == 1
-        # Simulate time passing beyond rotation interval
+        # Simulate time passing beyond rotation interval.
+        # Use the SAME sample to exercise the rotation-before-cache path
+        # (the real bug was rotation not firing when the sample stayed the same).
         device._efficiency_last_rotation -= 11
-        device._efficiency_cache_sample = None  # Clear cache to force recompute
-        device._compute_smooth_target([201, 0, 0], "a")
-        device._compute_smooth_target([201, 0, 0], "b")
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
         second_deprioritized = set(device._efficiency_deprioritized)
         assert len(second_deprioritized) == 1
         assert first_deprioritized != second_deprioritized
