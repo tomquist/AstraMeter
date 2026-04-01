@@ -102,6 +102,10 @@ class HomeWizardPowermeter(Powermeter):
             logger.error(f"HomeWizard: failed to decode message: {raw}")
             return
 
+        if not isinstance(msg, dict):
+            logger.error(f"HomeWizard: unexpected message format: {raw}")
+            return
+
         msg_type = msg.get("type")
         if msg_type == "authorization_requested":
             await ws.send_json({"type": "authorization", "data": self.token})
@@ -109,8 +113,9 @@ class HomeWizardPowermeter(Powermeter):
             logger.info("HomeWizard: authorized, subscribing to measurements")
             await ws.send_json({"type": "subscribe", "data": "measurement"})
         elif msg_type == "measurement":
-            data = msg.get("data", {})
-            self._handle_measurement(data)
+            data = msg.get("data")
+            if isinstance(data, dict):
+                self._handle_measurement(data)
         elif msg_type == "error":
             error_data = msg.get("data", {})
             logger.error(f"HomeWizard error: {error_data.get('message', msg)}")

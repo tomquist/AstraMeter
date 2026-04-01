@@ -111,6 +111,24 @@ async def test_unknown_message_type_does_not_crash():
     assert pm.values is None
 
 
+async def test_non_dict_json_does_not_crash():
+    pm = _create_powermeter()
+    ws = AsyncMock()
+    await pm._handle_message(ws, json.dumps([1, 2, 3]))
+    assert pm.values is None
+    await pm._handle_message(ws, json.dumps("just a string"))
+    assert pm.values is None
+
+
+async def test_measurement_non_dict_data_ignored():
+    pm = _create_powermeter()
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws, json.dumps({"type": "measurement", "data": "not a dict"})
+    )
+    assert pm.values is None
+
+
 async def test_measurement_message_stores_values():
     pm = _create_powermeter()
     ws = AsyncMock()
