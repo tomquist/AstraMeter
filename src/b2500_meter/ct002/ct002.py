@@ -203,7 +203,7 @@ class CT002:
         self._last_smooth_sample = None
         self._efficiency_deprioritized: set[str] = set()
         self._efficiency_priority: list[str] = []
-        self._efficiency_last_rotation: float = 0.0
+        self._efficiency_last_rotation: float = time.time()
         self._efficiency_cache_sample: tuple | None = None
         self._efficiency_cache_result: dict[str, float] | None = None
         self._transport = None
@@ -314,13 +314,11 @@ class CT002:
             self._efficiency_deprioritized = set()
             return {}
 
-        # Cache per sample for consistency across consumer calls
-        if sample_id == self._efficiency_cache_sample:
-            return self._efficiency_cache_result or {}
-
         now = time.time()
 
-        # Rotate priority for fairness
+        # Rotation check BEFORE cache: when the grid is stable the
+        # sample_id never changes, so the cache would prevent rotation
+        # from being evaluated.  Invalidate cache when rotation fires.
         if (
             self._efficiency_priority
             and now - self._efficiency_last_rotation
@@ -328,6 +326,11 @@ class CT002:
         ):
             self._efficiency_last_rotation = now
             self._efficiency_priority.append(self._efficiency_priority.pop(0))
+            self._efficiency_cache_sample = None  # force recompute
+
+        # Cache per sample for consistency across consumer calls
+        if sample_id == self._efficiency_cache_sample:
+            return self._efficiency_cache_result or {}
 
         # Sync priority list with current consumers (prune stale, add new at end)
         current = set(reports)
@@ -338,7 +341,14 @@ class CT002:
             if cid not in self._efficiency_priority:
                 self._efficiency_priority.append(cid)
 
-        abs_target = abs(self._smoothed_target or 0)
+        # Estimate total demand from battery outputs + grid residual.
+        # smoothed_target alone is wrong: it's the grid residual which
+        # approaches 0 when balanced, regardless of actual demand.
+        total_battery_power = sum(
+            parse_int(reports.get(cid, {}).get("power", 0))
+            for cid in self._efficiency_priority
+        )
+        abs_target = abs(total_battery_power + (self._smoothed_target or 0))
         n = len(self._efficiency_priority)
         per_consumer = abs_target / n
 
@@ -437,6 +447,24 @@ class CT002:
         for cid, weight in efficiency_adjustments.items():
             if cid in eff_part:
                 eff_part[cid] = weight
+        # Early return for deprioritized consumers: the battery uses integral
+        # control (target = current_power + grid_reading), so sending [0,0,0]
+        # means "stay at current power".  Instead, send the negative of the
+        # battery's reported power to drive it toward zero.
+        if (
+            efficiency_adjustments
+            and consumer_id
+            and efficiency_adjustments.get(consumer_id) == 0.0
+        ):
+            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
+            if consumer_id:
+                self._last_target_by_consumer[consumer_id] = 0
+            if reported == 0:
+                return [0, 0, 0]
+            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
+            result = [0.0, 0.0, 0.0]
+            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
+            return result
         total_effective = sum(eff_part.values())
         fair_share = (
             (self._smoothed_target / total_effective) * eff_part.get(consumer_id, 1.0)

@@ -591,8 +591,9 @@ class TestEfficiencyOptimization:
             fair_distribution=False,
             min_efficient_power=150,
         )
-        device._update_consumer_report("a", "A", 100)
-        device._update_consumer_report("b", "A", 100)
+        # Report 0W power so estimated demand = battery(0) + grid(200) = 200W
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
         out_a = device._compute_smooth_target([200, 0, 0], "a")
         out_b = device._compute_smooth_target([200, 0, 0], "b")
         assert (out_a[0] > 150 and out_b[0] < 10) or (out_b[0] > 150 and out_a[0] < 10)
