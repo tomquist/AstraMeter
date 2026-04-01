@@ -521,6 +521,29 @@ PASSWORD = mqtt_pass (Optional)
 The `JSON_PATH` option is used to extract the power value from a JSON payload. The path must be a [valid JSONPath expression](https://goessner.net/articles/JsonPath/).
 If the payload is a simple integer value, you can omit this option.
 
+#### Multi-phase MQTT
+
+For three-phase setups, there are two options:
+
+**Option 1: Multiple topics** — one topic per phase, each publishing a plain numeric value (or JSON with the same path):
+
+```ini
+[MQTT]
+BROKER = broker.example.com
+TOPICS = home/power/l1, home/power/l2, home/power/l3
+```
+
+**Option 2: Single topic with multiple JSON paths** — one topic publishing a JSON message containing all phases:
+
+```ini
+[MQTT]
+BROKER = broker.example.com
+TOPIC = home/powermeter
+JSON_PATHS = $.phases[0].power, $.phases[1].power, $.phases[2].power
+```
+
+`TOPICS` takes precedence over `TOPIC`, and `JSON_PATHS` takes precedence over `JSON_PATH`. You can combine `TOPICS` with `JSON_PATH` (same path applied to each topic) or with `JSON_PATHS` (one path per topic, counts must match).
+
 ### JSON HTTP
 
 ```ini

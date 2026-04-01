@@ -52,8 +52,8 @@ TEST_TOPIC = "test/power"
 def _make_pm(
     broker: str = "localhost",
     port: int = 1883,
-    topic: str = TEST_TOPIC,
-    json_path: str | None = None,
+    topic: str | list[str] = TEST_TOPIC,
+    json_path: str | list[str] | None = None,
     username: str | None = None,
     password: str | None = None,
 ) -> MqttPowermeter:
@@ -103,6 +103,114 @@ async def test_wait_for_message_async_wakes_on_event():
     await pm.wait_for_message_async(timeout=2)
     await task
     assert pm.value == 99.0
+
+
+# ---------------------------------------------------------------------------
+# Multi-phase constructor unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_single_topic_backward_compat():
+    pm = _make_pm(topic="t1")
+    assert len(pm._subscriptions) == 1
+    assert pm._subscriptions[0] == ("t1", None)
+    assert len(pm.values) == 1
+
+
+def test_single_topic_with_json_path_backward_compat():
+    pm = _make_pm(topic="t1", json_path="$.power")
+    assert pm._subscriptions == [("t1", "$.power")]
+
+
+def test_multi_topic_constructor():
+    pm = _make_pm(topic=["t1", "t2", "t3"])
+    assert len(pm._subscriptions) == 3
+    assert len(pm.values) == 3
+    assert pm._subscriptions == [("t1", None), ("t2", None), ("t3", None)]
+
+
+def test_single_topic_multi_json_paths():
+    pm = _make_pm(topic="t", json_path=["$.a", "$.b", "$.c"])
+    assert len(pm._subscriptions) == 3
+    assert pm._subscriptions == [("t", "$.a"), ("t", "$.b"), ("t", "$.c")]
+
+
+def test_multi_topic_single_json_path():
+    pm = _make_pm(topic=["t1", "t2"], json_path="$.p")
+    assert pm._subscriptions == [("t1", "$.p"), ("t2", "$.p")]
+
+
+def test_multi_topic_multi_json_path_matching():
+    pm = _make_pm(topic=["t1", "t2"], json_path=["$.a", "$.b"])
+    assert pm._subscriptions == [("t1", "$.a"), ("t2", "$.b")]
+
+
+def test_multi_topic_multi_json_path_length_mismatch():
+    with pytest.raises(ValueError, match="must match"):
+        _make_pm(topic=["t1", "t2"], json_path=["$.a", "$.b", "$.c"])
+
+
+def test_topic_indices_mapping():
+    pm = _make_pm(topic="t", json_path=["$.a", "$.b"])
+    assert pm._topic_indices == {"t": [0, 1]}
+
+
+def test_multi_topic_indices_mapping():
+    pm = _make_pm(topic=["t1", "t2", "t3"])
+    assert pm._topic_indices == {"t1": [0], "t2": [1], "t3": [2]}
+
+
+# ---------------------------------------------------------------------------
+# Multi-phase get/wait unit tests
+# ---------------------------------------------------------------------------
+
+
+async def test_get_watts_raises_when_partial_values():
+    pm = _make_pm(topic=["t1", "t2"])
+    pm.values[0] = 100.0
+    with pytest.raises(ValueError, match="No value received"):
+        await pm.get_powermeter_watts_async()
+
+
+async def test_get_watts_returns_all_phases():
+    pm = _make_pm(topic=["t1", "t2", "t3"])
+    pm.values[0] = 100.0
+    pm.values[1] = 200.0
+    pm.values[2] = 300.0
+    assert await pm.get_powermeter_watts_async() == [100.0, 200.0, 300.0]
+
+
+async def test_wait_for_message_returns_when_all_set():
+    pm = _make_pm(topic=["t1", "t2"])
+
+    async def _set_later():
+        await asyncio.sleep(0.05)
+        pm.values[0] = 10.0
+        pm._message_event.set()
+        await asyncio.sleep(0.05)
+        pm.values[1] = 20.0
+        pm._message_event.set()
+
+    task = asyncio.create_task(_set_later())
+    await pm.wait_for_message_async(timeout=2)
+    await task
+    assert await pm.get_powermeter_watts_async() == [10.0, 20.0]
+
+
+async def test_wait_for_message_times_out_with_partial():
+    pm = _make_pm(topic=["t1", "t2"])
+    pm.values[0] = 10.0
+    # values[1] is still None
+    with pytest.raises(TimeoutError, match="Timeout waiting"):
+        await pm.wait_for_message_async(timeout=0.2)
+
+
+async def test_value_property_backward_compat():
+    pm = _make_pm()
+    assert pm.value is None
+    pm.value = 42.0
+    assert pm.values[0] == 42.0
+    assert pm.value == 42.0
 
 
 # ---------------------------------------------------------------------------
@@ -223,5 +331,51 @@ async def test_receives_multiple_messages_returns_latest(mqtt_broker):
         # Give the listener time to process all messages
         await asyncio.sleep(0.5)
         assert await pm.get_powermeter_watts_async() == [30.0]
+    finally:
+        await pm.stop()
+
+
+@_needs_mosquitto
+async def test_receives_multi_topic_values(mqtt_broker):
+    import aiomqtt
+
+    port = mqtt_broker
+    topics = ["test/phase/l1", "test/phase/l2", "test/phase/l3"]
+    pm = MqttPowermeter(broker="127.0.0.1", port=port, topic=topics)
+    await pm.start()
+    try:
+        await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(topics[0], payload=b"100.0")
+            await pub.publish(topics[1], payload=b"200.0")
+            await pub.publish(topics[2], payload=b"300.0")
+        await pm.wait_for_message_async(timeout=5)
+        assert await pm.get_powermeter_watts_async() == [100.0, 200.0, 300.0]
+    finally:
+        await pm.stop()
+
+
+@_needs_mosquitto
+async def test_receives_single_topic_multi_json_paths(mqtt_broker):
+    import aiomqtt
+
+    port = mqtt_broker
+    topic = "test/multijson"
+    json_paths = ["$.l1.power", "$.l2.power", "$.l3.power"]
+    pm = MqttPowermeter(
+        broker="127.0.0.1", port=port, topic=topic, json_path=json_paths
+    )
+    await pm.start()
+    try:
+        await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
+        payload = {
+            "l1": {"power": 110.5},
+            "l2": {"power": 220.3},
+            "l3": {"power": 330.1},
+        }
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(topic, payload=json.dumps(payload).encode())
+        await pm.wait_for_message_async(timeout=5)
+        assert await pm.get_powermeter_watts_async() == [110.5, 220.3, 330.1]
     finally:
         await pm.stop()

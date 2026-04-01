@@ -235,11 +235,27 @@ def create_sml_powermeter(
 def create_mqtt_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    # Multi-topic: TOPICS takes precedence over TOPIC
+    topics_raw = config.get(section, "TOPICS", fallback=None)
+    if topics_raw:
+        topic: str | list[str] = [t.strip() for t in topics_raw.split(",") if t.strip()]
+    else:
+        topic = config.get(section, "TOPIC", fallback="")
+
+    # Multi-path: JSON_PATHS takes precedence over JSON_PATH
+    json_paths_raw = config.get(section, "JSON_PATHS", fallback=None)
+    if json_paths_raw:
+        json_path: str | list[str] | None = [
+            p.strip() for p in json_paths_raw.split(",") if p.strip()
+        ]
+    else:
+        json_path = config.get(section, "JSON_PATH", fallback=None)
+
     return MqttPowermeter(
         config.get(section, "BROKER", fallback=""),
         config.getint(section, "PORT", fallback=1883),
-        config.get(section, "TOPIC", fallback=""),
-        config.get(section, "JSON_PATH", fallback=None),
+        topic,
+        json_path,
         config.get(section, "USERNAME", fallback=None),
         config.get(section, "PASSWORD", fallback=None),
     )
