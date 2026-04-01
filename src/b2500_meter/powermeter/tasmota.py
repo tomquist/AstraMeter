@@ -40,13 +40,23 @@ class Tasmota(Powermeter):
             else list(json_power_output_mqtt_label)
         )
         self.json_power_calculate = json_power_calculate
-        if json_power_calculate and len(self.json_power_input_mqtt_labels) != len(
-            self.json_power_output_mqtt_labels
-        ):
-            raise ValueError(
-                "JSON_POWER_INPUT_MQTT_LABEL and JSON_POWER_OUTPUT_MQTT_LABEL "
-                "must have the same number of entries"
-            )
+        if json_power_calculate:
+            if len(self.json_power_input_mqtt_labels) != len(
+                self.json_power_output_mqtt_labels
+            ):
+                raise ValueError(
+                    "JSON_POWER_INPUT_MQTT_LABEL and JSON_POWER_OUTPUT_MQTT_LABEL "
+                    "must have the same number of entries"
+                )
+            if any(
+                not label.strip()
+                for label in self.json_power_input_mqtt_labels
+                + self.json_power_output_mqtt_labels
+            ):
+                raise ValueError(
+                    "JSON_POWER_INPUT_MQTT_LABEL and JSON_POWER_OUTPUT_MQTT_LABEL "
+                    "entries cannot be empty when JSON_POWER_CALCULATE is enabled"
+                )
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:

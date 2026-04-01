@@ -375,6 +375,19 @@ JSON_PAYLOAD_MQTT_PREFIX = eBZ
 JSON_POWER_MQTT_LABEL = Power_L1,Power_L2,Power_L3
 ```
 
+For 3-phase with `JSON_POWER_CALCULATE`, provide matching comma-separated
+input and output labels (counts must be equal):
+
+```ini
+[TASMOTA]
+IP = 192.168.1.101
+JSON_STATUS = StatusSNS
+JSON_PAYLOAD_MQTT_PREFIX = SML
+JSON_POWER_INPUT_MQTT_LABEL = Power_In_L1,Power_In_L2,Power_In_L3
+JSON_POWER_OUTPUT_MQTT_LABEL = Power_Out_L1,Power_Out_L2,Power_Out_L3
+JSON_POWER_CALCULATE = True
+```
+
 ### Shrdzm
 
 ```ini

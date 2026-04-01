@@ -101,9 +101,13 @@ def test_create_tasmota_powermeter_three_phase():
         "JSON_STATUS": "StatusSNS",
         "JSON_PAYLOAD_MQTT_PREFIX": "eBZ",
         "JSON_POWER_MQTT_LABEL": "Power_L1, Power_L2, Power_L3",
+        "JSON_POWER_INPUT_MQTT_LABEL": "In_L1, In_L2, In_L3",
+        "JSON_POWER_OUTPUT_MQTT_LABEL": "Out_L1, Out_L2, Out_L3",
     }
     meter = create_tasmota_powermeter("TASMOTA", config)
     assert meter.json_power_mqtt_labels == ["Power_L1", "Power_L2", "Power_L3"]
+    assert meter.json_power_input_mqtt_labels == ["In_L1", "In_L2", "In_L3"]
+    assert meter.json_power_output_mqtt_labels == ["Out_L1", "Out_L2", "Out_L3"]
 
 
 def test_split_labels():

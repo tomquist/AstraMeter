@@ -115,3 +115,18 @@ def test_tasmota_mismatched_calculate_labels():
             ["Out_L1"],
             True,
         )
+
+
+def test_tasmota_empty_calculate_labels():
+    with pytest.raises(ValueError, match="cannot be empty"):
+        Tasmota(
+            "192.168.1.1",
+            "",
+            "",
+            "StatusSNS",
+            "SML",
+            "",
+            "",
+            "",
+            True,
+        )
