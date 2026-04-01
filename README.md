@@ -220,12 +220,20 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
   the target is below this value (avoids false positives at low power).
 
 *Efficiency optimization — concentrating power at low demand:*
+
+Batteries have a minimum operating power below which their DC-DC converter
+efficiency drops sharply. When multiple batteries split a small load, each
+one may operate in this inefficient range, wasting energy as heat. The
+efficiency optimization detects this situation and concentrates the load on
+fewer batteries so each one stays above its efficient minimum, idling the
+rest. Batteries rotate periodically so wear is shared evenly.
+
 - **MIN_EFFICIENT_POWER** (default 0 = disabled) — When the per-battery share of
   total demand falls below this threshold (watts), excess batteries are
   deprioritized so the remaining ones operate above their efficient minimum.
   Example: 2 batteries, 200 W demand, threshold 150 → one battery gets 200 W,
   the other idles. Hysteresis (×1.2) prevents oscillation at the boundary.
-- **EFFICIENCY_ROTATION_INTERVAL** (default 300 s, minimum 10) — Seconds between
+- **EFFICIENCY_ROTATION_INTERVAL** (default 900 s, minimum 10) — Seconds between
   rotating which battery has priority. Ensures fair wear across batteries.
 - **EFFICIENCY_FADE_ALPHA** (default 0.15) — EMA factor controlling how quickly
   batteries transition during efficiency switchovers. During a transition each

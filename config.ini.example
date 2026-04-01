@@ -91,7 +91,7 @@ THROTTLE_INTERVAL = 0
 ## Example: 2 batteries, 200W demand, threshold 150 → one gets 200W, other 0W.
 #MIN_EFFICIENT_POWER = 0
 ## Seconds between rotating which battery has priority (minimum 10).
-#EFFICIENCY_ROTATION_INTERVAL = 300
+#EFFICIENCY_ROTATION_INTERVAL = 900
 ## How quickly efficiency transitions fade (0.01=very slow, 1.0=instant).
 #EFFICIENCY_FADE_ALPHA = 0.15
 

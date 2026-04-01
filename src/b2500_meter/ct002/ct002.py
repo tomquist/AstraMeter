@@ -164,7 +164,7 @@ class CT002:
         saturation_alpha=0.15,
         min_target_for_saturation=20,
         min_efficient_power=0,
-        efficiency_rotation_interval=300,
+        efficiency_rotation_interval=900,
         efficiency_fade_alpha=0.15,
     ):
         self.udp_port = udp_port

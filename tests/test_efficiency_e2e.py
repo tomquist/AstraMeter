@@ -44,7 +44,7 @@ class _SimHarness:
         base_load: list[float] | None = None,
         loads: list[Load] | None = None,
         min_efficient_power: int = 0,
-        efficiency_rotation_interval: int = 300,
+        efficiency_rotation_interval: int = 900,
         poll_interval: float = 0.3,
         base_noise: float = 0.0,
         **ct_kwargs,
