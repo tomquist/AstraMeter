@@ -264,6 +264,9 @@ class CT002:
             self._efficiency_deprioritized.discard(key)
             if key in self._efficiency_priority:
                 self._efficiency_priority.remove(key)
+                # Invalidate cache so next call rebuilds with updated topology
+                self._efficiency_cache_sample = None
+                self._efficiency_cache_result = None
         stale_addrs = [
             addr
             for addr, ts in self._last_response_time.items()
@@ -312,6 +315,8 @@ class CT002:
         """
         if self.min_efficient_power <= 0 or len(reports) < 2:
             self._efficiency_deprioritized = set()
+            self._efficiency_cache_sample = None
+            self._efficiency_cache_result = None
             return {}
 
         now = time.time()
