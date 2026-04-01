@@ -165,7 +165,7 @@ class CT002:
         min_target_for_saturation=20,
         min_efficient_power=0,
         efficiency_rotation_interval=300,
-        efficiency_fade_alpha=0.3,
+        efficiency_fade_alpha=0.15,
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -328,14 +328,8 @@ class CT002:
         # Rotation check BEFORE cache: when the grid is stable the
         # sample_id never changes, so the cache would prevent rotation
         # from being evaluated.  Invalidate cache when rotation fires.
-        # Guard: skip rotation while any consumer is mid-fade to prevent
-        # overlapping transitions.
-        fade_in_progress = any(
-            0.05 < w < 0.95 for w in self._efficiency_fade_weights.values()
-        )
         if (
             self._efficiency_priority
-            and not fade_in_progress
             and now - self._efficiency_last_rotation
             >= self.efficiency_rotation_interval
         ):
@@ -494,8 +488,11 @@ class CT002:
         faded_adjustments = self._fade_efficiency_weights(
             efficiency_adjustments, set(reports.keys())
         )
-        # Apply fully-converged deprioritizations to eff_part so
-        # fair_share redistribution is correct for active consumers.
+        # Set eff_part=0 only for fully converged deprioritizations so
+        # fair_share redistribution kicks in once the consumer is off.
+        # During fade we do NOT reduce eff_part — the blend formula handles
+        # the gradual ramp-down, and reducing eff_part would over-allocate
+        # corrections to the active consumer.
         for cid, fade_w in faded_adjustments.items():
             if cid in eff_part and fade_w == 0.0:
                 eff_part[cid] = 0.0
@@ -576,13 +573,18 @@ class CT002:
         if (raw_total < 0 and target > 0) or (raw_total > 0 and target < 0):
             target = 0
 
-        # Blend between the normal target and the drive-to-zero target for
-        # consumers mid-fade.  This is applied AFTER the sign clamp so
-        # the blend output (which intentionally opposes current power to
-        # ramp the consumer down) is not zeroed.  fade_w=1.0 means fully
-        # active (no blend), fade_w=0.0 means fully deprioritized (handled
-        # by the early return above), intermediate values blend smoothly.
-        if faded_adjustments and consumer_id and consumer_id in faded_adjustments:
+        # Blend for consumers fading DOWN (being deprioritized): mix the
+        # normal target with the drive-to-zero target (-reported) so the
+        # battery ramps down gradually.  Applied AFTER the sign clamp so the
+        # intentionally negative blend output is not zeroed.
+        # Consumers fading UP (re-activating) get the full normal target
+        # so they can absorb load quickly.
+        if (
+            faded_adjustments
+            and consumer_id
+            and consumer_id in faded_adjustments
+            and consumer_id in efficiency_adjustments
+        ):
             fade_w = faded_adjustments[consumer_id]
             if 0.0 < fade_w < 1.0:
                 reported = parse_int(reports.get(consumer_id, {}).get("power", 0))

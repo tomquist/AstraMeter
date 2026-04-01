@@ -117,7 +117,7 @@ async def run_device(
             ct_section, "EFFICIENCY_ROTATION_INTERVAL", fallback=300
         )
         efficiency_fade_alpha = cfg.getfloat(
-            ct_section, "EFFICIENCY_FADE_ALPHA", fallback=0.3
+            ct_section, "EFFICIENCY_FADE_ALPHA", fallback=0.15
         )
 
         logger.debug(f"{device_type.upper()} Settings for {device_id}:")

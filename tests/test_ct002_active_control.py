@@ -720,8 +720,8 @@ class TestEfficiencyFade:
         # One should be at ~200W, the other at ~0W — same as old behavior.
         assert (out_a[0] > 150 and out_b[0] < 10) or (out_b[0] > 150 and out_a[0] < 10)
 
-    def test_fade_rotation_guard(self):
-        """Rotation is blocked while a consumer is mid-fade."""
+    def test_fade_rotation_during_fade(self):
+        """Rotation fires even while a consumer is mid-fade."""
         device = CT002(
             active_control=True,
             fair_distribution=False,
@@ -730,7 +730,7 @@ class TestEfficiencyFade:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
-        # Trigger deprioritization — fade is in progress (default alpha=0.3).
+        # Trigger deprioritization — fade is in progress.
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
         first_deprioritized = set(device._efficiency_deprioritized)
@@ -739,8 +739,8 @@ class TestEfficiencyFade:
         device._efficiency_cache_sample = None
         device._compute_smooth_target([201, 0, 0], "a")
         device._compute_smooth_target([201, 0, 0], "b")
-        # Rotation should be blocked because fade is still in progress.
-        assert device._efficiency_deprioritized == first_deprioritized
+        # Rotation should fire — fade handles overlapping transitions.
+        assert device._efficiency_deprioritized != first_deprioritized
 
     def test_fade_consumer_disconnect_mid_fade(self):
         """Consumer with active fade gets pruned by cleanup."""

@@ -93,7 +93,7 @@ THROTTLE_INTERVAL = 0
 ## Seconds between rotating which battery has priority (minimum 10).
 #EFFICIENCY_ROTATION_INTERVAL = 300
 ## How quickly efficiency transitions fade (0.01=very slow, 1.0=instant).
-#EFFICIENCY_FADE_ALPHA = 0.3
+#EFFICIENCY_FADE_ALPHA = 0.15
 
 #[MARSTEK]
 ## Optional: auto-register managed fake CT devices in Marstek cloud on startup.
