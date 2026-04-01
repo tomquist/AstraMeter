@@ -219,6 +219,20 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **MIN_TARGET_FOR_SATURATION** (default 20 W) — Ignore saturation tracking when
   the target is below this value (avoids false positives at low power).
 
+*Efficiency optimization — concentrating power at low demand:*
+- **MIN_EFFICIENT_POWER** (default 0 = disabled) — When the per-battery share of
+  total demand falls below this threshold (watts), excess batteries are
+  deprioritized so the remaining ones operate above their efficient minimum.
+  Example: 2 batteries, 200 W demand, threshold 150 → one battery gets 200 W,
+  the other idles. Hysteresis (×1.2) prevents oscillation at the boundary.
+- **EFFICIENCY_ROTATION_INTERVAL** (default 300 s, minimum 10) — Seconds between
+  rotating which battery has priority. Ensures fair wear across batteries.
+- **EFFICIENCY_FADE_ALPHA** (default 0.15) — EMA factor controlling how quickly
+  batteries transition during efficiency switchovers. During a transition each
+  battery's power is reallocated proportionally to its fade weight, keeping the
+  total output tracking demand. Lower values produce smoother, slower
+  transitions; higher values are faster. Set to 1.0 for instant switching.
+
 ### CT002 / CT003
 
 ```ini
