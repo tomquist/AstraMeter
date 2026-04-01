@@ -82,7 +82,6 @@ async def test_get_powermeter_watts_async_raises_when_no_value():
 async def test_wait_for_message_async_returns_immediately():
     pm = _make_pm()
     pm.value = 1.0
-    pm._message_event.set()
     await pm.wait_for_message_async(timeout=0.1)
 
 
@@ -155,6 +154,7 @@ def mqtt_broker():
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @_needs_mosquitto

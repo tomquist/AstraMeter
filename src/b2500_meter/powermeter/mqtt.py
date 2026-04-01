@@ -43,6 +43,9 @@ class MqttPowermeter(Powermeter):
         self._connected_event = asyncio.Event()
 
     async def start(self) -> None:
+        self.value = None
+        self._message_event.clear()
+        self._connected_event.clear()
         self._run_task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
