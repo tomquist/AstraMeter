@@ -488,18 +488,64 @@ class CT002:
         faded_adjustments = self._fade_efficiency_weights(
             efficiency_adjustments, set(reports.keys())
         )
-        # Set eff_part=0 only for fully converged deprioritizations so
-        # fair_share redistribution kicks in once the consumer is off.
-        # During fade we do NOT reduce eff_part — the blend formula handles
-        # the gradual ramp-down, and reducing eff_part would over-allocate
-        # corrections to the active consumer.
+        # During an active fade transition, bypass the normal fair-share
+        # path and compute each consumer's target as a direct absolute-
+        # power allocation.  This keeps the sum of all consumers tracking
+        # demand throughout the transition.
+        #
+        # demand = total_battery_output + grid_residual
+        # desired_power[i] = demand * fade_w[i] / sum(fade_w)
+        # target_delta[i]  = desired_power[i] - reported_power[i]
+        any_fading = any(0.0 < w < 1.0 for w in faded_adjustments.values())
+
+        if any_fading and consumer_id and consumer_id in faded_adjustments:
+            fade_w = faded_adjustments[consumer_id]
+            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
+            if fade_w == 0.0:
+                # Fully deprioritized: drive to zero.
+                if consumer_id:
+                    self._last_target_by_consumer[consumer_id] = 0
+                if reported == 0:
+                    return [0, 0, 0]
+                phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
+                result = [0.0, 0.0, 0.0]
+                result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
+                return result
+
+            total_battery = sum(
+                parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
+            )
+            demand = total_battery + (self._smoothed_target or 0)
+            total_fade = sum(
+                self._efficiency_fade_weights.get(cid, 1.0) for cid in reports
+            )
+            desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
+            target = desired - reported
+
+            if consumer_id:
+                self._last_target_by_consumer[consumer_id] = target
+
+            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
+            phase_effective = {"A": 0.0, "B": 0.0, "C": 0.0}
+            for cid, report in reports.items():
+                p = (report.get("phase") or "A").upper()
+                if p not in phase_effective:
+                    p = "A"
+                phase_effective[p] += eff_part.get(cid, 1.0)
+            total_phase_effective = sum(phase_effective.values())
+            if total_phase_effective <= 0:
+                return [target, 0, 0]
+            return [
+                target * (phase_effective["A"] / total_phase_effective),
+                target * (phase_effective["B"] / total_phase_effective),
+                target * (phase_effective["C"] / total_phase_effective),
+            ]
+
+        # Non-fading path: fully converged deprioritizations and normal
+        # fair-share distribution.
         for cid, fade_w in faded_adjustments.items():
             if cid in eff_part and fade_w == 0.0:
                 eff_part[cid] = 0.0
-        # Early return for fully deprioritized consumers: the battery uses
-        # integral control (target = current_power + grid_reading), so
-        # sending [0,0,0] means "stay at current power".  Instead, send the
-        # negative of the battery's reported power to drive it toward zero.
         if (
             faded_adjustments
             and consumer_id
@@ -572,24 +618,6 @@ class CT002:
         # charge during import, worsening overshoot)
         if (raw_total < 0 and target > 0) or (raw_total > 0 and target < 0):
             target = 0
-
-        # Blend for consumers fading DOWN (being deprioritized): mix the
-        # normal target with the drive-to-zero target (-reported) so the
-        # battery ramps down gradually.  Applied AFTER the sign clamp so the
-        # intentionally negative blend output is not zeroed.
-        # Consumers fading UP (re-activating) get the full normal target
-        # so they can absorb load quickly.
-        if (
-            faded_adjustments
-            and consumer_id
-            and consumer_id in faded_adjustments
-            and consumer_id in efficiency_adjustments
-        ):
-            fade_w = faded_adjustments[consumer_id]
-            if 0.0 < fade_w < 1.0:
-                reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-                shutdown_target = float(-reported) if reported != 0 else 0.0
-                target = fade_w * target + (1.0 - fade_w) * shutdown_target
 
         if consumer_id:
             self._last_target_by_consumer[consumer_id] = target
