@@ -281,3 +281,21 @@ THROTTLE_INTERVAL = 0
 #OBIS_POWER_L1 = 0100240700ff
 #OBIS_POWER_L2 = 0100380700ff
 #OBIS_POWER_L3 = 01004c0700ff
+
+#[ENVOY]
+## Enphase Envoy local API powermeter
+## Reads grid power from /production.json?details=1 (net-consumption).
+## Requires grid CTs installed on the Envoy.
+#HOST = envoy.local
+## Static JWT token (optional if username/password/serial are provided)
+#TOKEN =
+## Enlighten cloud credentials for automatic token refresh (optional)
+#USERNAME =
+#PASSWORD =
+#SERIAL =
+## Number of phases (1 or 3)
+#PHASES = 1
+## Set False only if you get certificate errors on a trusted LAN (insecure).
+#VERIFY_SSL = False
+## Per-powermeter throttling override (optional)
+#THROTTLE_INTERVAL = 0

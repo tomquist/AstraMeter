@@ -32,6 +32,7 @@ from b2500_meter.powermeter import (
 SHELLY_SECTION = "SHELLY"
 TASMOTA_SECTION = "TASMOTA"
 SHRDZM_SECTION = "SHRDZM"
+ENVOY_SECTION = "ENVOY"
 EMLOG_SECTION = "EMLOG"
 IOBROKER_SECTION = "IOBROKER"
 HOMEASSISTANT_SECTION = "HOMEASSISTANT"
@@ -149,6 +150,8 @@ def create_powermeter(
         return create_tasmota_powermeter(section, config)
     elif section.startswith(SHRDZM_SECTION):
         return create_shrdzm_powermeter(section, config)
+    elif section.startswith(ENVOY_SECTION):
+        return create_envoy_powermeter(section, config)
     elif section.startswith(EMLOG_SECTION):
         return create_emlog_powermeter(section, config)
     elif section.startswith(IOBROKER_SECTION):
@@ -447,4 +450,20 @@ def create_sma_energy_meter_powermeter(
         config.getint(section, "PORT", fallback=9522),
         config.getint(section, "SERIAL_NUMBER", fallback=0),
         config.get(section, "INTERFACE", fallback=""),
+    )
+
+
+def create_envoy_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    from b2500_meter.powermeter.envoy import Envoy
+
+    return Envoy(
+        host=config.get(section, "HOST", fallback=""),
+        token=config.get(section, "TOKEN", fallback=""),
+        phases=config.getint(section, "PHASES", fallback=1),
+        verify_ssl=config.getboolean(section, "VERIFY_SSL", fallback=False),
+        username=config.get(section, "USERNAME", fallback=""),
+        password=config.get(section, "PASSWORD", fallback=""),
+        serial=config.get(section, "SERIAL", fallback=""),
     )
