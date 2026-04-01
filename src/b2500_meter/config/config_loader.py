@@ -395,6 +395,13 @@ def create_shrdzm_powermeter(
     )
 
 
+def _split_labels(raw: str) -> str | list[str]:
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(parts) <= 1:
+        return parts[0] if parts else ""
+    return parts
+
+
 def create_tasmota_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
@@ -404,9 +411,9 @@ def create_tasmota_powermeter(
         config.get(section, "PASS", fallback=""),
         config.get(section, "JSON_STATUS", fallback=""),
         config.get(section, "JSON_PAYLOAD_MQTT_PREFIX", fallback=""),
-        config.get(section, "JSON_POWER_MQTT_LABEL", fallback=""),
-        config.get(section, "JSON_POWER_INPUT_MQTT_LABEL", fallback=""),
-        config.get(section, "JSON_POWER_OUTPUT_MQTT_LABEL", fallback=""),
+        _split_labels(config.get(section, "JSON_POWER_MQTT_LABEL", fallback="")),
+        _split_labels(config.get(section, "JSON_POWER_INPUT_MQTT_LABEL", fallback="")),
+        _split_labels(config.get(section, "JSON_POWER_OUTPUT_MQTT_LABEL", fallback="")),
         config.getboolean(section, "JSON_POWER_CALCULATE", fallback=False),
     )
 

@@ -14,9 +14,9 @@ class Tasmota(Powermeter):
         password: str,
         json_status: str,
         json_payload_mqtt_prefix: str,
-        json_power_mqtt_label: str,
-        json_power_input_mqtt_label: str,
-        json_power_output_mqtt_label: str,
+        json_power_mqtt_label: str | list[str],
+        json_power_input_mqtt_label: str | list[str],
+        json_power_output_mqtt_label: str | list[str],
         json_power_calculate: bool,
     ):
         self.ip = ip
@@ -24,10 +24,29 @@ class Tasmota(Powermeter):
         self.password = password
         self.json_status = json_status
         self.json_payload_mqtt_prefix = json_payload_mqtt_prefix
-        self.json_power_mqtt_label = json_power_mqtt_label
-        self.json_power_input_mqtt_label = json_power_input_mqtt_label
-        self.json_power_output_mqtt_label = json_power_output_mqtt_label
+        self.json_power_mqtt_labels = (
+            [json_power_mqtt_label]
+            if isinstance(json_power_mqtt_label, str)
+            else list(json_power_mqtt_label)
+        )
+        self.json_power_input_mqtt_labels = (
+            [json_power_input_mqtt_label]
+            if isinstance(json_power_input_mqtt_label, str)
+            else list(json_power_input_mqtt_label)
+        )
+        self.json_power_output_mqtt_labels = (
+            [json_power_output_mqtt_label]
+            if isinstance(json_power_output_mqtt_label, str)
+            else list(json_power_output_mqtt_label)
+        )
         self.json_power_calculate = json_power_calculate
+        if json_power_calculate and len(self.json_power_input_mqtt_labels) != len(
+            self.json_power_output_mqtt_labels
+        ):
+            raise ValueError(
+                "JSON_POWER_INPUT_MQTT_LABEL and JSON_POWER_OUTPUT_MQTT_LABEL "
+                "must have the same number of entries"
+            )
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
@@ -58,8 +77,13 @@ class Tasmota(Powermeter):
             response = await self.get_json(f"/cm?{qs}")
         value = response[self.json_status][self.json_payload_mqtt_prefix]
         if not self.json_power_calculate:
-            return [int(value[self.json_power_mqtt_label])]
+            return [int(value[label]) for label in self.json_power_mqtt_labels]
         else:
-            power_in = value[self.json_power_input_mqtt_label]
-            power_out = value[self.json_power_output_mqtt_label]
-            return [int(power_in) - int(power_out)]
+            return [
+                int(value[in_l]) - int(value[out_l])
+                for in_l, out_l in zip(
+                    self.json_power_input_mqtt_labels,
+                    self.json_power_output_mqtt_labels,
+                    strict=True,
+                )
+            ]

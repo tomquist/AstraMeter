@@ -5,6 +5,7 @@ import pytest
 
 from b2500_meter.config.config_loader import (
     ClientFilter,
+    _split_labels,
     create_amisreader_powermeter,
     create_client_filter,
     create_emlog_powermeter,
@@ -90,6 +91,36 @@ def test_create_tasmota_powermeter():
     except Exception as e:
         if "Connection" not in str(e):  # Ignore expected connection errors
             raise
+
+
+def test_create_tasmota_powermeter_three_phase():
+    """Test Tasmota powermeter creation with comma-separated labels."""
+    config = configparser.ConfigParser()
+    config["TASMOTA"] = {
+        "IP": "127.0.0.1",
+        "JSON_STATUS": "StatusSNS",
+        "JSON_PAYLOAD_MQTT_PREFIX": "eBZ",
+        "JSON_POWER_MQTT_LABEL": "Power_L1, Power_L2, Power_L3",
+    }
+    meter = create_tasmota_powermeter("TASMOTA", config)
+    assert meter.json_power_mqtt_labels == ["Power_L1", "Power_L2", "Power_L3"]
+
+
+def test_split_labels():
+    """Test _split_labels helper."""
+    assert _split_labels("") == ""
+    assert _split_labels("Power") == "Power"
+    assert _split_labels("Power_L1,Power_L2,Power_L3") == [
+        "Power_L1",
+        "Power_L2",
+        "Power_L3",
+    ]
+    assert _split_labels("Power_L1 , Power_L2 , Power_L3") == [
+        "Power_L1",
+        "Power_L2",
+        "Power_L3",
+    ]
+    assert _split_labels(" , , ") == ""
 
 
 def test_create_shrdzm_powermeter():

@@ -365,6 +365,16 @@ JSON_POWER_OUTPUT_MQTT_LABEL = Power2
 JSON_POWER_CALCULATE = True
 ```
 
+For 3-phase meters, use comma-separated labels:
+
+```ini
+[TASMOTA]
+IP = 192.168.1.101
+JSON_STATUS = StatusSNS
+JSON_PAYLOAD_MQTT_PREFIX = eBZ
+JSON_POWER_MQTT_LABEL = Power_L1,Power_L2,Power_L3
+```
+
 ### Shrdzm
 
 ```ini
