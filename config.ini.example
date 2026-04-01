@@ -206,12 +206,13 @@ THROTTLE_INTERVAL = 0
 ## MQTT can have variable latency depending on broker and network
 #THROTTLE_INTERVAL = 1
 
-## Multi-phase option 1: one topic per phase (comma-separated)
+## Multi-phase: replace the [MQTT] section above with one of these alternatives
+## Option 1: one topic per phase (comma-separated)
 #[MQTT]
 #BROKER = broker.example.com
 #TOPICS = home/power/l1, home/power/l2, home/power/l3
 
-## Multi-phase option 2: single topic with multiple JSON paths
+## Option 2: single topic with multiple JSON paths
 #[MQTT]
 #BROKER = broker.example.com
 #TOPIC = home/powermeter

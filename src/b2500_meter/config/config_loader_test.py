@@ -224,6 +224,51 @@ def test_create_mqtt_powermeter():
             raise
 
 
+def test_create_mqtt_powermeter_with_topics():
+    """Test MQTT powermeter creation with multi-phase TOPICS."""
+    config = configparser.ConfigParser()
+    config["MQTT"] = {
+        "BROKER": "127.0.0.1",
+        "TOPICS": "home/l1, home/l2, home/l3",
+    }
+    pm = create_mqtt_powermeter("MQTT", config)
+    assert len(pm._subscriptions) == 3
+    assert pm._subscriptions == [
+        ("home/l1", None),
+        ("home/l2", None),
+        ("home/l3", None),
+    ]
+
+
+def test_create_mqtt_powermeter_with_json_paths():
+    """Test MQTT powermeter creation with single TOPIC and multiple JSON_PATHS."""
+    config = configparser.ConfigParser()
+    config["MQTT"] = {
+        "BROKER": "127.0.0.1",
+        "TOPIC": "home/power",
+        "JSON_PATHS": "$.l1.power, $.l2.power, $.l3.power",
+    }
+    pm = create_mqtt_powermeter("MQTT", config)
+    assert len(pm._subscriptions) == 3
+    assert pm._subscriptions[0] == ("home/power", "$.l1.power")
+    assert pm._subscriptions[1] == ("home/power", "$.l2.power")
+    assert pm._subscriptions[2] == ("home/power", "$.l3.power")
+
+
+def test_create_mqtt_powermeter_topics_takes_precedence_over_topic():
+    """Test that TOPICS takes precedence over TOPIC when both are set."""
+    config = configparser.ConfigParser()
+    config["MQTT"] = {
+        "BROKER": "127.0.0.1",
+        "TOPIC": "ignored",
+        "TOPICS": "home/l1, home/l2",
+    }
+    pm = create_mqtt_powermeter("MQTT", config)
+    assert len(pm._subscriptions) == 2
+    assert pm._subscriptions[0][0] == "home/l1"
+    assert pm._subscriptions[1][0] == "home/l2"
+
+
 def test_create_json_http_powermeter():
     """Test JSON HTTP powermeter creation."""
     config = configparser.ConfigParser()

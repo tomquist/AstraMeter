@@ -145,6 +145,11 @@ def test_multi_topic_multi_json_path_matching():
     assert pm._subscriptions == [("t1", "$.a"), ("t2", "$.b")]
 
 
+def test_empty_topic_list_raises():
+    with pytest.raises(ValueError, match="At least one MQTT topic"):
+        _make_pm(topic=[])
+
+
 def test_multi_topic_multi_json_path_length_mismatch():
     with pytest.raises(ValueError, match="must match"):
         _make_pm(topic=["t1", "t2"], json_path=["$.a", "$.b", "$.c"])

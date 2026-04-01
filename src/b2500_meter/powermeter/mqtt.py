@@ -48,9 +48,12 @@ class MqttPowermeter(Powermeter):
         # Handle single topic + multiple paths: replicate topic
         if len(topics) == 1 and len(paths) > 1:
             topics = topics * len(paths)
-        # Handle multiple topics + single/no path: already replicated above
+        # Handle multiple topics + single-element path list (e.g. json_path=["$.a"])
         elif len(topics) > 1 and len(paths) == 1:
             paths = paths * len(topics)
+
+        if not topics:
+            raise ValueError("At least one MQTT topic is required.")
 
         if len(topics) != len(paths):
             raise ValueError(
@@ -111,18 +114,20 @@ class MqttPowermeter(Powermeter):
                             continue
                         # Parse JSON once if any subscription for this topic needs it
                         parsed_json = None
-                        try:
-                            for i in indices:
-                                _, jp = self._subscriptions[i]
+                        for i in indices:
+                            _, jp = self._subscriptions[i]
+                            try:
                                 if jp:
                                     if parsed_json is None:
                                         parsed_json = json.loads(payload)
                                     self.values[i] = extract_json_value(parsed_json, jp)
                                 else:
                                     self.values[i] = float(payload)
-                            self._message_event.set()
-                        except (json.JSONDecodeError, ValueError) as e:
-                            logger.error(f"Failed to parse MQTT payload: {e}")
+                                self._message_event.set()
+                            except (json.JSONDecodeError, ValueError) as e:
+                                logger.error(
+                                    f"Failed to parse MQTT payload for index {i}: {e}"
+                                )
             except aiomqtt.MqttError as e:
                 self._connected_event.clear()
                 logger.warning(
@@ -139,15 +144,16 @@ class MqttPowermeter(Powermeter):
 
     async def get_powermeter_watts_async(self) -> list[float]:
         if all(v is not None for v in self.values):
-            return [v for v in self.values if v is not None]
+            return list(self.values)  # type: ignore[arg-type]
         raise ValueError("No value received from MQTT")
 
     async def wait_for_message_async(self, timeout=5):
         if all(v is not None for v in self.values):
             return
-        deadline = asyncio.get_event_loop().time() + timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
         while True:
-            remaining = deadline - asyncio.get_event_loop().time()
+            remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError("Timeout waiting for MQTT message")
             self._message_event.clear()
