@@ -498,8 +498,8 @@ class CT002:
         # target_delta[i]  = desired_power[i] - reported_power[i]
         any_fading = any(0.0 < w < 1.0 for w in faded_adjustments.values())
 
-        if any_fading and consumer_id and consumer_id in faded_adjustments:
-            fade_w = faded_adjustments[consumer_id]
+        if any_fading and consumer_id:
+            fade_w = self._efficiency_fade_weights.get(consumer_id, 1.0)
             reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
             if fade_w == 0.0:
                 # Fully deprioritized: drive to zero.
