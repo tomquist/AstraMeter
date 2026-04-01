@@ -494,10 +494,11 @@ class CT002:
         faded_adjustments = self._fade_efficiency_weights(
             efficiency_adjustments, set(reports.keys())
         )
+        # Apply fully-converged deprioritizations to eff_part so
+        # fair_share redistribution is correct for active consumers.
         for cid, fade_w in faded_adjustments.items():
-            if cid in eff_part:
-                sat = saturation.get(cid, 0.0)
-                eff_part[cid] = max(0.01, fade_w * (1.0 - sat))
+            if cid in eff_part and fade_w == 0.0:
+                eff_part[cid] = 0.0
         # Early return for fully deprioritized consumers: the battery uses
         # integral control (target = current_power + grid_reading), so
         # sending [0,0,0] means "stay at current power".  Instead, send the
@@ -574,6 +575,19 @@ class CT002:
         # charge during import, worsening overshoot)
         if (raw_total < 0 and target > 0) or (raw_total > 0 and target < 0):
             target = 0
+
+        # Blend between the normal target and the drive-to-zero target for
+        # consumers mid-fade.  This is applied AFTER the sign clamp so
+        # the blend output (which intentionally opposes current power to
+        # ramp the consumer down) is not zeroed.  fade_w=1.0 means fully
+        # active (no blend), fade_w=0.0 means fully deprioritized (handled
+        # by the early return above), intermediate values blend smoothly.
+        if faded_adjustments and consumer_id and consumer_id in faded_adjustments:
+            fade_w = faded_adjustments[consumer_id]
+            if 0.0 < fade_w < 1.0:
+                reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
+                shutdown_target = float(-reported) if reported != 0 else 0.0
+                target = fade_w * target + (1.0 - fade_w) * shutdown_target
 
         if consumer_id:
             self._last_target_by_consumer[consumer_id] = target

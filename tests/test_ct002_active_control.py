@@ -626,6 +626,43 @@ class TestEfficiencyFade:
         fade_w = device._efficiency_fade_weights[deprioritized_cid]
         assert 0 < fade_w < 1.0, f"Expected intermediate fade, got {fade_w}"
 
+    def test_fade_blend_drives_consumer_down(self):
+        """During fade-down, the blend formula should produce negative targets
+        to actively drive the consumer toward zero, not just reduce its share."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+        )
+        # Get consumer "b" fully deprioritized (instant with alpha=1.0).
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+        deprioritized_cid = next(iter(device._efficiency_deprioritized))
+
+        # Switch to gradual fade.  Exit limiting so fade weight rises.
+        device.efficiency_fade_alpha = 0.3
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([600, 0, 0], deprioritized_cid)
+        # 600W/2 = 300 > 180 (hysteresis exit): no longer limited.
+        assert len(device._efficiency_deprioritized) == 0
+        fade_w = device._efficiency_fade_weights.get(deprioritized_cid, 1.0)
+        assert 0 < fade_w < 1.0, f"Should be mid-fade, got {fade_w}"
+
+        # Now drop demand to re-enter limiting with consumer reporting 100W.
+        device._update_consumer_report(deprioritized_cid, "A", 100)
+        device._efficiency_cache_sample = None
+        out = device._compute_smooth_target([100, 0, 0], deprioritized_cid)
+        # The blend: target = fade_w * normal + (1 - fade_w) * (-100)
+        # With fade_w < 1 and reported=100, the drive-to-zero dominates.
+        assert out[0] < 0, (
+            f"Expected negative target to drive consumer down during fade, "
+            f"got {out[0]}. fade_w={device._efficiency_fade_weights}"
+        )
+
     def test_fade_gradual_activate(self):
         """When demand rises, reactivated consumer fades in gradually."""
         device = CT002(
