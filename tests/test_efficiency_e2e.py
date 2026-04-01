@@ -258,6 +258,7 @@ class TestEfficiencyE2E:
             base_load=[200.0, 0.0, 0.0],
             min_efficient_power=150,
             efficiency_rotation_interval=5,  # Short interval for testing
+            efficiency_fade_alpha=1.0,  # Instant fade so rotation isn't blocked
         )
         await h.start()
         try:
@@ -322,6 +323,48 @@ class TestEfficiencyE2E:
             assert active == 2, (
                 f"Expected 2 active batteries at 350W with 3 available. "
                 f"Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(30)
+    async def test_smooth_transition_no_overshoot(self):
+        """During demand increase, no single battery should overshoot excessively."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            loads=[Load("BigLoad", 500.0, "A")],
+        )
+        await h.start()
+        try:
+            # Low demand: 1 active battery.
+            await h.settle(5.0)
+            assert h.active_battery_count() == 1, (
+                f"Low demand: expected 1 active. Powers: {h.battery_powers()}"
+            )
+
+            # Toggle load on → high demand (700W).
+            h.load_model.toggle_load(1)
+
+            # Sample powers during the transition to check for overshoot.
+            max_power_seen = 0.0
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                for p in h.battery_powers():
+                    max_power_seen = max(max_power_seen, abs(p))
+
+            # No single battery should spike above 600W during the
+            # transition from 1→2 active batteries at 700W total demand.
+            assert max_power_seen < 600, (
+                f"Overshoot detected: max battery power {max_power_seen:.0f}W "
+                f"during transition. Final powers: {h.battery_powers()}"
+            )
+
+            # After settling, both batteries active and grid near zero.
+            await h.settle(3.0)
+            assert h.active_battery_count(threshold=30.0) == 2, (
+                f"High demand: expected 2 active. Powers: {h.battery_powers()}"
             )
         finally:
             await h.stop()

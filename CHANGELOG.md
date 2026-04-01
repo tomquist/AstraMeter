@@ -2,7 +2,7 @@
 
 ## Next
 - Added 3-phase support for Tasmota powermeter: comma-separated `JSON_POWER_MQTT_LABEL` / input / output labels ([#136](https://github.com/tomquist/b2500-meter/issues/136))
-- Added opt-in efficiency optimization for multi-battery setups: concentrates power on fewer batteries at low demand to avoid inefficient low-power operation, with hysteresis and time-based rotation for fairness (`MIN_EFFICIENT_POWER`, `EFFICIENCY_ROTATION_INTERVAL`)
+- Added opt-in efficiency optimization for multi-battery setups: concentrates power on fewer batteries at low demand to avoid inefficient low-power operation, with hysteresis, time-based rotation for fairness, and smooth fade transitions to prevent overshoot during switchovers (`MIN_EFFICIENT_POWER`, `EFFICIENCY_ROTATION_INTERVAL`, `EFFICIENCY_FADE_ALPHA`)
 - Added multi-phase support for MQTT powermeter: multiple topics (`TOPICS`) or multiple JSON paths (`JSON_PATHS`) from a single topic ([#208](https://github.com/tomquist/b2500-meter/issues/208), [#280](https://github.com/tomquist/b2500-meter/pull/280))
 - Added support for emulating a *CT002/CT003*, which is recommended to steer multiple devices
 - Added HomeWizard P1 powermeter support via the device WebSocket API with token and serial configuration ([#231](https://github.com/tomquist/b2500-meter/pull/231)), including optional `VERIFY_SSL` to disable TLS certificate verification on trusted networks when needed ([#254](https://github.com/tomquist/b2500-meter/pull/254))

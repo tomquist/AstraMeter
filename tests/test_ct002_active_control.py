@@ -413,10 +413,12 @@ class TestCleanup:
         device._update_consumer_report("a", "A", 0)
         device._efficiency_deprioritized.add("a")
         device._efficiency_priority.append("a")
+        device._efficiency_fade_weights["a"] = 0.5
         time.sleep(0.02)
         device._cleanup_consumers()
         assert "a" not in device._efficiency_deprioritized
         assert "a" not in device._efficiency_priority
+        assert "a" not in device._efficiency_fade_weights
 
 
 class TestEfficiencyOptimization:
@@ -440,6 +442,7 @@ class TestEfficiencyOptimization:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -510,6 +513,7 @@ class TestEfficiencyOptimization:
             fair_distribution=False,
             min_efficient_power=150,
             efficiency_rotation_interval=10,
+            efficiency_fade_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -560,6 +564,7 @@ class TestEfficiencyOptimization:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -591,6 +596,7 @@ class TestEfficiencyOptimization:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
         )
         # Report 0W power so estimated demand = battery(0) + grid(200) = 200W
         device._update_consumer_report("a", "A", 0)
@@ -598,3 +604,158 @@ class TestEfficiencyOptimization:
         out_a = device._compute_smooth_target([200, 0, 0], "a")
         out_b = device._compute_smooth_target([200, 0, 0], "b")
         assert (out_a[0] > 150 and out_b[0] < 10) or (out_b[0] > 150 and out_a[0] < 10)
+
+
+class TestEfficiencyFade:
+    """Tests for smooth fade transitions during efficiency optimization."""
+
+    def test_fade_gradual_deprioritize(self):
+        """With default alpha, deprioritized consumer should fade gradually."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # First call: deprioritization decided, but fade hasn't converged.
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        # The deprioritized consumer should NOT be at zero yet — it's fading.
+        deprioritized_cid = next(iter(device._efficiency_deprioritized))
+        fade_w = device._efficiency_fade_weights[deprioritized_cid]
+        assert 0 < fade_w < 1.0, f"Expected intermediate fade, got {fade_w}"
+
+    def test_fade_gradual_activate(self):
+        """When demand rises, reactivated consumer fades in gradually."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Fully deprioritize at low demand (instant with alpha=1.0).
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+        deprioritized_cid = next(iter(device._efficiency_deprioritized))
+        assert device._efficiency_fade_weights[deprioritized_cid] == 0.0
+
+        # Now switch to gradual fade and raise demand above hysteresis exit.
+        device.efficiency_fade_alpha = 0.3
+        device._efficiency_cache_sample = None  # Force recompute
+        device._compute_smooth_target([400, 0, 0], deprioritized_cid)
+        # Demand 400W / 2 = 200W > 180W (150*1.2): exits limiting.
+        # Fade weight should move toward 1.0 but not reach it yet.
+        fade_w = device._efficiency_fade_weights[deprioritized_cid]
+        assert 0 < fade_w < 1.0, f"Expected gradual activate, got {fade_w}"
+
+    def test_fade_converges(self):
+        """After enough calls, fade weight snaps to target."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Run many cycles — use different sample_ids to ensure EMA advances.
+        for i in range(20):
+            device._compute_smooth_target([200 + i, 0, 0], "a")
+            device._compute_smooth_target([200 + i, 0, 0], "b")
+        deprioritized_cid = next(iter(device._efficiency_deprioritized))
+        assert device._efficiency_fade_weights[deprioritized_cid] == 0.0
+
+    def test_fade_instant_with_alpha_one(self):
+        """With alpha=1.0, fade is instant (matches old behavior)."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        out_a = device._compute_smooth_target([200, 0, 0], "a")
+        out_b = device._compute_smooth_target([200, 0, 0], "b")
+        # One should be at ~200W, the other at ~0W — same as old behavior.
+        assert (out_a[0] > 150 and out_b[0] < 10) or (out_b[0] > 150 and out_a[0] < 10)
+
+    def test_fade_rotation_guard(self):
+        """Rotation is blocked while a consumer is mid-fade."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_rotation_interval=10,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Trigger deprioritization — fade is in progress (default alpha=0.3).
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        first_deprioritized = set(device._efficiency_deprioritized)
+        # Simulate time passing beyond rotation interval.
+        device._efficiency_last_rotation -= 11
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([201, 0, 0], "a")
+        device._compute_smooth_target([201, 0, 0], "b")
+        # Rotation should be blocked because fade is still in progress.
+        assert device._efficiency_deprioritized == first_deprioritized
+
+    def test_fade_consumer_disconnect_mid_fade(self):
+        """Consumer with active fade gets pruned by cleanup."""
+        device = CT002(
+            min_efficient_power=150,
+            consumer_ttl=0.01,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._efficiency_fade_weights["a"] = 0.5
+        time.sleep(0.02)
+        device._cleanup_consumers()
+        assert "a" not in device._efficiency_fade_weights
+
+    def test_fade_new_consumer_during_fade(self):
+        """New consumer starts its fade from 1.0, not from 0.0."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Trigger fade.
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        # New consumer appears — with high demand so it stays active.
+        device._update_consumer_report("c", "A", 0)
+        device._efficiency_cache_sample = None  # Force recompute
+        device._compute_smooth_target([600, 0, 0], "c")
+        # 600W/3 = 200W > 180W (hysteresis exit): all consumers active.
+        # New consumer "c" should be at 1.0 (never deprioritized).
+        assert device._efficiency_fade_weights.get("c", 1.0) == 1.0
+
+    def test_fade_demand_reversal(self):
+        """Deprioritization reverses mid-fade; EMA reverses direction."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Start fading down at low demand.
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        deprioritized_cid = next(iter(device._efficiency_deprioritized))
+        fade_after_low = device._efficiency_fade_weights[deprioritized_cid]
+        assert fade_after_low < 1.0
+
+        # Now raise demand above hysteresis exit (per_consumer > 150*1.2=180).
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([400, 0, 0], deprioritized_cid)
+        fade_after_high = device._efficiency_fade_weights[deprioritized_cid]
+        # Weight should have moved back toward 1.0.
+        assert fade_after_high > fade_after_low

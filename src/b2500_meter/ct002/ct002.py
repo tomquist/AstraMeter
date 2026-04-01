@@ -165,6 +165,7 @@ class CT002:
         min_target_for_saturation=20,
         min_efficient_power=0,
         efficiency_rotation_interval=300,
+        efficiency_fade_alpha=0.3,
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -190,6 +191,7 @@ class CT002:
         self.min_target_for_saturation = max(1, min_target_for_saturation)
         self.min_efficient_power = max(0, min_efficient_power)
         self.efficiency_rotation_interval = max(10, efficiency_rotation_interval)
+        self.efficiency_fade_alpha = max(0.01, min(1.0, efficiency_fade_alpha))
         self.before_send: (
             Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
         ) = None
@@ -206,6 +208,7 @@ class CT002:
         self._efficiency_last_rotation: float = time.time()
         self._efficiency_cache_sample: tuple | None = None
         self._efficiency_cache_result: dict[str, float] | None = None
+        self._efficiency_fade_weights: dict[str, float] = {}
         self._transport = None
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
@@ -262,6 +265,7 @@ class CT002:
             self._last_target_by_consumer.pop(key, None)
             self._saturation_by_consumer.pop(key, None)
             self._efficiency_deprioritized.discard(key)
+            self._efficiency_fade_weights.pop(key, None)
             if key in self._efficiency_priority:
                 self._efficiency_priority.remove(key)
                 # Invalidate cache so next call rebuilds with updated topology
@@ -324,8 +328,14 @@ class CT002:
         # Rotation check BEFORE cache: when the grid is stable the
         # sample_id never changes, so the cache would prevent rotation
         # from being evaluated.  Invalidate cache when rotation fires.
+        # Guard: skip rotation while any consumer is mid-fade to prevent
+        # overlapping transitions.
+        fade_in_progress = any(
+            0.05 < w < 0.95 for w in self._efficiency_fade_weights.values()
+        )
         if (
             self._efficiency_priority
+            and not fade_in_progress
             and now - self._efficiency_last_rotation
             >= self.efficiency_rotation_interval
         ):
@@ -401,6 +411,34 @@ class CT002:
         self._efficiency_cache_result = result
         return result
 
+    def _fade_efficiency_weights(
+        self, raw_adjustments: dict[str, float], consumer_ids: set[str]
+    ) -> dict[str, float]:
+        """Apply EMA fade to efficiency weights for smooth transitions.
+
+        Returns a dict of {consumer_id: faded_weight} for consumers whose
+        faded weight is below 1.0.  Consumers not in the dict are fully
+        active (weight 1.0).
+        """
+        alpha = self.efficiency_fade_alpha
+        result: dict[str, float] = {}
+        for cid in consumer_ids:
+            goal = raw_adjustments.get(cid, 1.0)
+            prev = self._efficiency_fade_weights.get(cid, 1.0)
+            new = prev + alpha * (goal - prev)
+            if abs(new - goal) < 0.05:
+                new = goal
+            self._efficiency_fade_weights[cid] = new
+            if new < 1.0:
+                result[cid] = new
+        # Prune consumers no longer tracked.
+        self._efficiency_fade_weights = {
+            cid: w
+            for cid, w in self._efficiency_fade_weights.items()
+            if cid in consumer_ids
+        }
+        return result
+
     def _compute_smooth_target(self, values, consumer_id=None):
         """
         Active control: smooth the raw grid reading and split target across consumers.
@@ -452,17 +490,22 @@ class CT002:
         efficiency_adjustments = self._compute_efficiency_deprioritized(
             reports, sample_id
         )
-        for cid, weight in efficiency_adjustments.items():
+        # Smooth fade: advance per-consumer EMA toward target weights.
+        faded_adjustments = self._fade_efficiency_weights(
+            efficiency_adjustments, set(reports.keys())
+        )
+        for cid, fade_w in faded_adjustments.items():
             if cid in eff_part:
-                eff_part[cid] = weight
-        # Early return for deprioritized consumers: the battery uses integral
-        # control (target = current_power + grid_reading), so sending [0,0,0]
-        # means "stay at current power".  Instead, send the negative of the
-        # battery's reported power to drive it toward zero.
+                sat = saturation.get(cid, 0.0)
+                eff_part[cid] = max(0.01, fade_w * (1.0 - sat))
+        # Early return for fully deprioritized consumers: the battery uses
+        # integral control (target = current_power + grid_reading), so
+        # sending [0,0,0] means "stay at current power".  Instead, send the
+        # negative of the battery's reported power to drive it toward zero.
         if (
-            efficiency_adjustments
+            faded_adjustments
             and consumer_id
-            and efficiency_adjustments.get(consumer_id) == 0.0
+            and faded_adjustments.get(consumer_id) == 0.0
         ):
             reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
             if consumer_id:

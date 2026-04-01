@@ -116,6 +116,9 @@ async def run_device(
         efficiency_rotation_interval = cfg.getint(
             ct_section, "EFFICIENCY_ROTATION_INTERVAL", fallback=300
         )
+        efficiency_fade_alpha = cfg.getfloat(
+            ct_section, "EFFICIENCY_FADE_ALPHA", fallback=0.3
+        )
 
         logger.debug(f"{device_type.upper()} Settings for {device_id}:")
         logger.debug(f"CT Type: {ct_type}")
@@ -169,6 +172,7 @@ async def run_device(
             min_target_for_saturation=min_target_for_saturation,
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=efficiency_rotation_interval,
+            efficiency_fade_alpha=efficiency_fade_alpha,
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
