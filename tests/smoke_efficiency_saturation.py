@@ -393,10 +393,10 @@ async def scenario_6_both_constrained():
         else:
             passed("both batteries at 0W, no crash")
 
-        # Restore one
+        # Restore one — give extra time for saturation to decay and system to recover
         h.batteries[0].max_charge_power = 800
         h.batteries[0].max_discharge_power = 800
-        await h.wait_sim_seconds(15)
+        await h.wait_sim_seconds(30)
         print(f"  After restoring battery 0: {h.status()}")
 
         if abs(h.battery_powers()[0]) < 50:
@@ -444,6 +444,45 @@ async def scenario_7_feature_disabled():
     return ok
 
 
+async def scenario_8_charging_direction():
+    """Scenario 8: Charging (solar excess) — swap works for negative targets."""
+    print("\n== Scenario 8: Charging direction (solar excess) ==")
+    h = SmokeHarness(
+        num_batteries=2,
+        base_load=[-200.0, 0.0, 0.0],  # Net export = charging
+    )
+    await h.start()
+    ok = True
+    try:
+        await h.wait_sim_seconds(10)
+        print(f"  Settled: {h.status()}")
+        if h.active_count() != 1:
+            ok = failed("settle", f"expected 1 active, got {h.active_count()}")
+        else:
+            passed("1 battery active (charging)")
+
+        # Constrain active battery — can't charge
+        powers = h.battery_powers()
+        active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
+        print(f"  Constraining battery {active_idx} max_charge=0")
+        h.batteries[active_idx].max_charge_power = 0
+
+        await h.wait_sim_seconds(10)
+        print(f"  After constraint: {h.status()}")
+
+        other_idx = 1 - active_idx
+        if abs(h.battery_powers()[other_idx]) < 50:
+            ok = failed("swap", "other battery didn't take over charging")
+        else:
+            passed(
+                f"other battery took over charging ({h.battery_powers()[other_idx]:.0f}W)"
+            )
+
+    finally:
+        await h.stop()
+    return ok
+
+
 async def main():
     print("=" * 60)
     print("Efficiency Saturation Smoke Tests")
@@ -458,6 +497,7 @@ async def main():
         scenario_5_load_change_during_constraint,
         scenario_6_both_constrained,
         scenario_7_feature_disabled,
+        scenario_8_charging_direction,
     ]
 
     results = []

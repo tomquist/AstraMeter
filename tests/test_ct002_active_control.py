@@ -1058,3 +1058,27 @@ class TestEfficiencySaturationSwap:
         assert depr_cid not in device._efficiency_deprioritized
         # Its saturation should have been reset on activation
         assert device._saturation_by_consumer.get(depr_cid, 0.0) == 0.0
+
+    def test_efficiency_force_rotation_on_saturation_charging(self):
+        """Forced swap also works for charging (negative target / solar excess)."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        # Negative values = solar excess / charging
+        device._compute_smooth_target([-200, 0, 0], "a")
+        device._compute_smooth_target([-200, 0, 0], "b")
+        assert len(device._efficiency_deprioritized) == 1
+        active_cid = "a" if "b" in device._efficiency_deprioritized else "b"
+        # Inject high saturation on the active consumer (can't charge)
+        device._saturation_by_consumer[active_cid] = 0.5
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([-200, 0, 0], "a")
+        device._compute_smooth_target([-200, 0, 0], "b")
+        # Active consumer should now be deprioritized (swapped)
+        assert active_cid in device._efficiency_deprioritized
