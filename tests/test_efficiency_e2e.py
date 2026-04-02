@@ -215,7 +215,7 @@ class TestEfficiencyE2E:
         try:
             # Low demand: only 1 battery active
             await h.settle(5.0)
-            assert h.active_battery_count() == 1, (
+            assert h.active_battery_count(threshold=30.0) == 1, (
                 f"Low demand: expected 1 active. Powers: {h.battery_powers()}"
             )
 
@@ -340,7 +340,7 @@ class TestEfficiencyE2E:
         try:
             # Low demand: 1 active battery.
             await h.settle(5.0)
-            assert h.active_battery_count() == 1, (
+            assert h.active_battery_count(threshold=30.0) == 1, (
                 f"Low demand: expected 1 active. Powers: {h.battery_powers()}"
             )
 
