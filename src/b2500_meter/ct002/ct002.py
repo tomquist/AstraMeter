@@ -404,8 +404,9 @@ class CT002:
             self._efficiency_priority.append(self._efficiency_priority.pop(0))
             self._efficiency_cache_sample = None  # force recompute
 
-        # Sync priority list with current consumers (prune stale, add new at end)
-        current = set(reports)
+        # Sync priority list with current active consumers
+        # (prune stale/inactive, add new at end)
+        current = set(reports) - self._inactive_consumers
         self._efficiency_priority = [
             c for c in self._efficiency_priority if c in current
         ]
@@ -576,7 +577,11 @@ class CT002:
                 )
             self._smoothed_target += delta
 
-        reports = dict(self._reports_by_consumer)
+        reports = {
+            cid: r
+            for cid, r in self._reports_by_consumer.items()
+            if cid not in self._inactive_consumers
+        }
         last_target = self._last_target_by_consumer.get(consumer_id)
 
         if consumer_id and consumer_id in reports:
@@ -948,13 +953,13 @@ class CT002:
             values = [0, 0, 0]
         raw_values = list(values)
         meter_value = sum(parse_int(v, 0) for v in values)
-        if self.active_control and not in_inspection_mode:
-            values = self._compute_smooth_target(values, consumer_id)
 
-        # Override targets to zero when consumer is paused
         is_active = self.is_consumer_active(consumer_id)
         if not is_active:
+            # Paused consumer: zero targets, skip smooth target & efficiency
             values = [0, 0, 0]
+        elif self.active_control and not in_inspection_mode:
+            values = self._compute_smooth_target(values, consumer_id)
 
         try:
             response_fields = self._build_response_fields(fields, values)
