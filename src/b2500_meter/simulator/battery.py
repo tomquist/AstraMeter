@@ -218,7 +218,9 @@ class _UDPClient(asyncio.DatagramProtocol):
     """Minimal asyncio datagram protocol for a single request/response."""
 
     def __init__(self) -> None:
-        self.received: asyncio.Future[bytes] = asyncio.get_event_loop().create_future()
+        self.received: asyncio.Future[bytes] = (
+            asyncio.get_running_loop().create_future()
+        )
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         if not self.received.done():
