@@ -409,7 +409,6 @@ class TestEfficiencyE2E:
             min_efficient_power=150,
             efficiency_fade_alpha=1.0,
             efficiency_saturation_threshold=0.4,
-            efficiency_rotation_interval=5,
             saturation_decay_factor=0.8,
         )
         await h.start()
@@ -420,16 +419,23 @@ class TestEfficiencyE2E:
             active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
             h.batteries[active_idx].max_charge_power = 0
             h.batteries[active_idx].max_discharge_power = 0
-            # Wait for swap
-            await h.settle(8.0)
+            # Poll for swap — the other battery should take over
             other_idx = 1 - active_idx
-            assert abs(h.battery_powers()[other_idx]) > 50
+            for _ in range(40):
+                await asyncio.sleep(0.5)
+                if abs(h.battery_powers()[other_idx]) > 50:
+                    break
+            assert abs(h.battery_powers()[other_idx]) > 50, (
+                f"Expected other battery to take over. Powers: {h.battery_powers()}"
+            )
             # Restore the original battery
             h.batteries[active_idx].max_charge_power = 800
             h.batteries[active_idx].max_discharge_power = 800
-            # Wait for rotation interval to give it another chance
-            await h.settle(10.0)
-            # Grid should still be near zero (system recovered)
+            # Poll for grid recovery
+            for _ in range(40):
+                await asyncio.sleep(0.5)
+                if abs(h.grid_total()) < 60:
+                    break
             assert abs(h.grid_total()) < 60, (
                 f"Grid should be near zero after recovery. Grid: {h.grid_total():.0f}W"
             )
