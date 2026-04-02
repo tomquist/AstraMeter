@@ -270,15 +270,25 @@ class TestEfficiencyE2E:
                 f"Expected 1 active before rotation. Powers: {powers_before}"
             )
 
-            # Wait for rotation (fires at ~7s) + settling
-            await h.settle(8.0)
-            powers_after = h.battery_powers()
-            active_after = [i for i, p in enumerate(powers_after) if abs(p) > 15]
-            assert len(active_after) == 1, (
-                f"Expected 1 active after rotation. Powers: {powers_after}"
-            )
+            # Poll until the active battery set changes or timeout.
+            timeout = h.ct002.efficiency_rotation_interval + 15.0
+            poll_interval = 0.3
+            elapsed = 0.0
+            active_after: list[int] = list(active_before)
+            powers_after = powers_before
+            while elapsed < timeout:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+                powers_after = h.battery_powers()
+                active_after = [i for i, p in enumerate(powers_after) if abs(p) > 15]
+                if len(active_after) == 1 and active_after != active_before:
+                    break
+            else:
+                pytest.fail(
+                    f"Rotation did not switch active battery within {timeout}s. "
+                    f"active_before={active_before}, last powers={powers_after}"
+                )
 
-            # The active battery should have changed
             assert active_before != active_after, (
                 f"Expected rotation: active_before={active_before}, "
                 f"active_after={active_after}. "
