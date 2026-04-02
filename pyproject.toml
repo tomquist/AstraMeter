@@ -12,7 +12,7 @@ license = { text = "GPL-3.0-or-later" }
 dependencies = [
     "aiohttp>=3.9.0",
     "requests",
-    "urllib3",
+    "urllib3>=2.6.3",
     "aiomqtt>=2.0.0,<3",
     "jsonpath-ng",
     "pymodbus==3.6.5",
