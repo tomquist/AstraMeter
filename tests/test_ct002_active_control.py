@@ -1031,3 +1031,30 @@ class TestEfficiencySaturationSwap:
         assert depr_cid not in device._efficiency_deprioritized
         # Still exactly 1 deprioritized
         assert len(device._efficiency_deprioritized) == 1
+
+    def test_efficiency_activation_resets_saturation(self):
+        """When a consumer transitions from deprioritized to active, its
+        saturation score is reset so ramp-up time isn't misinterpreted."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+            efficiency_rotation_interval=10,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        depr_cid = next(iter(device._efficiency_deprioritized))
+        # Give the deprioritized consumer a residual saturation score
+        device._saturation_by_consumer[depr_cid] = 0.6
+        # Trigger timed rotation to activate the deprioritized consumer
+        device._efficiency_last_rotation -= 11
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        # The previously deprioritized consumer should now be active
+        assert depr_cid not in device._efficiency_deprioritized
+        # Its saturation should have been reset on activation
+        assert device._saturation_by_consumer.get(depr_cid, 0.0) == 0.0

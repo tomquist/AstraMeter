@@ -456,6 +456,12 @@ class CT002:
         deprioritized = set(self._efficiency_priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
 
+        # Reset saturation for consumers transitioning to active so that
+        # physical ramp-up time isn't misinterpreted as genuine saturation.
+        # Must happen BEFORE the forced swap check.
+        for cid in self._efficiency_deprioritized - deprioritized:
+            self._saturation_by_consumer.pop(cid, None)
+
         if self._maybe_force_swap_saturated(self._efficiency_priority, slots, now):
             # Recompute after swap.  Cache naturally invalidates because
             # cache_key (built above with the pre-swap priority tuple) won't
