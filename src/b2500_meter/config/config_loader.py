@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import configparser
 from ipaddress import IPv4Address, IPv4Network
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from b2500_meter.mqtt_insights import MqttInsightsConfig
 
 from b2500_meter.config.logger import logger
-from b2500_meter.mqtt_insights import MqttInsightsConfig
 from b2500_meter.powermeter import (
     AmisReader,
     Emlog,
@@ -456,6 +461,8 @@ def read_mqtt_insights_config(
     config: configparser.ConfigParser,
 ) -> MqttInsightsConfig | None:
     """Read [MQTT_INSIGHTS] section; return None if absent."""
+    from b2500_meter.mqtt_insights import MqttInsightsConfig
+
     for section in config.sections():
         if section.startswith(MQTT_INSIGHTS_SECTION):
             return MqttInsightsConfig(

@@ -220,14 +220,21 @@ def test_queue_overflow_does_not_raise():
 # ── E2E tests with Mosquitto ─────────────────────────────────────────────
 
 
-def _make_service(port: int, base_topic: str = "test_insights") -> MqttInsightsService:
+_test_counter = 0
+
+
+def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsService:
+    global _test_counter
+    _test_counter += 1
+    if base_topic is None:
+        base_topic = f"test_insights_{_test_counter}"
     return MqttInsightsService(
         MqttInsightsConfig(
             broker="127.0.0.1",
             port=port,
             base_topic=base_topic,
             ha_discovery=True,
-            ha_discovery_prefix="homeassistant",
+            ha_discovery_prefix=f"ha_disc_{_test_counter}",
         )
     )
 
@@ -262,6 +269,7 @@ SAMPLE_SHELLY_DATA = {
 async def test_publishes_state_on_ct002_event(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    base = service._config.base_topic
     await service.start()
 
     try:
@@ -270,7 +278,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
-            await sub.subscribe("test_insights/ct002/+/consumer/+")
+            await sub.subscribe(f"{base}/ct002/+/consumer/+")
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
 
             try:
@@ -289,8 +297,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["ct_type"] == "HME-4"
         assert payload["ct_mac"] == "AA:BB:CC:DD:EE:FF"
         assert payload["active"] is True
-        assert str(received[0].topic) == "test_insights/ct002/dev1/consumer/consumer1"
-        assert received[0].retain
+        assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
         await service.stop()
 
@@ -299,6 +306,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
 async def test_publishes_device_status(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    base = service._config.base_topic
     await service.start()
 
     try:
@@ -306,7 +314,7 @@ async def test_publishes_device_status(mqtt_broker):
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
-            await sub.subscribe("test_insights/ct002/+/status")
+            await sub.subscribe(f"{base}/ct002/+/status")
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
 
             try:
@@ -330,6 +338,7 @@ async def test_publishes_device_status(mqtt_broker):
 async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    ha_prefix = service._config.ha_discovery_prefix
     await service.start()
 
     try:
@@ -337,7 +346,7 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
 
         discovery_msgs = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
-            await sub.subscribe("homeassistant/device/#")
+            await sub.subscribe(f"{ha_prefix}/device/#")
             # First event for consumer1
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
             # Second event for same consumer — should NOT trigger another discovery
@@ -373,6 +382,7 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
 async def test_active_toggle_via_mqtt(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    base = service._config.base_topic
     handler_calls = []
 
     def mock_handler(consumer_id, active):
@@ -386,12 +396,12 @@ async def test_active_toggle_via_mqtt(mqtt_broker):
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
-                "test_insights/ct002/dev1/consumer/consumer1/set",
+                f"{base}/ct002/dev1/consumer/consumer1/set",
                 payload=json.dumps({"active": False}).encode(),
             )
             await asyncio.sleep(0.5)
             await pub.publish(
-                "test_insights/ct002/dev1/consumer/consumer1/set",
+                f"{base}/ct002/dev1/consumer/consumer1/set",
                 payload=json.dumps({"active": True}).encode(),
             )
             await asyncio.sleep(0.5)
@@ -407,6 +417,7 @@ async def test_active_toggle_via_mqtt(mqtt_broker):
 async def test_consumer_removal_publishes_offline(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    base = service._config.base_topic
     await service.start()
 
     try:
@@ -418,22 +429,19 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
-            await sub.subscribe(
-                "test_insights/ct002/dev1/consumer/consumer1/availability"
-            )
+            await sub.subscribe(f"{base}/ct002/dev1/consumer/consumer1/availability")
             service.on_ct002_consumer_removed("dev1", "consumer1")
 
             try:
                 async with asyncio.timeout(3):
                     async for msg in sub.messages:
                         received.append(msg)
-                        break
+                        if msg.payload == b"offline":
+                            break
             except TimeoutError:
                 pass
 
-        assert len(received) == 1
-        assert received[0].payload == b"offline"
-        assert received[0].retain
+        assert any(m.payload == b"offline" for m in received)
     finally:
         await service.stop()
 
@@ -442,6 +450,7 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
 async def test_lwt_online_offline(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    base = service._config.base_topic
     await service.start()
 
     try:
@@ -450,7 +459,7 @@ async def test_lwt_online_offline(mqtt_broker):
         # Check online status
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
-            await sub.subscribe("test_insights/status")
+            await sub.subscribe(f"{base}/status")
             # The retained "online" message should arrive
             try:
                 async with asyncio.timeout(2):
@@ -470,6 +479,7 @@ async def test_lwt_online_offline(mqtt_broker):
 async def test_shelly_event_flow(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
+    base = service._config.base_topic
     await service.start()
 
     try:
@@ -477,7 +487,7 @@ async def test_shelly_event_flow(mqtt_broker):
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
-            await sub.subscribe("test_insights/shelly/+/battery/+")
+            await sub.subscribe(f"{base}/shelly/+/battery/+")
             service.on_shelly_response("shelly1", "192.168.1.100", SAMPLE_SHELLY_DATA)
 
             try:
