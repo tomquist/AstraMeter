@@ -347,15 +347,13 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
             await asyncio.sleep(0.3)
             service.on_ct002_response("dev1", "consumer2", SAMPLE_CT002_DATA)
 
-            deadline = asyncio.get_event_loop().time() + 3
             try:
-                while asyncio.get_event_loop().time() < deadline:
-                    async with asyncio.timeout(1):
-                        async for msg in sub.messages:
-                            discovery_msgs.append(msg)
-                            if len(discovery_msgs) >= 3:
-                                raise StopAsyncIteration
-            except (TimeoutError, StopAsyncIteration):
+                async with asyncio.timeout(3):
+                    async for msg in sub.messages:
+                        discovery_msgs.append(msg)
+                        if len(discovery_msgs) >= 3:
+                            break
+            except TimeoutError:
                 pass
 
         # Expect: device discovery + consumer1 discovery + consumer2 discovery = 3
