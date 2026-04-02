@@ -5,6 +5,8 @@ and verify that the efficiency optimization correctly concentrates power on fewe
 batteries at low demand and distributes to all at high demand.
 """
 
+from __future__ import annotations
+
 import asyncio
 
 import pytest

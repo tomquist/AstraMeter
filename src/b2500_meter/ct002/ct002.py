@@ -463,11 +463,11 @@ class CT002:
             self._saturation_by_consumer.pop(cid, None)
 
         if self._maybe_force_swap_saturated(self._efficiency_priority, slots, now):
-            # Recompute after swap.  Cache naturally invalidates because
-            # cache_key (built above with the pre-swap priority tuple) won't
-            # match the next caller's key (built with the post-swap tuple).
+            # Recompute after swap so all downstream state reflects the
+            # post-swap priority order.
             deprioritized = set(self._efficiency_priority[slots:])
             result = {cid: 0.0 for cid in deprioritized}
+            cache_key = (sample_id, tuple(self._efficiency_priority))
             # Clear saturation for consumers promoted to active by the swap
             # so physical ramp-up time isn't misinterpreted as saturation.
             for cid in self._efficiency_deprioritized - deprioritized:

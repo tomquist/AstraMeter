@@ -8,6 +8,8 @@ forced rotation, and recovery.
 Run: uv run python tests/smoke_efficiency_saturation.py
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import socket
@@ -94,7 +96,14 @@ class SmokeHarness:
             port=http_port,
         )
 
-        # Scale CT002 time-dependent parameters
+        if time_scale <= 0:
+            raise ValueError("time_scale must be > 0")
+
+        # Scale CT002 time-dependent parameters.
+        # CT002 clamps efficiency_rotation_interval to its own 10s floor,
+        # so very short scaled values are handled safely.
+        scaled_rotation = efficiency_rotation_interval / time_scale
+
         self.ct002 = CT002(
             udp_port=ct_port,
             ct_mac=ct_mac,
@@ -103,7 +112,7 @@ class SmokeHarness:
             smooth_target_alpha=0.9,
             deadband=5,
             min_efficient_power=min_efficient_power,
-            efficiency_rotation_interval=efficiency_rotation_interval / time_scale,
+            efficiency_rotation_interval=scaled_rotation,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
             saturation_decay_factor=saturation_decay_factor,
             consumer_ttl=120 / time_scale,
