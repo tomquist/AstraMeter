@@ -257,7 +257,7 @@ class TestEfficiencyE2E:
             num_batteries=2,
             base_load=[200.0, 0.0, 0.0],
             min_efficient_power=150,
-            efficiency_rotation_interval=5,  # Short interval for testing
+            efficiency_rotation_interval=7,  # Short interval for testing
             efficiency_fade_alpha=1.0,  # Instant fade so rotation isn't blocked
         )
         await h.start()
@@ -270,7 +270,7 @@ class TestEfficiencyE2E:
                 f"Expected 1 active before rotation. Powers: {powers_before}"
             )
 
-            # Wait for rotation + settling
+            # Wait for rotation (fires at ~7s) + settling
             await h.settle(8.0)
             powers_after = h.battery_powers()
             active_after = [i for i, p in enumerate(powers_after) if abs(p) > 15]

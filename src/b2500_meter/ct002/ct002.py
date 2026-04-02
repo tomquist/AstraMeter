@@ -190,7 +190,7 @@ class CT002:
         self.saturation_alpha = max(0.01, min(1.0, saturation_alpha))
         self.min_target_for_saturation = max(1, min_target_for_saturation)
         self.min_efficient_power = max(0, min_efficient_power)
-        self.efficiency_rotation_interval = max(10, efficiency_rotation_interval)
+        self.efficiency_rotation_interval = max(1, efficiency_rotation_interval)
         self.efficiency_fade_alpha = max(0.01, min(1.0, efficiency_fade_alpha))
         self.before_send: (
             Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
