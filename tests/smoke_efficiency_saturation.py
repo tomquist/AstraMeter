@@ -301,7 +301,8 @@ async def scenario_3_no_pingpong():
                 print(f"  t={i * 3}s: {h.status()}")
 
         print(f"  Swap count over 60s sim: {swap_count}")
-        # With 15s rotation and healthy batteries, expect ~4 rotations max
+        # With healthy batteries (no saturation), expect minimal swaps from
+        # timed rotation only; 6 is a conservative upper bound.
         if swap_count > 6:
             ok = failed("pingpong", f"too many swaps ({swap_count})")
         else:

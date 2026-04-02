@@ -446,6 +446,11 @@ class TestEfficiencyE2E:
             assert abs(h.battery_powers()[active_idx]) > 50, (
                 f"Restored battery should be producing. Powers: {h.battery_powers()}"
             )
+            # Poll for grid to settle after restored battery ramps up
+            for _ in range(20):
+                await asyncio.sleep(0.5)
+                if abs(h.grid_total()) < 60:
+                    break
             assert abs(h.grid_total()) < 60, (
                 f"Grid should be near zero after recovery. Grid: {h.grid_total():.0f}W"
             )
