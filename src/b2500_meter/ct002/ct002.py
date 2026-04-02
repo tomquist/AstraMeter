@@ -166,7 +166,7 @@ class CT002:
         min_efficient_power=0,
         efficiency_rotation_interval=900,
         efficiency_fade_alpha=0.15,
-        efficiency_saturation_threshold=0.4,
+        efficiency_saturation_threshold=0.0,
         saturation_decay_factor=0.995,
     ):
         self.udp_port = udp_port
@@ -399,6 +399,9 @@ class CT002:
         # sample_id never changes, so the cache would prevent saturation
         # swaps from being evaluated.  Invalidate cache when any active
         # consumer exceeds the saturation threshold.
+        # Note: slots_est uses the previous call's deprioritized set, which
+        # may differ from the upcoming computation.  This is an approximation;
+        # the full recomputation path also calls _maybe_force_swap_saturated.
         if (
             self.efficiency_saturation_threshold > 0
             and self._efficiency_cache_sample is not None
@@ -454,11 +457,11 @@ class CT002:
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
 
         if self._maybe_force_swap_saturated(self._efficiency_priority, slots, now):
-            # Recompute after swap; invalidate cache so next consumer sees it
+            # Recompute after swap.  Cache naturally invalidates because
+            # cache_key (built above with the pre-swap priority tuple) won't
+            # match the next caller's key (built with the post-swap tuple).
             deprioritized = set(self._efficiency_priority[slots:])
             result = {cid: 0.0 for cid in deprioritized}
-            self._efficiency_cache_sample = None
-            self._efficiency_cache_result = None
 
         for cid in deprioritized - self._efficiency_deprioritized:
             logger.info(

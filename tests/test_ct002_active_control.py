@@ -888,13 +888,14 @@ class TestEfficiencySaturationSwap:
         device._update_consumer_report("b", "A", 0)
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
-        old_rotation_time = device._efficiency_last_rotation
+        # Use sentinel so we can detect that the timer was actually updated
+        device._efficiency_last_rotation = 0
         active_cid = "a" if "b" in device._efficiency_deprioritized else "b"
         device._saturation_by_consumer[active_cid] = 0.5
         device._efficiency_cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
-        # Rotation timer should have been updated
-        assert device._efficiency_last_rotation >= old_rotation_time
+        # Rotation timer should have been updated from sentinel
+        assert device._efficiency_last_rotation > 0
 
     def test_efficiency_force_rotation_disabled_when_zero(self):
         """Threshold=0.0 disables forced swap even with high saturation."""
@@ -997,3 +998,36 @@ class TestEfficiencySaturationSwap:
         # The originally active consumer should be deprioritized
         assert active_cid in device._efficiency_deprioritized
         assert depr_cid not in device._efficiency_deprioritized
+
+    def test_efficiency_force_rotation_three_consumers(self):
+        """With 3 consumers and 2 active slots, only the saturated one swaps."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+            efficiency_rotation_interval=9999,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._update_consumer_report("c", "A", 0)
+        # 350W / 3 = 116 < 150 → limiting, slots = int(350/150) = 2
+        device._compute_smooth_target([350, 0, 0], "a")
+        device._compute_smooth_target([350, 0, 0], "b")
+        device._compute_smooth_target([350, 0, 0], "c")
+        assert len(device._efficiency_deprioritized) == 1
+        depr_cid = next(iter(device._efficiency_deprioritized))
+        active_cids = [c for c in ["a", "b", "c"] if c != depr_cid]
+        # Saturate only one of the two active consumers
+        sat_cid = active_cids[0]
+        device._saturation_by_consumer[sat_cid] = 0.5
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([350, 0, 0], "a")
+        device._compute_smooth_target([350, 0, 0], "b")
+        device._compute_smooth_target([350, 0, 0], "c")
+        # The saturated active should be swapped with the deprioritized one
+        assert sat_cid in device._efficiency_deprioritized
+        assert depr_cid not in device._efficiency_deprioritized
+        # Still exactly 1 deprioritized
+        assert len(device._efficiency_deprioritized) == 1

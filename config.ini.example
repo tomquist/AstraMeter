@@ -96,8 +96,9 @@ THROTTLE_INTERVAL = 0
 #EFFICIENCY_FADE_ALPHA = 0.15
 ## Force-rotate when a battery can't follow its target (e.g. externally limited
 ## to 0 W or fully discharged). The battery is swapped out within a few seconds
-## instead of waiting for the full rotation interval. 0 disables.
-#EFFICIENCY_SATURATION_THRESHOLD = 0.4
+## instead of waiting for the full rotation interval. 0 disables (default).
+## Recommended value when enabled: 0.4.
+#EFFICIENCY_SATURATION_THRESHOLD = 0
 ## How quickly a swapped-out battery becomes eligible again. Applied each cycle
 ## while the battery has no target. 1.0 = never recover, lower = faster recovery.
 #SATURATION_DECAY_FACTOR = 0.995
