@@ -416,6 +416,30 @@ class TestSaturationDetection:
         # actual=50 is well above min_target_for_saturation=20, so no saturation.
         assert device._saturation_by_consumer.get("a", 0.0) == 0.0
 
+    def test_saturation_boundary_at_threshold(self):
+        """Output exactly at min_target_for_saturation is not saturated;
+        output just below it is."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            saturation_detection=True,
+            saturation_alpha=1.0,
+            min_target_for_saturation=20,
+        )
+        # actual=20 (at threshold) → not saturated
+        device._update_consumer_report("a", "A", 20)
+        device._update_consumer_report("b", "A", 180)
+        device._last_target_by_consumer["a"] = 200
+        device._last_target_by_consumer["b"] = 200
+        device._compute_smooth_target([200, 0, 0], "a")
+        assert device._saturation_by_consumer.get("a", 0.0) == 0.0
+
+        # actual=19 (just below threshold) → saturated
+        device._update_consumer_report("a", "A", 19)
+        device._last_target_by_consumer["a"] = 200
+        device._compute_smooth_target([200, 0, 0], "a")
+        assert device._saturation_by_consumer.get("a", 0.0) > 0.0
+
 
 class TestCleanup:
     """Tests that saturation state is cleaned up with consumers."""
