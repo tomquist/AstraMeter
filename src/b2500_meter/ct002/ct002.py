@@ -166,6 +166,8 @@ class CT002:
         min_efficient_power=0,
         efficiency_rotation_interval=900,
         efficiency_fade_alpha=0.15,
+        efficiency_saturation_threshold=0.4,
+        saturation_decay_factor=0.995,
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -192,6 +194,10 @@ class CT002:
         self.min_efficient_power = max(0, min_efficient_power)
         self.efficiency_rotation_interval = max(10, efficiency_rotation_interval)
         self.efficiency_fade_alpha = max(0.01, min(1.0, efficiency_fade_alpha))
+        self.efficiency_saturation_threshold = max(
+            0.0, min(1.0, efficiency_saturation_threshold)
+        )
+        self.saturation_decay_factor = max(0.0, min(1.0, saturation_decay_factor))
         self.before_send: (
             Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
         ) = None
@@ -288,6 +294,13 @@ class CT002:
             return
         target_abs = abs(last_target)
         if target_abs < self.min_target_for_saturation:
+            prev = self._saturation_by_consumer.get(consumer_id, 0.0)
+            if prev > 0:
+                decayed = prev * self.saturation_decay_factor
+                if decayed < 0.001:
+                    self._saturation_by_consumer.pop(consumer_id, None)
+                else:
+                    self._saturation_by_consumer[consumer_id] = decayed
             return
         if (last_target > 0 and actual < 0) or (last_target < 0 and actual > 0):
             inst_saturation = 1.0
@@ -304,6 +317,42 @@ class CT002:
         self._saturation_by_consumer[consumer_id] = (
             alpha * inst_saturation + (1 - alpha) * prev
         )
+
+    def _maybe_force_swap_saturated(self, priority, slots, now):
+        """Swap a saturated active battery with a healthy deprioritized one.
+        Returns True if a swap occurred."""
+        if self.efficiency_saturation_threshold <= 0 or slots >= len(priority):
+            return False
+        sat = self._saturation_by_consumer
+        threshold = self.efficiency_saturation_threshold
+        # Find first saturated active consumer
+        saturated_idx = None
+        for i in range(slots):
+            if sat.get(priority[i], 0.0) >= threshold:
+                saturated_idx = i
+                break
+        if saturated_idx is None:
+            return False
+        # Find first healthy deprioritized consumer
+        healthy_idx = None
+        for i in range(slots, len(priority)):
+            if sat.get(priority[i], 0.0) < threshold:
+                healthy_idx = i
+                break
+        if healthy_idx is None:
+            return False
+        logger.info(
+            "Efficiency: %s cannot follow target (sat=%.2f), rotating to %s",
+            priority[saturated_idx][:16],
+            sat.get(priority[saturated_idx], 0.0),
+            priority[healthy_idx][:16],
+        )
+        priority[saturated_idx], priority[healthy_idx] = (
+            priority[healthy_idx],
+            priority[saturated_idx],
+        )
+        self._efficiency_last_rotation = now
+        return True
 
     def _compute_efficiency_deprioritized(self, reports, sample_id):
         """Decide which consumers to deprioritize for efficiency.
@@ -346,6 +395,25 @@ class CT002:
             if cid not in self._efficiency_priority:
                 self._efficiency_priority.append(cid)
 
+        # Saturation swap check BEFORE cache: when the grid is stable the
+        # sample_id never changes, so the cache would prevent saturation
+        # swaps from being evaluated.  Invalidate cache when any active
+        # consumer exceeds the saturation threshold.
+        if (
+            self.efficiency_saturation_threshold > 0
+            and self._efficiency_cache_sample is not None
+        ):
+            slots_est = len(self._efficiency_priority) - len(
+                self._efficiency_deprioritized
+            )
+            for cid in self._efficiency_priority[:slots_est]:
+                if (
+                    self._saturation_by_consumer.get(cid, 0.0)
+                    >= self.efficiency_saturation_threshold
+                ):
+                    self._efficiency_cache_sample = None
+                    break
+
         # Cache per sample for consistency across consumer calls.
         # Checked AFTER consumer sync so topology changes (new/removed
         # consumers) invalidate stale cached results.
@@ -384,6 +452,13 @@ class CT002:
         # First `slots` by priority are active, rest deprioritized
         deprioritized = set(self._efficiency_priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
+
+        if self._maybe_force_swap_saturated(self._efficiency_priority, slots, now):
+            # Recompute after swap; invalidate cache so next consumer sees it
+            deprioritized = set(self._efficiency_priority[slots:])
+            result = {cid: 0.0 for cid in deprioritized}
+            self._efficiency_cache_sample = None
+            self._efficiency_cache_result = None
 
         for cid in deprioritized - self._efficiency_deprioritized:
             logger.info(

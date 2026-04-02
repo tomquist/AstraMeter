@@ -368,3 +368,70 @@ class TestEfficiencyE2E:
             )
         finally:
             await h.stop()
+
+    @pytest.mark.timeout(45)
+    async def test_saturated_battery_triggers_rotation(self):
+        """When the active battery is saturated, it gets swapped out quickly."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+        )
+        await h.start()
+        try:
+            # Let system settle with both batteries available
+            await h.settle(5.0)
+            assert h.active_battery_count() == 1, (
+                f"Expected 1 active battery. Powers: {h.battery_powers()}"
+            )
+            # Identify which battery is active and saturate it
+            powers = h.battery_powers()
+            active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
+            other_idx = 1 - active_idx
+            h.batteries[active_idx].max_charge_power = 0
+            h.batteries[active_idx].max_discharge_power = 0
+            # Wait for saturation detection + forced swap + ramp-up
+            await h.settle(8.0)
+            assert abs(h.battery_powers()[other_idx]) > 50, (
+                f"Expected other battery to take over. Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(60)
+    async def test_saturation_recovery_after_swap(self):
+        """After forced swap, original battery recovers when constraint is lifted."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+            efficiency_rotation_interval=5,
+            saturation_decay_factor=0.8,
+        )
+        await h.start()
+        try:
+            await h.settle(5.0)
+            # Saturate the active battery
+            powers = h.battery_powers()
+            active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
+            h.batteries[active_idx].max_charge_power = 0
+            h.batteries[active_idx].max_discharge_power = 0
+            # Wait for swap
+            await h.settle(8.0)
+            other_idx = 1 - active_idx
+            assert abs(h.battery_powers()[other_idx]) > 50
+            # Restore the original battery
+            h.batteries[active_idx].max_charge_power = 800
+            h.batteries[active_idx].max_discharge_power = 800
+            # Wait for rotation interval to give it another chance
+            await h.settle(10.0)
+            # Grid should still be near zero (system recovered)
+            assert abs(h.grid_total()) < 60, (
+                f"Grid should be near zero after recovery. Grid: {h.grid_total():.0f}W"
+            )
+        finally:
+            await h.stop()

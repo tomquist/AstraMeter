@@ -94,6 +94,13 @@ THROTTLE_INTERVAL = 0
 #EFFICIENCY_ROTATION_INTERVAL = 900
 ## How quickly efficiency transitions fade (0.01=very slow, 1.0=instant).
 #EFFICIENCY_FADE_ALPHA = 0.15
+## Force-rotate when a battery can't follow its target (e.g. externally limited
+## to 0 W or fully discharged). The battery is swapped out within a few seconds
+## instead of waiting for the full rotation interval. 0 disables.
+#EFFICIENCY_SATURATION_THRESHOLD = 0.4
+## How quickly a swapped-out battery becomes eligible again. Applied each cycle
+## while the battery has no target. 1.0 = never recover, lower = faster recovery.
+#SATURATION_DECAY_FACTOR = 0.995
 
 #[MARSTEK]
 ## Optional: auto-register managed fake CT devices in Marstek cloud on startup.

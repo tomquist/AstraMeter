@@ -119,6 +119,12 @@ async def run_device(
         efficiency_fade_alpha = cfg.getfloat(
             ct_section, "EFFICIENCY_FADE_ALPHA", fallback=0.15
         )
+        efficiency_saturation_threshold = cfg.getfloat(
+            ct_section, "EFFICIENCY_SATURATION_THRESHOLD", fallback=0.4
+        )
+        saturation_decay_factor = cfg.getfloat(
+            ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
+        )
 
         logger.debug(f"{device_type.upper()} Settings for {device_id}:")
         logger.debug(f"CT Type: {ct_type}")
@@ -173,6 +179,8 @@ async def run_device(
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=efficiency_rotation_interval,
             efficiency_fade_alpha=efficiency_fade_alpha,
+            efficiency_saturation_threshold=efficiency_saturation_threshold,
+            saturation_decay_factor=saturation_decay_factor,
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
