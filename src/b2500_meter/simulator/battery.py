@@ -35,6 +35,7 @@ class BatterySimulator:
         poll_interval: float = 1.0,
         min_power_threshold: float = 20.0,
         inspection_count: int = 1,
+        time_scale: float = 1.0,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
@@ -56,6 +57,7 @@ class BatterySimulator:
         self.poll_interval = poll_interval
         self.min_power_threshold = min_power_threshold
         self.inspection_count = inspection_count
+        self.time_scale = max(0.1, time_scale)
 
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
@@ -189,7 +191,7 @@ class BatterySimulator:
         self._last_update = time.monotonic()
         while True:
             now = time.monotonic()
-            dt = now - self._last_update
+            dt = (now - self._last_update) * self.time_scale
             self._last_update = now
 
             self._update_power(dt)
@@ -198,7 +200,9 @@ class BatterySimulator:
             await self._send_request()
 
             jitter = random.uniform(-0.5, 0.5)
-            await asyncio.sleep(max(0.1, self.poll_interval + jitter))
+            await asyncio.sleep(
+                max(0.05, (self.poll_interval + jitter) / self.time_scale)
+            )
 
     # -- serialisation -----------------------------------------------------
 

@@ -85,6 +85,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             http_port=args.http_port or DEFAULT_HTTP_PORT,
         )
 
+    if args.time_scale != 1.0:
+        cfg.time_scale = args.time_scale
     validate_config(cfg)
     runner = SimulationRunner(cfg)
 
@@ -326,6 +328,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--ct-port", type=int, help="CT002 UDP port")
     p_run.add_argument("--http-port", type=int, help="HTTP API port")
     p_run.add_argument("--no-tui", action="store_true", help="Headless mode")
+    p_run.add_argument(
+        "--time-scale",
+        type=float,
+        default=1.0,
+        help="Speed up simulation time (e.g. 10 = 10x faster)",
+    )
     p_run.add_argument("-v", "--verbose", action="store_true")
 
     # -- start (daemon) ----------------------------------------------------

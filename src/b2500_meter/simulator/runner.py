@@ -44,6 +44,7 @@ class SimulationConfig:
     auto_mode: bool = False
     auto_interval: tuple[float, float] = (10.0, 30.0)
     log_interval: float = 5.0
+    time_scale: float = 1.0
 
 
 class SimulationRunner:
@@ -89,6 +90,7 @@ class SimulationRunner:
                 initial_soc=bc.initial_soc,
                 ramp_rate=bc.ramp_rate,
                 poll_interval=bc.poll_interval,
+                time_scale=cfg.time_scale,
             )
             for bc in cfg.batteries
         ]
@@ -115,7 +117,7 @@ class SimulationRunner:
 
     async def _log_loop(self) -> None:
         while True:
-            await asyncio.sleep(self.config.log_interval)
+            await asyncio.sleep(self.config.log_interval / self.config.time_scale)
             grid = self.powermeter.compute_grid()
             parts = [
                 f"grid=[{grid['phase_a']:.0f}, {grid['phase_b']:.0f}, {grid['phase_c']:.0f}]"
@@ -129,7 +131,7 @@ class SimulationRunner:
     async def _auto_loop(self) -> None:
         while True:
             lo, hi = self.load_model.auto_interval
-            await asyncio.sleep(random.uniform(lo, hi))
+            await asyncio.sleep(random.uniform(lo, hi) / self.config.time_scale)
             if self.load_model.auto_mode:
                 self.load_model.auto_step()
 
