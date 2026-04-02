@@ -240,6 +240,15 @@ rest. Batteries rotate periodically so wear is shared evenly.
   battery's power is reallocated proportionally to its fade weight, keeping the
   total output tracking demand. Lower values produce smoother, slower
   transitions; higher values are faster. Set to 1.0 for instant switching.
+- **EFFICIENCY_SATURATION_THRESHOLD** (default 0.4) — When an active battery's
+  saturation score exceeds this value (i.e. it can't follow its target because
+  it is full, empty, or externally limited), it is immediately swapped out for a
+  healthy deprioritized battery instead of waiting for the next timed rotation.
+  Set to 0 to disable.
+- **SATURATION_DECAY_FACTOR** (default 0.995) — How quickly a swapped-out
+  battery's saturation score decays while it has no target. Applied each cycle.
+  Lower values allow faster recovery; 1.0 means the battery never becomes
+  eligible again.
 
 ### CT002 / CT003
 

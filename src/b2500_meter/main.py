@@ -120,7 +120,7 @@ async def run_device(
             ct_section, "EFFICIENCY_FADE_ALPHA", fallback=0.15
         )
         efficiency_saturation_threshold = cfg.getfloat(
-            ct_section, "EFFICIENCY_SATURATION_THRESHOLD", fallback=0.0
+            ct_section, "EFFICIENCY_SATURATION_THRESHOLD", fallback=0.4
         )
         saturation_decay_factor = cfg.getfloat(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
