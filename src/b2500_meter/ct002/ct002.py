@@ -468,6 +468,10 @@ class CT002:
             # match the next caller's key (built with the post-swap tuple).
             deprioritized = set(self._efficiency_priority[slots:])
             result = {cid: 0.0 for cid in deprioritized}
+            # Clear saturation for consumers promoted to active by the swap
+            # so physical ramp-up time isn't misinterpreted as saturation.
+            for cid in self._efficiency_deprioritized - deprioritized:
+                self._saturation_by_consumer.pop(cid, None)
 
         for cid in deprioritized - self._efficiency_deprioritized:
             logger.info(

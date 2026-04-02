@@ -417,6 +417,7 @@ def main() -> None:
         args.ct_port = None
         args.http_port = None
         args.no_tui = False
+        args.time_scale = 1.0
         args.verbose = False
         cmd = "run"
 

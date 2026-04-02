@@ -20,13 +20,14 @@ BASE_HTTP_PORT = 18080
 
 
 def _find_free_ports(n: int = 2) -> list[int]:
-    """Return *n* free UDP port numbers."""
+    """Return *n* free port numbers (first UDP, rest TCP)."""
     import socket
 
+    types = [socket.SOCK_DGRAM] + [socket.SOCK_STREAM] * (n - 1)
     ports: list[int] = []
     socks: list[socket.socket] = []
-    for _ in range(n):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for i in range(n):
+        s = socket.socket(socket.AF_INET, types[i])
         s.bind(("127.0.0.1", 0))
         ports.append(s.getsockname()[1])
         socks.append(s)
@@ -392,8 +393,11 @@ class TestEfficiencyE2E:
             other_idx = 1 - active_idx
             h.batteries[active_idx].max_charge_power = 0
             h.batteries[active_idx].max_discharge_power = 0
-            # Wait for saturation detection + forced swap + ramp-up
-            await h.settle(8.0)
+            # Poll for saturation detection + forced swap + ramp-up
+            for _ in range(40):
+                await asyncio.sleep(0.5)
+                if abs(h.battery_powers()[other_idx]) > 50:
+                    break
             assert abs(h.battery_powers()[other_idx]) > 50, (
                 f"Expected other battery to take over. Powers: {h.battery_powers()}"
             )

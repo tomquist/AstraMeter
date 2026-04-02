@@ -835,6 +835,7 @@ class TestEfficiencySaturationSwap:
             efficiency_fade_alpha=1.0,
             efficiency_saturation_threshold=0.4,
             efficiency_rotation_interval=9999,
+            saturation_alpha=0.15,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -924,9 +925,10 @@ class TestEfficiencySaturationSwap:
             active_control=True,
             saturation_detection=True,
             saturation_decay_factor=0.9,
+            min_target_for_saturation=20,
         )
         device._saturation_by_consumer["a"] = 0.5
-        # Call with target below min_target_for_saturation (default 20)
+        # target (10) < min_target_for_saturation (20) → decay branch
         device._update_saturation("a", 10, 10)
         expected = 0.5 * 0.9
         assert abs(device._saturation_by_consumer["a"] - expected) < 1e-6
@@ -937,6 +939,7 @@ class TestEfficiencySaturationSwap:
             active_control=True,
             saturation_detection=True,
             saturation_decay_factor=0.5,
+            min_target_for_saturation=20,
         )
         device._saturation_by_consumer["a"] = 0.001
         device._update_saturation("a", 10, 10)

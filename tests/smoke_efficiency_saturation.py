@@ -22,11 +22,17 @@ from b2500_meter.simulator.powermeter_sim import PowermeterSimulator
 TIME_SCALE = 10  # 10x speed
 
 
-def _find_free_ports(n: int = 2) -> list[int]:
+def _find_free_ports(
+    n: int = 2,
+    types: list[int] | None = None,
+) -> list[int]:
+    if types is None:
+        # Default: first port UDP (CT002), rest TCP (HTTP)
+        types = [socket.SOCK_DGRAM] + [socket.SOCK_STREAM] * (n - 1)
     ports: list[int] = []
     socks: list[socket.socket] = []
-    for _ in range(n):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for i in range(n):
+        s = socket.socket(socket.AF_INET, types[i % len(types)])
         s.bind(("127.0.0.1", 0))
         ports.append(s.getsockname()[1])
         socks.append(s)
@@ -112,17 +118,34 @@ class SmokeHarness:
         self.time_scale = time_scale
 
     async def start(self):
-        await self.powermeter.start()
-        await self.ct002.start()
-        self._tasks = [asyncio.create_task(b.run()) for b in self.batteries]
+        self._tasks: list[asyncio.Task] = []
+        try:
+            await self.powermeter.start()
+            await self.ct002.start()
+            self._tasks = [asyncio.create_task(b.run()) for b in self.batteries]
+        except BaseException:
+            # Roll back anything already started
+            for t in self._tasks:
+                t.cancel()
+            if self._tasks:
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+            with contextlib.suppress(
+                asyncio.TimeoutError, asyncio.CancelledError, OSError
+            ):
+                await asyncio.wait_for(self.ct002.stop(), timeout=3.0)
+            with contextlib.suppress(
+                asyncio.TimeoutError, asyncio.CancelledError, OSError
+            ):
+                await asyncio.wait_for(self.powermeter.stop(), timeout=3.0)
+            raise
 
     async def stop(self):
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        with contextlib.suppress(asyncio.TimeoutError, Exception):
+        with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, OSError):
             await asyncio.wait_for(self.ct002.stop(), timeout=3.0)
-        with contextlib.suppress(asyncio.TimeoutError, Exception):
+        with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, OSError):
             await asyncio.wait_for(self.powermeter.stop(), timeout=3.0)
 
     async def wait_sim_seconds(self, sim_seconds: float):
@@ -370,7 +393,11 @@ async def scenario_5_load_change_during_constraint():
 async def scenario_6_both_constrained():
     """Scenario 6: Both batteries constrained — graceful degradation."""
     print("\n== Scenario 6: Both batteries constrained ==")
-    h = SmokeHarness(num_batteries=2, base_load=[200.0, 0.0, 0.0])
+    h = SmokeHarness(
+        num_batteries=2,
+        base_load=[200.0, 0.0, 0.0],
+        saturation_decay_factor=0.9,
+    )
     await h.start()
     ok = True
     try:
@@ -393,10 +420,10 @@ async def scenario_6_both_constrained():
         else:
             passed("both batteries at 0W, no crash")
 
-        # Restore one — give extra time for saturation to decay and system to recover
+        # Restore one — wait for saturation to decay and system to recover
         h.batteries[0].max_charge_power = 800
         h.batteries[0].max_discharge_power = 800
-        await h.wait_sim_seconds(30)
+        await h.wait_sim_seconds(15)
         print(f"  After restoring battery 0: {h.status()}")
 
         if abs(h.battery_powers()[0]) < 50:
