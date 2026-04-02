@@ -290,3 +290,21 @@ THROTTLE_INTERVAL = 0
 #OBIS_POWER_L1 = 0100240700ff
 #OBIS_POWER_L2 = 0100380700ff
 #OBIS_POWER_L3 = 01004c0700ff
+
+## --- MQTT Insights (optional) ---
+## Publishes internal state (grid power, targets, saturation, consumer topology)
+## to MQTT with Home Assistant Device Discovery support.
+## When running as a Home Assistant add-on with Mosquitto, this is auto-configured.
+#[MQTT_INSIGHTS]
+#BROKER = 192.168.1.100
+#PORT = 1883
+#USERNAME = mqtt_user
+#PASSWORD = mqtt_pass
+## Enable TLS (default: false)
+#TLS = false
+## Base topic for all MQTT Insights messages (default: b2500_meter)
+#BASE_TOPIC = b2500_meter
+## Enable Home Assistant MQTT Device Discovery (default: true)
+#HA_DISCOVERY = true
+## HA discovery prefix (default: homeassistant)
+#HA_DISCOVERY_PREFIX = homeassistant

@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
 import time
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any
 
 from b2500_meter.config import ClientFilter
 from b2500_meter.config.logger import logger
@@ -11,7 +16,7 @@ BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
 
 
 class _ShellyProtocol(asyncio.DatagramProtocol):
-    def __init__(self, shelly: "Shelly"):
+    def __init__(self, shelly: Shelly):
         self.shelly = shelly
         self._tasks: set[asyncio.Task] = set()
 
@@ -42,6 +47,7 @@ class Shelly:
         self._inactive_batteries: set[str] = set()
         self._stopped = asyncio.Event()
         self._inactive_check_task = None
+        self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
 
     def _calculate_derived_values(self, power):
         decimal_point_enforcer = 0.001
@@ -141,6 +147,14 @@ class Shelly:
                 battery_ip,
             )
 
+    def _call_event_listener(self, battery_ip: str, data: dict[str, Any]) -> None:
+        if not self.event_listener:
+            return
+        try:
+            self.event_listener(self._device_id, battery_ip, data)
+        except Exception as exc:
+            logger.warning("event_listener failed for %s: %s", battery_ip, exc)
+
     async def _safe_handle_request(self, transport, data, addr):
         try:
             await self._handle_request(transport, data, addr)
@@ -185,6 +199,32 @@ class Shelly:
                 logger.debug(f"Sending response: {response_json}")
                 response_data = response_json.encode()
                 transport.sendto(response_data, addr)
+
+                battery_ip = addr[0]
+                if len(powers) == 1:
+                    grid_l1, grid_l2, grid_l3 = powers[0], 0.0, 0.0
+                elif len(powers) >= 3:
+                    grid_l1, grid_l2, grid_l3 = (
+                        float(powers[0]),
+                        float(powers[1]),
+                        float(powers[2]),
+                    )
+                else:
+                    grid_l1, grid_l2, grid_l3 = 0.0, 0.0, 0.0
+                self._call_event_listener(
+                    battery_ip,
+                    {
+                        "grid_power": {
+                            "l1": grid_l1,
+                            "l2": grid_l2,
+                            "l3": grid_l3,
+                            "total": grid_l1 + grid_l2 + grid_l3,
+                        },
+                        "active": battery_ip not in self._inactive_batteries,
+                        "last_seen": datetime.now(timezone.utc).isoformat(),
+                        "battery_count": len(self._battery_last_seen),
+                    },
+                )
         except json.JSONDecodeError:
             logger.error("Error: Invalid JSON")
         except Exception:

@@ -2,6 +2,7 @@ import configparser
 from ipaddress import IPv4Address, IPv4Network
 
 from b2500_meter.config.logger import logger
+from b2500_meter.mqtt_insights import MqttInsightsConfig
 from b2500_meter.powermeter import (
     AmisReader,
     Emlog,
@@ -45,6 +46,7 @@ JSON_HTTP_SECTION = "JSON_HTTP"
 TQ_EM_SECTION = "TQ_EM"
 HOMEWIZARD_SECTION = "HOMEWIZARD"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
+MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
 
 class ClientFilter:
@@ -175,7 +177,7 @@ def create_powermeter(
         return create_homewizard_powermeter(section, config)
     elif section.startswith(SMA_ENERGY_METER_SECTION):
         return create_sma_energy_meter_powermeter(section, config)
-    elif section.startswith("MQTT"):
+    elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
         return create_mqtt_powermeter(section, config)
     else:
         return None
@@ -448,3 +450,24 @@ def create_sma_energy_meter_powermeter(
         config.getint(section, "SERIAL_NUMBER", fallback=0),
         config.get(section, "INTERFACE", fallback=""),
     )
+
+
+def read_mqtt_insights_config(
+    config: configparser.ConfigParser,
+) -> MqttInsightsConfig | None:
+    """Read [MQTT_INSIGHTS] section; return None if absent."""
+    for section in config.sections():
+        if section.startswith(MQTT_INSIGHTS_SECTION):
+            return MqttInsightsConfig(
+                broker=config.get(section, "BROKER", fallback="localhost"),
+                port=config.getint(section, "PORT", fallback=1883),
+                username=config.get(section, "USERNAME", fallback=None),
+                password=config.get(section, "PASSWORD", fallback=None),
+                tls=config.getboolean(section, "TLS", fallback=False),
+                base_topic=config.get(section, "BASE_TOPIC", fallback="b2500_meter"),
+                ha_discovery=config.getboolean(section, "HA_DISCOVERY", fallback=True),
+                ha_discovery_prefix=config.get(
+                    section, "HA_DISCOVERY_PREFIX", fallback="homeassistant"
+                ),
+            )
+    return None

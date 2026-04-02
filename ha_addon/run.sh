@@ -117,6 +117,17 @@ else
             echo "POWER_CALCULATE=False"
             echo "CURRENT_POWER_ENTITY=$(bashio::config 'power_input_alias')"
         fi
+
+        if bashio::services "mqtt"; then
+            echo ""
+            echo "[MQTT_INSIGHTS]"
+            echo "BROKER=$(bashio::services 'mqtt' 'host')"
+            echo "PORT=$(bashio::services 'mqtt' 'port')"
+            echo "USERNAME=$(bashio::services 'mqtt' 'username')"
+            echo "PASSWORD=$(bashio::services 'mqtt' 'password')"
+            echo "TLS=$(bashio::services 'mqtt' 'ssl')"
+            echo "HA_DISCOVERY=True"
+        fi
     } > "$CONFIG"
 fi
 

@@ -5,7 +5,11 @@ import os
 import signal
 from collections import OrderedDict
 
-from b2500_meter.config.config_loader import ClientFilter, read_all_powermeter_configs
+from b2500_meter.config.config_loader import (
+    ClientFilter,
+    read_all_powermeter_configs,
+    read_mqtt_insights_config,
+)
 from b2500_meter.config.logger import logger, setLogLevel
 from b2500_meter.ct002 import CT002, UDP_PORT
 from b2500_meter.health_service import HealthCheckService
@@ -14,6 +18,7 @@ from b2500_meter.marstek_api import (
     MarstekConfig,
     ensure_managed_fake_device,
 )
+from b2500_meter.mqtt_insights import MqttInsightsService
 from b2500_meter.powermeter import Powermeter
 from b2500_meter.shelly import Shelly
 from b2500_meter.version_info import get_git_commit_sha
@@ -67,6 +72,7 @@ async def run_device(
     args: argparse.Namespace,
     powermeters: list[tuple[Powermeter, ClientFilter]],
     device_id: str | None = None,
+    insights: MqttInsightsService | None = None,
 ):
     logger.debug(f"Starting device: {device_type}")
 
@@ -200,6 +206,20 @@ async def run_device(
             return [value1, value2, value3]
 
         device.before_send = update_readings
+        device._device_id = device_id or ""
+
+        if insights:
+
+            def _ct002_event_listener(dev_id, consumer_id, data):
+                if data.get("_removed"):
+                    insights.on_ct002_consumer_removed(dev_id, consumer_id)
+                else:
+                    insights.on_ct002_response(dev_id, consumer_id, data)
+
+            device.event_listener = _ct002_event_listener
+            insights.register_active_handler(
+                device_id or "", device.set_consumer_active
+            )
 
     elif device_type == "shellypro3em_old":
         logger.debug("Shelly Pro 3EM Settings:")
@@ -223,6 +243,12 @@ async def run_device(
 
     else:
         raise ValueError(f"Unsupported device type: {device_type}")
+
+    # Wire Shelly event listener
+    if insights and isinstance(device, Shelly):
+        device.event_listener = lambda dev_id, battery_ip, data: (
+            insights.on_shelly_response(dev_id, battery_ip, data)
+        )
 
     try:
         await device.start()
@@ -271,6 +297,7 @@ async def async_main(
             health = None
 
     powermeters: list[tuple[Powermeter, ClientFilter]] = []
+    insights: MqttInsightsService | None = None
 
     try:
         # Create powermeters
@@ -284,13 +311,20 @@ async def async_main(
             for powermeter, client_filter in powermeters:
                 await test_powermeter(powermeter, client_filter)
 
+        # MQTT Insights (optional)
+        insights_cfg = read_mqtt_insights_config(cfg)
+        if insights_cfg:
+            insights = MqttInsightsService(insights_cfg)
+            await insights.start()
+            logger.info("MQTT Insights service started")
+
         if not device_types:
             logger.warning("No runnable device types configured after filtering.")
             return
 
         await asyncio.gather(
             *(
-                run_device(device_type, cfg, args, powermeters, device_id)
+                run_device(device_type, cfg, args, powermeters, device_id, insights)
                 for device_type, device_id in zip(
                     device_types, device_ids, strict=False
                 )
@@ -299,6 +333,12 @@ async def async_main(
     finally:
         # Best-effort shutdown: each resource gets a stop attempt even if
         # an earlier one fails.
+        if insights:
+            try:
+                await insights.stop()
+                logger.info("MQTT Insights service stopped")
+            except Exception:
+                logger.exception("Error stopping MQTT Insights service")
         for pm, _ in powermeters:
             try:
                 await pm.stop()

@@ -719,6 +719,49 @@ CURRENT_POWER_ENTITY = sensor.current_power
 # No NETMASK specified - will match all clients (0.0.0.0/0)
 ```
 
+### MQTT Insights
+
+Publishes internal state (grid power per phase, charge targets, saturation, consumer topology) to MQTT with optional Home Assistant auto-discovery.
+
+**Home Assistant Add-on**: When running as an HA add-on with the Mosquitto broker add-on installed, MQTT Insights is auto-configured — no manual setup needed. Entities appear automatically in HA.
+
+**Manual configuration**:
+
+```ini
+[MQTT_INSIGHTS]
+BROKER = 192.168.1.100
+PORT = 1883
+USERNAME = mqtt_user
+PASSWORD = mqtt_pass
+TLS = false
+BASE_TOPIC = b2500_meter
+HA_DISCOVERY = true
+HA_DISCOVERY_PREFIX = homeassistant
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `BROKER` | `localhost` | MQTT broker hostname/IP |
+| `PORT` | `1883` | MQTT broker port |
+| `USERNAME` / `PASSWORD` | — | Credentials (optional) |
+| `TLS` | `false` | Enable TLS encryption |
+| `BASE_TOPIC` | `b2500_meter` | Root topic for all published messages |
+| `HA_DISCOVERY` | `true` | Enable Home Assistant MQTT Device Discovery |
+| `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
+
+**Published entities** (per CT002 consumer):
+- Grid power (L1/L2/L3/total), charge target (L1/L2/L3), reported power, saturation
+- Diagnostic: phase, device type, battery IP, CT type, CT MAC, last seen
+- **Active switch**: pause/resume individual consumers (targets zeroed when inactive)
+
+**Published entities** (per CT002 device):
+- Smooth target, active control status, consumer count
+
+**Published entities** (per Shelly battery):
+- Grid power (L1/L2/L3/total), active status, last seen
+
+**Topics**: `{base}/ct002/{id}/consumer/{cid}`, `{base}/ct002/{id}/status`, `{base}/shelly/{id}/battery/{ip}`, `{base}/shelly/{id}/status`, `{base}/status` (LWT)
+
 # Frequently Asked Questions (FAQ)
 
 ## General Usage and Setup
