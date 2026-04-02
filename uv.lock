@@ -225,7 +225,7 @@ requires-dist = [
     { name = "smllib" },
     { name = "textual", marker = "extra == 'sim'", specifier = ">=1.0.0" },
     { name = "textual-plot", marker = "extra == 'sim'", specifier = ">=0.10.1" },
-    { name = "urllib3", specifier = ">=2.6.3" },
+    { name = "urllib3", specifier = ">=2.6.3,<3" },
 ]
 provides-extras = ["dev", "sim"]
 
