@@ -455,6 +455,7 @@ class CT002:
         # First `slots` by priority are active, rest deprioritized
         deprioritized = set(self._efficiency_priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
+        pre_swap_active = set(self._efficiency_priority[:slots])
 
         # Reset saturation for consumers transitioning to active so that
         # physical ramp-up time isn't misinterpreted as genuine saturation.
@@ -470,7 +471,7 @@ class CT002:
             cache_key = (sample_id, tuple(self._efficiency_priority))
             # Clear saturation for consumers promoted to active by the swap
             # so physical ramp-up time isn't misinterpreted as saturation.
-            for cid in self._efficiency_deprioritized - deprioritized:
+            for cid in set(self._efficiency_priority[:slots]) - pre_swap_active:
                 self._saturation_by_consumer.pop(cid, None)
 
         for cid in deprioritized - self._efficiency_deprioritized:

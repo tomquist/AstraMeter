@@ -414,6 +414,7 @@ class TestEfficiencyE2E:
             base_load=[200.0, 0.0, 0.0],
             min_efficient_power=150,
             efficiency_fade_alpha=1.0,
+            efficiency_rotation_interval=10,
             efficiency_saturation_threshold=0.4,
             saturation_decay_factor=0.8,
         )
@@ -437,11 +438,14 @@ class TestEfficiencyE2E:
             # Restore the original battery
             h.batteries[active_idx].max_charge_power = 800
             h.batteries[active_idx].max_discharge_power = 800
-            # Poll for grid recovery
+            # Poll for the restored battery to become active again
             for _ in range(40):
                 await asyncio.sleep(0.5)
-                if abs(h.grid_total()) < 60:
+                if abs(h.battery_powers()[active_idx]) > 50:
                     break
+            assert abs(h.battery_powers()[active_idx]) > 50, (
+                f"Restored battery should be producing. Powers: {h.battery_powers()}"
+            )
             assert abs(h.grid_total()) < 60, (
                 f"Grid should be near zero after recovery. Grid: {h.grid_total():.0f}W"
             )

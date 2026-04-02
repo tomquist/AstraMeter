@@ -100,9 +100,9 @@ class SmokeHarness:
             raise ValueError("time_scale must be > 0")
 
         # Scale CT002 time-dependent parameters.
-        # CT002 clamps efficiency_rotation_interval to its own 10s floor,
-        # so very short scaled values are handled safely.
-        scaled_rotation = efficiency_rotation_interval / time_scale
+        # CT002 clamps efficiency_rotation_interval to a 10s floor, so
+        # apply the same floor here to avoid silent clamping.
+        scaled_rotation = max(efficiency_rotation_interval / time_scale, 10)
 
         self.ct002 = CT002(
             udp_port=ct_port,
