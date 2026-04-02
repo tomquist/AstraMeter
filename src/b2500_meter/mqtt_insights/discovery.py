@@ -100,8 +100,6 @@ def build_ct002_consumer_discovery(
             "value_template": tmpl,
             "entity_category": "diagnostic",
         }
-        if key == "phase":
-            comp["options"] = ["A", "B", "C"]
         components[key] = comp
 
     # Last seen (timestamp)

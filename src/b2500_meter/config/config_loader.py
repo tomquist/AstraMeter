@@ -461,8 +461,8 @@ def read_mqtt_insights_config(
             return MqttInsightsConfig(
                 broker=config.get(section, "BROKER", fallback="localhost"),
                 port=config.getint(section, "PORT", fallback=1883),
-                username=config.get(section, "USERNAME", fallback=None),
-                password=config.get(section, "PASSWORD", fallback=None),
+                username=config.get(section, "USERNAME", fallback=None) or None,
+                password=config.get(section, "PASSWORD", fallback=None) or None,
                 tls=config.getboolean(section, "TLS", fallback=False),
                 base_topic=config.get(section, "BASE_TOPIC", fallback="b2500_meter"),
                 ha_discovery=config.getboolean(section, "HA_DISCOVERY", fallback=True),

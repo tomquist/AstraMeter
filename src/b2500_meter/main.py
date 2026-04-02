@@ -211,6 +211,7 @@ async def run_device(
         if insights:
 
             def _ct002_event_listener(dev_id, consumer_id, data):
+                # {"_removed": True} is a sentinel from _cleanup_consumers
                 if data.get("_removed"):
                     insights.on_ct002_consumer_removed(dev_id, consumer_id)
                 else:

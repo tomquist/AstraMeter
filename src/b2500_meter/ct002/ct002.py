@@ -288,6 +288,7 @@ class CT002:
             if now - report.get("timestamp", 0) > self.consumer_ttl
         ]
         for key in stale:
+            # Sentinel: {"_removed": True} signals consumer removal to the event listener
             self._call_event_listener(key, {"_removed": True})
             self._reports_by_consumer.pop(key, None)
             self._values_by_consumer.pop(key, None)

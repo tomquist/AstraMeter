@@ -1152,3 +1152,90 @@ class TestEfficiencySaturationSwap:
         device._compute_smooth_target([-200, 0, 0], "b")
         # Active consumer should now be deprioritized (swapped)
         assert active_cid in device._efficiency_deprioritized
+
+
+class TestInactiveConsumers:
+    """Tests for the active/pause flag (set_consumer_active)."""
+
+    def test_inactive_consumer_drives_to_zero_on_phase(self):
+        """An inactive consumer with non-zero reported power should get
+        target = -reported_power on its phase, not just [0,0,0]."""
+        device = CT002(active_control=True, fair_distribution=False)
+        device._update_consumer_report("bat1", "B", 250)
+        device.set_consumer_active("bat1", False)
+
+        result = device._compute_smooth_target([400, 0, 0], "bat1")
+
+        # Phase B → index 1, target should be -250 to steer output to zero
+        assert result == [0.0, -250.0, 0.0]
+
+    def test_inactive_consumer_already_at_zero_returns_zeros(self):
+        """An inactive consumer reporting 0W should get [0,0,0]."""
+        device = CT002(active_control=True, fair_distribution=False)
+        device._update_consumer_report("bat1", "A", 0)
+        device.set_consumer_active("bat1", False)
+
+        result = device._compute_smooth_target([400, 0, 0], "bat1")
+        assert result == [0, 0, 0]
+
+    def test_inactive_consumer_excluded_from_fair_distribution(self):
+        """Fair share should only count active consumers."""
+        device = CT002(active_control=True, fair_distribution=False)
+        device._update_consumer_report("bat1", "A", 0)
+        device._update_consumer_report("bat2", "A", 0)
+        device.set_consumer_active("bat1", False)
+
+        # Only bat2 is active → gets the full target, not half
+        result = device._compute_smooth_target([400, 0, 0], "bat2")
+        assert result[0] == 400
+
+    def test_inactive_consumer_excluded_from_efficiency_rotation(self):
+        """Inactive consumers should not appear in the efficiency priority list."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=200,
+        )
+        device._update_consumer_report("bat1", "A", 50)
+        device._update_consumer_report("bat2", "A", 50)
+        device._update_consumer_report("bat3", "A", 50)
+        device.set_consumer_active("bat2", False)
+
+        device._compute_smooth_target([100, 0, 0], "bat1")
+
+        assert "bat2" not in device._efficiency_priority
+        assert "bat1" in device._efficiency_priority
+        assert "bat3" in device._efficiency_priority
+
+    def test_reactivated_consumer_rejoins_distribution(self):
+        """After re-activating, consumer should participate normally."""
+        device = CT002(active_control=True, fair_distribution=False)
+        device._update_consumer_report("bat1", "A", 0)
+        device._update_consumer_report("bat2", "A", 0)
+
+        # Pause bat1
+        device.set_consumer_active("bat1", False)
+        result = device._compute_smooth_target([400, 0, 0], "bat2")
+        assert result[0] == 400  # bat2 gets full share
+
+        # Reactivate bat1
+        device.set_consumer_active("bat1", True)
+        device._last_smooth_sample = None  # force re-evaluation
+        result = device._compute_smooth_target([400, 0, 0], "bat1")
+        assert result[0] == 200  # now split between two
+
+    def test_set_consumer_active_toggle(self):
+        device = CT002()
+        assert device.is_consumer_active("x")
+        device.set_consumer_active("x", False)
+        assert not device.is_consumer_active("x")
+        device.set_consumer_active("x", True)
+        assert device.is_consumer_active("x")
+
+    def test_last_target_set_to_zero_for_inactive(self):
+        """Inactive consumer's last_target should be recorded as 0."""
+        device = CT002(active_control=True)
+        device._update_consumer_report("bat1", "A", 100)
+        device.set_consumer_active("bat1", False)
+        device._compute_smooth_target([400, 0, 0], "bat1")
+        assert device._last_target_by_consumer["bat1"] == 0

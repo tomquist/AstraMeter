@@ -157,23 +157,10 @@ class MqttInsightsService:
                     )
 
             except asyncio.CancelledError:
-                # Graceful shutdown: try to publish offline
-                try:
-                    async with aiomqtt.Client(
-                        hostname=cfg.broker,
-                        port=cfg.port,
-                        username=cfg.username,
-                        password=cfg.password,
-                        tls_context=tls_context,
-                    ) as client:
-                        await client.publish(
-                            f"{cfg.base_topic}/status",
-                            payload=b"offline",
-                            qos=1,
-                            retain=True,
-                        )
-                except Exception:
-                    pass
+                # Graceful shutdown: publish offline in a shielded scope
+                # so the pending cancellation doesn't abort the publish.
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(self._publish_offline(cfg, tls_context))
                 raise
             except (aiomqtt.MqttError, OSError) as exc:
                 logger.warning(
@@ -182,6 +169,29 @@ class MqttInsightsService:
                     RECONNECT_DELAY,
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
+            except Exception:
+                logger.exception(
+                    "MQTT Insights unexpected error, reconnecting in %ss...",
+                    RECONNECT_DELAY,
+                )
+                await asyncio.sleep(RECONNECT_DELAY)
+
+    async def _publish_offline(
+        self, cfg: MqttInsightsConfig, tls_context: ssl.SSLContext | None
+    ) -> None:
+        async with aiomqtt.Client(
+            hostname=cfg.broker,
+            port=cfg.port,
+            username=cfg.username,
+            password=cfg.password,
+            tls_context=tls_context,
+        ) as client:
+            await client.publish(
+                f"{cfg.base_topic}/status",
+                payload=b"offline",
+                qos=1,
+                retain=True,
+            )
 
     async def _publish_loop(self, client: aiomqtt.Client) -> None:
         cfg = self._config
