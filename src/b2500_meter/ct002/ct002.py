@@ -310,8 +310,10 @@ class CT002:
                 alpha * inst_saturation + (1 - alpha) * prev
             )
             return
-        follow_ratio = min(1.0, abs(actual) / target_abs)
-        inst_saturation = 1.0 - follow_ratio
+        # True saturation: battery outputs ~0 when asked for significant power
+        # (e.g. SoC at limit).  A battery producing meaningful output but less
+        # than the target is ramping or chasing a moving load — not saturated.
+        inst_saturation = 1.0 if abs(actual) < self.min_target_for_saturation else 0.0
         alpha = self.saturation_alpha
         prev = self._saturation_by_consumer.get(consumer_id, 0.0)
         self._saturation_by_consumer[consumer_id] = (
