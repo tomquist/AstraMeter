@@ -667,7 +667,11 @@ class CT002:
 
         if consumer_id and consumer_id in reports:
             actual_self = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            self._update_saturation(consumer_id, last_target, actual_self)
+            # Skip saturation updates when manual override is active: the user-
+            # chosen target may be unreachable and inflating saturation would
+            # cause an immediate swap-out when switching back to auto mode.
+            if consumer_id not in self._manual_target_enabled:
+                self._update_saturation(consumer_id, last_target, actual_self)
 
         # Manual target override: bypass fair-share / efficiency logic entirely.
         if consumer_id and consumer_id in self._manual_target_enabled:

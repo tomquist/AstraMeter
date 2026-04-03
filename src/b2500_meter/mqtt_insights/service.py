@@ -110,6 +110,13 @@ class MqttInsightsService:
     ) -> None:
         self._rotation_handlers[device_id] = handler
 
+    def unregister_handlers(self, device_id: str) -> None:
+        """Remove all command handlers for a device (e.g. on device stop)."""
+        self._active_handlers.pop(device_id, None)
+        self._manual_target_handlers.pop(device_id, None)
+        self._auto_target_handlers.pop(device_id, None)
+        self._rotation_handlers.pop(device_id, None)
+
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def start(self) -> None:

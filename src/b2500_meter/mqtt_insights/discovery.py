@@ -120,6 +120,8 @@ def build_ct002_consumer_discovery(
         "name": "Manual Target",
         "unit_of_measurement": "W",
         "device_class": "power",
+        "min": -10000,
+        "max": 10000,
         "mode": "box",
         "state_topic": state_topic,
         "value_template": "{{ value_json.manual_target | default(0) }}",

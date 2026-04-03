@@ -284,6 +284,8 @@ async def run_device(
     try:
         await device.wait()
     finally:
+        if insights and isinstance(device, CT002):
+            insights.unregister_handlers(device_id or "")
         try:
             await device.stop()
         except Exception:
