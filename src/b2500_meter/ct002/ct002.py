@@ -241,6 +241,10 @@ class CT002:
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
         if active:
             self._inactive_consumers.discard(consumer_id)
+            # Clear stale control state so the resumed consumer starts fresh
+            # and isn't immediately deprioritized by old saturation scores.
+            self._saturation_by_consumer.pop(consumer_id, None)
+            self._last_target_by_consumer.pop(consumer_id, None)
         else:
             self._inactive_consumers.add(consumer_id)
 
@@ -970,11 +974,12 @@ class CT002:
         values = self._get_consumer_value(consumer_id)
         if values is None:
             values = [0, 0, 0]
-        raw_values = list(values)
-        meter_value = sum(parse_int(v, 0) for v in values)
+        raw_values = ([*list(values), 0, 0, 0])[:3]
+        meter_value = sum(parse_int(v, 0) for v in raw_values)
         is_active = self.is_consumer_active(consumer_id)
         if self.active_control and not in_inspection_mode:
             values = self._compute_smooth_target(values, consumer_id)
+        values = ([*list(values), 0, 0, 0])[:3]
 
         try:
             response_fields = self._build_response_fields(fields, values)

@@ -1232,6 +1232,19 @@ class TestInactiveConsumers:
         device.set_consumer_active("x", True)
         assert device.is_consumer_active("x")
 
+    def test_reactivation_clears_stale_state(self):
+        """Re-enabling a consumer should clear saturation and last_target."""
+        device = CT002(active_control=True)
+        device._saturation_by_consumer["bat1"] = 0.8
+        device._last_target_by_consumer["bat1"] = 50
+        device.set_consumer_active("bat1", False)
+        # Stale state is preserved while inactive
+        assert "bat1" in device._saturation_by_consumer
+        # Reactivation clears it
+        device.set_consumer_active("bat1", True)
+        assert "bat1" not in device._saturation_by_consumer
+        assert "bat1" not in device._last_target_by_consumer
+
     def test_last_target_set_to_zero_for_inactive(self):
         """Inactive consumer's last_target should be recorded as 0."""
         device = CT002(active_control=True)
