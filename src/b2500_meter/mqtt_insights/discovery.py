@@ -84,9 +84,20 @@ def build_ct002_consumer_discovery(
         "value_template": "{{ (value_json.saturation * 100) | round(1) }}",
     }
 
+    # Phase sensor (enum)
+    components["phase"] = {
+        "platform": "sensor",
+        "unique_id": f"{uid_prefix}_phase",
+        "name": "Phase",
+        "device_class": "enum",
+        "options": ["A", "B", "C"],
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.phase }}",
+        "entity_category": "diagnostic",
+    }
+
     # Diagnostic sensors
     for key, label, tmpl in [
-        ("phase", "Phase", "{{ value_json.phase }}"),
         ("device_type", "Device Type", "{{ value_json.device_type }}"),
         ("battery_ip", "Battery IP", "{{ value_json.battery_ip }}"),
         ("ct_type", "CT Type", "{{ value_json.ct_type }}"),
@@ -160,9 +171,13 @@ def build_ct002_consumer_discovery(
         "optimistic": True,
     }
 
+    # Build identifiers: include hame_energy_<mac> for matching real devices
+    mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
+    identifiers = [node_id, f"hame_energy_{mac_slug}"]
+
     payload = {
         "device": {
-            "identifiers": node_id,
+            "identifiers": identifiers,
             "name": f"CT002 {consumer_id}",
             "manufacturer": "b2500-meter",
         },

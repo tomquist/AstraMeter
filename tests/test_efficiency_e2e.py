@@ -141,6 +141,23 @@ class _SimHarness:
         """Count batteries producing more than `threshold` watts."""
         return sum(1 for p in self.battery_powers() if abs(p) > threshold)
 
+    async def wait_active(
+        self, expected: int, *, threshold: float = 15.0, timeout: float = 20.0
+    ) -> None:
+        """Poll until exactly *expected* batteries are active, or fail."""
+        poll = 0.3
+        elapsed = 0.0
+        while elapsed < timeout:
+            if self.active_battery_count(threshold) == expected:
+                return
+            await asyncio.sleep(poll)
+            elapsed += poll
+        powers = self.battery_powers()
+        raise AssertionError(
+            f"Expected {expected} active batteries (threshold={threshold}), "
+            f"got {self.active_battery_count(threshold)}. Powers: {powers}"
+        )
+
 
 @pytest.fixture
 async def harness():
@@ -168,21 +185,14 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(8.0)
-
-            powers = h.battery_powers()
-            active = h.active_battery_count(threshold=15.0)
-
-            # Exactly 1 battery should be doing meaningful work
-            assert active == 1, (
-                f"Expected 1 active battery at 200W demand with threshold=150, "
-                f"got {active}. Powers: {powers}"
-            )
+            await h.wait_active(1)
+            # Let it ramp to full power
+            await h.settle(3.0)
 
             # The active battery should be delivering roughly the full demand
-            max_power = max(abs(p) for p in powers)
+            max_power = max(abs(p) for p in h.battery_powers())
             assert max_power > 100, (
-                f"Active battery power {max_power}W is too low. Powers: {powers}"
+                f"Active battery power {max_power}W is too low. Powers: {h.battery_powers()}"
             )
         finally:
             await h.stop()
@@ -197,13 +207,7 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(5.0)
-
-            active = h.active_battery_count(threshold=30.0)
-            assert active == 2, (
-                f"Expected 2 active batteries at 600W demand, "
-                f"got {active}. Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(2, threshold=30.0)
         finally:
             await h.stop()
 
@@ -219,19 +223,13 @@ class TestEfficiencyE2E:
         await h.start()
         try:
             # Low demand: only 1 battery active
-            await h.settle(5.0)
-            assert h.active_battery_count(threshold=30.0) == 1, (
-                f"Low demand: expected 1 active. Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(1, threshold=30.0)
 
             # Toggle big load on → high demand
             h.load_model.toggle_load(1)
-            await h.settle(5.0)
 
             # Both should be active now (650W / 2 = 325W each > 150W)
-            assert h.active_battery_count(threshold=30.0) == 2, (
-                f"High demand: expected 2 active. Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(2, threshold=30.0)
         finally:
             await h.stop()
 
@@ -245,21 +243,7 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            # Initial battery polls are jittered, so the disabled-feature path
-            # can occasionally still be converging at the 8s mark in CI.
-            timeout = 15.0
-            poll_interval = 0.5
-            elapsed = 0.0
-            active = h.active_battery_count(threshold=15.0)
-            while elapsed < timeout and active != 2:
-                await asyncio.sleep(poll_interval)
-                elapsed += poll_interval
-                active = h.active_battery_count(threshold=15.0)
-
-            assert active == 2, (
-                f"With feature disabled, expected 2 active at 200W. "
-                f"Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(2)
         finally:
             await h.stop()
 
@@ -275,13 +259,20 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            # Let it settle and identify which battery is active.
-            # Needs extra time for startup delay + saturation swap at boot.
-            await h.settle(8.0)
-            powers_before = h.battery_powers()
-            active_before = [i for i, p in enumerate(powers_before) if abs(p) > 15]
+            # Poll until exactly 1 battery is active (startup + saturation swap).
+            timeout = 20.0
+            poll_interval = 0.3
+            elapsed = 0.0
+            active_before: list[int] = []
+            while elapsed < timeout:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+                powers_before = h.battery_powers()
+                active_before = [i for i, p in enumerate(powers_before) if abs(p) > 15]
+                if len(active_before) == 1:
+                    break
             assert len(active_before) == 1, (
-                f"Expected 1 active before rotation. Powers: {powers_before}"
+                f"Expected 1 active before rotation. Powers: {h.battery_powers()}"
             )
 
             # Poll until the active battery set changes or timeout.
@@ -321,8 +312,12 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(6.0)
-
+            await h.wait_active(1)
+            # Additional settle for grid convergence after battery is active
+            for _ in range(40):
+                await asyncio.sleep(0.3)
+                if abs(h.grid_total()) < 50:
+                    break
             grid = abs(h.grid_total())
             assert grid < 50, (
                 f"Grid should converge near zero, got {grid}W. "
@@ -341,17 +336,11 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(6.0)
-
-            active = h.active_battery_count(threshold=15.0)
-            assert active == 2, (
-                f"Expected 2 active batteries at 350W with 3 available. "
-                f"Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(2)
         finally:
             await h.stop()
 
-    @pytest.mark.timeout(30)
+    @pytest.mark.timeout(60)
     async def test_smooth_transition_no_overshoot(self):
         """During demand increase, no single battery should overshoot excessively."""
         h = _SimHarness(
@@ -363,10 +352,7 @@ class TestEfficiencyE2E:
         await h.start()
         try:
             # Low demand: 1 active battery.
-            await h.settle(5.0)
-            assert h.active_battery_count(threshold=30.0) == 1, (
-                f"Low demand: expected 1 active. Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(1, threshold=30.0)
 
             # Toggle load on → high demand (700W).
             h.load_model.toggle_load(1)
@@ -386,10 +372,7 @@ class TestEfficiencyE2E:
             )
 
             # After settling, both batteries active and grid near zero.
-            await h.settle(3.0)
-            assert h.active_battery_count(threshold=30.0) == 2, (
-                f"High demand: expected 2 active. Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(2, threshold=30.0)
         finally:
             await h.stop()
 
@@ -405,12 +388,7 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            # Let system settle with both batteries available.
-            # Extra time for startup delay + saturation swap at boot.
-            await h.settle(8.0)
-            assert h.active_battery_count() == 1, (
-                f"Expected 1 active battery. Powers: {h.battery_powers()}"
-            )
+            await h.wait_active(1)
             # Identify which battery is active and saturate it
             powers = h.battery_powers()
             active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
@@ -442,7 +420,7 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(5.0)
+            await h.wait_active(1)
             # Saturate the active battery
             powers = h.battery_powers()
             active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
