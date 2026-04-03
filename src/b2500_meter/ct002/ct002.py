@@ -327,12 +327,19 @@ class CT002:
         # Grace period: skip saturation updates for consumers recently
         # promoted from deprioritized to active.  Physical ramp-up time
         # (battery starting from 0 W) would otherwise be misinterpreted
-        # as genuine saturation.
+        # as genuine saturation.  Once the consumer proves it can produce
+        # meaningful output the grace is cleared so genuine saturation
+        # (e.g. empty battery) is detected normally.
         grace_deadline = self._saturation_grace_until.get(consumer_id)
         if grace_deadline is not None:
             if time.time() < grace_deadline:
-                return
-            del self._saturation_grace_until[consumer_id]
+                if abs(actual) >= self.min_target_for_saturation:
+                    # Consumer ramped up successfully — grace no longer needed.
+                    del self._saturation_grace_until[consumer_id]
+                else:
+                    return
+            else:
+                del self._saturation_grace_until[consumer_id]
         target_abs = abs(last_target)
         if target_abs < self.min_target_for_saturation:
             prev = self._saturation_by_consumer.get(consumer_id, 0.0)

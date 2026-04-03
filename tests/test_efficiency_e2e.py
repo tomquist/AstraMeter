@@ -50,6 +50,7 @@ class _SimHarness:
         efficiency_rotation_interval: int = 900,
         poll_interval: float = 0.3,
         base_noise: float = 0.0,
+        startup_delay: float = 2.0,
         **ct_kwargs,
     ):
         ct_port, http_port = _find_free_ports(2)
@@ -82,6 +83,7 @@ class _SimHarness:
                     ramp_rate=400.0,  # Fast ramp for quicker test convergence
                     poll_interval=poll_interval,
                     min_power_threshold=5.0,  # Low threshold to observe small targets
+                    startup_delay=startup_delay,  # Mimic real inverter warm-up from idle
                 )
             )
 
@@ -166,7 +168,7 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            await h.settle(5.0)
+            await h.settle(8.0)
 
             powers = h.battery_powers()
             active = h.active_battery_count(threshold=15.0)
@@ -261,7 +263,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    @pytest.mark.timeout(45)
+    @pytest.mark.timeout(60)
     async def test_priority_rotation_switches_active_battery(self):
         """After rotation interval, a different battery becomes active."""
         h = _SimHarness(
@@ -273,8 +275,9 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            # Let it settle and identify which battery is active
-            await h.settle(4.0)
+            # Let it settle and identify which battery is active.
+            # Needs extra time for startup delay + saturation swap at boot.
+            await h.settle(8.0)
             powers_before = h.battery_powers()
             active_before = [i for i, p in enumerate(powers_before) if abs(p) > 15]
             assert len(active_before) == 1, (
@@ -402,8 +405,9 @@ class TestEfficiencyE2E:
         )
         await h.start()
         try:
-            # Let system settle with both batteries available
-            await h.settle(5.0)
+            # Let system settle with both batteries available.
+            # Extra time for startup delay + saturation swap at boot.
+            await h.settle(8.0)
             assert h.active_battery_count() == 1, (
                 f"Expected 1 active battery. Powers: {h.battery_powers()}"
             )

@@ -34,6 +34,7 @@ class BatterySimulator:
         ramp_rate: float = 200.0,
         poll_interval: float = 1.0,
         min_power_threshold: float = 20.0,
+        startup_delay: float = 0.0,
         inspection_count: int = 1,
         time_scale: float = 1.0,
     ) -> None:
@@ -56,6 +57,7 @@ class BatterySimulator:
         self.ramp_rate = ramp_rate
         self.poll_interval = poll_interval
         self.min_power_threshold = min_power_threshold
+        self.startup_delay = max(0.0, startup_delay)
         self.inspection_count = inspection_count
         self.time_scale = max(0.1, time_scale)
 
@@ -64,6 +66,7 @@ class BatterySimulator:
         self._target_power: float = 0.0
         self._request_count: int = 0
         self._last_update: float = time.monotonic()
+        self._startup_elapsed: float = 0.0
 
     # -- public read-only properties ---------------------------------------
 
@@ -100,6 +103,20 @@ class BatterySimulator:
             target = 0.0
         if self._soc <= 0.0 and target > 0:
             target = 0.0
+
+        # Startup delay: when resuming from idle the real inverter needs
+        # a few seconds before it begins ramping.  During this window the
+        # battery stays at ~0 W, which is the behaviour that previously
+        # triggered false saturation detection.
+        if self.startup_delay > 0:
+            idle = abs(self._current_power) < self.min_power_threshold
+            want_power = abs(target) >= self.min_power_threshold
+            if idle and want_power:
+                self._startup_elapsed += dt
+                if self._startup_elapsed < self.startup_delay:
+                    return  # stay at current (near-zero) power
+            else:
+                self._startup_elapsed = 0.0
 
         # Ramp toward target
         diff = target - self._current_power
