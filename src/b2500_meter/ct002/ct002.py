@@ -16,6 +16,11 @@ SEPARATOR = "|"
 UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
+# Seconds to suppress saturation checks after a battery is promoted from
+# deprioritized to active.  Covers the physical ramp-up time of the
+# inverter; the grace is also cleared early once the battery proves it
+# can produce meaningful output.
+SATURATION_GRACE_SECONDS = 30
 
 RESPONSE_LABELS = [
     "meter_dev_type",
@@ -503,10 +508,10 @@ class CT002:
         # Reset saturation for consumers transitioning to active so that
         # physical ramp-up time isn't misinterpreted as genuine saturation.
         # Must happen BEFORE the forced swap check.
-        # Also grant a grace period equal to the rotation interval so the
-        # battery has time to physically ramp up before saturation is
-        # evaluated again.
-        grace = now + self.efficiency_rotation_interval
+        # Grant a short grace period so the inverter can physically ramp
+        # up before saturation is evaluated again.  The grace is also
+        # cleared early once the battery proves it can produce output.
+        grace = now + SATURATION_GRACE_SECONDS
         for cid in self._efficiency_deprioritized - deprioritized:
             self._saturation_by_consumer.pop(cid, None)
             self._saturation_grace_until[cid] = grace

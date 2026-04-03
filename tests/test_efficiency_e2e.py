@@ -393,7 +393,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    @pytest.mark.timeout(45)
+    @pytest.mark.timeout(60)
     async def test_saturated_battery_triggers_rotation(self):
         """When the active battery is saturated, it gets swapped out quickly."""
         h = _SimHarness(
