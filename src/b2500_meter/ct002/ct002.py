@@ -511,7 +511,7 @@ class CT002:
         # Grant a short grace period so the inverter can physically ramp
         # up before saturation is evaluated again.  The grace is also
         # cleared early once the battery proves it can produce output.
-        grace = now + SATURATION_GRACE_SECONDS
+        grace = now + min(SATURATION_GRACE_SECONDS, self.efficiency_rotation_interval)
         for cid in self._efficiency_deprioritized - deprioritized:
             self._saturation_by_consumer.pop(cid, None)
             self._saturation_grace_until[cid] = grace

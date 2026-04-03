@@ -34,7 +34,7 @@ class BatterySimulator:
         ramp_rate: float = 200.0,
         poll_interval: float = 1.0,
         min_power_threshold: float = 20.0,
-        startup_delay: float = 0.0,
+        startup_delay: float = 2.0,
         inspection_count: int = 1,
         time_scale: float = 1.0,
     ) -> None:
