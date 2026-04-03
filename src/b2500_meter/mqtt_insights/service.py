@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -455,23 +456,38 @@ class MqttInsightsService:
                 )
 
         if "manual_target" in cmd:
-            try:
-                target = float(cmd["manual_target"])
-            except (TypeError, ValueError):
+            raw_target = cmd["manual_target"]
+            if isinstance(raw_target, bool):
                 logger.warning(
                     "Invalid manual_target value for %s/%s", device_id, consumer_id
                 )
             else:
-                handler = self._manual_target_handlers.get(device_id)
-                if handler:
-                    try:
-                        handler(consumer_id, target)
-                    except Exception:
-                        logger.exception(
-                            "Manual target handler error for %s/%s",
+                try:
+                    target = float(raw_target)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invalid manual_target value for %s/%s",
+                        device_id,
+                        consumer_id,
+                    )
+                else:
+                    if not math.isfinite(target):
+                        logger.warning(
+                            "Non-finite manual_target for %s/%s",
                             device_id,
                             consumer_id,
                         )
+                    else:
+                        handler = self._manual_target_handlers.get(device_id)
+                        if handler:
+                            try:
+                                handler(consumer_id, target)
+                            except Exception:
+                                logger.exception(
+                                    "Manual target handler error for %s/%s",
+                                    device_id,
+                                    consumer_id,
+                                )
 
         if "auto_target" in cmd:
             auto = bool(cmd["auto_target"])

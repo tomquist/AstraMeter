@@ -254,6 +254,12 @@ class CT002:
         auto=False means use manual target override."""
         if auto:
             self._manual_target_enabled.discard(consumer_id)
+            # Clear stale control state so the first auto cycle starts fresh.
+            self._last_target_by_consumer.pop(consumer_id, None)
+            self._saturation_by_consumer.pop(consumer_id, None)
+            self._saturation_grace_until[consumer_id] = time.time() + min(
+                SATURATION_GRACE_SECONDS, self.efficiency_rotation_interval
+            )
         else:
             self._manual_target_enabled.add(consumer_id)
 
@@ -681,6 +687,13 @@ class CT002:
             result = [0.0, 0.0, 0.0]
             result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(override)
             return result
+
+        # Exclude manual-override consumers from the automatic fair-share pool.
+        reports = {
+            cid: r
+            for cid, r in reports.items()
+            if cid not in self._manual_target_enabled
+        }
 
         # Snapshot after _update_saturation may have modified the dict.
         saturation = dict(self._saturation_by_consumer)
