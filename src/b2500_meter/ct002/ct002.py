@@ -264,8 +264,30 @@ class CT002:
                 )
         else:
             self._manual_target_enabled.add(consumer_id)
+            # Prune from cached efficiency state so auto pool isn't skewed.
+            self._efficiency_deprioritized.discard(consumer_id)
+            self._efficiency_priority = [
+                cid for cid in self._efficiency_priority if cid != consumer_id
+            ]
+            self._efficiency_fade_weights.pop(consumer_id, None)
+            self._efficiency_cache_sample = None
+            self._efficiency_cache_result = None
 
     def force_efficiency_rotation(self) -> None:
+        # Sync priority list with current auto pool before rotating.
+        current = (
+            set(self._reports_by_consumer)
+            - self._inactive_consumers
+            - self._manual_target_enabled
+        )
+        self._efficiency_priority = [
+            cid for cid in self._efficiency_priority if cid in current
+        ]
+        for cid in sorted(current):
+            if cid not in self._efficiency_priority:
+                self._efficiency_priority.append(cid)
+        self._efficiency_deprioritized.intersection_update(current)
+
         if len(self._efficiency_priority) < 2:
             return
         self._efficiency_priority.append(self._efficiency_priority.pop(0))
