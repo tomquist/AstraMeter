@@ -711,10 +711,12 @@ class CT002:
         # Manual target override: bypass fair-share / efficiency logic entirely.
         if consumer_id and consumer_id in self._manual_target_enabled:
             override = self._manual_target_values.get(consumer_id, 0.0)
-            self._last_target_by_consumer[consumer_id] = override
+            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
+            target = override - reported
+            self._last_target_by_consumer[consumer_id] = target
             phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
             result = [0.0, 0.0, 0.0]
-            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(override)
+            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(target)
             return result
 
         # Exclude manual-override consumers from the automatic fair-share pool.
