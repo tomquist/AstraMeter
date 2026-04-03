@@ -265,6 +265,16 @@ async def _collect_messages(sub, target, *, timeout=5, stop=None):
         await asyncio.wait_for(_inner(), timeout=timeout)
 
 
+async def _poll(predicate, *, timeout=5, interval=0.05):
+    """Poll *predicate* until it returns True, or raise on timeout."""
+
+    async def _inner():
+        while not predicate():
+            await asyncio.sleep(interval)
+
+    await asyncio.wait_for(_inner(), timeout=timeout)
+
+
 # ── E2E tests with Mosquitto ─────────────────────────────────────────────
 
 
@@ -323,8 +333,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
     await service.start()
 
     try:
-        # Give service time to connect
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
@@ -353,7 +362,7 @@ async def test_publishes_device_status(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
@@ -378,7 +387,7 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         discovery_msgs = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
@@ -386,10 +395,9 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
             # First event for consumer1
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
             # Second event for same consumer — should NOT trigger another discovery
-            await asyncio.sleep(0.3)
+            await _poll(lambda: "dev1/consumer1" in service._discovered_ct002_consumers)
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
             # Third event for consumer2 — SHOULD trigger new discovery
-            await asyncio.sleep(0.3)
             service.on_ct002_response("dev1", "consumer2", SAMPLE_CT002_DATA)
 
             await _collect_messages(
@@ -426,19 +434,19 @@ async def test_active_toggle_via_mqtt(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
                 f"{base}/ct002/dev1/consumer/consumer1/set",
                 payload=json.dumps({"active": False}).encode(),
             )
-            await asyncio.sleep(0.5)
+            await _poll(lambda: len(handler_calls) >= 1)
             await pub.publish(
                 f"{base}/ct002/dev1/consumer/consumer1/set",
                 payload=json.dumps({"active": True}).encode(),
             )
-            await asyncio.sleep(0.5)
+            await _poll(lambda: len(handler_calls) >= 2)
 
         assert len(handler_calls) == 2
         assert handler_calls[0] == ("consumer1", False)
@@ -455,11 +463,11 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         # First fire an event so the consumer is "discovered"
         service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
-        await asyncio.sleep(0.5)
+        await _poll(lambda: "dev1/consumer1" in service._discovered_ct002_consumers)
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
@@ -485,7 +493,7 @@ async def test_lwt_online_offline(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         # Check online status
         received = []
@@ -508,7 +516,7 @@ async def test_shelly_event_flow(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
@@ -539,16 +547,15 @@ async def test_manual_target_command_via_mqtt(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
                 f"{base}/ct002/dev1/consumer/consumer1/set",
                 payload=json.dumps({"manual_target": 150}).encode(),
             )
-            await asyncio.sleep(0.5)
 
-        assert len(handler_calls) == 1
+        await _poll(lambda: len(handler_calls) >= 1)
         assert handler_calls[0] == ("consumer1", 150.0)
     finally:
         await service.stop()
@@ -568,16 +575,15 @@ async def test_auto_target_command_via_mqtt(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
                 f"{base}/ct002/dev1/consumer/consumer1/set",
                 payload=json.dumps({"auto_target": False}).encode(),
             )
-            await asyncio.sleep(0.5)
 
-        assert len(handler_calls) == 1
+        await _poll(lambda: len(handler_calls) >= 1)
         assert handler_calls[0] == ("consumer1", False)
     finally:
         await service.stop()
@@ -597,16 +603,15 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
                 f"{base}/ct002/dev1/set",
                 payload=json.dumps({"force_rotation": True}).encode(),
             )
-            await asyncio.sleep(0.5)
 
-        assert len(handler_calls) == 1
+        await _poll(lambda: len(handler_calls) >= 1)
         assert handler_calls[0] == "rotated"
     finally:
         await service.stop()
@@ -620,11 +625,13 @@ async def test_shelly_battery_removal_publishes_offline(mqtt_broker):
     await service.start()
 
     try:
-        await asyncio.sleep(0.5)
+        await service.wait_connected()
 
         # First fire an event so the battery is "discovered"
         service.on_shelly_response("shelly1", "192.168.1.100", SAMPLE_SHELLY_DATA)
-        await asyncio.sleep(0.5)
+        await _poll(
+            lambda: "shelly1/192_168_1_100" in service._discovered_shelly_batteries
+        )
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:

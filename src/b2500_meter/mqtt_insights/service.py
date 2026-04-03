@@ -60,6 +60,7 @@ class MqttInsightsService:
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
+        self._connected = asyncio.Event()
 
     # ── Public API (called from device event listeners) ───────────────
 
@@ -121,7 +122,12 @@ class MqttInsightsService:
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self._connected.clear()
         self._task = asyncio.create_task(self._run())
+
+    async def wait_connected(self, timeout: float = 10) -> None:
+        """Wait until the service has connected and subscribed."""
+        await asyncio.wait_for(self._connected.wait(), timeout=timeout)
 
     async def stop(self) -> None:
         if self._task:
@@ -183,6 +189,8 @@ class MqttInsightsService:
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/consumer/+/set")
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/set")
 
+                    self._connected.set()
+
                     # Run publish loop and message listener concurrently
                     await asyncio.gather(
                         self._publish_loop(client),
@@ -190,12 +198,14 @@ class MqttInsightsService:
                     )
 
             except asyncio.CancelledError:
+                self._connected.clear()
                 # Graceful shutdown: publish offline in a shielded scope
                 # so the pending cancellation doesn't abort the publish.
                 with contextlib.suppress(Exception):
                     await asyncio.shield(self._publish_offline(cfg, tls_context))
                 raise
             except (aiomqtt.MqttError, OSError) as exc:
+                self._connected.clear()
                 logger.warning(
                     "MQTT Insights connection error: %s. Reconnecting in %ss...",
                     exc,
@@ -203,6 +213,7 @@ class MqttInsightsService:
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
             except Exception:
+                self._connected.clear()
                 logger.exception(
                     "MQTT Insights unexpected error, reconnecting in %ss...",
                     RECONNECT_DELAY,
