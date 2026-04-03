@@ -187,6 +187,7 @@ async def run_device(
             efficiency_fade_alpha=efficiency_fade_alpha,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
             saturation_decay_factor=saturation_decay_factor,
+            device_id=device_id or "",
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
@@ -206,7 +207,6 @@ async def run_device(
             return [value1, value2, value3]
 
         device.before_send = update_readings
-        device._device_id = device_id or ""
 
         if insights:
 

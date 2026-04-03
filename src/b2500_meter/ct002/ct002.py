@@ -170,6 +170,7 @@ class CT002:
         efficiency_fade_alpha=0.15,
         efficiency_saturation_threshold=0.4,
         saturation_decay_factor=0.995,
+        device_id="",
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -204,7 +205,7 @@ class CT002:
             Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
         ) = None
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
-        self._device_id = ""
+        self._device_id = device_id
         self._inactive_consumers: set[str] = set()
         self._info_idx_counter = 0
         self._values_by_consumer = {}
