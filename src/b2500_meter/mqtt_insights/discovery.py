@@ -113,6 +113,36 @@ def build_ct002_consumer_discovery(
         "entity_category": "diagnostic",
     }
 
+    # Manual target number
+    components["manual_target"] = {
+        "platform": "number",
+        "unique_id": f"{uid_prefix}_manual_target",
+        "name": "Manual Target",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "mode": "box",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.manual_target | default(0) }}",
+        "command_topic": f"{state_topic}/set",
+        "command_template": '{"manual_target": {{ value }}}',
+        "entity_category": "config",
+    }
+
+    # Auto target switch (on = automatic control, off = manual override)
+    components["auto_target"] = {
+        "platform": "switch",
+        "unique_id": f"{uid_prefix}_auto_target",
+        "name": "Auto Target",
+        "state_topic": state_topic,
+        "command_topic": f"{state_topic}/set",
+        "value_template": "{{ value_json.auto_target }}",
+        "payload_on": '{"auto_target": true}',
+        "payload_off": '{"auto_target": false}',
+        "state_on": "True",
+        "state_off": "False",
+        "entity_category": "config",
+    }
+
     # Active switch
     components["active"] = {
         "platform": "switch",
@@ -192,6 +222,14 @@ def build_ct002_device_discovery(
             "state_topic": state_topic,
             "value_template": "{{ value_json.consumer_count }}",
             "entity_category": "diagnostic",
+        },
+        "force_rotation": {
+            "platform": "button",
+            "unique_id": f"{uid_prefix}_force_rotation",
+            "name": "Force Rotation",
+            "command_topic": f"{base_topic}/ct002/{device_id}/set",
+            "payload_press": '{"force_rotation": true}',
+            "entity_category": "config",
         },
     }
 

@@ -244,9 +244,14 @@ async def run_device(
 
     # Wire Shelly event listener
     if insights and isinstance(device, Shelly):
-        device.event_listener = lambda dev_id, battery_ip, data: (
-            insights.on_shelly_response(dev_id, battery_ip, data)
-        )
+
+        def _shelly_event_listener(dev_id, battery_ip, data):
+            if data.get("_removed"):
+                insights.on_shelly_battery_removed(dev_id, battery_ip)
+            else:
+                insights.on_shelly_response(dev_id, battery_ip, data)
+
+        device.event_listener = _shelly_event_listener
 
     try:
         await device.start()
@@ -266,6 +271,15 @@ async def run_device(
     # are never routed to a device that failed to come up.
     if insights and isinstance(device, CT002):
         insights.register_active_handler(device_id or "", device.set_consumer_active)
+        insights.register_manual_target_handler(
+            device_id or "", device.set_consumer_manual_target
+        )
+        insights.register_auto_target_handler(
+            device_id or "", device.set_consumer_auto_target
+        )
+        insights.register_rotation_handler(
+            device_id or "", device.force_efficiency_rotation
+        )
 
     try:
         await device.wait()

@@ -227,6 +227,8 @@ class CT002:
         self._efficiency_cache_sample: tuple | None = None
         self._efficiency_cache_result: dict[str, float] | None = None
         self._efficiency_fade_weights: dict[str, float] = {}
+        self._manual_target_values: dict[str, float] = {}
+        self._manual_target_enabled: set[str] = set()
         self._transport = None
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
@@ -243,6 +245,30 @@ class CT002:
 
     def _get_consumer_value(self, consumer_id):
         return self._values_by_consumer.get(consumer_id)
+
+    def set_consumer_manual_target(self, consumer_id: str, target: float) -> None:
+        self._manual_target_values[consumer_id] = target
+
+    def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
+        """Toggle auto target. auto=True means automatic control (default).
+        auto=False means use manual target override."""
+        if auto:
+            self._manual_target_enabled.discard(consumer_id)
+        else:
+            self._manual_target_enabled.add(consumer_id)
+
+    def force_efficiency_rotation(self) -> None:
+        if len(self._efficiency_priority) < 2:
+            return
+        self._efficiency_priority.append(self._efficiency_priority.pop(0))
+        self._efficiency_last_rotation = time.time()
+        self._efficiency_cache_sample = None
+        self._efficiency_cache_result = None
+        self._efficiency_fade_weights.clear()
+        logger.info(
+            "Efficiency: forced rotation, new order: %s",
+            [c[:16] for c in self._efficiency_priority],
+        )
 
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
         if active:
@@ -309,6 +335,8 @@ class CT002:
             self._inactive_consumers.discard(key)
             self._efficiency_deprioritized.discard(key)
             self._efficiency_fade_weights.pop(key, None)
+            self._manual_target_values.pop(key, None)
+            self._manual_target_enabled.discard(key)
             if key in self._efficiency_priority:
                 self._efficiency_priority.remove(key)
                 # Invalidate cache so next call rebuilds with updated topology
@@ -640,6 +668,15 @@ class CT002:
         if consumer_id and consumer_id in reports:
             actual_self = parse_int(reports.get(consumer_id, {}).get("power", 0))
             self._update_saturation(consumer_id, last_target, actual_self)
+
+        # Manual target override: bypass fair-share / efficiency logic entirely.
+        if consumer_id and consumer_id in self._manual_target_enabled:
+            override = self._manual_target_values.get(consumer_id, 0.0)
+            self._last_target_by_consumer[consumer_id] = override
+            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
+            result = [0.0, 0.0, 0.0]
+            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(override)
+            return result
 
         # Snapshot after _update_saturation may have modified the dict.
         saturation = dict(self._saturation_by_consumer)
@@ -1066,6 +1103,8 @@ class CT002:
                     "smooth_target": self._smoothed_target
                     if self._smoothed_target is not None
                     else 0.0,
+                    "manual_target": self._manual_target_values.get(consumer_id),
+                    "auto_target": consumer_id not in self._manual_target_enabled,
                     "active_control": self.active_control,
                     "consumer_count": len(self._reports_by_consumer),
                 },

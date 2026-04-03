@@ -146,6 +146,7 @@ class Shelly:
                 BATTERY_INACTIVE_TIMEOUT_SECONDS,
                 battery_ip,
             )
+            self._call_event_listener(battery_ip, {"_removed": True})
 
     def _call_event_listener(self, battery_ip: str, data: dict[str, Any]) -> None:
         if not self.event_listener:
