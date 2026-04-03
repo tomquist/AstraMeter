@@ -173,8 +173,8 @@ class SmokeHarness:
 
     def status(self) -> str:
         powers = self.battery_powers()
-        sat = self.ct002._saturation_by_consumer
-        depr = self.ct002._efficiency_deprioritized
+        sat = self.ct002._balancer._saturation._scores
+        depr = self.ct002._balancer._deprioritized
         grid = self.grid_total()
         parts = [f"grid={grid:.0f}W"]
         for i, b in enumerate(self.batteries):
@@ -290,10 +290,10 @@ async def scenario_3_no_pingpong():
 
         # Track swaps over 2 rotation intervals
         swap_count = 0
-        last_depr = set(h.ct002._efficiency_deprioritized)
+        last_depr = set(h.ct002._balancer._deprioritized)
         for i in range(20):
             await h.wait_sim_seconds(3)
-            depr = set(h.ct002._efficiency_deprioritized)
+            depr = set(h.ct002._balancer._deprioritized)
             if depr != last_depr:
                 swap_count += 1
                 last_depr = depr
@@ -461,7 +461,7 @@ async def scenario_7_feature_disabled():
         await h.wait_sim_seconds(5)
         powers = h.battery_powers()
         active_idx = 0 if abs(powers[0]) > abs(powers[1]) else 1
-        first_depr = set(h.ct002._efficiency_deprioritized)
+        first_depr = set(h.ct002._balancer._deprioritized)
         print(f"  Settled: {h.status()}")
 
         # Constrain active
@@ -471,7 +471,7 @@ async def scenario_7_feature_disabled():
         print(f"  After constraint (no swap expected): {h.status()}")
 
         # Should NOT have swapped since feature is disabled
-        if h.ct002._efficiency_deprioritized != first_depr:
+        if h.ct002._balancer._deprioritized != first_depr:
             ok = failed("disabled", "swap happened despite threshold=0")
         else:
             passed("no forced swap with feature disabled")

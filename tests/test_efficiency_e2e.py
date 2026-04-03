@@ -276,7 +276,7 @@ class TestEfficiencyE2E:
             )
 
             # Poll until the active battery set changes or timeout.
-            timeout = h.ct002.efficiency_rotation_interval + 15.0
+            timeout = h.ct002._balancer._cfg.efficiency_rotation_interval + 15.0
             poll_interval = 0.3
             elapsed = 0.0
             active_after: list[int] = list(active_before)

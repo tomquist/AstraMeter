@@ -10,124 +10,39 @@ from typing import Any
 
 from b2500_meter.config.logger import logger
 
-SOH = 0x01
-STX = 0x02
-ETX = 0x03
-SEPARATOR = "|"
-UDP_PORT = 12345
-CLEANUP_INTERVAL_SECONDS = 5
-EFFICIENCY_HYSTERESIS_FACTOR = 1.2
-# Seconds to suppress saturation checks after a battery is promoted from
-# deprioritized to active.  Covers the physical ramp-up time of the
-# inverter; the grace is also cleared early once the battery proves it
-# can produce meaningful output.
-SATURATION_GRACE_SECONDS = 30
+from .balancer import BalancerConfig, ConsumerMode, LoadBalancer
+from .protocol import (
+    ETX,
+    RESPONSE_LABELS,
+    SEPARATOR,
+    SOH,
+    STX,
+    build_payload,
+    calculate_checksum,
+    compute_length,
+    parse_int,
+    parse_request,
+)
+from .smoother import TargetSmoother
 
-RESPONSE_LABELS = [
-    "meter_dev_type",
-    "meter_mac_code",
-    "hhm_dev_type",
-    "hhm_mac_code",
-    "A_phase_power",
-    "B_phase_power",
-    "C_phase_power",
-    "total_power",
-    "A_chrg_nb",
-    "B_chrg_nb",
-    "C_chrg_nb",
-    "ABC_chrg_nb",
-    "wifi_rssi",
-    "info_idx",
-    "x_chrg_power",
-    "A_chrg_power",
-    "B_chrg_power",
-    "C_chrg_power",
-    "ABC_chrg_power",
-    "x_dchrg_power",
-    "A_dchrg_power",
-    "B_dchrg_power",
-    "C_dchrg_power",
-    "ABC_dchrg_power",
+# Re-export protocol symbols for backward compatibility
+__all__ = [
+    "CT002",
+    "ETX",
+    "RESPONSE_LABELS",
+    "SEPARATOR",
+    "SOH",
+    "STX",
+    "UDP_PORT",
+    "build_payload",
+    "calculate_checksum",
+    "compute_length",
+    "parse_int",
+    "parse_request",
 ]
 
-
-def calculate_checksum(data_bytes):
-    xor = 0
-    for b in data_bytes:
-        xor ^= b
-    return xor
-
-
-def parse_int(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def compute_length(payload_without_length):
-    base_size = 1 + 1 + len(payload_without_length) + 1 + 2
-    for length_digits in range(1, 5):
-        total_length = base_size + length_digits
-        if len(str(total_length)) == length_digits:
-            return total_length
-    raise ValueError("Payload length too large")
-
-
-def build_payload(fields):
-    message_str = SEPARATOR + SEPARATOR.join(fields)
-    message_bytes = message_str.encode("ascii")
-    total_length = compute_length(message_bytes)
-    payload = bytearray([SOH, STX])
-    payload.extend(str(total_length).encode("ascii"))
-    payload.extend(message_bytes)
-    payload.append(ETX)
-    checksum_val = calculate_checksum(payload)
-    checksum = f"{checksum_val:02x}".encode("ascii")
-    payload.extend(checksum)
-    return payload
-
-
-def parse_request(data):
-    if len(data) < 10:
-        return None, "Too short"
-    if data[0] != SOH or data[1] != STX:
-        return None, "Missing SOH/STX"
-    sep_index = data.find(b"|", 2)
-    if sep_index == -1:
-        return None, "No separator after length"
-    try:
-        length = int(data[2:sep_index].decode("ascii"))
-    except ValueError:
-        return None, "Invalid length field"
-    if len(data) != length:
-        return None, f"Length mismatch (expected {length}, got {len(data)})"
-    if data[-3] != ETX:
-        return None, "Missing ETX"
-    xor = 0
-    for b in data[: length - 2]:
-        xor ^= b
-    expected_checksum = f"{xor:02x}".encode("ascii")
-    actual_checksum = data[-2:]
-    if actual_checksum.lower() != expected_checksum:
-        # Tolerate a leading space in the checksum: some firmware versions
-        # emit a space instead of the high hex nibble.
-        if (
-            actual_checksum[0:1] == b" "
-            and actual_checksum[1:2].lower() == expected_checksum[1:2]
-        ):
-            pass
-        else:
-            return (
-                None,
-                f"Checksum mismatch (expected {expected_checksum}, got {actual_checksum})",
-            )
-    try:
-        message = data[sep_index:-3].decode("ascii")
-    except UnicodeDecodeError:
-        return None, "Invalid ASCII encoding"
-    fields = message.split("|")[1:]
-    return fields, None
+UDP_PORT = 12345
+CLEANUP_INTERVAL_SECONDS = 5
 
 
 class _CT002Protocol(asyncio.DatagramProtocol):
@@ -186,27 +101,6 @@ class CT002:
         self.consumer_ttl = consumer_ttl
         self.debug_status = debug_status
         self.active_control = active_control
-        self.smooth_target_alpha = max(0.01, min(1.0, smooth_target_alpha))
-        self.max_smooth_step = max(0, max_smooth_step)
-        self.fair_distribution = fair_distribution
-        self.balance_gain = max(0.0, min(1.0, balance_gain))
-        self.error_boost_threshold = max(0, error_boost_threshold)
-        self.error_boost_max = max(0.0, error_boost_max)
-        self.error_reduce_threshold = max(0, error_reduce_threshold)
-        self.balance_deadband = max(0, balance_deadband)
-        self.deadband = max(0, deadband)
-        self.max_correction_per_step = max(0, max_correction_per_step)
-        self.max_target_step = max(0, max_target_step)
-        self.saturation_detection = saturation_detection
-        self.saturation_alpha = max(0.01, min(1.0, saturation_alpha))
-        self.min_target_for_saturation = max(1, min_target_for_saturation)
-        self.min_efficient_power = max(0, min_efficient_power)
-        self.efficiency_rotation_interval = max(1, efficiency_rotation_interval)
-        self.efficiency_fade_alpha = max(0.01, min(1.0, efficiency_fade_alpha))
-        self.efficiency_saturation_threshold = max(
-            0.0, min(1.0, efficiency_saturation_threshold)
-        )
-        self.saturation_decay_factor = max(0.0, min(1.0, saturation_decay_factor))
         self.before_send: (
             Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
         ) = None
@@ -214,26 +108,43 @@ class CT002:
         self._device_id = device_id
         self._inactive_consumers: set[str] = set()
         self._info_idx_counter = 0
-        self._values_by_consumer = {}
-        self._reports_by_consumer = {}
-        self._last_target_by_consumer = {}
-        self._saturation_by_consumer = {}
-        self._saturation_grace_until: dict[str, float] = {}
+        self._values_by_consumer: dict = {}
+        self._reports_by_consumer: dict = {}
         self._last_response_time: dict[tuple, float] = {}
-        self._smoothed_target = None
-        self._last_smooth_sample = None
-        self._efficiency_deprioritized: set[str] = set()
-        self._efficiency_priority: list[str] = []
-        self._efficiency_last_rotation: float = time.time()
-        self._efficiency_cache_sample: tuple | None = None
-        self._efficiency_cache_result: dict[str, float] | None = None
-        self._efficiency_fade_weights: dict[str, float] = {}
         self._manual_target_values: dict[str, float] = {}
         self._manual_target_enabled: set[str] = set()
         self._transport = None
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
         self._stopped = asyncio.Event()
+
+        # Composed components
+        self._smoother = TargetSmoother(
+            alpha=max(0.01, min(1.0, smooth_target_alpha)),
+            max_step=max(0, max_smooth_step),
+            deadband=max(0, deadband),
+        )
+        self._balancer = LoadBalancer(
+            config=BalancerConfig(
+                fair_distribution=fair_distribution,
+                balance_gain=balance_gain,
+                balance_deadband=balance_deadband,
+                error_boost_threshold=error_boost_threshold,
+                error_boost_max=error_boost_max,
+                error_reduce_threshold=error_reduce_threshold,
+                max_correction_per_step=max_correction_per_step,
+                max_target_step=max_target_step,
+                deadband=deadband,
+                min_efficient_power=min_efficient_power,
+                efficiency_rotation_interval=efficiency_rotation_interval,
+                efficiency_fade_alpha=efficiency_fade_alpha,
+                efficiency_saturation_threshold=efficiency_saturation_threshold,
+            ),
+            saturation_alpha=saturation_alpha,
+            saturation_min_target=min_target_for_saturation,
+            saturation_decay_factor=saturation_decay_factor,
+            saturation_enabled=saturation_detection,
+        )
 
     def _consumer_key(self, addr, fields):
         battery_mac = fields[1] if len(fields) > 1 else ""
@@ -261,57 +172,23 @@ class CT002:
             was_manual = consumer_id in self._manual_target_enabled
             self._manual_target_enabled.discard(consumer_id)
             if was_manual:
-                # Clear stale control state so the first auto cycle starts fresh.
-                self._last_target_by_consumer.pop(consumer_id, None)
-                self._saturation_by_consumer.pop(consumer_id, None)
-                self._saturation_grace_until[consumer_id] = time.time() + min(
-                    SATURATION_GRACE_SECONDS, self.efficiency_rotation_interval
-                )
+                self._balancer.reset_consumer(consumer_id)
         else:
             self._manual_target_enabled.add(consumer_id)
-            # Prune from cached efficiency state so auto pool isn't skewed.
-            self._efficiency_deprioritized.discard(consumer_id)
-            self._efficiency_priority = [
-                cid for cid in self._efficiency_priority if cid != consumer_id
-            ]
-            self._efficiency_fade_weights.pop(consumer_id, None)
-            self._efficiency_cache_sample = None
-            self._efficiency_cache_result = None
+            self._balancer.detach_from_auto_pool(consumer_id)
 
     def force_efficiency_rotation(self) -> None:
-        # Sync priority list with current auto pool before rotating.
         current = (
             set(self._reports_by_consumer)
             - self._inactive_consumers
             - self._manual_target_enabled
         )
-        self._efficiency_priority = [
-            cid for cid in self._efficiency_priority if cid in current
-        ]
-        for cid in sorted(current):
-            if cid not in self._efficiency_priority:
-                self._efficiency_priority.append(cid)
-        self._efficiency_deprioritized.intersection_update(current)
-
-        if len(self._efficiency_priority) < 2:
-            return
-        self._efficiency_priority.append(self._efficiency_priority.pop(0))
-        self._efficiency_last_rotation = time.time()
-        self._efficiency_cache_sample = None
-        self._efficiency_cache_result = None
-        self._efficiency_fade_weights.clear()
-        logger.info(
-            "Efficiency: forced rotation, new order: %s",
-            [c[:16] for c in self._efficiency_priority],
-        )
+        self._balancer.force_rotation(current)
 
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
         if active:
             self._inactive_consumers.discard(consumer_id)
-            # Clear stale control state so the resumed consumer starts fresh
-            # and isn't immediately deprioritized by old saturation scores.
-            self._saturation_by_consumer.pop(consumer_id, None)
-            self._last_target_by_consumer.pop(consumer_id, None)
+            self._balancer.reset_consumer(consumer_id)
         else:
             self._inactive_consumers.add(consumer_id)
 
@@ -360,23 +237,13 @@ class CT002:
             if now - report.get("timestamp", 0) > self.consumer_ttl
         ]
         for key in stale:
-            # Sentinel: {"_removed": True} signals consumer removal to the event listener
             self._call_event_listener(key, {"_removed": True})
             self._reports_by_consumer.pop(key, None)
             self._values_by_consumer.pop(key, None)
-            self._last_target_by_consumer.pop(key, None)
-            self._saturation_by_consumer.pop(key, None)
-            self._saturation_grace_until.pop(key, None)
             self._inactive_consumers.discard(key)
-            self._efficiency_deprioritized.discard(key)
-            self._efficiency_fade_weights.pop(key, None)
             self._manual_target_values.pop(key, None)
             self._manual_target_enabled.discard(key)
-            if key in self._efficiency_priority:
-                self._efficiency_priority.remove(key)
-                # Invalidate cache so next call rebuilds with updated topology
-                self._efficiency_cache_sample = None
-                self._efficiency_cache_result = None
+            self._balancer.remove_consumer(key)
         stale_addrs = [
             addr
             for addr, ts in self._last_response_time.items()
@@ -385,508 +252,36 @@ class CT002:
         for addr in stale_addrs:
             self._last_response_time.pop(addr, None)
 
-    def _update_saturation(self, consumer_id, last_target, actual):
-        """
-        Update saturation score using EMA. Saturation = 1 when consumer cannot
-        follow target (e.g. full/empty battery); 0 when following well.
-        """
-        if not self.saturation_detection or last_target is None:
-            return
-        # Grace period: skip saturation updates for consumers recently
-        # promoted from deprioritized to active.  Physical ramp-up time
-        # (battery starting from 0 W) would otherwise be misinterpreted
-        # as genuine saturation.  Once the consumer proves it can produce
-        # meaningful output the grace is cleared so genuine saturation
-        # (e.g. empty battery) is detected normally.
-        grace_deadline = self._saturation_grace_until.get(consumer_id)
-        if grace_deadline is not None:
-            if time.time() < grace_deadline:
-                if abs(actual) >= self.min_target_for_saturation:
-                    # Consumer ramped up successfully — grace no longer needed.
-                    del self._saturation_grace_until[consumer_id]
-                else:
-                    return
-            else:
-                del self._saturation_grace_until[consumer_id]
-        target_abs = abs(last_target)
-        if target_abs < self.min_target_for_saturation:
-            prev = self._saturation_by_consumer.get(consumer_id, 0.0)
-            if prev > 0:
-                decayed = prev * self.saturation_decay_factor
-                if decayed < 0.001:
-                    self._saturation_by_consumer.pop(consumer_id, None)
-                else:
-                    self._saturation_by_consumer[consumer_id] = decayed
-            return
-        # True saturation: battery outputs ~0 when asked for significant power
-        # (e.g. SoC at limit). A battery producing meaningful output in either
-        # direction is ramping or chasing a moving load, not saturated.
-        inst_saturation = 1.0 if abs(actual) < self.min_target_for_saturation else 0.0
-        alpha = self.saturation_alpha
-        prev = self._saturation_by_consumer.get(consumer_id, 0.0)
-        self._saturation_by_consumer[consumer_id] = (
-            alpha * inst_saturation + (1 - alpha) * prev
-        )
-
-    def _maybe_force_swap_saturated(self, priority, slots, now):
-        """Swap a saturated active battery with a healthy deprioritized one.
-        Returns True if a swap occurred."""
-        if self.efficiency_saturation_threshold <= 0 or slots >= len(priority):
-            return False
-        sat = self._saturation_by_consumer
-        threshold = self.efficiency_saturation_threshold
-        # Find first saturated active consumer
-        saturated_idx = None
-        for i in range(slots):
-            if sat.get(priority[i], 0.0) >= threshold:
-                saturated_idx = i
-                break
-        if saturated_idx is None:
-            return False
-        # Find first healthy deprioritized consumer
-        healthy_idx = None
-        for i in range(slots, len(priority)):
-            if sat.get(priority[i], 0.0) < threshold:
-                healthy_idx = i
-                break
-        if healthy_idx is None:
-            return False
-        logger.info(
-            "Efficiency: %s cannot follow target (sat=%.2f), rotating to %s",
-            priority[saturated_idx][:16],
-            sat.get(priority[saturated_idx], 0.0),
-            priority[healthy_idx][:16],
-        )
-        priority[saturated_idx], priority[healthy_idx] = (
-            priority[healthy_idx],
-            priority[saturated_idx],
-        )
-        self._efficiency_last_rotation = now
-        return True
-
-    def _compute_efficiency_deprioritized(self, reports, sample_id):
-        """Decide which consumers to deprioritize for efficiency.
-
-        At low demand, concentrates power on fewer consumers by reducing
-        excess consumers' effective participation weight.  Uses hysteresis
-        to prevent oscillation and rotates priority for fairness.
-
-        Returns a dict mapping consumer_id -> weight (0.0 = fully
-        deprioritized).  Empty dict means no deprioritization.  Future
-        strategies (SOC-based, device-type-aware, proportional) can change
-        the weights without modifying the integration point.
-        """
-        if self.min_efficient_power <= 0 or len(reports) < 2:
-            self._efficiency_deprioritized = set()
-            self._efficiency_cache_sample = None
-            self._efficiency_cache_result = None
-            return {}
-
-        now = time.time()
-
-        # Rotation check BEFORE cache: when the grid is stable the
-        # sample_id never changes, so the cache would prevent rotation
-        # from being evaluated.  Invalidate cache when rotation fires.
-        if (
-            self._efficiency_priority
-            and now - self._efficiency_last_rotation
-            >= self.efficiency_rotation_interval
-        ):
-            self._efficiency_last_rotation = now
-            self._efficiency_priority.append(self._efficiency_priority.pop(0))
-            self._efficiency_cache_sample = None  # force recompute
-
-        # Sync priority list with current active consumers
-        # (prune stale/inactive, add new at end)
-        current = set(reports) - self._inactive_consumers
-        self._efficiency_priority = [
-            c for c in self._efficiency_priority if c in current
-        ]
-        grace = now + min(SATURATION_GRACE_SECONDS, self.efficiency_rotation_interval)
-        for cid in sorted(current):
-            if cid not in self._efficiency_priority:
-                self._efficiency_priority.append(cid)
-                # New consumer: grant grace period so physical ramp-up time
-                # isn't misinterpreted as genuine saturation.
-                self._saturation_grace_until[cid] = grace
-
-        # Saturation swap check BEFORE cache: when the grid is stable the
-        # sample_id never changes, so the cache would prevent saturation
-        # swaps from being evaluated.  Invalidate cache when any active
-        # consumer exceeds the saturation threshold.
-        # Note: slots_est uses the previous call's deprioritized set, which
-        # may differ from the upcoming computation.  This is an approximation;
-        # the full recomputation path also calls _maybe_force_swap_saturated.
-        if (
-            self.efficiency_saturation_threshold > 0
-            and self._efficiency_cache_sample is not None
-        ):
-            slots_est = len(self._efficiency_priority) - len(
-                self._efficiency_deprioritized
+    def _consumer_mode(self, consumer_id: str | None) -> ConsumerMode:
+        if consumer_id and consumer_id in self._inactive_consumers:
+            return ConsumerMode("inactive")
+        if consumer_id and consumer_id in self._manual_target_enabled:
+            return ConsumerMode(
+                "manual", self._manual_target_values.get(consumer_id, 0.0)
             )
-            for cid in self._efficiency_priority[:slots_est]:
-                if (
-                    self._saturation_by_consumer.get(cid, 0.0)
-                    >= self.efficiency_saturation_threshold
-                ):
-                    self._efficiency_cache_sample = None
-                    break
-
-        # Cache per sample for consistency across consumer calls.
-        # Checked AFTER consumer sync so topology changes (new/removed
-        # consumers) invalidate stale cached results.
-        cache_key = (sample_id, tuple(self._efficiency_priority))
-        if cache_key == self._efficiency_cache_sample:
-            return self._efficiency_cache_result or {}
-
-        # Estimate total demand from battery outputs + grid residual.
-        # smoothed_target alone is wrong: it's the grid residual which
-        # approaches 0 when balanced, regardless of actual demand.
-        total_battery_power = sum(
-            parse_int(reports.get(cid, {}).get("power", 0))
-            for cid in self._efficiency_priority
-        )
-        abs_target = abs(total_battery_power + (self._smoothed_target or 0))
-        n = len(self._efficiency_priority)
-        per_consumer = abs_target / n
-
-        # Hysteresis: require HIGHER per-consumer demand to EXIT limiting
-        # than to ENTER it, preventing oscillation at the boundary.
-        was_limiting = len(self._efficiency_deprioritized) > 0
-        if was_limiting:
-            enter_limiting = per_consumer < (
-                self.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR
-            )
-        else:
-            enter_limiting = per_consumer < self.min_efficient_power
-
-        if enter_limiting and n > 1:
-            # Cap at n-1 to ensure at least one consumer is deprioritized
-            # when hysteresis says we should be limiting.
-            slots = max(1, min(n - 1, int(abs_target / self.min_efficient_power)))
-        else:
-            slots = n
-
-        # First `slots` by priority are active, rest deprioritized
-        deprioritized = set(self._efficiency_priority[slots:])
-        result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
-        pre_swap_active = set(self._efficiency_priority[:slots])
-
-        # Reset saturation for consumers transitioning to active so that
-        # physical ramp-up time isn't misinterpreted as genuine saturation.
-        # Must happen BEFORE the forced swap check.
-        # Grant a short grace period so the inverter can physically ramp
-        # up before saturation is evaluated again.  The grace is also
-        # cleared early once the battery proves it can produce output.
-        for cid in self._efficiency_deprioritized - deprioritized:
-            self._saturation_by_consumer.pop(cid, None)
-            self._saturation_grace_until[cid] = grace
-
-        if self._maybe_force_swap_saturated(self._efficiency_priority, slots, now):
-            # Recompute after swap so all downstream state reflects the
-            # post-swap priority order.
-            deprioritized = set(self._efficiency_priority[slots:])
-            result = {cid: 0.0 for cid in deprioritized}
-            cache_key = (sample_id, tuple(self._efficiency_priority))
-            # Clear saturation for consumers promoted to active by the swap
-            # so physical ramp-up time isn't misinterpreted as saturation.
-            for cid in set(self._efficiency_priority[:slots]) - pre_swap_active:
-                self._saturation_by_consumer.pop(cid, None)
-                self._saturation_grace_until[cid] = grace
-
-        for cid in deprioritized - self._efficiency_deprioritized:
-            self._saturation_grace_until.pop(cid, None)
-            logger.info(
-                "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
-                cid[:16],
-                abs_target,
-                slots,
-            )
-        for cid in self._efficiency_deprioritized - deprioritized:
-            logger.info(
-                "Efficiency: activating consumer %s (demand %.0fW, %d active)",
-                cid[:16],
-                abs_target,
-                slots,
-            )
-
-        self._efficiency_deprioritized = deprioritized
-        self._efficiency_cache_sample = cache_key
-        self._efficiency_cache_result = result
-        return result
-
-    def _fade_efficiency_weights(
-        self, raw_adjustments: dict[str, float], consumer_ids: set[str]
-    ) -> dict[str, float]:
-        """Apply EMA fade to efficiency weights for smooth transitions.
-
-        Returns a dict of {consumer_id: faded_weight} for consumers whose
-        faded weight is below 1.0.  Consumers not in the dict are fully
-        active (weight 1.0).
-        """
-        alpha = self.efficiency_fade_alpha
-        result: dict[str, float] = {}
-        for cid in consumer_ids:
-            goal = raw_adjustments.get(cid, 1.0)
-            prev = self._efficiency_fade_weights.get(cid, 1.0)
-            new = prev + alpha * (goal - prev)
-            if abs(new - goal) < 0.05:
-                new = goal
-            self._efficiency_fade_weights[cid] = new
-            if new < 1.0:
-                result[cid] = new
-        # Prune consumers no longer tracked.
-        self._efficiency_fade_weights = {
-            cid: w
-            for cid, w in self._efficiency_fade_weights.items()
-            if cid in consumer_ids
-        }
-        return result
+        return ConsumerMode("auto")
 
     def _compute_smooth_target(self, values, consumer_id=None):
-        """
-        Active control: smooth the raw grid reading and split target across consumers.
-        With fair_distribution: adjust each consumer's target to balance actual load.
-        With saturation_detection: reduce share for consumers that cannot follow target.
-        Phase output is distributed across known consumer phases (A/B/C) based on
-        effective participation (saturation-aware); falls back to phase A if unknown.
-        """
+        """Active control: smooth the raw grid reading and delegate
+        target allocation to the load balancer."""
         if not self.active_control or not values or len(values) != 3:
             return values
 
         raw_total = sum(parse_int(v, 0) for v in values)
-        alpha = self.smooth_target_alpha
-
-        # Apply smoothing only once per meter sample.  Multiple consumers
-        # call this method with the same grid reading; the sample ID
-        # (tuple of values) prevents compounding the update.
         sample_id = tuple(values)
-        if self._smoothed_target is None:
-            self._smoothed_target = raw_total
-            self._last_smooth_sample = sample_id
-        elif sample_id != self._last_smooth_sample:
-            self._last_smooth_sample = sample_id
-            if self.deadband > 0 and abs(raw_total) < self.deadband:
-                delta = -alpha * self._smoothed_target
-            else:
-                catchup_alpha = alpha
-                if (raw_total > 0) != (self._smoothed_target > 0):
-                    catchup_alpha = min(0.5, alpha * 4)
-                delta = catchup_alpha * (raw_total - self._smoothed_target)
-            if self.max_smooth_step > 0:
-                delta = max(
-                    -self.max_smooth_step,
-                    min(self.max_smooth_step, delta),
-                )
-            self._smoothed_target += delta
+        smoothed = self._smoother.update(raw_total, sample_id)
+        mode = self._consumer_mode(consumer_id)
 
-        # Paused consumer: actively steer its output to zero by sending
-        # target = -reported_power on its phase (same logic as efficiency
-        # deprioritization).  The consumer is excluded from fair distribution
-        # and efficiency rotation.  Smoothing above is still updated so
-        # remaining active consumers see an accurate grid residual.
-        if consumer_id and consumer_id in self._inactive_consumers:
-            reports = self._reports_by_consumer
-            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            self._last_target_by_consumer[consumer_id] = 0
-            if reported == 0:
-                return [0, 0, 0]
-            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
-            result = [0.0, 0.0, 0.0]
-            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
-            return result
-
-        reports = {
-            cid: r
-            for cid, r in self._reports_by_consumer.items()
-            if cid not in self._inactive_consumers
-        }
-        last_target = self._last_target_by_consumer.get(consumer_id)
-
-        if consumer_id and consumer_id in reports:
-            actual_self = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            # Skip saturation updates when manual override is active: the user-
-            # chosen target may be unreachable and inflating saturation would
-            # cause an immediate swap-out when switching back to auto mode.
-            if consumer_id not in self._manual_target_enabled:
-                self._update_saturation(consumer_id, last_target, actual_self)
-
-        # Manual target override: bypass fair-share / efficiency logic entirely.
-        if consumer_id and consumer_id in self._manual_target_enabled:
-            override = self._manual_target_values.get(consumer_id, 0.0)
-            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            target = override - reported
-            self._last_target_by_consumer[consumer_id] = target
-            return self._split_by_phase(target, reports)
-
-        # Exclude manual-override consumers from the automatic fair-share pool.
-        reports = {
-            cid: r
-            for cid, r in reports.items()
-            if cid not in self._manual_target_enabled
-        }
-
-        # Snapshot after _update_saturation may have modified the dict.
-        saturation = dict(self._saturation_by_consumer)
-        num_consumers = max(1, len(reports))
-        eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
-        # Efficiency optimization: deprioritize excess consumers at low demand
-        efficiency_adjustments = self._compute_efficiency_deprioritized(
-            reports, sample_id
+        return self._balancer.compute_target(
+            consumer_id,
+            mode,
+            self._reports_by_consumer,
+            smoothed,
+            raw_total,
+            frozenset(self._inactive_consumers),
+            frozenset(self._manual_target_enabled),
+            sample_id,
         )
-        # Smooth fade: advance per-consumer EMA toward target weights.
-        faded_adjustments = self._fade_efficiency_weights(
-            efficiency_adjustments, set(reports.keys())
-        )
-        # During an active fade transition, bypass the normal fair-share
-        # path and compute each consumer's target as a direct absolute-
-        # power allocation.  This keeps the sum of all consumers tracking
-        # demand throughout the transition.
-        #
-        # demand = total_battery_output + grid_residual
-        # desired_power[i] = demand * fade_w[i] / sum(fade_w)
-        # target_delta[i]  = desired_power[i] - reported_power[i]
-        any_fading = any(0.0 < w < 1.0 for w in faded_adjustments.values())
-
-        if any_fading and consumer_id:
-            fade_w = self._efficiency_fade_weights.get(consumer_id, 1.0)
-            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            if fade_w == 0.0:
-                # Fully deprioritized: drive to zero.
-                if consumer_id:
-                    self._last_target_by_consumer[consumer_id] = 0
-                if reported == 0:
-                    return [0, 0, 0]
-                phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
-                result = [0.0, 0.0, 0.0]
-                result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
-                return result
-
-            total_battery = sum(
-                parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
-            )
-            demand = total_battery + (self._smoothed_target or 0)
-            total_fade = sum(
-                self._efficiency_fade_weights.get(cid, 1.0) for cid in reports
-            )
-            desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
-            target = desired - reported
-
-            if consumer_id:
-                self._last_target_by_consumer[consumer_id] = target
-
-            return self._split_by_phase(target, reports, eff_part)
-
-        # Non-fading path: fully converged deprioritizations and normal
-        # fair-share distribution.
-        for cid, fade_w in faded_adjustments.items():
-            if cid in eff_part and fade_w == 0.0:
-                eff_part[cid] = 0.0
-        if (
-            faded_adjustments
-            and consumer_id
-            and faded_adjustments.get(consumer_id) == 0.0
-        ):
-            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            if consumer_id:
-                self._last_target_by_consumer[consumer_id] = 0
-            if reported == 0:
-                return [0, 0, 0]
-            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
-            result = [0.0, 0.0, 0.0]
-            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
-            return result
-        total_effective = sum(eff_part.values())
-        fair_share = (
-            (self._smoothed_target / total_effective) * eff_part.get(consumer_id, 1.0)
-            if consumer_id and consumer_id in reports
-            else self._smoothed_target / num_consumers
-        )
-        if (
-            not self.fair_distribution
-            or consumer_id is None
-            or consumer_id not in reports
-            or (self.deadband > 0 and abs(raw_total) < self.deadband)
-        ):
-            target = fair_share
-        elif consumer_id in eff_part:
-            actual_self = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            participating = [cid for cid in reports if eff_part.get(cid, 1.0) > 0.1]
-            if participating:
-                actual_total = sum(
-                    parse_int(reports.get(cid, {}).get("power", 0))
-                    for cid in participating
-                )
-                actual_avg = actual_total / len(participating)
-                error = actual_avg - actual_self
-                err_abs = abs(error)
-                if self.balance_deadband > 0 and err_abs < self.balance_deadband:
-                    target = fair_share
-                else:
-                    gain = self.balance_gain
-                    if (
-                        self.error_reduce_threshold > 0
-                        and err_abs < self.error_reduce_threshold
-                    ):
-                        gain = gain * (err_abs / self.error_reduce_threshold)
-                    elif self.error_boost_threshold > 0 and self.error_boost_max > 0:
-                        boost = (
-                            min(err_abs / self.error_boost_threshold, 1.0)
-                            * self.error_boost_max
-                        )
-                        gain = gain * (1.0 + boost)
-                    correction = gain * error
-                    if self.max_correction_per_step > 0:
-                        cap = self.max_correction_per_step
-                        if correction > cap:
-                            correction = cap
-                        elif correction < -cap:
-                            correction = -cap
-                    target = fair_share + correction
-                    if self.max_target_step > 0:
-                        lo = actual_self - self.max_target_step
-                        hi = actual_self + self.max_target_step
-                        target = max(lo, min(hi, target))
-            else:
-                target = fair_share
-        # When meter and target disagree on sign, clamp to avoid fighting the
-        # actual state (smoothing lag can command discharge during export or
-        # charge during import, worsening overshoot)
-        if (raw_total < 0 and target > 0) or (raw_total > 0 and target < 0):
-            target = 0
-
-        if consumer_id:
-            self._last_target_by_consumer[consumer_id] = target
-
-        return self._split_by_phase(target, reports, eff_part)
-
-    def _split_by_phase(
-        self,
-        target: float,
-        reports: dict,
-        weights: dict[str, float] | None = None,
-    ) -> list[float]:
-        """Distribute *target* across phases according to consumer phase mapping.
-
-        *weights* maps consumer_id → effective weight (defaults to 1.0 each).
-        """
-        phase_effective: dict[str, float] = {"A": 0.0, "B": 0.0, "C": 0.0}
-        for cid, report in reports.items():
-            phase = (report.get("phase") or "A").upper()
-            if phase not in phase_effective:
-                phase = "A"
-            w = (weights or {}).get(cid, 1.0)
-            phase_effective[phase] += w
-
-        total_phase_effective = sum(phase_effective.values())
-        if total_phase_effective <= 0:
-            return [target, 0, 0]
-
-        return [
-            target * (phase_effective["A"] / total_phase_effective),
-            target * (phase_effective["B"] / total_phase_effective),
-            target * (phase_effective["C"] / total_phase_effective),
-        ]
 
     def _collect_reports_by_phase(self):
         by_phase = {
@@ -1062,8 +457,7 @@ class CT002:
             " in inspection mode" if in_inspection_mode else "",
         )
 
-        # Deduplication check — stamp immediately (before any await) so a
-        # second rapid packet from the same addr sees the updated time.
+        # Deduplication check
         current_time = time.time()
         last_time = self._last_response_time.get(addr)
         if last_time and (current_time - last_time) < self.dedupe_time_window:
@@ -1142,12 +536,12 @@ class CT002:
                     "battery_ip": addr[0],
                     "ct_type": fields[2] if len(fields) > 2 else "",
                     "ct_mac": fields[3] if len(fields) > 3 else "",
-                    "saturation": self._saturation_by_consumer.get(consumer_id, 0.0),
-                    "last_target": self._last_target_by_consumer.get(consumer_id),
+                    "saturation": self._balancer.get_saturation(consumer_id),
+                    "last_target": self._balancer.get_last_target(consumer_id),
                     "active": is_active,
                     "last_seen": datetime.now(timezone.utc).isoformat(),
-                    "smooth_target": self._smoothed_target
-                    if self._smoothed_target is not None
+                    "smooth_target": self._smoother.value
+                    if self._smoother.value is not None
                     else 0.0,
                     "manual_target": self._manual_target_values.get(consumer_id),
                     "auto_target": consumer_id not in self._manual_target_enabled,
@@ -1185,8 +579,6 @@ class CT002:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
             self._cleanup_task = None
-        # Close transport first to stop new datagrams from spawning tasks,
-        # then cancel and await any in-flight handler tasks.
         if self._transport:
             self._transport.close()
             self._transport = None
