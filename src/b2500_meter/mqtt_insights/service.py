@@ -325,7 +325,11 @@ class MqttInsightsService:
             if consumer_key not in self._discovered_ct002_consumers:
                 self._discovered_ct002_consumers.add(consumer_key)
                 topic, payload = build_ct002_consumer_discovery(
-                    base, did, cid, cfg.ha_discovery_prefix
+                    base,
+                    did,
+                    cid,
+                    cfg.ha_discovery_prefix,
+                    device_type=data.get("device_type", ""),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True

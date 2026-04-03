@@ -38,6 +38,7 @@ def build_ct002_consumer_discovery(
     device_id: str,
     consumer_id: str,
     ha_prefix: str,
+    device_type: str = "",
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     safe_cid = _sanitize_id(consumer_id)
@@ -175,12 +176,18 @@ def build_ct002_consumer_discovery(
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
     identifiers = [node_id, f"hame_energy_{mac_slug}"]
 
+    device_info: dict = {
+        "identifiers": identifiers,
+        "name": f"HAME Energy {device_type} {mac_slug}"
+        if device_type
+        else f"HAME Energy {mac_slug}",
+        "manufacturer": "HAME Energy",
+    }
+    if device_type:
+        device_info["model_id"] = device_type
+
     payload = {
-        "device": {
-            "identifiers": identifiers,
-            "name": f"CT002 {consumer_id}",
-            "manufacturer": "b2500-meter",
-        },
+        "device": device_info,
         "origin": _origin(),
         "components": components,
         "availability_mode": "all",
