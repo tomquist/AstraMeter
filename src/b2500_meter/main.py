@@ -218,9 +218,6 @@ async def run_device(
                     insights.on_ct002_response(dev_id, consumer_id, data)
 
             device.event_listener = _ct002_event_listener
-            insights.register_active_handler(
-                device_id or "", device.set_consumer_active
-            )
 
     elif device_type == "shellypro3em_old":
         logger.debug("Shelly Pro 3EM Settings:")
@@ -264,6 +261,12 @@ async def run_device(
                 "Device %s (%s) cleanup also failed", device_type, device_id
             )
         return
+
+    # Register active handler only after successful start so MQTT commands
+    # are never routed to a device that failed to come up.
+    if insights and isinstance(device, CT002):
+        insights.register_active_handler(device_id or "", device.set_consumer_active)
+
     try:
         await device.wait()
     finally:

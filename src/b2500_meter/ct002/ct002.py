@@ -554,22 +554,6 @@ class CT002:
         if not self.active_control or not values or len(values) != 3:
             return values
 
-        # Paused consumer: actively steer its output to zero by sending
-        # target = -reported_power on its phase (same logic as efficiency
-        # deprioritization).  The consumer is excluded from fair distribution
-        # and efficiency rotation but the smooth target is still updated so
-        # remaining active consumers see an accurate grid residual.
-        if consumer_id and consumer_id in self._inactive_consumers:
-            reports = self._reports_by_consumer
-            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            self._last_target_by_consumer[consumer_id] = 0
-            if reported == 0:
-                return [0, 0, 0]
-            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
-            result = [0.0, 0.0, 0.0]
-            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
-            return result
-
         raw_total = sum(parse_int(v, 0) for v in values)
         alpha = self.smooth_target_alpha
 
@@ -595,6 +579,22 @@ class CT002:
                     min(self.max_smooth_step, delta),
                 )
             self._smoothed_target += delta
+
+        # Paused consumer: actively steer its output to zero by sending
+        # target = -reported_power on its phase (same logic as efficiency
+        # deprioritization).  The consumer is excluded from fair distribution
+        # and efficiency rotation.  Smoothing above is still updated so
+        # remaining active consumers see an accurate grid residual.
+        if consumer_id and consumer_id in self._inactive_consumers:
+            reports = self._reports_by_consumer
+            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
+            self._last_target_by_consumer[consumer_id] = 0
+            if reported == 0:
+                return [0, 0, 0]
+            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
+            result = [0.0, 0.0, 0.0]
+            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
+            return result
 
         reports = {
             cid: r
