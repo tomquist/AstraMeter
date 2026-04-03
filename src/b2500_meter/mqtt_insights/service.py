@@ -513,6 +513,12 @@ class MqttInsightsService:
                                     device_id,
                                     consumer_id,
                                 )
+                        else:
+                            logger.debug(
+                                "No manual_target handler for device %s (consumer %s)",
+                                device_id,
+                                consumer_id,
+                            )
 
         if "auto_target" in cmd:
             raw = cmd["auto_target"]
@@ -527,6 +533,12 @@ class MqttInsightsService:
                             device_id,
                             consumer_id,
                         )
+                else:
+                    logger.debug(
+                        "No auto_target handler for device %s (consumer %s)",
+                        device_id,
+                        consumer_id,
+                    )
             else:
                 logger.warning(
                     "Invalid auto_target value for %s/%s", device_id, consumer_id
@@ -540,3 +552,5 @@ class MqttInsightsService:
                     handler()
                 except Exception:
                     logger.exception("Rotation handler error for device %s", device_id)
+            else:
+                logger.debug("No rotation handler for device %s", device_id)
