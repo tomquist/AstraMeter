@@ -212,6 +212,7 @@ class CT002:
         self._reports_by_consumer = {}
         self._last_target_by_consumer = {}
         self._saturation_by_consumer = {}
+        self._saturation_grace_until: dict[str, float] = {}
         self._last_response_time: dict[tuple, float] = {}
         self._smoothed_target = None
         self._last_smooth_sample = None
@@ -299,6 +300,7 @@ class CT002:
             self._values_by_consumer.pop(key, None)
             self._last_target_by_consumer.pop(key, None)
             self._saturation_by_consumer.pop(key, None)
+            self._saturation_grace_until.pop(key, None)
             self._inactive_consumers.discard(key)
             self._efficiency_deprioritized.discard(key)
             self._efficiency_fade_weights.pop(key, None)
@@ -322,6 +324,15 @@ class CT002:
         """
         if not self.saturation_detection or last_target is None:
             return
+        # Grace period: skip saturation updates for consumers recently
+        # promoted from deprioritized to active.  Physical ramp-up time
+        # (battery starting from 0 W) would otherwise be misinterpreted
+        # as genuine saturation.
+        grace_deadline = self._saturation_grace_until.get(consumer_id)
+        if grace_deadline is not None:
+            if time.time() < grace_deadline:
+                return
+            del self._saturation_grace_until[consumer_id]
         target_abs = abs(last_target)
         if target_abs < self.min_target_for_saturation:
             prev = self._saturation_by_consumer.get(consumer_id, 0.0)
@@ -485,8 +496,13 @@ class CT002:
         # Reset saturation for consumers transitioning to active so that
         # physical ramp-up time isn't misinterpreted as genuine saturation.
         # Must happen BEFORE the forced swap check.
+        # Also grant a grace period equal to the rotation interval so the
+        # battery has time to physically ramp up before saturation is
+        # evaluated again.
+        grace = now + self.efficiency_rotation_interval
         for cid in self._efficiency_deprioritized - deprioritized:
             self._saturation_by_consumer.pop(cid, None)
+            self._saturation_grace_until[cid] = grace
 
         if self._maybe_force_swap_saturated(self._efficiency_priority, slots, now):
             # Recompute after swap so all downstream state reflects the
@@ -498,8 +514,10 @@ class CT002:
             # so physical ramp-up time isn't misinterpreted as saturation.
             for cid in set(self._efficiency_priority[:slots]) - pre_swap_active:
                 self._saturation_by_consumer.pop(cid, None)
+                self._saturation_grace_until[cid] = grace
 
         for cid in deprioritized - self._efficiency_deprioritized:
+            self._saturation_grace_until.pop(cid, None)
             logger.info(
                 "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
                 cid[:16],

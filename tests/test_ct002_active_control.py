@@ -1153,6 +1153,86 @@ class TestEfficiencySaturationSwap:
         # Active consumer should now be deprioritized (swapped)
         assert active_cid in device._efficiency_deprioritized
 
+    def test_rotation_grace_period_prevents_immediate_swap_back(self):
+        """After timed rotation promotes a consumer, saturation updates are
+        skipped during the grace period so the battery has time to ramp up."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+            efficiency_rotation_interval=1800,
+            saturation_alpha=0.15,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        first_deprioritized = set(device._efficiency_deprioritized)
+        assert len(first_deprioritized) == 1
+        first_active = "a" if "b" in first_deprioritized else "b"
+        first_depr = next(iter(first_deprioritized))
+
+        # Simulate the active consumer becoming saturated and being swapped
+        device._saturation_by_consumer[first_active] = 0.5
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        # The swap should have happened: originally-active is now deprioritized
+        assert first_active in device._efficiency_deprioritized
+        # The promoted consumer should have a grace period set
+        assert first_depr in device._saturation_grace_until
+
+        # Now simulate rapid polling where the promoted consumer reports
+        # zero output (battery ramping up).  The last target was set to a
+        # real value, so without the grace period, saturation would climb
+        # to >=0.4 in about 4 polls and trigger an immediate swap-back.
+        device._last_target_by_consumer[first_depr] = 200
+        for _ in range(10):
+            device._update_saturation(first_depr, 200, 0)
+            device._efficiency_cache_sample = None
+            device._compute_smooth_target([200, 0, 0], "a")
+            device._compute_smooth_target([200, 0, 0], "b")
+
+        # The promoted consumer should STILL be active (grace period protects it)
+        assert first_depr not in device._efficiency_deprioritized
+        # Its saturation should be zero (updates skipped during grace)
+        assert device._saturation_by_consumer.get(first_depr, 0.0) == 0.0
+
+    def test_rotation_grace_period_expires(self):
+        """After the grace period expires, saturation detection resumes."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+            efficiency_rotation_interval=10,
+            saturation_alpha=0.15,
+        )
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        first_depr = next(iter(device._efficiency_deprioritized))
+
+        # Trigger timed rotation to promote the deprioritized consumer
+        device._efficiency_last_rotation -= 11
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        assert first_depr not in device._efficiency_deprioritized
+
+        # Expire the grace period by shifting the deadline into the past
+        device._saturation_grace_until[first_depr] = time.time() - 1
+
+        # Now inject high saturation — it should trigger a swap
+        device._saturation_by_consumer[first_depr] = 0.5
+        device._efficiency_cache_sample = None
+        device._compute_smooth_target([200, 0, 0], "a")
+        device._compute_smooth_target([200, 0, 0], "b")
+        assert first_depr in device._efficiency_deprioritized
+
 
 class TestInactiveConsumers:
     """Tests for the active/pause flag (set_consumer_active)."""
