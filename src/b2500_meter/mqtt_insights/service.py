@@ -425,6 +425,10 @@ class MqttInsightsService:
                 logger.warning("Invalid command payload on %s", topic_str)
                 continue
 
+            if not isinstance(cmd, dict):
+                logger.warning("Command payload is not a JSON object on %s", topic_str)
+                continue
+
             # Distinguish device-level vs consumer-level topics.
             parts = middle.split("/consumer/", 1)
             if len(parts) == 2:
@@ -439,21 +443,24 @@ class MqttInsightsService:
         self, device_id: str, consumer_id: str, cmd: dict
     ) -> None:
         if "active" in cmd:
-            active = bool(cmd["active"])
-            handler = self._active_handlers.get(device_id)
-            if handler:
-                try:
-                    handler(consumer_id, active)
-                except Exception:
-                    logger.exception(
-                        "Active handler error for %s/%s", device_id, consumer_id
+            raw = cmd["active"]
+            if raw is True or raw is False:
+                handler = self._active_handlers.get(device_id)
+                if handler:
+                    try:
+                        handler(consumer_id, raw)
+                    except Exception:
+                        logger.exception(
+                            "Active handler error for %s/%s", device_id, consumer_id
+                        )
+                else:
+                    logger.debug(
+                        "No active handler for device %s (consumer %s)",
+                        device_id,
+                        consumer_id,
                     )
             else:
-                logger.debug(
-                    "No active handler for device %s (consumer %s)",
-                    device_id,
-                    consumer_id,
-                )
+                logger.warning("Invalid active value for %s/%s", device_id, consumer_id)
 
         if "manual_target" in cmd:
             raw_target = cmd["manual_target"]
@@ -477,6 +484,13 @@ class MqttInsightsService:
                             device_id,
                             consumer_id,
                         )
+                    elif not -10000 <= target <= 10000:
+                        logger.warning(
+                            "Out-of-range manual_target for %s/%s: %s",
+                            device_id,
+                            consumer_id,
+                            target,
+                        )
                     else:
                         handler = self._manual_target_handlers.get(device_id)
                         if handler:
@@ -490,20 +504,25 @@ class MqttInsightsService:
                                 )
 
         if "auto_target" in cmd:
-            auto = bool(cmd["auto_target"])
-            handler = self._auto_target_handlers.get(device_id)
-            if handler:
-                try:
-                    handler(consumer_id, auto)
-                except Exception:
-                    logger.exception(
-                        "Auto target handler error for %s/%s",
-                        device_id,
-                        consumer_id,
-                    )
+            raw = cmd["auto_target"]
+            if raw is True or raw is False:
+                handler = self._auto_target_handlers.get(device_id)
+                if handler:
+                    try:
+                        handler(consumer_id, raw)
+                    except Exception:
+                        logger.exception(
+                            "Auto target handler error for %s/%s",
+                            device_id,
+                            consumer_id,
+                        )
+            else:
+                logger.warning(
+                    "Invalid auto_target value for %s/%s", device_id, consumer_id
+                )
 
     def _handle_device_command(self, device_id: str, cmd: dict) -> None:
-        if cmd.get("force_rotation"):
+        if cmd.get("force_rotation") is True:
             handler = self._rotation_handlers.get(device_id)
             if handler:
                 try:

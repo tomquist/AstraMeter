@@ -253,13 +253,15 @@ class CT002:
         """Toggle auto target. auto=True means automatic control (default).
         auto=False means use manual target override."""
         if auto:
+            was_manual = consumer_id in self._manual_target_enabled
             self._manual_target_enabled.discard(consumer_id)
-            # Clear stale control state so the first auto cycle starts fresh.
-            self._last_target_by_consumer.pop(consumer_id, None)
-            self._saturation_by_consumer.pop(consumer_id, None)
-            self._saturation_grace_until[consumer_id] = time.time() + min(
-                SATURATION_GRACE_SECONDS, self.efficiency_rotation_interval
-            )
+            if was_manual:
+                # Clear stale control state so the first auto cycle starts fresh.
+                self._last_target_by_consumer.pop(consumer_id, None)
+                self._saturation_by_consumer.pop(consumer_id, None)
+                self._saturation_grace_until[consumer_id] = time.time() + min(
+                    SATURATION_GRACE_SECONDS, self.efficiency_rotation_interval
+                )
         else:
             self._manual_target_enabled.add(consumer_id)
 
