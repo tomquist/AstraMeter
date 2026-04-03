@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import configparser
+import contextlib
 import json
 import re
 
@@ -217,6 +218,30 @@ def test_queue_overflow_does_not_raise():
     # No exception raised
 
 
+# ── E2E helpers ──────────────────────────────────────────────────────────
+
+
+async def _collect_messages(sub, target, *, timeout=5, stop=None):
+    """Collect messages from *sub* into *target* list.
+
+    *stop* is an optional callable(msg) → bool that ends collection early.
+    Falls back to collecting a single message when *stop* is None.
+    Compatible with Python 3.10 (no asyncio.timeout).
+    """
+
+    async def _inner():
+        async for msg in sub.messages:
+            target.append(msg)
+            if stop is not None:
+                if stop(msg):
+                    return
+            else:
+                return  # single message
+
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(_inner(), timeout=timeout)
+
+
 # ── E2E tests with Mosquitto ─────────────────────────────────────────────
 
 
@@ -280,14 +305,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/ct002/+/consumer/+")
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
-
-            try:
-                async with asyncio.timeout(5):
-                    async for msg in sub.messages:
-                        received.append(msg)
-                        break
-            except TimeoutError:
-                pass
+            await _collect_messages(sub, received)
 
         assert len(received) == 1
         payload = json.loads(received[0].payload)
@@ -316,14 +334,7 @@ async def test_publishes_device_status(mqtt_broker):
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/ct002/+/status")
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
-
-            try:
-                async with asyncio.timeout(5):
-                    async for msg in sub.messages:
-                        received.append(msg)
-                        break
-            except TimeoutError:
-                pass
+            await _collect_messages(sub, received)
 
         assert len(received) == 1
         payload = json.loads(received[0].payload)
@@ -356,14 +367,12 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
             await asyncio.sleep(0.3)
             service.on_ct002_response("dev1", "consumer2", SAMPLE_CT002_DATA)
 
-            try:
-                async with asyncio.timeout(3):
-                    async for msg in sub.messages:
-                        discovery_msgs.append(msg)
-                        if len(discovery_msgs) >= 3:
-                            break
-            except TimeoutError:
-                pass
+            await _collect_messages(
+                sub,
+                discovery_msgs,
+                timeout=3,
+                stop=lambda _: len(discovery_msgs) >= 3,
+            )
 
         # Expect: device discovery + consumer1 discovery + consumer2 discovery = 3
         # (no duplicate for second consumer1 event)
@@ -431,15 +440,12 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/ct002/dev1/consumer/consumer1/availability")
             service.on_ct002_consumer_removed("dev1", "consumer1")
-
-            try:
-                async with asyncio.timeout(3):
-                    async for msg in sub.messages:
-                        received.append(msg)
-                        if msg.payload == b"offline":
-                            break
-            except TimeoutError:
-                pass
+            await _collect_messages(
+                sub,
+                received,
+                timeout=3,
+                stop=lambda m: m.payload == b"offline",
+            )
 
         assert any(m.payload == b"offline" for m in received)
     finally:
@@ -461,13 +467,7 @@ async def test_lwt_online_offline(mqtt_broker):
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/status")
             # The retained "online" message should arrive
-            try:
-                async with asyncio.timeout(2):
-                    async for msg in sub.messages:
-                        received.append(msg)
-                        break
-            except TimeoutError:
-                pass
+            await _collect_messages(sub, received, timeout=2)
 
         assert len(received) == 1
         assert received[0].payload == b"online"
@@ -489,14 +489,7 @@ async def test_shelly_event_flow(mqtt_broker):
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/shelly/+/battery/+")
             service.on_shelly_response("shelly1", "192.168.1.100", SAMPLE_SHELLY_DATA)
-
-            try:
-                async with asyncio.timeout(5):
-                    async for msg in sub.messages:
-                        received.append(msg)
-                        break
-            except TimeoutError:
-                pass
+            await _collect_messages(sub, received)
 
         assert len(received) == 1
         payload = json.loads(received[0].payload)
