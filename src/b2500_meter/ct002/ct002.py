@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -247,7 +248,11 @@ class CT002:
         return self._values_by_consumer.get(consumer_id)
 
     def set_consumer_manual_target(self, consumer_id: str, target: float) -> None:
-        self._manual_target_values[consumer_id] = target
+        value = float(target)
+        if not math.isfinite(value):
+            msg = f"manual target must be finite, got {target!r}"
+            raise ValueError(msg)
+        self._manual_target_values[consumer_id] = value
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
