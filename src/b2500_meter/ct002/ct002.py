@@ -714,10 +714,7 @@ class CT002:
             reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
             target = override - reported
             self._last_target_by_consumer[consumer_id] = target
-            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
-            result = [0.0, 0.0, 0.0]
-            result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(target)
-            return result
+            return self._split_by_phase(target, reports)
 
         # Exclude manual-override consumers from the automatic fair-share pool.
         reports = {
@@ -775,21 +772,7 @@ class CT002:
             if consumer_id:
                 self._last_target_by_consumer[consumer_id] = target
 
-            phase = (reports.get(consumer_id, {}).get("phase") or "A").upper()
-            phase_effective = {"A": 0.0, "B": 0.0, "C": 0.0}
-            for cid, report in reports.items():
-                p = (report.get("phase") or "A").upper()
-                if p not in phase_effective:
-                    p = "A"
-                phase_effective[p] += eff_part.get(cid, 1.0)
-            total_phase_effective = sum(phase_effective.values())
-            if total_phase_effective <= 0:
-                return [target, 0, 0]
-            return [
-                target * (phase_effective["A"] / total_phase_effective),
-                target * (phase_effective["B"] / total_phase_effective),
-                target * (phase_effective["C"] / total_phase_effective),
-            ]
+            return self._split_by_phase(target, reports, eff_part)
 
         # Non-fading path: fully converged deprioritizations and normal
         # fair-share distribution.
@@ -872,13 +855,25 @@ class CT002:
         if consumer_id:
             self._last_target_by_consumer[consumer_id] = target
 
-        # Distribute target across phases according to active consumer phase mapping.
-        phase_effective = {"A": 0.0, "B": 0.0, "C": 0.0}
+        return self._split_by_phase(target, reports, eff_part)
+
+    def _split_by_phase(
+        self,
+        target: float,
+        reports: dict,
+        weights: dict[str, float] | None = None,
+    ) -> list[float]:
+        """Distribute *target* across phases according to consumer phase mapping.
+
+        *weights* maps consumer_id → effective weight (defaults to 1.0 each).
+        """
+        phase_effective: dict[str, float] = {"A": 0.0, "B": 0.0, "C": 0.0}
         for cid, report in reports.items():
             phase = (report.get("phase") or "A").upper()
             if phase not in phase_effective:
                 phase = "A"
-            phase_effective[phase] += eff_part.get(cid, 1.0)
+            w = (weights or {}).get(cid, 1.0)
+            phase_effective[phase] += w
 
         total_phase_effective = sum(phase_effective.values())
         if total_phase_effective <= 0:
