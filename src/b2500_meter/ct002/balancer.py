@@ -263,7 +263,9 @@ class LoadBalancer:
     def _effective_probe_min_power(self) -> float:
         return max(self._probe_success_threshold, self._cfg.probe_min_power)
 
-    def _next_probe_requested_abs(self, current_requested_abs: float, ceiling: float) -> float:
+    def _next_probe_requested_abs(
+        self, current_requested_abs: float, ceiling: float
+    ) -> float:
         ceiling = max(0.0, ceiling)
         base_step = max(1.0, self._probe_success_threshold * 0.5)
         if current_requested_abs <= 0:
@@ -489,8 +491,8 @@ class LoadBalancer:
                     next_requested_abs,
                 )
             elif probe.requested_power_abs > 0:
-                desired_probe = (
-                    max(0.0, probe.requested_power_abs - self._probe_success_threshold)
+                desired_probe = max(
+                    0.0, probe.requested_power_abs - self._probe_success_threshold
                 )
             if desired_total < 0 and desired_probe > 0:
                 desired_probe = -desired_probe
