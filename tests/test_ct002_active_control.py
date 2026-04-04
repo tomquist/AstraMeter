@@ -1212,7 +1212,7 @@ class TestEfficiencySaturationSwap:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
-            efficiency_fade_alpha=1.0,
+            efficiency_fade_alpha=0.15,
             efficiency_saturation_threshold=0.4,
             efficiency_rotation_interval=10,
             saturation_alpha=0.15,
@@ -1235,11 +1235,17 @@ class TestEfficiencySaturationSwap:
         device._balancer._probe_state.deadline = time.time() - 1
 
         device._balancer._cache_sample = None
-        device._compute_smooth_target([200, 0, 0], "a")
-        device._compute_smooth_target([200, 0, 0], "b")
+        out_a = device._compute_smooth_target([200, 0, 0], "a")
+        out_b = device._compute_smooth_target([200, 0, 0], "b")
         assert first_depr in device._balancer._deprioritized
         assert first_active not in device._balancer._deprioritized
         assert device._balancer._probe_state is None
+        assert device._balancer._get_consumer(first_depr).fade_weight == 0.0
+        assert device._balancer._get_consumer(first_active).fade_weight == 1.0
+        rejected_out = out_a if first_depr == "a" else out_b
+        restored_out = out_b if first_active == "b" else out_a
+        assert rejected_out[0] == 0.0
+        assert restored_out[0] > 0.0
 
     def test_probe_backup_uses_delta_not_absolute_output(self):
         """Backup command must keep current output when it already covers demand."""

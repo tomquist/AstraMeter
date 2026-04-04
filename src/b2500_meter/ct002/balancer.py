@@ -349,6 +349,9 @@ class LoadBalancer:
             return
         candidate_state = self._get_consumer(probe.candidate_id)
         candidate_state.saturation_score = max(candidate_state.saturation_score, 1.0)
+        candidate_state.fade_weight = 0.0
+        for cid in probe.restore_active_ids:
+            self._get_consumer(cid).fade_weight = 1.0
         self._clear_consumer_grace(probe.candidate_id)
         self._clear_post_probe_fade()
         remaining = [
