@@ -267,12 +267,12 @@ class LoadBalancer:
         self, current_requested_abs: float, ceiling: float
     ) -> float:
         ceiling = max(0.0, ceiling)
-        base_step = max(1.0, self._probe_success_threshold * 0.5)
+        base_step = max(1.0, self._probe_success_threshold * 0.25)
         if current_requested_abs <= 0:
             return min(ceiling, base_step)
         return min(
             ceiling,
-            max(current_requested_abs + base_step, current_requested_abs * 1.5),
+            max(current_requested_abs + base_step, current_requested_abs * 1.35),
         )
 
     def _clear_probe_state(self, reason: str) -> None:

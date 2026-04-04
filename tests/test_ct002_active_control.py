@@ -1272,7 +1272,7 @@ class TestEfficiencySaturationSwap:
 
         assert device._balancer._probe_state is not None
         assert out_a[0] == 0
-        assert out_b[0] == 10
+        assert out_b[0] == 5
 
     def test_probe_backup_ignores_probe_output_and_follows_demand(self):
         """Backup should keep following live demand during probe."""
