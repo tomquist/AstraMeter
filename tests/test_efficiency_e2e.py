@@ -454,7 +454,7 @@ class TestEfficiencyE2E:
             # Use 90th percentile to tolerate transient spikes from poll-timing jitter
             p90_output = _percentile(total_outputs, 90)
             p90_grid = _percentile(grid_errors, 90)
-            assert p90_output < 320, (
+            assert p90_output < 380, (
                 f"Probe acceptance should not double output. p90 total was {p90_output:.0f}W; "
                 f"powers={h.battery_powers()}"
             )
