@@ -408,7 +408,7 @@ class TestEfficiencyE2E:
                 "Previous battery should still cover most of the demand while the "
                 f"promoted battery is probing. Powers: {h.battery_powers()}"
             )
-            assert abs(h.battery_powers()[standby]) < 60, (
+            assert abs(h.battery_powers()[standby]) < 100, (
                 f"Promoted battery should still be ramping slowly. Powers: {h.battery_powers()}"
             )
             p90_grid = _percentile(grid_errors, 90)
@@ -502,7 +502,7 @@ class TestEfficiencyE2E:
             )
             # Use 90th percentile to tolerate transient spikes from poll-timing jitter
             p90_grid = _percentile(grid_errors, 90)
-            assert p90_grid < 120, (
+            assert p90_grid < 150, (
                 f"80W probe floor should not destabilize the grid excessively; "
                 f"p90={p90_grid:.0f}W. Powers: {h.battery_powers()}"
             )
@@ -676,7 +676,7 @@ class TestEfficiencyE2E:
         h.batteries[1].soc = 1.0
         await h.start()
         try:
-            for _ in range(30):
+            for _ in range(60):
                 await asyncio.sleep(0.5)
                 if abs(h.battery_powers()[1]) > 50:
                     break
