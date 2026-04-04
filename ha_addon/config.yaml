@@ -38,6 +38,8 @@ options:
   marstek_auto_register_ct_device: false
   marstek_mailbox: ""
   marstek_password: ""
+  min_efficient_power: 0
+  efficiency_rotation_interval: 900
   log_level: "info"
 schema:
   power_input_alias: str
@@ -48,5 +50,7 @@ schema:
   marstek_auto_register_ct_device: bool?
   marstek_mailbox: str?
   marstek_password: password?
+  min_efficient_power: int(0,)?
+  efficiency_rotation_interval: int(1,)?
   log_level: list(critical|error|warning|info|debug)
   custom_config: str?

@@ -66,6 +66,16 @@ else
         ct_mac="$(bashio::config 'ct_mac')"
     fi
 
+    min_efficient_power=""
+    if bashio::config.has_value 'min_efficient_power'; then
+        min_efficient_power="$(bashio::config 'min_efficient_power')"
+    fi
+
+    efficiency_rotation_interval=""
+    if bashio::config.has_value 'efficiency_rotation_interval'; then
+        efficiency_rotation_interval="$(bashio::config 'efficiency_rotation_interval')"
+    fi
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -76,16 +86,19 @@ else
         if [ "$has_ct002" -eq 1 ] && [ "$has_ct003" -eq 1 ]; then
             echo "[CT002]"
             echo "CT_MAC=$ct_mac"
-            # CT002/CT003 control behavior is fixed by emulator
+            [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
+            [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             echo ""
             echo "[CT003]"
             echo "CT_MAC=$ct_mac"
-            # CT002/CT003 control behavior is fixed by emulator
+            [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
+            [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             echo ""
         else
             echo "[$ct_section]"
             echo "CT_MAC=$ct_mac"
-            # CT002/CT003 control behavior is fixed by emulator
+            [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
+            [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             echo ""
         fi
 
