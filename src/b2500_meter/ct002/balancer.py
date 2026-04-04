@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
+from collections.abc import Callable
 from typing import Literal, NamedTuple
 
 from b2500_meter.config.logger import logger
@@ -134,7 +135,9 @@ class SaturationTracker:
         stall_timeout_seconds: float,
         *,
         enabled: bool = True,
+        clock: Callable[[], float] | None = None,
     ) -> None:
+        self._clock = clock or time.time
         self._enabled = enabled
         self._alpha = max(0.01, min(1.0, alpha))
         self._min_target = max(1, min_target)
@@ -147,7 +150,7 @@ class SaturationTracker:
         """Update the saturation score for a consumer."""
         if not self._enabled or last_target is None:
             return
-        now = time.time()
+        now = self._clock()
         target_abs = abs(last_target)
         # Grace period handling
         if state.saturation_grace_until > 0:
@@ -190,7 +193,7 @@ class SaturationTracker:
 
     def set_grace(self, state: BalancerConsumerState, deadline: float) -> None:
         state.saturation_grace_until = deadline
-        state.saturation_grace_started_at = time.time()
+        state.saturation_grace_started_at = self._clock()
 
     def clear(self, state: BalancerConsumerState) -> None:
         state.saturation_score = 0.0
@@ -222,7 +225,9 @@ class LoadBalancer:
         saturation_stall_timeout_seconds: float,
         *,
         saturation_enabled: bool = True,
+        clock: Callable[[], float] | None = None,
     ) -> None:
+        self._clock = clock or time.time
         self._cfg = config
         self._saturation = SaturationTracker(
             alpha=saturation_alpha,
@@ -230,12 +235,13 @@ class LoadBalancer:
             min_target=saturation_min_target,
             decay_factor=saturation_decay_factor,
             stall_timeout_seconds=saturation_stall_timeout_seconds,
+            clock=self._clock,
         )
         self._saturation_grace_seconds = max(0.0, saturation_grace_seconds)
         self._consumers: dict[str, BalancerConsumerState] = {}
         self._deprioritized: set[str] = set()
         self._priority: list[str] = []
-        self._last_rotation: float = time.time()
+        self._last_rotation: float = self._clock()
         self._cache_sample: tuple | None = None
         self._cache_result: dict[str, float] | None = None
         self._probe_state: ProbeState | None = None
@@ -606,7 +612,7 @@ class LoadBalancer:
         state = self._get_consumer(consumer_id)
         state.last_target = None
         state.saturation_score = 0.0
-        grace = time.time() + min(
+        grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
         )
         self._saturation.set_grace(state, grace)
@@ -626,7 +632,7 @@ class LoadBalancer:
         if len(self._priority) < 2:
             return
         self._priority.append(self._priority.pop(0))
-        self._last_rotation = time.time()
+        self._last_rotation = self._clock()
         self._probe_state = None
         self._invalidate_efficiency_cache()
         for cid in list(self._consumers):
@@ -843,7 +849,7 @@ class LoadBalancer:
             self._invalidate_efficiency_cache()
             return {}
 
-        now = time.time()
+        now = self._clock()
         current = set(reports)
         self._priority = [c for c in self._priority if c in current]
         self._deprioritized.intersection_update(current)
@@ -1021,7 +1027,7 @@ class LoadBalancer:
         alpha = self._cfg.efficiency_fade_alpha
         result: dict[str, float] = {}
         frozen = self._probe_participants()
-        now = time.time()
+        now = self._clock()
         post_probe_active = now < self._post_probe_fade_until
         for cid in consumer_ids:
             state = self._get_consumer(cid)

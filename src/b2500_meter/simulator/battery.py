@@ -198,6 +198,20 @@ class BatterySimulator:
 
     # -- main loop ---------------------------------------------------------
 
+    async def step(self, dt: float | None = None) -> list[str] | None:
+        """Execute one simulation iteration with explicit *dt*.
+
+        When *dt* is ``None`` it defaults to :attr:`poll_interval`.
+        Unlike :meth:`run`, this does **not** sleep or touch
+        ``_last_update`` — it is designed for deterministic test
+        stepping.
+        """
+        if dt is None:
+            dt = self.poll_interval
+        self._update_power(dt)
+        self._update_soc(dt)
+        return await self._send_request()
+
     async def run(self) -> None:
         logger.info(
             "Battery %s started (phase=%s, soc=%.0f%%)",
@@ -211,10 +225,7 @@ class BatterySimulator:
             dt = (now - self._last_update) * self.time_scale
             self._last_update = now
 
-            self._update_power(dt)
-            self._update_soc(dt)
-
-            await self._send_request()
+            await self.step(dt)
 
             jitter = random.uniform(-0.5, 0.5)
             await asyncio.sleep(

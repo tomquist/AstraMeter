@@ -125,6 +125,7 @@ class CT002:
         saturation_grace_seconds=SATURATION_GRACE_SECONDS,
         saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
         device_id="",
+        clock=None,
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -176,6 +177,7 @@ class CT002:
             saturation_grace_seconds=saturation_grace_seconds,
             saturation_stall_timeout_seconds=saturation_stall_timeout_seconds,
             saturation_enabled=saturation_detection,
+            clock=clock,
         )
 
     def _consumer_key(self, addr, fields):
