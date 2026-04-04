@@ -1207,7 +1207,7 @@ class TestEfficiencySaturationSwap:
         assert device._balancer._get_consumer(first_depr).saturation_score == 0.0
 
     def test_rotation_grace_period_expires(self):
-        """After the grace period expires, saturation detection resumes."""
+        """Probe timeout restores the previous active battery."""
         device = CT002(
             active_control=True,
             fair_distribution=False,
@@ -1222,24 +1222,72 @@ class TestEfficiencySaturationSwap:
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
         first_depr = next(iter(device._balancer._deprioritized))
+        first_active = "a" if first_depr == "b" else "b"
 
         # Trigger timed rotation to promote the deprioritized consumer
         device._balancer._last_rotation -= 11
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
         assert first_depr not in device._balancer._deprioritized
+        assert device._balancer._probe_state is not None
 
-        # Expire the grace period by shifting the deadline into the past
-        device._balancer._get_consumer("first_depr").saturation_grace_until = (
-            time.time() - 1
-        )
+        # Expire the probe window and keep the promoted battery at 0W.
+        device._balancer._probe_state.deadline = time.time() - 1
 
-        # Now inject high saturation — it should trigger a swap
-        device._balancer._get_consumer(first_depr).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
         assert first_depr in device._balancer._deprioritized
+        assert first_active not in device._balancer._deprioritized
+        assert device._balancer._probe_state is None
+
+    def test_probe_backup_uses_delta_not_absolute_output(self):
+        """Backup command must keep current output when it already covers demand."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            probe_min_power=80,
+            efficiency_fade_alpha=1.0,
+            efficiency_rotation_interval=10,
+            deadband=0,
+        )
+        device._update_consumer_report("a", "A", 200)
+        device._update_consumer_report("b", "A", 0)
+        device._balancer._priority = ["a", "b"]
+        device._balancer._deprioritized = {"b"}
+        device._balancer._last_rotation -= 11
+
+        out_a = device._compute_smooth_target([0, 0, 0], "a")
+        out_b = device._compute_smooth_target([0, 0, 0], "b")
+
+        assert device._balancer._probe_state is not None
+        assert out_a[0] == 0
+        assert out_b[0] == 80
+
+    def test_probe_backup_ignores_probe_output_and_follows_demand(self):
+        """Backup should keep following live demand during probe."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            min_efficient_power=150,
+            probe_min_power=80,
+            efficiency_fade_alpha=1.0,
+            efficiency_rotation_interval=10,
+            deadband=0,
+        )
+        device._update_consumer_report("a", "A", 200)
+        device._update_consumer_report("b", "A", 40)
+        device._balancer._priority = ["a", "b"]
+        device._balancer._deprioritized = {"b"}
+        device._balancer._last_rotation -= 11
+
+        out_a = device._compute_smooth_target([-40, 0, 0], "a")
+        out_b = device._compute_smooth_target([-40, 0, 0], "b")
+
+        assert device._balancer._probe_state is not None
+        assert out_a[0] == 0
+        assert out_b[0] == 40
 
 
 class TestInactiveConsumers:

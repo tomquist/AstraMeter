@@ -11,7 +11,13 @@ from typing import Any
 
 from b2500_meter.config.logger import logger
 
-from .balancer import BalancerConfig, ConsumerMode, LoadBalancer
+from .balancer import (
+    SATURATION_GRACE_SECONDS,
+    SATURATION_STALL_TIMEOUT_SECONDS,
+    BalancerConfig,
+    ConsumerMode,
+    LoadBalancer,
+)
 from .protocol import (
     ETX,
     RESPONSE_LABELS,
@@ -111,10 +117,13 @@ class CT002:
         saturation_alpha=0.15,
         min_target_for_saturation=20,
         min_efficient_power=0,
+        probe_min_power=80,
         efficiency_rotation_interval=900,
         efficiency_fade_alpha=0.15,
         efficiency_saturation_threshold=0.4,
         saturation_decay_factor=0.995,
+        saturation_grace_seconds=SATURATION_GRACE_SECONDS,
+        saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
         device_id="",
     ):
         self.udp_port = udp_port
@@ -156,6 +165,7 @@ class CT002:
                 max_target_step=max_target_step,
                 deadband=deadband,
                 min_efficient_power=min_efficient_power,
+                probe_min_power=probe_min_power,
                 efficiency_rotation_interval=efficiency_rotation_interval,
                 efficiency_fade_alpha=efficiency_fade_alpha,
                 efficiency_saturation_threshold=efficiency_saturation_threshold,
@@ -163,6 +173,8 @@ class CT002:
             saturation_alpha=saturation_alpha,
             saturation_min_target=min_target_for_saturation,
             saturation_decay_factor=saturation_decay_factor,
+            saturation_grace_seconds=saturation_grace_seconds,
+            saturation_stall_timeout_seconds=saturation_stall_timeout_seconds,
             saturation_enabled=saturation_detection,
         )
 

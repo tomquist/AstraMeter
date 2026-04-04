@@ -210,16 +210,8 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
   relative to its current output. A hard clamp on per-cycle change.
 
-*Saturation detection — handling full/empty batteries:*
-- **SATURATION_DETECTION** (default true) — Track how well each battery follows its
-  target. When a battery cannot deliver (full or empty), its share is reduced and
-  redistributed to others.
-- **SATURATION_ALPHA** (default 0.15) — EMA factor for the saturation score.
-  Lower = slower to declare a battery saturated (and slower to recover).
-- **MIN_TARGET_FOR_SATURATION** (default 20 W) — Ignore saturation tracking when
-  the target is below this value (avoids false positives at low power).
-
-*Efficiency optimization — concentrating power at low demand:*
+*Battery efficiency optimization — concentrating power on fewer batteries,
+probing handoffs, and swapping away from ones that cannot follow:*
 
 Batteries have a minimum operating power below which their DC-DC converter
 efficiency drops sharply. When multiple batteries split a small load, each
@@ -227,6 +219,17 @@ one may operate in this inefficient range, wasting energy as heat. The
 efficiency optimization detects this situation and concentrates the load on
 fewer batteries so each one stays above its efficient minimum, idling the
 rest. Batteries rotate periodically so wear is shared evenly.
+
+When a timed rotation or forced swap promotes a new battery, the handoff now
+uses a **probe phase** instead of dropping the previous active battery to zero
+immediately. During probe, the promoted battery gets the real CT002
+delta-control signal while the previous active battery (or batteries) stays
+online as backup and covers the signed residual shortfall based on the
+promoted battery's latest reported power. Once the promoted battery shows
+meaningful real output, the probe commits and the backup fades out. If it
+never ramps, the probe times out and the balancer restores the previous active
+battery. After a successful probe, saturation detection stays active so
+mid-interval failures still trigger a swap.
 
 - **MIN_EFFICIENT_POWER** (default 0 = disabled) — When the per-battery share of
   total demand falls below this threshold (watts), excess batteries are
@@ -236,15 +239,35 @@ rest. Batteries rotate periodically so wear is shared evenly.
 - **EFFICIENCY_ROTATION_INTERVAL** (default 900 s, minimum 10) — Seconds between
   rotating which battery has priority. Ensures fair wear across batteries.
 - **EFFICIENCY_FADE_ALPHA** (default 0.15) — EMA factor controlling how quickly
-  batteries transition during efficiency switchovers. During a transition each
-  battery's power is reallocated proportionally to its fade weight, keeping the
-  total output tracking demand. Lower values produce smoother, slower
-  transitions; higher values are faster. Set to 1.0 for instant switching.
+  batteries transition during efficiency switchovers. It mainly controls how
+  quickly the old battery fades out **after a successful probe** (and also
+  smooths ordinary efficiency transitions). Lower values produce smoother,
+  slower transitions; higher values are faster. Set to 1.0 for instant
+  switching.
 - **EFFICIENCY_SATURATION_THRESHOLD** (default 0.4) — When an active battery's
   saturation score exceeds this value (i.e. it can't follow its target because
   it is full, empty, or externally limited), it is immediately swapped out for a
   healthy deprioritized battery instead of waiting for the next timed rotation.
-  Set to 0 to disable.
+  During a probe, the probe timeout is the main "never ramps" control; this
+  threshold still matters after the probe succeeds and for already-active
+  batteries. Set to 0 to disable.
+- **SATURATION_DETECTION** (default true) — Track how well each battery follows
+  its target. When a battery cannot deliver (full or empty), its share is
+  reduced and redistributed to others.
+- **SATURATION_ALPHA** (default 0.15) — EMA factor for the saturation score.
+  Lower = slower to declare a battery saturated (and slower to recover).
+- **MIN_TARGET_FOR_SATURATION** (default 20 W) — Ignore saturation tracking when
+  the target is below this value (avoids false positives at low power). Probe
+  success uses the same threshold.
+- **SATURATION_GRACE_SECONDS** (default 90 s) — The maximum **probe window** when
+  a deprioritized battery is promoted by timed rotation or forced swap. During
+  this window the previous active battery stays available as backup and covers
+  the residual shortfall while the promoted battery ramps. If the promoted
+  battery reaches meaningful output earlier, the probe commits early.
+- **SATURATION_STALL_TIMEOUT_SECONDS** (default 60 s) — Stall escape for
+  non-probe grace cases, such as batteries rejoining auto control after being
+  paused or switched out of manual mode. Probe handoffs themselves now use the
+  full probe window above as the primary timer.
 - **SATURATION_DECAY_FACTOR** (default 0.995) — How quickly a swapped-out
   battery's saturation score decays while it has no target. Applied each cycle.
   Lower values allow faster recovery; 1.0 means the battery never becomes

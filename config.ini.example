@@ -84,23 +84,33 @@ THROTTLE_INTERVAL = 0
 ## Ignore saturation tracking when target is below this (W).
 #MIN_TARGET_FOR_SATURATION = 20
 
-## --- Efficiency optimization (opt-in low-demand power concentration) ---
+## --- Efficiency optimization (opt-in low-demand power concentration + probe handoff) ---
 ## At low total demand, concentrates power on fewer batteries to avoid
 ## inefficient low-power operation. Each active battery gets at least this
-## many watts. 0 disables (default). Batteries rotate for fairness.
+## many watts. 0 disables (default). Batteries rotate for fairness, and newly
+## promoted batteries are probed before the previous active battery fades out.
 ## Example: 2 batteries, 200W demand, threshold 150 → one gets 200W, other 0W.
 #MIN_EFFICIENT_POWER = 0
 ## Seconds between rotating which battery has priority (minimum 10).
 #EFFICIENCY_ROTATION_INTERVAL = 900
-## How quickly efficiency transitions fade (0.01=very slow, 1.0=instant).
+## How quickly the old battery fades out after a successful probe
+## (0.01=very slow, 1.0=instant).
 #EFFICIENCY_FADE_ALPHA = 0.15
 ## Force-rotate when a battery can't follow its target (e.g. externally limited
-## to 0 W or fully discharged). The battery is swapped out within a few seconds
-## instead of waiting for the full rotation interval. 0 disables.
+## to 0 W or fully discharged). After a probe succeeds, this still swaps out an
+## active battery within a few seconds instead of waiting for the full rotation
+## interval. 0 disables.
 #EFFICIENCY_SATURATION_THRESHOLD = 0.4
 ## How quickly a swapped-out battery becomes eligible again. Applied each cycle
 ## while the battery has no target. 1.0 = never recover, lower = faster recovery.
 #SATURATION_DECAY_FACTOR = 0.995
+## Probe window for a newly promoted battery. During this time the previous
+## active battery stays online as backup and covers the residual shortfall until
+## the promoted battery shows meaningful real output.
+#SATURATION_GRACE_SECONDS = 90
+## Stall escape for non-probe grace cases such as batteries rejoining auto mode.
+## Probe handoffs use the probe window above as the primary timer.
+#SATURATION_STALL_TIMEOUT_SECONDS = 60
 
 #[MARSTEK]
 ## Optional: auto-register managed fake CT devices in Marstek cloud on startup.

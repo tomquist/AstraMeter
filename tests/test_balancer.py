@@ -17,6 +17,7 @@ class TestBalancerConsumerState:
         assert s.fade_weight == 1.0
         assert s.saturation_score == 0.0
         assert s.saturation_grace_until == 0.0
+        assert s.saturation_grace_started_at == 0.0
 
     def test_fields_mutate_independently(self):
         s = BalancerConsumerState()
@@ -24,15 +25,23 @@ class TestBalancerConsumerState:
         s.fade_weight = 0.5
         s.saturation_score = 0.3
         s.saturation_grace_until = 999.0
+        s.saturation_grace_started_at = 123.0
         assert s.last_target == 100.0
         assert s.fade_weight == 0.5
         assert s.saturation_score == 0.3
         assert s.saturation_grace_until == 999.0
+        assert s.saturation_grace_started_at == 123.0
 
 
 class TestSaturationTracker:
     def _make_tracker(self, **kwargs):
-        defaults = dict(alpha=0.15, min_target=20, decay_factor=0.995, enabled=True)
+        defaults = dict(
+            alpha=0.15,
+            min_target=20,
+            decay_factor=0.995,
+            stall_timeout_seconds=60.0,
+            enabled=True,
+        )
         defaults.update(kwargs)
         return SaturationTracker(**defaults)
 
@@ -91,30 +100,59 @@ class TestSaturationTracker:
 
     def test_grace_clears_early_on_meaningful_output(self):
         tracker = self._make_tracker(alpha=1.0, min_target=20)
-        state = BalancerConsumerState(saturation_grace_until=time.time() + 100)
+        now = time.time()
+        state = BalancerConsumerState(
+            saturation_grace_until=now + 100,
+            saturation_grace_started_at=now,
+        )
         tracker.update(state, 200, 50)  # actual=50 >= min_target=20
         assert state.saturation_grace_until == 0.0  # grace cleared early
+        assert state.saturation_grace_started_at == 0.0
         assert state.saturation_score == 0.0  # not saturated
 
     def test_grace_expires(self):
         tracker = self._make_tracker(alpha=1.0, min_target=20)
-        state = BalancerConsumerState(saturation_grace_until=time.time() - 1)
+        state = BalancerConsumerState(
+            saturation_grace_until=time.time() - 1,
+            saturation_grace_started_at=time.time() - 5,
+        )
         tracker.update(state, 200, 0)
         assert state.saturation_grace_until == 0.0
+        assert state.saturation_grace_started_at == 0.0
         assert state.saturation_score == 1.0  # grace expired, saturated
+
+    def test_grace_stall_marks_immediate_saturation_after_timeout(self):
+        tracker = self._make_tracker(
+            alpha=0.15, min_target=20, stall_timeout_seconds=4.0
+        )
+        now = time.time()
+        state = BalancerConsumerState(
+            saturation_grace_until=now + 100,
+            saturation_grace_started_at=now - 5,
+        )
+        tracker.update(state, 200, 0)
+        assert state.saturation_score == 1.0
+        assert state.saturation_grace_until == 0.0
+        assert state.saturation_grace_started_at == 0.0
 
     def test_clear(self):
         tracker = self._make_tracker()
-        state = BalancerConsumerState(saturation_score=0.8, saturation_grace_until=999)
+        state = BalancerConsumerState(
+            saturation_score=0.8,
+            saturation_grace_until=999,
+            saturation_grace_started_at=123,
+        )
         tracker.clear(state)
         assert state.saturation_score == 0.0
         assert state.saturation_grace_until == 0.0
+        assert state.saturation_grace_started_at == 0.0
 
     def test_set_grace(self):
         tracker = self._make_tracker()
         state = BalancerConsumerState()
         tracker.set_grace(state, 42.0)
         assert state.saturation_grace_until == 42.0
+        assert state.saturation_grace_started_at > 0.0
 
     def test_get(self):
         tracker = self._make_tracker()
@@ -138,6 +176,12 @@ class TestLoadBalancerLifecycle:
             saturation_min_target=balancer_kwargs.pop("saturation_min_target", 20),
             saturation_decay_factor=balancer_kwargs.pop(
                 "saturation_decay_factor", 0.995
+            ),
+            saturation_grace_seconds=balancer_kwargs.pop(
+                "saturation_grace_seconds", 90.0
+            ),
+            saturation_stall_timeout_seconds=balancer_kwargs.pop(
+                "saturation_stall_timeout_seconds", 60.0
             ),
             **balancer_kwargs,
         )
@@ -180,6 +224,7 @@ class TestLoadBalancerLifecycle:
         assert state.last_target is None
         assert state.saturation_score == 0.0
         assert state.saturation_grace_until > time.time()
+        assert state.saturation_grace_started_at > 0.0
 
     def test_detach_from_auto_pool(self):
         lb = self._make_balancer()

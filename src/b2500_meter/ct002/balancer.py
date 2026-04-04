@@ -15,7 +15,12 @@ EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # deprioritized to active.  Covers the physical ramp-up time of the
 # inverter; the grace is also cleared early once the battery proves it
 # can produce meaningful output.
-SATURATION_GRACE_SECONDS = 30
+SATURATION_GRACE_SECONDS = 90
+# A battery that still produces effectively nothing after prolonged grace under
+# a real target is overwhelmingly likely to be empty/full/limited, not merely
+# ramping up. In that case we bypass the remaining grace window and mark it
+# saturated immediately so the balancer can rotate to a healthy unit.
+SATURATION_STALL_TIMEOUT_SECONDS = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +42,7 @@ class BalancerConfig:
     max_target_step: float = 0
     deadband: float = 20
     min_efficient_power: float = 0
+    probe_min_power: float = 80
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
@@ -57,6 +63,7 @@ class BalancerConfig:
         _clamp("max_target_step", 0, float("inf"))
         _clamp("deadband", 0, float("inf"))
         _clamp("min_efficient_power", 0, float("inf"))
+        _clamp("probe_min_power", 0, float("inf"))
         _clamp("efficiency_rotation_interval", 1, float("inf"))
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
@@ -87,6 +94,20 @@ class BalancerConsumerState:
     fade_weight: float = 1.0
     saturation_score: float = 0.0
     saturation_grace_until: float = 0.0
+    saturation_grace_started_at: float = 0.0
+
+
+@dataclasses.dataclass
+class ProbeState:
+    """Tracks an in-flight efficiency handoff."""
+
+    candidate_id: str
+    active_ids: tuple[str, ...]
+    backup_ids: tuple[str, ...]
+    restore_active_ids: tuple[str, ...]
+    deadline: float
+    started_at: float
+    proof_samples: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +130,7 @@ class SaturationTracker:
         alpha: float,
         min_target: float,
         decay_factor: float,
+        stall_timeout_seconds: float,
         *,
         enabled: bool = True,
     ) -> None:
@@ -116,6 +138,7 @@ class SaturationTracker:
         self._alpha = max(0.01, min(1.0, alpha))
         self._min_target = max(1, min_target)
         self._decay_factor = max(0.0, min(1.0, decay_factor))
+        self._stall_timeout_seconds = max(0.0, stall_timeout_seconds)
 
     def update(
         self, state: BalancerConsumerState, last_target: float | None, actual: float
@@ -123,16 +146,29 @@ class SaturationTracker:
         """Update the saturation score for a consumer."""
         if not self._enabled or last_target is None:
             return
+        now = time.time()
+        target_abs = abs(last_target)
         # Grace period handling
         if state.saturation_grace_until > 0:
-            if time.time() < state.saturation_grace_until:
+            if now < state.saturation_grace_until:
                 if abs(actual) >= self._min_target:
                     state.saturation_grace_until = 0.0
+                    state.saturation_grace_started_at = 0.0
+                elif (
+                    target_abs >= self._min_target
+                    and state.saturation_grace_started_at > 0
+                    and now - state.saturation_grace_started_at
+                    >= self._stall_timeout_seconds
+                ):
+                    state.saturation_score = 1.0
+                    state.saturation_grace_until = 0.0
+                    state.saturation_grace_started_at = 0.0
+                    return
                 else:
                     return
             else:
                 state.saturation_grace_until = 0.0
-        target_abs = abs(last_target)
+                state.saturation_grace_started_at = 0.0
         if target_abs < self._min_target:
             prev = state.saturation_score
             if prev > 0:
@@ -153,10 +189,12 @@ class SaturationTracker:
 
     def set_grace(self, state: BalancerConsumerState, deadline: float) -> None:
         state.saturation_grace_until = deadline
+        state.saturation_grace_started_at = time.time()
 
     def clear(self, state: BalancerConsumerState) -> None:
         state.saturation_score = 0.0
         state.saturation_grace_until = 0.0
+        state.saturation_grace_started_at = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +217,8 @@ class LoadBalancer:
         saturation_alpha: float,
         saturation_min_target: float,
         saturation_decay_factor: float,
+        saturation_grace_seconds: float,
+        saturation_stall_timeout_seconds: float,
         *,
         saturation_enabled: bool = True,
     ) -> None:
@@ -188,13 +228,20 @@ class LoadBalancer:
             enabled=saturation_enabled,
             min_target=saturation_min_target,
             decay_factor=saturation_decay_factor,
+            stall_timeout_seconds=saturation_stall_timeout_seconds,
         )
+        self._saturation_grace_seconds = max(0.0, saturation_grace_seconds)
         self._consumers: dict[str, BalancerConsumerState] = {}
         self._deprioritized: set[str] = set()
         self._priority: list[str] = []
         self._last_rotation: float = time.time()
         self._cache_sample: tuple | None = None
         self._cache_result: dict[str, float] | None = None
+        self._probe_state: ProbeState | None = None
+        self._probe_timeout_seconds = max(0.0, saturation_grace_seconds)
+        self._probe_success_threshold = max(1.0, float(saturation_min_target))
+        self._post_probe_fade_until = 0.0
+        self._post_probe_fade_ids: set[str] = set()
 
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
@@ -202,6 +249,233 @@ class LoadBalancer:
             state = BalancerConsumerState()
             self._consumers[consumer_id] = state
         return state
+
+    def _invalidate_efficiency_cache(self) -> None:
+        self._cache_sample = None
+        self._cache_result = None
+
+    def _probe_participants(self) -> set[str]:
+        if self._probe_state is None:
+            return set()
+        return set(self._probe_state.active_ids) | set(self._probe_state.backup_ids)
+
+    def _effective_probe_min_power(self) -> float:
+        return max(self._probe_success_threshold, self._cfg.probe_min_power)
+
+    def _clear_probe_state(self, reason: str) -> None:
+        if self._probe_state is None:
+            return
+        logger.info("Efficiency: ending probe (%s)", reason)
+        self._probe_state = None
+        self._invalidate_efficiency_cache()
+
+    def _clear_post_probe_fade(self) -> None:
+        self._post_probe_fade_until = 0.0
+        self._post_probe_fade_ids.clear()
+
+    def _set_consumer_grace(self, consumer_id: str, deadline: float) -> None:
+        self._saturation.set_grace(self._get_consumer(consumer_id), deadline)
+
+    def _clear_consumer_grace(self, consumer_id: str) -> None:
+        state = self._get_consumer(consumer_id)
+        state.saturation_grace_until = 0.0
+        state.saturation_grace_started_at = 0.0
+
+    def _begin_probe(
+        self,
+        candidate_id: str,
+        active_ids: tuple[str, ...],
+        backup_ids: tuple[str, ...],
+        restore_active_ids: tuple[str, ...],
+        now: float,
+    ) -> None:
+        deadline = now + self._probe_timeout_seconds
+        self._probe_state = ProbeState(
+            candidate_id=candidate_id,
+            active_ids=active_ids,
+            backup_ids=backup_ids,
+            restore_active_ids=restore_active_ids,
+            deadline=deadline,
+            started_at=now,
+        )
+        for cid in set(active_ids) | set(backup_ids):
+            self._get_consumer(cid).fade_weight = 1.0
+        self._clear_post_probe_fade()
+        self._saturation.clear(self._get_consumer(candidate_id))
+        self._set_consumer_grace(candidate_id, deadline)
+        logger.info(
+            "Efficiency: probing consumer %s with backups %s until %.1fs",
+            candidate_id[:16],
+            [cid[:16] for cid in backup_ids],
+            self._probe_timeout_seconds,
+        )
+        self._invalidate_efficiency_cache()
+
+    def _commit_probe(self, reports: dict, now: float, actual: float) -> None:
+        probe = self._probe_state
+        if probe is None:
+            return
+        participants = [
+            cid for cid in (*probe.active_ids, *probe.backup_ids) if cid in reports
+        ]
+        total_actual = sum(
+            abs(parse_int(reports.get(cid, {}).get("power", 0))) for cid in participants
+        )
+        if total_actual > 0:
+            for cid in participants:
+                actual_share = abs(parse_int(reports.get(cid, {}).get("power", 0)))
+                self._get_consumer(cid).fade_weight = actual_share / total_actual
+        else:
+            active_count = max(1, len(probe.active_ids))
+            for cid in probe.active_ids:
+                self._get_consumer(cid).fade_weight = 1.0 / active_count
+            for cid in probe.backup_ids:
+                self._get_consumer(cid).fade_weight = 0.0
+        self._post_probe_fade_until = now + min(5.0, self._probe_timeout_seconds)
+        self._post_probe_fade_ids = set(participants)
+        self._clear_consumer_grace(probe.candidate_id)
+        self._probe_state = None
+        self._last_rotation = now
+        logger.info(
+            "Efficiency: probe succeeded for %s at %.0fW",
+            probe.candidate_id[:16],
+            actual,
+        )
+        self._invalidate_efficiency_cache()
+
+    def _reject_probe(self, now: float, reason: str) -> None:
+        probe = self._probe_state
+        if probe is None:
+            return
+        candidate_state = self._get_consumer(probe.candidate_id)
+        candidate_state.saturation_score = max(candidate_state.saturation_score, 1.0)
+        self._clear_consumer_grace(probe.candidate_id)
+        self._clear_post_probe_fade()
+        remaining = [
+            cid for cid in self._priority if cid not in probe.restore_active_ids
+        ]
+        self._priority = list(probe.restore_active_ids) + [
+            cid for cid in remaining if cid not in probe.restore_active_ids
+        ]
+        self._probe_state = None
+        self._last_rotation = now
+        logger.info(
+            "Efficiency: probe rejected for %s (%s), restoring backups %s",
+            probe.candidate_id[:16],
+            reason,
+            [cid[:16] for cid in probe.backup_ids],
+        )
+        self._invalidate_efficiency_cache()
+
+    def _resolve_probe_state(
+        self, reports: dict, now: float, smoothed_target: float
+    ) -> bool:
+        probe = self._probe_state
+        if probe is None:
+            return False
+        participants = set(probe.active_ids) | set(probe.backup_ids)
+        missing = [cid for cid in participants if cid not in reports]
+        if missing:
+            self._clear_probe_state(
+                f"participants disappeared: {[cid[:16] for cid in missing]}"
+            )
+            return True
+        actual = parse_int(reports.get(probe.candidate_id, {}).get("power", 0))
+        desired_total = (
+            sum(parse_int(report.get("power", 0)) for report in reports.values())
+            + smoothed_target
+        )
+        probe_min_power = self._effective_probe_min_power()
+        demand_sign = 1 if desired_total > 0 else -1 if desired_total < 0 else 0
+        actual_sign = 1 if actual > 0 else -1 if actual < 0 else 0
+        if (
+            demand_sign != 0
+            and actual_sign == demand_sign
+            and abs(actual) >= probe_min_power
+        ):
+            probe.proof_samples += 1
+        else:
+            probe.proof_samples = 0
+        if probe.proof_samples >= 2:
+            self._commit_probe(reports, now, actual)
+            return True
+        if now >= probe.deadline:
+            self._reject_probe(now, "timeout before meaningful output")
+            return True
+        return False
+
+    def _compute_desired_contribution(
+        self,
+        consumer_id: str,
+        reports: dict,
+        weights: dict[str, float],
+        desired_total: float,
+    ) -> float:
+        total_weight = sum(weights.get(cid, 0.0) for cid in reports)
+        if total_weight > 0:
+            fair_share = desired_total * weights.get(consumer_id, 0.0) / total_weight
+        else:
+            fair_share = desired_total / max(1, len(reports))
+        if (
+            not self._cfg.fair_distribution
+            or consumer_id not in reports
+            or (
+                self._cfg.balance_deadband > 0
+                and abs(desired_total) < self._cfg.balance_deadband
+            )
+        ):
+            return fair_share
+        return self._balance_correction(consumer_id, reports, weights, fair_share)
+
+    def _compute_probe_target(
+        self,
+        consumer_id: str | None,
+        reports: dict,
+        smoothed_target: float,
+        eff_part: dict[str, float],
+    ) -> list[float] | None:
+        probe = self._probe_state
+        if probe is None or consumer_id is None:
+            return None
+        candidate_id = probe.candidate_id
+        if candidate_id not in reports:
+            return None
+        support_reports = {
+            cid: reports[cid]
+            for cid in (*probe.backup_ids, *(cid for cid in probe.active_ids if cid != candidate_id))
+            if cid in reports
+        }
+        if consumer_id != candidate_id and consumer_id not in support_reports:
+            return None
+
+        desired_total = (
+            sum(parse_int(report.get("power", 0)) for report in reports.values())
+            + smoothed_target
+        )
+        state = self._get_consumer(consumer_id)
+        probe_actual = parse_int(reports.get(candidate_id, {}).get("power", 0))
+        probe_min_power = self._effective_probe_min_power()
+
+        if consumer_id == candidate_id:
+            desired_probe = 0.0
+            if desired_total > 0:
+                desired_probe = probe_min_power
+            elif desired_total < 0:
+                desired_probe = -probe_min_power
+            target = desired_probe - probe_actual
+            state.last_target = target
+            return self._split_by_phase(target, {candidate_id: reports[candidate_id]})
+
+        backup_weights = {
+            cid: max(0.01, eff_part.get(cid, 1.0)) for cid in support_reports
+        }
+        desired = self._compute_desired_contribution(
+            consumer_id, support_reports, backup_weights, desired_total
+        )
+        reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
+        target = desired - reported
+        state.last_target = target
+        return self._split_by_phase(target, support_reports, backup_weights)
 
     # ------------------------------------------------------------------
     # Primary interface
@@ -242,6 +516,7 @@ class LoadBalancer:
             and state
             and consumer_id in active_reports
             and consumer_mode.mode != "manual"
+            and consumer_id not in self._probe_participants()
         ):
             actual = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
             self._saturation.update(state, last_target, actual)
@@ -270,16 +545,18 @@ class LoadBalancer:
         self._deprioritized.discard(consumer_id)
         if consumer_id in self._priority:
             self._priority.remove(consumer_id)
-            self._cache_sample = None
-            self._cache_result = None
+            self._invalidate_efficiency_cache()
+        if consumer_id in self._probe_participants():
+            self._clear_probe_state(f"consumer removed: {consumer_id[:16]}")
 
     def detach_from_auto_pool(self, consumer_id: str) -> None:
         """Remove from efficiency rotation (consumer switched to manual)."""
         self._deprioritized.discard(consumer_id)
         self._priority = [cid for cid in self._priority if cid != consumer_id]
         self._consumers.pop(consumer_id, None)
-        self._cache_sample = None
-        self._cache_result = None
+        self._invalidate_efficiency_cache()
+        if consumer_id in self._probe_participants():
+            self._clear_probe_state(f"consumer detached: {consumer_id[:16]}")
 
     def reset_consumer(self, consumer_id: str) -> None:
         """Clear stale state and set a grace period.
@@ -291,9 +568,9 @@ class LoadBalancer:
         state.last_target = None
         state.saturation_score = 0.0
         grace = time.time() + min(
-            SATURATION_GRACE_SECONDS, self._cfg.efficiency_rotation_interval
+            self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
         )
-        state.saturation_grace_until = grace
+        self._saturation.set_grace(state, grace)
 
     # ------------------------------------------------------------------
     # Rotation
@@ -311,8 +588,8 @@ class LoadBalancer:
             return
         self._priority.append(self._priority.pop(0))
         self._last_rotation = time.time()
-        self._cache_sample = None
-        self._cache_result = None
+        self._probe_state = None
+        self._invalidate_efficiency_cache()
         for cid in list(self._consumers):
             if cid in current_pool:
                 self._consumers[cid].fade_weight = 1.0
@@ -403,6 +680,12 @@ class LoadBalancer:
             efficiency_adjustments, set(reports.keys())
         )
         any_fading = any(0.0 < w < 1.0 for w in faded_adjustments.values())
+
+        probe_target = self._compute_probe_target(
+            consumer_id, reports, smoothed_target, eff_part
+        )
+        if probe_target is not None:
+            return probe_target
 
         # --- Fading path ---
         if any_fading and consumer_id:
@@ -516,33 +799,48 @@ class LoadBalancer:
         """Decide which consumers to deprioritize for efficiency."""
         cfg = self._cfg
         if cfg.min_efficient_power <= 0 or len(reports) < 2:
+            self._probe_state = None
             self._deprioritized = set()
-            self._cache_sample = None
-            self._cache_result = None
+            self._invalidate_efficiency_cache()
             return {}
 
         now = time.time()
+        current = set(reports)
+        self._priority = [c for c in self._priority if c in current]
+        self._deprioritized.intersection_update(current)
+        grace = now + min(
+            self._saturation_grace_seconds, cfg.efficiency_rotation_interval
+        )
+        for cid in sorted(current):
+            if cid not in self._priority:
+                self._priority.append(cid)
+                self._set_consumer_grace(cid, grace)
+
+        prev_slots = max(
+            0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
+        )
+        previous_active = tuple(self._priority[:prev_slots])
+        probe_resolved = self._resolve_probe_state(reports, now, smoothed_target)
+        probe_active = self._probe_state is not None
 
         # Rotation check BEFORE cache
         if (
-            self._priority
+            not probe_active
+            and not probe_resolved
+            and self._priority
             and now - self._last_rotation >= cfg.efficiency_rotation_interval
         ):
             self._last_rotation = now
             self._priority.append(self._priority.pop(0))
-            self._cache_sample = None
-
-        # Sync priority list with current active consumers
-        current = set(reports)
-        self._priority = [c for c in self._priority if c in current]
-        grace = now + min(SATURATION_GRACE_SECONDS, cfg.efficiency_rotation_interval)
-        for cid in sorted(current):
-            if cid not in self._priority:
-                self._priority.append(cid)
-                self._saturation.set_grace(self._get_consumer(cid), grace)
+            self._invalidate_efficiency_cache()
 
         # Saturation swap check BEFORE cache
-        if cfg.efficiency_saturation_threshold > 0 and self._cache_sample is not None:
+        if (
+            not probe_active
+            and not probe_resolved
+            and cfg.efficiency_saturation_threshold > 0
+            and self._cache_sample is not None
+        ):
             slots_est = len(self._priority) - len(self._deprioritized)
             for cid in self._priority[:slots_est]:
                 state = self._consumers.get(cid)
@@ -550,7 +848,7 @@ class LoadBalancer:
                     state
                     and state.saturation_score >= cfg.efficiency_saturation_threshold
                 ):
-                    self._cache_sample = None
+                    self._invalidate_efficiency_cache()
                     break
 
         cache_key = (sample_id, tuple(self._priority))
@@ -587,21 +885,39 @@ class LoadBalancer:
         for cid in self._deprioritized - deprioritized:
             state = self._get_consumer(cid)
             self._saturation.clear(state)
-            self._saturation.set_grace(state, grace)
+            self._set_consumer_grace(cid, grace)
 
-        if self._maybe_force_swap_saturated(self._priority, slots, now):
+        if (
+            not probe_active
+            and not probe_resolved
+            and self._maybe_force_swap_saturated(self._priority, slots, now)
+        ):
             deprioritized = set(self._priority[slots:])
             result = {cid: 0.0 for cid in deprioritized}
             cache_key = (sample_id, tuple(self._priority))
             for cid in set(self._priority[:slots]) - pre_swap_active:
                 state = self._get_consumer(cid)
                 self._saturation.clear(state)
-                self._saturation.set_grace(state, grace)
+                self._set_consumer_grace(cid, grace)
+
+        final_active = tuple(self._priority[:slots])
+        if not probe_active and not probe_resolved and previous_active:
+            promoted = [cid for cid in final_active if cid not in previous_active]
+            backups = [cid for cid in previous_active if cid not in final_active]
+            if promoted and backups:
+                self._begin_probe(
+                    promoted[0],
+                    final_active,
+                    tuple(backups),
+                    previous_active,
+                    now,
+                )
 
         for cid in deprioritized - self._deprioritized:
             state = self._consumers.get(cid)
             if state:
                 state.saturation_grace_until = 0.0
+                state.saturation_grace_started_at = 0.0
             logger.info(
                 "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
                 cid[:16],
@@ -665,16 +981,27 @@ class LoadBalancer:
         """Apply EMA fade to efficiency weights for smooth transitions."""
         alpha = self._cfg.efficiency_fade_alpha
         result: dict[str, float] = {}
+        frozen = self._probe_participants()
+        now = time.time()
+        post_probe_active = now < self._post_probe_fade_until
         for cid in consumer_ids:
-            goal = raw_adjustments.get(cid, 1.0)
             state = self._get_consumer(cid)
+            if cid in frozen:
+                state.fade_weight = 1.0
+                continue
+            goal = raw_adjustments.get(cid, 1.0)
             prev = state.fade_weight
-            new = prev + alpha * (goal - prev)
+            effective_alpha = alpha
+            if post_probe_active and cid in self._post_probe_fade_ids:
+                effective_alpha = min(alpha, 0.25)
+            new = prev + effective_alpha * (goal - prev)
             if abs(new - goal) < 0.05:
                 new = goal
             state.fade_weight = new
             if new < 1.0:
                 result[cid] = new
+        if not post_probe_active:
+            self._clear_post_probe_fade()
         # Clean up consumers no longer in the pool
         for cid in list(self._consumers):
             if cid not in consumer_ids and cid not in self._priority:

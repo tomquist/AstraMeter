@@ -49,8 +49,12 @@ class _SimHarness:
         min_efficient_power: int = 0,
         efficiency_rotation_interval: int = 900,
         poll_interval: float = 0.3,
+        poll_intervals: list[float] | None = None,
         base_noise: float = 0.0,
         startup_delay: float = 2.0,
+        startup_delays: list[float] | None = None,
+        min_power_threshold: float = 5.0,
+        min_power_thresholds: list[float] | None = None,
         **ct_kwargs,
     ):
         ct_port, http_port = _find_free_ports(2)
@@ -70,6 +74,17 @@ class _SimHarness:
         self.batteries: list[BatterySimulator] = []
         for i in range(num_batteries):
             mac = f"02B250{i + 1:06X}"
+            battery_poll_interval = (
+                poll_intervals[i] if poll_intervals is not None else poll_interval
+            )
+            battery_startup_delay = (
+                startup_delays[i] if startup_delays is not None else startup_delay
+            )
+            battery_min_power_threshold = (
+                min_power_thresholds[i]
+                if min_power_thresholds is not None
+                else min_power_threshold
+            )
             self.batteries.append(
                 BatterySimulator(
                     mac=mac,
@@ -81,9 +96,9 @@ class _SimHarness:
                     max_discharge_power=800,
                     initial_soc=0.8,
                     ramp_rate=400.0,  # Fast ramp for quicker test convergence
-                    poll_interval=poll_interval,
-                    min_power_threshold=5.0,  # Low threshold to observe small targets
-                    startup_delay=startup_delay,  # Mimic real inverter warm-up from idle
+                    poll_interval=battery_poll_interval,
+                    min_power_threshold=battery_min_power_threshold,
+                    startup_delay=battery_startup_delay,  # Mimic real inverter warm-up from idle
                 )
             )
 
@@ -140,6 +155,9 @@ class _SimHarness:
     def active_battery_count(self, threshold: float = 15.0) -> int:
         """Count batteries producing more than `threshold` watts."""
         return sum(1 for p in self.battery_powers() if abs(p) > threshold)
+
+    def active_battery_indexes(self, threshold: float = 15.0) -> list[int]:
+        return [i for i, p in enumerate(self.battery_powers()) if abs(p) > threshold]
 
     async def wait_active(
         self, expected: int, *, threshold: float = 15.0, timeout: float = 20.0
@@ -249,7 +267,7 @@ class TestEfficiencyE2E:
 
     @pytest.mark.timeout(60)
     async def test_priority_rotation_switches_active_battery(self):
-        """After rotation interval, a different battery becomes active."""
+        """After rotation interval, the other battery joins via probe."""
         h = _SimHarness(
             num_batteries=2,
             base_load=[200.0, 0.0, 0.0],
@@ -275,29 +293,241 @@ class TestEfficiencyE2E:
                 f"Expected 1 active before rotation. Powers: {h.battery_powers()}"
             )
 
-            # Poll until the active battery set changes or timeout.
-            timeout = h.ct002._balancer._cfg.efficiency_rotation_interval + 15.0
+            await h.settle(3.0)
+            h.ct002._balancer._last_rotation -= (
+                h.ct002._balancer._cfg.efficiency_rotation_interval + 1.0
+            )
+            timeout = 10.0
             poll_interval = 0.3
             elapsed = 0.0
-            active_after: list[int] = list(active_before)
             powers_after = powers_before
+            standby_idx = 1 - active_before[0]
+            probe_joined = False
             while elapsed < timeout:
                 await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
                 powers_after = h.battery_powers()
-                active_after = [i for i, p in enumerate(powers_after) if abs(p) > 15]
-                if len(active_after) == 1 and active_after != active_before:
+                if abs(powers_after[standby_idx]) > 15:
+                    probe_joined = True
                     break
-            else:
-                pytest.fail(
-                    f"Rotation did not switch active battery within {timeout}s. "
-                    f"active_before={active_before}, last powers={powers_after}"
-                )
+            assert probe_joined, (
+                f"Rotation should start a probe handoff on the other battery within {timeout}s. "
+                f"active_before={active_before}, last powers={powers_after}"
+            )
+            assert abs(h.grid_total()) < 160, (
+                f"Grid should stay reasonably stable during timed probe rotation. "
+                f"Grid={h.grid_total():.0f}W powers={h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
 
-            assert active_before != active_after, (
-                f"Expected rotation: active_before={active_before}, "
-                f"active_after={active_after}. "
-                f"Powers before={powers_before}, after={powers_after}"
+    @pytest.mark.timeout(60)
+    async def test_probe_keeps_grid_near_zero_during_slow_rotation(self):
+        """During a slow probe, the previous battery keeps covering demand."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_rotation_interval=7,
+            startup_delay=6.0,
+            efficiency_fade_alpha=1.0,
+        )
+        await h.start()
+        try:
+            await h.wait_active(1)
+            powers_before = h.battery_powers()
+            active_before = 0 if abs(powers_before[0]) > abs(powers_before[1]) else 1
+            standby = 1 - active_before
+
+            h.ct002._balancer._last_rotation -= 8
+
+            max_grid = 0.0
+            min_backup_power = float("inf")
+            max_probe_power = 0.0
+            for _ in range(8):
+                await asyncio.sleep(0.5)
+                powers = h.battery_powers()
+                max_grid = max(max_grid, abs(h.grid_total()))
+                min_backup_power = min(min_backup_power, abs(powers[active_before]))
+                max_probe_power = max(max_probe_power, abs(powers[standby]))
+
+            assert min_backup_power > 120, (
+                f"Previous battery should remain online during probe. Powers: {h.battery_powers()}"
+            )
+            assert max_probe_power < 40, (
+                "Promoted battery should still be in startup delay during the probe window. "
+                f"Powers: {h.battery_powers()}"
+            )
+            assert max_grid < 70, (
+                f"Grid should stay near zero during probe, saw {max_grid:.0f}W. "
+                f"Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(60)
+    async def test_probe_handles_mixed_poll_intervals(self):
+        """Residual backup coverage tolerates probe lag from slower polling."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_rotation_interval=7,
+            poll_intervals=[0.9, 0.3],
+            startup_delays=[6.0, 6.0],
+            efficiency_fade_alpha=1.0,
+        )
+        await h.start()
+        try:
+            await h.wait_active(1)
+            active_before = h.active_battery_indexes()[0]
+            standby = 1 - active_before
+
+            h.ct002._balancer._last_rotation -= 8
+
+            max_grid = 0.0
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                max_grid = max(max_grid, abs(h.grid_total()))
+
+            assert abs(h.battery_powers()[active_before]) > 100, (
+                "Previous battery should still cover most of the demand while the "
+                f"promoted battery is probing. Powers: {h.battery_powers()}"
+            )
+            assert abs(h.battery_powers()[standby]) < 60, (
+                f"Promoted battery should still be ramping slowly. Powers: {h.battery_powers()}"
+            )
+            assert max_grid < 90, (
+                f"Mixed poll intervals should not blow up grid error during probe (max {max_grid:.0f}W). "
+                f"Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(60)
+    async def test_probe_acceptance_avoids_large_export_spike(self):
+        """Successful probe handoff should not temporarily double total output."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_rotation_interval=7,
+            startup_delay=2.0,
+            efficiency_fade_alpha=1.0,
+        )
+        await h.start()
+        try:
+            await h.wait_active(1)
+            active_before = h.active_battery_indexes()[0]
+            standby = 1 - active_before
+            h.ct002._balancer._last_rotation -= 8
+
+            max_total_output = 0.0
+            max_grid = 0.0
+            probe_accepted = False
+            for _ in range(24):
+                await asyncio.sleep(0.5)
+                powers = h.battery_powers()
+                max_total_output = max(max_total_output, sum(max(p, 0.0) for p in powers))
+                max_grid = max(max_grid, abs(h.grid_total()))
+                if abs(powers[standby]) > 15:
+                    probe_accepted = True
+
+            assert probe_accepted, f"Expected promoted battery to join. Powers: {h.battery_powers()}"
+            assert max_total_output < 320, (
+                f"Probe acceptance should not double output. Max total was {max_total_output:.0f}W; "
+                f"powers={h.battery_powers()}"
+            )
+            assert max_grid < 130, (
+                f"Probe acceptance should keep grid reasonably stable; max error {max_grid:.0f}W. "
+                f"powers={h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(60)
+    async def test_probe_respects_80w_inverter_floor(self):
+        """Probe should use a meaningful command when batteries ignore tiny targets."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            probe_min_power=80,
+            efficiency_rotation_interval=7,
+            startup_delay=0.0,
+            min_power_thresholds=[80.0, 80.0],
+            efficiency_fade_alpha=1.0,
+        )
+        await h.start()
+        try:
+            await h.wait_active(1, threshold=80.0)
+            await h.settle(3.0)
+            active_before = h.active_battery_indexes(threshold=80.0)[0]
+            standby = 1 - active_before
+            h.ct002._balancer._last_rotation -= 8
+
+            probe_joined = False
+            max_grid = 0.0
+            for _ in range(16):
+                await asyncio.sleep(0.5)
+                powers = h.battery_powers()
+                max_grid = max(max_grid, abs(h.grid_total()))
+                if abs(powers[standby]) >= 70:
+                    probe_joined = True
+                    break
+
+            assert probe_joined, (
+                "Probe should use enough command to clear an 80W inverter floor. "
+                f"Powers: {h.battery_powers()}"
+            )
+            assert max_grid < 120, (
+                f"80W probe floor should not destabilize the grid excessively; max {max_grid:.0f}W. "
+                f"Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(60)
+    async def test_probe_rejection_keeps_backup_covering_demand(self):
+        """Rejected probe should not create a noticeable demand gap."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_rotation_interval=7,
+            startup_delay=0.0,
+            efficiency_fade_alpha=1.0,
+            saturation_grace_seconds=5.0,
+        )
+        await h.start()
+        try:
+            await h.wait_active(1)
+            await h.settle(3.0)
+            active_before = h.active_battery_indexes()[0]
+            standby = 1 - active_before
+            h.batteries[standby].startup_delay = 20.0
+            h.ct002._balancer._last_rotation -= 8
+
+            max_grid = 0.0
+            large_gap_samples = 0
+            for _ in range(16):
+                await asyncio.sleep(0.5)
+                powers = h.battery_powers()
+                grid = abs(h.grid_total())
+                max_grid = max(max_grid, grid)
+                if grid > 100:
+                    large_gap_samples += 1
+
+            assert abs(h.battery_powers()[standby]) < 25, (
+                f"Promoted battery should still be rejected as a slow/stuck probe. Powers: {h.battery_powers()}"
+            )
+            assert large_gap_samples <= 1, (
+                "Rejected probe should not leave the grid under-covered for multiple samples. "
+                f"max_grid={max_grid:.0f}W powers={h.battery_powers()}"
+            )
+            assert max_grid < 70, (
+                f"Rejected probe should not leave a large grid gap; max error {max_grid:.0f}W. "
+                f"Powers: {h.battery_powers()}"
             )
         finally:
             await h.stop()
@@ -385,6 +615,7 @@ class TestEfficiencyE2E:
             min_efficient_power=150,
             efficiency_fade_alpha=1.0,
             efficiency_saturation_threshold=0.4,
+            saturation_stall_timeout_seconds=4.0,
         )
         await h.start()
         try:
@@ -407,6 +638,37 @@ class TestEfficiencyE2E:
             await h.stop()
 
     @pytest.mark.timeout(60)
+    async def test_initially_empty_battery_swaps_without_timed_rotation(self):
+        """An empty prioritized battery should be swapped out before timed rotation."""
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_fade_alpha=1.0,
+            efficiency_rotation_interval=9999,
+            efficiency_saturation_threshold=0.4,
+            saturation_stall_timeout_seconds=4.0,
+        )
+        h.batteries[0].soc = 0.0
+        h.batteries[1].soc = 1.0
+        await h.start()
+        try:
+            for _ in range(30):
+                await asyncio.sleep(0.5)
+                if abs(h.battery_powers()[1]) > 50:
+                    break
+            assert abs(h.battery_powers()[1]) > 50, (
+                "Healthy battery should take over without waiting for timed rotation. "
+                f"Powers: {h.battery_powers()}"
+            )
+            assert abs(h.battery_powers()[0]) < 20, (
+                "Empty battery should remain near zero after the takeover. "
+                f"Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    @pytest.mark.timeout(60)
     async def test_saturation_recovery_after_swap(self):
         """After forced swap, original battery recovers when constraint is lifted."""
         h = _SimHarness(
@@ -417,6 +679,7 @@ class TestEfficiencyE2E:
             efficiency_rotation_interval=10,
             efficiency_saturation_threshold=0.4,
             saturation_decay_factor=0.8,
+            saturation_stall_timeout_seconds=4.0,
         )
         await h.start()
         try:
@@ -438,12 +701,13 @@ class TestEfficiencyE2E:
             # Restore the original battery
             h.batteries[active_idx].max_charge_power = 800
             h.batteries[active_idx].max_discharge_power = 800
+            h.ct002._balancer._last_rotation -= 11
             # Poll for the restored battery to become active again
-            for _ in range(40):
+            for _ in range(60):
                 await asyncio.sleep(0.5)
-                if abs(h.battery_powers()[active_idx]) > 50:
+                if abs(h.battery_powers()[active_idx]) > 25:
                     break
-            assert abs(h.battery_powers()[active_idx]) > 50, (
+            assert abs(h.battery_powers()[active_idx]) > 25, (
                 f"Restored battery should be producing. Powers: {h.battery_powers()}"
             )
             # Poll for grid to settle after restored battery ramps up
