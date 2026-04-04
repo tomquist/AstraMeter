@@ -428,12 +428,16 @@ class TestEfficiencyE2E:
             for _ in range(24):
                 await asyncio.sleep(0.5)
                 powers = h.battery_powers()
-                max_total_output = max(max_total_output, sum(max(p, 0.0) for p in powers))
+                max_total_output = max(
+                    max_total_output, sum(max(p, 0.0) for p in powers)
+                )
                 max_grid = max(max_grid, abs(h.grid_total()))
                 if abs(powers[standby]) > 15:
                     probe_accepted = True
 
-            assert probe_accepted, f"Expected promoted battery to join. Powers: {h.battery_powers()}"
+            assert probe_accepted, (
+                f"Expected promoted battery to join. Powers: {h.battery_powers()}"
+            )
             assert max_total_output < 320, (
                 f"Probe acceptance should not double output. Max total was {max_total_output:.0f}W; "
                 f"powers={h.battery_powers()}"

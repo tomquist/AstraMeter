@@ -442,7 +442,10 @@ class LoadBalancer:
             return None
         support_reports = {
             cid: reports[cid]
-            for cid in (*probe.backup_ids, *(cid for cid in probe.active_ids if cid != candidate_id))
+            for cid in (
+                *probe.backup_ids,
+                *(cid for cid in probe.active_ids if cid != candidate_id),
+            )
             if cid in reports
         }
         if consumer_id != candidate_id and consumer_id not in support_reports:
