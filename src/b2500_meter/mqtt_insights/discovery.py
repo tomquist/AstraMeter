@@ -125,6 +125,18 @@ def build_ct002_consumer_discovery(
         "entity_category": "diagnostic",
     }
 
+    # Poll interval (EMA-smoothed seconds between consecutive polls)
+    components["poll_interval"] = {
+        "platform": "sensor",
+        "unique_id": f"{uid_prefix}_poll_interval",
+        "name": "Poll Interval",
+        "device_class": "duration",
+        "unit_of_measurement": "s",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.poll_interval }}",
+        "entity_category": "diagnostic",
+    }
+
     # Manual target number
     components["manual_target"] = {
         "platform": "number",
@@ -330,6 +342,18 @@ def build_shelly_battery_discovery(
         "device_class": "timestamp",
         "state_topic": state_topic,
         "value_template": "{{ value_json.last_seen }}",
+        "entity_category": "diagnostic",
+    }
+
+    # Poll interval (EMA-smoothed seconds between consecutive polls)
+    components["poll_interval"] = {
+        "platform": "sensor",
+        "unique_id": f"{uid_prefix}_poll_interval",
+        "name": "Poll Interval",
+        "device_class": "duration",
+        "unit_of_measurement": "s",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.poll_interval }}",
         "entity_category": "diagnostic",
     }
 

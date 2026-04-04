@@ -287,6 +287,7 @@ class MqttInsightsService:
             "saturation": data.get("saturation", 0.0),
             "last_target": data.get("last_target"),
             "active": data.get("active", True),
+            "poll_interval": data.get("poll_interval"),
             "last_seen": data.get("last_seen", ""),
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),
@@ -367,6 +368,7 @@ class MqttInsightsService:
         battery_state = {
             "grid_power": data.get("grid_power", {}),
             "active": data.get("active", True),
+            "poll_interval": data.get("poll_interval"),
             "last_seen": data.get("last_seen", ""),
         }
 

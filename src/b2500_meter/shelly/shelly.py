@@ -44,6 +44,7 @@ class Shelly:
         self._transport = None
         self._protocol: _ShellyProtocol | None = None
         self._battery_last_seen: dict[str, float] = {}
+        self._battery_poll_interval: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
         self._stopped = asyncio.Event()
         self._inactive_check_task = None
@@ -104,12 +105,27 @@ class Shelly:
             },
         }
 
-    def _track_battery_seen(self, addr):
+    def _track_battery_seen(self, addr) -> float | None:
         battery_ip = addr[0]
         now = time.time()
 
         first_seen = battery_ip not in self._battery_last_seen
         was_inactive = battery_ip in self._inactive_batteries
+
+        # Compute EMA-smoothed poll interval
+        poll_interval: float | None = None
+        if not first_seen:
+            raw_interval = now - self._battery_last_seen[battery_ip]
+            prev = self._battery_poll_interval.get(battery_ip)
+            if prev is None:
+                self._battery_poll_interval[battery_ip] = round(raw_interval, 1)
+            else:
+                alpha = 0.3
+                self._battery_poll_interval[battery_ip] = round(
+                    alpha * raw_interval + (1 - alpha) * prev, 1
+                )
+            poll_interval = self._battery_poll_interval[battery_ip]
+
         self._battery_last_seen[battery_ip] = now
         if was_inactive:
             self._inactive_batteries.remove(battery_ip)
@@ -126,6 +142,8 @@ class Shelly:
                 self._udp_port,
                 battery_ip,
             )
+
+        return poll_interval
 
     def _log_inactive_batteries(self):
         now = time.time()
@@ -163,7 +181,7 @@ class Shelly:
             logger.exception("Error handling Shelly request from %s", addr)
 
     async def _handle_request(self, transport, data, addr):
-        self._track_battery_seen(addr)
+        poll_interval = self._track_battery_seen(addr)
 
         try:
             request_str = data.decode()
@@ -222,6 +240,7 @@ class Shelly:
                             "total": grid_l1 + grid_l2 + grid_l3,
                         },
                         "active": battery_ip not in self._inactive_batteries,
+                        "poll_interval": poll_interval,
                         "last_seen": datetime.now(timezone.utc).isoformat(),
                         "battery_count": len(self._battery_last_seen),
                     },

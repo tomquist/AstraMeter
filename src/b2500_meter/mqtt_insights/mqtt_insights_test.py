@@ -70,6 +70,14 @@ def test_ct002_consumer_discovery_structure():
     assert "ct_type" in comps
     assert "ct_mac" in comps
     assert "last_seen" in comps
+    assert "poll_interval" in comps
+
+    # Poll interval sensor
+    poll = comps["poll_interval"]
+    assert poll["platform"] == "sensor"
+    assert poll["device_class"] == "duration"
+    assert poll["unit_of_measurement"] == "s"
+    assert poll["entity_category"] == "diagnostic"
 
     # Primary entity has name: null
     assert comps["grid_power_total"]["name"] is None
@@ -126,6 +134,10 @@ def test_shelly_battery_discovery_structure():
     assert "grid_power_total" in comps
     assert "active" in comps
     assert "last_seen" in comps
+    assert "poll_interval" in comps
+    poll = comps["poll_interval"]
+    assert poll["device_class"] == "duration"
+    assert poll["unit_of_measurement"] == "s"
     assert payload["availability_mode"] == "all"
     assert len(payload["availability"]) == 2
 
@@ -309,6 +321,7 @@ SAMPLE_CT002_DATA = {
     "saturation": 0.5,
     "last_target": 300.0,
     "active": True,
+    "poll_interval": 5.0,
     "last_seen": "2026-01-01T00:00:00+00:00",
     "manual_target": None,
     "auto_target": True,
@@ -320,6 +333,7 @@ SAMPLE_CT002_DATA = {
 SAMPLE_SHELLY_DATA = {
     "grid_power": {"l1": 100.0, "l2": 200.0, "l3": 300.0, "total": 600.0},
     "active": True,
+    "poll_interval": 5.0,
     "last_seen": "2026-01-01T00:00:00+00:00",
     "battery_count": 1,
 }
