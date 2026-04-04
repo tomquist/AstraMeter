@@ -302,8 +302,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 400)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         out_a = device._compute_smooth_target([400, 0, 0], "a")
         out_b = device._compute_smooth_target([400, 0, 0], "b")
         assert out_a[0] < out_b[0]
@@ -319,8 +319,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 200)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         out1 = device._compute_smooth_target([400, 0, 0], "a")
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 200)
@@ -335,11 +335,11 @@ class TestSaturationDetection:
             saturation_alpha=0.5,
             min_target_for_saturation=10,
         )
-        device._balancer._saturation._scores["a"] = 1.0
+        device._balancer._get_consumer("a").saturation_score = 1.0
         device._update_consumer_report("a", "A", 200)
         device._update_consumer_report("b", "A", 200)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         out1 = device._compute_smooth_target([400, 0, 0], "a")
         device._update_consumer_report("a", "A", 200)
         device._update_consumer_report("b", "A", 200)
@@ -356,8 +356,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
-        device._balancer._last_target["a"] = 10
-        device._balancer._last_target["b"] = 10
+        device._balancer._get_consumer("a").last_target = 10
+        device._balancer._get_consumer("b").last_target = 10
         out = device._compute_smooth_target([20, 0, 0], "a")
         assert out[0] == 10
 
@@ -369,8 +369,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 400)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         out_a = device._compute_smooth_target([400, 0, 0], "a")
         out_b = device._compute_smooth_target([400, 0, 0], "b")
         assert out_a[0] == out_b[0] == 200
@@ -386,13 +386,13 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", -100)
         device._update_consumer_report("b", "A", 200)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         out = device._compute_smooth_target([400, 0, 0], "a")
         # Consumer "a" is still producing meaningful power, so it should not
         # be flagged as saturated solely because it has not crossed zero yet.
         assert out[0] == 200
-        assert device._balancer._saturation._scores.get("a", 0.0) == 0.0
+        assert device._balancer._get_consumer("a").saturation_score == 0.0
 
     def test_partial_output_not_saturated(self):
         """A battery producing meaningful output below target is NOT saturated.
@@ -410,11 +410,11 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 50)
         device._update_consumer_report("b", "A", 150)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         device._compute_smooth_target([200, 0, 0], "a")
         # actual=50 is well above min_target_for_saturation=20, so no saturation.
-        assert device._balancer._saturation._scores.get("a", 0.0) == 0.0
+        assert device._balancer._get_consumer("a").saturation_score == 0.0
 
     def test_saturation_boundary_at_threshold(self):
         """Output exactly at min_target_for_saturation is not saturated;
@@ -429,16 +429,16 @@ class TestSaturationDetection:
         # actual=20 (at threshold) → not saturated
         device._update_consumer_report("a", "A", 20)
         device._update_consumer_report("b", "A", 180)
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = 200
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = 200
         device._compute_smooth_target([200, 0, 0], "a")
-        assert device._balancer._saturation._scores.get("a", 0.0) == 0.0
+        assert device._balancer._get_consumer("a").saturation_score == 0.0
 
         # actual=19 (just below threshold) → saturated
         device._update_consumer_report("a", "A", 19)
-        device._balancer._last_target["a"] = 200
+        device._balancer._get_consumer("a").last_target = 200
         device._compute_smooth_target([200, 0, 0], "a")
-        assert device._balancer._saturation._scores.get("a", 0.0) > 0.0
+        assert device._balancer._get_consumer("a").saturation_score > 0.0
 
 
 class TestCleanup:
@@ -447,24 +447,23 @@ class TestCleanup:
     def test_cleanup_removes_saturation_state(self):
         device = CT002(saturation_detection=True, consumer_ttl=0.01)
         device._update_consumer_report("a", "A", 0)
-        device._balancer._last_target["a"] = 100
-        device._balancer._saturation._scores["a"] = 0.5
+        device._balancer._get_consumer("a").last_target = 100
+        device._balancer._get_consumer("a").saturation_score = 0.5
         time.sleep(0.02)
         device._cleanup_consumers()
-        assert "a" not in device._balancer._saturation._scores
-        assert "a" not in device._balancer._last_target
+        assert "a" not in device._balancer._consumers
 
     def test_cleanup_removes_efficiency_state(self):
         device = CT002(min_efficient_power=150, consumer_ttl=0.01)
         device._update_consumer_report("a", "A", 0)
         device._balancer._deprioritized.add("a")
         device._balancer._priority.append("a")
-        device._balancer._fade_weights["a"] = 0.5
+        device._balancer._get_consumer("a").fade_weight = 0.5
         time.sleep(0.02)
         device._cleanup_consumers()
         assert "a" not in device._balancer._deprioritized
         assert "a" not in device._balancer._priority
-        assert "a" not in device._balancer._fade_weights
+        assert "a" not in device._balancer._consumers
 
 
 class TestEfficiencyOptimization:
@@ -669,7 +668,7 @@ class TestEfficiencyFade:
         device._compute_smooth_target([200, 0, 0], "b")
         # The deprioritized consumer should NOT be at zero yet — it's fading.
         deprioritized_cid = next(iter(device._balancer._deprioritized))
-        fade_w = device._balancer._fade_weights[deprioritized_cid]
+        fade_w = device._balancer._consumers[deprioritized_cid].fade_weight
         assert 0 < fade_w < 1.0, f"Expected intermediate fade, got {fade_w}"
 
     def test_fade_blend_drives_consumer_down(self):
@@ -697,7 +696,7 @@ class TestEfficiencyFade:
         device._compute_smooth_target([600, 0, 0], deprioritized_cid)
         # 600W/2 = 300 > 180 (hysteresis exit): no longer limited.
         assert len(device._balancer._deprioritized) == 0
-        fade_w = device._balancer._fade_weights.get(deprioritized_cid, 1.0)
+        fade_w = device._balancer._get_consumer(deprioritized_cid).fade_weight
         assert 0 < fade_w < 1.0, f"Should be mid-fade, got {fade_w}"
 
         # Now drop demand to re-enter limiting with consumer reporting 100W.
@@ -708,7 +707,7 @@ class TestEfficiencyFade:
         # With fade_w < 1 and reported=100, the drive-to-zero dominates.
         assert out[0] < 0, (
             f"Expected negative target to drive consumer down during fade, "
-            f"got {out[0]}. fade_w={device._balancer._fade_weights}"
+            f"got {out[0]}. fade_w={{cid: s.fade_weight for cid, s in device._balancer._consumers.items()}}"
         )
 
     def test_fade_gradual_activate(self):
@@ -726,7 +725,7 @@ class TestEfficiencyFade:
         device._compute_smooth_target([200, 0, 0], "b")
         assert len(device._balancer._deprioritized) == 1
         deprioritized_cid = next(iter(device._balancer._deprioritized))
-        assert device._balancer._fade_weights[deprioritized_cid] == 0.0
+        assert device._balancer._consumers[deprioritized_cid].fade_weight == 0.0
 
         # Now switch to gradual fade and raise demand above hysteresis exit.
         device._balancer._cfg = dataclasses.replace(
@@ -736,7 +735,7 @@ class TestEfficiencyFade:
         device._compute_smooth_target([400, 0, 0], deprioritized_cid)
         # Demand 400W / 2 = 200W > 180W (150*1.2): exits limiting.
         # Fade weight should move toward 1.0 but not reach it yet.
-        fade_w = device._balancer._fade_weights[deprioritized_cid]
+        fade_w = device._balancer._consumers[deprioritized_cid].fade_weight
         assert 0 < fade_w < 1.0, f"Expected gradual activate, got {fade_w}"
 
     def test_fade_converges(self):
@@ -753,7 +752,7 @@ class TestEfficiencyFade:
             device._compute_smooth_target([200 + i, 0, 0], "a")
             device._compute_smooth_target([200 + i, 0, 0], "b")
         deprioritized_cid = next(iter(device._balancer._deprioritized))
-        assert device._balancer._fade_weights[deprioritized_cid] == 0.0
+        assert device._balancer._consumers[deprioritized_cid].fade_weight == 0.0
 
     def test_fade_instant_with_alpha_one(self):
         """With alpha=1.0, fade is instant (matches old behavior)."""
@@ -799,10 +798,10 @@ class TestEfficiencyFade:
             consumer_ttl=0.01,
         )
         device._update_consumer_report("a", "A", 0)
-        device._balancer._fade_weights["a"] = 0.5
+        device._balancer._get_consumer("a").fade_weight = 0.5
         time.sleep(0.02)
         device._cleanup_consumers()
-        assert "a" not in device._balancer._fade_weights
+        assert "a" not in device._balancer._consumers
 
     def test_fade_new_consumer_during_fade(self):
         """New consumer starts its fade from 1.0, not from 0.0."""
@@ -822,7 +821,7 @@ class TestEfficiencyFade:
         device._compute_smooth_target([600, 0, 0], "c")
         # 600W/3 = 200W > 180W (hysteresis exit): all consumers active.
         # New consumer "c" should be at 1.0 (never deprioritized).
-        assert device._balancer._fade_weights.get("c", 1.0) == 1.0
+        assert device._balancer._get_consumer("c").fade_weight == 1.0
 
     def test_fade_demand_reversal(self):
         """Deprioritization reverses mid-fade; EMA reverses direction."""
@@ -837,13 +836,13 @@ class TestEfficiencyFade:
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
         deprioritized_cid = next(iter(device._balancer._deprioritized))
-        fade_after_low = device._balancer._fade_weights[deprioritized_cid]
+        fade_after_low = device._balancer._consumers[deprioritized_cid].fade_weight
         assert fade_after_low < 1.0
 
         # Now raise demand above hysteresis exit (per_consumer > 150*1.2=180).
         device._balancer._cache_sample = None
         device._compute_smooth_target([400, 0, 0], deprioritized_cid)
-        fade_after_high = device._balancer._fade_weights[deprioritized_cid]
+        fade_after_high = device._balancer._consumers[deprioritized_cid].fade_weight
         # Weight should have moved back toward 1.0.
         assert fade_after_high > fade_after_low
 
@@ -869,7 +868,7 @@ class TestEfficiencySaturationSwap:
         # The active consumer is whichever is NOT deprioritized
         active_cid = "a" if "b" in first_deprioritized else "b"
         # Inject high saturation on the active consumer
-        device._balancer._saturation._scores[active_cid] = 0.5
+        device._balancer._get_consumer(active_cid).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
@@ -895,7 +894,7 @@ class TestEfficiencySaturationSwap:
         active_cid = "a" if "b" in first_deprioritized else "b"
         # Inject low saturation that stays below threshold even after one
         # EMA update (0.15*1.0 + 0.85*0.1 = 0.235 < 0.4).
-        device._balancer._saturation._scores[active_cid] = 0.1
+        device._balancer._get_consumer(active_cid).saturation_score = 0.1
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
@@ -917,8 +916,8 @@ class TestEfficiencySaturationSwap:
         device._compute_smooth_target([200, 0, 0], "b")
         first_deprioritized = set(device._balancer._deprioritized)
         # Inject high saturation on BOTH consumers
-        device._balancer._saturation._scores["a"] = 0.6
-        device._balancer._saturation._scores["b"] = 0.6
+        device._balancer._get_consumer("a").saturation_score = 0.6
+        device._balancer._get_consumer("b").saturation_score = 0.6
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
@@ -942,7 +941,7 @@ class TestEfficiencySaturationSwap:
         # Use sentinel so we can detect that the timer was actually updated
         device._balancer._last_rotation = 0
         active_cid = "a" if "b" in device._balancer._deprioritized else "b"
-        device._balancer._saturation._scores[active_cid] = 0.5
+        device._balancer._get_consumer(active_cid).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         # Rotation timer should have been updated from sentinel
@@ -963,7 +962,7 @@ class TestEfficiencySaturationSwap:
         device._compute_smooth_target([200, 0, 0], "b")
         first_deprioritized = set(device._balancer._deprioritized)
         active_cid = "a" if "b" in first_deprioritized else "b"
-        device._balancer._saturation._scores[active_cid] = 0.9
+        device._balancer._get_consumer(active_cid).saturation_score = 0.9
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
@@ -977,11 +976,11 @@ class TestEfficiencySaturationSwap:
             saturation_decay_factor=0.9,
             min_target_for_saturation=20,
         )
-        device._balancer._saturation._scores["a"] = 0.5
+        device._balancer._get_consumer("a").saturation_score = 0.5
         # target (10) < min_target_for_saturation (20) → decay branch
-        device._balancer._saturation.update("a", 10, 10)
+        device._balancer._saturation.update(device._balancer._get_consumer("a"), 10, 10)
         expected = 0.5 * 0.9
-        assert abs(device._balancer._saturation._scores["a"] - expected) < 1e-6
+        assert abs(device._balancer._consumers["a"].saturation_score - expected) < 1e-6
 
     def test_efficiency_saturation_decay_floor(self):
         """Saturation entry is removed when it decays below 0.001."""
@@ -991,10 +990,10 @@ class TestEfficiencySaturationSwap:
             saturation_decay_factor=0.5,
             min_target_for_saturation=20,
         )
-        device._balancer._saturation._scores["a"] = 0.001
-        device._balancer._saturation.update("a", 10, 10)
+        device._balancer._get_consumer("a").saturation_score = 0.001
+        device._balancer._saturation.update(device._balancer._get_consumer("a"), 10, 10)
         # 0.001 * 0.5 = 0.0005 < 0.001 → entry should be removed
-        assert "a" not in device._balancer._saturation._scores
+        assert device._balancer._get_consumer("a").saturation_score == 0.0
 
     def test_efficiency_force_swap_during_active_fade(self):
         """Forced swap during an active fade converges correctly."""
@@ -1012,9 +1011,9 @@ class TestEfficiencySaturationSwap:
         deprioritized_cid = next(iter(device._balancer._deprioritized))
         active_cid = "a" if deprioritized_cid == "b" else "b"
         # Verify fade is in progress (default alpha < 1.0)
-        assert 0.0 < device._balancer._fade_weights.get(deprioritized_cid, 1.0) < 1.0
+        assert 0.0 < device._balancer._get_consumer(deprioritized_cid).fade_weight < 1.0
         # Inject saturation on active consumer to force swap
-        device._balancer._saturation._scores[active_cid] = 0.5
+        device._balancer._get_consumer(active_cid).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
@@ -1042,7 +1041,7 @@ class TestEfficiencySaturationSwap:
         active_cid = "a" if "b" in device._balancer._deprioritized else "b"
         depr_cid = "b" if active_cid == "a" else "a"
         # Inject saturation on active consumer
-        device._balancer._saturation._scores[active_cid] = 0.5
+        device._balancer._get_consumer(active_cid).saturation_score = 0.5
         device._balancer._cache_sample = None
         # First consumer call triggers swap
         device._compute_smooth_target([200, 0, 0], "a")
@@ -1074,7 +1073,7 @@ class TestEfficiencySaturationSwap:
         active_cids = [c for c in ["a", "b", "c"] if c != depr_cid]
         # Saturate only one of the two active consumers
         sat_cid = active_cids[0]
-        device._balancer._saturation._scores[sat_cid] = 0.5
+        device._balancer._get_consumer(sat_cid).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([350, 0, 0], "a")
         device._compute_smooth_target([350, 0, 0], "b")
@@ -1101,7 +1100,7 @@ class TestEfficiencySaturationSwap:
         device._compute_smooth_target([200, 0, 0], "b")
         depr_cid = next(iter(device._balancer._deprioritized))
         # Give the deprioritized consumer a residual saturation score
-        device._balancer._saturation._scores[depr_cid] = 0.2
+        device._balancer._get_consumer(depr_cid).saturation_score = 0.2
         # Trigger timed rotation to activate the deprioritized consumer
         device._balancer._last_rotation -= 11
         device._compute_smooth_target([200, 0, 0], "a")
@@ -1109,7 +1108,7 @@ class TestEfficiencySaturationSwap:
         # The previously deprioritized consumer should now be active
         assert depr_cid not in device._balancer._deprioritized
         # Its saturation should have been reset on activation
-        assert device._balancer._saturation._scores.get(depr_cid, 0.0) == 0.0
+        assert device._balancer._get_consumer(depr_cid).saturation_score == 0.0
 
     def test_efficiency_rampdown_does_not_poison_replacement_battery(self):
         """A healthy battery ramping down must remain eligible for takeover."""
@@ -1126,13 +1125,13 @@ class TestEfficiencySaturationSwap:
         device._update_consumer_report("b", "A", 200)
         device._balancer._priority = ["a", "b"]
         device._balancer._deprioritized = {"b"}
-        device._balancer._last_target["a"] = 200
-        device._balancer._last_target["b"] = -80
-        device._balancer._saturation._scores["a"] = 0.5
+        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("b").last_target = -80
+        device._balancer._get_consumer("a").saturation_score = 0.5
 
         device._compute_smooth_target([200, 0, 0], "b")
 
-        assert device._balancer._saturation._scores.get("b", 0.0) == 0.0
+        assert device._balancer._get_consumer("b").saturation_score == 0.0
 
     def test_efficiency_force_rotation_on_saturation_charging(self):
         """Forced swap also works for charging (negative target / solar excess)."""
@@ -1151,7 +1150,7 @@ class TestEfficiencySaturationSwap:
         assert len(device._balancer._deprioritized) == 1
         active_cid = "a" if "b" in device._balancer._deprioritized else "b"
         # Inject high saturation on the active consumer (can't charge)
-        device._balancer._saturation._scores[active_cid] = 0.5
+        device._balancer._get_consumer(active_cid).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([-200, 0, 0], "a")
         device._compute_smooth_target([-200, 0, 0], "b")
@@ -1180,22 +1179,24 @@ class TestEfficiencySaturationSwap:
         first_depr = next(iter(first_deprioritized))
 
         # Simulate the active consumer becoming saturated and being swapped
-        device._balancer._saturation._scores[first_active] = 0.5
+        device._balancer._get_consumer(first_active).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
         # The swap should have happened: originally-active is now deprioritized
         assert first_active in device._balancer._deprioritized
         # The promoted consumer should have a grace period set
-        assert first_depr in device._balancer._saturation._grace_until
+        assert device._balancer._get_consumer(first_depr).saturation_grace_until > 0
 
         # Now simulate rapid polling where the promoted consumer reports
         # zero output (battery ramping up).  The last target was set to a
         # real value, so without the grace period, saturation would climb
         # to >=0.4 in about 4 polls and trigger an immediate swap-back.
-        device._balancer._last_target[first_depr] = 200
+        device._balancer._get_consumer(first_depr).last_target = 200
         for _ in range(10):
-            device._balancer._saturation.update(first_depr, 200, 0)
+            device._balancer._saturation.update(
+                device._balancer._get_consumer(first_depr), 200, 0
+            )
             device._balancer._cache_sample = None
             device._compute_smooth_target([200, 0, 0], "a")
             device._compute_smooth_target([200, 0, 0], "b")
@@ -1203,7 +1204,7 @@ class TestEfficiencySaturationSwap:
         # The promoted consumer should STILL be active (grace period protects it)
         assert first_depr not in device._balancer._deprioritized
         # Its saturation should be zero (updates skipped during grace)
-        assert device._balancer._saturation._scores.get(first_depr, 0.0) == 0.0
+        assert device._balancer._get_consumer(first_depr).saturation_score == 0.0
 
     def test_rotation_grace_period_expires(self):
         """After the grace period expires, saturation detection resumes."""
@@ -1229,10 +1230,12 @@ class TestEfficiencySaturationSwap:
         assert first_depr not in device._balancer._deprioritized
 
         # Expire the grace period by shifting the deadline into the past
-        device._balancer._saturation._grace_until[first_depr] = time.time() - 1
+        device._balancer._get_consumer("first_depr").saturation_grace_until = (
+            time.time() - 1
+        )
 
         # Now inject high saturation — it should trigger a swap
-        device._balancer._saturation._scores[first_depr] = 0.5
+        device._balancer._get_consumer(first_depr).saturation_score = 0.5
         device._balancer._cache_sample = None
         device._compute_smooth_target([200, 0, 0], "a")
         device._compute_smooth_target([200, 0, 0], "b")
@@ -1305,7 +1308,7 @@ class TestInactiveConsumers:
 
         # Reactivate bat1
         device.set_consumer_active("bat1", True)
-        device._last_smooth_sample = None  # force re-evaluation
+        device._smoother._last_sample = None  # force re-evaluation
         result = device._compute_smooth_target([400, 0, 0], "bat1")
         assert result[0] == 200  # now split between two
 
@@ -1320,15 +1323,15 @@ class TestInactiveConsumers:
     def test_reactivation_clears_stale_state(self):
         """Re-enabling a consumer should clear saturation and last_target."""
         device = CT002(active_control=True)
-        device._balancer._saturation._scores["bat1"] = 0.8
-        device._balancer._last_target["bat1"] = 50
+        device._balancer._get_consumer("bat1").saturation_score = 0.8
+        device._balancer._get_consumer("bat1").last_target = 50
         device.set_consumer_active("bat1", False)
         # Stale state is preserved while inactive
-        assert "bat1" in device._balancer._saturation._scores
+        assert device._balancer._get_consumer("bat1").saturation_score > 0.0
         # Reactivation clears it
         device.set_consumer_active("bat1", True)
-        assert "bat1" not in device._balancer._saturation._scores
-        assert "bat1" not in device._balancer._last_target
+        assert device._balancer._get_consumer("bat1").saturation_score == 0.0
+        assert device._balancer._get_consumer("bat1").last_target is None
 
     def test_last_target_set_to_zero_for_inactive(self):
         """Inactive consumer's last_target should be recorded as 0."""
@@ -1336,4 +1339,4 @@ class TestInactiveConsumers:
         device._update_consumer_report("bat1", "A", 100)
         device.set_consumer_active("bat1", False)
         device._compute_smooth_target([400, 0, 0], "bat1")
-        assert device._balancer._last_target["bat1"] == 0
+        assert device._balancer._get_consumer("bat1").last_target == 0

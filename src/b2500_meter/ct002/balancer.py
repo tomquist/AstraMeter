@@ -75,6 +75,21 @@ class ConsumerMode(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
+# Per-consumer state
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class BalancerConsumerState:
+    """Bundled per-consumer state owned by LoadBalancer."""
+
+    last_target: float | None = None
+    fade_weight: float = 1.0
+    saturation_score: float = 0.0
+    saturation_grace_until: float = 0.0
+
+
+# ---------------------------------------------------------------------------
 # Saturation tracker
 # ---------------------------------------------------------------------------
 
@@ -84,6 +99,9 @@ class SaturationTracker:
 
     A saturation score of 1.0 means the actuator cannot follow its target
     (e.g. battery full/empty); 0.0 means it is tracking well.
+
+    State is stored externally in :class:`BalancerConsumerState` objects;
+    this class holds only configuration and algorithm logic.
     """
 
     def __init__(
@@ -98,54 +116,47 @@ class SaturationTracker:
         self._alpha = max(0.01, min(1.0, alpha))
         self._min_target = max(1, min_target)
         self._decay_factor = max(0.0, min(1.0, decay_factor))
-        self._scores: dict[str, float] = {}
-        self._grace_until: dict[str, float] = {}
 
     def update(
-        self, consumer_id: str, last_target: float | None, actual: float
+        self, state: BalancerConsumerState, last_target: float | None, actual: float
     ) -> None:
-        """Update the saturation score for *consumer_id*."""
+        """Update the saturation score for a consumer."""
         if not self._enabled or last_target is None:
             return
         # Grace period handling
-        grace_deadline = self._grace_until.get(consumer_id)
-        if grace_deadline is not None:
-            if time.time() < grace_deadline:
+        if state.saturation_grace_until > 0:
+            if time.time() < state.saturation_grace_until:
                 if abs(actual) >= self._min_target:
-                    del self._grace_until[consumer_id]
+                    state.saturation_grace_until = 0.0
                 else:
                     return
             else:
-                del self._grace_until[consumer_id]
+                state.saturation_grace_until = 0.0
         target_abs = abs(last_target)
         if target_abs < self._min_target:
-            prev = self._scores.get(consumer_id, 0.0)
+            prev = state.saturation_score
             if prev > 0:
                 decayed = prev * self._decay_factor
                 if decayed < 0.001:
-                    self._scores.pop(consumer_id, None)
+                    state.saturation_score = 0.0
                 else:
-                    self._scores[consumer_id] = decayed
+                    state.saturation_score = decayed
             return
         inst_saturation = 1.0 if abs(actual) < self._min_target else 0.0
-        prev = self._scores.get(consumer_id, 0.0)
-        self._scores[consumer_id] = (
+        prev = state.saturation_score
+        state.saturation_score = (
             self._alpha * inst_saturation + (1 - self._alpha) * prev
         )
 
-    def get(self, consumer_id: str) -> float:
-        return self._scores.get(consumer_id, 0.0)
+    def get(self, state: BalancerConsumerState) -> float:
+        return state.saturation_score
 
-    def set_grace(self, consumer_id: str, deadline: float) -> None:
-        self._grace_until[consumer_id] = deadline
+    def set_grace(self, state: BalancerConsumerState, deadline: float) -> None:
+        state.saturation_grace_until = deadline
 
-    def clear(self, consumer_id: str) -> None:
-        self._scores.pop(consumer_id, None)
-        self._grace_until.pop(consumer_id, None)
-
-    def remove(self, consumer_id: str) -> None:
-        self._scores.pop(consumer_id, None)
-        self._grace_until.pop(consumer_id, None)
+    def clear(self, state: BalancerConsumerState) -> None:
+        state.saturation_score = 0.0
+        state.saturation_grace_until = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -178,13 +189,19 @@ class LoadBalancer:
             min_target=saturation_min_target,
             decay_factor=saturation_decay_factor,
         )
-        self._last_target: dict[str, float] = {}
+        self._consumers: dict[str, BalancerConsumerState] = {}
         self._deprioritized: set[str] = set()
         self._priority: list[str] = []
         self._last_rotation: float = time.time()
         self._cache_sample: tuple | None = None
         self._cache_result: dict[str, float] | None = None
-        self._fade_weights: dict[str, float] = {}
+
+    def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
+        state = self._consumers.get(consumer_id)
+        if state is None:
+            state = BalancerConsumerState()
+            self._consumers[consumer_id] = state
+        return state
 
     # ------------------------------------------------------------------
     # Primary interface
@@ -218,20 +235,22 @@ class LoadBalancer:
         }
 
         # Update saturation (skip manual consumers)
-        last_target = self._last_target.get(consumer_id) if consumer_id else None
+        state = self._get_consumer(consumer_id) if consumer_id else None
+        last_target = state.last_target if state else None
         if (
             consumer_id
+            and state
             and consumer_id in active_reports
             and consumer_mode.mode != "manual"
         ):
             actual = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
-            self._saturation.update(consumer_id, last_target, actual)
+            self._saturation.update(state, last_target, actual)
 
         # --- Manual override ---
-        if consumer_mode.mode == "manual" and consumer_id:
+        if consumer_mode.mode == "manual" and consumer_id and state:
             reported = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
             target = consumer_mode.manual_value - reported
-            self._last_target[consumer_id] = target
+            state.last_target = target
             return self._split_by_phase(target, active_reports)
 
         # Auto-pool reports (exclude manual consumers)
@@ -247,10 +266,8 @@ class LoadBalancer:
 
     def remove_consumer(self, consumer_id: str) -> None:
         """Full cleanup for a departing consumer."""
-        self._last_target.pop(consumer_id, None)
-        self._saturation.remove(consumer_id)
+        self._consumers.pop(consumer_id, None)
         self._deprioritized.discard(consumer_id)
-        self._fade_weights.pop(consumer_id, None)
         if consumer_id in self._priority:
             self._priority.remove(consumer_id)
             self._cache_sample = None
@@ -260,7 +277,7 @@ class LoadBalancer:
         """Remove from efficiency rotation (consumer switched to manual)."""
         self._deprioritized.discard(consumer_id)
         self._priority = [cid for cid in self._priority if cid != consumer_id]
-        self._fade_weights.pop(consumer_id, None)
+        self._consumers.pop(consumer_id, None)
         self._cache_sample = None
         self._cache_result = None
 
@@ -270,12 +287,13 @@ class LoadBalancer:
         Called when a consumer transitions back to auto mode or resumes
         from inactive.
         """
-        self._last_target.pop(consumer_id, None)
-        self._saturation.clear(consumer_id)
+        state = self._get_consumer(consumer_id)
+        state.last_target = None
+        state.saturation_score = 0.0
         grace = time.time() + min(
             SATURATION_GRACE_SECONDS, self._cfg.efficiency_rotation_interval
         )
-        self._saturation.set_grace(consumer_id, grace)
+        state.saturation_grace_until = grace
 
     # ------------------------------------------------------------------
     # Rotation
@@ -295,7 +313,11 @@ class LoadBalancer:
         self._last_rotation = time.time()
         self._cache_sample = None
         self._cache_result = None
-        self._fade_weights.clear()
+        for cid in list(self._consumers):
+            if cid in current_pool:
+                self._consumers[cid].fade_weight = 1.0
+            else:
+                self._consumers.pop(cid, None)
         logger.info(
             "Efficiency: forced rotation, new order: %s",
             [c[:16] for c in self._priority],
@@ -306,10 +328,12 @@ class LoadBalancer:
     # ------------------------------------------------------------------
 
     def get_saturation(self, consumer_id: str) -> float:
-        return self._saturation.get(consumer_id)
+        state = self._consumers.get(consumer_id)
+        return state.saturation_score if state else 0.0
 
     def get_last_target(self, consumer_id: str) -> float | None:
-        return self._last_target.get(consumer_id)
+        state = self._consumers.get(consumer_id)
+        return state.last_target if state else None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -318,7 +342,7 @@ class LoadBalancer:
     def _steer_to_zero(self, consumer_id: str | None, reports: dict) -> list[float]:
         """Drive a consumer's output to zero."""
         if consumer_id:
-            self._last_target[consumer_id] = 0
+            self._get_consumer(consumer_id).last_target = 0
         reported = parse_int(
             reports.get(consumer_id, {}).get("power", 0) if consumer_id else 0
         )
@@ -368,7 +392,7 @@ class LoadBalancer:
         sample_id: tuple = (),
     ) -> list[float]:
         """Automatic allocation for auto-pool consumers."""
-        saturation = dict(self._saturation._scores)
+        saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
 
@@ -382,7 +406,8 @@ class LoadBalancer:
 
         # --- Fading path ---
         if any_fading and consumer_id:
-            fade_w = self._fade_weights.get(consumer_id, 1.0)
+            state = self._get_consumer(consumer_id)
+            fade_w = state.fade_weight
             reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
             if fade_w == 0.0:
                 return self._steer_to_zero(consumer_id, reports)
@@ -391,12 +416,11 @@ class LoadBalancer:
                 parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
             )
             demand = total_battery + smoothed_target
-            total_fade = sum(self._fade_weights.get(cid, 1.0) for cid in reports)
+            total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             target = desired - reported
 
-            if consumer_id:
-                self._last_target[consumer_id] = target
+            state.last_target = target
 
             return self._split_by_phase(target, reports, eff_part)
 
@@ -438,7 +462,7 @@ class LoadBalancer:
             target = 0
 
         if consumer_id:
-            self._last_target[consumer_id] = target
+            self._get_consumer(consumer_id).last_target = target
 
         return self._split_by_phase(target, reports, eff_part)
 
@@ -515,13 +539,17 @@ class LoadBalancer:
         for cid in sorted(current):
             if cid not in self._priority:
                 self._priority.append(cid)
-                self._saturation.set_grace(cid, grace)
+                self._saturation.set_grace(self._get_consumer(cid), grace)
 
         # Saturation swap check BEFORE cache
         if cfg.efficiency_saturation_threshold > 0 and self._cache_sample is not None:
             slots_est = len(self._priority) - len(self._deprioritized)
             for cid in self._priority[:slots_est]:
-                if self._saturation.get(cid) >= cfg.efficiency_saturation_threshold:
+                state = self._consumers.get(cid)
+                if (
+                    state
+                    and state.saturation_score >= cfg.efficiency_saturation_threshold
+                ):
                     self._cache_sample = None
                     break
 
@@ -557,19 +585,23 @@ class LoadBalancer:
 
         # Reset saturation for consumers transitioning to active
         for cid in self._deprioritized - deprioritized:
-            self._saturation.clear(cid)
-            self._saturation.set_grace(cid, grace)
+            state = self._get_consumer(cid)
+            self._saturation.clear(state)
+            self._saturation.set_grace(state, grace)
 
         if self._maybe_force_swap_saturated(self._priority, slots, now):
             deprioritized = set(self._priority[slots:])
             result = {cid: 0.0 for cid in deprioritized}
             cache_key = (sample_id, tuple(self._priority))
             for cid in set(self._priority[:slots]) - pre_swap_active:
-                self._saturation.clear(cid)
-                self._saturation.set_grace(cid, grace)
+                state = self._get_consumer(cid)
+                self._saturation.clear(state)
+                self._saturation.set_grace(state, grace)
 
         for cid in deprioritized - self._deprioritized:
-            self._saturation._grace_until.pop(cid, None)
+            state = self._consumers.get(cid)
+            if state:
+                state.saturation_grace_until = 0.0
             logger.info(
                 "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
                 cid[:16],
@@ -599,22 +631,25 @@ class LoadBalancer:
         threshold = cfg.efficiency_saturation_threshold
         saturated_idx = None
         for i in range(slots):
-            if self._saturation.get(priority[i]) >= threshold:
+            state = self._consumers.get(priority[i])
+            if state and state.saturation_score >= threshold:
                 saturated_idx = i
                 break
         if saturated_idx is None:
             return False
         healthy_idx = None
         for i in range(slots, len(priority)):
-            if self._saturation.get(priority[i]) < threshold:
+            state = self._consumers.get(priority[i])
+            if not state or state.saturation_score < threshold:
                 healthy_idx = i
                 break
         if healthy_idx is None:
             return False
+        sat_state = self._consumers.get(priority[saturated_idx])
         logger.info(
             "Efficiency: %s cannot follow target (sat=%.2f), rotating to %s",
             priority[saturated_idx][:16],
-            self._saturation.get(priority[saturated_idx]),
+            sat_state.saturation_score if sat_state else 0.0,
             priority[healthy_idx][:16],
         )
         priority[saturated_idx], priority[healthy_idx] = (
@@ -632,14 +667,16 @@ class LoadBalancer:
         result: dict[str, float] = {}
         for cid in consumer_ids:
             goal = raw_adjustments.get(cid, 1.0)
-            prev = self._fade_weights.get(cid, 1.0)
+            state = self._get_consumer(cid)
+            prev = state.fade_weight
             new = prev + alpha * (goal - prev)
             if abs(new - goal) < 0.05:
                 new = goal
-            self._fade_weights[cid] = new
+            state.fade_weight = new
             if new < 1.0:
                 result[cid] = new
-        self._fade_weights = {
-            cid: w for cid, w in self._fade_weights.items() if cid in consumer_ids
-        }
+        # Clean up consumers no longer in the pool
+        for cid in list(self._consumers):
+            if cid not in consumer_ids and cid not in self._priority:
+                self._consumers.pop(cid, None)
         return result

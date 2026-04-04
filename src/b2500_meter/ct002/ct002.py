@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import math
 import time
 from collections.abc import Awaitable, Callable
@@ -43,6 +44,29 @@ __all__ = [
 
 UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
+
+
+# ---------------------------------------------------------------------------
+# Per-consumer state
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Consumer:
+    """Bundled per-consumer state owned by CT002."""
+
+    consumer_id: str
+    # Meter readings (set externally, e.g. by powermeter integration)
+    values: list | None = None
+    # Report data (updated each UDP request)
+    phase: str = "A"
+    power: int = 0
+    timestamp: float = 0.0
+    device_type: str = ""
+    # Control state (set by explicit API calls)
+    manual_target: float = 0.0
+    manual_enabled: bool = False
+    active: bool = True
 
 
 class _CT002Protocol(asyncio.DatagramProtocol):
@@ -106,13 +130,9 @@ class CT002:
         ) = None
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
         self._device_id = device_id
-        self._inactive_consumers: set[str] = set()
+        self._consumers: dict[str, Consumer] = {}
         self._info_idx_counter = 0
-        self._values_by_consumer: dict = {}
-        self._reports_by_consumer: dict = {}
         self._last_response_time: dict[tuple, float] = {}
-        self._manual_target_values: dict[str, float] = {}
-        self._manual_target_enabled: set[str] = set()
         self._transport = None
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
@@ -152,48 +172,59 @@ class CT002:
             return battery_mac.lower()
         return f"{addr[0]}:{addr[1]}"
 
+    def _get_consumer(self, consumer_id: str) -> Consumer:
+        consumer = self._consumers.get(consumer_id)
+        if consumer is None:
+            consumer = Consumer(consumer_id=consumer_id)
+            self._consumers[consumer_id] = consumer
+        return consumer
+
     def set_consumer_value(self, consumer_id, values):
-        self._values_by_consumer[consumer_id] = values
+        self._get_consumer(consumer_id).values = values
 
     def _get_consumer_value(self, consumer_id):
-        return self._values_by_consumer.get(consumer_id)
+        consumer = self._consumers.get(consumer_id)
+        return consumer.values if consumer else None
 
     def set_consumer_manual_target(self, consumer_id: str, target: float) -> None:
         value = float(target)
         if not math.isfinite(value):
             msg = f"manual target must be finite, got {target!r}"
             raise ValueError(msg)
-        self._manual_target_values[consumer_id] = value
+        self._get_consumer(consumer_id).manual_target = value
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
         auto=False means use manual target override."""
+        consumer = self._get_consumer(consumer_id)
         if auto:
-            was_manual = consumer_id in self._manual_target_enabled
-            self._manual_target_enabled.discard(consumer_id)
+            was_manual = consumer.manual_enabled
+            consumer.manual_enabled = False
             if was_manual:
                 self._balancer.reset_consumer(consumer_id)
         else:
-            self._manual_target_enabled.add(consumer_id)
+            consumer.manual_enabled = True
             self._balancer.detach_from_auto_pool(consumer_id)
 
     def force_efficiency_rotation(self) -> None:
-        current = (
-            set(self._reports_by_consumer)
-            - self._inactive_consumers
-            - self._manual_target_enabled
-        )
+        current = {
+            cid
+            for cid, c in self._consumers.items()
+            if c.timestamp > 0 and c.active and not c.manual_enabled
+        }
         self._balancer.force_rotation(current)
 
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
+        consumer = self._get_consumer(consumer_id)
         if active:
-            self._inactive_consumers.discard(consumer_id)
+            consumer.active = True
             self._balancer.reset_consumer(consumer_id)
         else:
-            self._inactive_consumers.add(consumer_id)
+            consumer.active = False
 
     def is_consumer_active(self, consumer_id: str) -> bool:
-        return consumer_id not in self._inactive_consumers
+        consumer = self._consumers.get(consumer_id)
+        return consumer.active if consumer else True
 
     def _call_event_listener(self, consumer_id: str, data: dict[str, Any]) -> None:
         if not self.event_listener:
@@ -205,14 +236,12 @@ class CT002:
 
     def _update_consumer_report(self, consumer_id, phase, power, device_type=""):
         normalized_phase = str(phase).upper() if phase else "A"
-        previous = self._reports_by_consumer.get(consumer_id, {})
-        previous_phase = previous.get("phase")
-        self._reports_by_consumer[consumer_id] = {
-            "phase": normalized_phase,
-            "power": parse_int(power, 0),
-            "timestamp": time.time(),
-            "device_type": device_type,
-        }
+        consumer = self._get_consumer(consumer_id)
+        previous_phase = consumer.phase if consumer.timestamp > 0 else None
+        consumer.phase = normalized_phase
+        consumer.power = parse_int(power, 0)
+        consumer.timestamp = time.time()
+        consumer.device_type = device_type
 
         if normalized_phase in ("A", "B", "C") and previous_phase != normalized_phase:
             if previous_phase in ("A", "B", "C"):
@@ -233,16 +262,12 @@ class CT002:
         now = time.time()
         stale = [
             key
-            for key, report in self._reports_by_consumer.items()
-            if now - report.get("timestamp", 0) > self.consumer_ttl
+            for key, consumer in self._consumers.items()
+            if consumer.timestamp > 0 and now - consumer.timestamp > self.consumer_ttl
         ]
         for key in stale:
             self._call_event_listener(key, {"_removed": True})
-            self._reports_by_consumer.pop(key, None)
-            self._values_by_consumer.pop(key, None)
-            self._inactive_consumers.discard(key)
-            self._manual_target_values.pop(key, None)
-            self._manual_target_enabled.discard(key)
+            del self._consumers[key]
             self._balancer.remove_consumer(key)
         stale_addrs = [
             addr
@@ -253,12 +278,15 @@ class CT002:
             self._last_response_time.pop(addr, None)
 
     def _consumer_mode(self, consumer_id: str | None) -> ConsumerMode:
-        if consumer_id and consumer_id in self._inactive_consumers:
+        if not consumer_id:
+            return ConsumerMode("auto")
+        consumer = self._consumers.get(consumer_id)
+        if consumer is None:
+            return ConsumerMode("auto")
+        if not consumer.active:
             return ConsumerMode("inactive")
-        if consumer_id and consumer_id in self._manual_target_enabled:
-            return ConsumerMode(
-                "manual", self._manual_target_values.get(consumer_id, 0.0)
-            )
+        if consumer.manual_enabled:
+            return ConsumerMode("manual", consumer.manual_target)
         return ConsumerMode("auto")
 
     def _compute_smooth_target(self, values, consumer_id=None):
@@ -272,14 +300,24 @@ class CT002:
         smoothed = self._smoother.update(raw_total, sample_id)
         mode = self._consumer_mode(consumer_id)
 
+        reports = {
+            cid: {"phase": c.phase, "power": c.power}
+            for cid, c in self._consumers.items()
+            if c.timestamp > 0
+        }
+        inactive = frozenset(cid for cid, c in self._consumers.items() if not c.active)
+        manual = frozenset(
+            cid for cid, c in self._consumers.items() if c.manual_enabled
+        )
+
         return self._balancer.compute_target(
             consumer_id,
             mode,
-            self._reports_by_consumer,
+            reports,
             smoothed,
             raw_total,
-            frozenset(self._inactive_consumers),
-            frozenset(self._manual_target_enabled),
+            inactive,
+            manual,
             sample_id,
         )
 
@@ -289,13 +327,14 @@ class CT002:
             "B": {"chrg_power": 0, "dchrg_power": 0, "active": False},
             "C": {"chrg_power": 0, "dchrg_power": 0, "active": False},
         }
-        reports = list(self._reports_by_consumer.items())
 
-        for _consumer_id, report in reports:
-            phase = (report.get("phase") or "A").upper()
+        for consumer in self._consumers.values():
+            if consumer.timestamp <= 0:
+                continue
+            phase = consumer.phase.upper()
             if phase not in by_phase:
                 phase = "A"
-            power = parse_int(report.get("power", 0))
+            power = consumer.power
             if power == 0:
                 continue
             by_phase[phase]["active"] = True
@@ -319,11 +358,13 @@ class CT002:
         phases = " ".join(f"{p}:{int(v)}W" for p, v in zip("ABC", values, strict=False))
         chrg = " ".join(f"{p}:{phase_values[p]['chrg_power']}" for p in "ABC")
         dchrg = " ".join(f"{p}:{phase_values[p]['dchrg_power']}" for p in "ABC")
-        reports = list(self._reports_by_consumer.items())
+        consumers_with_reports = sorted(
+            ((c.consumer_id, c) for c in self._consumers.values() if c.timestamp > 0),
+            key=lambda x: x[0],
+        )
         consumers = (
             " ".join(
-                f"{cid[:8]}@{r.get('phase', '?')}:{r.get('power', 0)}"
-                for cid, r in sorted(reports, key=lambda x: x[0])
+                f"{cid[:8]}@{c.phase}:{c.power}" for cid, c in consumers_with_reports
             )
             or "none"
         )
@@ -515,7 +556,7 @@ class CT002:
 
         # Fire event listener after response is sent
         if not in_inspection_mode:
-            report = self._reports_by_consumer.get(consumer_id, {})
+            consumer = self._consumers.get(consumer_id)
             self._call_event_listener(
                 consumer_id,
                 {
@@ -530,9 +571,9 @@ class CT002:
                         "l2": float(values[1]),
                         "l3": float(values[2]),
                     },
-                    "phase": report.get("phase", reported_phase),
+                    "phase": consumer.phase if consumer else reported_phase,
                     "reported_power": reported_power,
-                    "device_type": report.get("device_type", ""),
+                    "device_type": consumer.device_type if consumer else "",
                     "battery_ip": addr[0],
                     "ct_type": fields[2] if len(fields) > 2 else "",
                     "ct_mac": fields[3] if len(fields) > 3 else "",
@@ -543,10 +584,12 @@ class CT002:
                     "smooth_target": self._smoother.value
                     if self._smoother.value is not None
                     else 0.0,
-                    "manual_target": self._manual_target_values.get(consumer_id),
-                    "auto_target": consumer_id not in self._manual_target_enabled,
+                    "manual_target": consumer.manual_target if consumer else None,
+                    "auto_target": not consumer.manual_enabled if consumer else True,
                     "active_control": self.active_control,
-                    "consumer_count": len(self._reports_by_consumer),
+                    "consumer_count": sum(
+                        1 for c in self._consumers.values() if c.timestamp > 0
+                    ),
                 },
             )
 

@@ -173,7 +173,10 @@ class SmokeHarness:
 
     def status(self) -> str:
         powers = self.battery_powers()
-        sat = self.ct002._balancer._saturation._scores
+        sat = {
+            cid: s.saturation_score
+            for cid, s in self.ct002._balancer._consumers.items()
+        }
         depr = self.ct002._balancer._deprioritized
         grid = self.grid_total()
         parts = [f"grid={grid:.0f}W"]
