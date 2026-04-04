@@ -50,6 +50,7 @@ __all__ = [
 
 UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
+POLL_INTERVAL_EMA_ALPHA = 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +258,10 @@ class CT002:
             if consumer.poll_interval is None:
                 consumer.poll_interval = round(raw_interval, 1)
             else:
-                alpha = 0.3
                 consumer.poll_interval = round(
-                    alpha * raw_interval + (1 - alpha) * consumer.poll_interval, 1
+                    POLL_INTERVAL_EMA_ALPHA * raw_interval
+                    + (1 - POLL_INTERVAL_EMA_ALPHA) * consumer.poll_interval,
+                    1,
                 )
         consumer.phase = normalized_phase
         consumer.power = parse_int(power, 0)

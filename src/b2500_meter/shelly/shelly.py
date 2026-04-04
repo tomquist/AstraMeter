@@ -13,6 +13,7 @@ from b2500_meter.config.logger import logger
 from b2500_meter.powermeter import Powermeter
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
+POLL_INTERVAL_EMA_ALPHA = 0.3
 
 
 class _ShellyProtocol(asyncio.DatagramProtocol):
@@ -120,9 +121,10 @@ class Shelly:
             if prev is None:
                 self._battery_poll_interval[battery_ip] = round(raw_interval, 1)
             else:
-                alpha = 0.3
                 self._battery_poll_interval[battery_ip] = round(
-                    alpha * raw_interval + (1 - alpha) * prev, 1
+                    POLL_INTERVAL_EMA_ALPHA * raw_interval
+                    + (1 - POLL_INTERVAL_EMA_ALPHA) * prev,
+                    1,
                 )
             poll_interval = self._battery_poll_interval[battery_ip]
 

@@ -363,6 +363,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["ct_type"] == "HME-4"
         assert payload["ct_mac"] == "AA:BB:CC:DD:EE:FF"
         assert payload["active"] is True
+        assert payload["poll_interval"] == 5.0
         assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
         await service.stop()
@@ -542,6 +543,7 @@ async def test_shelly_event_flow(mqtt_broker):
         payload = json.loads(received[0].payload)
         assert payload["grid_power"]["total"] == 600.0
         assert payload["active"] is True
+        assert payload["poll_interval"] == 5.0
         assert "192_168_1_100" in str(received[0].topic)
     finally:
         await service.stop()
