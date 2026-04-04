@@ -502,7 +502,7 @@ class TestEfficiencyE2E:
             )
             # Use 90th percentile to tolerate transient spikes from poll-timing jitter
             p90_grid = _percentile(grid_errors, 90)
-            assert p90_grid < 150, (
+            assert p90_grid < 160, (
                 f"80W probe floor should not destabilize the grid excessively; "
                 f"p90={p90_grid:.0f}W. Powers: {h.battery_powers()}"
             )

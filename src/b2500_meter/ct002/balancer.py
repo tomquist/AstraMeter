@@ -108,6 +108,7 @@ class ProbeState:
     deadline: float
     started_at: float
     proof_samples: int = 0
+    requested_power_abs: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +263,16 @@ class LoadBalancer:
     def _effective_probe_min_power(self) -> float:
         return max(self._probe_success_threshold, self._cfg.probe_min_power)
 
+    def _next_probe_requested_abs(self, current_requested_abs: float, ceiling: float) -> float:
+        ceiling = max(0.0, ceiling)
+        base_step = max(1.0, self._probe_success_threshold * 0.5)
+        if current_requested_abs <= 0:
+            return min(ceiling, base_step)
+        return min(
+            ceiling,
+            max(current_requested_abs + base_step, current_requested_abs * 1.5),
+        )
+
     def _clear_probe_state(self, reason: str) -> None:
         if self._probe_state is None:
             return
@@ -388,13 +399,13 @@ class LoadBalancer:
             sum(parse_int(report.get("power", 0)) for report in reports.values())
             + smoothed_target
         )
-        probe_min_power = self._effective_probe_min_power()
+        probe_success_threshold = self._probe_success_threshold
         demand_sign = 1 if desired_total > 0 else -1 if desired_total < 0 else 0
         actual_sign = 1 if actual > 0 else -1 if actual < 0 else 0
         if (
             demand_sign != 0
             and actual_sign == demand_sign
-            and abs(actual) >= probe_min_power
+            and abs(actual) >= probe_success_threshold
         ):
             probe.proof_samples += 1
         else:
@@ -460,14 +471,30 @@ class LoadBalancer:
         )
         state = self._get_consumer(consumer_id)
         probe_actual = parse_int(reports.get(candidate_id, {}).get("power", 0))
-        probe_min_power = self._effective_probe_min_power()
+        probe_ceiling = max(abs(desired_total), self._cfg.probe_min_power)
 
         if consumer_id == candidate_id:
+            next_requested_abs = self._next_probe_requested_abs(
+                probe.requested_power_abs, probe_ceiling
+            )
             desired_probe = 0.0
             if desired_total > 0:
-                desired_probe = probe_min_power
+                desired_probe = max(
+                    abs(probe_actual),
+                    next_requested_abs,
+                )
             elif desired_total < 0:
-                desired_probe = -probe_min_power
+                desired_probe = -max(
+                    abs(probe_actual),
+                    next_requested_abs,
+                )
+            elif probe.requested_power_abs > 0:
+                desired_probe = (
+                    max(0.0, probe.requested_power_abs - self._probe_success_threshold)
+                )
+            if desired_total < 0 and desired_probe > 0:
+                desired_probe = -desired_probe
+            probe.requested_power_abs = abs(desired_probe)
             target = desired_probe - probe_actual
             state.last_target = target
             return self._split_by_phase(target, {candidate_id: reports[candidate_id]})

@@ -1250,7 +1250,7 @@ class TestEfficiencySaturationSwap:
         assert restored_out[0] > 0.0
 
     def test_probe_backup_uses_delta_not_absolute_output(self):
-        """Backup command must keep current output when it already covers demand."""
+        """Initial probe command should ramp up instead of jumping to absolute output."""
         device = CT002(
             active_control=True,
             fair_distribution=False,
@@ -1272,7 +1272,7 @@ class TestEfficiencySaturationSwap:
 
         assert device._balancer._probe_state is not None
         assert out_a[0] == 0
-        assert out_b[0] == 80
+        assert out_b[0] == 10
 
     def test_probe_backup_ignores_probe_output_and_follows_demand(self):
         """Backup should keep following live demand during probe."""
@@ -1297,7 +1297,7 @@ class TestEfficiencySaturationSwap:
 
         assert device._balancer._probe_state is not None
         assert out_a[0] == 0
-        assert out_b[0] == 40
+        assert out_b[0] == 0
 
     def test_probe_backup_backs_off_after_first_qualifying_sample(self):
         """Once the probe has one qualifying sample, backup should subtract actual probe output."""
