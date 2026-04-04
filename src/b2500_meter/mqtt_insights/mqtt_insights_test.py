@@ -236,6 +236,33 @@ BROKER = localhost
     assert result.ha_discovery_prefix == "homeassistant"
 
 
+def test_read_mqtt_insights_config_empty_values():
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        """
+[MQTT_INSIGHTS]
+BROKER =
+PORT =
+USERNAME =
+PASSWORD =
+TLS =
+BASE_TOPIC =
+HA_DISCOVERY =
+HA_DISCOVERY_PREFIX =
+"""
+    )
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.broker == "localhost"
+    assert result.port == 1883
+    assert result.username is None
+    assert result.password is None
+    assert result.tls is False
+    assert result.base_topic == "b2500_meter"
+    assert result.ha_discovery is True
+    assert result.ha_discovery_prefix == "homeassistant"
+
+
 def test_read_mqtt_insights_config_absent():
     cfg = configparser.ConfigParser()
     cfg.read_string("[GENERAL]\nDEVICE_TYPE=ct002\n")

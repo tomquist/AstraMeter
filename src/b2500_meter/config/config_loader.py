@@ -465,16 +465,23 @@ def read_mqtt_insights_config(
 
     for section in config.sections():
         if section.startswith(MQTT_INSIGHTS_SECTION):
+            raw_port = config.get(section, "PORT", fallback="")
+            raw_tls = config.get(section, "TLS", fallback="")
+            raw_ha_discovery = config.get(section, "HA_DISCOVERY", fallback="")
             return MqttInsightsConfig(
-                broker=config.get(section, "BROKER", fallback="localhost"),
-                port=config.getint(section, "PORT", fallback=1883),
+                broker=config.get(section, "BROKER", fallback="") or "localhost",
+                port=int(raw_port) if raw_port else 1883,
                 username=config.get(section, "USERNAME", fallback=None) or None,
                 password=config.get(section, "PASSWORD", fallback=None) or None,
-                tls=config.getboolean(section, "TLS", fallback=False),
-                base_topic=config.get(section, "BASE_TOPIC", fallback="b2500_meter"),
-                ha_discovery=config.getboolean(section, "HA_DISCOVERY", fallback=True),
+                tls=config.getboolean(section, "TLS") if raw_tls else False,
+                base_topic=config.get(section, "BASE_TOPIC", fallback="")
+                or "b2500_meter",
+                ha_discovery=config.getboolean(section, "HA_DISCOVERY")
+                if raw_ha_discovery
+                else True,
                 ha_discovery_prefix=config.get(
-                    section, "HA_DISCOVERY_PREFIX", fallback="homeassistant"
-                ),
+                    section, "HA_DISCOVERY_PREFIX", fallback=""
+                )
+                or "homeassistant",
             )
     return None
