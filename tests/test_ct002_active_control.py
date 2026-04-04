@@ -706,9 +706,10 @@ class TestEfficiencyFade:
         out = device._compute_smooth_target([100, 0, 0], deprioritized_cid)
         # The blend: target = fade_w * normal + (1 - fade_w) * (-100)
         # With fade_w < 1 and reported=100, the drive-to-zero dominates.
+        fade_w = {cid: s.fade_weight for cid, s in device._balancer._consumers.items()}
         assert out[0] < 0, (
             f"Expected negative target to drive consumer down during fade, "
-            f"got {out[0]}. fade_w={{cid: s.fade_weight for cid, s in device._balancer._consumers.items()}}"
+            f"got {out[0]}. fade_w={fade_w}"
         )
 
     def test_fade_gradual_activate(self):
