@@ -512,7 +512,6 @@ class TestEfficiencyE2E:
             large_gap_samples = 0
             for _ in range(16):
                 await asyncio.sleep(0.5)
-                powers = h.battery_powers()
                 grid = abs(h.grid_total())
                 max_grid = max(max_grid, grid)
                 if grid > 100:
