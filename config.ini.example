@@ -93,6 +93,9 @@ THROTTLE_INTERVAL = 0
 #MIN_EFFICIENT_POWER = 0
 ## Seconds between rotating which battery has priority (minimum 10).
 #EFFICIENCY_ROTATION_INTERVAL = 900
+## Minimum target (W) sent when probing a newly promoted battery.
+## Batteries that ignore tiny commands need a higher floor (default 80).
+#PROBE_MIN_POWER = 80
 ## How quickly the old battery fades out after a successful probe
 ## (0.01=very slow, 1.0=instant).
 #EFFICIENCY_FADE_ALPHA = 0.15
