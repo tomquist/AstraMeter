@@ -475,8 +475,12 @@ class LoadBalancer:
         backup_weights = {
             cid: max(0.01, eff_part.get(cid, 1.0)) for cid in support_reports
         }
+        qualified_probe_actual = probe_actual if probe.proof_samples > 0 else 0
         desired = self._compute_desired_contribution(
-            consumer_id, support_reports, backup_weights, desired_total
+            consumer_id,
+            support_reports,
+            backup_weights,
+            desired_total - qualified_probe_actual,
         )
         reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
         target = desired - reported

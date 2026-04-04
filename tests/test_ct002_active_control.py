@@ -3,6 +3,7 @@
 import dataclasses
 import time
 
+from b2500_meter.ct002.balancer import ProbeState
 from b2500_meter.ct002.ct002 import CT002
 
 
@@ -1252,6 +1253,7 @@ class TestEfficiencySaturationSwap:
         device = CT002(
             active_control=True,
             fair_distribution=False,
+            smooth_target_alpha=1.0,
             min_efficient_power=150,
             probe_min_power=80,
             efficiency_fade_alpha=1.0,
@@ -1276,6 +1278,7 @@ class TestEfficiencySaturationSwap:
         device = CT002(
             active_control=True,
             fair_distribution=False,
+            smooth_target_alpha=1.0,
             min_efficient_power=150,
             probe_min_power=80,
             efficiency_fade_alpha=1.0,
@@ -1294,6 +1297,31 @@ class TestEfficiencySaturationSwap:
         assert device._balancer._probe_state is not None
         assert out_a[0] == 0
         assert out_b[0] == 40
+
+    def test_probe_backup_backs_off_after_first_qualifying_sample(self):
+        """Once the probe has one qualifying sample, backup should subtract actual probe output."""
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            probe_min_power=80,
+        )
+        device._balancer._probe_state = ProbeState(
+            candidate_id="b",
+            active_ids=("b",),
+            backup_ids=("a",),
+            restore_active_ids=("a",),
+            deadline=time.time() + 10,
+            started_at=time.time(),
+            proof_samples=1,
+        )
+        reports = {
+            "a": {"phase": "A", "power": 200},
+            "b": {"phase": "A", "power": 80},
+        }
+        out_a = device._balancer._compute_probe_target("a", reports, -80, {})
+
+        assert out_a is not None
+        assert out_a[0] == -80
 
 
 class TestInactiveConsumers:
