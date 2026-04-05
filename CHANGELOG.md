@@ -28,10 +28,10 @@
 - **From-source / contributor workflow:** Pipenv, `Pipfile`, and running `python main.py` from the repo root are removed—use **uv** and the **`astrameter`** command (or `uv run astrameter`) per [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 1.0.8
-- Added support for Modbus holding registers through new `REGISTER_TYPE` configuration option ([#173](https://github.com/tomquist/astrameter/pull/173))
-- Improved Shelly emulator with threaded UDP handling for better performance under concurrent requests when throttle interval is used ([#168](https://github.com/tomquist/astrameter/pull/168))
-- Enhanced TQ Energy Manager with signed power calculation using separate import/export OBIS codes ([#153](https://github.com/tomquist/astrameter/pull/153))
-- Fixed powermeter test results to log at info level instead of debug level ([#165](https://github.com/tomquist/astrameter/pull/165))
+- Added support for Modbus holding registers through new `REGISTER_TYPE` configuration option ([#173](https://github.com/tomquist/b2500-meter/pull/173))
+- Improved Shelly emulator with threaded UDP handling for better performance under concurrent requests when throttle interval is used ([#168](https://github.com/tomquist/b2500-meter/pull/168))
+- Enhanced TQ Energy Manager with signed power calculation using separate import/export OBIS codes ([#153](https://github.com/tomquist/b2500-meter/pull/153))
+- Fixed powermeter test results to log at info level instead of debug level ([#165](https://github.com/tomquist/b2500-meter/pull/165))
 
 ## 1.0.7
 - Added support for TQ Energy Manager devices through new TQ EM powermeter integration
@@ -62,7 +62,7 @@
 
 ## 1.0.0 - Initial Release
 
-- Initial release of AstraMeter
+- Initial release of B2500 Meter
 - Support for emulating a CT001, Shelly Pro 3EM, Shelly EM gen3 and Shelly Pro EM50 for Marstek/Hame storages
 - Support for various power meter integrations:
   - Shelly devices (1PM, Plus1PM, EM, 3EM, 3EMPro)
