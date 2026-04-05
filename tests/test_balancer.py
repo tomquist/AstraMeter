@@ -205,6 +205,52 @@ class TestSaturationTracker:
             f"when signs agree but output is low"
         )
 
+    def test_actual_zero_during_reversal_does_not_trigger_guard(self):
+        """actual=0 should NOT activate the sign-reversal guard (actual
+        has no sign), so saturation accumulates normally."""
+        tracker = self._make_tracker(alpha=0.15, min_target=20)
+        state = BalancerConsumerState()
+
+        # Target is -100W (charge) but actual is exactly 0
+        for _ in range(20):
+            tracker.update(state, last_target=-100.0, actual=0.0)
+        assert state.saturation_score > 0.4, (
+            f"Saturation score {state.saturation_score:.3f} should accumulate "
+            f"when actual is zero (no sign to disagree)"
+        )
+
+    def test_target_zero_does_not_trigger_guard(self):
+        """target=0 should NOT activate the sign-reversal guard."""
+        tracker = self._make_tracker(alpha=0.15, min_target=20, decay_factor=0.995)
+        state = BalancerConsumerState(saturation_score=0.5)
+
+        # Target is 0, actual is positive — target_abs < min_target so
+        # the low-target decay path handles this, not the sign guard.
+        for _ in range(10):
+            tracker.update(state, last_target=0.0, actual=50.0)
+        # Score should have decayed via the low-target path
+        assert state.saturation_score < 0.5
+
+    def test_sign_reversal_then_same_sign_resumes_accumulation(self):
+        """After a sign reversal period, once actual crosses zero to match
+        target sign, saturation tracking resumes normally."""
+        tracker = self._make_tracker(alpha=0.15, min_target=20)
+        state = BalancerConsumerState()
+
+        # Phase 1: sign reversal — target negative, actual positive
+        for _ in range(10):
+            tracker.update(state, last_target=-100.0, actual=50.0)
+        score_after_reversal = state.saturation_score
+        assert score_after_reversal < 0.01
+
+        # Phase 2: actual crosses zero but is small (same sign, low output)
+        for _ in range(20):
+            tracker.update(state, last_target=-100.0, actual=-5.0)
+        assert state.saturation_score > 0.4, (
+            f"Saturation score {state.saturation_score:.3f} should accumulate "
+            f"once signs agree again"
+        )
+
 
 class TestLoadBalancerLifecycle:
     def _make_balancer(self, **kwargs):
