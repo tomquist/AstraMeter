@@ -173,7 +173,15 @@ class SaturationTracker:
             else:
                 state.saturation_grace_until = 0.0
                 state.saturation_grace_started_at = 0.0
-        if target_abs < self._min_target:
+        # Detect sign reversal: target says one direction, actual is still
+        # in the opposite direction.  The battery is healthy but ramping to
+        # the new direction — not saturated.  Treat like low-target (decay).
+        target_sign = 1 if last_target > 0 else (-1 if last_target < 0 else 0)
+        actual_sign = 1 if actual > 0 else (-1 if actual < 0 else 0)
+        sign_reversing = (
+            target_sign != 0 and actual_sign != 0 and target_sign != actual_sign
+        )
+        if target_abs < self._min_target or sign_reversing:
             prev = state.saturation_score
             if prev > 0:
                 decayed = prev * self._decay_factor

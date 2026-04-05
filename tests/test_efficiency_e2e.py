@@ -698,3 +698,59 @@ class TestEfficiencyE2E:
             )
         finally:
             await h.stop()
+
+    async def test_load_sign_reversal_does_not_cause_false_saturation(self):
+        """When load flips sign (discharge->charge), active battery must not
+        be falsely detected as saturated while it ramps to the new direction.
+
+        Reproduces the real-world ping-pong observed when solar production
+        changes cause the grid target to flip sign.
+        """
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_rotation_interval=9999,  # no timed rotation
+            efficiency_fade_alpha=1.0,
+            efficiency_saturation_threshold=0.4,
+            saturation_stall_timeout_seconds=60.0,
+        )
+        await h.start()
+        try:
+            # Let system settle with one battery discharging
+            await h.step_until(lambda: h.active_battery_count() == 1)
+            await h.step(10)
+
+            active_idx = h.active_battery_indexes()[0]
+            other_idx = 1 - active_idx
+            assert h.battery_powers()[active_idx] > 100
+
+            # Flip load sign: go from 200W discharge to -200W (solar excess)
+            h.load_model.base_load[0] = -200.0
+
+            # Step through the sign reversal -- the active battery must NOT
+            # be swapped out due to false saturation.
+            # 60 steps at 0.3s/step = 18s, plenty for old bug to trigger.
+            rotations = 0
+            for _ in range(60):
+                await h.step()
+                powers_after = h.battery_powers()
+                # Detect rotation: other battery becomes sole active
+                if (
+                    abs(powers_after[other_idx]) > 15
+                    and abs(powers_after[active_idx]) < 15
+                ):
+                    rotations += 1
+
+            # The battery should have reversed direction (now charging)
+            assert h.battery_powers()[active_idx] < -50, (
+                f"Active battery should be charging after sign reversal. "
+                f"Powers: {h.battery_powers()}"
+            )
+            # No false-saturation rotation should have occurred
+            assert rotations == 0, (
+                f"Battery was falsely rotated {rotations} time(s) during "
+                f"sign reversal. Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
