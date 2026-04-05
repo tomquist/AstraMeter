@@ -3,8 +3,8 @@
 import dataclasses
 import time
 
-from b2500_meter.ct002.balancer import ProbeState
-from b2500_meter.ct002.ct002 import CT002
+from astrameter.ct002.balancer import ProbeState
+from astrameter.ct002.ct002 import CT002
 
 
 class TestActiveControl:

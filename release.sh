@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release b2500-meter from develop: bump version, finalize CHANGELOG, merge to main, tag, sync develop.
+# Release astrameter from develop: bump version, finalize CHANGELOG, merge to main, tag, sync develop.
 # Requires: git, yq (https://github.com/mikefarah/yq), clean develop, origin/develop up to date.
 # Usage: ./release.sh X.Y.Z
 

@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "b2500-meter"
+name = "astrameter"
 version = "1.1.0"
-description = "Power-meter monitoring for Marstek B2500 battery inverters"
+description = "Power-meter monitoring for Marstek battery inverters (formerly b2500-meter)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
@@ -35,11 +35,11 @@ sim = [
 ]
 
 [project.scripts]
-b2500-meter = "b2500_meter.main:main"
-b2500-sim = "b2500_meter.simulator.cli:main"
+astrameter = "astrameter.main:main"
+astra-sim = "astrameter.simulator.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/b2500_meter"]
+packages = ["src/astrameter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]
@@ -59,7 +59,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["b2500_meter"]
+known-first-party = ["astrameter"]
 
 [tool.mypy]
 python_version = "3.10"

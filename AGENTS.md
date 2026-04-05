@@ -25,8 +25,8 @@ Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. 
 
 ## Adding a powermeter
 
-1. **Implementation** — Add `src/b2500_meter/powermeter/<module>.py` with a class subclassing `Powermeter`; implement `get_powermeter_watts()` (and `wait_for_message()` only if the base default is wrong for your source).
-2. **Exports** — Import and re-export the class from `src/b2500_meter/powermeter/__init__.py`.
-3. **Config** — In `src/b2500_meter/config/config_loader.py`: import the class, define a `*_SECTION` string, add a `section.startswith(...)` branch in `create_powermeter()`, and a `create_*_powermeter()` factory that reads options from the section. `POWER_OFFSET` / `POWER_MULTIPLIER`, `THROTTLE_INTERVAL`, and `NETMASK` are handled globally for any section that returns a powermeter — no extra wiring unless you need something custom.
+1. **Implementation** — Add `src/astrameter/powermeter/<module>.py` with a class subclassing `Powermeter`; implement `get_powermeter_watts()` (and `wait_for_message()` only if the base default is wrong for your source).
+2. **Exports** — Import and re-export the class from `src/astrameter/powermeter/__init__.py`.
+3. **Config** — In `src/astrameter/config/config_loader.py`: import the class, define a `*_SECTION` string, add a `section.startswith(...)` branch in `create_powermeter()`, and a `create_*_powermeter()` factory that reads options from the section. `POWER_OFFSET` / `POWER_MULTIPLIER`, `THROTTLE_INTERVAL`, and `NETMASK` are handled globally for any section that returns a powermeter — no extra wiring unless you need something custom.
 4. **Examples, docs & changelog** — Add a commented example to `config.ini.example` and a subsection under **Configuration** in `README.md`, plus one **`## Next`** bullet for the powermeter (add once, then update that bullet on follow-up iterations if needed—see **Changelog** above).
-5. **Tests** — Add `src/b2500_meter/powermeter/<module>_test.py` (or extend existing tests) and run the commands above before finishing.
+5. **Tests** — Add `src/astrameter/powermeter/<module>_test.py` (or extend existing tests) and run the commands above before finishing.

@@ -1,7 +1,7 @@
 import logging
 
-from b2500_meter.ct002.ct002 import CT002
-from b2500_meter.ct002.protocol import (
+from astrameter.ct002.ct002 import CT002
+from astrameter.ct002.protocol import (
     ETX,
     RESPONSE_LABELS,
     SOH,

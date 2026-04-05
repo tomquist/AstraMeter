@@ -72,7 +72,7 @@ jobs:
         run: uv sync --frozen --extra dev
 
       - name: Run tests
-        run: uv run pytest --cov=b2500_meter --cov-report=xml --junitxml=test-results.xml
+        run: uv run pytest --cov=astrameter --cov-report=xml --junitxml=test-results.xml
 
       - name: Upload test results
         if: ${{ always() }}

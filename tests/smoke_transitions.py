@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from smoke_efficiency_saturation import SmokeHarness, failed, passed
 
-from b2500_meter.simulator.load_model import Load
+from astrameter.simulator.load_model import Load
 
 
 async def scenario_1_load_step_up():

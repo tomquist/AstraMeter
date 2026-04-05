@@ -1,4 +1,4 @@
-import b2500_meter.version_info as version_info
+import astrameter.version_info as version_info
 
 
 def test_get_git_commit_sha_empty(monkeypatch):

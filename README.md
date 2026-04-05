@@ -1,9 +1,13 @@
-# B2500 Meter
+# AstraMeter
 
-This project emulates Smart Meter devices for Marstek storage systems such as the B2500, Marstek Jupiter, and Marstek Venus energy storage systems while allowing integration with almost any smart meter. It does this by emulating one or more of the following devices:
+> **Formerly known as b2500-meter.** The project was renamed to reflect support
+> for the full range of Marstek storage systems (B2500, Jupiter, Venus, …),
+> not just the B2500.
+
+This project emulates Smart Meter devices for Marstek storage systems such as the B2500, Jupiter, and Venus while allowing integration with almost any smart meter. It does this by emulating one or more of the following devices:
 - CT002 / CT003 (Marstek CT protocol; use for **multiple** storage devices)
 - Shelly Pro 3EM
-  - Uses port 1010 (B2500 firmware up to version 224) and port 2220 (B2500 firmware version 226+)
+  - Uses port 1010 (Marstek firmware up to version 224) and port 2220 (Marstek firmware version 226+)
   - Can be specifically targeted with shellypro3em_old (port 1010) or shellypro3em_new (port 2220)
 - Shelly EM gen3
 - Shelly Pro EM50
@@ -12,7 +16,7 @@ This project emulates Smart Meter devices for Marstek storage systems such as th
 
 ## Getting Started
 
-The B2500 Meter project can be installed and run in several ways depending on your needs and environment:
+The AstraMeter project can be installed and run in several ways depending on your needs and environment:
 
 1. **Home Assistant Add-on** (Recommended for Home Assistant users)
    - Easiest installation method if you're using Home Assistant
@@ -33,11 +37,11 @@ The B2500 Meter project can be installed and run in several ways depending on yo
 
 1. **Add the Repository to Home Assistant**
 
-   [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fb2500-meter)
+   [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fastrameter)
 
 3. **Install the Add-on**
    - Click on "Add-on Store" in the bottom right corner
-   - The B2500 Meter add-on should appear in the add-on store
+   - The AstraMeter add-on should appear in the add-on store
    - Click on it and then click "Install"
 
 4. **Configure the Add-on**
@@ -54,9 +58,9 @@ The B2500 Meter project can be installed and run in several ways depending on yo
    - Set `Device Types` (comma-separated list) to the device types you want to emulate:
      - `ct002`: CT002 emulator (Marstek CT002 protocol)
      - `ct003`: CT003 emulator (same protocol as CT002)
-     - `shellypro3em`: Shelly Pro 3EM emulator (uses both ports 1010 and 2220 for compatibility with all B2500 firmware versions)
-     - `shellypro3em_old`: Shelly Pro 3EM emulator using port 1010 (for B2500 firmware up to v224)
-     - `shellypro3em_new`: Shelly Pro 3EM emulator using port 2220 (for B2500 firmware v226+)
+     - `shellypro3em`: Shelly Pro 3EM emulator (uses both ports 1010 and 2220 for compatibility with all Marstek firmware versions)
+     - `shellypro3em_old`: Shelly Pro 3EM emulator using port 1010 (for Marstek firmware up to v224)
+     - `shellypro3em_new`: Shelly Pro 3EM emulator using port 2220 (for Marstek firmware v226+)
      - `shellyemg3`: Shelly EM gen3 emulator
      - `shellyproem50`: Shelly Pro EM50 emulator
      
@@ -65,7 +69,7 @@ The B2500 Meter project can be installed and run in several ways depending on yo
 
    B) Using a Custom Configuration File for Advanced Configuration:
    - Create a `config.ini` file based on the examples in the [Configuration](#configuration) section
-   - Place the file in `/addon_configs/a0ef98c5_b2500_meter/`. You can do that via "File editor" Addon in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor Addon config to access the `/addon_configs` folder.
+   - Place the file in `/addon_configs/a0ef98c5_astrameter/`. You can do that via "File editor" Addon in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor Addon config to access the `/addon_configs` folder.
    - In the add-on configuration, set `Custom Config` to the filename (e.g., "config.ini" without the path)
    - When using a custom configuration file, other configuration options will be ignored
 
@@ -89,7 +93,7 @@ The B2500 Meter project can be installed and run in several ways depending on yo
    You can control the verbosity by setting the `LOG_LEVEL` environment
    variable (for example `-e LOG_LEVEL=debug`). If not set the container
    defaults to `info`.
-Note: Host network mode is required because the B2500 device uses UDP broadcasts for device discovery. Without host networking, the container won't be able to receive these broadcasts properly.
+Note: Host network mode is required because Marstek devices use UDP broadcasts for device discovery. Without host networking, the container won't be able to receive these broadcasts properly.
 
 ### Pre-release builds (`next`)
 
@@ -99,11 +103,11 @@ CI publishes **pre-release** container images from the **`develop`** branch with
 
 1. Add the repository pointing at the **`develop`** branch (same flow as [Home Assistant Add-on Installation](#home-assistant-add-on-installation), but use this URL):
 
-   `https://github.com/tomquist/b2500-meter#develop`
+   `https://github.com/tomquist/astrameter#develop`
 
-   [![Add develop repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fb2500-meter%23develop)
+   [![Add develop repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fastrameter%23develop)
 
-2. Install or update the **B2500 Meter** add-on from the store. Supervisor will pull the **`next`**-tagged image (`ghcr.io/tomquist/b2500-meter-addon:next`).
+2. Install or update the **AstraMeter** add-on from the store. Supervisor will pull the **`next`**-tagged image (`ghcr.io/tomquist/astrameter-addon:next`).
 
 To return to stable releases, remove this repository and add the normal URL without `#develop` ([step 1 under Home Assistant Add-on Installation](#home-assistant-add-on-installation)), then reinstall or wait for an update to the **`latest`** track.
 
@@ -112,7 +116,7 @@ To return to stable releases, remove this repository and add the normal URL with
 Use the **`next`** image instead of **`latest`** in `docker-compose.yaml` (or `docker run`):
 
 ```yaml
-image: ghcr.io/tomquist/b2500-meter:next
+image: ghcr.io/tomquist/astrameter:next
 ```
 
 ### Direct Installation
@@ -131,7 +135,7 @@ image: ghcr.io/tomquist/b2500-meter:next
 
 2. **Navigate to Project Directory**
    ```bash
-   cd path/to/b2500-meter
+   cd path/to/astrameter
    ```
 
 3. **Install [uv](https://docs.astral.sh/uv/getting-started/installation/)** (dependency manager).
@@ -139,7 +143,7 @@ image: ghcr.io/tomquist/b2500-meter:next
 4. **Install dependencies and run**
    ```bash
    uv sync
-   uv run b2500-meter
+   uv run astrameter
    ```
    With dev tools (tests, ruff, mypy): `uv sync --extra dev`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
@@ -147,7 +151,7 @@ All commands above work across Windows, macOS, and Linux. The only difference is
 
 ## Additional Notes
 
-When the script is running, switch your B2500 to "Self-Adaptation" mode to enable the powermeter functionality.
+When the script is running, switch your Marstek battery to "Self-Adaptation" mode to enable the powermeter functionality.
 
 For details on the CT002/CT003 UDP protocol used by Marstek storage systems, see [docs/ct002-ct003-protocol.md](docs/ct002-ct003-protocol.md).
 
@@ -296,14 +300,14 @@ Optional Marstek cloud auto-registration:
 - **MARSTEK.ENABLE** — auto-create/check managed fake CT device(s) at startup
 - **MARSTEK.MAILBOX / PASSWORD** — credentials used to call Marstek API
 - For `ct002` a managed `HME-4` device is ensured, for `ct003` a managed `HME-3` device.
-- Device fields created by b2500-meter:
+- Device fields created by astrameter:
   - `devid == mac` (random lowercase hex)
   - `bluetooth_name = MST-SMR_<last4(mac)>`
-  - `name = B2500-Meter CT002` / `B2500-Meter CT003`
+  - `name = AstraMeter CT002` / `AstraMeter CT003`
 - If a matching managed device of expected type already exists, no new device is created.
 - Important behavior notes:
   - Managed fake CT devices appear as **offline** in the app CT list (expected behavior).
-  - Refresh the CT device list after registration (or log out/in if needed). Then select `B2500-Meter CT002` / `B2500-Meter CT003`, switch battery mode to automatic, and choose that CT. It should be selectable as soon as it appears in the device list.
+  - Refresh the CT device list after registration (or log out/in if needed). Then select `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and choose that CT. It should be selectable as soon as it appears in the device list.
   - Marstek credentials are only needed for one-time registration. You can remove `MARSTEK.MAILBOX` / `MARSTEK.PASSWORD` immediately after registration succeeds (or if the managed device already exists).
   - If you use Home Assistant add-on `custom_config`, values from that file take precedence over add-on UI fields.
 
@@ -757,7 +761,7 @@ PORT = 1883
 USERNAME = mqtt_user
 PASSWORD = mqtt_pass
 TLS = false
-BASE_TOPIC = b2500_meter
+BASE_TOPIC = astrameter
 HA_DISCOVERY = true
 HA_DISCOVERY_PREFIX = homeassistant
 ```
@@ -768,7 +772,7 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `PORT` | `1883` | MQTT broker port |
 | `USERNAME` / `PASSWORD` | — | Credentials (optional) |
 | `TLS` | `false` | Enable TLS encryption |
-| `BASE_TOPIC` | `b2500_meter` | Root topic for all published messages |
+| `BASE_TOPIC` | `astrameter` | Root topic for all published messages |
 | `HA_DISCOVERY` | `true` | Enable Home Assistant MQTT Device Discovery |
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
 
@@ -800,7 +804,7 @@ A: Common causes include:
 - **Network setup:** Ensure both devices are on the same subnet (255.255.255.0)
 - **Bluetooth interference:** Disconnect any Bluetooth connections during setup
 - **Docker configuration:** When using Docker, set `network_mode: host` to enable UDP broadcast reception
-- **CT002/CT003 pairing flow:** For managed fake CTs, refresh the CT device list (or log out/in), then pick `B2500-Meter CT002` / `B2500-Meter CT003`, switch battery mode to automatic, and select that CT. It should be selectable as soon as it appears in the device list. The fake CT appears as offline in the CT list (expected).
+- **CT002/CT003 pairing flow:** For managed fake CTs, refresh the CT device list (or log out/in), then pick `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and select that CT. It should be selectable as soon as it appears in the device list. The fake CT appears as offline in the CT list (expected).
 - **Config source confusion:** If Home Assistant add-on `custom_config` is used, it overrides add-on UI credentials/options.
 
 ### The emulator isn't visible in the Shelly app or network scanners. Is this normal?
@@ -810,9 +814,9 @@ A: Yes. The emulator only implements the minimal protocol needed for Marstek sto
 ### How do I autostart the script on boot?
 
 A: Use systemd to create a service:
-1. Create a unit file (e.g., `/etc/systemd/system/b2500-meter.service`)
+1. Create a unit file (e.g., `/etc/systemd/system/astrameter.service`)
 2. Set `ExecStart` to your startup command
-3. Enable and start: `sudo systemctl enable b2500-meter && sudo systemctl start b2500-meter`
+3. Enable and start: `sudo systemctl enable astrameter && sudo systemctl start astrameter`
 
 ### Can I run multiple instances for different storage devices?
 
@@ -856,8 +860,8 @@ A:
 ### How do I handle the different ports for Shelly Pro 3EM?
 
 A: Use one of these device types:
-- `shellypro3em_old`: Port 1010 (B2500 firmware ≤224 or Jupiter & Venus)
-- `shellypro3em_new`: Port 2220 (B2500 firmware ≥226)
+- `shellypro3em_old`: Port 1010 (Marstek firmware ≤224 or Jupiter & Venus)
+- `shellypro3em_new`: Port 2220 (Marstek firmware ≥226)
 - `shellypro3em`: Both ports (most compatible)
 
 ### Can I use this with non-Marstek storage systems (e.g., Zendure, Hoymiles)?
@@ -892,27 +896,27 @@ A: Powermeters typically report import as positive and export as negative (see [
 
 ## Simulator
 
-The project includes a standalone battery and powermeter simulator (`b2500-sim`) that lets you test the CT002 emulator without real hardware. It simulates N batteries speaking the CT002 UDP protocol and exposes an HTTP endpoint that b2500-meter reads as a powermeter.
+The project includes a standalone battery and powermeter simulator (`astra-sim`) that lets you test the CT002 emulator without real hardware. It simulates N batteries speaking the CT002 UDP protocol and exposes an HTTP endpoint that astrameter reads as a powermeter.
 
 ### Install
 
 ```bash
-pip install 'b2500-meter[sim]'
+pip install 'astrameter[sim]'
 # or with uv:
-uv pip install 'b2500-meter[sim]'
+uv pip install 'astrameter[sim]'
 ```
 
 ### Quick Start
 
 **Terminal 1** — Start the simulator (1 battery, single-phase, with TUI):
 ```bash
-b2500-sim run --batteries 1 --phases 1
+astra-sim run --batteries 1 --phases 1
 ```
 
-**Terminal 2** — Start b2500-meter with the matching config:
+**Terminal 2** — Start astrameter with the matching config:
 ```bash
-b2500-sim config > config.ini   # generate a config snippet
-b2500-meter -c config.ini
+astra-sim config > config.ini   # generate a config snippet
+astrameter -c config.ini
 ```
 
 The generated `config.ini` looks like:
@@ -935,10 +939,10 @@ For three-phase setups, use `JSON_PATHS = $.phase_a,$.phase_b,$.phase_c`.
 
 ```bash
 # 3 batteries distributed across 3 phases
-b2500-sim run --batteries 3 --phases 3
+astra-sim run --batteries 3 --phases 3
 
 # Custom base load and initial SOC
-b2500-sim run --batteries 2 --phases 3 --base-load 500,300,200 --soc 0.8
+astra-sim run --batteries 2 --phases 3 --base-load 500,300,200 --soc 0.8
 ```
 
 ### JSON Config File
@@ -946,7 +950,7 @@ b2500-sim run --batteries 2 --phases 3 --base-load 500,300,200 --soc 0.8
 For full control, use a JSON config file:
 
 ```bash
-b2500-sim run -c sim_config.json
+astra-sim run -c sim_config.json
 ```
 
 Example `sim_config.json`:
@@ -1064,23 +1068,23 @@ This configuration demonstrates:
 
 ### Interactive Controls
 
-When running with the TUI (`b2500-sim run`, without `--no-tui`), you can interact with the simulation using keyboard shortcuts displayed on screen. The TUI shows live battery state (power, SOC, targets), grid readings per phase, and active loads.
+When running with the TUI (`astra-sim run`, without `--no-tui`), you can interact with the simulation using keyboard shortcuts displayed on screen. The TUI shows live battery state (power, SOC, targets), grid readings per phase, and active loads.
 
 Without the TUI, you can control the simulation via the HTTP API:
 
 ```bash
 # Toggle a load on/off (1-based index)
-b2500-sim load toggle 1
+astra-sim load toggle 1
 
 # Set solar production (watts)
-b2500-sim solar set 800
-b2500-sim solar set off
+astra-sim solar set 800
+astra-sim solar set off
 
 # Set a battery's SOC (for testing saturation)
-b2500-sim battery 02B250000001 soc 0.0
+astra-sim battery 02B250000001 soc 0.0
 
 # Show full status
-b2500-sim status
+astra-sim status
 ```
 
 ### Daemon Mode
@@ -1089,13 +1093,13 @@ Run the simulator in the background and attach/detach the TUI:
 
 ```bash
 # Start headless daemon
-b2500-sim start -c sim_config.json
+astra-sim start -c sim_config.json
 
 # Attach TUI to running daemon
-b2500-sim attach
+astra-sim attach
 
 # Stop daemon
-b2500-sim stop
+astra-sim stop
 ```
 
 ### Custom Ports
@@ -1104,10 +1108,10 @@ If you need non-default ports (e.g. to avoid conflicts):
 
 ```bash
 # Simulator on custom ports
-b2500-sim run --batteries 2 --phases 3 --ct-port 54321 --http-port 9090
+astra-sim run --batteries 2 --phases 3 --ct-port 54321 --http-port 9090
 
-# Generate matching b2500-meter config
-b2500-sim config --ct-port 54321 --http-port 9090 > config.ini
+# Generate matching astrameter config
+astra-sim config --ct-port 54321 --http-port 9090 > config.ini
 ```
 
 ### Headless Mode
@@ -1115,15 +1119,15 @@ b2500-sim config --ct-port 54321 --http-port 9090 > config.ini
 For CI or scripted testing, run without the TUI:
 
 ```bash
-b2500-sim run --batteries 2 --phases 3 --no-tui
+astra-sim run --batteries 2 --phases 3 --no-tui
 ```
 
 ### How It Works
 
-The simulator is fully decoupled from b2500-meter — it communicates purely over the network:
+The simulator is fully decoupled from astrameter — it communicates purely over the network:
 
-- **Battery simulators** send UDP requests to b2500-meter's CT002 emulator using the same protocol as real Marstek B2500 batteries
-- **Powermeter simulator** serves an HTTP JSON endpoint (`GET /power`) that b2500-meter reads via its `[JSON_HTTP]` powermeter config
+- **Battery simulators** send UDP requests to astrameter's CT002 emulator using the same protocol as real Marstek batteries
+- **Powermeter simulator** serves an HTTP JSON endpoint (`GET /power`) that astrameter reads via its `[JSON_HTTP]` powermeter config
 - Grid power is computed as: `grid = base_load + active_loads + noise - solar - battery_output`
 - When solar exceeds consumption, grid goes negative (export) and batteries charge
 - Batteries track SOC and saturate at 0%/100%

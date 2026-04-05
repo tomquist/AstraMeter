@@ -315,8 +315,8 @@ THROTTLE_INTERVAL = 0
 #PASSWORD = mqtt_pass
 ## Enable TLS (default: false)
 #TLS = false
-## Base topic for all MQTT Insights messages (default: b2500_meter)
-#BASE_TOPIC = b2500_meter
+## Base topic for all MQTT Insights messages (default: astrameter)
+#BASE_TOPIC = astrameter
 ## Enable Home Assistant MQTT Device Discovery (default: true)
 #HA_DISCOVERY = true
 ## HA discovery prefix (default: homeassistant)

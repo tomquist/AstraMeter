@@ -16,13 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r b2500 && useradd -r -g b2500 -s /sbin/nologin b2500
+RUN groupadd -r astra && useradd -r -g astra -s /sbin/nologin astra
 
 WORKDIR /app
 
 COPY --from=builder /app /app
 
-RUN chown -R b2500:b2500 /app
+RUN chown -R astra:astra /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -38,6 +38,6 @@ EXPOSE 52500/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:52500/health || exit 1
 
-USER b2500
+USER astra
 
-CMD ["b2500-meter"]
+CMD ["astrameter"]

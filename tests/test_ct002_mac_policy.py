@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from b2500_meter.ct002.ct002 import CT002, build_payload
+from astrameter.ct002.ct002 import CT002, build_payload
 
 
 def make_request(ct_mac):

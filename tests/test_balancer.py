@@ -2,7 +2,7 @@
 
 import time
 
-from b2500_meter.ct002.balancer import (
+from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
     LoadBalancer,

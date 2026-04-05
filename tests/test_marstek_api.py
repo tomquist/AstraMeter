@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from b2500_meter.marstek_api import (
+from astrameter.marstek_api import (
     _desired_type,
     _find_existing_managed_device,
     _generate_new_id,

@@ -16,10 +16,10 @@ import socket
 import sys
 import time
 
-from b2500_meter.ct002.ct002 import CT002
-from b2500_meter.simulator.battery import BatterySimulator
-from b2500_meter.simulator.load_model import Load, LoadModel
-from b2500_meter.simulator.powermeter_sim import PowermeterSimulator
+from astrameter.ct002.ct002 import CT002
+from astrameter.simulator.battery import BatterySimulator
+from astrameter.simulator.load_model import Load, LoadModel
+from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
 TIME_SCALE = 10  # 10x speed
 
