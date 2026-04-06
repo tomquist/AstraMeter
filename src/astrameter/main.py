@@ -429,7 +429,7 @@ def main():
 
     # configure logger
     setLogLevel(args.loglevel)
-    logger.info("startet astrameter application")
+    logger.info("started astrameter application")
     _sha = get_git_commit_sha()
     if _sha:
         logger.info("Git commit: %s", _sha)
