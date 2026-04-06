@@ -248,7 +248,9 @@ class CT002:
         try:
             self.event_listener(self._device_id, consumer_id, data)
         except Exception as exc:
-            logger.warning("event_listener failed for %s: %s", consumer_id, exc)
+            logger.warning(
+                "event_listener failed for %s: %s", consumer_id, exc, exc_info=True
+            )
 
     def _update_consumer_report(self, consumer_id, phase, power, device_type=""):
         normalized_phase = str(phase).upper() if phase else "A"
@@ -462,7 +464,7 @@ class CT002:
         try:
             return await self.before_send(addr, fields, consumer_id)
         except Exception as exc:
-            logger.warning("before_send failed for %s: %s", addr, exc)
+            logger.warning("before_send failed for %s: %s", addr, exc, exc_info=True)
             return None
 
     def _validate_ct_mac(self, request_fields):
@@ -565,6 +567,7 @@ class CT002:
                 addr,
                 fields,
                 exc,
+                exc_info=True,
             )
             return
         logger.debug(
