@@ -131,7 +131,7 @@ else
             echo "CURRENT_POWER_ENTITY=$(bashio::config 'power_input_alias')"
         fi
 
-        if bashio::services "mqtt"; then
+        if bashio::services.available "mqtt"; then
             echo ""
             echo "[MQTT_INSIGHTS]"
             echo "BROKER=$(bashio::services 'mqtt' 'host')"
