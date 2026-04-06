@@ -69,7 +69,7 @@ The AstraMeter project can be installed and run in several ways depending on you
 
    B) Using a Custom Configuration File for Advanced Configuration:
    - Create a `config.ini` file based on the examples in the [Configuration](#configuration) section
-   - Place the file in `/addon_configs/a0ef98c5_b2500_meter/`. You can do that via "File editor" app in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor app config to access the `/addon_configs` folder.
+   - Place the file in `/addon_configs/a0ef98c5_b2500_meter/` (path uses the legacy slug `b2500_meter` for in-place upgrade compatibility). You can do that via "File editor" app in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor app config to access the `/addon_configs` folder.
    - In the app configuration, set `Custom Config` to the filename (e.g., "config.ini" without the path)
    - When using a custom configuration file, other configuration options will be ignored
 
