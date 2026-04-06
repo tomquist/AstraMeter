@@ -19,7 +19,7 @@ configuration:
     description: "Controls the verbosity of log messages. Select 'critical' for only critical errors, 'error' for error messages and above, 'warning' for warnings and above, 'info' for informational messages and above (recommended), or 'debug' for detailed debugging information. Use 'debug' for troubleshooting connection or configuration issues."
   custom_config:
     name: Custom Config
-    description: "Optional. Name of a custom config.ini file to use instead of the UI configuration. The file must be placed in the add-on's configuration directory."
+    description: "Optional. Name of a custom config.ini file to use instead of the UI configuration. The file must be placed in the app's configuration directory."
   min_efficient_power:
     name: Min Efficient Power
     description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."
@@ -28,7 +28,7 @@ configuration:
     description: "Seconds between rotating which battery has priority when Min Efficient Power is active (default 900). Ensures fair wear across batteries by periodically swapping which batteries are active and which are idled. Minimum value is 1. Only applies to CT002/CT003 device types."
   marstek_auto_register_ct_device:
     name: Auto-register Managed CT Device (Marstek)
-    description: "If enabled, the add-on signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."
+    description: "If enabled, the app signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."
   marstek_mailbox:
     name: Marstek Account Email
     description: "Email address used to sign in to your Marstek account for managed CT device registration."

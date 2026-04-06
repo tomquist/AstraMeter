@@ -18,7 +18,7 @@ This project emulates Smart Meter devices for Marstek storage systems such as th
 
 The AstraMeter project can be installed and run in several ways depending on your needs and environment:
 
-1. **Home Assistant Add-on** (Recommended for Home Assistant users)
+1. **Home Assistant App** (Recommended for Home Assistant users)
    - Easiest installation method if you're using Home Assistant
    - Provides a user-friendly interface for configuration
    - Integrates seamlessly with your Home Assistant installation
@@ -33,22 +33,22 @@ The AstraMeter project can be installed and run in several ways depending on you
    - Requires Python environment setup
    - More flexible for customization and development
 
-### Home Assistant Add-on Installation
+### Home Assistant App Installation
 
 1. **Add the Repository to Home Assistant**
 
    [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fastrameter)
 
-3. **Install the Add-on**
-   - Click on "Add-on Store" in the bottom right corner
-   - The AstraMeter add-on should appear in the add-on store
+3. **Install the App**
+   - Click on "App Store" in the bottom right corner
+   - The AstraMeter app should appear in the app store
    - Click on it and then click "Install"
 
-4. **Configure the Add-on**
-   You can configure the add-on in two ways:
+4. **Configure the App**
+   You can configure the app in two ways:
 
-   A) Using the Add-on Configuration Interface:
-   - After installation, go to the add-on's Configuration tab
+   A) Using the App Configuration Interface:
+   - After installation, go to the app's Configuration tab
    - For single-phase monitoring:
      - Set the `Power Input Entity ID` and optionally the `Power Output Entity ID` to the entity IDs of your power sensors
    - For three-phase monitoring:
@@ -69,13 +69,13 @@ The AstraMeter project can be installed and run in several ways depending on you
 
    B) Using a Custom Configuration File for Advanced Configuration:
    - Create a `config.ini` file based on the examples in the [Configuration](#configuration) section
-   - Place the file in `/addon_configs/a0ef98c5_astrameter/`. You can do that via "File editor" Addon in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor Addon config to access the `/addon_configs` folder.
-   - In the add-on configuration, set `Custom Config` to the filename (e.g., "config.ini" without the path)
+   - Place the file in `/addon_configs/a0ef98c5_astrameter/`. You can do that via "File editor" app in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor app config to access the `/addon_configs` folder.
+   - In the app configuration, set `Custom Config` to the filename (e.g., "config.ini" without the path)
    - When using a custom configuration file, other configuration options will be ignored
 
-5. **Start the Add-on**
-   - Go to the add-on's Info tab
-   - Click "Start" to run the add-on
+5. **Start the App**
+   - Go to the app's Info tab
+   - Click "Start" to run the app
 
 ### Docker Installation
 
@@ -97,19 +97,19 @@ Note: Host network mode is required because Marstek devices use UDP broadcasts f
 
 ### Pre-release builds (`next`)
 
-CI publishes **pre-release** container images from the **`develop`** branch with the **`next`** tag on GitHub Container Registry. These track the latest changes before a stable release and **may be less stable** than **`latest`**—use them to try fixes early or to validate the add-on before it lands on **`main`**.
+CI publishes **pre-release** container images from the **`develop`** branch with the **`next`** tag on GitHub Container Registry. These track the latest changes before a stable release and **may be less stable** than **`latest`**—use them to try fixes early or to validate the app before it lands on **`main`**.
 
-**Home Assistant Add-on**
+**Home Assistant App**
 
-1. Add the repository pointing at the **`develop`** branch (same flow as [Home Assistant Add-on Installation](#home-assistant-add-on-installation), but use this URL):
+1. Add the repository pointing at the **`develop`** branch (same flow as [Home Assistant App Installation](#home-assistant-app-installation), but use this URL):
 
    `https://github.com/tomquist/astrameter#develop`
 
    [![Add develop repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fastrameter%23develop)
 
-2. Install or update the **AstraMeter** add-on from the store. Supervisor will pull the **`next`**-tagged image (`ghcr.io/tomquist/astrameter-addon:next`).
+2. Install or update the **AstraMeter** app from the store. Supervisor will pull the **`next`**-tagged image (`ghcr.io/tomquist/astrameter-addon:next`).
 
-To return to stable releases, remove this repository and add the normal URL without `#develop` ([step 1 under Home Assistant Add-on Installation](#home-assistant-add-on-installation)), then reinstall or wait for an update to the **`latest`** track.
+To return to stable releases, remove this repository and add the normal URL without `#develop` ([step 1 under Home Assistant App Installation](#home-assistant-app-installation)), then reinstall or wait for an update to the **`latest`** track.
 
 **Docker**
 
@@ -309,7 +309,7 @@ Optional Marstek cloud auto-registration:
   - Managed fake CT devices appear as **offline** in the app CT list (expected behavior).
   - Refresh the CT device list after registration (or log out/in if needed). Then select `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and choose that CT. It should be selectable as soon as it appears in the device list.
   - Marstek credentials are only needed for one-time registration. You can remove `MARSTEK.MAILBOX` / `MARSTEK.PASSWORD` immediately after registration succeeds (or if the managed device already exists).
-  - If you use Home Assistant add-on `custom_config`, values from that file take precedence over add-on UI fields.
+  - If you use Home Assistant app `custom_config`, values from that file take precedence over app UI fields.
 
 ### Value Transformation
 
@@ -750,7 +750,7 @@ CURRENT_POWER_ENTITY = sensor.current_power
 
 Publishes internal state (grid power per phase, charge targets, saturation, consumer topology) to MQTT with optional Home Assistant auto-discovery.
 
-**Home Assistant Add-on**: When running as an HA add-on with the Mosquitto broker add-on installed, MQTT Insights is auto-configured — no manual setup needed. Entities appear automatically in HA.
+**Home Assistant App**: When running as an HA app with the Mosquitto broker app installed, MQTT Insights is auto-configured — no manual setup needed. Entities appear automatically in HA.
 
 **Manual configuration**:
 
@@ -805,7 +805,7 @@ A: Common causes include:
 - **Bluetooth interference:** Disconnect any Bluetooth connections during setup
 - **Docker configuration:** When using Docker, set `network_mode: host` to enable UDP broadcast reception
 - **CT002/CT003 pairing flow:** For managed fake CTs, refresh the CT device list (or log out/in), then pick `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and select that CT. It should be selectable as soon as it appears in the device list. The fake CT appears as offline in the CT list (expected).
-- **Config source confusion:** If Home Assistant add-on `custom_config` is used, it overrides add-on UI credentials/options.
+- **Config source confusion:** If Home Assistant app `custom_config` is used, it overrides app UI credentials/options.
 
 ### The emulator isn't visible in the Shelly app or network scanners. Is this normal?
 
@@ -836,7 +836,7 @@ A: Create a template sensor in Home Assistant:
 {{ states('sensor.power_in_kilowatts') | float * 1000 }}
 ```
 
-### How do I set up three-phase measurement in the Home Assistant Addon?
+### How do I set up three-phase measurement in the Home Assistant App?
 
 A: Use comma-separated entity IDs:
 ```
@@ -873,11 +873,11 @@ A: No, this project is Marstek-specific. For other brands, see [uni-meter](https
 ### I get permission errors when binding to port 1010/2220.
 
 A: Ports below 1024 require root privileges on Linux. Solutions:
-- Use Docker or Home Assistant Add-on (recommended)
+- Use Docker or Home Assistant App (recommended)
 - Use `setcap` to grant permissions
 - Run as root (not recommended)
 
-### I get parsing errors on startup or the add-on crashes.
+### I get parsing errors on startup or the app crashes.
 
 A: Common causes:
 - Incorrect entity IDs or API access
