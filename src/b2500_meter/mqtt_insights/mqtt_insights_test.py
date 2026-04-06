@@ -61,7 +61,7 @@ def test_ct002_consumer_discovery_structure():
     assert dev["identifiers"] == ["astrameter_consumer_aabbccddeeff"]
     assert dev["name"] == "AstraMeter Consumer HMJ-2 aabbccddeeff"
     assert dev["manufacturer"] == "Marstek"
-    assert dev["model"] == "HMJ-2"
+    assert dev["model_id"] == "HMJ-2"
     assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in dev["connections"]
 
     # Check two-level availability
@@ -121,7 +121,7 @@ def test_ct002_consumer_discovery_no_device_type():
     )
     dev = payload["device"]
     assert dev["name"] == "AstraMeter Consumer aabbccddeeff"
-    assert "model" not in dev
+    assert "model_id" not in dev
 
 
 def test_ct002_consumer_discovery_non_mac_consumer():
@@ -132,18 +132,20 @@ def test_ct002_consumer_discovery_non_mac_consumer():
     assert "connections" not in payload["device"]
 
 
-def test_ct002_consumer_discovery_network_mac():
-    """network_mac adds a ['mac', ...] connection entry."""
+def test_ct002_consumer_discovery_network_mac_and_ip():
+    """network_mac and battery_ip add connection entries."""
     _, payload = build_ct002_consumer_discovery(
         "b2500_meter",
         "dev1",
         "aabbccddeeff",
         "homeassistant",
         network_mac="11:22:33:44:55:66",
+        battery_ip="192.168.1.10",
     )
     conns = payload["device"]["connections"]
     assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in conns
     assert ["mac", "11:22:33:44:55:66"] in conns
+    assert ["ip", "192.168.1.10"] in conns
 
 
 def test_ct002_device_discovery_structure():

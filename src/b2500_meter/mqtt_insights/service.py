@@ -357,6 +357,7 @@ class MqttInsightsService:
                     cfg.ha_discovery_prefix,
                     device_type=data.get("device_type", ""),
                     network_mac=network_mac,
+                    battery_ip=battery_ip,
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True

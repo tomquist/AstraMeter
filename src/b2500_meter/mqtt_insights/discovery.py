@@ -40,6 +40,7 @@ def build_ct002_consumer_discovery(
     ha_prefix: str,
     device_type: str = "",
     network_mac: str = "",
+    battery_ip: str = "",
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     safe_cid = _sanitize_id(consumer_id)
@@ -202,10 +203,12 @@ def build_ct002_consumer_discovery(
         connections.append(["bluetooth", bt_mac])
     if network_mac:
         connections.append(["mac", network_mac])
+    if battery_ip:
+        connections.append(["ip", battery_ip])
     if connections:
         device_info["connections"] = connections
     if device_type:
-        device_info["model"] = device_type
+        device_info["model_id"] = device_type
 
     payload = {
         "device": device_info,
