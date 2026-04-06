@@ -63,6 +63,7 @@ def test_ct002_consumer_discovery_structure():
     assert dev["manufacturer"] == "Marstek"
     assert dev["model_id"] == "HMJ-2"
     assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in dev["connections"]
+    assert ["astrameter", "ct002_dev1"] in dev["connections"]
 
     # Check two-level availability
     assert payload["availability_mode"] == "all"
@@ -125,11 +126,12 @@ def test_ct002_consumer_discovery_no_device_type():
 
 
 def test_ct002_consumer_discovery_non_mac_consumer():
-    """No connections field when consumer_id is not a 12-char hex MAC."""
+    """Non-MAC consumer_id still gets the astrameter meter correlation."""
     _, payload = build_ct002_consumer_discovery(
         "astrameter", "dev1", "192.168.1.1:12345", "homeassistant"
     )
-    assert "connections" not in payload["device"]
+    conns = payload["device"]["connections"]
+    assert conns == [["astrameter", "ct002_dev1"]]
 
 
 def test_ct002_consumer_discovery_network_mac_and_ip():
@@ -143,6 +145,7 @@ def test_ct002_consumer_discovery_network_mac_and_ip():
         battery_ip="192.168.1.10",
     )
     conns = payload["device"]["connections"]
+    assert ["astrameter", "ct002_dev1"] in conns
     assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in conns
     assert ["mac", "11:22:33:44:55:66"] in conns
     assert ["ip", "192.168.1.10"] in conns
@@ -151,6 +154,8 @@ def test_ct002_consumer_discovery_network_mac_and_ip():
 def test_ct002_device_discovery_structure():
     topic, payload = build_ct002_device_discovery("astrameter", "dev1", "homeassistant")
     _assert_discovery_structure(topic, payload)
+    assert "AstraMeter" in payload["device"]["name"]
+    assert ["astrameter", "ct002_dev1"] in payload["device"]["connections"]
     comps = payload["components"]
     assert "smooth_target" in comps
     assert "active_control" in comps
@@ -170,6 +175,8 @@ def test_shelly_battery_discovery_structure():
         "astrameter", "shelly1", "192.168.1.100", "homeassistant"
     )
     _assert_discovery_structure(topic, payload)
+    assert "AstraMeter" in payload["device"]["name"]
+    assert ["astrameter", "shelly_shelly1"] in payload["device"]["connections"]
     comps = payload["components"]
     assert "grid_power_total" in comps
     assert "active" in comps
@@ -187,6 +194,8 @@ def test_shelly_device_discovery_structure():
         "astrameter", "shelly1", "homeassistant"
     )
     _assert_discovery_structure(topic, payload)
+    assert "AstraMeter" in payload["device"]["name"]
+    assert ["astrameter", "shelly_shelly1"] in payload["device"]["connections"]
     assert "battery_count" in payload["components"]
 
 

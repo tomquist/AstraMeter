@@ -195,7 +195,9 @@ def build_ct002_consumer_discovery(
         else f"AstraMeter Consumer {mac_slug}",
         "manufacturer": "Marstek",
     }
-    connections: list[list[str]] = []
+    connections: list[list[str]] = [
+        ["astrameter", f"ct002_{device_id}"],
+    ]
     if re.fullmatch(r"[0-9a-f]{12}", mac_slug):
         bt_mac = ":".join(
             mac_slug[i : i + 2] for i in range(0, len(mac_slug), 2)
@@ -205,8 +207,7 @@ def build_ct002_consumer_discovery(
         connections.append(["mac", network_mac])
     if battery_ip:
         connections.append(["ip", battery_ip])
-    if connections:
-        device_info["connections"] = connections
+    device_info["connections"] = connections
     if device_type:
         device_info["model_id"] = device_type
 
@@ -284,8 +285,9 @@ def build_ct002_device_discovery(
     payload = {
         "device": {
             "identifiers": node_id,
-            "name": f"CT002 {device_id}",
+            "name": f"AstraMeter CT002 {device_id}",
             "manufacturer": "astrameter",
+            "connections": [["astrameter", f"ct002_{device_id}"]],
         },
         "origin": _origin(),
         "components": components,
@@ -372,8 +374,9 @@ def build_shelly_battery_discovery(
     payload = {
         "device": {
             "identifiers": node_id,
-            "name": f"Shelly Battery {battery_ip}",
+            "name": f"AstraMeter Shelly Battery {battery_ip}",
             "manufacturer": "astrameter",
+            "connections": [["astrameter", f"shelly_{device_id}"]],
         },
         "origin": _origin(),
         "components": components,
@@ -420,8 +423,9 @@ def build_shelly_device_discovery(
     payload = {
         "device": {
             "identifiers": node_id,
-            "name": f"Shelly {device_id}",
+            "name": f"AstraMeter Shelly {device_id}",
             "manufacturer": "astrameter",
+            "connections": [["astrameter", f"shelly_{device_id}"]],
         },
         "origin": _origin(),
         "components": components,
