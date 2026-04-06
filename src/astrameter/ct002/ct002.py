@@ -504,7 +504,7 @@ class CT002:
         reported_phase = (fields[4] if len(fields) > 4 else "").strip().upper()
         reported_power = parse_int(fields[5] if len(fields) > 5 else 0)
 
-        if reported_phase not in ("A", "B", "C", "0", ""):
+        if reported_phase not in ("A", "B", "C", "D", "0", ""):
             logger.debug(
                 "CT002 request from %s has invalid phase '%s'",
                 addr,
@@ -512,7 +512,7 @@ class CT002:
             )
             return
 
-        in_inspection_mode = reported_phase in ("0", "")
+        in_inspection_mode = reported_phase in ("D", "0", "")
 
         logger.debug(
             "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s ct_mac=%s phase=%s power=%s consumer_id=%s%s",

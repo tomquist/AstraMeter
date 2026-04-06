@@ -55,15 +55,15 @@ Request payload fields (consumer → CT):
 2. **meter_mac_code** — battery MAC (12 hex chars, from Marstek app device management)
 3. **hhm_dev_type** — CT type (`HME-4` or `HME-3`)
 4. **hhm_mac_code** — CT MAC (12 hex chars, from Marstek app device management)
-5. **phase** — phase identifier (`A`, `B`, `C`) observed in real traffic; `0` or empty means inspection mode
+5. **phase** — phase identifier (`A`, `B`, `C`) observed in real traffic; `D`, `0` or empty means inspection mode
 6. **phase_power** — signed integer watts for the phase in field 5
 
 This mapping is based on real packet captures. Older public scripts may show `0|0` placeholders,
 but observed live traffic carries `phase|power` in these two fields.
 
-### Inspection mode (phase `0` or empty)
+### Inspection mode (phase `D`, `0` or empty)
 
-When a device sends `phase=0` or an empty phase, it is in **inspection mode** — determining which
+When a device sends `phase=D`, `phase=0` or an empty phase, it is in **inspection mode** — determining which
 phase it is connected to. The emulator:
 
 - **Responds** to the request (so the device can continue its phase detection)
@@ -110,7 +110,7 @@ This list describes current emulator behavior as implemented.
 ## Multi‑consumer behavior
 
 The emulator tracks per‑consumer `phase` + `phase_power` from the request fields (only when phase is
-`A`, `B`, or `C`; inspection-mode requests with phase `0` or empty are responded to but not aggregated).
+`A`, `B`, or `C`; inspection-mode requests with phase `D`, `0` or empty are responded to but not aggregated).
 If a consumer stops sending updates for a while, its reported values are evicted after a configurable
 TTL (`CONSUMER_TTL`).
 
