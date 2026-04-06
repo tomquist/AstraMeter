@@ -35,3 +35,9 @@ configuration:
   marstek_password:
     name: Marstek Account Password
     description: "Password used to sign in to your Marstek account for managed CT device registration."
+  power_offset:
+    name: Power Offset
+    description: "Optional. Added to each power value after the multiplier is applied. Single value (e.g. -50) or a comma-separated list (one per phase, e.g. -50,-30,-40). Leave empty to disable."
+  power_multiplier:
+    name: Power Multiplier
+    description: "Optional. Scales each power value (formula: value * POWER_MULTIPLIER + POWER_OFFSET). Single value (e.g. 1.05) or a comma-separated list (one per phase, e.g. 1.05,1.02,1.03). Use -1 to flip polarity. Leave empty to disable."

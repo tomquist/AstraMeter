@@ -130,6 +130,12 @@ else
             echo "POWER_CALCULATE=False"
             echo "CURRENT_POWER_ENTITY=$(bashio::config 'power_input_alias')"
         fi
+        if bashio::config.has_value 'power_offset'; then
+            echo "POWER_OFFSET=$(bashio::config 'power_offset')"
+        fi
+        if bashio::config.has_value 'power_multiplier'; then
+            echo "POWER_MULTIPLIER=$(bashio::config 'power_multiplier')"
+        fi
 
         if bashio::services.available "mqtt"; then
             echo ""

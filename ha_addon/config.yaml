@@ -53,4 +53,6 @@ schema:
   min_efficient_power: int(0,)?
   efficiency_rotation_interval: int(1,)?
   log_level: list(critical|error|warning|info|debug)
+  power_offset: str?
+  power_multiplier: str?
   custom_config: str?

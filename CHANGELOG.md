@@ -8,7 +8,7 @@
 - Added SMA Energy Meter / Sunny Home Manager support via Speedwire multicast with auto-detection and per-phase readings ([#252](https://github.com/tomquist/astrameter/pull/252))
 - Added SML powermeter support for smart meters over a local serial port (IR head), with optional per-phase OBIS overrides ([#229](https://github.com/tomquist/astrameter/pull/229))
 - Added multi-phase support for Tasmota (`JSON_POWER_MQTT_LABEL`) and MQTT (`TOPICS` / `JSON_PATHS`) powermeters ([#136](https://github.com/tomquist/astrameter/issues/136), [#280](https://github.com/tomquist/astrameter/pull/280))
-- Added `POWER_OFFSET` and `POWER_MULTIPLIER` transforms for any powermeter, including per-phase calibration, sign flipping, and phase nulling ([#250](https://github.com/tomquist/astrameter/pull/250))
+- Added `POWER_OFFSET` and `POWER_MULTIPLIER` transforms for any powermeter, including per-phase calibration, sign flipping, and phase nulling ([#250](https://github.com/tomquist/astrameter/pull/250)); the Home Assistant app exposes both as optional advanced fields
 - Added optional Marstek cloud auto-registration for managed fake CT devices at startup ([#237](https://github.com/tomquist/astrameter/pull/237))
 - Switched the Home Assistant powermeter integration from REST polling to the WebSocket API ([#232](https://github.com/tomquist/astrameter/pull/232))
 - Added `LOG_LEVEL` environment variable support for Docker and CLI runs ([#174](https://github.com/tomquist/astrameter/pull/174))
