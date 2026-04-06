@@ -13,6 +13,11 @@ on:
       digest-prefix:
         required: true
         type: string
+      legacy-image-name:
+        required: false
+        type: string
+        default: ""
+        description: "Optional legacy image name (e.g. owner/repo) to publish the same manifest under for backward compatibility"
 
 jobs:
   merge:
@@ -32,11 +37,17 @@ jobs:
       - id: lower-repo
         run: |
           echo "IMAGE_NAME=${GITHUB_REPOSITORY@L}${{ inputs.image-suffix }}" >> $GITHUB_OUTPUT
+          if [ -n "${{ inputs.legacy-image-name }}" ]; then
+            LEGACY_LOWER=$(echo "${{ inputs.legacy-image-name }}" | tr '[:upper:]' '[:lower:]')
+            echo "LEGACY_IMAGE_NAME=${LEGACY_LOWER}${{ inputs.image-suffix }}" >> $GITHUB_OUTPUT
+          fi
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ inputs.registry }}/${{ steps.lower-repo.outputs.IMAGE_NAME }}
+          images: |
+            ${{ inputs.registry }}/${{ steps.lower-repo.outputs.IMAGE_NAME }}
+            ${{ inputs.legacy-image-name != '' && format('{0}/{1}', inputs.registry, steps.lower-repo.outputs.LEGACY_IMAGE_NAME) || '' }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
