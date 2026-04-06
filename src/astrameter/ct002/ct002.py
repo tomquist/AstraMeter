@@ -509,15 +509,21 @@ class CT002:
         # (newer Marstek battery firmwares); accept any other value too so
         # future markers don't break phase detection.
         in_inspection_mode = reported_phase not in ("A", "B", "C")
+        if in_inspection_mode:
+            logger.debug(
+                "CT002 request from %s in inspection mode (phase=%r)",
+                addr,
+                reported_phase,
+            )
 
         logger.debug(
-            "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s ct_mac=%s phase=%s power=%s consumer_id=%s%s",
+            "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s ct_mac=%s phase=%r power=%s consumer_id=%s%s",
             addr,
             fields[0] if len(fields) > 0 else None,
             fields[1] if len(fields) > 1 else None,
             fields[2] if len(fields) > 2 else None,
             fields[3] if len(fields) > 3 else None,
-            reported_phase or "(inspection)",
+            reported_phase,
             reported_power,
             consumer_id,
             " in inspection mode" if in_inspection_mode else "",
