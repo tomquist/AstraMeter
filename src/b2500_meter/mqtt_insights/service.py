@@ -27,6 +27,27 @@ RECONNECT_DELAY = 5
 QUEUE_MAX_SIZE = 100
 
 
+async def _arp_lookup(ip: str) -> str:
+    """Best-effort ARP lookup via /proc/net/arp. Returns 'AA:BB:CC:DD:EE:FF' or ''."""
+
+    def _sync_lookup() -> str:
+        try:
+            with open("/proc/net/arp") as f:
+                for line in f:
+                    parts = line.split()
+                    if (
+                        len(parts) >= 4
+                        and parts[0] == ip
+                        and parts[3] != "00:00:00:00:00:00"
+                    ):
+                        return parts[3].upper()
+        except OSError:
+            pass
+        return ""
+
+    return await asyncio.to_thread(_sync_lookup)
+
+
 @dataclass
 class MqttInsightsConfig:
     broker: str
@@ -325,12 +346,17 @@ class MqttInsightsService:
 
             if consumer_key not in self._discovered_ct002_consumers:
                 self._discovered_ct002_consumers.add(consumer_key)
+                network_mac = ""
+                battery_ip = data.get("battery_ip", "")
+                if battery_ip:
+                    network_mac = await _arp_lookup(battery_ip)
                 topic, payload = build_ct002_consumer_discovery(
                     base,
                     did,
                     cid,
                     cfg.ha_discovery_prefix,
                     device_type=data.get("device_type", ""),
+                    network_mac=network_mac,
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True

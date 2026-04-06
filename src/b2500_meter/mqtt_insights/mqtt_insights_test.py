@@ -23,7 +23,7 @@ from .discovery import (
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
-from .service import MqttInsightsConfig, MqttInsightsService
+from .service import MqttInsightsConfig, MqttInsightsService, _arp_lookup
 
 # ── Discovery payload unit tests ──────────────────────────────────────────
 
@@ -49,12 +49,20 @@ def _assert_discovery_structure(topic: str, payload: dict) -> None:
 
 def test_ct002_consumer_discovery_structure():
     topic, payload = build_ct002_consumer_discovery(
-        "b2500_meter", "dev1", "consumer1", "homeassistant"
+        "b2500_meter", "dev1", "aabbccddeeff", "homeassistant", device_type="HMJ-2"
     )
     _assert_discovery_structure(topic, payload)
 
     assert "homeassistant/device/" in topic
     assert topic.endswith("/config")
+
+    # Device info — AstraMeter branding
+    dev = payload["device"]
+    assert dev["identifiers"] == ["astrameter_consumer_aabbccddeeff"]
+    assert dev["name"] == "AstraMeter Consumer HMJ-2 aabbccddeeff"
+    assert dev["manufacturer"] == "Marstek"
+    assert dev["model"] == "HMJ-2"
+    assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in dev["connections"]
 
     # Check two-level availability
     assert payload["availability_mode"] == "all"
@@ -104,6 +112,38 @@ def test_ct002_consumer_discovery_structure():
     assert auto["state_on"] == "True"
     assert auto["state_off"] == "False"
     assert auto["entity_category"] == "config"
+
+
+def test_ct002_consumer_discovery_no_device_type():
+    """Name omits device_type when empty."""
+    _, payload = build_ct002_consumer_discovery(
+        "b2500_meter", "dev1", "aabbccddeeff", "homeassistant"
+    )
+    dev = payload["device"]
+    assert dev["name"] == "AstraMeter Consumer aabbccddeeff"
+    assert "model" not in dev
+
+
+def test_ct002_consumer_discovery_non_mac_consumer():
+    """No connections field when consumer_id is not a 12-char hex MAC."""
+    _, payload = build_ct002_consumer_discovery(
+        "b2500_meter", "dev1", "192.168.1.1:12345", "homeassistant"
+    )
+    assert "connections" not in payload["device"]
+
+
+def test_ct002_consumer_discovery_network_mac():
+    """network_mac adds a ['mac', ...] connection entry."""
+    _, payload = build_ct002_consumer_discovery(
+        "b2500_meter",
+        "dev1",
+        "aabbccddeeff",
+        "homeassistant",
+        network_mac="11:22:33:44:55:66",
+    )
+    conns = payload["device"]["connections"]
+    assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in conns
+    assert ["mac", "11:22:33:44:55:66"] in conns
 
 
 def test_ct002_device_discovery_structure():
@@ -163,6 +203,49 @@ def test_sanitize_id():
     assert _sanitize_id("192.168.1.100") == "192_168_1_100"
     assert _sanitize_id("AA:BB:CC") == "AA_BB_CC"
     assert _sanitize_id("normal-id_123") == "normal-id_123"
+
+
+async def test_arp_lookup_found(tmp_path):
+    """ARP lookup finds a matching entry."""
+    arp_file = tmp_path / "arp"
+    arp_file.write_text(
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "192.168.1.10     0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
+        "192.168.1.20     0x1         0x2         11:22:33:44:55:66     *        eth0\n"
+    )
+    from unittest.mock import mock_open, patch
+
+    real_data = arp_file.read_text()
+    m = mock_open(read_data=real_data)
+    # mock_open doesn't support iteration by default; wire it up
+    m.return_value.__iter__ = lambda self: iter(real_data.splitlines(keepends=True))
+    with patch("builtins.open", m):
+        result = await _arp_lookup("192.168.1.10")
+    assert result == "AA:BB:CC:DD:EE:FF"
+
+
+async def test_arp_lookup_not_found(tmp_path):
+    """ARP lookup returns empty when IP is not in the table."""
+    from unittest.mock import mock_open, patch
+
+    data = (
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "192.168.1.10     0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
+    )
+    m = mock_open(read_data=data)
+    m.return_value.__iter__ = lambda self: iter(data.splitlines(keepends=True))
+    with patch("builtins.open", m):
+        result = await _arp_lookup("192.168.1.99")
+    assert result == ""
+
+
+async def test_arp_lookup_file_missing():
+    """ARP lookup returns empty when /proc/net/arp is not available."""
+    from unittest.mock import patch
+
+    with patch("builtins.open", side_effect=OSError):
+        result = await _arp_lookup("192.168.1.10")
+    assert result == ""
 
 
 # ── Config tests ──────────────────────────────────────────────────────────

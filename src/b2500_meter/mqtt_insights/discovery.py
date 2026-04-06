@@ -39,6 +39,7 @@ def build_ct002_consumer_discovery(
     consumer_id: str,
     ha_prefix: str,
     device_type: str = "",
+    network_mac: str = "",
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     safe_cid = _sanitize_id(consumer_id)
@@ -184,19 +185,27 @@ def build_ct002_consumer_discovery(
         "optimistic": True,
     }
 
-    # Build identifiers: include hame_energy_<mac> for matching real devices
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
-    identifiers = [node_id, f"hame_energy_{mac_slug}"]
 
     device_info: dict = {
-        "identifiers": identifiers,
-        "name": f"HAME Energy {device_type} {mac_slug}"
+        "identifiers": [f"astrameter_consumer_{mac_slug}"],
+        "name": f"AstraMeter Consumer {device_type} {mac_slug}"
         if device_type
-        else f"HAME Energy {mac_slug}",
-        "manufacturer": "HAME Energy",
+        else f"AstraMeter Consumer {mac_slug}",
+        "manufacturer": "Marstek",
     }
+    connections: list[list[str]] = []
+    if re.fullmatch(r"[0-9a-f]{12}", mac_slug):
+        bt_mac = ":".join(
+            mac_slug[i : i + 2] for i in range(0, len(mac_slug), 2)
+        ).upper()
+        connections.append(["bluetooth", bt_mac])
+    if network_mac:
+        connections.append(["mac", network_mac])
+    if connections:
+        device_info["connections"] = connections
     if device_type:
-        device_info["model_id"] = device_type
+        device_info["model"] = device_type
 
     payload = {
         "device": device_info,
