@@ -20,6 +20,9 @@ configuration:
   custom_config:
     name: Custom Config
     description: "Optional. Name of a custom config.ini file to use instead of the UI configuration. The file must be placed in the app's configuration directory."
+  mqtt_uri:
+    name: Custom MQTT URI
+    description: "Optional. MQTT broker URI for MQTT Insights, e.g. mqtt://user:pass@broker.example.com:1883 (or mqtts:// for TLS). When set, this overrides Home Assistant's internal MQTT broker. Leave empty to use the Mosquitto add-on automatically."
   min_efficient_power:
     name: Min Efficient Power
     description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."

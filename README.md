@@ -595,8 +595,18 @@ TOPIC = home/powermeter
 JSON_PATH = $.path.to.value (Optional for JSON payloads)
 USERNAME = mqtt_user (Optional)
 PASSWORD = mqtt_pass (Optional)
+# Optional: connect over TLS (mqtts://) — default false
+# TLS = false
 # Per-powermeter throttling override
 # THROTTLE_INTERVAL = 2
+```
+
+Instead of `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS`, you can provide a single `URI` of the form `mqtt://user:pass@host:port` (or `mqtts://...` for TLS). When `URI` is set, the individual broker fields are ignored.
+
+```ini
+[MQTT]
+URI = mqtts://user:pass@broker.example.com:8883
+TOPIC = home/powermeter
 ```
 
 The `JSON_PATH` option is used to extract the power value from a JSON payload. The path must be a [valid JSONPath expression](https://goessner.net/articles/JsonPath/).
@@ -768,6 +778,7 @@ HA_DISCOVERY_PREFIX = homeassistant
 
 | Option | Default | Description |
 |---|---|---|
+| `URI` | — | MQTT URI (`mqtt[s]://user:pass@host:port`); when set, overrides `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS` |
 | `BROKER` | `localhost` | MQTT broker hostname/IP |
 | `PORT` | `1883` | MQTT broker port |
 | `USERNAME` / `PASSWORD` | — | Credentials (optional) |

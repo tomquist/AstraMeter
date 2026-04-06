@@ -231,6 +231,12 @@ THROTTLE_INTERVAL = 0
 #[MQTT]
 #BROKER = broker.example.com
 #PORT = 1883
+## Optional: enable TLS to connect over mqtts:// (default false)
+#TLS = false
+## Alternatively, provide a single MQTT URI in place of BROKER/PORT/USERNAME/PASSWORD/TLS:
+##   mqtt://user:pass@broker.example.com:1883
+##   mqtts://user:pass@broker.example.com:8883
+#URI = mqtt://user:pass@broker.example.com:1883
 #TOPIC = home/powermeter
 #JSON_PATH = path.to.value (Optional)
 #USERNAME = mqtt_user (Optional)
@@ -315,6 +321,10 @@ THROTTLE_INTERVAL = 0
 #PASSWORD = mqtt_pass
 ## Enable TLS (default: false)
 #TLS = false
+## Alternatively, provide a single MQTT URI in place of BROKER/PORT/USERNAME/PASSWORD/TLS:
+##   mqtt://user:pass@broker.example.com:1883
+##   mqtts://user:pass@broker.example.com:8883
+#URI = mqtt://user:pass@192.168.1.100:1883
 ## Base topic for all MQTT Insights messages (default: astrameter)
 #BASE_TOPIC = astrameter
 ## Enable Home Assistant MQTT Device Discovery (default: true)

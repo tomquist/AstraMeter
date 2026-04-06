@@ -56,3 +56,4 @@ schema:
   power_offset: str?
   power_multiplier: str?
   custom_config: str?
+  mqtt_uri: str?

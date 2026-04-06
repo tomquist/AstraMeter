@@ -44,6 +44,9 @@ if bashio::config.has_value 'custom_config' && [ -f "/config/$(bashio::config 'c
     if bashio::config.has_value 'marstek_mailbox' || bashio::config.has_value 'marstek_password' || bashio::config.has_value 'marstek_auto_register_ct_device'; then
         bashio::log.warning "App UI Marstek settings are ignored when custom_config is used; values from custom config file take precedence"
     fi
+    if bashio::config.has_value 'mqtt_uri'; then
+        bashio::log.warning "App UI mqtt_uri is ignored when custom_config is used; the custom config file controls MQTT settings"
+    fi
     cp "/config/$(bashio::config 'custom_config')" "$CONFIG"
 else
     device_types="$(bashio::config 'device_types')"
@@ -139,7 +142,14 @@ else
             echo "POWER_MULTIPLIER=$power_multiplier"
         fi
 
-        if bashio::services.available "mqtt"; then
+        if bashio::config.has_value 'mqtt_uri'; then
+            bashio::log.info "Using custom MQTT broker URL from configuration"
+            echo ""
+            echo "[MQTT_INSIGHTS]"
+            echo "URI=$(bashio::config 'mqtt_uri')"
+            echo "HA_DISCOVERY=True"
+        elif bashio::services.available "mqtt"; then
+            bashio::log.info "Using Home Assistant's internal MQTT broker"
             echo ""
             echo "[MQTT_INSIGHTS]"
             echo "BROKER=$(bashio::services 'mqtt' 'host')"

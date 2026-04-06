@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import ssl
 
 import aiomqtt
 from jsonpath_ng import parse
@@ -30,11 +31,13 @@ class MqttPowermeter(Powermeter):
         json_path: str | list[str] | None = None,
         username: str | None = None,
         password: str | None = None,
+        tls: bool = False,
     ):
         self.broker = broker
         self.port = port
         self.username = username
         self.password = password
+        self.tls = tls
 
         # Normalize topic(s) and json_path(s) into subscription list
         topics = [topic] if isinstance(topic, str) else list(topic)
@@ -92,6 +95,7 @@ class MqttPowermeter(Powermeter):
 
     async def _run(self) -> None:
         unique_topics = list(self._topic_indices.keys())
+        tls_context = ssl.create_default_context() if self.tls else None
         while True:
             try:
                 async with aiomqtt.Client(
@@ -99,6 +103,7 @@ class MqttPowermeter(Powermeter):
                     port=self.port,
                     username=self.username,
                     password=self.password,
+                    tls_context=tls_context,
                     keepalive=60,
                 ) as client:
                     logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")

@@ -25,7 +25,9 @@ from astrameter.config.config_loader import (
     create_tq_em_powermeter,
     create_vzlogger_powermeter,
     parse_float_list,
+    parse_mqtt_uri,
     read_all_powermeter_configs,
+    read_mqtt_insights_config,
 )
 from astrameter.powermeter import TransformedPowermeter
 
@@ -288,6 +290,105 @@ def test_create_mqtt_powermeter_with_json_paths():
     assert pm._subscriptions[0] == ("home/power", "$.l1.power")
     assert pm._subscriptions[1] == ("home/power", "$.l2.power")
     assert pm._subscriptions[2] == ("home/power", "$.l3.power")
+
+
+def test_parse_mqtt_uri_full():
+    parts = parse_mqtt_uri("mqtt://alice:s%40cret@broker.example.com:1884")
+    assert parts.host == "broker.example.com"
+    assert parts.port == 1884
+    assert parts.username == "alice"
+    assert parts.password == "s@cret"
+    assert parts.tls is False
+
+
+def test_parse_mqtt_uri_mqtts_default_port():
+    parts = parse_mqtt_uri("mqtts://broker.example.com")
+    assert parts.host == "broker.example.com"
+    assert parts.port == 8883
+    assert parts.username is None
+    assert parts.password is None
+    assert parts.tls is True
+
+
+def test_parse_mqtt_uri_mqtt_default_port():
+    parts = parse_mqtt_uri("mqtt://broker.example.com")
+    assert parts.port == 1883
+    assert parts.tls is False
+
+
+def test_parse_mqtt_uri_invalid_scheme():
+    with pytest.raises(ValueError):
+        parse_mqtt_uri("http://broker.example.com")
+
+
+def test_parse_mqtt_uri_missing_host():
+    with pytest.raises(ValueError):
+        parse_mqtt_uri("mqtt://")
+
+
+def test_parse_mqtt_uri_empty():
+    with pytest.raises(ValueError):
+        parse_mqtt_uri("")
+
+
+def test_create_mqtt_powermeter_with_uri():
+    config = configparser.ConfigParser()
+    config["MQTT"] = {
+        "URI": "mqtts://alice:secret@broker.example.com:8884",
+        "TOPIC": "home/power",
+    }
+    pm = create_mqtt_powermeter("MQTT", config)
+    assert pm.broker == "broker.example.com"
+    assert pm.port == 8884
+    assert pm.username == "alice"
+    assert pm.password == "secret"
+    assert pm.tls is True
+
+
+def test_read_mqtt_insights_config_with_uri():
+    config = configparser.ConfigParser()
+    config["MQTT_INSIGHTS"] = {
+        "URI": "mqtt://bob:pw@192.168.1.50:1885",
+    }
+    cfg = read_mqtt_insights_config(config)
+    assert cfg is not None
+    assert cfg.broker == "192.168.1.50"
+    assert cfg.port == 1885
+    assert cfg.username == "bob"
+    assert cfg.password == "pw"
+    assert cfg.tls is False
+
+
+def test_read_mqtt_insights_config_with_mqtts_uri():
+    config = configparser.ConfigParser()
+    config["MQTT_INSIGHTS"] = {
+        "URI": "mqtts://broker.example.com",
+    }
+    cfg = read_mqtt_insights_config(config)
+    assert cfg is not None
+    assert cfg.tls is True
+    assert cfg.port == 8883
+    assert cfg.username is None
+    assert cfg.password is None
+
+
+def test_read_mqtt_insights_config_without_uri():
+    """Plain BROKER/PORT/USERNAME/PASSWORD/TLS still works."""
+    config = configparser.ConfigParser()
+    config["MQTT_INSIGHTS"] = {
+        "BROKER": "10.0.0.1",
+        "PORT": "1888",
+        "USERNAME": "u",
+        "PASSWORD": "p",
+        "TLS": "true",
+    }
+    cfg = read_mqtt_insights_config(config)
+    assert cfg is not None
+    assert cfg.broker == "10.0.0.1"
+    assert cfg.port == 1888
+    assert cfg.username == "u"
+    assert cfg.password == "p"
+    assert cfg.tls is True
 
 
 def test_create_mqtt_powermeter_topics_takes_precedence_over_topic():

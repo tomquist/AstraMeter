@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import configparser
+from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 from typing import TYPE_CHECKING
+from urllib.parse import unquote, urlparse
 
 if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
@@ -68,6 +70,54 @@ class ClientFilter:
             logger.error(f"Error: {e}")
             return False
         return False
+
+
+@dataclass
+class MqttUriParts:
+    """Parsed connection details from an MQTT URI."""
+
+    host: str
+    port: int
+    username: str | None
+    password: str | None
+    tls: bool
+
+
+def parse_mqtt_uri(uri: str) -> MqttUriParts:
+    """Parse an ``mqtt://`` / ``mqtts://`` URI into its connection parts.
+
+    Accepts URIs of the form ``mqtt[s]://[user[:pass]@]host[:port]``. Username
+    and password may be percent-encoded. Raises ``ValueError`` if the URI is
+    not a valid MQTT URI.
+    """
+
+    raw = (uri or "").strip()
+    if not raw:
+        raise ValueError("MQTT URI is empty")
+
+    parsed = urlparse(raw)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("mqtt", "mqtts"):
+        raise ValueError(
+            f"Unsupported MQTT URI scheme '{parsed.scheme}'; expected 'mqtt' or 'mqtts'"
+        )
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"MQTT URI is missing a host: {uri!r}")
+
+    tls = scheme == "mqtts"
+    port = parsed.port if parsed.port is not None else (8883 if tls else 1883)
+    username = unquote(parsed.username) if parsed.username is not None else None
+    password = unquote(parsed.password) if parsed.password is not None else None
+
+    return MqttUriParts(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        tls=tls,
+    )
 
 
 def parse_float_list(value: str, key_name: str, section: str) -> list[float]:
@@ -258,13 +308,29 @@ def create_mqtt_powermeter(
     else:
         json_path = config.get(section, "JSON_PATH", fallback=None)
 
+    uri = config.get(section, "URI", fallback="").strip()
+    if uri:
+        parts = parse_mqtt_uri(uri)
+        broker = parts.host
+        port = parts.port
+        username = parts.username
+        password = parts.password
+        tls = parts.tls
+    else:
+        broker = config.get(section, "BROKER", fallback="")
+        port = config.getint(section, "PORT", fallback=1883)
+        username = config.get(section, "USERNAME", fallback=None)
+        password = config.get(section, "PASSWORD", fallback=None)
+        tls = config.getboolean(section, "TLS", fallback=False)
+
     return MqttPowermeter(
-        config.get(section, "BROKER", fallback=""),
-        config.getint(section, "PORT", fallback=1883),
+        broker,
+        port,
         topic,
         json_path,
-        config.get(section, "USERNAME", fallback=None),
-        config.get(section, "PASSWORD", fallback=None),
+        username,
+        password,
+        tls=tls,
     )
 
 
@@ -468,12 +534,26 @@ def read_mqtt_insights_config(
             raw_port = config.get(section, "PORT", fallback="")
             raw_tls = config.get(section, "TLS", fallback="")
             raw_ha_discovery = config.get(section, "HA_DISCOVERY", fallback="")
+            uri = config.get(section, "URI", fallback="").strip()
+            if uri:
+                parts = parse_mqtt_uri(uri)
+                broker_value = parts.host
+                port_value = parts.port
+                username_value: str | None = parts.username
+                password_value: str | None = parts.password
+                tls_value = parts.tls
+            else:
+                broker_value = config.get(section, "BROKER", fallback="") or "localhost"
+                port_value = int(raw_port) if raw_port else 1883
+                username_value = config.get(section, "USERNAME", fallback=None) or None
+                password_value = config.get(section, "PASSWORD", fallback=None) or None
+                tls_value = config.getboolean(section, "TLS") if raw_tls else False
             return MqttInsightsConfig(
-                broker=config.get(section, "BROKER", fallback="") or "localhost",
-                port=int(raw_port) if raw_port else 1883,
-                username=config.get(section, "USERNAME", fallback=None) or None,
-                password=config.get(section, "PASSWORD", fallback=None) or None,
-                tls=config.getboolean(section, "TLS") if raw_tls else False,
+                broker=broker_value,
+                port=port_value,
+                username=username_value,
+                password=password_value,
+                tls=tls_value,
                 base_topic=config.get(section, "BASE_TOPIC", fallback="")
                 or "astrameter",
                 ha_discovery=config.getboolean(section, "HA_DISCOVERY")
