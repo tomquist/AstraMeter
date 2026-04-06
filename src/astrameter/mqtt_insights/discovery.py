@@ -48,6 +48,7 @@ def build_ct002_consumer_discovery(
     state_topic = f"{base_topic}/ct002/{device_id}/consumer/{consumer_id}"
     avail_topic = f"{state_topic}/availability"
     uid_prefix = f"astrameter_ct002_{safe_dev}_{safe_cid}"
+    meter_identifier = f"astrameter_ct002_{safe_dev}"
 
     components: dict[str, dict] = {}
 
@@ -194,10 +195,9 @@ def build_ct002_consumer_discovery(
         if device_type
         else f"AstraMeter Consumer {mac_slug}",
         "manufacturer": "Marstek",
+        "via_device": meter_identifier,
     }
-    connections: list[list[str]] = [
-        ["astrameter", f"ct002_{device_id}"],
-    ]
+    connections: list[list[str]] = []
     if re.fullmatch(r"[0-9a-f]{12}", mac_slug):
         bt_mac = ":".join(
             mac_slug[i : i + 2] for i in range(0, len(mac_slug), 2)
@@ -207,7 +207,8 @@ def build_ct002_consumer_discovery(
         connections.append(["mac", network_mac])
     if battery_ip:
         connections.append(["ip", battery_ip])
-    device_info["connections"] = connections
+    if connections:
+        device_info["connections"] = connections
     if device_type:
         device_info["model_id"] = device_type
 
@@ -287,7 +288,6 @@ def build_ct002_device_discovery(
             "identifiers": node_id,
             "name": f"AstraMeter CT002 {device_id}",
             "manufacturer": "astrameter",
-            "connections": [["astrameter", f"ct002_{device_id}"]],
         },
         "origin": _origin(),
         "components": components,
@@ -376,7 +376,7 @@ def build_shelly_battery_discovery(
             "identifiers": node_id,
             "name": f"AstraMeter Shelly Battery {battery_ip}",
             "manufacturer": "astrameter",
-            "connections": [["astrameter", f"shelly_{device_id}"]],
+            "via_device": f"astrameter_shelly_{safe_dev}",
         },
         "origin": _origin(),
         "components": components,
@@ -425,7 +425,6 @@ def build_shelly_device_discovery(
             "identifiers": node_id,
             "name": f"AstraMeter Shelly {device_id}",
             "manufacturer": "astrameter",
-            "connections": [["astrameter", f"shelly_{device_id}"]],
         },
         "origin": _origin(),
         "components": components,
