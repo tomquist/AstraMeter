@@ -78,7 +78,9 @@ class ThrottledPowermeter(Powermeter):
             # interval before retrying — avoids hammering a failing source.
             self._last_update_time = time.monotonic()
             if self._last_values is not None:
-                logger.warning("Throttling: Error getting fresh values: %s", e)
+                logger.warning(
+                    "Throttling: Error getting fresh values: %s", e, exc_info=True
+                )
                 logger.debug(
                     "Throttling: Using cached values due to error: %s",
                     self._last_values,

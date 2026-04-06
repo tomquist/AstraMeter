@@ -112,7 +112,7 @@ class HomeAssistant(Powermeter):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"Home Assistant WebSocket error: {e}")
+                logger.error("Home Assistant WebSocket error: %s", e, exc_info=True)
             # Reset protocol state for reconnection; keep _entity_values
             # (stale values are preferable to ValueError during brief disconnect;
             # subscribe_entities re-sends initial states on reconnect)

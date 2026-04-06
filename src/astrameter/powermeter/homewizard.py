@@ -90,7 +90,7 @@ class HomeWizardPowermeter(Powermeter):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"HomeWizard WebSocket error: {e}")
+                logger.error("HomeWizard WebSocket error: %s", e, exc_info=True)
             await asyncio.sleep(5)
 
     async def _handle_message(

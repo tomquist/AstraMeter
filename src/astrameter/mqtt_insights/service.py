@@ -228,10 +228,12 @@ class MqttInsightsService:
                 raise
             except (aiomqtt.MqttError, OSError) as exc:
                 self._connected.clear()
+                # Reconnect loop — traceback would be noisy, keep it terse.
                 logger.warning(
                     "MQTT Insights connection error: %s. Reconnecting in %ss...",
                     exc,
                     RECONNECT_DELAY,
+                    exc_info=False,
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
             except Exception:

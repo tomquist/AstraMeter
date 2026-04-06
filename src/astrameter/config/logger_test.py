@@ -1,4 +1,5 @@
 import importlib
+import io
 import logging
 import re
 from unittest.mock import patch
@@ -47,3 +48,74 @@ def test_set_log_level_configures_timestamped_log_output():
         formatted,
     )
     assert kwargs["force"] is True
+
+
+def test_warning_inside_except_block_includes_traceback():
+    setLogLevel("warning")
+    root = logging.getLogger()
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(message)s"))
+    # Copy the auto-exc-info filter from the root stream handler installed by
+    # setLogLevel so this test handler sees the same behavior.
+    for existing in root.handlers:
+        for flt in existing.filters:
+            handler.addFilter(flt)
+    root.addHandler(handler)
+    try:
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as exc:
+            logging.getLogger("astrameter.test").warning("failed: %s", exc)
+    finally:
+        root.removeHandler(handler)
+
+    output = buffer.getvalue()
+    assert "WARNING:failed: boom" in output
+    assert "Traceback (most recent call last):" in output
+    assert "RuntimeError: boom" in output
+
+
+def test_warning_outside_except_block_has_no_traceback():
+    setLogLevel("warning")
+    root = logging.getLogger()
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(message)s"))
+    for existing in root.handlers:
+        for flt in existing.filters:
+            handler.addFilter(flt)
+    root.addHandler(handler)
+    try:
+        logging.getLogger("astrameter.test").warning("plain warning")
+    finally:
+        root.removeHandler(handler)
+
+    output = buffer.getvalue()
+    assert "WARNING:plain warning" in output
+    assert "Traceback" not in output
+
+
+def test_exc_info_false_opts_out_of_auto_traceback():
+    setLogLevel("warning")
+    root = logging.getLogger()
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(message)s"))
+    for existing in root.handlers:
+        for flt in existing.filters:
+            handler.addFilter(flt)
+    root.addHandler(handler)
+    try:
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as exc:
+            logging.getLogger("astrameter.test").warning(
+                "suppressed: %s", exc, exc_info=False
+            )
+    finally:
+        root.removeHandler(handler)
+
+    output = buffer.getvalue()
+    assert "WARNING:suppressed: boom" in output
+    assert "Traceback" not in output

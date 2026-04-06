@@ -547,9 +547,11 @@ def main():
                         "Credentials are only needed for one-time registration. You can remove MARSTEK mailbox/password from config now."
                     )
             except MarstekApiError as exc:
-                logger.error("Marstek auto-registration failed: %s", exc)
+                logger.error("Marstek auto-registration failed: %s", exc, exc_info=True)
             except Exception as exc:
-                logger.error("Unexpected Marstek auto-registration error: %s", exc)
+                logger.error(
+                    "Unexpected Marstek auto-registration error: %s", exc, exc_info=True
+                )
 
     # Map SIGTERM to KeyboardInterrupt so asyncio.run cancels tasks and
     # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).

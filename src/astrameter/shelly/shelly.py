@@ -174,7 +174,9 @@ class Shelly:
         try:
             self.event_listener(self._device_id, battery_ip, data)
         except Exception as exc:
-            logger.warning("event_listener failed for %s: %s", battery_ip, exc)
+            logger.warning(
+                "event_listener failed for %s: %s", battery_ip, exc, exc_info=True
+            )
 
     async def _safe_handle_request(self, transport, data, addr):
         try:

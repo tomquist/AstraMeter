@@ -130,8 +130,12 @@ class MqttPowermeter(Powermeter):
                                 )
             except aiomqtt.MqttError as e:
                 self._connected_event.clear()
+                # Reconnect loop — traceback would be noisy, keep it terse.
                 logger.warning(
-                    f"MQTT connection error: {e}. Reconnecting in {RECONNECT_DELAY}s..."
+                    "MQTT connection error: %s. Reconnecting in %ss...",
+                    e,
+                    RECONNECT_DELAY,
+                    exc_info=False,
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
 
