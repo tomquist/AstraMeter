@@ -601,7 +601,7 @@ PASSWORD = mqtt_pass (Optional)
 # THROTTLE_INTERVAL = 2
 ```
 
-Instead of `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS`, you can provide a single `URI` of the form `mqtt://user:pass@host:port` (or `mqtts://...` for TLS). When `URI` is set, the individual broker fields are ignored.
+Instead of `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS`, you can provide a single `URI` of the form `mqtt[s]://[user[:pass]@]host[:port]` (use `mqtts://` for TLS; credentials and port are optional). When `URI` is set, the individual `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS` fields are ignored.
 
 ```ini
 [MQTT]

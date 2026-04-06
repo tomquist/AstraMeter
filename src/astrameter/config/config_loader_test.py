@@ -331,6 +331,27 @@ def test_parse_mqtt_uri_empty():
         parse_mqtt_uri("")
 
 
+def test_parse_mqtt_uri_rejects_path():
+    with pytest.raises(ValueError, match="path"):
+        parse_mqtt_uri("mqtt://broker.example.com/some/path")
+
+
+def test_parse_mqtt_uri_allows_trailing_slash():
+    parts = parse_mqtt_uri("mqtt://broker.example.com:1883/")
+    assert parts.host == "broker.example.com"
+    assert parts.port == 1883
+
+
+def test_parse_mqtt_uri_rejects_query():
+    with pytest.raises(ValueError, match="query"):
+        parse_mqtt_uri("mqtt://broker.example.com?clientId=foo")
+
+
+def test_parse_mqtt_uri_rejects_fragment():
+    with pytest.raises(ValueError, match="fragment"):
+        parse_mqtt_uri("mqtt://broker.example.com#frag")
+
+
 def test_create_mqtt_powermeter_with_uri():
     config = configparser.ConfigParser()
     config["MQTT"] = {

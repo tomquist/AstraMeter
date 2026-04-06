@@ -106,6 +106,13 @@ def parse_mqtt_uri(uri: str) -> MqttUriParts:
     if not host:
         raise ValueError(f"MQTT URI is missing a host: {uri!r}")
 
+    if parsed.path not in ("", "/"):
+        raise ValueError(f"MQTT URI must not contain a path: {uri!r}")
+    if parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(
+            f"MQTT URI must not contain params, query, or fragment: {uri!r}"
+        )
+
     tls = scheme == "mqtts"
     port = parsed.port if parsed.port is not None else (8883 if tls else 1883)
     username = unquote(parsed.username) if parsed.username is not None else None
