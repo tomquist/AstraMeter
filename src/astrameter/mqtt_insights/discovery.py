@@ -239,6 +239,7 @@ def build_ct002_device_discovery(
     base_topic: str,
     device_id: str,
     ha_prefix: str,
+    addon_slug: str | None = None,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_ct002_{safe_dev}"
@@ -283,12 +284,16 @@ def build_ct002_device_discovery(
         },
     }
 
+    device_info: dict = {
+        "identifiers": node_id,
+        "name": f"AstraMeter CT002 {device_id}",
+        "manufacturer": "astrameter",
+    }
+    if addon_slug:
+        device_info["via_device"] = addon_slug
+
     payload = {
-        "device": {
-            "identifiers": node_id,
-            "name": f"AstraMeter CT002 {device_id}",
-            "manufacturer": "astrameter",
-        },
+        "device": device_info,
         "origin": _origin(),
         "components": components,
         "availability": [_system_availability(base_topic)],
@@ -403,6 +408,7 @@ def build_shelly_device_discovery(
     base_topic: str,
     device_id: str,
     ha_prefix: str,
+    addon_slug: str | None = None,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_shelly_{safe_dev}"
@@ -420,12 +426,16 @@ def build_shelly_device_discovery(
         },
     }
 
+    device_info: dict = {
+        "identifiers": node_id,
+        "name": f"AstraMeter Shelly {device_id}",
+        "manufacturer": "astrameter",
+    }
+    if addon_slug:
+        device_info["via_device"] = addon_slug
+
     payload = {
-        "device": {
-            "identifiers": node_id,
-            "name": f"AstraMeter Shelly {device_id}",
-            "manufacturer": "astrameter",
-        },
+        "device": device_info,
         "origin": _origin(),
         "components": components,
         "availability": [_system_availability(base_topic)],

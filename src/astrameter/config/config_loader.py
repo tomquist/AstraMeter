@@ -570,5 +570,6 @@ def read_mqtt_insights_config(
                     section, "HA_DISCOVERY_PREFIX", fallback=""
                 )
                 or "homeassistant",
+                addon_slug=config.get(section, "ADDON_SLUG", fallback="") or None,
             )
     return None

@@ -143,12 +143,23 @@ else
             echo "POWER_MULTIPLIER=$power_multiplier"
         fi
 
+        # Fetch this add-on's slug from the supervisor so MQTT discovery can
+        # link discovered meter devices to the add-on device via_device.
+        addon_slug=""
+        if addon_slug="$(bashio::api.supervisor GET '/store/addons/self' false '.slug')" && [ -n "$addon_slug" ]; then
+            bashio::log.info "Resolved add-on slug for HA discovery: $addon_slug"
+        else
+            bashio::log.warning "Failed to resolve add-on slug from supervisor; meter devices will not be linked via_device"
+            addon_slug=""
+        fi
+
         if bashio::config.has_value 'mqtt_uri'; then
             bashio::log.info "Using custom MQTT broker URL from configuration"
             echo ""
             echo "[MQTT_INSIGHTS]"
             echo "URI=$(bashio::config 'mqtt_uri')"
             echo "HA_DISCOVERY=True"
+            [ -n "$addon_slug" ] && echo "ADDON_SLUG=$addon_slug"
         elif bashio::services.available "mqtt"; then
             bashio::log.info "Using Home Assistant's internal MQTT broker"
             echo ""
@@ -159,6 +170,7 @@ else
             echo "PASSWORD=$(bashio::services 'mqtt' 'password')"
             echo "TLS=$(bashio::services 'mqtt' 'ssl')"
             echo "HA_DISCOVERY=True"
+            [ -n "$addon_slug" ] && echo "ADDON_SLUG=$addon_slug"
         fi
     } > "$CONFIG"
 fi

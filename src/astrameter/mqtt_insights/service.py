@@ -58,6 +58,7 @@ class MqttInsightsConfig:
     base_topic: str = "astrameter"
     ha_discovery: bool = True
     ha_discovery_prefix: str = "homeassistant"
+    addon_slug: str | None = None
 
 
 @dataclass
@@ -341,7 +342,7 @@ class MqttInsightsService:
             if did not in self._discovered_ct002_devices:
                 self._discovered_ct002_devices.add(did)
                 topic, payload = build_ct002_device_discovery(
-                    base, did, cfg.ha_discovery_prefix
+                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
@@ -437,7 +438,7 @@ class MqttInsightsService:
             if did not in self._discovered_shelly_devices:
                 self._discovered_shelly_devices.add(did)
                 topic, payload = build_shelly_device_discovery(
-                    base, did, cfg.ha_discovery_prefix
+                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
