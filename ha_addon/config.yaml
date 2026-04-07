@@ -13,7 +13,7 @@ init: false
 startup: application
 boot: auto
 auto_restart: true
-watchdog: "http://[HOST]:52500/health"
+watchdog: "http://[HOST]:[PORT:52500]/health"
 services:
   - "mqtt:want"
 homeassistant_api: true
