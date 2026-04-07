@@ -18,6 +18,7 @@
 - Added battery activity info logs for Shelly emulation to report detection, inactivity, and reconnection events ([#241](https://github.com/tomquist/astrameter/pull/241))
 - Reduced throttling output noise by replacing unconditional `print` calls in `ThrottledPowermeter` with structured logging (`logger.debug` for routine wait/fetch/cache messages; failures remain at error level) ([#251](https://github.com/tomquist/astrameter/pull/251))
 - Improved Shelly UDP server robustness by adding socket timeouts to avoid hangs during shutdown and testing ([#233](https://github.com/tomquist/astrameter/pull/233))
+- Fixed Home Assistant add-on health check failing to start with `address in use` on port 52500 by no longer publishing the port (the watchdog still reaches it via host networking).
 
 ### Breaking
 - The Home Assistant app no longer publishes images for 32-bit ARM (`armhf` / `armv7`). Installations must use a 64-bit Home Assistant OS or supervisor environment (`amd64` or `aarch64`), consistent with Home Assistant dropping 32-bit support.

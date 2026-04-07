@@ -13,7 +13,7 @@ init: false
 startup: application
 boot: auto
 auto_restart: true
-watchdog: "http://[HOST]:[PORT:52500]/health"
+watchdog: "http://[HOST]:52500/health"
 services:
   - "mqtt:want"
 homeassistant_api: true
@@ -26,7 +26,6 @@ ports:
   2220/udp: 2220
   2222/udp: 2222
   2223/udp: 2223
-  52500/tcp: 52500
 map:
   - type: addon_config
     read_only: false
