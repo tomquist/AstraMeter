@@ -1,6 +1,7 @@
 # Changelog
 
 ## Next
+- MQTT Insights now publishes Home Assistant device discovery for CT002 and Shelly meters as soon as the device starts (and re-publishes on every reconnect), so stale retained discovery payloads from previous addon versions are overwritten immediately instead of waiting for the first battery event
 - **Breaking:** Rebrand project from "B2500 Meter" to "AstraMeter" (formerly b2500-meter). Package renamed to `astrameter`, CLI commands are now `astrameter` and `astra-sim`. Docker image moved from `ghcr.io/tomquist/b2500-meter` to `ghcr.io/tomquist/astrameter` (the legacy `ghcr.io/tomquist/b2500-meter` image is still published in parallel for backward compatibility). Home Assistant users must update their app repository URL to `https://github.com/tomquist/astrameter#main`.
 - Added CT002/CT003 emulation for steering multiple Marstek storage devices over the Marstek CT UDP protocol, with opt-in efficiency optimization that concentrates power on fewer batteries at low demand and rotates fairly over time (`MIN_EFFICIENT_POWER`, `EFFICIENCY_ROTATION_INTERVAL`, and related tuning options)
 - Added MQTT Insights: optional `[MQTT_INSIGHTS]` section publishes internal state (grid power, targets, saturation, consumer topology) to MQTT with Home Assistant Device Discovery, per-consumer active/pause control, manual target override, and Shelly battery offline availability; auto-configured in the HA app when Mosquitto is installed

@@ -63,9 +63,11 @@ class MqttInsightsConfig:
 
 @dataclass
 class _Event:
-    kind: str  # "ct002", "ct002_remove", "shelly", "shelly_remove"
+    # "ct002", "ct002_remove", "shelly", "shelly_remove",
+    # "ct002_device_register", "shelly_device_register"
+    kind: str
     device_id: str
-    entity_id: str  # consumer_id / battery ip_slug
+    entity_id: str = ""  # consumer_id / battery ip_slug
     data: dict[str, Any] = field(default_factory=dict)
 
 
@@ -78,6 +80,8 @@ class MqttInsightsService:
         self._discovered_ct002_devices: set[str] = set()
         self._discovered_shelly_batteries: set[str] = set()
         self._discovered_shelly_devices: set[str] = set()
+        self._known_ct002_devices: set[str] = set()
+        self._known_shelly_devices: set[str] = set()
         self._pending_arp: set[str] = set()
         self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
@@ -114,6 +118,31 @@ class MqttInsightsService:
         ip_slug = _sanitize_id(battery_ip)
         evt = _Event(kind="shelly_remove", device_id=device_id, entity_id=ip_slug)
         self._put_nowait(evt)
+
+    def notify_ct002_device(self, device_id: str) -> None:
+        """Track a CT002 device and request immediate discovery publication.
+
+        Discovery is normally published on the first device event, but waiting
+        for traffic means stale retained discovery payloads from a previous
+        addon version may linger in the broker until a battery actually
+        responds. Calling this on device startup ensures the current payload
+        is published as soon as MQTT is connected.
+        """
+        self._known_ct002_devices.add(device_id)
+        self._put_nowait(_Event(kind="ct002_device_register", device_id=device_id))
+
+    def notify_shelly_device(self, device_id: str) -> None:
+        """Track a Shelly device and request immediate discovery publication."""
+        self._known_shelly_devices.add(device_id)
+        self._put_nowait(_Event(kind="shelly_device_register", device_id=device_id))
+
+    def forget_ct002_device(self, device_id: str) -> None:
+        """Stop tracking a CT002 device for proactive discovery republishes."""
+        self._known_ct002_devices.discard(device_id)
+
+    def forget_shelly_device(self, device_id: str) -> None:
+        """Stop tracking a Shelly device for proactive discovery republishes."""
+        self._known_shelly_devices.discard(device_id)
 
     def register_active_handler(
         self, device_id: str, handler: Callable[[str, bool], None]
@@ -212,6 +241,18 @@ class MqttInsightsService:
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/consumer/+/set")
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/set")
 
+                    # Re-publish device-level discovery for known devices so
+                    # any stale retained payloads in the broker are overwritten
+                    # immediately, without waiting for the next device event.
+                    for did in self._known_ct002_devices:
+                        self._put_nowait(
+                            _Event(kind="ct002_device_register", device_id=did)
+                        )
+                    for did in self._known_shelly_devices:
+                        self._put_nowait(
+                            _Event(kind="shelly_device_register", device_id=did)
+                        )
+
                     self._connected.set()
 
                     # Run publish loop and message listener concurrently
@@ -278,6 +319,14 @@ class MqttInsightsService:
                     await self._handle_shelly_event(client, base, cfg, evt)
                 elif evt.kind == "shelly_remove":
                     await self._handle_shelly_remove(client, base, evt)
+                elif evt.kind == "ct002_device_register":
+                    await self._publish_ct002_device_discovery(
+                        client, base, cfg, evt.device_id
+                    )
+                elif evt.kind == "shelly_device_register":
+                    await self._publish_shelly_device_discovery(
+                        client, base, cfg, evt.device_id
+                    )
             except aiomqtt.MqttError:
                 raise
             except Exception:
@@ -339,14 +388,7 @@ class MqttInsightsService:
 
         # Discovery on first sight
         if cfg.ha_discovery:
-            if did not in self._discovered_ct002_devices:
-                self._discovered_ct002_devices.add(did)
-                topic, payload = build_ct002_device_discovery(
-                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
-                )
-                await client.publish(
-                    topic, payload=json.dumps(payload).encode(), retain=True
-                )
+            await self._publish_ct002_device_discovery(client, base, cfg, did)
 
             need_discovery = consumer_key not in self._discovered_ct002_consumers
             need_arp_retry = consumer_key in self._pending_arp
@@ -378,6 +420,40 @@ class MqttInsightsService:
                     await client.publish(
                         topic, payload=json.dumps(payload).encode(), retain=True
                     )
+
+    async def _publish_ct002_device_discovery(
+        self,
+        client: aiomqtt.Client,
+        base: str,
+        cfg: MqttInsightsConfig,
+        device_id: str,
+    ) -> None:
+        if not cfg.ha_discovery:
+            return
+        if device_id in self._discovered_ct002_devices:
+            return
+        self._discovered_ct002_devices.add(device_id)
+        topic, payload = build_ct002_device_discovery(
+            base, device_id, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+        )
+        await client.publish(topic, payload=json.dumps(payload).encode(), retain=True)
+
+    async def _publish_shelly_device_discovery(
+        self,
+        client: aiomqtt.Client,
+        base: str,
+        cfg: MqttInsightsConfig,
+        device_id: str,
+    ) -> None:
+        if not cfg.ha_discovery:
+            return
+        if device_id in self._discovered_shelly_devices:
+            return
+        self._discovered_shelly_devices.add(device_id)
+        topic, payload = build_shelly_device_discovery(
+            base, device_id, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+        )
+        await client.publish(topic, payload=json.dumps(payload).encode(), retain=True)
 
     async def _handle_ct002_remove(
         self,
@@ -435,14 +511,7 @@ class MqttInsightsService:
 
         # Discovery
         if cfg.ha_discovery:
-            if did not in self._discovered_shelly_devices:
-                self._discovered_shelly_devices.add(did)
-                topic, payload = build_shelly_device_discovery(
-                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
-                )
-                await client.publish(
-                    topic, payload=json.dumps(payload).encode(), retain=True
-                )
+            await self._publish_shelly_device_discovery(client, base, cfg, did)
 
             if battery_key not in self._discovered_shelly_batteries:
                 self._discovered_shelly_batteries.add(battery_key)

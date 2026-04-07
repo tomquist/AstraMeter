@@ -280,6 +280,7 @@ async def run_device(
     # Register active handler only after successful start so MQTT commands
     # are never routed to a device that failed to come up.
     if insights and isinstance(device, CT002):
+        insights.notify_ct002_device(device_id or "")
         insights.register_active_handler(device_id or "", device.set_consumer_active)
         insights.register_manual_target_handler(
             device_id or "", device.set_consumer_manual_target
@@ -290,12 +291,17 @@ async def run_device(
         insights.register_rotation_handler(
             device_id or "", device.force_efficiency_rotation
         )
+    elif insights and isinstance(device, Shelly):
+        insights.notify_shelly_device(device_id or "")
 
     try:
         await device.wait()
     finally:
         if insights and isinstance(device, CT002):
             insights.unregister_handlers(device_id or "")
+            insights.forget_ct002_device(device_id or "")
+        elif insights and isinstance(device, Shelly):
+            insights.forget_shelly_device(device_id or "")
         try:
             await device.stop()
         except Exception:

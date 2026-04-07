@@ -580,6 +580,60 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
 
 
 @needs_mosquitto
+async def test_notify_ct002_device_publishes_discovery_proactively(mqtt_broker):
+    """Calling notify_ct002_device should publish device-level discovery
+    immediately, before any battery event arrives. This ensures that stale
+    retained discovery payloads from older addon versions are overwritten on
+    startup."""
+    port = mqtt_broker
+    service = _make_service(port)
+    ha_prefix = service._config.ha_discovery_prefix
+
+    # Register the device BEFORE start so it gets published as soon as the
+    # service connects (mirrors how main.py wires things up).
+    service.notify_ct002_device("dev1")
+
+    await service.start()
+    try:
+        await service.wait_connected()
+
+        discovery_msgs = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(f"{ha_prefix}/device/astrameter_ct002_dev1/config")
+            await _collect_messages(sub, discovery_msgs, timeout=3)
+
+        assert len(discovery_msgs) == 1
+        payload = json.loads(discovery_msgs[0].payload)
+        assert payload["device"]["identifiers"] == "astrameter_ct002_dev1"
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_notify_shelly_device_publishes_discovery_proactively(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port)
+    ha_prefix = service._config.ha_discovery_prefix
+
+    service.notify_shelly_device("shelly1")
+
+    await service.start()
+    try:
+        await service.wait_connected()
+
+        discovery_msgs = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(f"{ha_prefix}/device/astrameter_shelly_shelly1/config")
+            await _collect_messages(sub, discovery_msgs, timeout=3)
+
+        assert len(discovery_msgs) == 1
+        payload = json.loads(discovery_msgs[0].payload)
+        assert payload["device"]["identifiers"] == "astrameter_shelly_shelly1"
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
 async def test_active_toggle_via_mqtt(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
