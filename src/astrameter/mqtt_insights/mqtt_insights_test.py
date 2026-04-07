@@ -337,6 +337,7 @@ BROKER = localhost
     assert result.base_topic == "astrameter"
     assert result.ha_discovery is True
     assert result.ha_discovery_prefix == "homeassistant"
+    assert result.addon_slug is None
 
 
 def test_read_mqtt_insights_config_empty_values():
@@ -352,6 +353,7 @@ TLS =
 BASE_TOPIC =
 HA_DISCOVERY =
 HA_DISCOVERY_PREFIX =
+ADDON_SLUG =
 """
     )
     result = read_mqtt_insights_config(cfg)
@@ -364,6 +366,18 @@ HA_DISCOVERY_PREFIX =
     assert result.base_topic == "astrameter"
     assert result.ha_discovery is True
     assert result.ha_discovery_prefix == "homeassistant"
+    assert result.addon_slug is None
+
+
+def test_read_mqtt_insights_config_whitespace_addon_slug():
+    """Whitespace-only ADDON_SLUG values must be normalised to None."""
+    cfg = configparser.ConfigParser()
+    cfg.add_section("MQTT_INSIGHTS")
+    cfg.set("MQTT_INSIGHTS", "BROKER", "localhost")
+    cfg.set("MQTT_INSIGHTS", "ADDON_SLUG", "   ")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.addon_slug is None
 
 
 def test_read_mqtt_insights_config_absent():

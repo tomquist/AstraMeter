@@ -146,7 +146,11 @@ else
         # Fetch this add-on's slug from the supervisor so MQTT discovery can
         # link discovered meter devices to the add-on device via_device.
         addon_slug=""
-        if addon_slug="$(bashio::api.supervisor GET '/store/addons/self' false '.slug')" && [ -n "$addon_slug" ]; then
+        addon_info_json=""
+        if addon_info_json="$(bashio::api.supervisor GET '/addons/self/info' false)" && [ -n "$addon_info_json" ]; then
+            addon_slug="$(echo "$addon_info_json" | jq -r '.slug // empty')"
+        fi
+        if [ -n "$addon_slug" ]; then
             bashio::log.info "Resolved add-on slug for HA discovery: $addon_slug"
         else
             bashio::log.warning "Failed to resolve add-on slug from supervisor; meter devices will not be linked via_device"
