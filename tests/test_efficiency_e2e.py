@@ -529,6 +529,74 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
+    async def test_probe_rejection_chains_to_next_candidate(self):
+        """Rejected probe should immediately probe the next healthy candidate."""
+        h = _SimHarness(
+            num_batteries=3,
+            base_load=[200.0, 0.0, 0.0],
+            min_efficient_power=150,
+            efficiency_rotation_interval=7,
+            startup_delay=0.0,
+            efficiency_fade_alpha=1.0,
+            saturation_grace_seconds=5.0,
+        )
+        await h.start()
+        try:
+            await h.step_until(lambda: h.active_battery_count() == 1)
+            await h.step(10)
+
+            balancer = h.ct002._balancer
+            priority = list(balancer._priority)
+            assert len(priority) == 3, f"Expected 3 consumers, got {priority}"
+            # The first deprioritized consumer is the one that time-based
+            # rotation will probe on the next tick.
+            doomed_cid = priority[1]
+            good_cid = priority[2]
+
+            def _battery_for(cid: str) -> int:
+                for i, b in enumerate(h.batteries):
+                    if b.mac.lower() == cid:
+                        return i
+                raise AssertionError(f"No battery matches consumer {cid}")
+
+            doomed_idx = _battery_for(doomed_cid)
+            good_idx = _battery_for(good_cid)
+            # Sabotage the first-probed battery: its ramp-up will not
+            # produce meaningful power within the probe timeout.
+            h.batteries[doomed_idx].startup_delay = 20.0
+
+            # Advance past the rotation interval to trigger a probe.
+            h.clock.advance(8)
+
+            # The doomed standby should be probed first.
+            await h.step_until(
+                lambda: (
+                    balancer._probe_state is not None
+                    and balancer._probe_state.candidate_id == doomed_cid
+                ),
+                max_steps=20,
+            )
+
+            # After rejection the balancer must chain directly into probing
+            # the remaining healthy candidate instead of falling back to the
+            # restored (known-saturated) active.
+            await h.step_until(
+                lambda: (
+                    balancer._probe_state is not None
+                    and balancer._probe_state.candidate_id == good_cid
+                ),
+                max_steps=200,
+            )
+
+            # The chained probe should succeed and the good standby should
+            # start driving the load shortly after.
+            await h.step_until(
+                lambda: abs(h.battery_powers()[good_idx]) > 15,
+                max_steps=200,
+            )
+        finally:
+            await h.stop()
+
     async def test_grid_converges_near_zero(self):
         """With efficiency optimization, grid import/export should converge near zero."""
         h = _SimHarness(

@@ -387,6 +387,7 @@ class LoadBalancer:
         self._priority = list(probe.restore_active_ids) + [
             cid for cid in remaining if cid not in probe.restore_active_ids
         ]
+        restore_active_ids = probe.restore_active_ids
         self._probe_state = None
         self._last_rotation = now
         logger.info(
@@ -396,6 +397,60 @@ class LoadBalancer:
             [cid[:16] for cid in probe.backup_ids],
         )
         self._invalidate_efficiency_cache()
+        self._chain_probe_after_rejection(restore_active_ids, now)
+
+    def _chain_probe_after_rejection(
+        self, restore_active_ids: tuple[str, ...], now: float
+    ) -> None:
+        """Immediately probe the next healthy deprioritized consumer, if any.
+
+        After a probe is rejected the restored active set is (by definition)
+        the same one whose saturation triggered the original probe, so we
+        already know it cannot follow demand.  Rather than wait for its
+        saturation score to rebuild we search the deprioritized tail for
+        the next candidate whose score is still below threshold and kick
+        off a fresh probe on it.  The just-rejected candidate is pinned at
+        ``saturation_score=1.0`` so it is naturally skipped.
+        """
+        cfg = self._cfg
+        threshold = cfg.efficiency_saturation_threshold
+        if threshold <= 0:
+            return
+        slots = len(restore_active_ids)
+        if slots <= 0 or slots >= len(self._priority):
+            return
+        candidate_idx: int | None = None
+        for i in range(slots, len(self._priority)):
+            state = self._consumers.get(self._priority[i])
+            if state is None or state.saturation_score < threshold:
+                candidate_idx = i
+                break
+        if candidate_idx is None:
+            return
+        worst_active_idx = 0
+        worst_score = -1.0
+        for i in range(slots):
+            state = self._consumers.get(self._priority[i])
+            score = state.saturation_score if state else 0.0
+            if score > worst_score:
+                worst_score = score
+                worst_active_idx = i
+        candidate_id = self._priority[candidate_idx]
+        self._priority[worst_active_idx], self._priority[candidate_idx] = (
+            self._priority[candidate_idx],
+            self._priority[worst_active_idx],
+        )
+        new_active = tuple(self._priority[:slots])
+        backups = tuple(cid for cid in restore_active_ids if cid not in new_active)
+        if not backups:
+            return
+        self._begin_probe(
+            candidate_id,
+            new_active,
+            backups,
+            restore_active_ids,
+            now,
+        )
 
     def _resolve_probe_state(
         self, reports: dict, now: float, smoothed_target: float
