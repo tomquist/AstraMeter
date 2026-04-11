@@ -84,7 +84,9 @@ async def run_device(
         ct_mac = cfg.get(ct_section, "CT_MAC", fallback="")
         ct_udp_port = cfg.getint(ct_section, "UDP_PORT", fallback=UDP_PORT)
         wifi_rssi = cfg.getint(ct_section, "WIFI_RSSI", fallback=-50)
-        dedupe_time_window = cfg.getint(ct_section, "DEDUPE_TIME_WINDOW", fallback=0)
+        dedupe_time_window = cfg.getfloat(
+            ct_section, "DEDUPE_TIME_WINDOW", fallback=0.0
+        )
         consumer_ttl = cfg.getint(ct_section, "CONSUMER_TTL", fallback=120)
         debug_status = cfg.getboolean(ct_section, "DEBUG_STATUS", fallback=False)
         if os.environ.get("DEBUG_STATUS", "").lower() in ("1", "true", "yes"):

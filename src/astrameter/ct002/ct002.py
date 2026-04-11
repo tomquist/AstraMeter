@@ -100,7 +100,7 @@ class CT002:
         ct_mac="",
         ct_type="HME-4",
         wifi_rssi=-50,
-        dedupe_time_window=0,
+        dedupe_time_window=0.0,
         consumer_ttl=120,
         debug_status=False,
         active_control=True,
