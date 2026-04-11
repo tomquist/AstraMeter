@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 import aiohttp
@@ -14,6 +16,15 @@ logger = logging.getLogger("astrameter")
 # Home Assistant websocket subscribe_entities compressed state (homeassistant.const)
 _HA_S = "s"
 _HA_DIFF_ADD = "+"
+
+# WebSocket heartbeat (seconds) — same rationale as HomeWizard.
+WS_HEARTBEAT_SECONDS = 30.0
+
+# An entity older than this is considered stale.  HA typically pushes
+# state changes on every update plus periodic keepalives; anything
+# past 60 s without a push from a power sensor is strongly suspicious
+# and consistent with a stalled websocket stream.
+DEFAULT_MAX_STATE_AGE_SECONDS = 60.0
 
 
 class HomeAssistant(Powermeter):
@@ -28,6 +39,9 @@ class HomeAssistant(Powermeter):
         power_input_alias: str | list[str],
         power_output_alias: str | list[str],
         path_prefix: str | None,
+        *,
+        max_state_age_seconds: float = DEFAULT_MAX_STATE_AGE_SECONDS,
+        clock: Callable[[], float] | None = None,
     ):
         self.ip = ip
         self.port = port
@@ -50,8 +64,13 @@ class HomeAssistant(Powermeter):
             else power_output_alias
         )
         self.path_prefix = path_prefix
+        self._max_state_age_seconds = max(0.0, max_state_age_seconds)
+        self._clock = clock or time.monotonic
 
         self._entity_values: dict[str, float | None] = {}
+        # Per-entity timestamp of the most recent state update, used
+        # for staleness detection (None = never received).
+        self._entity_update_time: dict[str, float | None] = {}
         self._tracked_entities = self._collect_entities()
         self._msg_id = 0
         self._subscribe_entities_id: int | None = None
@@ -96,7 +115,9 @@ class HomeAssistant(Powermeter):
         while True:
             try:
                 assert self._session is not None
-                async with self._session.ws_connect(url, heartbeat=30) as ws:
+                async with self._session.ws_connect(
+                    url, heartbeat=WS_HEARTBEAT_SECONDS
+                ) as ws:
                     logger.info(f"Home Assistant WebSocket connected to {self.ip}")
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
@@ -114,10 +135,13 @@ class HomeAssistant(Powermeter):
             except Exception as e:
                 logger.error("Home Assistant WebSocket error: %s", e, exc_info=True)
             # Reset protocol state for reconnection; keep _entity_values
-            # (stale values are preferable to ValueError during brief disconnect;
-            # subscribe_entities re-sends initial states on reconnect)
+            # as a courtesy, but mark them all stale so the staleness
+            # check in _get_entity_value will raise until fresh state
+            # pushes arrive from the reconnect.
             self._msg_id = 0
             self._subscribe_entities_id = None
+            for eid in list(self._entity_update_time):
+                self._entity_update_time[eid] = None
             await asyncio.sleep(5)
 
     def _handle_compressed_entity_event(self, ev: dict[str, Any]) -> None:
@@ -190,16 +214,19 @@ class HomeAssistant(Powermeter):
         logger.debug(f"Home Assistant: update_entity_value: {entity_id}, {state_val}")
         if state_val is None:
             self._entity_values[entity_id] = None
+            self._entity_update_time[entity_id] = None
             self._check_entities_ready()
             return
         try:
             value = float(state_val)  # type: ignore[arg-type]
             self._entity_values[entity_id] = value
+            self._entity_update_time[entity_id] = self._clock()
         except (ValueError, TypeError):
             logger.warning(
                 f"Home Assistant sensor {entity_id} state '{state_val}' is not numeric"
             )
             self._entity_values[entity_id] = None
+            self._entity_update_time[entity_id] = None
         self._check_entities_ready()
 
     def _check_entities_ready(self) -> None:
@@ -212,6 +239,18 @@ class HomeAssistant(Powermeter):
         val = self._entity_values.get(entity_id)
         if val is None:
             raise ValueError(f"Home Assistant sensor {entity_id} has no state")
+        if self._max_state_age_seconds > 0:
+            last = self._entity_update_time.get(entity_id)
+            if last is None:
+                raise ValueError(
+                    f"Home Assistant sensor {entity_id} has no update timestamp"
+                )
+            age = self._clock() - last
+            if age > self._max_state_age_seconds:
+                raise ValueError(
+                    f"Home Assistant sensor {entity_id} is stale "
+                    f"({age:.1f}s old, max {self._max_state_age_seconds:.1f}s)"
+                )
         return val
 
     async def get_powermeter_watts(self) -> list[float]:

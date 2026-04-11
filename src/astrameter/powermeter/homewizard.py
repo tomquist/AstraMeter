@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import ssl
+import time
+from collections.abc import Callable
 
 import aiohttp
 
@@ -16,19 +18,50 @@ logger = logging.getLogger("astrameter")
 # Docs: https://api-documentation.homewizard.com/docs/v2/authorization#https
 CA_CERT_PATH = os.path.join(os.path.dirname(__file__), "homewizard_ca.pem")
 
+# WebSocket heartbeat (seconds).  With this set, aiohttp sends ping
+# frames at this interval and forcibly closes the connection if no
+# pong is received within 2x the heartbeat — catches half-open TCP
+# sockets that would otherwise freeze ``async for msg in ws`` forever.
+WS_HEARTBEAT_SECONDS = 30.0
+
+# Maximum age of the last-received measurement before ``get_powermeter_watts``
+# considers the value stale and raises.  HomeWizard P1 dongles push
+# measurements roughly once per second, so 30 s of silence is a very
+# large safety margin.
+DEFAULT_MAX_MEASUREMENT_AGE_SECONDS = 30.0
+
+# Independent software watchdog: if no measurement has arrived within
+# this many seconds, the ws loop force-closes and reconnects even when
+# aiohttp's heartbeat hasn't tripped (e.g. the dongle is ACKing ping
+# frames but has stopped sending measurement events).
+WATCHDOG_TIMEOUT_SECONDS = 45.0
+
 
 class HomeWizardPowermeter(Powermeter):
     def __init__(
-        self, ip: str, token: str, serial: str, verify_ssl: bool = True
+        self,
+        ip: str,
+        token: str,
+        serial: str,
+        verify_ssl: bool = True,
+        *,
+        max_measurement_age_seconds: float = DEFAULT_MAX_MEASUREMENT_AGE_SECONDS,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.ip = ip
         self.token = token
         self.serial = serial
         self._verify_ssl = verify_ssl
+        self._max_measurement_age_seconds = max(0.0, max_measurement_age_seconds)
+        self._clock = clock or time.monotonic
         self.values: list[float] | None = None
+        self._last_measurement_time: float | None = None
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._message_event = asyncio.Event()
+        # Set whenever we receive a new measurement; the ws_loop watchdog
+        # clears it after checking staleness to re-arm the timer.
+        self._fresh_measurement_event = asyncio.Event()
 
         if not verify_ssl:
             logger.warning(
@@ -51,7 +84,9 @@ class HomeWizardPowermeter(Powermeter):
         if self._session:
             return
         self.values = None
+        self._last_measurement_time = None
         self._message_event = asyncio.Event()
+        self._fresh_measurement_event = asyncio.Event()
         self._session = aiohttp.ClientSession()
         self._ws_task = asyncio.create_task(self._ws_loop())
 
@@ -73,25 +108,69 @@ class HomeWizardPowermeter(Powermeter):
             try:
                 assert self._session is not None
                 async with self._session.ws_connect(
-                    url, ssl=ssl_context, server_hostname=server_hostname
+                    url,
+                    ssl=ssl_context,
+                    server_hostname=server_hostname,
+                    heartbeat=WS_HEARTBEAT_SECONDS,
                 ) as ws:
                     logger.info(f"HomeWizard WebSocket connected to {self.ip}")
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            await self._handle_message(ws, msg.data)
-                        elif msg.type in (
-                            aiohttp.WSMsgType.ERROR,
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSING,
-                            aiohttp.WSMsgType.CLOSED,
-                        ):
-                            break
+                    # Start a watchdog that force-closes the ws if no
+                    # measurement arrives within WATCHDOG_TIMEOUT_SECONDS.
+                    # This catches the case where the dongle's TCP
+                    # keepalives succeed (so aiohttp's heartbeat doesn't
+                    # trip) but the measurement stream has stalled at
+                    # the application layer.
+                    watchdog = asyncio.create_task(self._measurement_watchdog(ws))
+                    try:
+                        async for msg in ws:
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                await self._handle_message(ws, msg.data)
+                            elif msg.type in (
+                                aiohttp.WSMsgType.ERROR,
+                                aiohttp.WSMsgType.CLOSE,
+                                aiohttp.WSMsgType.CLOSING,
+                                aiohttp.WSMsgType.CLOSED,
+                            ):
+                                break
+                    finally:
+                        watchdog.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await watchdog
                     logger.info("HomeWizard WebSocket closed")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error("HomeWizard WebSocket error: %s", e, exc_info=True)
             await asyncio.sleep(5)
+
+    async def _measurement_watchdog(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Force-close *ws* when no measurement has arrived within
+        :data:`WATCHDOG_TIMEOUT_SECONDS`.
+
+        HomeWizard P1 dongles normally push a measurement every ~1 s.
+        A dongle that stops streaming without closing the TCP connection
+        will otherwise sit forever in :meth:`_ws_loop`'s
+        ``async for msg in ws`` — the exact failure mode observed in
+        the user's report.
+        """
+        try:
+            while True:
+                self._fresh_measurement_event.clear()
+                try:
+                    await asyncio.wait_for(
+                        self._fresh_measurement_event.wait(),
+                        timeout=WATCHDOG_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "HomeWizard watchdog: no measurement for %.0fs, "
+                        "force-closing WebSocket to trigger a reconnect",
+                        WATCHDOG_TIMEOUT_SECONDS,
+                    )
+                    await ws.close()
+                    return
+        except asyncio.CancelledError:
+            raise
 
     async def _handle_message(
         self, ws: aiohttp.ClientWebSocketResponse, raw: str
@@ -135,12 +214,24 @@ class HomeWizardPowermeter(Powermeter):
             return
 
         self.values = values
+        self._last_measurement_time = self._clock()
         self._message_event.set()
+        self._fresh_measurement_event.set()
 
     async def get_powermeter_watts(self) -> list[float]:
-        if self.values is not None:
-            return list(self.values)
-        raise ValueError("No value received from HomeWizard")
+        if self.values is None:
+            raise ValueError("No value received from HomeWizard")
+        if (
+            self._max_measurement_age_seconds > 0
+            and self._last_measurement_time is not None
+        ):
+            age = self._clock() - self._last_measurement_time
+            if age > self._max_measurement_age_seconds:
+                raise ValueError(
+                    f"HomeWizard measurement is stale "
+                    f"({age:.1f}s old, max {self._max_measurement_age_seconds:.1f}s)"
+                )
+        return list(self.values)
 
     async def wait_for_message(self, timeout: float = 5) -> None:
         try:

@@ -1,19 +1,17 @@
 """End-to-end regression: probe handoff under the log2 topology.
 
-Scenario mirrors the user's log2 (2026-04-10):
-    - Two batteries, both self-report phase ``B``.
-    - Grid load is on a different phase (phase ``A``), so the only
-      way to zero the grid is via cross-phase compensation (which
-      the CT002 protocol allows by design).
-    - Efficiency optimization is enabled.
-    - A probe-based handoff is forced.
+Covers two scenarios:
 
-The exact "target pinned at 0, grid drifts ~97 W for 1.5 h" symptom
-from the production log requires a *stale meter source*, which this
-in-process harness can't easily reproduce (the simulator always
-returns fresh values).  What this test DOES cover is the "happy
-path" of the handoff itself: the new active battery must end up
-covering the real demand within the deadband.
+1. *Happy path* — probe handoff between two consumers with a
+   live meter.  The grid must return to the deadband after the
+   handoff.
+
+2. *Stale-meter lockup* — what actually happened in the user's log:
+   the push-based powermeter (HomeWizard) stops delivering new
+   measurements part-way through the probe window, the
+   ``before_send`` callback keeps serving the last-known values,
+   and the balancer is forced to drive the rotation blind.  This
+   is the reproduction of the 1.5-hour uncompensated-grid bug.
 """
 
 from __future__ import annotations
@@ -74,6 +72,16 @@ class _Harness:
     ) -> None:
         ct_port, http_port = _find_free_ports(2)
         self.clock = _FakeClock()
+        # When non-None, `before_send` returns this frozen snapshot
+        # instead of the live grid reading.  Simulates a push-based
+        # powermeter (HomeWizard / HA websocket) whose connection has
+        # silently half-opened mid-stream.
+        self.frozen_grid: list[float] | None = None
+        # When True, `before_send` raises ``ValueError("stale")``
+        # instead of returning a value.  Simulates a push-based
+        # powermeter that HAS a staleness check (the fix for the
+        # lockup) — the CT002 emulator must handle this gracefully.
+        self.powermeter_raises_stale: bool = False
         self.load_model = LoadModel(
             base_load=[load_a, 0.0, 0.0],
             base_noise=0.0,
@@ -133,10 +141,29 @@ class _Harness:
         )
 
         async def update_readings(_addr, _fields=None, _consumer_id=None):
+            if self.powermeter_raises_stale:
+                raise ValueError("HomeWizard measurement is stale (test)")
+            if self.frozen_grid is not None:
+                return list(self.frozen_grid)
             grid = self.powermeter.compute_grid()
             return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
 
         self.ct002.before_send = update_readings
+
+    def freeze_meter_at_current_reading(self) -> None:
+        """Simulate a push-based powermeter going stale.  From this
+        call onward the CT002 emulator sees a frozen snapshot of the
+        grid — the simulator's *real* grid continues to evolve based
+        on battery outputs and loads."""
+        grid = self.powermeter.compute_grid()
+        self.frozen_grid = [
+            grid["phase_a"],
+            grid["phase_b"],
+            grid["phase_c"],
+        ]
+
+    def unfreeze_meter(self) -> None:
+        self.frozen_grid = None
 
     async def start(self) -> None:
         await self.powermeter.start()
@@ -219,6 +246,151 @@ class TestProbeLockup:
             assert new_active != active_idx, (
                 f"Rotation didn't swap the active battery. "
                 f"before={before_powers} after={after_powers}"
+            )
+        finally:
+            await h.stop()
+
+    async def test_stale_meter_during_probe_causes_persistent_lockup(
+        self,
+    ) -> None:
+        """Reproduce the log2 failure: a push-based powermeter goes
+        stale (stops delivering new measurements) part-way through a
+        probe handoff.  The CT002 emulator sees a frozen grid reading
+        (which was near zero just before the rotation fired) while the
+        real grid drifts to the full magnitude of the load.
+
+        Expectation under the current emulator code (no staleness
+        detection anywhere in the powermeter stack): the balancer
+        computes target ≈ 0 because its meter source is pinned at ~0,
+        and the real grid stays badly uncompensated indefinitely —
+        exactly what the user observed for ~1.5 h until restart.
+
+        This test *is* the regression: if a future change adds
+        staleness detection or any other recovery mechanism, the
+        assertions below will need to be updated.
+        """
+        h = _Harness(
+            load_a=94.0,
+            min_efficient_power=50,
+            efficiency_rotation_interval=9999,
+        )
+        await h.start()
+        try:
+            # Warm-up to steady state: one battery actively covering
+            # demand, grid near zero, smoother converged to ~0.
+            await h.step(200)
+
+            before = h.battery_powers()
+            assert max(abs(p) for p in before) > 40.0, (
+                f"Warm-up failed. Powers: {before}"
+            )
+            assert abs(h.grid_total()) < 30.0, (
+                f"Grid not settled. grid={h.grid_total():.1f}"
+            )
+
+            # Freeze the meter *right before* rotating.  This is
+            # exactly the timing in the user's log: the WebSocket went
+            # quiet while the balancer was in its quiet "both batteries
+            # at their share, grid balanced" steady state.
+            h.freeze_meter_at_current_reading()
+            h.ct002.force_efficiency_rotation()
+
+            # Let the probe run, commit, fade, and settle.
+            for _ in range(200):
+                await h.step()
+
+            after = h.battery_powers()
+            grid_after = h.grid_total()
+            smoothed = h.ct002._smoother.value
+
+            # The real grid is measurably off-balance because the
+            # emulator drove the handoff blind.  Accept either sign:
+            # the failure mode could be either over-discharge or
+            # under-coverage depending on how the batteries behave.
+            print(
+                f"\n  after: powers={after} grid={grid_after:.1f} "
+                f"smoothed_emulator={smoothed}"
+            )
+            assert abs(grid_after) > 40.0, (
+                "Stale-meter reproduction failed to trigger the "
+                f"lockup: grid={grid_after:.1f} W.  The test needs a "
+                "stronger trigger or the emulator has gained recovery "
+                "behaviour that invalidates this regression."
+            )
+        finally:
+            await h.stop()
+
+    async def test_powermeter_stale_error_is_handled_gracefully(
+        self,
+        caplog,
+    ) -> None:
+        """The fixed path: when the powermeter proactively raises
+        ``ValueError`` on detected staleness (as the HomeWizard /
+        HomeAssistant powermeters now do after the heartbeat + age
+        check), the CT002 emulator must:
+
+        1. Log a rate-limited warning on the first failure.
+        2. Not spam the log with one warning per battery poll.
+        3. Hold its last known state (batteries stay put).
+        4. Log a recovery message when the powermeter returns.
+        """
+        import logging
+
+        h = _Harness(
+            load_a=94.0,
+            min_efficient_power=50,
+            efficiency_rotation_interval=9999,
+        )
+        await h.start()
+        try:
+            await h.step(200)
+            before = h.battery_powers()
+
+            # Flip the powermeter into raising-stale mode.  Equivalent
+            # to a HomeWizard dongle that has detected its own
+            # measurement stream has stalled.
+            h.powermeter_raises_stale = True
+
+            with caplog.at_level(logging.WARNING, logger="astrameter"):
+                # Step 50 times — that's ~150 battery polls (2 batteries
+                # x 50 steps x some retries on both consumers).  With
+                # per-tick logging this would produce 150+ warnings.
+                for _ in range(50):
+                    await h.step()
+
+            stale_warnings = [
+                r for r in caplog.records if "before_send failed" in r.getMessage()
+            ]
+            assert 1 <= len(stale_warnings) <= 3, (
+                f"Expected 1-3 rate-limited stale warnings, got "
+                f"{len(stale_warnings)}: "
+                f"{[r.getMessage() for r in stale_warnings]}"
+            )
+
+            # Batteries held their state — they did NOT get commanded
+            # off-axis by the balancer acting on bad data.  Tolerance
+            # is generous because the balancer can still emit small
+            # corrections from its existing smoothed value.
+            after_stale = h.battery_powers()
+            active_idx = 0 if abs(before[0]) > abs(before[1]) else 1
+            assert abs(after_stale[active_idx] - before[active_idx]) < 20.0, (
+                f"Active battery moved significantly despite stale meter: "
+                f"before={before} after_stale={after_stale}"
+            )
+
+            # Now recover: powermeter starts returning fresh values
+            # again.  We should see a recovery log line and the
+            # balancer should pick up again.
+            h.powermeter_raises_stale = False
+            with caplog.at_level(logging.INFO, logger="astrameter"):
+                caplog.clear()
+                await h.step(10)
+
+            recovery_logs = [
+                r for r in caplog.records if "before_send recovered" in r.getMessage()
+            ]
+            assert len(recovery_logs) == 1, (
+                f"Expected exactly one recovery log, got {len(recovery_logs)}"
             )
         finally:
             await h.stop()

@@ -149,6 +149,10 @@ class CT002:
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
         self._stopped = asyncio.Event()
+        # Rate-limited warnings for powermeter (before_send) failures
+        # — see _call_before_send.
+        self._before_send_failure_count: int = 0
+        self._before_send_last_warn: float = 0.0
 
         # Composed components
         self._smoother = TargetSmoother(
@@ -463,10 +467,41 @@ class CT002:
         if not self.before_send:
             return None
         try:
-            return await self.before_send(addr, fields, consumer_id)
+            result = await self.before_send(addr, fields, consumer_id)
         except Exception as exc:
-            logger.warning("before_send failed for %s: %s", addr, exc, exc_info=True)
+            # Rate-limit: log loudly on the first failure after a
+            # healthy spell, then at most once every 30 s while the
+            # failure persists.  The CT002 UDP server sees every
+            # battery request, so logging on every failure would flood
+            # the log with hundreds of lines per minute during a meter
+            # outage.
+            self._before_send_failure_count += 1
+            now = time.time()
+            if (
+                self._before_send_failure_count == 1
+                or now - self._before_send_last_warn >= 30.0
+            ):
+                logger.warning(
+                    "CT002 before_send failed (%d in a row) for %s: %s. "
+                    "The CT002 emulator is serving cached meter values "
+                    "until the powermeter recovers; batteries will hold "
+                    "their current output.",
+                    self._before_send_failure_count,
+                    addr,
+                    exc,
+                    exc_info=True,
+                )
+                self._before_send_last_warn = now
             return None
+        # Success path: if we were in a failure spell, log the recovery.
+        if self._before_send_failure_count > 0:
+            logger.info(
+                "CT002 before_send recovered after %d consecutive failures",
+                self._before_send_failure_count,
+            )
+            self._before_send_failure_count = 0
+            self._before_send_last_warn = 0.0
+        return result
 
     def _validate_ct_mac(self, request_fields):
         if not self.ct_mac:
