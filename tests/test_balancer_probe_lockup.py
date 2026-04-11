@@ -236,19 +236,44 @@ class TestProbeHandoffLockup:
         # test actually exercises the production reseed path.
         lb = _make_balancer(clock, smoother=smoother)
 
-        # --- Warm-up: drive to steady state with acd929a74b20 active ----
-        # Prime: seed both consumers, grid is balanced, load ~94 W, backup
-        # producing 94 W.
+        # --- Warm-up: drive to a single-active steady state --------------
+        # Prime: seed both consumers on phase B with a 94 W load on the
+        # load model and ``acd929a74b20`` already producing 94 W (so the
+        # grid reads zero and the balancer is not trying to correct
+        # anything while the priority list settles).
         for _ in range(10):
             reports = _reports(active_power=0, backup_power=94)
             _tick(lb, smoother, reports, grid_reading=0.0)
             clock.advance(3.0)
-            # Tweak the reading so TargetSmoother.update() sees a distinct
-            # sample_id each tick (would be true of any real meter).
-            smoother.update(0.0 + 1e-6 * clock(), (clock(),))
+            # Feed a unique ``sample_id`` each tick so
+            # ``TargetSmoother.update()`` isn't deduped against the
+            # previous _tick call.  The ``raw_total`` is deliberately
+            # the *true* zero reading (not ``1e-6 * clock()`` — that
+            # would be ~1700 because ``_FakeClock`` starts at
+            # ``time.time()``, which would hugely contaminate the EMA).
+            smoother.update(0.0, (clock(),))
 
-        # Confirm the balancer picked acd929a74b20 as the sole active.
-        assert "24215edb1936" in lb._deprioritized or "acd929a74b20" in lb._priority
+        # Strict exclusivity check: after warm-up, the balancer has
+        # populated the priority list from ``sorted(current_pool)``
+        # (`balancer.py:867`), so ``24215edb1936`` (alphabetically
+        # first) sits at slot 0 and ``acd929a74b20`` is the sole
+        # deprioritized consumer.  The earlier assertion used an
+        # ``or`` expression that was tautologically true because
+        # ``acd929a74b20`` is always in ``_priority`` regardless of
+        # which slot it's in — this stricter form actually catches
+        # regressions where the warm-up leaves the pool in an
+        # unexpected state.
+        assert lb._priority == ["24215edb1936", "acd929a74b20"], (
+            f"Unexpected priority after warm-up: {lb._priority}"
+        )
+        assert lb._deprioritized == {"acd929a74b20"}, (
+            f"Unexpected deprioritized after warm-up: {lb._deprioritized}"
+        )
+        # Sanity: the smoother pollution fix above must keep the EMA
+        # at true zero during a zero-grid warm-up.
+        assert smoother.value == 0.0, (
+            f"Warm-up contaminated the smoother: {smoother.value}"
+        )
 
         # --- Force rotation (equivalent to the 05:28:00 probe start) -----
         lb.force_rotation({"24215edb1936", "acd929a74b20"})

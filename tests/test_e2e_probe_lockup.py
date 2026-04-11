@@ -85,6 +85,9 @@ class _Harness:
         port_reservations = _reserve_free_ports(2)
         ct_port, self._ct_port_sock = port_reservations[0]
         http_port, self._http_port_sock = port_reservations[1]
+        # Lifecycle flags so ``stop()`` is safe to call before ``start()``.
+        self._started_powermeter = False
+        self._started_ct002 = False
         self.clock = _FakeClock()
         # When non-None, `before_send` returns this frozen snapshot
         # instead of the live grid reading.  Simulates a push-based
@@ -185,18 +188,43 @@ class _Harness:
         # service binds so the TOCTOU window is a single function
         # call (rather than the full harness construction time that
         # the eager-close pattern would leave exposed).
-        self._http_port_sock.close()
-        await self.powermeter.start()
-        self._ct_port_sock.close()
-        await self.ct002.start()
+        #
+        # Also unwind cleanly on partial-start failure: if
+        # ``ct002.start()`` raises after ``powermeter.start()``
+        # already succeeded, tear the powermeter back down before
+        # re-raising so the test doesn't leak a listening HTTP
+        # server across test runs.  ``_started_*`` flags make this
+        # cleanup idempotent with :meth:`stop`.
+        self._started_powermeter = False
+        self._started_ct002 = False
+        try:
+            self._http_port_sock.close()
+            await self.powermeter.start()
+            self._started_powermeter = True
+            self._ct_port_sock.close()
+            await self.ct002.start()
+            self._started_ct002 = True
+        except BaseException:
+            if self._started_powermeter and not self._started_ct002:
+                with contextlib.suppress(Exception):
+                    await self.powermeter.stop()
+                self._started_powermeter = False
+            raise
 
     async def stop(self) -> None:
-        await self.ct002.stop()
-        await self.powermeter.stop()
+        if self._started_ct002:
+            with contextlib.suppress(Exception):
+                await self.ct002.stop()
+            self._started_ct002 = False
+        if self._started_powermeter:
+            with contextlib.suppress(Exception):
+                await self.powermeter.stop()
+            self._started_powermeter = False
         # If `start()` was never reached, the reservation sockets are
         # still open — close them so the test doesn't leak fds.  If
         # `start()` did run, the sockets are already closed and
-        # `.close()` here is a harmless no-op.
+        # ``contextlib.suppress(OSError)`` makes the double-close a
+        # no-op.
         for sock in (self._ct_port_sock, self._http_port_sock):
             with contextlib.suppress(OSError):
                 sock.close()
@@ -439,4 +467,55 @@ class TestProbeLockup:
                 f"Expected exactly one recovery log, got {len(recovery_logs)}"
             )
         finally:
+            await h.stop()
+
+    async def test_harness_start_unwinds_on_partial_failure(self) -> None:
+        """If the second service (CT002) fails to start after the first
+        (the powermeter) already came up, :meth:`_Harness.start` must
+        tear the powermeter back down before re-raising so the test
+        run doesn't leak a listening HTTP server.
+        """
+        h = _Harness(
+            load_a=94.0,
+            min_efficient_power=50,
+            efficiency_rotation_interval=9999,
+        )
+
+        # Sabotage CT002 so it will raise after the powermeter has
+        # already come up.  Using ``RuntimeError`` so it can't be
+        # confused with a genuine asyncio / network error.
+        original_ct002_start = h.ct002.start
+
+        async def _fail_ct002_start() -> None:
+            raise RuntimeError("simulated CT002 start failure")
+
+        h.ct002.start = _fail_ct002_start  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="simulated CT002 start failure"):
+            await h.start()
+
+        # After the failed start the powermeter must no longer be
+        # listening: its runner should have been cleaned up by the
+        # unwind path.  We detect this by verifying the HTTP port
+        # is free (we can rebind to it) — if the unwind skipped the
+        # stop, the port would still be held.
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", h.powermeter.port))
+            except OSError as exc:
+                raise AssertionError(
+                    f"Powermeter HTTP port {h.powermeter.port} is still "
+                    f"bound after the failed start — unwind did not "
+                    f"call powermeter.stop(): {exc}"
+                ) from exc
+            finally:
+                probe.close()
+        finally:
+            # Restore and drain any remaining state.  ``h.stop()`` must
+            # be idempotent here — the powermeter was stopped by the
+            # unwind and CT002 was never started, so this should be a
+            # no-op with only reservation-socket close fallthrough.
+            h.ct002.start = original_ct002_start  # type: ignore[method-assign]
             await h.stop()
