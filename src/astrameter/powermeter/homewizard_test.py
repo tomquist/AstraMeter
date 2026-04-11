@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -442,6 +443,62 @@ async def test_ws_loop_passes_heartbeat_to_ws_connect():
     assert captured_kwargs["heartbeat"] > 0, (
         f"heartbeat must be a positive number, got {captured_kwargs['heartbeat']!r}"
     )
+
+
+async def test_measurement_watchdog_closes_ws_on_timeout():
+    """Regression: when the WebSocket is alive (no transport error)
+    but the measurement stream has stalled, the watchdog must force
+    a close so ``ws_loop`` drops through to the reconnect branch.
+
+    Instead of patching ``asyncio.wait_for`` we drive the real one
+    with a tiny timeout via a monkey-patched constant — that way
+    the test exercises the ``TimeoutError`` path through the actual
+    event machinery rather than a mock.
+    """
+    pm = _create_powermeter()
+    ws = AsyncMock()
+
+    # Patch the module constant to effectively 0 so ``wait_for``
+    # times out immediately (no measurement has arrived).
+    with patch("astrameter.powermeter.homewizard.WATCHDOG_TIMEOUT_SECONDS", 0.01):
+        await pm._measurement_watchdog(ws)
+
+    ws.close.assert_called_once()
+
+
+async def test_measurement_watchdog_re_arms_after_each_measurement():
+    """The watchdog clears its event on every iteration so a single
+    early measurement cannot appease it forever — the timer must
+    restart from zero every time.  This test drives the real event
+    primitives: set the fresh-measurement event repeatedly for two
+    iterations, then stop — the next iteration must timeout.
+    """
+    pm = _create_powermeter()
+    ws = AsyncMock()
+
+    iterations = 0
+
+    async def set_event_twice_then_wait():
+        nonlocal iterations
+        while True:
+            await asyncio.sleep(0.001)
+            iterations += 1
+            if iterations <= 2:
+                pm._fresh_measurement_event.set()
+            else:
+                # Stop feeding events — watchdog will time out.
+                return
+
+    feeder = asyncio.create_task(set_event_twice_then_wait())
+    with patch("astrameter.powermeter.homewizard.WATCHDOG_TIMEOUT_SECONDS", 0.05):
+        await pm._measurement_watchdog(ws)
+
+    feeder.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await feeder
+
+    assert iterations >= 3
+    ws.close.assert_called_once()
 
 
 async def test_ws_loop_reconnects_on_client_error():

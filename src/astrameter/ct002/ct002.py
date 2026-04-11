@@ -149,6 +149,10 @@ class CT002:
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
         self._stopped = asyncio.Event()
+        # Clock used for rate-limiting ``before_send`` warning logs.
+        # Defaults to wall time but tests may inject a fake clock so
+        # the rate-limit is deterministic under accelerated stepping.
+        self._clock: Callable[[], float] = clock or time.time
         # Rate-limited warnings for powermeter (before_send) failures
         # — see _call_before_send.
         self._before_send_failure_count: int = 0
@@ -474,9 +478,11 @@ class CT002:
             # failure persists.  The CT002 UDP server sees every
             # battery request, so logging on every failure would flood
             # the log with hundreds of lines per minute during a meter
-            # outage.
+            # outage.  We use ``self._clock`` (not wall time) so that
+            # deterministic test harnesses with a ``_FakeClock`` see
+            # the same rate-limit behaviour as production.
             self._before_send_failure_count += 1
-            now = time.time()
+            now = self._clock()
             if (
                 self._before_send_failure_count == 1
                 or now - self._before_send_last_warn >= 30.0

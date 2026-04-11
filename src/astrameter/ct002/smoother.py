@@ -78,6 +78,16 @@ class TargetSmoother:
             )
             return self._value
 
+        # ``raw_total == self._last_raw_total`` uses exact equality on
+        # a float, which would normally be fragile.  It's safe here
+        # because the production caller is
+        # :meth:`astrameter.ct002.ct002.CT002._compute_smooth_target`
+        # which computes ``raw_total = sum(parse_int(v, 0) for v in values)``
+        # — all ints, so equality is exact.  Tests pass floats but
+        # reuse the same value without intervening arithmetic, so
+        # equality is also exact there.  If a future caller starts
+        # feeding computed floats through this path, swap to
+        # ``math.isclose`` and expect to justify the tolerance.
         if sample_id == self._last_sample and raw_total == self._last_raw_total:
             logger.debug(
                 "TargetSmoother: dedup hit (raw=%.2f value=%.2f)",

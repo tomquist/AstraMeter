@@ -379,6 +379,15 @@ class LoadBalancer:
         # against a fresh baseline instead of an EMA that still carries
         # pre-probe state (including the transient zero-crossing that
         # happens while the candidate ramps up and the backup drops out).
+        #
+        # Timing note: ``_commit_probe`` runs inside
+        # ``_resolve_probe_state`` which is called from
+        # ``_compute_efficiency_deprioritized`` from
+        # ``_compute_auto_target`` — the current ``compute_target`` call
+        # has already captured ``smoothed_target`` as a parameter, so
+        # the reseed here does NOT affect the current tick's target.
+        # It only affects the NEXT ``_compute_smooth_target`` call in
+        # :class:`CT002`, which is the desired semantics.
         if self._smoother is not None:
             self._smoother.reseed()
 

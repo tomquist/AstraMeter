@@ -137,11 +137,16 @@ class HomeAssistant(Powermeter):
             # Reset protocol state for reconnection; keep _entity_values
             # as a courtesy, but mark them all stale so the staleness
             # check in _get_entity_value will raise until fresh state
-            # pushes arrive from the reconnect.
+            # pushes arrive from the reconnect.  ``_entities_ready``
+            # must also clear, otherwise ``wait_for_message()`` would
+            # return immediately for any caller relying on it as a
+            # readiness signal even though every entity is effectively
+            # stale until the next ``subscribe_entities`` snapshot.
             self._msg_id = 0
             self._subscribe_entities_id = None
             for eid in list(self._entity_update_time):
                 self._entity_update_time[eid] = None
+            self._entities_ready.clear()
             await asyncio.sleep(5)
 
     def _handle_compressed_entity_event(self, ev: dict[str, Any]) -> None:
@@ -230,7 +235,12 @@ class HomeAssistant(Powermeter):
         self._check_entities_ready()
 
     def _check_entities_ready(self) -> None:
-        if all(self._entity_values.get(e) is not None for e in self._tracked_entities):
+        ready = all(
+            self._entity_values.get(e) is not None
+            and self._entity_update_time.get(e) is not None
+            for e in self._tracked_entities
+        )
+        if ready:
             self._entities_ready.set()
         else:
             self._entities_ready.clear()

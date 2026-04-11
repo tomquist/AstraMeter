@@ -253,21 +253,29 @@ class TestProbeLockup:
     async def test_stale_meter_during_probe_causes_persistent_lockup(
         self,
     ) -> None:
-        """Reproduce the log2 failure: a push-based powermeter goes
-        stale (stops delivering new measurements) part-way through a
-        probe handoff.  The CT002 emulator sees a frozen grid reading
-        (which was near zero just before the rotation fired) while the
-        real grid drifts to the full magnitude of the load.
+        """Documents the log2 failure *in the absence of powermeter
+        staleness detection*.
 
-        Expectation under the current emulator code (no staleness
-        detection anywhere in the powermeter stack): the balancer
-        computes target ≈ 0 because its meter source is pinned at ~0,
-        and the real grid stays badly uncompensated indefinitely —
-        exactly what the user observed for ~1.5 h until restart.
+        The harness's in-test ``before_send`` does NOT implement
+        staleness detection — when ``frozen_grid`` is set it silently
+        returns the cached values.  This deliberately exercises the
+        path where the emulator has no way to know the meter has
+        gone quiet: the balancer computes ``target ≈ 0`` because its
+        meter source is pinned at ~0, and the real grid drifts to the
+        full magnitude of the load (what the user observed for ~1.5 h
+        until manual restart).
 
-        This test *is* the regression: if a future change adds
-        staleness detection or any other recovery mechanism, the
-        assertions below will need to be updated.
+        The actual fix for the reported bug lives **one layer up**:
+        ``HomeWizardPowermeter`` / ``HomeAssistant`` now raise
+        ``ValueError`` when their cached value is too old, at which
+        point CT002 takes a different code path — that path is
+        exercised by
+        :meth:`test_powermeter_stale_error_is_handled_gracefully`.
+
+        Keeping this test around as a regression marker: if the
+        balancer ever gains the ability to recover *without* help
+        from the powermeter layer, this assertion will start to fail
+        and this test should be updated or deleted.
         """
         h = _Harness(
             load_a=94.0,
@@ -352,17 +360,27 @@ class TestProbeLockup:
             h.powermeter_raises_stale = True
 
             with caplog.at_level(logging.WARNING, logger="astrameter"):
-                # Step 50 times — that's ~150 battery polls (2 batteries
-                # x 50 steps x some retries on both consumers).  With
-                # per-tick logging this would produce 150+ warnings.
-                for _ in range(50):
+                # Step through ~40 battery polls = 40 * 3s = 120 s of
+                # simulated wall time.  The rate limit is 30 s of
+                # simulated time per warning, so the correct cadence is
+                # 1 + floor(120/30) = 5 warnings max (one on the first
+                # failure, then at t=30/60/90/120).  Anything
+                # significantly above 5 means the rate limit is broken
+                # (i.e. per-tick logging has come back) and the
+                # assertion will catch the regression.
+                for _ in range(40):
                     await h.step()
 
             stale_warnings = [
                 r for r in caplog.records if "before_send failed" in r.getMessage()
             ]
-            assert 1 <= len(stale_warnings) <= 3, (
-                f"Expected 1-3 rate-limited stale warnings, got "
+            # Tight bound: under the fake clock we expect exactly one
+            # warning per 30 simulated seconds plus the first one.  A
+            # regression that removed the rate limit entirely would
+            # emit ~80 warnings (one per CT002 poll over 40 steps,
+            # both consumers).
+            assert 3 <= len(stale_warnings) <= 6, (
+                f"Expected 3-6 rate-limited stale warnings, got "
                 f"{len(stale_warnings)}: "
                 f"{[r.getMessage() for r in stale_warnings]}"
             )

@@ -530,3 +530,37 @@ async def test_max_state_age_zero_disables_check():
     )
     clock.advance(100000.0)
     assert await pm.get_powermeter_watts() == [100.0]
+
+
+async def test_reconnect_clears_entity_update_times_and_ready_flag():
+    """A websocket disconnect must clear the entity update times and
+    the ``_entities_ready`` event, so ``get_powermeter_watts`` raises
+    and ``wait_for_message`` blocks again until fresh state arrives
+    from the reconnect's ``subscribe_entities`` snapshot.
+    """
+    clock = _FakeClock()
+    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
+    )
+    assert pm._entities_ready.is_set()
+    assert await pm.get_powermeter_watts() == [100.0]
+
+    # Simulate exactly what ``_ws_loop`` does in its reconnect block.
+    pm._msg_id = 0
+    pm._subscribe_entities_id = None
+    for eid in list(pm._entity_update_time):
+        pm._entity_update_time[eid] = None
+    pm._entities_ready.clear()
+
+    assert not pm._entities_ready.is_set()
+    with pytest.raises(ValueError):
+        await pm.get_powermeter_watts()
+
+    # Fresh state arrives from the reconnected subscribe_entities
+    # snapshot — both signals recover.
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "250"}]
+    )
+    assert pm._entities_ready.is_set()
+    assert await pm.get_powermeter_watts() == [250.0]
