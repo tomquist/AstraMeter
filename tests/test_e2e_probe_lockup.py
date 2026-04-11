@@ -16,6 +16,7 @@ Covers two scenarios:
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import time
 
@@ -38,9 +39,20 @@ class _FakeClock:
         self._now += seconds
 
 
-def _find_free_ports(n: int) -> list[int]:
-    socks: list[socket.socket] = []
-    ports: list[int] = []
+def _reserve_free_ports(n: int) -> list[tuple[int, socket.socket]]:
+    """Reserve *n* ephemeral ports and return ``(port, socket)`` pairs.
+
+    The reservation sockets are **kept open** by the caller: they must
+    be closed one at a time *immediately* before the corresponding
+    service binds to the port, so the TOCTOU window between the
+    reservation closing and the service re-binding is minimized to a
+    single function call.  Closing the reservation sockets eagerly
+    (as a plain ``_find_free_ports`` would) leaves a wide race window
+    during which another process (or a parallel pytest worker under
+    ``pytest-xdist``) can grab the port and cause a spurious bind
+    failure.
+    """
+    pairs: list[tuple[int, socket.socket]] = []
     try:
         for i in range(n):
             s = socket.socket(
@@ -48,12 +60,12 @@ def _find_free_ports(n: int) -> list[int]:
                 socket.SOCK_DGRAM if i == 0 else socket.SOCK_STREAM,
             )
             s.bind(("127.0.0.1", 0))
-            ports.append(s.getsockname()[1])
-            socks.append(s)
-    finally:
-        for s in socks:
+            pairs.append((s.getsockname()[1], s))
+    except Exception:
+        for _, s in pairs:
             s.close()
-    return ports
+        raise
+    return pairs
 
 
 class _Harness:
@@ -70,7 +82,9 @@ class _Harness:
         min_efficient_power: int = 50,
         efficiency_rotation_interval: int = 20,
     ) -> None:
-        ct_port, http_port = _find_free_ports(2)
+        port_reservations = _reserve_free_ports(2)
+        ct_port, self._ct_port_sock = port_reservations[0]
+        http_port, self._http_port_sock = port_reservations[1]
         self.clock = _FakeClock()
         # When non-None, `before_send` returns this frozen snapshot
         # instead of the live grid reading.  Simulates a push-based
@@ -166,12 +180,26 @@ class _Harness:
         self.frozen_grid = None
 
     async def start(self) -> None:
+        # Hand the reserved ports off to the real services one at a
+        # time: close the reservation socket immediately before its
+        # service binds so the TOCTOU window is a single function
+        # call (rather than the full harness construction time that
+        # the eager-close pattern would leave exposed).
+        self._http_port_sock.close()
         await self.powermeter.start()
+        self._ct_port_sock.close()
         await self.ct002.start()
 
     async def stop(self) -> None:
         await self.ct002.stop()
         await self.powermeter.stop()
+        # If `start()` was never reached, the reservation sockets are
+        # still open — close them so the test doesn't leak fds.  If
+        # `start()` did run, the sockets are already closed and
+        # `.close()` here is a harmless no-op.
+        for sock in (self._ct_port_sock, self._http_port_sock):
+            with contextlib.suppress(OSError):
+                sock.close()
 
     async def step(self, n: int = 1) -> None:
         for _ in range(n):

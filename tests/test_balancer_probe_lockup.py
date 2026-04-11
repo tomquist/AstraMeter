@@ -44,8 +44,20 @@ class _FakeClock:
         self._t += dt
 
 
-def _make_balancer(clock: _FakeClock) -> LoadBalancer:
-    """Match the user's configuration (defaults plus efficiency enabled)."""
+def _make_balancer(
+    clock: _FakeClock,
+    smoother: TargetSmoother | None = None,
+) -> LoadBalancer:
+    """Match the user's configuration (defaults plus efficiency enabled).
+
+    The ``smoother`` is injected the same way :class:`CT002` does in
+    production (`ct002.py:159`).  Tests that exercise the probe
+    commit/reject path **must** pass their smoother here, otherwise
+    the balancer has no reference to the smoother and
+    ``_commit_probe``/``_reject_probe`` can't call ``reseed()`` on it —
+    the test would silently skip the reseed path the code is
+    supposed to cover.
+    """
     return LoadBalancer(
         config=BalancerConfig(
             fair_distribution=True,
@@ -70,6 +82,7 @@ def _make_balancer(clock: _FakeClock) -> LoadBalancer:
         saturation_stall_timeout_seconds=60.0,
         saturation_enabled=True,
         clock=clock,
+        smoother=smoother,
     )
 
 
@@ -217,8 +230,11 @@ class TestProbeHandoffLockup:
               target, not zero it.
         """
         clock = _FakeClock()
-        lb = _make_balancer(clock)
         smoother = TargetSmoother(alpha=0.9, deadband=20.0)
+        # Wire the smoother into the balancer the same way CT002 does
+        # in production, so ``_commit_probe`` will reseed it and the
+        # test actually exercises the production reseed path.
+        lb = _make_balancer(clock, smoother=smoother)
 
         # --- Warm-up: drive to steady state with acd929a74b20 active ----
         # Prime: seed both consumers, grid is balanced, load ~94 W, backup
@@ -274,9 +290,17 @@ class TestProbeHandoffLockup:
 
             # Phase B target for the active battery.
             b_target = active_target[1]
+            # ``smoother.value`` can be ``None`` on the tick immediately
+            # following a probe commit (the balancer reseeds its
+            # injected smoother in ``_commit_probe``).  Use a sentinel
+            # so the trace print survives that transient.
+            smoothed_str = (
+                f"{smoother.value:6.1f}" if smoother.value is not None else "  None"
+            )
             print(
-                f"t={tick_index:02d} active_power={active_power:3d} backup={backup_power:3d} "
-                f"grid={grid:6.1f} smoothed={smoother.value:6.1f} "
+                f"t={tick_index:02d} active_power={active_power:3d} "
+                f"backup={backup_power:3d} grid={grid:6.1f} "
+                f"smoothed={smoothed_str} "
                 f"active_tgt={active_target} backup_tgt={backup_target}"
             )
 
