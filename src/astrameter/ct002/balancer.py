@@ -10,6 +10,7 @@ from typing import Literal, NamedTuple
 from astrameter.config.logger import logger
 
 from .protocol import parse_int
+from .smoother import TargetSmoother
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
@@ -234,6 +235,7 @@ class LoadBalancer:
         *,
         saturation_enabled: bool = True,
         clock: Callable[[], float] | None = None,
+        smoother: TargetSmoother | None = None,
     ) -> None:
         self._clock = clock or time.time
         self._cfg = config
@@ -246,6 +248,10 @@ class LoadBalancer:
             clock=self._clock,
         )
         self._saturation_grace_seconds = max(0.0, saturation_grace_seconds)
+        # Optional: the meter smoother is reseeded after every probe
+        # commit / rejection so post-handoff state cannot drag in a
+        # stale pre-probe EMA value.  Injected by CT002 at construction.
+        self._smoother = smoother
         self._consumers: dict[str, BalancerConsumerState] = {}
         self._deprioritized: set[str] = set()
         self._priority: list[str] = []
@@ -369,6 +375,12 @@ class LoadBalancer:
             actual,
         )
         self._invalidate_efficiency_cache()
+        # Reseed the meter smoother so the post-handoff balance runs
+        # against a fresh baseline instead of an EMA that still carries
+        # pre-probe state (including the transient zero-crossing that
+        # happens while the candidate ramps up and the backup drops out).
+        if self._smoother is not None:
+            self._smoother.reseed()
 
     def _reject_probe(self, now: float, reason: str) -> None:
         probe = self._probe_state
@@ -396,6 +408,10 @@ class LoadBalancer:
             [cid[:16] for cid in probe.backup_ids],
         )
         self._invalidate_efficiency_cache()
+        # See _commit_probe — same rationale: force a fresh baseline
+        # after the probe window ends.
+        if self._smoother is not None:
+            self._smoother.reseed()
 
     def _resolve_probe_state(
         self, reports: dict, now: float, smoothed_target: float

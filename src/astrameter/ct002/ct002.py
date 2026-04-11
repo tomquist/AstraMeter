@@ -180,6 +180,7 @@ class CT002:
             saturation_stall_timeout_seconds=saturation_stall_timeout_seconds,
             saturation_enabled=saturation_detection,
             clock=clock,
+            smoother=self._smoother,
         )
 
     def _consumer_key(self, addr, fields):
