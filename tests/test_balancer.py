@@ -314,10 +314,15 @@ class TestSaturationTracker:
                 alpha=0.15, min_target=20, decay_factor=0.995, clock=clock
             )
             state = BalancerConsumerState()
+            # Seed ``last_saturation_update`` so the first iteration uses
+            # the test's ``dt`` rather than the default reference-period
+            # bootstrap (which would skew fast vs slow by ~2.5 s of
+            # effective EMA time).
+            state.last_saturation_update = clock()
             elapsed = 0.0
             while elapsed < window_seconds - 1e-9:
-                tracker.update(state, last_target=100.0, actual=5.0)
                 clock.advance(dt)
+                tracker.update(state, last_target=100.0, actual=5.0)
                 elapsed += dt
             return state.saturation_score
 
@@ -346,10 +351,11 @@ class TestSaturationTracker:
                 alpha=0.15, min_target=20, decay_factor=0.9, clock=clock
             )
             state = BalancerConsumerState(saturation_score=0.8)
+            state.last_saturation_update = clock()
             elapsed = 0.0
             while elapsed < window_seconds - 1e-9:
-                tracker.update(state, last_target=5.0, actual=5.0)
                 clock.advance(dt)
+                tracker.update(state, last_target=5.0, actual=5.0)
                 elapsed += dt
             return state.saturation_score
 
