@@ -30,7 +30,6 @@ from .protocol import (
     parse_int,
     parse_request,
 )
-from .smoother import TargetSmoother
 
 # Re-export protocol symbols for backward compatibility
 __all__ = [
@@ -104,8 +103,6 @@ class CT002:
         consumer_ttl=120,
         debug_status=False,
         active_control=True,
-        smooth_target_alpha=0.9,
-        max_smooth_step=0,
         fair_distribution=True,
         balance_gain=0.2,
         error_boost_threshold=150,
@@ -128,6 +125,7 @@ class CT002:
         saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
         device_id="",
         clock=None,
+        reset_fn=None,
     ):
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -159,11 +157,7 @@ class CT002:
         self._before_send_last_warn: float = 0.0
 
         # Composed components
-        self._smoother = TargetSmoother(
-            alpha=max(0.01, min(1.0, smooth_target_alpha)),
-            max_step=max(0, max_smooth_step),
-            deadband=max(0, deadband),
-        )
+        self._last_smooth_target: float = 0.0
         self._balancer = LoadBalancer(
             config=BalancerConfig(
                 fair_distribution=fair_distribution,
@@ -188,7 +182,7 @@ class CT002:
             saturation_stall_timeout_seconds=saturation_stall_timeout_seconds,
             saturation_enabled=saturation_detection,
             clock=clock,
-            smoother=self._smoother,
+            reset_fn=reset_fn,
         )
 
     def _consumer_key(self, addr, fields):
@@ -333,9 +327,9 @@ class CT002:
         if not self.active_control or not values or len(values) != 3:
             return values
 
-        raw_total = sum(parse_int(v, 0) for v in values)
+        total = sum(parse_int(v, 0) for v in values)
+        self._last_smooth_target = total
         sample_id = tuple(values)
-        smoothed = self._smoother.update(raw_total, sample_id)
         mode = self._consumer_mode(consumer_id)
 
         reports = {
@@ -352,8 +346,7 @@ class CT002:
             consumer_id,
             mode,
             reports,
-            smoothed,
-            raw_total,
+            total,
             inactive,
             manual,
             sample_id,
@@ -656,9 +649,7 @@ class CT002:
                     "active": is_active,
                     "poll_interval": consumer.poll_interval if consumer else None,
                     "last_seen": datetime.now(timezone.utc).isoformat(),
-                    "smooth_target": self._smoother.value
-                    if self._smoother.value is not None
-                    else 0.0,
+                    "smooth_target": self._last_smooth_target,
                     "manual_target": consumer.manual_target if consumer else None,
                     "auto_target": not consumer.manual_enabled if consumer else True,
                     "active_control": self.active_control,

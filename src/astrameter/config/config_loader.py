@@ -37,6 +37,10 @@ from astrameter.powermeter import (
     VZLogger,
     parse_sml_obis_config,
 )
+from astrameter.powermeter.wrappers.smoothing import (
+    DeadbandPowermeter,
+    SmoothedPowermeter,
+)
 
 SHELLY_SECTION = "SHELLY"
 TASMOTA_SECTION = "TASMOTA"
@@ -153,6 +157,11 @@ def read_all_powermeter_configs(
     global_wait_for_next_message = config.getboolean(
         "GENERAL", "WAIT_FOR_NEXT_MESSAGE", fallback=True
     )
+    global_smooth_alpha = config.getfloat(
+        "GENERAL", "SMOOTH_TARGET_ALPHA", fallback=0.0
+    )
+    global_max_smooth_step = config.getfloat("GENERAL", "MAX_SMOOTH_STEP", fallback=0.0)
+    global_deadband = config.getfloat("GENERAL", "DEADBAND", fallback=0.0)
     global_pid_kp = config.getfloat("GENERAL", "PID_KP", fallback=0.0)
     global_pid_ki = config.getfloat("GENERAL", "PID_KI", fallback=0.0)
     global_pid_kd = config.getfloat("GENERAL", "PID_KD", fallback=0.0)
@@ -198,6 +207,49 @@ def read_all_powermeter_configs(
                     section,
                 )
                 powermeter = ThrottledPowermeter(powermeter, section_throttle_interval)
+
+            section_smooth_alpha = config.getfloat(
+                section, "SMOOTH_TARGET_ALPHA", fallback=global_smooth_alpha
+            )
+            if section_smooth_alpha > 0:
+                section_smooth_alpha = max(0.01, min(1.0, section_smooth_alpha))
+                section_max_smooth_step = config.getfloat(
+                    section, "MAX_SMOOTH_STEP", fallback=global_max_smooth_step
+                )
+                smooth_source = (
+                    "section-specific"
+                    if config.has_option(section, "SMOOTH_TARGET_ALPHA")
+                    else "global"
+                )
+                logger.info(
+                    "Applying %s EMA smoothing (alpha=%.2f, max_step=%.0f) to %s",
+                    smooth_source,
+                    section_smooth_alpha,
+                    section_max_smooth_step,
+                    section,
+                )
+                powermeter = SmoothedPowermeter(
+                    powermeter,
+                    alpha=section_smooth_alpha,
+                    max_step=section_max_smooth_step,
+                )
+
+            section_deadband = config.getfloat(
+                section, "DEADBAND", fallback=global_deadband
+            )
+            if section_deadband > 0:
+                deadband_source = (
+                    "section-specific"
+                    if config.has_option(section, "DEADBAND")
+                    else "global"
+                )
+                logger.info(
+                    "Applying %s deadband (%.0fW) to %s",
+                    deadband_source,
+                    section_deadband,
+                    section,
+                )
+                powermeter = DeadbandPowermeter(powermeter, deadband=section_deadband)
 
             section_pid_kp = config.getfloat(section, "PID_KP", fallback=global_pid_kp)
             if section_pid_kp > 0:

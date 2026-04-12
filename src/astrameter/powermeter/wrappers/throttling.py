@@ -2,11 +2,12 @@ import asyncio
 import time
 
 from astrameter.config.logger import logger
+from astrameter.powermeter.base import Powermeter
 
-from .base import Powermeter
+from .base import PowermeterWrapper
 
 
-class ThrottledPowermeter(Powermeter):
+class ThrottledPowermeter(PowermeterWrapper):
     """
     A wrapper around powermeter that throttles the rate of value fetching.
 
@@ -18,7 +19,7 @@ class ThrottledPowermeter(Powermeter):
     """
 
     def __init__(self, wrapped_powermeter: Powermeter, throttle_interval: float = 0.0):
-        self.wrapped_powermeter = wrapped_powermeter
+        super().__init__(wrapped_powermeter)
         self.throttle_interval = throttle_interval
 
         # Coalescing fetch pattern: when a fetch is in flight (including the
@@ -27,18 +28,6 @@ class ThrottledPowermeter(Powermeter):
         self._last_update_time: float | None = None
         self._last_values: list[float] | None = None
         self._pending_fetch: asyncio.Future[list[float]] | None = None
-
-    async def wait_for_message(self, timeout=5):
-        return await self.wrapped_powermeter.wait_for_message(timeout)
-
-    async def wait_for_next_message(self, timeout=5):
-        return await self.wrapped_powermeter.wait_for_next_message(timeout)
-
-    async def start(self):
-        await self.wrapped_powermeter.start()
-
-    async def stop(self):
-        await self.wrapped_powermeter.stop()
 
     async def get_powermeter_watts(self) -> list[float]:
         if self.throttle_interval <= 0:

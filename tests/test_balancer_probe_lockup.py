@@ -23,6 +23,7 @@ The root cause is exercised here at two levels:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 from astrameter.ct002.balancer import (
     BalancerConfig,
@@ -30,7 +31,6 @@ from astrameter.ct002.balancer import (
     LoadBalancer,
     ProbeState,
 )
-from astrameter.ct002.smoother import TargetSmoother
 
 
 class _FakeClock:
@@ -46,17 +46,13 @@ class _FakeClock:
 
 def _make_balancer(
     clock: _FakeClock,
-    smoother: TargetSmoother | None = None,
+    reset_fn: Callable[[], None] | None = None,
 ) -> LoadBalancer:
     """Match the user's configuration (defaults plus efficiency enabled).
 
-    The ``smoother`` is injected the same way :class:`CT002` does in
-    production (`ct002.py:159`).  Tests that exercise the probe
-    commit/reject path **must** pass their smoother here, otherwise
-    the balancer has no reference to the smoother and
-    ``_commit_probe``/``_reject_probe`` can't call ``reseed()`` on it —
-    the test would silently skip the reseed path the code is
-    supposed to cover.
+    Tests that exercise the probe commit/reject path **must** pass a
+    ``reset_fn`` here so ``_commit_probe``/``_reject_probe`` can
+    invoke it — otherwise the test silently skips the reset path.
     """
     return LoadBalancer(
         config=BalancerConfig(
@@ -82,7 +78,7 @@ def _make_balancer(
         saturation_stall_timeout_seconds=60.0,
         saturation_enabled=True,
         clock=clock,
-        smoother=smoother,
+        reset_fn=reset_fn,
     )
 
 
@@ -97,7 +93,6 @@ def _reports(active_power: int, backup_power: int) -> dict:
 
 def _tick(
     lb: LoadBalancer,
-    smoother: TargetSmoother,
     reports: dict,
     grid_reading: float,
 ) -> tuple[list[float], list[float]]:
@@ -105,42 +100,35 @@ def _tick(
 
     Returns ``(active_target, backup_target)`` as 3-element phase lists.
     """
-    sample_id = (grid_reading, 0.0, 0.0)
-    smoothed = smoother.update(grid_reading, sample_id)
-
     # Order mirrors the real log: active battery first, backup second.
     active_target = lb.compute_target(
         consumer_id="24215edb1936",
         consumer_mode=ConsumerMode("auto"),
         all_reports=reports,
-        smoothed_target=smoothed,
-        raw_total=grid_reading,
+        grid_total=grid_reading,
         inactive=frozenset(),
         manual=frozenset(),
-        sample_id=sample_id,
     )
     backup_target = lb.compute_target(
         consumer_id="acd929a74b20",
         consumer_mode=ConsumerMode("auto"),
         all_reports=reports,
-        smoothed_target=smoothed,
-        raw_total=grid_reading,
+        grid_total=grid_reading,
         inactive=frozenset(),
         manual=frozenset(),
-        sample_id=sample_id,
     )
     return active_target, backup_target
 
 
 class TestProbeReseedsSmoother:
-    """After a probe commits or rejects, the balancer must reseed any
-    attached smoother so the post-handoff control loop cannot drag in
-    pre-probe EMA state.
+    """After a probe commits or rejects, the balancer must invoke the
+    injected ``reset_fn`` so the post-handoff control loop cannot drag
+    in pre-probe EMA state.
     """
 
-    def test_probe_commit_reseeds_injected_smoother(self) -> None:
+    def test_probe_commit_calls_reset_fn(self) -> None:
         clock = _FakeClock()
-        smoother = TargetSmoother(alpha=0.5)
+        calls: list[str] = []
         lb = LoadBalancer(
             config=BalancerConfig(
                 min_efficient_power=50,
@@ -153,11 +141,8 @@ class TestProbeReseedsSmoother:
             saturation_grace_seconds=90.0,
             saturation_stall_timeout_seconds=60.0,
             clock=clock,
-            smoother=smoother,
+            reset_fn=lambda: calls.append("reset"),
         )
-        # Seed the smoother so reseed has something to clear.
-        smoother.update(50.0, (50.0,))
-        assert smoother.value == 50.0
 
         # Inject a fake in-flight probe and commit it.
         lb._probe_state = ProbeState(  # type: ignore[attr-defined]
@@ -177,11 +162,11 @@ class TestProbeReseedsSmoother:
             actual=22.0,
         )
 
-        assert smoother.value is None, "smoother was not reseeded after probe commit"
+        assert len(calls) == 1, "reset_fn was not called after probe commit"
 
-    def test_probe_reject_reseeds_injected_smoother(self) -> None:
+    def test_probe_reject_calls_reset_fn(self) -> None:
         clock = _FakeClock()
-        smoother = TargetSmoother(alpha=0.5)
+        calls: list[str] = []
         lb = LoadBalancer(
             config=BalancerConfig(
                 min_efficient_power=50,
@@ -194,10 +179,8 @@ class TestProbeReseedsSmoother:
             saturation_grace_seconds=90.0,
             saturation_stall_timeout_seconds=60.0,
             clock=clock,
-            smoother=smoother,
+            reset_fn=lambda: calls.append("reset"),
         )
-        smoother.update(75.0, (75.0,))
-        assert smoother.value == 75.0
 
         lb._probe_state = ProbeState(  # type: ignore[attr-defined]
             candidate_id="24215edb1936",
@@ -209,7 +192,30 @@ class TestProbeReseedsSmoother:
         )
         lb._reject_probe(now=clock(), reason="test")  # type: ignore[attr-defined]
 
-        assert smoother.value is None, "smoother was not reseeded after probe reject"
+        assert len(calls) == 1, "reset_fn was not called after probe reject"
+
+
+class _TestSmoother:
+    """Minimal EMA smoother for test use only."""
+
+    def __init__(self, alpha: float = 0.9) -> None:
+        self._alpha = alpha
+        self._value: float | None = None
+
+    @property
+    def value(self) -> float | None:
+        return self._value
+
+    def update(self, raw: float) -> float:
+        if self._value is None:
+            self._value = raw
+        else:
+            delta = self._alpha * (raw - self._value)
+            self._value += delta
+        return self._value
+
+    def reset(self) -> None:
+        self._value = None
 
 
 class TestProbeHandoffLockup:
@@ -230,11 +236,11 @@ class TestProbeHandoffLockup:
               target, not zero it.
         """
         clock = _FakeClock()
-        smoother = TargetSmoother(alpha=0.9, deadband=20.0)
-        # Wire the smoother into the balancer the same way CT002 does
-        # in production, so ``_commit_probe`` will reseed it and the
-        # test actually exercises the production reseed path.
-        lb = _make_balancer(clock, smoother=smoother)
+        smoother = _TestSmoother(alpha=0.9)
+        # Wire the smoother's reset into the balancer so
+        # ``_commit_probe`` will reset it and the test actually
+        # exercises the production reset path.
+        lb = _make_balancer(clock, reset_fn=smoother.reset)
 
         # --- Warm-up: drive to a single-active steady state --------------
         # Prime: seed both consumers on phase B with a 94 W load on the
@@ -243,34 +249,23 @@ class TestProbeHandoffLockup:
         # anything while the priority list settles).
         for _ in range(10):
             reports = _reports(active_power=0, backup_power=94)
-            _tick(lb, smoother, reports, grid_reading=0.0)
+            smoothed = smoother.update(0.0)
+            _tick(lb, reports, grid_reading=smoothed)
             clock.advance(3.0)
-            # Feed a unique ``sample_id`` each tick so
-            # ``TargetSmoother.update()`` isn't deduped against the
-            # previous _tick call.  The ``raw_total`` is deliberately
-            # the *true* zero reading (not ``1e-6 * clock()`` — that
-            # would be ~1700 because ``_FakeClock`` starts at
-            # ``time.time()``, which would hugely contaminate the EMA).
-            smoother.update(0.0, (clock(),))
 
         # Strict exclusivity check: after warm-up, the balancer has
         # populated the priority list from ``sorted(current_pool)``
         # (`balancer.py:867`), so ``24215edb1936`` (alphabetically
         # first) sits at slot 0 and ``acd929a74b20`` is the sole
-        # deprioritized consumer.  The earlier assertion used an
-        # ``or`` expression that was tautologically true because
-        # ``acd929a74b20`` is always in ``_priority`` regardless of
-        # which slot it's in — this stricter form actually catches
-        # regressions where the warm-up leaves the pool in an
-        # unexpected state.
+        # deprioritized consumer.
         assert lb._priority == ["24215edb1936", "acd929a74b20"], (
             f"Unexpected priority after warm-up: {lb._priority}"
         )
         assert lb._deprioritized == {"acd929a74b20"}, (
             f"Unexpected deprioritized after warm-up: {lb._deprioritized}"
         )
-        # Sanity: the smoother pollution fix above must keep the EMA
-        # at true zero during a zero-grid warm-up.
+        # Sanity: the smoother must stay at true zero during a
+        # zero-grid warm-up.
         assert smoother.value == 0.0, (
             f"Warm-up contaminated the smoother: {smoother.value}"
         )
@@ -284,7 +279,8 @@ class TestProbeHandoffLockup:
             reports = _reports(active_power=p, backup_power=94)
             # Grid during probe: total battery = p + 94, load still 94,
             # so grid = 94 - (p + 94) = -p (slight export while probe ramps).
-            _tick(lb, smoother, reports, grid_reading=float(-p))
+            smoothed = smoother.update(float(-p))
+            _tick(lb, reports, grid_reading=smoothed)
             clock.advance(3.0)
 
         # --- Post-probe fade: backup collapses, active stays stuck at 22 W
@@ -308,17 +304,12 @@ class TestProbeHandoffLockup:
             grid = 94.0 - (active_power + backup_power)
 
             reports = _reports(active_power=active_power, backup_power=backup_power)
-            active_target, backup_target = _tick(
-                lb, smoother, reports, grid_reading=grid
-            )
+            smoothed = smoother.update(grid)
+            active_target, backup_target = _tick(lb, reports, grid_reading=smoothed)
             clock.advance(3.0)
 
             # Phase B target for the active battery.
             b_target = active_target[1]
-            # ``smoother.value`` can be ``None`` on the tick immediately
-            # following a probe commit (the balancer reseeds its
-            # injected smoother in ``_commit_probe``).  Use a sentinel
-            # so the trace print survives that transient.
             smoothed_str = (
                 f"{smoother.value:6.1f}" if smoother.value is not None else "  None"
             )
