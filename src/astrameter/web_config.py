@@ -274,7 +274,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
     "CT002": {
         "UDP_PORT": {"type": "integer"},
         "WIFI_RSSI": {"type": "integer"},
-        "DEDUPE_TIME_WINDOW": {"type": "integer"},
+        "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
         "CONSUMER_TTL": {"type": "integer"},
         "DEBUG_STATUS": {"type": "boolean"},
         "ACTIVE_CONTROL": {"type": "boolean"},
