@@ -238,3 +238,12 @@ class SmaEnergyMeter(Powermeter):
             await asyncio.wait_for(self._async_message_event.wait(), timeout)
         except asyncio.TimeoutError:
             raise TimeoutError("Timeout waiting for SMA Energy Meter data") from None
+
+    async def wait_for_next_message(self, timeout=5):
+        if self._async_message_event is None:
+            raise RuntimeError("start() must be called before wait_for_next_message()")
+        self._async_message_event.clear()
+        try:
+            await asyncio.wait_for(self._async_message_event.wait(), timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError("Timeout waiting for SMA Energy Meter data") from None

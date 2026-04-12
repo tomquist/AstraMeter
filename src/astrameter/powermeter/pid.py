@@ -95,6 +95,9 @@ class PidPowermeter(Powermeter):
         """Pass through to wrapped powermeter."""
         return await self.wrapped_powermeter.wait_for_message(timeout)
 
+    async def wait_for_next_message(self, timeout=5):
+        return await self.wrapped_powermeter.wait_for_next_message(timeout)
+
     async def start(self):
         """Pass through to wrapped powermeter."""
         await self.wrapped_powermeter.start()

@@ -457,8 +457,9 @@ class CT002:
         ]
 
         phase_values = self._collect_reports_by_phase()
+        phase_power = [phase_a, phase_b, phase_c]
         for phase, idx in (("A", 0), ("B", 1), ("C", 2)):
-            if phase_values[phase]["active"]:
+            if phase_values[phase]["active"] or phase_power[idx] != 0:
                 response_fields[8 + idx] = "1"
             response_fields[15 + idx] = str(phase_values[phase]["chrg_power"])
             response_fields[20 + idx] = str(phase_values[phase]["dchrg_power"])
@@ -579,14 +580,13 @@ class CT002:
             return
         self._last_response_time[addr] = current_time
 
-        if not in_inspection_mode:
-            meter_dev_type = fields[0] if len(fields) > 0 else ""
-            self._update_consumer_report(
-                consumer_id,
-                phase=reported_phase,
-                power=reported_power,
-                device_type=meter_dev_type,
-            )
+        meter_dev_type = fields[0] if len(fields) > 0 else ""
+        self._update_consumer_report(
+            consumer_id,
+            phase=reported_phase if not in_inspection_mode else "A",
+            power=reported_power,
+            device_type=meter_dev_type,
+        )
 
         updated = await self._call_before_send(addr, fields, consumer_id)
         if updated is not None:

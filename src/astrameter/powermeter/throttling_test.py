@@ -71,6 +71,15 @@ async def test_wait_for_message_passthrough():
     mock_pm.wait_for_message.assert_called_once_with(30)
 
 
+async def test_wait_for_next_message_passthrough():
+    mock_pm = Mock()
+    mock_pm.wait_for_next_message = AsyncMock()
+    throttled = ThrottledPowermeter(mock_pm, throttle_interval=1.0)
+
+    await throttled.wait_for_next_message(timeout=15)
+    mock_pm.wait_for_next_message.assert_called_once_with(15)
+
+
 async def test_exception_handling_with_cache():
     """Test that cached values are returned on error after a successful fetch."""
     mock_pm = Mock()

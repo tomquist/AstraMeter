@@ -100,6 +100,30 @@ async def test_wait_for_message_wakes_on_event():
     assert pm.value == 99.0
 
 
+async def test_wait_for_next_message_blocks_until_new():
+    pm = _make_pm()
+    pm.value = 1.0
+    pm._message_event.set()
+
+    async def _set_later():
+        await asyncio.sleep(0.05)
+        pm.value = 42.0
+        pm._message_event.set()
+
+    task = asyncio.create_task(_set_later())
+    await pm.wait_for_next_message(timeout=2)
+    await task
+    assert pm.value == 42.0
+
+
+async def test_wait_for_next_message_times_out():
+    pm = _make_pm()
+    pm.value = 1.0
+    pm._message_event.set()
+    with pytest.raises(TimeoutError, match="Timeout waiting"):
+        await pm.wait_for_next_message(timeout=0.1)
+
+
 # ---------------------------------------------------------------------------
 # Multi-phase constructor unit tests
 # ---------------------------------------------------------------------------
