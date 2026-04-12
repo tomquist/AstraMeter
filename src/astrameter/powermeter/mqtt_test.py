@@ -124,6 +124,24 @@ async def test_wait_for_next_message_times_out():
         await pm.wait_for_next_message(timeout=0.1)
 
 
+async def test_wait_for_next_message_multi_topic_cold_start():
+    pm = _make_pm(topic=["t1", "t2"])
+    # Cold start: no values set, event not set
+
+    async def _set_staggered():
+        await asyncio.sleep(0.05)
+        pm.values[0] = 100.0
+        pm._message_event.set()
+        await asyncio.sleep(0.05)
+        pm.values[1] = 200.0
+        pm._message_event.set()
+
+    task = asyncio.create_task(_set_staggered())
+    await pm.wait_for_next_message(timeout=2)
+    await task
+    assert await pm.get_powermeter_watts() == [100.0, 200.0]
+
+
 # ---------------------------------------------------------------------------
 # Multi-phase constructor unit tests
 # ---------------------------------------------------------------------------

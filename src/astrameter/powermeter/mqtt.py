@@ -175,7 +175,16 @@ class MqttPowermeter(Powermeter):
 
     async def wait_for_next_message(self, timeout=5):
         self._message_event.clear()
-        try:
-            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for MQTT message") from None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError("Timeout waiting for MQTT message")
+            try:
+                await asyncio.wait_for(self._message_event.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                raise TimeoutError("Timeout waiting for MQTT message") from None
+            if all(v is not None for v in self.values):
+                return
+            self._message_event.clear()
