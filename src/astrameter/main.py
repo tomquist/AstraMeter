@@ -211,6 +211,7 @@ async def run_device(
             if powermeter is None:
                 logger.debug(f"No powermeter found for client {addr[0]}")
                 return None
+            await powermeter.wait_for_next_message()
             values = await powermeter.get_powermeter_watts()
             value1 = values[0] if len(values) > 0 else 0
             value2 = values[1] if len(values) > 1 else 0

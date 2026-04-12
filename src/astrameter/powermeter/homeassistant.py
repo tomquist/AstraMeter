@@ -77,6 +77,7 @@ class HomeAssistant(Powermeter):
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._entities_ready = asyncio.Event()
+        self._message_event = asyncio.Event()
 
     def _collect_entities(self) -> set[str]:
         if self.power_calculate:
@@ -233,6 +234,7 @@ class HomeAssistant(Powermeter):
             self._entity_values[entity_id] = None
             self._entity_update_time[entity_id] = None
         self._check_entities_ready()
+        self._message_event.set()
 
     def _check_entities_ready(self) -> None:
         ready = all(
@@ -286,5 +288,12 @@ class HomeAssistant(Powermeter):
     async def wait_for_message(self, timeout: float = 5) -> None:
         try:
             await asyncio.wait_for(self._entities_ready.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError("Timeout waiting for Home Assistant state") from None
+
+    async def wait_for_next_message(self, timeout: float = 5) -> None:
+        self._message_event.clear()
+        try:
+            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             raise TimeoutError("Timeout waiting for Home Assistant state") from None

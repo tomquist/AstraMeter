@@ -252,6 +252,27 @@ async def test_wait_for_message_timeout():
         await pm.wait_for_message(timeout=0)
 
 
+async def test_wait_for_next_message_blocks_until_new():
+    pm = _create_powermeter()
+    pm._handle_measurement({"power_w": 100})
+
+    async def _push_later():
+        await asyncio.sleep(0.05)
+        pm._handle_measurement({"power_w": 200})
+
+    task = asyncio.create_task(_push_later())
+    await pm.wait_for_next_message(timeout=2)
+    await task
+    assert await pm.get_powermeter_watts() == [200]
+
+
+async def test_wait_for_next_message_timeout():
+    pm = _create_powermeter()
+    pm._handle_measurement({"power_w": 100})
+    with pytest.raises(TimeoutError):
+        await pm.wait_for_next_message(timeout=0)
+
+
 # --- Category F: Lifecycle ---
 
 

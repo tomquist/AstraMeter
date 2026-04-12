@@ -322,6 +322,46 @@ class TestWaitForMessageAsync:
             await meter.wait_for_message(timeout=0)
 
 
+class TestWaitForNextMessage:
+    async def test_blocks_until_new(self):
+        meter = _create_meter()
+        meter._async_message_event = asyncio.Event()
+        packet = _build_packet(
+            [
+                _build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000),
+                _build_channel(CHANNEL_TOTAL_POWER_MINUS, 0),
+            ]
+        )
+        meter._handle_packet(packet)
+
+        async def _push_later():
+            await asyncio.sleep(0.05)
+            new_packet = _build_packet(
+                [
+                    _build_channel(CHANNEL_TOTAL_POWER_PLUS, 2000),
+                    _build_channel(CHANNEL_TOTAL_POWER_MINUS, 0),
+                ]
+            )
+            meter._handle_packet(new_packet)
+
+        task = asyncio.create_task(_push_later())
+        await meter.wait_for_next_message(timeout=2)
+        await task
+        assert await meter.get_powermeter_watts() == [200.0]
+
+    async def test_timeout(self):
+        meter = _create_meter()
+        meter._async_message_event = asyncio.Event()
+        meter._async_message_event.set()
+        with pytest.raises(TimeoutError):
+            await meter.wait_for_next_message(timeout=0)
+
+    async def test_not_started_raises(self):
+        meter = _create_meter()
+        with pytest.raises(RuntimeError):
+            await meter.wait_for_next_message(timeout=0)
+
+
 class TestLifecycle:
     async def test_stop_closes_transport(self):
         meter = _create_meter()

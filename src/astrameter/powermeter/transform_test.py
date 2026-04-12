@@ -10,6 +10,7 @@ def mock_powermeter():
     pm = Mock()
     pm.get_powermeter_watts = AsyncMock()
     pm.wait_for_message = AsyncMock()
+    pm.wait_for_next_message = AsyncMock()
     return pm
 
 
@@ -104,6 +105,12 @@ async def test_wait_for_message_default_timeout(mock_powermeter):
     t = TransformedPowermeter(mock_powermeter, [0.0], [1.0])
     await t.wait_for_message()
     mock_powermeter.wait_for_message.assert_called_once_with(5)
+
+
+async def test_wait_for_next_message_passthrough(mock_powermeter):
+    t = TransformedPowermeter(mock_powermeter, [0.0], [1.0])
+    await t.wait_for_next_message(timeout=10)
+    mock_powermeter.wait_for_next_message.assert_called_once_with(10)
 
 
 def test_empty_offsets_raises(mock_powermeter):

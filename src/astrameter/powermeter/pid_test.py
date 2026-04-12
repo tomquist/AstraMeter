@@ -11,6 +11,7 @@ def mock_powermeter():
     pm = Mock()
     pm.get_powermeter_watts = AsyncMock()
     pm.wait_for_message = AsyncMock()
+    pm.wait_for_next_message = AsyncMock()
     pm.start = AsyncMock()
     pm.stop = AsyncMock()
     return pm
@@ -238,6 +239,12 @@ async def test_wait_for_message_passthrough(mock_powermeter):
     pm = PidPowermeter(mock_powermeter, kp=1.0)
     await pm.wait_for_message(timeout=7)
     mock_powermeter.wait_for_message.assert_called_once_with(7)
+
+
+async def test_wait_for_next_message_passthrough(mock_powermeter):
+    pm = PidPowermeter(mock_powermeter, kp=1.0)
+    await pm.wait_for_next_message(timeout=3)
+    mock_powermeter.wait_for_next_message.assert_called_once_with(3)
 
 
 # ------------------------------------------------------------------

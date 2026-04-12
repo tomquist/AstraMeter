@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -357,6 +358,34 @@ async def test_wait_for_message_timeout():
     pm = _create_powermeter()
     with pytest.raises(TimeoutError):
         await pm.wait_for_message(timeout=0)
+
+
+# wait_for_next_message tests
+
+
+async def test_wait_for_next_message_blocks_until_new():
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
+    )
+
+    async def _push_later():
+        await asyncio.sleep(0.05)
+        pm._update_entity_value("sensor.current_power", "200")
+
+    task = asyncio.create_task(_push_later())
+    await pm.wait_for_next_message(timeout=2)
+    await task
+    assert await pm.get_powermeter_watts() == [200.0]
+
+
+async def test_wait_for_next_message_timeout():
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
+    )
+    with pytest.raises(TimeoutError):
+        await pm.wait_for_next_message(timeout=0)
 
 
 # subscribe_entities entity list test

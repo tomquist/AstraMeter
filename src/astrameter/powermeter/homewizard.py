@@ -238,3 +238,10 @@ class HomeWizardPowermeter(Powermeter):
             await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             raise TimeoutError("Timeout waiting for HomeWizard measurement") from None
+
+    async def wait_for_next_message(self, timeout: float = 5) -> None:
+        self._message_event.clear()
+        try:
+            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError("Timeout waiting for HomeWizard measurement") from None

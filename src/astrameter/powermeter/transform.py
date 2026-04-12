@@ -34,6 +34,9 @@ class TransformedPowermeter(Powermeter):
     async def wait_for_message(self, timeout=5):
         return await self.wrapped_powermeter.wait_for_message(timeout)
 
+    async def wait_for_next_message(self, timeout=5):
+        return await self.wrapped_powermeter.wait_for_next_message(timeout)
+
     async def start(self):
         await self.wrapped_powermeter.start()
 
