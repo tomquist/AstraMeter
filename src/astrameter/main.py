@@ -12,7 +12,6 @@ from astrameter.config.config_loader import (
 )
 from astrameter.config.logger import logger, setLogLevel
 from astrameter.ct002 import CT002, UDP_PORT
-from astrameter.health_service import HealthCheckService
 from astrameter.marstek_api import (
     MarstekApiError,
     MarstekConfig,
@@ -22,6 +21,7 @@ from astrameter.mqtt_insights import MqttInsightsService
 from astrameter.powermeter import Powermeter
 from astrameter.shelly import Shelly
 from astrameter.version_info import get_git_commit_sha
+from astrameter.web_server import WebServer
 
 # CT002/CT003 phase assignment is auto-managed by emulator runtime.
 
@@ -309,22 +309,29 @@ async def async_main(
     device_ids: list[str],
     skip_test: bool,
 ):
-    # Start health check server
-    health = None
-    if cfg.getboolean("GENERAL", "ENABLE_HEALTH_CHECK", fallback=True):
-        logger.info("Starting health check service...")
+    web_server = None
+    if cfg.getboolean("GENERAL", "ENABLE_WEB_SERVER", fallback=True):
+        logger.info("Starting web server...")
         try:
-            health = HealthCheckService()
-            if await health.start():
-                logger.info("Health check service started successfully")
+            enable_web_config = cfg.getboolean(
+                "GENERAL", "WEB_CONFIG_ENABLED", fallback=False
+            )
+            port = cfg.getint("GENERAL", "WEB_SERVER_PORT", fallback=52500)
+            web_server = WebServer(
+                port=port,
+                config_path=args.config,
+                enable_web_config=enable_web_config,
+            )
+            if await web_server.start():
+                logger.info("Web server started successfully")
             else:
-                logger.error("Failed to start health check service")
-                health = None
+                logger.error("Failed to start web server")
+                web_server = None
         except Exception:
-            logger.exception("Health check service failed to initialize")
-            if health:
-                await health.stop()
-            health = None
+            logger.exception("Web server failed to initialize")
+            if web_server:
+                await web_server.stop()
+            web_server = None
 
     powermeters: list[tuple[Powermeter, ClientFilter]] = []
     insights: MqttInsightsService | None = None
@@ -374,14 +381,83 @@ async def async_main(
                 await pm.stop()
             except Exception:
                 logger.exception("Error stopping powermeter %s", pm)
-        if health:
-            logger.info("Stopping health check service...")
+        if web_server:
+            logger.info("Stopping web server...")
             try:
-                await asyncio.wait_for(health.stop(), timeout=5.0)
+                await asyncio.wait_for(web_server.stop(), timeout=5.0)
             except TimeoutError:
-                logger.warning("Health check service stop timed out")
+                logger.warning("Web server stop timed out")
             except Exception:
-                logger.exception("Error stopping health check service")
+                logger.exception("Error stopping web server")
+
+
+def _apply_cli_overrides(
+    cfg: configparser.ConfigParser, args: argparse.Namespace
+) -> None:
+    """Re-apply CLI flags that override config-file values."""
+    if args.throttle_interval is not None:
+        if not cfg.has_section("GENERAL"):
+            cfg.add_section("GENERAL")
+        cfg.set("GENERAL", "THROTTLE_INTERVAL", str(args.throttle_interval))
+
+
+def _resolve_device_config(
+    cfg: configparser.ConfigParser, args: argparse.Namespace
+) -> tuple[list[str], list[str], bool]:
+    """Derive device_types, device_ids and skip_test from *cfg* and CLI *args*."""
+    device_types = (
+        args.device_types
+        if args.device_types is not None
+        else [
+            dt.strip()
+            for dt in cfg.get("GENERAL", "DEVICE_TYPE", fallback="shellypro3em").split(
+                ","
+            )
+            if dt.strip()
+        ]
+    )
+    skip_test = (
+        args.skip_powermeter_test
+        if args.skip_powermeter_test is not None
+        else cfg.getboolean("GENERAL", "SKIP_POWERMETER_TEST", fallback=False)
+    )
+
+    device_ids: list[str] = list(args.device_ids) if args.device_ids is not None else []
+    if not device_ids:
+        cfg_device_ids = cfg.get("GENERAL", "DEVICE_IDS", fallback="").strip()
+        if cfg_device_ids:
+            device_ids = [
+                did.strip() for did in cfg_device_ids.split(",") if did.strip()
+            ]
+    while len(device_ids) < len(device_types):
+        device_type = device_types[len(device_ids)]
+        if device_type in ["shellypro3em", "shellyemg3", "shellyproem50"]:
+            device_ids.append(f"{device_type}-ec4609c439c{len(device_ids) + 1}")
+        else:
+            device_ids.append(f"device-{len(device_ids) + 1}")
+
+    if "shellypro3em" in device_types:
+        shellypro3em_index = device_types.index("shellypro3em")
+        device_types[shellypro3em_index] = "shellypro3em_old"
+        device_types.append("shellypro3em_new")
+        device_ids.append(device_ids[shellypro3em_index])
+
+    ct_ports = []
+    for device_type in device_types:
+        if device_type in ["ct002", "ct003"]:
+            section = get_ct_section(device_type, cfg)
+            ct_ports.append(cfg.getint(section, "UDP_PORT", fallback=UDP_PORT))
+    if len(ct_ports) != len(set(ct_ports)):
+        raise ValueError(
+            "Multiple CT002/CT003 devices are configured with the same UDP port. "
+            "Set UDP_PORT in [CT002]/[CT003] to avoid conflicts."
+        )
+
+    logger.info(f"Device Types: {device_types}")
+    logger.info(f"Device IDs: {device_ids}")
+    logger.info(f"Skip Test: {skip_test}")
+
+    return device_types, device_ids, skip_test
 
 
 def main():
@@ -438,67 +514,9 @@ def main():
             "Git commit not logged (set GIT_COMMIT_SHA at image build for CI images)"
         )
 
-    # Load general settings
-    device_types = (
-        args.device_types
-        if args.device_types is not None
-        else [
-            dt.strip()
-            for dt in cfg.get("GENERAL", "DEVICE_TYPE", fallback="shellypro3em").split(
-                ","
-            )
-            if dt.strip()
-        ]
-    )
-    skip_test = (
-        args.skip_powermeter_test
-        if args.skip_powermeter_test is not None
-        else cfg.getboolean("GENERAL", "SKIP_POWERMETER_TEST", fallback=False)
-    )
+    device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
 
-    device_ids = args.device_ids if args.device_ids is not None else []
-    # Load device IDs from config if not provided via CLI
-    if not device_ids:
-        cfg_device_ids = cfg.get("GENERAL", "DEVICE_IDS", fallback="").strip()
-        if cfg_device_ids:
-            device_ids = [
-                did.strip() for did in cfg_device_ids.split(",") if did.strip()
-            ]
-    # Fill missing device IDs with default format
-    while len(device_ids) < len(device_types):
-        device_type = device_types[len(device_ids)]
-        if device_type in ["shellypro3em", "shellyemg3", "shellyproem50"]:
-            device_ids.append(f"{device_type}-ec4609c439c{len(device_ids) + 1}")
-        else:
-            device_ids.append(f"device-{len(device_ids) + 1}")
-
-    # For backward compatibility, replace shellypro3em with shellypro3em_old and shellypro3em_new
-    if "shellypro3em" in device_types:
-        shellypro3em_index = device_types.index("shellypro3em")
-        device_types[shellypro3em_index] = "shellypro3em_old"
-        device_types.append("shellypro3em_new")
-        device_ids.append(device_ids[shellypro3em_index])
-
-    ct_ports = []
-    for device_type in device_types:
-        if device_type in ["ct002", "ct003"]:
-            section = get_ct_section(device_type, cfg)
-            ct_ports.append(cfg.getint(section, "UDP_PORT", fallback=UDP_PORT))
-    if len(ct_ports) != len(set(ct_ports)):
-        raise ValueError(
-            "Multiple CT002/CT003 devices are configured with the same UDP port. "
-            "Set UDP_PORT in [CT002]/[CT003] to avoid conflicts."
-        )
-
-    logger.info(f"Device Types: {device_types}")
-    logger.info(f"Device IDs: {device_ids}")
-    logger.info(f"Skip Test: {skip_test}")
-
-    # Apply command line throttling override if specified
-    if args.throttle_interval is not None:
-        if not cfg.has_section("GENERAL"):
-            cfg.add_section("GENERAL")
-        cfg.set("GENERAL", "THROTTLE_INTERVAL", str(args.throttle_interval))
+    _apply_cli_overrides(cfg, args)
 
     # Optional Marstek cloud registration for managed fake CT devices (sync, before event loop)
     marstek_enabled = cfg.getboolean("MARSTEK", "ENABLE", fallback=False)
@@ -557,13 +575,34 @@ def main():
     # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).
     signal.signal(signal.SIGTERM, signal.default_int_handler)
 
-    try:
-        asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
-    except KeyboardInterrupt:
-        pass
-    except RuntimeError as exc:
-        logger.error("%s", exc)
-        exit(1)
+    # SIGUSR1 is used by the web UI restart button.  We set a flag *before*
+    # raising KeyboardInterrupt so the outer loop knows to re-run instead of
+    # exiting.
+    restart_requested = False
+
+    def _restart_handler(signum, frame):
+        nonlocal restart_requested
+        restart_requested = True
+        signal.default_int_handler(signum, frame)
+
+    signal.signal(signal.SIGUSR1, _restart_handler)
+
+    while True:
+        restart_requested = False
+        try:
+            asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
+            break  # clean exit
+        except KeyboardInterrupt:
+            if not restart_requested:
+                break
+            logger.info("Restarting service…")
+            cfg = configparser.ConfigParser(dict_type=OrderedDict, interpolation=None)
+            cfg.read(args.config)
+            _apply_cli_overrides(cfg, args)
+            device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
+        except RuntimeError as exc:
+            logger.error("%s", exc)
+            exit(1)
 
 
 # end main

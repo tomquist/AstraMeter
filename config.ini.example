@@ -6,6 +6,10 @@ DEVICE_TYPE = shellypro3em
 #DEVICE_IDS = shellypro3em-c59b15461a21
 # Skip initial powermeter test on startup
 SKIP_POWERMETER_TEST = False
+# Enable the web-based configuration editor at http://<host>:<port>/config (opt-in, default False)
+#WEB_CONFIG_ENABLED = False
+# Port for the embedded web server (health check + config editor). Default: 52500
+#WEB_SERVER_PORT = 52500
 # Global throttling configuration (in seconds) - applies to all powermeters unless overridden
 # Enforces minimum time between power meter readings by waiting when called too frequently
 # This helps prevent instability or oscillation for slower data sources

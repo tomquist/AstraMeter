@@ -85,7 +85,7 @@ else
         echo "[GENERAL]"
         echo "DEVICE_TYPE=$(bashio::config 'device_types')"
         echo "THROTTLE_INTERVAL=$(bashio::config 'throttle_interval')"
-        echo "ENABLE_HEALTH_CHECK=true"
+        echo "ENABLE_WEB_SERVER=true"
         echo ""
         if [ "$has_ct002" -eq 1 ] && [ "$has_ct003" -eq 1 ]; then
             echo "[CT002]"
