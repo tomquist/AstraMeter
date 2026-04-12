@@ -106,7 +106,9 @@ THROTTLE_INTERVAL = 0
 ## Force-rotate when a battery can't follow its target (e.g. externally limited
 ## to 0 W or fully discharged). After a probe succeeds, this still swaps out an
 ## active battery within a few seconds instead of waiting for the full rotation
-## interval. 0 disables.
+## interval. 0 disables. The saturation EMA is time-weighted, so slow
+## powermeters (>10 s updates) accumulate saturation faster per sample; raise
+## this value (e.g. 0.8) if you see unnecessary swaps with a slow meter.
 #EFFICIENCY_SATURATION_THRESHOLD = 0.4
 ## How quickly a swapped-out battery becomes eligible again. Applied each cycle
 ## while the battery has no target. 1.0 = never recover, lower = faster recovery.

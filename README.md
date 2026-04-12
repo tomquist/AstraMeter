@@ -254,7 +254,10 @@ mid-interval failures still trigger a swap.
   healthy deprioritized battery instead of waiting for the next timed rotation.
   During a probe, the probe timeout is the main "never ramps" control; this
   threshold still matters after the probe succeeds and for already-active
-  batteries. Set to 0 to disable.
+  batteries. Set to 0 to disable. The saturation EMA is time-weighted, so
+  batteries with slower powermeters (>10 s update interval) accumulate saturation
+  faster per sample — if you see unnecessary swaps with a slow powermeter,
+  raise this value (e.g. to 0.8).
 - **SATURATION_DETECTION** (default true) — Track how well each battery follows
   its target. When a battery cannot deliver (full or empty), its share is
   reduced and redistributed to others.
