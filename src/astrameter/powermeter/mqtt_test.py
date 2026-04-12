@@ -112,7 +112,9 @@ async def test_wait_for_next_message_blocks_until_new():
 
     task = asyncio.create_task(_set_later())
     await pm.wait_for_next_message(timeout=2)
-    assert task.done(), "wait_for_next_message returned before the setter task completed"
+    assert task.done(), (
+        "wait_for_next_message returned before the setter task completed"
+    )
     assert pm.value == 42.0
 
 
