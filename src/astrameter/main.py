@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import configparser
+import contextlib
 import os
 import signal
 from collections import OrderedDict
@@ -18,7 +19,11 @@ from astrameter.marstek_api import (
     MarstekConfig,
     ensure_managed_fake_device,
 )
-from astrameter.mqtt_insights import MqttInsightsService
+from astrameter.mqtt_insights import (
+    MarstekMqttBinding,
+    MqttInsightsService,
+    normalize_mac,
+)
 from astrameter.powermeter import Powermeter
 from astrameter.shelly import Shelly
 from astrameter.version_info import get_git_commit_sha
@@ -118,6 +123,7 @@ async def run_device(
     powermeters: list[tuple[Powermeter, ClientFilter, bool]],
     device_id: str | None = None,
     insights: MqttInsightsService | None = None,
+    marstek_mac: str = "",
 ):
     logger.debug(f"Starting device: {device_type}")
 
@@ -341,11 +347,51 @@ async def run_device(
             device_id or "", device.force_efficiency_rotation
         )
 
+    # Marstek MQTT responder — only wired up when Marstek credentials
+    # yielded a managed MAC (so hame-relay can route the replies back to
+    # the Marstek app) and the feature is enabled.
+    if isinstance(device, CT002) and insights and insights.marstek_mqtt_enabled:
+        if marstek_mac:
+
+            async def _marstek_get_values(
+                _pms: list[tuple[Powermeter, ClientFilter]] = powermeters,
+            ) -> list[float]:
+                chosen: Powermeter | None = next(
+                    (pm for pm, cf in _pms if cf.matches("0.0.0.0")), None
+                )
+                if chosen is None and _pms:
+                    chosen = _pms[0][0]
+                if chosen is None:
+                    return [0.0, 0.0, 0.0]
+                await chosen.wait_for_next_message()
+                vs = await chosen.get_powermeter_watts()
+                return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
+
+            await insights.register_marstek(
+                MarstekMqttBinding(
+                    device_id=device_id or "",
+                    ct_type=device.ct_type,
+                    mac=marstek_mac,
+                    get_values=_marstek_get_values,
+                    wifi_rssi=device.wifi_rssi,
+                )
+            )
+        else:
+            logger.info(
+                "Marstek MQTT responder not wired for %s: no managed MAC "
+                "available. Enable [MARSTEK] with MAILBOX/PASSWORD to use "
+                "this feature, or set MARSTEK_MQTT_ENABLED=false to silence "
+                "this notice.",
+                device_id,
+            )
+
     try:
         await device.wait()
     finally:
         if insights and isinstance(device, CT002):
             insights.unregister_handlers(device_id or "")
+            with contextlib.suppress(Exception):
+                await insights.unregister_marstek(device_id or "")
         try:
             await device.stop()
         except Exception:
@@ -358,7 +404,9 @@ async def async_main(
     device_types: list[str],
     device_ids: list[str],
     skip_test: bool,
+    managed_macs: dict[str, str] | None = None,
 ):
+    managed_macs = managed_macs or {}
     web_server = None
     if cfg.getboolean("GENERAL", "ENABLE_WEB_SERVER", fallback=True):
         logger.info("Starting web server...")
@@ -411,7 +459,15 @@ async def async_main(
 
         await asyncio.gather(
             *(
-                run_device(device_type, cfg, args, powermeters, device_id, insights)
+                run_device(
+                    device_type,
+                    cfg,
+                    args,
+                    powermeters,
+                    device_id,
+                    insights,
+                    managed_macs.get(device_type, ""),
+                )
                 for device_type, device_id in zip(
                     device_types, device_ids, strict=False
                 )
@@ -568,7 +624,11 @@ def main():
 
     _apply_cli_overrides(cfg, args)
 
-    # Optional Marstek cloud registration for managed fake CT devices (sync, before event loop)
+    # Optional Marstek cloud registration for managed fake CT devices (sync, before event loop).
+    # When registration succeeds, the returned MAC is captured per device
+    # type so the Marstek MQTT responder in MQTT Insights uses the same
+    # MAC that hame-relay will route back to the Marstek app.
+    managed_macs: dict[str, str] = {}
     marstek_enabled = cfg.getboolean("MARSTEK", "ENABLE", fallback=False)
     if marstek_enabled:
         mailbox = cfg.get("MARSTEK", "MAILBOX", fallback="")
@@ -592,7 +652,11 @@ def main():
                 for dt in ("ct002", "ct003"):
                     if dt in device_types:
                         any_ct = True
-                        ensure_managed_fake_device(marstek_cfg, dt)
+                        created = ensure_managed_fake_device(marstek_cfg, dt)
+                        if created is not None:
+                            normalized = normalize_mac(str(created.get("mac", "")))
+                            if normalized:
+                                managed_macs[dt] = normalized
                 if any_ct:
                     logger.info(
                         "Managed fake CT registration completed. Fake CT devices appear as offline in the Marstek app CT list (this is expected)."
@@ -640,7 +704,9 @@ def main():
     while True:
         restart_requested = False
         try:
-            asyncio.run(async_main(cfg, args, device_types, device_ids, skip_test))
+            asyncio.run(
+                async_main(cfg, args, device_types, device_ids, skip_test, managed_macs)
+            )
             break  # clean exit
         except KeyboardInterrupt:
             if not restart_requested:

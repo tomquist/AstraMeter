@@ -418,3 +418,9 @@ THROTTLE_INTERVAL = 0
 #HA_DISCOVERY = true
 ## HA discovery prefix (default: homeassistant)
 #HA_DISCOVERY_PREFIX = homeassistant
+## Respond to Marstek CT002/CT003 MQTT polls on this broker (default: true).
+## Combined with hame-relay (https://github.com/tomquist/hame-relay) the
+## emulator's CT readings surface in the Marstek mobile app. Requires a
+## working [MARSTEK] section: the MAC used in the MQTT topics is the
+## managed fake device AstraMeter registers in the Marstek cloud.
+#MARSTEK_MQTT_ENABLED = true

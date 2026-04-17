@@ -732,5 +732,8 @@ def read_mqtt_insights_config(
                 addon_slug=(
                     config.get(section, "ADDON_SLUG", fallback="").strip() or None
                 ),
+                marstek_mqtt_enabled=config.getboolean(
+                    section, "MARSTEK_MQTT_ENABLED", fallback=True
+                ),
             )
     return None

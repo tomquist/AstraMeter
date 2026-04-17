@@ -889,6 +889,9 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `BASE_TOPIC` | `astrameter` | Root topic for all published messages |
 | `HA_DISCOVERY` | `true` | Enable Home Assistant MQTT Device Discovery |
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
+| `MARSTEK_MQTT_ENABLED` | `true` | Respond to Marstek CT002/CT003 MQTT polls on this broker (requires `[MARSTEK]`) |
+
+**Marstek app visibility**: when `[MARSTEK]` credentials are configured, AstraMeter registers a managed fake CT device in the Marstek cloud. With `MARSTEK_MQTT_ENABLED=true` (default) it also answers the CT's MQTT polls on this broker. Combined with [hame-relay](https://github.com/tomquist/hame-relay) bridging the local broker to the Marstek cloud, the emulator's readings then show up as a CT002/CT003 in the Marstek mobile app. Set `MARSTEK_MQTT_ENABLED=false` to keep MQTT Insights but opt out of this responder.
 
 **Published entities** (per CT002 consumer):
 - Grid power (L1/L2/L3/total), charge target (L1/L2/L3), reported power, saturation

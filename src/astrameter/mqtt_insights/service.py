@@ -22,6 +22,14 @@ from .discovery import (
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
+from .marstek_mqtt import (
+    MarstekMqttBinding,
+    app_topics_for,
+    build_response,
+    device_topics_for,
+    is_poll_payload,
+    parse_app_topic,
+)
 
 RECONNECT_DELAY = 5
 QUEUE_MAX_SIZE = 100
@@ -59,6 +67,11 @@ class MqttInsightsConfig:
     ha_discovery: bool = True
     ha_discovery_prefix: str = "homeassistant"
     addon_slug: str | None = None
+    # Respond to Marstek app MQTT polls for CT002/CT003 on the same
+    # broker connection. Combined with hame-relay this surfaces the
+    # emulator in the Marstek app. Default on; requires [MARSTEK]
+    # credentials so that the managed MAC matches the cloud device.
+    marstek_mqtt_enabled: bool = True
 
 
 @dataclass
@@ -84,6 +97,13 @@ class MqttInsightsService:
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
         self._connected = asyncio.Event()
+        # Marstek MQTT responder state — populated via register_marstek().
+        self._marstek_bindings: dict[str, MarstekMqttBinding] = {}
+        self._marstek_lock = asyncio.Lock()
+        self._client: aiomqtt.Client | None = None
+        # Rate-limit per-device get_values failure logging so a broken
+        # powermeter doesn't flood the log at hm2mqtt's poll cadence.
+        self._marstek_get_values_failed: set[str] = set()
 
     # ── Public API (called from device event listeners) ───────────────
 
@@ -141,6 +161,46 @@ class MqttInsightsService:
         self._manual_target_handlers.pop(device_id, None)
         self._auto_target_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
+
+    # ── Marstek MQTT responder ────────────────────────────────────────
+
+    @property
+    def marstek_mqtt_enabled(self) -> bool:
+        return self._config.marstek_mqtt_enabled
+
+    async def register_marstek(self, binding: MarstekMqttBinding) -> None:
+        """Register a CT002/CT003 Marstek MQTT responder for *binding*.
+
+        If already connected, live-subscribes to the App topics; otherwise
+        the ``_run`` loop picks up the new entry on the next (re)connect.
+        """
+        if not self._config.marstek_mqtt_enabled:
+            return
+        async with self._marstek_lock:
+            existing = self._marstek_bindings.get(binding.device_id)
+            if existing is not None and existing.mac != binding.mac:
+                logger.warning(
+                    "Marstek MQTT: re-registering %s with a different MAC (%s → %s)",
+                    binding.device_id,
+                    existing.mac,
+                    binding.mac,
+                )
+            self._marstek_bindings[binding.device_id] = binding
+            client = self._client
+            if client is not None:
+                for topic in app_topics_for(binding):
+                    with contextlib.suppress(aiomqtt.MqttError):
+                        await client.subscribe(topic)
+
+    async def unregister_marstek(self, device_id: str) -> None:
+        async with self._marstek_lock:
+            binding = self._marstek_bindings.pop(device_id, None)
+            self._marstek_get_values_failed.discard(device_id)
+            client = self._client
+            if binding is not None and client is not None:
+                for topic in app_topics_for(binding):
+                    with contextlib.suppress(aiomqtt.MqttError):
+                        await client.unsubscribe(topic)
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -212,13 +272,27 @@ class MqttInsightsService:
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/consumer/+/set")
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/set")
 
+                    # Subscribe to Marstek App topics for every registered
+                    # binding. Store the client so register_marstek() called
+                    # while already connected can live-subscribe too.
+                    if cfg.marstek_mqtt_enabled:
+                        async with self._marstek_lock:
+                            self._client = client
+                            for binding in self._marstek_bindings.values():
+                                for topic in app_topics_for(binding):
+                                    await client.subscribe(topic)
+
                     self._connected.set()
 
-                    # Run publish loop and message listener concurrently
-                    await asyncio.gather(
-                        self._publish_loop(client),
-                        self._listen_commands(client),
-                    )
+                    try:
+                        # Run publish loop and message listener concurrently
+                        await asyncio.gather(
+                            self._publish_loop(client),
+                            self._listen_commands(client),
+                        )
+                    finally:
+                        async with self._marstek_lock:
+                            self._client = None
 
             except asyncio.CancelledError:
                 self._connected.clear()
@@ -473,6 +547,11 @@ class MqttInsightsService:
 
         async for message in client.messages:
             topic_str = str(message.topic)
+            if topic_str.startswith("hame_energy/") or topic_str.startswith(
+                "marstek_energy/"
+            ):
+                await self._handle_marstek_message(client, message)
+                continue
             if not topic_str.startswith(prefix) or not topic_str.endswith(suffix):
                 continue
 
@@ -604,3 +683,49 @@ class MqttInsightsService:
                     logger.exception("Rotation handler error for device %s", device_id)
             else:
                 logger.debug("No rotation handler for device %s", device_id)
+
+    async def _handle_marstek_message(
+        self, client: aiomqtt.Client, message: aiomqtt.Message
+    ) -> None:
+        topic = str(message.topic)
+        parsed = parse_app_topic(topic)
+        if parsed is None:
+            return
+        ct_type, mac = parsed
+        binding = self._find_marstek_binding(ct_type, mac)
+        if binding is None:
+            logger.debug("Marstek MQTT: no binding for %s/%s", ct_type, mac)
+            return
+
+        body = message.payload if isinstance(message.payload, bytes) else b""
+        if not is_poll_payload(body):
+            logger.debug("Marstek MQTT: non-poll payload on %s", topic)
+            return
+
+        try:
+            watts = await binding.get_values()
+        except Exception:
+            if binding.device_id not in self._marstek_get_values_failed:
+                logger.exception(
+                    "Marstek MQTT: get_values failed for %s; suppressing "
+                    "further failures until values recover",
+                    binding.device_id,
+                )
+                self._marstek_get_values_failed.add(binding.device_id)
+            return
+        if binding.device_id in self._marstek_get_values_failed:
+            logger.info("Marstek MQTT: get_values recovered for %s", binding.device_id)
+            self._marstek_get_values_failed.discard(binding.device_id)
+
+        payload = build_response(binding, list(watts))
+        for reply_topic in device_topics_for(binding):
+            with contextlib.suppress(aiomqtt.MqttError):
+                await client.publish(reply_topic, payload=payload, qos=0, retain=False)
+
+    def _find_marstek_binding(
+        self, ct_type: str, mac: str
+    ) -> MarstekMqttBinding | None:
+        for binding in self._marstek_bindings.values():
+            if binding.ct_type == ct_type and binding.mac == mac.lower():
+                return binding
+        return None
