@@ -230,6 +230,7 @@ def config_to_json(config_path: str) -> str:
 
 _PM_COMMON: dict[str, dict[str, object]] = {
     "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
     "POWER_OFFSET": {"type": "float"},
     "POWER_MULTIPLIER": {"type": "float"},
     "NETMASK": {},
@@ -265,6 +266,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "DISABLE_SUM_PHASES": {"type": "boolean"},
         "DISABLE_ABSOLUTE_VALUES": {"type": "boolean"},
         "THROTTLE_INTERVAL": {"type": "float"},
+        "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
         "PID_KP": {"type": "float"},
         "PID_KI": {"type": "float"},
         "PID_KD": {"type": "float"},

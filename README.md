@@ -174,10 +174,20 @@ SKIP_POWERMETER_TEST = False
 # Set to 0 to disable throttling (default). Recommended: 1-3 seconds for slow data sources
 # Can be overridden per powermeter section
 THROTTLE_INTERVAL = 0
+# Briefly wait (up to 2s) for a fresh push from event-driven powermeters
+# (MQTT, Home Assistant, HomeWizard, SMA, ...) before responding to the
+# battery. Set to false to skip the wait and always serve the last-known
+# value — recommended when the underlying meter updates slower than 2s
+# (e.g. P1 smart meter behind Home Assistant) so that the inevitable timeout
+# doesn't add latency to every CT002 response. Default: true.
+# Can be overridden per powermeter section.
+#WAIT_FOR_NEXT_MESSAGE = true
 ```
 
-Per-powermeter options (e.g. in `[TASMOTA]`):
+Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[HOMEASSISTANT]`):
 - **THROTTLE_INTERVAL** — Override global throttling for this powermeter
+- **WAIT_FOR_NEXT_MESSAGE** — Override the global wait-for-fresh-push behaviour
+  for this powermeter (set to `false` to opt out of the wait entirely)
 
 CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **ACTIVE_CONTROL** — When true (default), the emulator smooths the grid reading, splits

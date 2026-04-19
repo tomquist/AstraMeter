@@ -583,7 +583,7 @@ def test_read_all_configs_with_power_transform():
 
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
-    pm, _ = powermeters[0]
+    pm, _, _ = powermeters[0]
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [-50.0]
     assert pm.multipliers == [1.05]
@@ -600,7 +600,7 @@ def test_read_all_configs_with_per_phase_transform():
 
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
-    pm, _ = powermeters[0]
+    pm, _, _ = powermeters[0]
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [-10.0, -20.0, -30.0]
     assert pm.multipliers == [1.05, 1.02, 1.03]
@@ -616,7 +616,7 @@ def test_read_all_configs_offset_only():
 
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
-    pm, _ = powermeters[0]
+    pm, _, _ = powermeters[0]
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [10.0]
     assert pm.multipliers == [1.0]
@@ -632,7 +632,7 @@ def test_read_all_configs_zero_multiplier_accepted():
 
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
-    pm, _ = powermeters[0]
+    pm, _, _ = powermeters[0]
     assert isinstance(pm, TransformedPowermeter)
     assert pm.multipliers == [0.0]
 
@@ -646,5 +646,42 @@ def test_read_all_configs_no_transform_when_not_configured():
 
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
-    pm, _ = powermeters[0]
+    pm, _, _ = powermeters[0]
     assert not isinstance(pm, TransformedPowermeter)
+
+
+def test_read_all_configs_wait_for_next_message_default_true():
+    """No config means waiting is enabled (preserves PR #322 behaviour)."""
+    config = configparser.ConfigParser()
+    config["SCRIPT_1"] = {"COMMAND": 'echo "100"'}
+    powermeters = read_all_powermeter_configs(config)
+    assert len(powermeters) == 1
+    _, _, wait_for_next = powermeters[0]
+    assert wait_for_next is True
+
+
+def test_read_all_configs_wait_for_next_message_global_off():
+    """[GENERAL] WAIT_FOR_NEXT_MESSAGE=false applies to every section."""
+    config = configparser.ConfigParser()
+    config["GENERAL"] = {"WAIT_FOR_NEXT_MESSAGE": "false"}
+    config["SCRIPT_1"] = {"COMMAND": 'echo "100"'}
+    config["SCRIPT_2"] = {"COMMAND": 'echo "200"'}
+    powermeters = read_all_powermeter_configs(config)
+    assert len(powermeters) == 2
+    assert all(wait is False for _, _, wait in powermeters)
+
+
+def test_read_all_configs_wait_for_next_message_section_override():
+    """Per-section WAIT_FOR_NEXT_MESSAGE overrides the global default."""
+    config = configparser.ConfigParser()
+    config["GENERAL"] = {"WAIT_FOR_NEXT_MESSAGE": "true"}
+    config["SCRIPT_1"] = {
+        "COMMAND": 'echo "100"',
+        "WAIT_FOR_NEXT_MESSAGE": "false",
+    }
+    config["SCRIPT_2"] = {"COMMAND": 'echo "200"'}
+    powermeters = read_all_powermeter_configs(config)
+    assert len(powermeters) == 2
+    # Section order is preserved by configparser, so SCRIPT_1 (override=false)
+    # is first and SCRIPT_2 (inherits global true) is second.
+    assert [wait for _, _, wait in powermeters] == [False, True]

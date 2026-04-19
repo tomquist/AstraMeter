@@ -145,10 +145,13 @@ def parse_float_list(value: str, key_name: str, section: str) -> list[float]:
 
 def read_all_powermeter_configs(
     config: configparser.ConfigParser,
-) -> list[tuple[Powermeter, ClientFilter]]:
-    powermeters = []
+) -> list[tuple[Powermeter, ClientFilter, bool]]:
+    powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
     global_throttle_interval = config.getfloat(
         "GENERAL", "THROTTLE_INTERVAL", fallback=0.0
+    )
+    global_wait_for_next_message = config.getboolean(
+        "GENERAL", "WAIT_FOR_NEXT_MESSAGE", fallback=True
     )
     global_pid_kp = config.getfloat("GENERAL", "PID_KP", fallback=0.0)
     global_pid_ki = config.getfloat("GENERAL", "PID_KI", fallback=0.0)
@@ -237,7 +240,10 @@ def read_all_powermeter_configs(
                 )
 
             client_filter = create_client_filter(section, config)
-            powermeters.append((powermeter, client_filter))
+            wait_for_next_message = config.getboolean(
+                section, "WAIT_FOR_NEXT_MESSAGE", fallback=global_wait_for_next_message
+            )
+            powermeters.append((powermeter, client_filter, wait_for_next_message))
     return powermeters
 
 

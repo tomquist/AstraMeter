@@ -33,6 +33,43 @@ def get_ct_section(device_type: str, cfg: configparser.ConfigParser) -> str:
     return section
 
 
+async def read_ct_powermeter(
+    addr: tuple[str, int],
+    powermeters: list[tuple[Powermeter, ClientFilter, bool]],
+) -> list[float] | None:
+    """Pick the powermeter matching *addr* and return up to three phase values.
+
+    Optionally awaits a fresh push (with a 2 s cap) when the matched
+    powermeter has ``WAIT_FOR_NEXT_MESSAGE`` enabled. A timeout there is
+    swallowed so the cached value is still served — `update_readings`
+    callers should never see a stale-meter `TimeoutError`.
+    """
+    powermeter = None
+    wait_for_next = False
+    for pm, client_filter, wait_flag in powermeters:
+        if client_filter.matches(addr[0]):
+            powermeter = pm
+            wait_for_next = wait_flag
+            break
+    if powermeter is None:
+        logger.debug(f"No powermeter found for client {addr[0]}")
+        return None
+    if wait_for_next:
+        try:
+            await powermeter.wait_for_next_message(timeout=2)
+        except TimeoutError:
+            logger.debug(
+                "Powermeter %s produced no fresh message within 2s; "
+                "serving last known value",
+                type(powermeter).__name__,
+            )
+    values = await powermeter.get_powermeter_watts()
+    value1 = values[0] if len(values) > 0 else 0
+    value2 = values[1] if len(values) > 1 else 0
+    value3 = values[2] if len(values) > 2 else 0
+    return [value1, value2, value3]
+
+
 async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
     """Test powermeter configuration with minimal retry logic for edge cases."""
     max_retries = 3
@@ -70,7 +107,7 @@ async def run_device(
     device_type: str,
     cfg: configparser.ConfigParser,
     args: argparse.Namespace,
-    powermeters: list[tuple[Powermeter, ClientFilter]],
+    powermeters: list[tuple[Powermeter, ClientFilter, bool]],
     device_id: str | None = None,
     insights: MqttInsightsService | None = None,
 ):
@@ -203,21 +240,7 @@ async def run_device(
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
-            powermeter = None
-            for pm, client_filter in powermeters:
-                if client_filter.matches(addr[0]):
-                    powermeter = pm
-                    break
-            if powermeter is None:
-                logger.debug(f"No powermeter found for client {addr[0]}")
-                return None
-            await powermeter.wait_for_next_message()
-            values = await powermeter.get_powermeter_watts()
-            value1 = values[0] if len(values) > 0 else 0
-            value2 = values[1] if len(values) > 1 else 0
-            value3 = values[2] if len(values) > 2 else 0
-
-            return [value1, value2, value3]
+            return await read_ct_powermeter(addr, powermeters)
 
         device.before_send = update_readings
 
@@ -336,7 +359,7 @@ async def async_main(
                 await web_server.stop()
             web_server = None
 
-    powermeters: list[tuple[Powermeter, ClientFilter]] = []
+    powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
     insights: MqttInsightsService | None = None
 
     try:
@@ -344,11 +367,11 @@ async def async_main(
         powermeters = read_all_powermeter_configs(cfg)
 
         # Start powermeter lifecycle
-        for pm, _ in powermeters:
+        for pm, _, _ in powermeters:
             await pm.start()
 
         if not skip_test:
-            for powermeter, client_filter in powermeters:
+            for powermeter, client_filter, _ in powermeters:
                 await test_powermeter(powermeter, client_filter)
 
         # MQTT Insights (optional)
@@ -379,7 +402,7 @@ async def async_main(
                 logger.info("MQTT Insights service stopped")
             except Exception:
                 logger.exception("Error stopping MQTT Insights service")
-        for pm, _ in powermeters:
+        for pm, _, _ in powermeters:
             try:
                 await pm.stop()
             except Exception:
