@@ -508,7 +508,7 @@ def create_vzlogger_powermeter(
     return VZLogger(
         config.get(section, "IP", fallback=""),
         config.get(section, "PORT", fallback=""),
-        config.get(section, "UUID", fallback=""),
+        _split_labels(config.get(section, "UUID", fallback="")),
     )
 
 

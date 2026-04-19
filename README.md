@@ -599,6 +599,16 @@ PORT = 8080
 UUID = your-uuid
 ```
 
+For 3-phase meters, provide comma-separated UUIDs (one per phase); phases are
+fetched in parallel:
+
+```ini
+[VZLOGGER]
+IP = 192.168.1.106
+PORT = 8080
+UUID = uuid-l1, uuid-l2, uuid-l3
+```
+
 ### ESPHome
 
 ```ini

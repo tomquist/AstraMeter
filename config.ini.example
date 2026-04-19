@@ -211,6 +211,8 @@ THROTTLE_INTERVAL = 0
 #IP = 192.168.1.106
 #PORT = 8080
 #UUID = your-uuid
+## For 3-phase meters, use comma-separated UUIDs (one per phase):
+#UUID = uuid-l1, uuid-l2, uuid-l3
 ## Per-powermeter throttling override (optional)
 #THROTTLE_INTERVAL = 1
 
