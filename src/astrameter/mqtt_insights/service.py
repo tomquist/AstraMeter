@@ -104,6 +104,10 @@ class MqttInsightsService:
         # Rate-limit per-device get_values failure logging so a broken
         # powermeter doesn't flood the log at hm2mqtt's poll cadence.
         self._marstek_get_values_failed: set[str] = set()
+        # In-flight poll handlers — tracked so one slow powermeter doesn't
+        # block the listener loop, and so we can cancel pending tasks on
+        # reconnect / shutdown.
+        self._marstek_tasks: set[asyncio.Task[None]] = set()
 
     # ── Public API (called from device event listeners) ───────────────
 
@@ -293,6 +297,7 @@ class MqttInsightsService:
                     finally:
                         async with self._marstek_lock:
                             self._client = None
+                        await self._cancel_marstek_tasks()
 
             except asyncio.CancelledError:
                 self._connected.clear()
@@ -687,12 +692,14 @@ class MqttInsightsService:
     async def _handle_marstek_message(
         self, client: aiomqtt.Client, message: aiomqtt.Message
     ) -> None:
+        """Dispatch a poll quickly; offload the response to a task so a
+        slow powermeter can't stall the listener loop."""
         topic = str(message.topic)
         parsed = parse_app_topic(topic)
         if parsed is None:
             return
         ct_type, mac = parsed
-        binding = self._find_marstek_binding(ct_type, mac)
+        binding = await self._find_marstek_binding(ct_type, mac)
         if binding is None:
             logger.debug("Marstek MQTT: no binding for %s/%s", ct_type, mac)
             return
@@ -702,6 +709,13 @@ class MqttInsightsService:
             logger.debug("Marstek MQTT: non-poll payload on %s", topic)
             return
 
+        task = asyncio.create_task(self._serve_marstek_poll(client, binding))
+        self._marstek_tasks.add(task)
+        task.add_done_callback(self._marstek_tasks.discard)
+
+    async def _serve_marstek_poll(
+        self, client: aiomqtt.Client, binding: MarstekMqttBinding
+    ) -> None:
         try:
             watts = await binding.get_values()
         except Exception:
@@ -722,10 +736,23 @@ class MqttInsightsService:
             with contextlib.suppress(aiomqtt.MqttError):
                 await client.publish(reply_topic, payload=payload, qos=0, retain=False)
 
-    def _find_marstek_binding(
+    async def _cancel_marstek_tasks(self) -> None:
+        pending = tuple(self._marstek_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._marstek_tasks.clear()
+
+    async def _find_marstek_binding(
         self, ct_type: str, mac: str
     ) -> MarstekMqttBinding | None:
-        for binding in self._marstek_bindings.values():
-            if binding.ct_type == ct_type and binding.mac == mac.lower():
+        # Snapshot under the lock so a concurrent (un)register can't mutate
+        # the dict mid-scan.
+        async with self._marstek_lock:
+            candidates = tuple(self._marstek_bindings.values())
+        mac_lower = mac.lower()
+        for binding in candidates:
+            if binding.ct_type == ct_type and binding.mac == mac_lower:
                 return binding
         return None

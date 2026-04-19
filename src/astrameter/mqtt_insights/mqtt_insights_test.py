@@ -1058,7 +1058,99 @@ async def test_marstek_get_values_failure_suppressed(mqtt_broker):
             await _collect_messages(client, received, timeout=1)
             assert received == []
         # get_values was called but no reply was published
+        await _poll(lambda: binding.device_id in service._marstek_get_values_failed)
         assert calls == [("called",)]
-        assert binding.device_id in service._marstek_get_values_failed
     finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
+    """A binding registered before start() must get its App topics
+    subscribed on the first connect."""
+    port = mqtt_broker
+    service = _make_service(port)
+    binding, _ = _make_binding()
+    # Register *before* start — the service must pick this up on connect.
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
+            )
+            received = []
+            await _collect_messages(
+                client, received, timeout=5, stop=lambda _: len(received) >= 1
+            )
+        assert len(received) == 1
+        assert received[0].payload.startswith(
+            b"pwr_a=100,pwr_b=200,pwr_c=300,pwr_t=600"
+        )
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker):
+    """A slow get_values for one binding must not block polls for another.
+
+    With the offload-to-task design, the listener stays responsive even
+    while a prior poll handler is still awaiting its powermeter.
+    """
+    port = mqtt_broker
+    service = _make_service(port)
+
+    slow_gate = asyncio.Event()
+
+    async def _slow_values() -> list[float]:
+        # Block until the test explicitly releases this handler.
+        await slow_gate.wait()
+        return [1.0, 2.0, 3.0]
+
+    slow = MarstekMqttBinding(
+        device_id="slow-ct",
+        ct_type="HME-4",
+        mac="02b250111111",
+        get_values=_slow_values,
+        wifi_rssi=-50,
+    )
+    fast, _ = _make_binding(
+        device_id="fast-ct", mac="02b250222222", values=[10.0, 20.0, 30.0]
+    )
+
+    await service.register_marstek(slow)
+    await service.register_marstek(fast)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{fast.mac}/ctrl")
+
+            # Trigger the slow poll first — its handler will block in get_values.
+            await client.publish(
+                f"hame_energy/HME-4/App/{slow.mac}/ctrl", payload=b"cd=1"
+            )
+            # Immediately trigger the fast poll — if the listener were
+            # stalled, we'd never see its reply.
+            await client.publish(
+                f"hame_energy/HME-4/App/{fast.mac}/ctrl", payload=b"cd=1"
+            )
+            received = []
+            await _collect_messages(
+                client, received, timeout=5, stop=lambda _: len(received) >= 1
+            )
+
+        assert len(received) == 1
+        assert received[0].payload.startswith(b"pwr_a=10,pwr_b=20,pwr_c=30,pwr_t=60")
+    finally:
+        slow_gate.set()
         await service.stop()

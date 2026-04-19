@@ -80,15 +80,18 @@ def parse_app_topic(topic: str) -> tuple[str, str] | None:
 
 
 def app_topics_for(binding: MarstekMqttBinding) -> tuple[str, str]:
-    return tuple(  # type: ignore[return-value]
-        t.format(ct_type=binding.ct_type, mac=binding.mac) for t in APP_TOPIC_TEMPLATES
+    old, new = APP_TOPIC_TEMPLATES
+    return (
+        old.format(ct_type=binding.ct_type, mac=binding.mac),
+        new.format(ct_type=binding.ct_type, mac=binding.mac),
     )
 
 
 def device_topics_for(binding: MarstekMqttBinding) -> tuple[str, str]:
-    return tuple(  # type: ignore[return-value]
-        t.format(ct_type=binding.ct_type, mac=binding.mac)
-        for t in DEVICE_TOPIC_TEMPLATES
+    old, new = DEVICE_TOPIC_TEMPLATES
+    return (
+        old.format(ct_type=binding.ct_type, mac=binding.mac),
+        new.format(ct_type=binding.ct_type, mac=binding.mac),
     )
 
 
