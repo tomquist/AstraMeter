@@ -204,17 +204,14 @@ THROTTLE_INTERVAL = 0
 #POWER_OUTPUT_ALIAS = sensor.phase1_output, sensor.phase2_output, sensor.phase3_output
 
 ## Per-powermeter throttling override (optional)
-#THROTTLE_INTERVAL = 1
+## HomeAssistant typically needs 2-3 seconds due to network latency
+#THROTTLE_INTERVAL = 2
 ## Skip the up-to-2s wait for a fresh push from this powermeter and always
 ## serve the last-known value. Useful when the underlying sensor (e.g. P1
 ## smart meter) updates slower than 2s, so the wait would always time out
 ## and the cached value would be served anyway. Defaults to the global
 ## [GENERAL] WAIT_FOR_NEXT_MESSAGE setting (true).
 #WAIT_FOR_NEXT_MESSAGE = false
-
-## Per-powermeter throttling override (optional)
-## HomeAssistant typically needs 2-3 seconds due to network latency
-#THROTTLE_INTERVAL = 2
 
 #[VZLOGGER]
 #IP = 192.168.1.106

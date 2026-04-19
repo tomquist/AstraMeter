@@ -201,14 +201,25 @@ class Shelly:
             logger.debug(f"Parsed request: {json.dumps(request, indent=2)}")
             if isinstance(request.get("params", {}).get("id"), int):
                 powermeter = None
-                for pm, client_filter, _ in self._powermeters:
+                wait_for_next_message = False
+                for pm, client_filter, wait_flag in self._powermeters:
                     if client_filter.matches(addr[0]):
                         powermeter = pm
+                        wait_for_next_message = wait_flag
                         break
                 if powermeter is None:
                     logger.warning(f"No powermeter found for client {addr[0]}")
                     return
 
+                if wait_for_next_message:
+                    try:
+                        await powermeter.wait_for_next_message(timeout=2)
+                    except TimeoutError:
+                        logger.debug(
+                            "Powermeter %s produced no fresh message within 2s; "
+                            "serving last known value",
+                            type(powermeter).__name__,
+                        )
                 powers = await powermeter.get_powermeter_watts()
 
                 if request.get("method") == "EM.GetStatus":
