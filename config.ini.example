@@ -50,20 +50,6 @@ THROTTLE_INTERVAL = 0
 ## relayed and batteries decide on their own.
 #ACTIVE_CONTROL = True
 
-## --- Smoothing ---
-## EMA alpha for the grid reading (0.0-1.0). Higher = tracks load changes faster;
-## lower = filters noise but adds lag that can cause overshoot with multiple batteries.
-## The battery's own ramp rate already filters noise, so 0.9 works well when the
-## powermeter updates at >= 1 Hz. Reduce toward 0.3 for slower powermeters.
-#SMOOTH_TARGET_ALPHA = 0.9
-## When |grid total| is within this band (W), the smoothed target decays toward zero
-## instead of chasing noise. Keeps batteries from hunting around the zero-crossing.
-## 10-30 W is sensible; 0 disables.
-#DEADBAND = 20
-## Maximum watts the smoothed target may change per cycle. Acts as a slew-rate limit.
-## 0 disables (default). Rarely needed at high alpha.
-#MAX_SMOOTH_STEP = 0
-
 ## --- Fair distribution (multi-battery balancing) ---
 ## Adjust each battery's target so they share the load evenly.
 ## Only matters with 2+ batteries.
@@ -149,6 +135,14 @@ THROTTLE_INTERVAL = 0
 ## Per-powermeter throttling override (optional)
 ## Shelly devices are typically fast, so throttling may not be needed
 #THROTTLE_INTERVAL = 0
+## Per-powermeter smoothing (optional, defaults come from [GENERAL])
+## EMA alpha (0.0-1.0). Higher = tracks faster; lower = filters noise.
+## 0.9 works well at >= 1 Hz; reduce toward 0.3 for slower powermeters.
+#SMOOTH_TARGET_ALPHA = 0.9
+## Return zeros when |grid total| < DEADBAND (W). 10-30 W sensible; 0 disables.
+#DEADBAND = 20
+## Max watts the smoothed target may change per cycle (slew-rate limit). 0 disables.
+#MAX_SMOOTH_STEP = 0
 
 #[TASMOTA]
 #IP = 192.168.1.101

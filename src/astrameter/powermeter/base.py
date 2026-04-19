@@ -22,3 +22,6 @@ class Powermeter:
 
     async def stop(self):
         pass
+
+    def reset(self):
+        pass

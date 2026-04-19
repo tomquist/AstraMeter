@@ -4,6 +4,7 @@ import configparser
 import os
 import signal
 from collections import OrderedDict
+from collections.abc import Sequence
 
 from astrameter.config.config_loader import (
     ClientFilter,
@@ -103,6 +104,13 @@ async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
                 ) from e
 
 
+def _reset_all_powermeters(
+    powermeters: Sequence[tuple[Powermeter, object, object]],
+) -> None:
+    for pm, *_ in powermeters:
+        pm.reset()
+
+
 async def run_device(
     device_type: str,
     cfg: configparser.ConfigParser,
@@ -129,10 +137,6 @@ async def run_device(
         if os.environ.get("DEBUG_STATUS", "").lower() in ("1", "true", "yes"):
             debug_status = True
         active_control = cfg.getboolean(ct_section, "ACTIVE_CONTROL", fallback=True)
-        smooth_target_alpha = cfg.getfloat(
-            ct_section, "SMOOTH_TARGET_ALPHA", fallback=0.9
-        )
-        max_smooth_step = cfg.getint(ct_section, "MAX_SMOOTH_STEP", fallback=0)
         fair_distribution = cfg.getboolean(
             ct_section, "FAIR_DISTRIBUTION", fallback=True
         )
@@ -200,8 +204,7 @@ async def run_device(
             if min_efficient_power > 0:
                 extras.append(f"efficiency optimization ({min_efficient_power}W)")
             logger.info(
-                "Active control enabled (alpha=%.2f): smooth target + load split%s",
-                smooth_target_alpha,
+                "Active control enabled: load split%s",
                 " + " + " + ".join(extras) if extras else "",
             )
 
@@ -214,8 +217,6 @@ async def run_device(
             consumer_ttl=consumer_ttl,
             debug_status=debug_status,
             active_control=active_control,
-            smooth_target_alpha=smooth_target_alpha,
-            max_smooth_step=max_smooth_step,
             fair_distribution=fair_distribution,
             balance_gain=balance_gain,
             error_boost_threshold=error_boost_threshold,
@@ -237,6 +238,7 @@ async def run_device(
             efficiency_saturation_threshold=efficiency_saturation_threshold,
             saturation_decay_factor=saturation_decay_factor,
             device_id=device_id or "",
+            reset_fn=lambda: _reset_all_powermeters(powermeters),
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):

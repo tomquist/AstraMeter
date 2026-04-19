@@ -8,20 +8,26 @@ from .iobroker import IoBroker
 from .json_http import JsonHttpPowermeter
 from .modbus import ModbusPowermeter
 from .mqtt import MqttPowermeter
-from .pid import PidPowermeter
 from .script import Script
 from .shelly import Shelly, Shelly1PM, Shelly3EM, Shelly3EMPro, ShellyEM, ShellyPlus1PM
 from .shrdzm import Shrdzm
 from .sma_energy_meter import SmaEnergyMeter
 from .sml import Sml, parse_sml_obis_config
 from .tasmota import Tasmota
-from .throttling import ThrottledPowermeter
 from .tq_em import TQEnergyManager
-from .transform import TransformedPowermeter
 from .vzlogger import VZLogger
+from .wrappers import (
+    DeadbandPowermeter,
+    PidPowermeter,
+    PowermeterWrapper,
+    SmoothedPowermeter,
+    ThrottledPowermeter,
+    TransformedPowermeter,
+)
 
 __all__ = [
     "AmisReader",
+    "DeadbandPowermeter",
     "ESPHome",
     "Emlog",
     "HomeAssistant",
@@ -32,6 +38,7 @@ __all__ = [
     "MqttPowermeter",
     "PidPowermeter",
     "Powermeter",
+    "PowermeterWrapper",
     "Script",
     "Shelly",
     "Shelly1PM",
@@ -42,6 +49,7 @@ __all__ = [
     "Shrdzm",
     "SmaEnergyMeter",
     "Sml",
+    "SmoothedPowermeter",
     "TQEnergyManager",
     "Tasmota",
     "ThrottledPowermeter",

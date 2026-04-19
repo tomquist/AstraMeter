@@ -1,9 +1,10 @@
 from astrameter.config.logger import logger
+from astrameter.powermeter.base import Powermeter
 
-from .base import Powermeter
+from .base import PowermeterWrapper
 
 
-class TransformedPowermeter(Powermeter):
+class TransformedPowermeter(PowermeterWrapper):
     """
     A wrapper around a powermeter that applies a linear transformation
     (multiplier and offset) to each returned power value.
@@ -25,23 +26,11 @@ class TransformedPowermeter(Powermeter):
             raise ValueError("offsets must be a non-empty list")
         if not multipliers:
             raise ValueError("multipliers must be a non-empty list")
-        self.wrapped_powermeter = wrapped_powermeter
+        super().__init__(wrapped_powermeter)
         self.offsets = offsets
         self.multipliers = multipliers
         self._offsets_mismatch_warned = False
         self._multipliers_mismatch_warned = False
-
-    async def wait_for_message(self, timeout=5):
-        return await self.wrapped_powermeter.wait_for_message(timeout)
-
-    async def wait_for_next_message(self, timeout=5):
-        return await self.wrapped_powermeter.wait_for_next_message(timeout)
-
-    async def start(self):
-        await self.wrapped_powermeter.start()
-
-    async def stop(self):
-        await self.wrapped_powermeter.stop()
 
     def _apply_transform(self, values: list[float]) -> list[float]:
         result = []

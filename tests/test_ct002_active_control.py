@@ -19,18 +19,6 @@ class TestActiveControl:
         assert out[1] == 0
         assert out[2] == 0
 
-    def test_smooth_target_ema_smooths_raw_input(self):
-        device = CT002(
-            active_control=True,
-            fair_distribution=False,
-            smooth_target_alpha=0.5,
-        )
-        device._update_consumer_report("a", "A", 0)
-        first = device._compute_smooth_target([400, 0, 0], "a")
-        second = device._compute_smooth_target([100, 0, 0], "a")
-        assert first[0] == 400
-        assert second[0] == 250
-
     def test_active_control_off_passes_through_values(self):
         device = CT002(active_control=False)
         device._update_consumer_report("a", "A", 0)
@@ -53,67 +41,6 @@ class TestActiveControl:
         assert out[0] == 100
         assert out[1] == 100
         assert out[2] == 0
-
-    def test_deadband_decays_smoothed_toward_zero(self):
-        """When raw total is within deadband, smoothed target should decay
-        toward zero rather than holding stale values."""
-        device = CT002(
-            active_control=True,
-            fair_distribution=False,
-            smooth_target_alpha=0.3,
-            deadband=20,
-        )
-        device._update_consumer_report("a", "A", 0)
-        # Set a large initial smoothed target
-        device._compute_smooth_target([500, 0, 0], "a")
-        assert device._smoother.value == 500
-
-        # Feed readings within deadband (grid balanced).
-        # Each call uses a unique value so the sample-dedup sees a fresh reading.
-        for i in range(20):
-            device._compute_smooth_target([i, 0, 0], "a")
-
-        # Smoothed should have decayed significantly toward zero
-        assert device._smoother.value < 10
-
-    def test_deadband_decay_does_not_overshoot_zero(self):
-        """Deadband decay should not make smoothed target cross zero."""
-        device = CT002(
-            active_control=True,
-            fair_distribution=False,
-            smooth_target_alpha=0.5,
-            deadband=20,
-        )
-        device._update_consumer_report("a", "A", 0)
-        device._compute_smooth_target([100, 0, 0], "a")
-        # Decay multiple times with unique values within deadband
-        for i in range(50):
-            device._compute_smooth_target([i % 19, 0, 0], "a")
-        # Should approach zero but stay non-negative
-        assert device._smoother.value >= 0
-
-    def test_smoothing_applies_once_per_sample(self):
-        """Multiple consumers calling with the same meter reading should
-        not compound the smoothing update."""
-        device = CT002(
-            active_control=True,
-            fair_distribution=False,
-            smooth_target_alpha=0.5,
-        )
-        device._update_consumer_report("a", "A", 0)
-        device._update_consumer_report("b", "A", 0)
-        device._compute_smooth_target([400, 0, 0], "a")
-        assert device._smoother.value == 400
-
-        # Two consumers call with the same new reading
-        device._compute_smooth_target([100, 0, 0], "a")
-        after_first = device._smoother.value
-        device._compute_smooth_target([100, 0, 0], "b")
-        after_second = device._smoother.value
-
-        # Smoothing should have applied only once
-        assert after_first == 250  # 400 + 0.5*(100-400)
-        assert after_second == 250  # unchanged
 
 
 class TestFairDistribution:
@@ -1254,7 +1181,6 @@ class TestEfficiencySaturationSwap:
         device = CT002(
             active_control=True,
             fair_distribution=False,
-            smooth_target_alpha=1.0,
             min_efficient_power=150,
             probe_min_power=80,
             efficiency_fade_alpha=1.0,
@@ -1279,7 +1205,6 @@ class TestEfficiencySaturationSwap:
         device = CT002(
             active_control=True,
             fair_distribution=False,
-            smooth_target_alpha=1.0,
             min_efficient_power=150,
             probe_min_power=80,
             efficiency_fade_alpha=1.0,
@@ -1391,7 +1316,6 @@ class TestInactiveConsumers:
 
         # Reactivate bat1
         device.set_consumer_active("bat1", True)
-        device._smoother._last_sample = None  # force re-evaluation
         result = device._compute_smooth_target([400, 0, 0], "bat1")
         assert result[0] == 200  # now split between two
 

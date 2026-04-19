@@ -104,11 +104,11 @@ async def test_integral_accumulates_over_time(mock_powermeter):
     pm = PidPowermeter(mock_powermeter, kp=0.0, ki=1.0, output_max=800.0)
 
     t0 = 1000.0
-    with patch("astrameter.powermeter.pid.time") as mock_time:
+    with patch("astrameter.powermeter.wrappers.pid.time") as mock_time:
         mock_time.monotonic.return_value = t0
         await pm.get_powermeter_watts()  # first call — init state
 
-    with patch("astrameter.powermeter.pid.time") as mock_time:
+    with patch("astrameter.powermeter.wrappers.pid.time") as mock_time:
         mock_time.monotonic.return_value = t0 + 1.0
         r2 = await pm.get_powermeter_watts()
 
@@ -123,11 +123,11 @@ async def test_anti_windup_stops_integration(mock_powermeter):
     pm = PidPowermeter(mock_powermeter, kp=0.0, ki=1.0, output_max=200.0)
 
     t0 = 1000.0
-    with patch("astrameter.powermeter.pid.time") as mock_time:
+    with patch("astrameter.powermeter.wrappers.pid.time") as mock_time:
         mock_time.monotonic.return_value = t0
         await pm.get_powermeter_watts()  # init
 
-    with patch("astrameter.powermeter.pid.time") as mock_time:
+    with patch("astrameter.powermeter.wrappers.pid.time") as mock_time:
         mock_time.monotonic.return_value = t0 + 10.0
         result = await pm.get_powermeter_watts()
 
@@ -147,12 +147,12 @@ async def test_derivative_reacts_to_change(mock_powermeter):
 
     t0 = 1000.0
     mock_powermeter.get_powermeter_watts.return_value = [100.0]
-    with patch("astrameter.powermeter.pid.time") as mock_time:
+    with patch("astrameter.powermeter.wrappers.pid.time") as mock_time:
         mock_time.monotonic.return_value = t0
         await pm.get_powermeter_watts()
 
     mock_powermeter.get_powermeter_watts.return_value = [200.0]
-    with patch("astrameter.powermeter.pid.time") as mock_time:
+    with patch("astrameter.powermeter.wrappers.pid.time") as mock_time:
         mock_time.monotonic.return_value = t0 + 1.0
         result = await pm.get_powermeter_watts()
 

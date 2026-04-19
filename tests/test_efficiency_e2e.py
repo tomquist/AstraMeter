@@ -141,11 +141,11 @@ class _SimHarness:
             ct_mac=ct_mac,
             active_control=True,
             fair_distribution=True,
-            smooth_target_alpha=0.9,
             deadband=5,
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=efficiency_rotation_interval,
             clock=self.clock,
+            reset_fn=None,
             **ct_kwargs,
         )
 

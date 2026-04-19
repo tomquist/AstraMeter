@@ -1,10 +1,12 @@
 import asyncio
 import time
 
-from .base import Powermeter
+from astrameter.powermeter.base import Powermeter
+
+from .base import PowermeterWrapper
 
 
-class PidPowermeter(Powermeter):
+class PidPowermeter(PowermeterWrapper):
     """
     A wrapper around a powermeter that applies a PID (Proportional-Integral-
     Derivative) controller to steer the reported power toward zero (grid balance).
@@ -78,7 +80,7 @@ class PidPowermeter(Powermeter):
                 f"PID mode must be one of {self.VALID_MODES}, got '{mode}'"
             )
 
-        self.wrapped_powermeter = wrapped_powermeter
+        super().__init__(wrapped_powermeter)
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -90,21 +92,6 @@ class PidPowermeter(Powermeter):
         self._prev_error: float | None = None
         self._prev_time: float | None = None
         self._lock = asyncio.Lock()
-
-    async def wait_for_message(self, timeout=5):
-        """Pass through to wrapped powermeter."""
-        return await self.wrapped_powermeter.wait_for_message(timeout)
-
-    async def wait_for_next_message(self, timeout=5):
-        return await self.wrapped_powermeter.wait_for_next_message(timeout)
-
-    async def start(self):
-        """Pass through to wrapped powermeter."""
-        await self.wrapped_powermeter.start()
-
-    async def stop(self):
-        """Pass through to wrapped powermeter."""
-        await self.wrapped_powermeter.stop()
 
     async def get_powermeter_watts(self) -> list[float]:
         """Return PID-adjusted power readings for each phase."""

@@ -10,7 +10,6 @@ from typing import Literal, NamedTuple
 from astrameter.config.logger import logger
 
 from .protocol import parse_int
-from .smoother import TargetSmoother
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
@@ -285,7 +284,7 @@ class LoadBalancer:
         *,
         saturation_enabled: bool = True,
         clock: Callable[[], float] | None = None,
-        smoother: TargetSmoother | None = None,
+        reset_fn: Callable[[], None] | None = None,
     ) -> None:
         self._clock = clock or time.time
         self._cfg = config
@@ -298,10 +297,10 @@ class LoadBalancer:
             clock=self._clock,
         )
         self._saturation_grace_seconds = max(0.0, saturation_grace_seconds)
-        # Optional: the meter smoother is reseeded after every probe
-        # commit / rejection so post-handoff state cannot drag in a
-        # stale pre-probe EMA value.  Injected by CT002 at construction.
-        self._smoother = smoother
+        # Optional: called after every probe commit / rejection so
+        # post-handoff state cannot drag in stale pre-probe EMA values.
+        # Injected by CT002 at construction.
+        self._reset_fn = reset_fn
         self._consumers: dict[str, BalancerConsumerState] = {}
         self._deprioritized: set[str] = set()
         self._priority: list[str] = []
@@ -425,7 +424,7 @@ class LoadBalancer:
             actual,
         )
         self._invalidate_efficiency_cache()
-        # Reseed the meter smoother so the post-handoff balance runs
+        # Reset powermeter wrapper state so the post-handoff balance runs
         # against a fresh baseline instead of an EMA that still carries
         # pre-probe state (including the transient zero-crossing that
         # happens while the candidate ramps up and the backup drops out).
@@ -434,12 +433,12 @@ class LoadBalancer:
         # ``_resolve_probe_state`` which is called from
         # ``_compute_efficiency_deprioritized`` from
         # ``_compute_auto_target`` — the current ``compute_target`` call
-        # has already captured ``smoothed_target`` as a parameter, so
-        # the reseed here does NOT affect the current tick's target.
-        # It only affects the NEXT ``_compute_smooth_target`` call in
-        # :class:`CT002`, which is the desired semantics.
-        if self._smoother is not None:
-            self._smoother.reseed()
+        # has already captured ``grid_total`` as a parameter, so the
+        # reset here does NOT affect the current tick's target.  It only
+        # affects the NEXT powermeter reading, which is the desired
+        # semantics.
+        if self._reset_fn is not None:
+            self._reset_fn()
 
     def _reject_probe(self, now: float, reason: str) -> None:
         probe = self._probe_state
@@ -469,11 +468,11 @@ class LoadBalancer:
         self._invalidate_efficiency_cache()
         # See _commit_probe — same rationale: force a fresh baseline
         # after the probe window ends.
-        if self._smoother is not None:
-            self._smoother.reseed()
+        if self._reset_fn is not None:
+            self._reset_fn()
 
     def _resolve_probe_state(
-        self, reports: dict, now: float, smoothed_target: float
+        self, reports: dict, now: float, grid_total: float
     ) -> bool:
         probe = self._probe_state
         if probe is None:
@@ -488,7 +487,7 @@ class LoadBalancer:
         actual = parse_int(reports.get(probe.candidate_id, {}).get("power", 0))
         desired_total = (
             sum(parse_int(report.get("power", 0)) for report in reports.values())
-            + smoothed_target
+            + grid_total
         )
         probe_success_threshold = self._probe_success_threshold
         demand_sign = 1 if desired_total > 0 else -1 if desired_total < 0 else 0
@@ -536,7 +535,7 @@ class LoadBalancer:
         self,
         consumer_id: str | None,
         reports: dict,
-        smoothed_target: float,
+        grid_total: float,
         eff_part: dict[str, float],
     ) -> list[float] | None:
         probe = self._probe_state
@@ -558,7 +557,7 @@ class LoadBalancer:
 
         desired_total = (
             sum(parse_int(report.get("power", 0)) for report in reports.values())
-            + smoothed_target
+            + grid_total
         )
         state = self._get_consumer(consumer_id)
         probe_actual = parse_int(reports.get(candidate_id, {}).get("power", 0))
@@ -614,8 +613,7 @@ class LoadBalancer:
         consumer_id: str | None,
         consumer_mode: ConsumerMode,
         all_reports: dict,
-        smoothed_target: float,
-        raw_total: float,
+        grid_total: float,
         inactive: frozenset[str],
         manual: frozenset[str],
         sample_id: tuple = (),
@@ -675,9 +673,7 @@ class LoadBalancer:
         # Auto-pool reports (exclude manual consumers)
         reports = {cid: r for cid, r in active_reports.items() if cid not in manual}
 
-        return self._compute_auto_target(
-            consumer_id, reports, smoothed_target, raw_total, sample_id
-        )
+        return self._compute_auto_target(consumer_id, reports, grid_total, sample_id)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -808,8 +804,7 @@ class LoadBalancer:
         self,
         consumer_id: str | None,
         reports: dict,
-        smoothed_target: float,
-        raw_total: float,
+        grid_total: float,
         sample_id: tuple = (),
     ) -> list[float]:
         """Automatic allocation for auto-pool consumers."""
@@ -818,7 +813,7 @@ class LoadBalancer:
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
 
         efficiency_adjustments = self._compute_efficiency_deprioritized(
-            reports, sample_id, smoothed_target
+            reports, sample_id, grid_total
         )
         faded_adjustments = self._fade_efficiency_weights(
             efficiency_adjustments, set(reports.keys())
@@ -826,7 +821,7 @@ class LoadBalancer:
         any_fading = any(0.0 < w < 1.0 for w in faded_adjustments.values())
 
         probe_target = self._compute_probe_target(
-            consumer_id, reports, smoothed_target, eff_part
+            consumer_id, reports, grid_total, eff_part
         )
         if probe_target is not None:
             return probe_target
@@ -842,7 +837,7 @@ class LoadBalancer:
             total_battery = sum(
                 parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
             )
-            demand = total_battery + smoothed_target
+            demand = total_battery + grid_total
             total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             target = desired - reported
@@ -864,9 +859,9 @@ class LoadBalancer:
 
         total_effective = sum(eff_part.values())
         fair_share = (
-            (smoothed_target / total_effective) * eff_part.get(consumer_id, 1.0)
+            (grid_total / total_effective) * eff_part.get(consumer_id, 1.0)
             if consumer_id and consumer_id in reports
-            else smoothed_target / num_consumers
+            else grid_total / num_consumers
         )
 
         cfg = self._cfg
@@ -874,7 +869,6 @@ class LoadBalancer:
             not cfg.fair_distribution
             or consumer_id is None
             or consumer_id not in reports
-            or (cfg.deadband > 0 and abs(raw_total) < cfg.deadband)
         ):
             target = fair_share
         elif consumer_id in eff_part:
@@ -884,8 +878,9 @@ class LoadBalancer:
         else:
             target = fair_share
 
-        # Clamp sign disagreement
-        if (raw_total < 0 and target > 0) or (raw_total > 0 and target < 0):
+        # Clamp sign disagreement: prevent the inverter from acting
+        # against the current grid direction.
+        if (grid_total < 0 and target > 0) or (grid_total > 0 and target < 0):
             target = 0
 
         if consumer_id:
@@ -938,7 +933,7 @@ class LoadBalancer:
     # ------------------------------------------------------------------
 
     def _compute_efficiency_deprioritized(
-        self, reports: dict, sample_id: tuple, smoothed_target: float
+        self, reports: dict, sample_id: tuple, grid_total: float
     ) -> dict[str, float]:
         """Decide which consumers to deprioritize for efficiency."""
         cfg = self._cfg
@@ -964,7 +959,7 @@ class LoadBalancer:
             0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
         )
         previous_active = tuple(self._priority[:prev_slots])
-        probe_resolved = self._resolve_probe_state(reports, now, smoothed_target)
+        probe_resolved = self._resolve_probe_state(reports, now, grid_total)
         probe_active = self._probe_state is not None
 
         # Rotation check BEFORE cache
@@ -1003,7 +998,7 @@ class LoadBalancer:
         total_battery_power = sum(
             parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
         )
-        abs_target = abs(total_battery_power + smoothed_target)
+        abs_target = abs(total_battery_power + grid_total)
         n = len(self._priority)
         per_consumer = abs_target / n
 

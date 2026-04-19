@@ -149,12 +149,12 @@ class _Harness:
             ct_mac=ct_mac,
             active_control=True,
             fair_distribution=True,
-            smooth_target_alpha=0.9,
             deadband=5,
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=efficiency_rotation_interval,
             probe_min_power=20,  # lower so the test's small loads can probe
             clock=self.clock,
+            reset_fn=None,
         )
 
         async def update_readings(_addr, _fields=None, _consumer_id=None):
@@ -365,7 +365,7 @@ class TestProbeLockup:
 
             after = h.battery_powers()
             grid_after = h.grid_total()
-            smoothed = h.ct002._smoother.value
+            smoothed = h.ct002._last_smooth_target
 
             # The real grid is measurably off-balance because the
             # emulator drove the handoff blind.  Accept either sign:
