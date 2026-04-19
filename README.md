@@ -202,6 +202,15 @@ Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[H
 - **DEADBAND** (default 0 = disabled, W) — When the absolute reading is below this
   value, the wrapper emits zeros instead of chasing noise. Keeps batteries from
   hunting around the zero-crossing; 10–30 W is a sensible range.
+- **HAMPEL_WINDOW** (default 0 = disabled) — Rolling window size for
+  median-based outlier rejection. Typical values 5–7. Useful for MQTT/HTTP
+  sources that occasionally emit wild samples; applied after throttling and
+  before EMA smoothing.
+- **HAMPEL_N_SIGMA** (default 3.0) — Rejection threshold in MAD-derived sigmas.
+  Lower values reject more aggressively.
+- **HAMPEL_MIN_THRESHOLD** (default 0, W) — Minimum rejection threshold in
+  watts. Prevents spikes from passing through during long periods of constant
+  readings (the MAD=0 degenerate case); 50 W is a reasonable starting value.
 
 CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **ACTIVE_CONTROL** — When true (default), the emulator smooths the grid reading, splits

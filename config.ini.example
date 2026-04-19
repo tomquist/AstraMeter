@@ -357,6 +357,26 @@ THROTTLE_INTERVAL = 0
 #PID_OUTPUT_MAX = 800
 #PID_MODE = bias
 
+## --- Hampel outlier filter (optional) ---
+## Stateful rolling-median rejection of wild samples (e.g. MQTT/WiFi glitches).
+## Outliers are replaced with the window median; normal samples pass through
+## unchanged.  Disabled by default.
+##
+## When HAMPEL_WINDOW > 0, the wrapper is inserted after throttling and before
+## EMA smoothing.  This is orthogonal to the EMA: Hampel rejects impulse noise,
+## the EMA smooths the cleaned signal.
+##
+## Recommended starting point for flaky HTTP/MQTT sources:
+##   HAMPEL_WINDOW        = 5    # odd sizes recommended; 5–7 works well
+##   HAMPEL_N_SIGMA       = 3.0  # reject beyond ~3σ (MAD-derived)
+##   HAMPEL_MIN_THRESHOLD = 50   # watts; floor for constant-signal (MAD=0) case
+##
+## Parameters can be set globally in [GENERAL] or per powermeter section.
+## Per-section values override the global ones.
+#HAMPEL_WINDOW = 5
+#HAMPEL_N_SIGMA = 3.0
+#HAMPEL_MIN_THRESHOLD = 50
+
 ## --- MQTT Insights (optional) ---
 ## Publishes internal state (grid power, targets, saturation, consumer topology)
 ## to MQTT with Home Assistant Device Discovery support.

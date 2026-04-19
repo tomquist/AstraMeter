@@ -18,6 +18,7 @@ from .tq_em import TQEnergyManager
 from .vzlogger import VZLogger
 from .wrappers import (
     DeadbandPowermeter,
+    HampelPowermeter,
     PidPowermeter,
     PowermeterWrapper,
     SmoothedPowermeter,
@@ -30,6 +31,7 @@ __all__ = [
     "DeadbandPowermeter",
     "ESPHome",
     "Emlog",
+    "HampelPowermeter",
     "HomeAssistant",
     "HomeWizardPowermeter",
     "IoBroker",
