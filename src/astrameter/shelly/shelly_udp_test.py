@@ -22,7 +22,7 @@ async def test_multiple_requests_with_throttling():
     pm = ThrottledPowermeter(dummy, throttle_interval=0.2)
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
 
-    shelly = Shelly([(pm, cf)], udp_port=0, device_id="test")
+    shelly = Shelly([(pm, cf, True)], udp_port=0, device_id="test")
     await shelly.start()
     port = shelly.udp_port
     assert port != 0, "Shelly should have bound to an actual port"

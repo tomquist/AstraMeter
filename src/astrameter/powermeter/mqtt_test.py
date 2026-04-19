@@ -128,20 +128,21 @@ async def test_wait_for_next_message_times_out():
 
 async def test_wait_for_next_message_multi_topic_cold_start():
     pm = _make_pm(topic=["t1", "t2"])
-    # Cold start: no values set, event not set
+    # Cold start: no values set, event not set. Only one of the two topics
+    # publishes during the wait window — wait_for_next_message must return
+    # promptly anyway (any fresh message is enough to consider the reading
+    # refreshed; the multi-phase consistency check belongs to
+    # ``wait_for_message`` / ``get_powermeter_watts``).
 
-    async def _set_staggered():
+    async def _publish_one():
         await asyncio.sleep(0.05)
         pm.values[0] = 100.0
         pm._message_event.set()
-        await asyncio.sleep(0.05)
-        pm.values[1] = 200.0
-        pm._message_event.set()
 
-    task = asyncio.create_task(_set_staggered())
+    task = asyncio.create_task(_publish_one())
     await pm.wait_for_next_message(timeout=2)
     await task
-    assert await pm.get_powermeter_watts() == [100.0, 200.0]
+    assert pm.values == [100.0, None]
 
 
 # ---------------------------------------------------------------------------

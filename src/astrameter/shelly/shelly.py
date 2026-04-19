@@ -35,7 +35,7 @@ class _ShellyProtocol(asyncio.DatagramProtocol):
 class Shelly:
     def __init__(
         self,
-        powermeters: list[tuple[Powermeter, ClientFilter]],
+        powermeters: list[tuple[Powermeter, ClientFilter, bool]],
         udp_port: int,
         device_id,
     ):
@@ -201,7 +201,7 @@ class Shelly:
             logger.debug(f"Parsed request: {json.dumps(request, indent=2)}")
             if isinstance(request.get("params", {}).get("id"), int):
                 powermeter = None
-                for pm, client_filter in self._powermeters:
+                for pm, client_filter, _ in self._powermeters:
                     if client_filter.matches(addr[0]):
                         powermeter = pm
                         break
