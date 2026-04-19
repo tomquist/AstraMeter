@@ -14,6 +14,9 @@ configuration:
   throttle_interval:
     name: Throttling Interval
     description: "Minimum time interval (in seconds) between power meter readings. When set to 0, throttling is disabled for maximum performance. For slower data sources or to prevent control instability, set to 1-3 seconds. Supports decimal values (e.g., 1.5 for 1.5 seconds). Increase this value if you're seeing oscillations or instability with slow data sources."
+  wait_for_next_message:
+    name: Wait For Fresh Home Assistant Reading
+    description: "When enabled (default), the app waits briefly (up to 2 seconds) for Home Assistant to push a fresh value before responding to the battery, keeping control loops on the freshest data. Disable this if your source sensor (e.g. a P1 smart meter) updates slower than 2 seconds — turning it off avoids the needless wait and always serves the last-known value immediately."
   log_level:
     name: Log Level
     description: "Controls the verbosity of log messages. Select 'critical' for only critical errors, 'error' for error messages and above, 'warning' for warnings and above, 'info' for informational messages and above (recommended), or 'debug' for detailed debugging information. Use 'debug' for troubleshooting connection or configuration issues."
