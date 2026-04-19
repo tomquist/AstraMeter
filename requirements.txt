@@ -1,0 +1,6 @@
+requests
+jsonpath-ng
+paho-mqtt
+pymodbus<=3.9.0
+pytest
+
