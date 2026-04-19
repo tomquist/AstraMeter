@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from astrameter.config.logger import logger
+from astrameter.request_dedupe import RequestDeduplicator
 
 from .balancer import (
     SATURATION_GRACE_SECONDS,
@@ -142,7 +143,9 @@ class CT002:
         self._device_id = device_id
         self._consumers: dict[str, Consumer] = {}
         self._info_idx_counter = 0
-        self._last_response_time: dict[tuple, float] = {}
+        self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
+            dedupe_time_window, clock=clock or time.time
+        )
         self._transport = None
         self._protocol: _CT002Protocol | None = None
         self._cleanup_task = None
@@ -301,13 +304,7 @@ class CT002:
             self._call_event_listener(key, {"_removed": True})
             del self._consumers[key]
             self._balancer.remove_consumer(key)
-        stale_addrs = [
-            addr
-            for addr, ts in self._last_response_time.items()
-            if now - ts > self.dedupe_time_window
-        ]
-        for addr in stale_addrs:
-            self._last_response_time.pop(addr, None)
+        self._dedup.purge_older_than(self.consumer_ttl)
 
     def _consumer_mode(self, consumer_id: str | None) -> ConsumerMode:
         if not consumer_id:
@@ -565,13 +562,15 @@ class CT002:
             " in inspection mode" if in_inspection_mode else "",
         )
 
-        # Deduplication check
-        current_time = time.time()
-        last_time = self._last_response_time.get(addr)
-        if last_time and (current_time - last_time) < self.dedupe_time_window:
-            logger.debug("Ignoring request from %s due to dedupe window", addr)
+        # Deduplication check (keyed by consumer id so repeats from the
+        # same battery are suppressed regardless of source UDP port).
+        if not self._dedup.should_process(consumer_id):
+            logger.debug(
+                "Ignoring request from %s (consumer=%s) due to dedupe window",
+                addr,
+                consumer_id,
+            )
             return
-        self._last_response_time[addr] = current_time
 
         meter_dev_type = fields[0] if len(fields) > 0 else ""
         self._update_consumer_report(

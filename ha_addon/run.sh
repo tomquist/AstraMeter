@@ -85,6 +85,9 @@ else
         echo "[GENERAL]"
         echo "DEVICE_TYPE=$(bashio::config 'device_types')"
         echo "THROTTLE_INTERVAL=$(bashio::config 'throttle_interval')"
+        if bashio::config.has_value 'dedupe_time_window'; then
+            echo "DEDUPE_TIME_WINDOW=$(bashio::config 'dedupe_time_window')"
+        fi
         echo "ENABLE_WEB_SERVER=true"
         echo ""
         if [ "$has_ct002" -eq 1 ] && [ "$has_ct003" -eq 1 ]; then
@@ -142,6 +145,15 @@ else
         if bashio::config.has_value 'power_multiplier'; then
             power_multiplier="$(bashio::config 'power_multiplier' | tr -d '\r\n')"
             echo "POWER_MULTIPLIER=$power_multiplier"
+        fi
+        if bashio::config.has_value 'smooth_target_alpha'; then
+            echo "SMOOTH_TARGET_ALPHA=$(bashio::config 'smooth_target_alpha')"
+        fi
+        if bashio::config.has_value 'max_smooth_step'; then
+            echo "MAX_SMOOTH_STEP=$(bashio::config 'max_smooth_step')"
+        fi
+        if bashio::config.has_value 'deadband'; then
+            echo "DEADBAND=$(bashio::config 'deadband')"
         fi
 
         # Fetch this add-on's slug from the supervisor so MQTT discovery can

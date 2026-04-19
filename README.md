@@ -303,7 +303,9 @@ CT_MAC = 001122334455
 UDP_PORT = 12345
 # WiFi RSSI reported to the storage system
 WIFI_RSSI = -50
-# Ignore repeated requests from the same client within this window (seconds)
+# Ignore repeated requests from the same consumer within this window (seconds).
+# Also supported by the Shelly emulator (keyed by battery IP); set it under
+# [GENERAL] to apply regardless of the emulated device type.
 DEDUPE_TIME_WINDOW = 0
 # Forget consumers after this many seconds without updates (multi-consumer support)
 CONSUMER_TTL = 120

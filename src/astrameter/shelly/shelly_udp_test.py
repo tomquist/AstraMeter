@@ -17,6 +17,43 @@ class DummyPowermeter(Powermeter):
         return [1.0]
 
 
+async def test_dedupe_window_drops_rapid_duplicates():
+    dummy = DummyPowermeter()
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+
+    shelly = Shelly(
+        [(dummy, cf, False)],
+        udp_port=0,
+        device_id="test",
+        dedupe_time_window=0.3,
+    )
+    await shelly.start()
+    port = shelly.udp_port
+    try:
+        # First request is answered normally.
+        first = await _send_req(port, 1)
+        assert first == 1
+        calls_after_first = dummy.call_count
+
+        # A second request from the same IP within the window is dropped:
+        # the emulator never responds, so the client times out.
+        try:
+            await _send_req(port, 2, timeout=0.2)
+            raise AssertionError("expected dedup to drop the duplicate request")
+        except TimeoutError:
+            pass
+        # No extra powermeter fetch for the dropped request.
+        assert dummy.call_count == calls_after_first
+
+        # After the dedup window elapses, requests are answered again.
+        await asyncio.sleep(0.4)
+        third = await _send_req(port, 3)
+        assert third == 3
+        assert dummy.call_count == calls_after_first + 1
+    finally:
+        await shelly.stop()
+
+
 async def test_multiple_requests_with_throttling():
     dummy = DummyPowermeter()
     pm = ThrottledPowermeter(dummy, throttle_interval=0.2)
@@ -56,7 +93,7 @@ async def test_multiple_requests_with_throttling():
         await shelly.stop()
 
 
-async def _send_req(port, request_id):
+async def _send_req(port, request_id, timeout=2.0):
     loop = asyncio.get_running_loop()
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: _ClientProtocol(),
@@ -71,7 +108,7 @@ async def _send_req(port, request_id):
             "params": {"id": 0},
         }
         transport.sendto(json.dumps(req).encode(), ("127.0.0.1", port))
-        data = await asyncio.wait_for(protocol.received, timeout=2.0)
+        data = await asyncio.wait_for(protocol.received, timeout=timeout)
         return json.loads(data.decode())["id"]
     finally:
         transport.close()

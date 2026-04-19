@@ -56,5 +56,9 @@ schema:
   log_level: list(critical|error|warning|info|debug)
   power_offset: str?
   power_multiplier: str?
+  dedupe_time_window: float(0,)?
+  smooth_target_alpha: float(0,1)?
+  max_smooth_step: float(0,)?
+  deadband: float(0,)?
   custom_config: str?
   mqtt_uri: str?

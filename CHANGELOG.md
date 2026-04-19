@@ -1,6 +1,7 @@
 # Changelog
 
 ## Next
+- Added `DEDUPE_TIME_WINDOW` support to the Shelly emulator to drop burst-repeat requests from the same battery IP; the value can be set under `[GENERAL]` to apply regardless of which device type is emulated
 - Added opt-in web-based configuration editor (`WEB_CONFIG_ENABLED = True` in `[GENERAL]`) accessible at `http://<host>:52500/config`; supports editing all config sections and keys with type-appropriate inputs, comment preservation, and a Save & Restart button
 - **Breaking:** Rebrand project from "B2500 Meter" to "AstraMeter" (formerly b2500-meter). Package renamed to `astrameter`, CLI commands are now `astrameter` and `astra-sim`. Docker image moved from `ghcr.io/tomquist/b2500-meter` to `ghcr.io/tomquist/astrameter` (the legacy `ghcr.io/tomquist/b2500-meter` image is still published in parallel for backward compatibility). Home Assistant users must update their app repository URL to `https://github.com/tomquist/astrameter#main`.
 - Added CT002/CT003 emulation for steering multiple Marstek storage devices over the Marstek CT UDP protocol, with opt-in efficiency optimization that concentrates power on fewer batteries at low demand and rotates fairly over time (`MIN_EFFICIENT_POWER`, `EFFICIENCY_ROTATION_INTERVAL`, and related tuning options)

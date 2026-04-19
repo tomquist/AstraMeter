@@ -47,3 +47,15 @@ configuration:
   power_multiplier:
     name: Power Multiplier
     description: "Optional. Scales each power value (formula: value * POWER_MULTIPLIER + POWER_OFFSET). Single value (e.g. 1.05) or a comma-separated list (one per phase, e.g. 1.05,1.02,1.03). Use -1 to flip polarity. Leave empty to disable."
+  dedupe_time_window:
+    name: Deduplication Time Window
+    description: "Optional. Seconds during which repeat requests from the same battery are ignored. Applies to both CT002/CT003 (keyed by consumer id) and Shelly (keyed by battery IP) emulators. Set to 0 or leave empty to disable."
+  smooth_target_alpha:
+    name: Smoothing Alpha (EMA)
+    description: "Optional. Exponential moving-average factor in (0, 1] applied to power readings from Home Assistant. Smaller values smooth more heavily (e.g. 0.1 = heavy smoothing, 0.5 = light). Leave empty to disable."
+  max_smooth_step:
+    name: Max Smoothing Step
+    description: "Optional. Caps the maximum watt change per cycle when smoothing is active. Use together with Smoothing Alpha to bound per-step jumps (e.g. 200). Leave empty or 0 for unlimited."
+  deadband:
+    name: Deadband (W)
+    description: "Optional. Readings with absolute value below this threshold are reported as 0 W to stop battery micro-cycling near zero demand (e.g. 5). Leave empty or 0 to disable."

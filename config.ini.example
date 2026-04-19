@@ -26,6 +26,10 @@ THROTTLE_INTERVAL = 0
 # response than a fresh one. Defaults to true.
 # Can be overridden per powermeter section.
 #WAIT_FOR_NEXT_MESSAGE = true
+# Ignore repeated requests from the same emulator client within this window
+# (seconds). Applies to CT002/CT003 (keyed by consumer id) and Shelly (keyed
+# by battery IP). Can be overridden in the [CT002]/[CT003] section. 0 disables.
+#DEDUPE_TIME_WINDOW = 0
 
 #[CT002]
 ## CT type is derived from the emulated device (ct002 -> HME-4, ct003 -> HME-3).
@@ -38,7 +42,8 @@ THROTTLE_INTERVAL = 0
 #UDP_PORT = 12345
 ## WiFi RSSI reported to the storage system
 #WIFI_RSSI = -50
-## Ignore repeated requests from the same client within this window (seconds)
+## Ignore repeated requests from the same consumer within this window (seconds).
+## Overrides the [GENERAL] DEDUPE_TIME_WINDOW for this section.
 #DEDUPE_TIME_WINDOW = 0
 ## Forget consumers after this many seconds without updates (multi-consumer support)
 #CONSUMER_TTL = 120

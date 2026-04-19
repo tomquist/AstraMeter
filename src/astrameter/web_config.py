@@ -267,6 +267,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "DISABLE_ABSOLUTE_VALUES": {"type": "boolean"},
         "THROTTLE_INTERVAL": {"type": "float"},
         "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+        "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
         "PID_KP": {"type": "float"},
         "PID_KI": {"type": "float"},
         "PID_KD": {"type": "float"},
