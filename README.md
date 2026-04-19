@@ -182,6 +182,10 @@ THROTTLE_INTERVAL = 0
 # doesn't add latency to every CT002 response. Default: true.
 # Can be overridden per powermeter section.
 #WAIT_FOR_NEXT_MESSAGE = true
+# Ignore repeated requests from the same emulator client within this window
+# (seconds). Applies to CT002/CT003 (keyed by consumer id) and Shelly (keyed
+# by battery IP). Can be overridden in the [CT002]/[CT003] section. 0 disables.
+#DEDUPE_TIME_WINDOW = 0
 ```
 
 Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[HOMEASSISTANT]`):

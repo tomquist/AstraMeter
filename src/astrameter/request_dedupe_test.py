@@ -58,3 +58,33 @@ def test_purge_drops_stale_entries() -> None:
 def test_purge_on_empty_is_noop() -> None:
     dedup: RequestDeduplicator[str] = RequestDeduplicator(1.0)
     dedup.purge_older_than(10.0)  # should not raise
+
+
+def test_dropped_request_does_not_refresh_timestamp() -> None:
+    # The window is measured from the last *accepted* request. A dropped
+    # repeat within the window must not slide the window forward.
+    clock = FakeClock()
+    dedup: RequestDeduplicator[str] = RequestDeduplicator(1.0, clock=clock)
+    assert dedup.should_process("a") is True  # accepted at t=0.0
+    clock.now = 0.6
+    assert dedup.should_process("a") is False  # dropped; must not refresh
+    # At t=1.05 we're past the original accept (t=0.0) but would still be
+    # within 1.0s of the dropped attempt (t=0.6) if it had refreshed.
+    clock.now = 1.05
+    assert dedup.should_process("a") is True
+
+
+def test_non_finite_window_is_treated_as_disabled() -> None:
+    inf_dedup: RequestDeduplicator[str] = RequestDeduplicator(float("inf"))
+    for _ in range(3):
+        assert inf_dedup.should_process("a") is True
+
+    nan_dedup: RequestDeduplicator[str] = RequestDeduplicator(float("nan"))
+    for _ in range(3):
+        assert nan_dedup.should_process("a") is True
+
+
+def test_negative_window_is_treated_as_disabled() -> None:
+    dedup: RequestDeduplicator[str] = RequestDeduplicator(-5.0)
+    for _ in range(3):
+        assert dedup.should_process("a") is True

@@ -143,6 +143,9 @@ class CT002:
         self._device_id = device_id
         self._consumers: dict[str, Consumer] = {}
         self._info_idx_counter = 0
+        # Use wall-clock (time.time) so the dedup shares a timebase with
+        # _cleanup_consumers' purge; RequestDeduplicator would otherwise
+        # default to time.monotonic and mix timebases across the class.
         self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
             dedupe_time_window, clock=clock or time.time
         )

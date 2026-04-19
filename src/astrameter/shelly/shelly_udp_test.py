@@ -5,6 +5,7 @@ from ipaddress import IPv4Network
 
 from astrameter.config import ClientFilter
 from astrameter.powermeter import Powermeter, ThrottledPowermeter
+from astrameter.request_dedupe import RequestDeduplicator
 from astrameter.shelly.shelly import Shelly
 
 
@@ -17,41 +18,59 @@ class DummyPowermeter(Powermeter):
         return [1.0]
 
 
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _FakeTransport:
+    def __init__(self) -> None:
+        self.sent: list[tuple[bytes, tuple]] = []
+
+    def sendto(self, data: bytes, addr: tuple) -> None:
+        self.sent.append((data, addr))
+
+
 async def test_dedupe_window_drops_rapid_duplicates():
+    # Drive the handler directly with a fake transport and a fake clock so
+    # the test is independent of wall-clock time and real UDP delivery.
     dummy = DummyPowermeter()
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-
     shelly = Shelly(
         [(dummy, cf, False)],
         udp_port=0,
         device_id="test",
-        dedupe_time_window=0.3,
+        dedupe_time_window=10.0,
     )
-    await shelly.start()
-    port = shelly.udp_port
-    try:
-        # First request is answered normally.
-        first = await _send_req(port, 1)
-        assert first == 1
-        calls_after_first = dummy.call_count
+    clock = _FakeClock()
+    shelly._dedup = RequestDeduplicator(10.0, clock=clock)
 
-        # A second request from the same IP within the window is dropped:
-        # the emulator never responds, so the client times out.
-        try:
-            await _send_req(port, 2, timeout=0.2)
-            raise AssertionError("expected dedup to drop the duplicate request")
-        except TimeoutError:
-            pass
-        # No extra powermeter fetch for the dropped request.
-        assert dummy.call_count == calls_after_first
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+    addr = ("127.0.0.1", 54321)
 
-        # After the dedup window elapses, requests are answered again.
-        await asyncio.sleep(0.4)
-        third = await _send_req(port, 3)
-        assert third == 3
-        assert dummy.call_count == calls_after_first + 1
-    finally:
-        await shelly.stop()
+    # First request: accepted and a response is sent.
+    await shelly._handle_request(transport, req, addr)
+    assert len(transport.sent) == 1
+    assert dummy.call_count == 1
+
+    # Second request within the window: dropped. Same source IP, different
+    # port (mirroring real Shelly batteries which use ephemeral ports).
+    clock.now = 1.0
+    await shelly._handle_request(transport, req, ("127.0.0.1", 54322))
+    assert len(transport.sent) == 1
+    assert dummy.call_count == 1
+
+    # After the window elapses, requests are answered again.
+    clock.now = 11.5
+    await shelly._handle_request(transport, req, ("127.0.0.1", 54323))
+    assert len(transport.sent) == 2
+    assert dummy.call_count == 2
 
 
 async def test_multiple_requests_with_throttling():

@@ -51,7 +51,10 @@ class Shelly:
         self._inactive_batteries: set[str] = set()
         self._stopped = asyncio.Event()
         self._inactive_check_task = None
-        self._dedup: RequestDeduplicator[str] = RequestDeduplicator(dedupe_time_window)
+        self._dedupe_time_window = max(0.0, dedupe_time_window)
+        self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
+            self._dedupe_time_window
+        )
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
 
     def _calculate_derived_values(self, power):
@@ -277,7 +280,12 @@ class Shelly:
             while True:
                 await asyncio.sleep(1.0)
                 self._log_inactive_batteries()
-                self._dedup.purge_older_than(BATTERY_INACTIVE_TIMEOUT_SECONDS)
+                # Keep dedup entries until they've aged past both the
+                # inactive-battery horizon and the configured window, so
+                # windows greater than 120s are still honored.
+                self._dedup.purge_older_than(
+                    max(BATTERY_INACTIVE_TIMEOUT_SECONDS, self._dedupe_time_window)
+                )
         except asyncio.CancelledError:
             pass
 

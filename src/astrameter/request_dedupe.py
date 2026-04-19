@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Hashable
 from typing import Generic, TypeVar
@@ -13,6 +14,14 @@ class RequestDeduplicator(Generic[K]):
     Callers pick the key (e.g. a battery IP for the Shelly emulator, a
     consumer id for CT002). A window of 0 disables dedup and every
     request is allowed through.
+
+    Semantics:
+    - ``should_process`` measures the window from the last **accepted**
+      request. Dropped requests do not refresh the timestamp, so the
+      next acceptance window stays aligned to the original.
+    - The internal dict grows unboundedly until ``purge_older_than`` is
+      called. Callers are expected to schedule periodic purges (e.g.
+      alongside their own TTL sweeps) to keep memory bounded.
     """
 
     def __init__(
@@ -20,7 +29,10 @@ class RequestDeduplicator(Generic[K]):
         window_seconds: float,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        self._window = max(0.0, window_seconds)
+        if not math.isfinite(window_seconds) or window_seconds <= 0.0:
+            self._window = 0.0
+        else:
+            self._window = window_seconds
         self._clock = clock or time.monotonic
         self._last: dict[K, float] = {}
 
