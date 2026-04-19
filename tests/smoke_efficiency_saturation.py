@@ -109,13 +109,13 @@ class SmokeHarness:
             ct_mac=ct_mac,
             active_control=True,
             fair_distribution=True,
-            smooth_target_alpha=0.9,
             deadband=5,
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=scaled_rotation,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
             saturation_decay_factor=saturation_decay_factor,
             consumer_ttl=120 / time_scale,
+            reset_fn=None,
             **ct_kwargs,
         )
 

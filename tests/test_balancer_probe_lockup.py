@@ -9,15 +9,11 @@ snaps from 95 W → 0 W one tick later and is pinned at 0 W indefinitely
 (visible in the log for ~1.5 hours until manual restart).  The grid
 drifts ~97 W uncompensated for the entire window.
 
-The root cause is exercised here at two levels:
-
-1. A *unit-level* repro that drives :class:`LoadBalancer.compute_target`
-   with the exact report sequence from the log (two phase-B consumers,
-   scripted power outputs and meter readings) and asserts the active
-   battery receives a reasonable target after the handoff.
-
-2. A *smoother-level* repro in ``test_smoother.py`` covering the
-   ``sample_id`` dedup that fires even when ``raw_total`` has changed.
+The root cause is exercised here via a *unit-level* repro that drives
+:class:`LoadBalancer.compute_target` with the exact report sequence from
+the log (two phase-B consumers, scripted power outputs and meter
+readings) and asserts the active battery receives a reasonable target
+after the handoff.
 """
 
 from __future__ import annotations
