@@ -303,6 +303,22 @@ THROTTLE_INTERVAL = 0
 ## Per-powermeter throttling override (optional)
 #THROTTLE_INTERVAL = 0
 
+#[ENVOY]
+## Enphase IQ Gateway (Envoy) via local HTTPS API
+## Reads grid power from /production.json?details=1 (net-consumption).
+## Auto-detects single- vs three-phase from the response.
+#HOST = 192.168.1.120
+## Option A: long-lived JWT token from https://entrez.enphaseenergy.com/
+#TOKEN = eyJ...
+## Option B: let AstraMeter obtain a token via the Enphase Enlighten cloud
+##   (auto-refreshes on 401; not compatible with MFA-enabled Enlighten accounts)
+#USERNAME = you@example.com
+#PASSWORD = your-enphase-password
+#SERIAL = 123456789012
+## Envoy uses a self-signed certificate; verification is disabled by default.
+## Affects only the local Envoy connection — cloud requests always verify TLS.
+#VERIFY_SSL = False
+
 #[SMA_ENERGY_METER]
 ## SMA Energy Meter / Sunny Home Manager via Speedwire multicast
 ## Listens for UDP multicast broadcasts and reports per-phase power (L1, L2, L3)

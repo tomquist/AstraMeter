@@ -740,6 +740,31 @@ SERIAL = your_device_serial
 # THROTTLE_INTERVAL = 0
 ```
 
+### Enphase Envoy (IQ Gateway)
+
+Reads grid power from an [Enphase IQ Gateway / Envoy](https://enphase.com/installers/microinverters/iq-gateway) over the local HTTPS API (`/production.json?details=1`). The reading comes from the `net-consumption` measurement (positive = grid import, negative = export). Per-phase readings are reported automatically when the gateway exposes them; otherwise the aggregate single-phase value is used. Requires consumption CTs installed on the Envoy.
+
+```ini
+[ENVOY]
+HOST = 192.168.1.120
+# Option A: pre-obtained long-lived JWT (recommended)
+TOKEN = eyJ...
+# Option B: let AstraMeter fetch and refresh tokens via the Enphase Enlighten cloud
+# USERNAME = you@example.com
+# PASSWORD = your-enphase-password
+# SERIAL = 123456789012
+# Envoy ships a self-signed certificate; verification is disabled by default.
+# VERIFY_SSL = False
+```
+
+**Token acquisition.** Generate a long-lived (~1 year) static token at <https://entrez.enphaseenergy.com/>. Alternatively, configure `USERNAME`/`PASSWORD`/`SERIAL` and AstraMeter will fetch a token on first use and refresh it automatically when the Envoy returns 401.
+
+**TLS.** `VERIFY_SSL` defaults to `False` because Enphase does not publish a CA bundle for the IQ Gateway's self-signed certificate. This option **only affects the local Envoy connection** — Enphase Enlighten cloud requests (login and token endpoints) always verify TLS using the system trust store, regardless of this setting.
+
+**MFA.** The auto-fetch flow does not support Enlighten accounts with multi-factor authentication enabled. Those users must supply a static `TOKEN`.
+
+**CT direction.** If your readings have the wrong sign (export shows as import or vice versa), one or more CTs are mounted backwards. Flip them in software with the global `POWER_MULTIPLIER = -1` (or per-phase, e.g. `POWER_MULTIPLIER = 1, -1, 1`).
+
 ### SMA Energy Meter
 
 Reads an [SMA Energy Meter](https://www.sma.de/) (EM 1.0/2.0) or Sunny Home Manager via the **Speedwire** multicast protocol (UDP). The listener joins the default multicast group and reports per-phase active power (L1, L2, L3). Use `SERIAL_NUMBER = 0` to auto-detect the first meter seen on the network, or set the device serial to pin a specific unit. Like other UDP-based features, this requires the host to receive multicast traffic (use Docker host networking or equivalent).

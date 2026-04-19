@@ -13,6 +13,7 @@ from astrameter.config.logger import logger
 from astrameter.powermeter import (
     AmisReader,
     Emlog,
+    Envoy,
     ESPHome,
     HomeAssistant,
     HomeWizardPowermeter,
@@ -58,6 +59,7 @@ MODBUS_SECTION = "MODBUS"
 JSON_HTTP_SECTION = "JSON_HTTP"
 TQ_EM_SECTION = "TQ_EM"
 HOMEWIZARD_SECTION = "HOMEWIZARD"
+ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
@@ -379,6 +381,8 @@ def create_powermeter(
         return create_json_http_powermeter(section, config)
     elif section.startswith(HOMEWIZARD_SECTION):
         return create_homewizard_powermeter(section, config)
+    elif section.startswith(ENVOY_SECTION):
+        return create_envoy_powermeter(section, config)
     elif section.startswith(SMA_ENERGY_METER_SECTION):
         return create_sma_energy_meter_powermeter(section, config)
     elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
@@ -658,6 +662,19 @@ def create_homewizard_powermeter(
         config.get(section, "TOKEN", fallback=""),
         config.get(section, "SERIAL", fallback=""),
         verify_ssl=config.getboolean(section, "VERIFY_SSL", fallback=True),
+    )
+
+
+def create_envoy_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    return Envoy(
+        host=config.get(section, "HOST", fallback=""),
+        token=config.get(section, "TOKEN", fallback=""),
+        username=config.get(section, "USERNAME", fallback=""),
+        password=config.get(section, "PASSWORD", fallback=""),
+        serial=config.get(section, "SERIAL", fallback=""),
+        verify_ssl=config.getboolean(section, "VERIFY_SSL", fallback=False),
     )
 
 

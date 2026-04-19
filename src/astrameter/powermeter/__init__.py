@@ -1,6 +1,7 @@
 from .amisreader import AmisReader
 from .base import Powermeter
 from .emlog import Emlog
+from .envoy import Envoy
 from .esphome import ESPHome
 from .homeassistant import HomeAssistant
 from .homewizard import HomeWizardPowermeter
@@ -31,6 +32,7 @@ __all__ = [
     "DeadbandPowermeter",
     "ESPHome",
     "Emlog",
+    "Envoy",
     "HampelPowermeter",
     "HomeAssistant",
     "HomeWizardPowermeter",
