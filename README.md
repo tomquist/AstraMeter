@@ -188,27 +188,25 @@ THROTTLE_INTERVAL = 0
 #DEDUPE_TIME_WINDOW = 0
 ```
 
-Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[HOMEASSISTANT]`):
+Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[HOMEASSISTANT]`, or globally under `[GENERAL]`):
 - **THROTTLE_INTERVAL** — Override global throttling for this powermeter
 - **WAIT_FOR_NEXT_MESSAGE** — Override the global wait-for-fresh-push behaviour
   for this powermeter (set to `false` to opt out of the wait entirely)
+- **SMOOTH_TARGET_ALPHA** (default 0 = disabled) — EMA factor for the powermeter
+  reading in (0, 1]. Higher values track load changes faster; lower values filter
+  noise but add lag. Values close to 1.0 work well when the powermeter updates at
+  ≥ 1 Hz; reduce toward 0.3 if it updates significantly slower than 1 Hz.
+- **MAX_SMOOTH_STEP** (default 0 = unlimited) — Maximum watts the smoothed reading
+  may change per request cycle when `SMOOTH_TARGET_ALPHA` is active. Acts as a
+  slew-rate limit.
+- **DEADBAND** (default 0 = disabled, W) — When the absolute reading is below this
+  value, the wrapper emits zeros instead of chasing noise. Keeps batteries from
+  hunting around the zero-crossing; 10–30 W is a sensible range.
 
 CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **ACTIVE_CONTROL** — When true (default), the emulator smooths the grid reading, splits
   the target across batteries, and balances their load.
   When false, the emulator relays raw meter values and batteries decide on their own.
-
-*Smoothing — how fast the emulator tracks grid changes:*
-- **SMOOTH_TARGET_ALPHA** (default 0.9) — EMA factor for the grid reading. Higher values
-  track load changes faster; lower values filter noise but add lag. The battery's own ramp
-  rate already filters noise, so values close to 1.0 work well when the powermeter updates
-  at ≥ 1 Hz. Reduce toward 0.3 if your powermeter updates significantly slower than 1 Hz
-  (higher lag in readings needs heavier smoothing to avoid oscillation).
-- **DEADBAND** (default 20 W) — When the grid total is within ± this value, the smoothed
-  target decays toward zero instead of chasing noise. Keeps batteries from hunting around
-  the zero-crossing. 10–30 W is a sensible range; set to 0 to disable.
-- **MAX_SMOOTH_STEP** (default 0 = unlimited) — Maximum watts the smoothed target may
-  change per request cycle. Acts as a slew-rate limit. Rarely needed at high alpha.
 
 *Fair distribution — balancing load across multiple batteries:*
 - **FAIR_DISTRIBUTION** (default true) — Adjust each battery's target so they share the

@@ -149,7 +149,6 @@ class _Harness:
             ct_mac=ct_mac,
             active_control=True,
             fair_distribution=True,
-            deadband=5,
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=efficiency_rotation_interval,
             probe_min_power=20,  # lower so the test's small loads can probe

@@ -52,7 +52,6 @@ class TestFairDistribution:
             fair_distribution=True,
             balance_gain=0.3,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -67,7 +66,6 @@ class TestFairDistribution:
             fair_distribution=True,
             balance_gain=0.3,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -93,7 +91,6 @@ class TestFairDistribution:
             fair_distribution=True,
             balance_gain=0,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -111,7 +108,6 @@ class TestFairDistribution:
             error_boost_threshold=100,
             error_boost_max=1.0,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -129,7 +125,6 @@ class TestFairDistribution:
             balance_gain=0.3,
             error_boost_threshold=0,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -162,7 +157,6 @@ class TestFairDistribution:
             error_reduce_threshold=0,
             error_boost_threshold=0,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -177,7 +171,6 @@ class TestFairDistribution:
             fair_distribution=True,
             balance_gain=0.3,
             balance_deadband=25,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=0,
         )
@@ -192,7 +185,6 @@ class TestFairDistribution:
             fair_distribution=True,
             balance_gain=0.5,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=50,
             max_target_step=0,
         )
@@ -207,7 +199,6 @@ class TestFairDistribution:
             fair_distribution=True,
             balance_gain=0.5,
             balance_deadband=0,
-            deadband=0,
             max_correction_per_step=0,
             max_target_step=100,
         )
@@ -1185,7 +1176,6 @@ class TestEfficiencySaturationSwap:
             probe_min_power=80,
             efficiency_fade_alpha=1.0,
             efficiency_rotation_interval=10,
-            deadband=0,
         )
         device._update_consumer_report("a", "A", 200)
         device._update_consumer_report("b", "A", 0)
@@ -1209,7 +1199,6 @@ class TestEfficiencySaturationSwap:
             probe_min_power=80,
             efficiency_fade_alpha=1.0,
             efficiency_rotation_interval=10,
-            deadband=0,
         )
         device._update_consumer_report("a", "A", 200)
         device._update_consumer_report("b", "A", 40)

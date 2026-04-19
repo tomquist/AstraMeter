@@ -109,7 +109,6 @@ class SmokeHarness:
             ct_mac=ct_mac,
             active_control=True,
             fair_distribution=True,
-            deadband=5,
             min_efficient_power=min_efficient_power,
             efficiency_rotation_interval=scaled_rotation,
             efficiency_saturation_threshold=efficiency_saturation_threshold,

@@ -153,7 +153,6 @@ async def run_device(
             ct_section, "ERROR_REDUCE_THRESHOLD", fallback=20
         )
         balance_deadband = cfg.getint(ct_section, "BALANCE_DEADBAND", fallback=15)
-        deadband = cfg.getint(ct_section, "DEADBAND", fallback=20)
         max_correction_per_step = cfg.getint(
             ct_section, "MAX_CORRECTION_PER_STEP", fallback=80
         )
@@ -227,7 +226,6 @@ async def run_device(
             error_boost_max=error_boost_max,
             error_reduce_threshold=error_reduce_threshold,
             balance_deadband=balance_deadband,
-            deadband=deadband,
             max_correction_per_step=max_correction_per_step,
             max_target_step=max_target_step,
             saturation_detection=saturation_detection,

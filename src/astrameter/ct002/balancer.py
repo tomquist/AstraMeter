@@ -53,7 +53,6 @@ class BalancerConfig:
     error_reduce_threshold: float = 20
     max_correction_per_step: float = 80
     max_target_step: float = 0
-    deadband: float = 20
     min_efficient_power: float = 0
     probe_min_power: float = 80
     efficiency_rotation_interval: float = 900
@@ -74,7 +73,6 @@ class BalancerConfig:
         _clamp("error_reduce_threshold", 0, float("inf"))
         _clamp("max_correction_per_step", 0, float("inf"))
         _clamp("max_target_step", 0, float("inf"))
-        _clamp("deadband", 0, float("inf"))
         _clamp("min_efficient_power", 0, float("inf"))
         _clamp("probe_min_power", 0, float("inf"))
         _clamp("efficiency_rotation_interval", 1, float("inf"))

@@ -60,7 +60,6 @@ def _make_balancer(
             error_reduce_threshold=20,
             max_correction_per_step=80,
             max_target_step=0,
-            deadband=20,
             min_efficient_power=50,
             probe_min_power=80,
             efficiency_rotation_interval=1800,
