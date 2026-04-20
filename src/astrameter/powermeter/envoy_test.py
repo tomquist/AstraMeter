@@ -222,3 +222,84 @@ def test_build_ssl_context_verify_false() -> None:
     ctx = envoy_module._build_ssl_context(verify_ssl=False)
     assert ctx.verify_mode == ssl.CERT_NONE
     assert ctx.check_hostname is False
+
+
+# Malformed line entries produce descriptive ValueErrors instead of raw
+# KeyError/TypeError.
+async def test_malformed_line_entry_raises() -> None:
+    envoy = _make_envoy()
+    envoy._session = _mock_session(
+        {
+            "consumption": [
+                {
+                    "measurementType": "net-consumption",
+                    "wNow": 0.0,
+                    "lines": [{"wNow": 100.0}, "oops", {"wNow": 300.0}],
+                }
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="malformed net-consumption line"):
+        await envoy.get_powermeter_watts()
+
+
+async def test_non_numeric_line_wnow_raises() -> None:
+    envoy = _make_envoy()
+    envoy._session = _mock_session(
+        {
+            "consumption": [
+                {
+                    "measurementType": "net-consumption",
+                    "wNow": 0.0,
+                    "lines": [{"wNow": "not-a-number"}],
+                }
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="non-numeric 'wNow'"):
+        await envoy.get_powermeter_watts()
+
+
+# Lifecycle: operations before start() raise RuntimeError (not AssertionError,
+# so the check survives python -O).
+async def test_get_without_start_raises_runtime_error() -> None:
+    envoy = _make_envoy()
+    with pytest.raises(RuntimeError, match="not started"):
+        await envoy.get_powermeter_watts()
+
+
+# Thundering-herd guard: if another coroutine already refreshed the token while
+# we were awaiting the 401 response, skip our own refresh and just retry.
+async def test_401_skips_refresh_if_token_changed(monkeypatch) -> None:
+    obtain = AsyncMock(return_value="should-not-be-used")
+    monkeypatch.setattr(envoy_module, "_obtain_token", obtain)
+    envoy = _make_envoy(
+        token="expired", username="u@example.com", password="pw", serial="123"
+    )
+
+    calls = iter(
+        [
+            _mock_response(raise_status=401),
+            _mock_response(SAMPLE_LINES_RESPONSE),
+        ]
+    )
+
+    def fake_get(*_args, **_kwargs):
+        resp = next(calls)
+        if resp.raise_for_status.side_effect is not None:
+            # Simulate another coroutine having refreshed between the 401
+            # being returned and our except handler running.
+            envoy._token = "already-refreshed"
+        return _ctx(resp)
+
+    session = MagicMock()
+    session.get.side_effect = fake_get
+    envoy._session = session
+    envoy._cloud_session = MagicMock()
+
+    result = await envoy.get_powermeter_watts()
+    assert result == [-100.0, -80.0, -120.0]
+    obtain.assert_not_awaited()
+    # Second call uses the token another coroutine already put in place.
+    second_headers = session.get.call_args_list[1].kwargs["headers"]
+    assert second_headers["Authorization"] == "Bearer already-refreshed"

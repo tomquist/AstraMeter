@@ -132,20 +132,23 @@ class Envoy(Powermeter):
         async with self._token_lock:
             if self._token:
                 return
-            assert self._cloud_session is not None
+            if self._cloud_session is None:
+                raise RuntimeError("Cloud session not started; call start() first")
             self._token = await _obtain_token(
                 self._cloud_session, self._username, self._password, self._serial
             )
 
     async def _refresh_token(self) -> None:
         async with self._token_lock:
-            assert self._cloud_session is not None
+            if self._cloud_session is None:
+                raise RuntimeError("Cloud session not started; call start() first")
             self._token = await _obtain_token(
                 self._cloud_session, self._username, self._password, self._serial
             )
 
     async def _get_production(self) -> dict[str, Any]:
-        assert self._session is not None
+        if self._session is None:
+            raise RuntimeError("Session not started; call start() first")
         url = f"https://{self.host}/production.json?details=1"
         headers = {"Authorization": f"Bearer {self._token}"}
         async with self._session.get(url, headers=headers) as resp:
@@ -155,13 +158,17 @@ class Envoy(Powermeter):
 
     async def _fetch_production(self) -> dict[str, Any]:
         await self._ensure_token()
+        old_token = self._token
         try:
             return await self._get_production()
         except ClientResponseError as e:
             if e.status != 401 or not self._has_credentials:
                 raise
-            logger.info("Envoy: token rejected (401), refreshing")
-            await self._refresh_token()
+            # If another coroutine already refreshed while we were awaiting,
+            # skip our own refresh and retry with the fresh token.
+            if self._token == old_token:
+                logger.info("Envoy: token rejected (401), refreshing")
+                await self._refresh_token()
             return await self._get_production()
 
     async def get_powermeter_watts(self) -> list[float]:
@@ -189,5 +196,23 @@ class Envoy(Powermeter):
 
         lines = entry.get("lines")
         if isinstance(lines, list) and lines:
-            return [float(line["wNow"]) for line in lines[:3]]
-        return [float(entry["wNow"])]
+            values: list[float] = []
+            for i, line in enumerate(lines[:3]):
+                if not isinstance(line, dict) or "wNow" not in line:
+                    raise ValueError(
+                        f"Envoy: malformed net-consumption line entry at index {i}"
+                    )
+                try:
+                    values.append(float(line["wNow"]))
+                except (TypeError, ValueError) as err:
+                    raise ValueError(
+                        f"Envoy: non-numeric 'wNow' in net-consumption line at index {i}"
+                    ) from err
+            return values
+
+        if "wNow" not in entry:
+            raise ValueError("Envoy: net-consumption entry missing 'wNow'")
+        try:
+            return [float(entry["wNow"])]
+        except (TypeError, ValueError) as err:
+            raise ValueError("Envoy: non-numeric 'wNow' in net-consumption") from err
