@@ -450,13 +450,14 @@ class LoadBalancer:
         self._clear_consumer_grace(probe.candidate_id)
         self._clear_post_probe_fade()
         remaining = [
-            cid for cid in self._priority if cid not in probe.restore_active_ids
+            cid
+            for cid in self._priority
+            if cid not in probe.restore_active_ids and cid != probe.candidate_id
         ]
-        self._priority = list(probe.restore_active_ids) + [
-            cid for cid in remaining if cid not in probe.restore_active_ids
-        ]
+        self._priority = (
+            list(probe.restore_active_ids) + remaining + [probe.candidate_id]
+        )
         self._probe_state = None
-        self._last_rotation = now
         logger.info(
             "Efficiency: probe rejected for %s (%s), restoring backups %s",
             probe.candidate_id[:16],
