@@ -331,7 +331,7 @@ class CT002:
         mode = self._consumer_mode(consumer_id)
 
         reports = {
-            cid: {"phase": c.phase, "power": c.power}
+            cid: {"phase": c.phase, "power": c.power, "device_type": c.device_type}
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }

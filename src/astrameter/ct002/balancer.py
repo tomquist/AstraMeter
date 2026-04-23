@@ -35,6 +35,24 @@ SATURATION_REFERENCE_DT = 1.0
 # rather than dosing the EMA with a huge rise or decay step.
 SATURATION_LONG_GAP_SECONDS = 30.0
 
+# Device-type prefixes of the only Marstek battery families that can charge
+# via AC (the Venus lineup).  ``HMG`` covers HMG-*; ``VNS`` covers VNSE3,
+# VNSA, VNSD, and any other Venus-family variant.  Every other reporting
+# battery is assumed DC-coupled (B2500 family, Jupiter, etc.) and is
+# excluded from charge distribution under a grid surplus.  See issue #338.
+AC_CHARGEABLE_DEVICE_PREFIXES: tuple[str, ...] = ("HMG", "VNS")
+
+
+def _is_ac_chargeable(device_type: str) -> bool:
+    """True iff *device_type* identifies an AC-chargeable Marstek battery.
+
+    Empty / unknown device types are treated as DC-only — an unknown
+    battery cannot be assumed to accept charge commands.
+    """
+    if not device_type:
+        return False
+    return device_type.upper().startswith(AC_CHARGEABLE_DEVICE_PREFIXES)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -310,6 +328,9 @@ class LoadBalancer:
         self._probe_success_threshold = max(1.0, float(saturation_min_target))
         self._post_probe_fade_until = 0.0
         self._post_probe_fade_ids: set[str] = set()
+        # Latch so the "surplus with no AC-chargeable battery" notice is
+        # logged once per transition into that state, not every tick.
+        self._all_dc_surplus_warned: bool = False
 
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
@@ -811,6 +832,23 @@ class LoadBalancer:
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
 
+        # Exclude DC-only batteries (B2500 family, Jupiter, anything not in
+        # AC_CHARGEABLE_DEVICE_PREFIXES) from charge distribution under
+        # surplus.  They'll happily discharge on positive grid_total, but
+        # asking them to charge wastes the share that should have gone to
+        # the AC sibling (Venus).  See issue #338.
+        charge_blind = (
+            {
+                cid
+                for cid, r in reports.items()
+                if not _is_ac_chargeable(r.get("device_type", ""))
+            }
+            if grid_total < 0
+            else set()
+        )
+        for cid in charge_blind:
+            eff_part[cid] = 0.0
+
         efficiency_adjustments = self._compute_efficiency_deprioritized(
             reports, sample_id, grid_total
         )
@@ -824,6 +862,30 @@ class LoadBalancer:
         )
         if probe_target is not None:
             return probe_target
+
+        # Degenerate case: every reporter is DC-only but we're under
+        # surplus.  Nothing can absorb; log once so the user can see why
+        # the grid is still feeding back, then fall through to the
+        # per-consumer DC hold below.
+        all_dc_under_surplus = (
+            grid_total < 0 and charge_blind and not (set(reports) - charge_blind)
+        )
+        if all_dc_under_surplus and not self._all_dc_surplus_warned:
+            logger.info(
+                "CT002: %.0f W surplus but no AC-chargeable battery "
+                "reporting — holding all at 0 W. Reporting device_types: %s",
+                -grid_total,
+                sorted({reports[cid].get("device_type", "") or "?" for cid in reports}),
+            )
+            self._all_dc_surplus_warned = True
+        elif not all_dc_under_surplus:
+            self._all_dc_surplus_warned = False
+
+        # A DC-only consumer under surplus must be told explicitly to hold
+        # at 0 — don't fall through to the fair-share math where a residual
+        # correction could leak a nonzero target.
+        if consumer_id and consumer_id in charge_blind:
+            return self._steer_to_zero(consumer_id, reports)
 
         # --- Fading path ---
         if any_fading and consumer_id:
