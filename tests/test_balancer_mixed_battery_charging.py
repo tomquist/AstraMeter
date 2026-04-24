@@ -140,6 +140,37 @@ class ACBatteryWithStartupThreshold:
             self.power = 0.0
 
 
+class B2500PassThrough:
+    """B2500 at 100 % SoC passing its DC solar input straight through as AC.
+
+    When the B2500 is full it can no longer absorb its own DC input, so
+    the excess flows out as AC — the unit reports positive power
+    (apparent discharge) regardless of any CT command.  The balancer
+    sees this as "B2500 is producing" while the real grid is still
+    importing the surplus it can't absorb.  See issue #338 (follow-up
+    from the repo owner): this scenario reproduces the deadlock
+    *without* requiring any Venus startup-threshold assumption, because
+    the balance-correction + sign-clamp interaction alone pins the
+    Venus below the level needed to cancel the B2500's feed.
+    """
+
+    def __init__(
+        self,
+        mac: str,
+        passthrough_w: int,
+        *,
+        device_type: str = "HMJ-1",
+    ) -> None:
+        self.mac = mac
+        self.passthrough_w = passthrough_w
+        self.device_type = device_type
+        self.power = float(passthrough_w)
+
+    def step(self, target_delta: float, reported_power: float) -> None:
+        # Output is dictated by DC solar input, not the CT command.
+        self.power = float(self.passthrough_w)
+
+
 def _make_balancer(clock: _FakeClock) -> LoadBalancer:
     """Balancer with CT002 defaults (matching the out-of-the-box config)."""
     return LoadBalancer(
@@ -314,6 +345,50 @@ def test_non_venus_prefixes_are_treated_as_dc(dc_device_type: str) -> None:
     assert min(power["venus"][-30:]) < -500, (
         f"Venus should absorb the surplus while the DC sibling is held at 0. "
         f"Venus tail: {power['venus'][-30:]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B2500 pass-through at 100 % SoC
+# ---------------------------------------------------------------------------
+
+
+def test_b2500_passthrough_at_full_soc_does_not_pin_venus() -> None:
+    """B2500 full + passing 500 W DC through as AC: Venus must absorb it.
+
+    Without the fix the pre-fix balancer pins the Venus at ~-340 W: the
+    balance correction treats the B2500's +500 W "output" as a peer
+    behaviour the Venus should match toward, and the sign clamp then
+    blocks Venus from being pushed negative enough to cancel the feed.
+    The result is a sustained ~160 W export, independent of any
+    inverter startup threshold.
+
+    With the fix, the B2500 is recognised by prefix (``HMJ-1``) as
+    DC-only and excluded from charge distribution; the Venus receives
+    the full -500 W target, charges to -500 W, and pins the grid at 0.
+    """
+    b2500 = B2500PassThrough("b2500_full", passthrough_w=500)
+    venus = ACBatteryWithStartupThreshold("venus", device_type="HMG-50")
+
+    grid, power = _run_scenario([b2500, venus], surplus_watts=0.0, ticks=60)
+
+    venus_tail = power["venus"][-20:]
+    b2500_tail = power["b2500_full"][-20:]
+    grid_tail = grid[-20:]
+
+    # B2500 keeps pushing its 500 W pass-through regardless of commands.
+    assert all(abs(p - 500.0) < 1.0 for p in b2500_tail), (
+        f"B2500 pass-through output should stay at 500 W, tail was {b2500_tail}"
+    )
+    # Venus absorbs the full pass-through; grid at ~0.
+    assert min(venus_tail) < -490, (
+        f"Venus should converge near -500 W to cancel the pass-through, "
+        f"tail was {venus_tail}"
+    )
+    avg_grid = sum(grid_tail) / len(grid_tail)
+    assert abs(avg_grid) < 30, (
+        f"Grid should converge near 0 W (Venus exactly cancels B2500), "
+        f"got {avg_grid:.0f} W"
     )
 
 

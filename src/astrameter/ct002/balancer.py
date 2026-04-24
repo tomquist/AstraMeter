@@ -832,18 +832,34 @@ class LoadBalancer:
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
 
-        # Exclude DC-only batteries (B2500 family, Jupiter, anything not in
-        # AC_CHARGEABLE_DEVICE_PREFIXES) from charge distribution under
-        # surplus.  They'll happily discharge on positive grid_total, but
-        # asking them to charge wastes the share that should have gone to
-        # the AC sibling (Venus).  See issue #338.
+        # Exclude DC-only batteries (B2500 family, Jupiter, anything not
+        # in AC_CHARGEABLE_DEVICE_PREFIXES) from charge distribution
+        # whenever the grid is in charge territory.  The base gate is
+        # ``grid_total < 0`` (surplus), but we also extend it to the
+        # exact zero-crossing when an AC-chargeable battery is already
+        # charging (``power < 0``) — that signals pass-through
+        # equilibrium, which happens when a full B2500 is passing its DC
+        # solar input through as AC output (+P W) while the Venus
+        # charges a matching -P W, leaving grid at 0.  Without this
+        # extension the balance-correction fires at the zero-crossing
+        # and oscillates the Venus back out of its steady state.  We
+        # deliberately don't fire on ``grid_total == 0`` during pure
+        # discharge (both batteries discharging to serve the house load)
+        # because no AC-chargeable battery is charging there.
+        # See issue #338.
+        ac_charging = any(
+            _is_ac_chargeable(r.get("device_type", ""))
+            and parse_int(r.get("power", 0)) < 0
+            for r in reports.values()
+        )
+        in_charge_territory = grid_total < 0 or (grid_total == 0 and ac_charging)
         charge_blind = (
             {
                 cid
                 for cid, r in reports.items()
                 if not _is_ac_chargeable(r.get("device_type", ""))
             }
-            if grid_total < 0
+            if in_charge_territory
             else set()
         )
         for cid in charge_blind:
