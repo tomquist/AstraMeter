@@ -410,12 +410,15 @@ def test_dc_discharge_still_shared_with_ac_sibling() -> None:
 
     grid, power = _run_scenario([b2500, venus], surplus_watts=-1000.0, ticks=200)
 
-    avg_grid = sum(grid[-30:]) / 30
+    tail_grid = grid[-30:]
+    tail_b2500 = power["b2500"][-30:]
+    tail_venus = power["venus"][-30:]
+    avg_grid = sum(tail_grid) / len(tail_grid)
     assert abs(avg_grid) < 50, (
         f"Discharge across both batteries should drain the grid; got {avg_grid:.0f} W"
     )
-    assert sum(power["b2500"][-30:]) / 30 > 400, "B2500 should be discharging"
-    assert sum(power["venus"][-30:]) / 30 > 400, "Venus should be discharging"
+    assert sum(tail_b2500) / len(tail_b2500) > 400, "B2500 should be discharging"
+    assert sum(tail_venus) / len(tail_venus) > 400, "Venus should be discharging"
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +471,9 @@ def test_unknown_device_type_deadlock_persists() -> None:
     both batteries look like unknown DC batteries to the balancer, so
     nobody is asked to charge and the grid keeps feeding back the
     surplus.  This is the expected fail-closed behaviour for consumers
-    we can't identify.
+    we can't identify.  This also exercises the ``all_dc_under_surplus``
+    branch; the one-shot info-log emitted there is asserted separately
+    by ``test_all_dc_under_surplus_holds_zero_and_logs``.
     """
     b2500 = DCOnlyBattery("b2500_legacy", device_type="")
     venus = ACBatteryWithStartupThreshold("venus_legacy", device_type="")
