@@ -34,11 +34,11 @@
 - **Added** `exc_info` to logger warnings for better debugging ([#307](https://github.com/tomquist/astrameter/pull/307)).
 
 ### Changed
-- **Upgraded** `JSON_PATHS` parsing in the JSON HTTP and MQTT powermeters to the `jsonpath-ng` extended syntax, so values that arrive with a unit suffix (e.g. openHAB `Number:Power` returning `"331.74 W"`) can be sanitized inside the path with `` `split(...)` `` or `` `sub(/regex/, replacement)` `` instead of failing the float conversion ([#348](https://github.com/tomquist/astrameter/issues/348)).
 - **Switched** the Home Assistant powermeter integration from REST polling to the WebSocket API ([#232](https://github.com/tomquist/astrameter/pull/232)).
 - **Expanded** Shelly emulation logs to report battery detection, inactivity, and reconnection events ([#241](https://github.com/tomquist/astrameter/pull/241)).
 - **Reduced** throttling output noise by replacing unconditional `print` calls in `ThrottledPowermeter` with structured logging (`logger.debug` for routine wait/fetch/cache messages; failures remain at error level) ([#251](https://github.com/tomquist/astrameter/pull/251)).
 - **Improved** Shelly UDP server robustness by adding socket timeouts to avoid hangs during shutdown and testing ([#233](https://github.com/tomquist/astrameter/pull/233)).
+- **Upgraded** `JSON_PATHS` parsing in the JSON HTTP and MQTT powermeters to the `jsonpath-ng` extended syntax, so values that arrive with a unit suffix (e.g. openHAB `Number:Power` returning `"331.74 W"`) can be sanitized inside the path with `` `split(...)` `` or `` `sub(/regex/, replacement)` `` instead of failing the float conversion ([#349](https://github.com/tomquist/astrameter/pull/349)).
 
 ### Fixed
 - **Fixed** Modbus `UNIT_ID` handling and clarified Home Assistant entity ID configuration in the docs ([#191](https://github.com/tomquist/astrameter/pull/191), [#195](https://github.com/tomquist/astrameter/pull/195)).
