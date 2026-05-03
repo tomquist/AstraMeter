@@ -717,6 +717,13 @@ PASSWORD = pass (Optional)
 HEADERS = Authorization: Bearer token
 ```
 
+`JSON_PATHS` is parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage the value before it's converted to a float. For example, an openHAB `Number:Power` item returns `"331.74 W"` — strip the unit with either of:
+
+```ini
+JSON_PATHS = $.state.`split( , 0, -1)`
+JSON_PATHS = $.state.`sub(/[^0-9.\-]+$/, )`
+```
+
 ### TQ Energy Manager
 
 ```ini

@@ -4,7 +4,7 @@ import json
 import ssl
 
 import aiomqtt
-from jsonpath_ng import parse
+from jsonpath_ng.ext import parse
 
 from astrameter.config.logger import logger
 
