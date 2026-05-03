@@ -23,6 +23,17 @@ async def test_three_phase(mock_aiohttp_session):
         await meter.stop()
 
 
+async def test_strips_unit_suffix_via_jsonpath_ext(mock_aiohttp_session):
+    mock_aiohttp_session.set_json({"state": "331.74 W"})
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+        meter = JsonHttpPowermeter(
+            "http://localhost", "$.state.`sub(/[^0-9.\\-]+$/, )`"
+        )
+        await meter.start()
+        assert await meter.get_powermeter_watts() == [331.74]
+        await meter.stop()
+
+
 async def test_headers_and_auth(mock_aiohttp_session):
     mock_aiohttp_session.set_json({"power": 50})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session) as mock_cls:

@@ -279,6 +279,10 @@ THROTTLE_INTERVAL = 0
 # [JSON_HTTP]
 #URL = http://example.com/api
 #JSON_PATHS = $.power
+## JSON_PATHS supports jsonpath-ng extensions; strip a unit suffix like
+## "331.74 W" with `split` or `sub`:
+##JSON_PATHS = $.state.`split( , 0, -1)`
+##JSON_PATHS = $.state.`sub(/[^0-9.\-]+$/, )`
 #USERNAME = user
 #PASSWORD = pass
 #HEADERS = Authorization: Bearer token

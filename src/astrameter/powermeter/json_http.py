@@ -2,7 +2,7 @@ import json
 
 import aiohttp
 from aiohttp import BasicAuth, ClientTimeout
-from jsonpath_ng import parse
+from jsonpath_ng.ext import parse
 
 from astrameter.config.logger import logger
 
