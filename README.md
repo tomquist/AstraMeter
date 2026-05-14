@@ -971,6 +971,16 @@ A:
 - **Venus:** Firmware 120+ for Shelly support, 152+ for improved regulation
 - **B2500:** Firmware 108+ (HMJ devices) or 224+ (all others)
 
+### My device reports itself as HMJ-1, HMJ-2, etc. — is it supported?
+
+A: Yes. `HMJ-*` is one of the device-type prefixes used by B2500-family
+batteries (alongside `HMA-*` and `HMB-*`); the Venus family uses `HMG-*`
+and `VNS*`. AstraMeter recognises all of these, so a B2500 reporting as
+`HMJ-2` over Bluetooth or MQTT is configured the same way as any other
+B2500 — pick a CT002/CT003 or Shelly emulator per the
+[Configuration](#configuration) section. See **What firmware do I need
+for my Marstek device?** above for the firmware floor on HMJ units.
+
 ### How do I handle the different ports for Shelly Pro 3EM?
 
 A: Use one of these device types:
