@@ -847,12 +847,25 @@ class LoadBalancer:
         # discharge (both batteries discharging to serve the house load)
         # because no AC-chargeable battery is charging there.
         # See issue #338.
+        #
+        # The whole gate is further conditioned on ``any_ac_chargeable``:
+        # if no AC-coupled battery is reporting there is nothing to
+        # protect from B2500 interference, so we let the normal fair-
+        # share path handle brief negative-grid transients (load drops,
+        # ramp overshoot) by smoothly reducing discharge rather than
+        # slamming the whole pool to 0 W and forcing a re-ramp cycle.
+        # See issue #359.
         ac_charging = any(
             _is_ac_chargeable(r.get("device_type", ""))
             and parse_int(r.get("power", 0)) < 0
             for r in reports.values()
         )
-        in_charge_territory = grid_total < 0 or (grid_total == 0 and ac_charging)
+        any_ac_chargeable = any(
+            _is_ac_chargeable(r.get("device_type", "")) for r in reports.values()
+        )
+        in_charge_territory = any_ac_chargeable and (
+            grid_total < 0 or (grid_total == 0 and ac_charging)
+        )
         charge_blind = (
             {
                 cid
@@ -881,10 +894,15 @@ class LoadBalancer:
 
         # Degenerate case: every reporter is DC-only but we're under
         # surplus.  Nothing can absorb; log once so the user can see why
-        # the grid is still feeding back, then fall through to the
-        # per-consumer DC hold below.
+        # the grid is still feeding back.  In this all-DC mode we leave
+        # ``in_charge_territory`` off (see above) so that the regular
+        # fair-share path can still smoothly reduce discharge through
+        # brief negative-grid transients (e.g. a load drop while the
+        # batteries are mid-discharge — see issue #359); the B2500s'
+        # own AC-charge clamp keeps them at 0 W under a sustained
+        # surplus regardless.
         all_dc_under_surplus = (
-            grid_total < 0 and charge_blind and not (set(reports) - charge_blind)
+            grid_total < 0 and bool(reports) and not any_ac_chargeable
         )
         if all_dc_under_surplus and not self._all_dc_surplus_warned:
             logger.info(

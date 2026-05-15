@@ -41,6 +41,7 @@
 - **Upgraded** `JSON_PATHS` parsing in the JSON HTTP and MQTT powermeters to the `jsonpath-ng` extended syntax, so values that arrive with a unit suffix (e.g. openHAB `Number:Power` returning `"331.74 W"`) can be sanitized inside the path with `` `split(...)` `` or `` `sub(/regex/, replacement)` `` instead of failing the float conversion ([#349](https://github.com/tomquist/astrameter/pull/349)).
 
 ### Fixed
+- **Fixed** CT002/CT003 active control collapsing a pure DC-only battery pool (e.g. only B2500 / Jupiter) to 0 W whenever the grid briefly went negative (load drop, ramp overshoot). The Venus-protection logic only applies when an AC-chargeable battery is actually present; pure-DC setups now ride out brief negative-grid transients with a smooth fair-share trim instead of a full re-ramp cycle ([#359](https://github.com/tomquist/astrameter/issues/359)).
 - **Fixed** Modbus `UNIT_ID` handling and clarified Home Assistant entity ID configuration in the docs ([#191](https://github.com/tomquist/astrameter/pull/191), [#195](https://github.com/tomquist/astrameter/pull/195)).
 
 ## 1.0.8
