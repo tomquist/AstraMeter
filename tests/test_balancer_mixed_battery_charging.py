@@ -549,3 +549,54 @@ def test_transient_surplus_does_not_collapse_dc_only_pool() -> None:
         tail = power_trace[mac][-10:]
         assert min(tail) > 300, f"{mac} collapsed after transient surplus: tail={tail}"
         assert max(tail) < 400, f"{mac} overshot after transient surplus: tail={tail}"
+
+
+def test_sustained_surplus_dc_only_balancer_never_asks_to_discharge() -> None:
+    """Under sustained surplus the balancer itself must not command discharge.
+
+    Previously ``_steer_to_zero`` guaranteed every DC-only target was 0
+    under surplus.  With the issue #359 fix the all-DC path falls
+    through to fair-share, so the safety property now rests on the
+    sign-clamp at the tail of ``_compute_auto_target`` (``grid_total <
+    0 and target > 0 → 0``) plus fair-share producing a non-positive
+    share of a negative grid.
+
+    Pin the batteries at 0 W (simulating the B2500's AC-charge clamp)
+    and verify the balancer's emitted target stays ``<= 0`` for every
+    tick — i.e. the balancer never instructs a DC-only battery to
+    discharge into a surplus.  Complements
+    ``test_all_dc_under_surplus_holds_zero_and_logs``, which exercises
+    the full closed-loop including the simulated battery's own clamp.
+    """
+    macs = ("dc_a", "dc_b")
+    clock = _FakeClock()
+    lb = _make_balancer(clock)
+    surplus = 600.0
+
+    max_target_seen: dict[str, float] = {m: float("-inf") for m in macs}
+    for tick in range(200):
+        # Batteries pinned at 0 W (real B2500 cannot accept AC charge).
+        reports = {m: {"phase": "A", "power": 0, "device_type": "HMJ-1"} for m in macs}
+        grid_total = -surplus  # nothing absorbs, so grid stays at -600 W
+        for m in macs:
+            delta = lb.compute_target(
+                consumer_id=m,
+                consumer_mode=ConsumerMode("auto"),
+                all_reports=reports,
+                grid_total=grid_total,
+                inactive=frozenset(),
+                manual=frozenset(),
+                sample_id=(tick,),
+            )[0]
+            # Target is a delta added to reported power (0 here), so the
+            # commanded absolute power equals ``delta``.  Under surplus
+            # this must never be positive.
+            assert delta <= 0, (
+                f"tick {tick}: balancer asked {m} to discharge into "
+                f"a {grid_total:.0f} W surplus (delta={delta})"
+            )
+            max_target_seen[m] = max(max_target_seen[m], delta)
+        clock.advance(1.0)
+
+    for m, peak in max_target_seen.items():
+        assert peak <= 0, f"{m} peak target under surplus was {peak} (expected <= 0)"
