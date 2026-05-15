@@ -367,7 +367,7 @@ async def run_device(
                 if chosen is None:
                     return [0.0, 0.0, 0.0]
                 await chosen.wait_for_next_message()
-                vs = await chosen.get_powermeter_watts()
+                vs = await chosen.get_powermeter_watts_raw()
                 return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
 
             def _marstek_connected_slave_count() -> int:

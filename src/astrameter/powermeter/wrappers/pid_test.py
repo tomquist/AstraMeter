@@ -10,6 +10,7 @@ def mock_powermeter():
     """Return a mock powermeter with async stubs for all interface methods."""
     pm = Mock()
     pm.get_powermeter_watts = AsyncMock()
+    pm.get_powermeter_watts_raw = pm.get_powermeter_watts
     pm.wait_for_message = AsyncMock()
     pm.wait_for_next_message = AsyncMock()
     pm.start = AsyncMock()
