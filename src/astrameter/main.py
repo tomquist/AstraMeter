@@ -22,7 +22,9 @@ from astrameter.marstek_api import (
 from astrameter.mqtt_insights import (
     MarstekMqttBinding,
     MqttInsightsService,
+    format_cd4_slave_csv,
     normalize_mac,
+    ver_v_from_marstek_api_version,
 )
 from astrameter.powermeter import Powermeter
 from astrameter.shelly import Shelly
@@ -124,6 +126,7 @@ async def run_device(
     device_id: str | None = None,
     insights: MqttInsightsService | None = None,
     marstek_mac: str = "",
+    marstek_ver_v: int | None = None,
 ):
     logger.debug(f"Starting device: {device_type}")
 
@@ -367,13 +370,24 @@ async def run_device(
                 vs = await chosen.get_powermeter_watts()
                 return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
 
+            def _marstek_connected_slave_count() -> int:
+                return device.reporting_consumer_count()
+
+            def _marstek_cd4_slave_csv() -> str:
+                return format_cd4_slave_csv(device.reporting_consumer_rows())
+
             await insights.register_marstek(
                 MarstekMqttBinding(
                     device_id=device_id or "",
                     ct_type=device.ct_type,
                     mac=marstek_mac,
                     get_values=_marstek_get_values,
+                    get_connected_slave_count=_marstek_connected_slave_count,
+                    get_cd4_slave_csv=_marstek_cd4_slave_csv,
                     wifi_rssi=device.wifi_rssi,
+                    ver_v=marstek_ver_v
+                    if marstek_ver_v is not None
+                    else ver_v_from_marstek_api_version(None),
                 )
             )
         else:
@@ -404,9 +418,9 @@ async def async_main(
     device_types: list[str],
     device_ids: list[str],
     skip_test: bool,
-    managed_macs: dict[str, str] | None = None,
+    managed_marstek: dict[str, tuple[str, int]] | None = None,
 ):
-    managed_macs = managed_macs or {}
+    managed_marstek = managed_marstek or {}
     web_server = None
     if cfg.getboolean("GENERAL", "ENABLE_WEB_SERVER", fallback=True):
         logger.info("Starting web server...")
@@ -466,7 +480,7 @@ async def async_main(
                     powermeters,
                     device_id,
                     insights,
-                    managed_macs.get(device_type, ""),
+                    *managed_marstek.get(device_type, ("", None)),
                 )
                 for device_type, device_id in zip(
                     device_types, device_ids, strict=False
@@ -628,7 +642,7 @@ def main():
     # When registration succeeds, the returned MAC is captured per device
     # type so the Marstek MQTT responder in MQTT Insights uses the same
     # MAC that hame-relay will route back to the Marstek app.
-    managed_macs: dict[str, str] = {}
+    managed_marstek: dict[str, tuple[str, int]] = {}
     marstek_enabled = cfg.getboolean("MARSTEK", "ENABLE", fallback=False)
     if marstek_enabled:
         mailbox = cfg.get("MARSTEK", "MAILBOX", fallback="")
@@ -656,7 +670,12 @@ def main():
                         if created is not None:
                             normalized = normalize_mac(str(created.get("mac", "")))
                             if normalized:
-                                managed_macs[dt] = normalized
+                                managed_marstek[dt] = (
+                                    normalized,
+                                    ver_v_from_marstek_api_version(
+                                        created.get("version")
+                                    ),
+                                )
                 if any_ct:
                     logger.info(
                         "Managed fake CT registration completed. Fake CT devices appear as offline in the Marstek app CT list (this is expected)."
@@ -705,7 +724,9 @@ def main():
         restart_requested = False
         try:
             asyncio.run(
-                async_main(cfg, args, device_types, device_ids, skip_test, managed_macs)
+                async_main(
+                    cfg, args, device_types, device_ids, skip_test, managed_marstek
+                )
             )
             break  # clean exit
         except KeyboardInterrupt:

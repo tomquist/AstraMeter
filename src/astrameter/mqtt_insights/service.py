@@ -24,11 +24,13 @@ from .discovery import (
 )
 from .marstek_mqtt import (
     MarstekMqttBinding,
+    MarstekPollContext,
     app_topics_for,
+    build_cd4_response,
     build_response,
     device_topics_for,
-    is_poll_payload,
     parse_app_topic,
+    parse_marstek_poll_payload,
 )
 
 RECONNECT_DELAY = 5
@@ -72,6 +74,10 @@ class MqttInsightsConfig:
     # emulator in the Marstek app. Default on; requires [MARSTEK]
     # credentials so that the managed MAC matches the cloud device.
     marstek_mqtt_enabled: bool = True
+    # Periodic broadcast interval (seconds). When > 0 and marstek_mqtt_enabled,
+    # publish power values for every registered binding at this cadence so the
+    # Marstek app stays up-to-date without relying solely on its own polls.
+    marstek_mqtt_interval: float = 1
 
 
 @dataclass
@@ -289,11 +295,13 @@ class MqttInsightsService:
                     self._connected.set()
 
                     try:
-                        # Run publish loop and message listener concurrently
-                        await asyncio.gather(
+                        coros: list[Any] = [
                             self._publish_loop(client),
                             self._listen_commands(client),
-                        )
+                        ]
+                        if cfg.marstek_mqtt_enabled and cfg.marstek_mqtt_interval > 0:
+                            coros.append(self._marstek_broadcast_loop(client))
+                        await asyncio.gather(*coros)
                     finally:
                         async with self._marstek_lock:
                             self._client = None
@@ -689,6 +697,22 @@ class MqttInsightsService:
             else:
                 logger.debug("No rotation handler for device %s", device_id)
 
+    async def _marstek_broadcast_loop(self, client: aiomqtt.Client) -> None:
+        """Periodically publish power values for all registered bindings."""
+        interval = self._config.marstek_mqtt_interval
+        while True:
+            async with self._marstek_lock:
+                bindings = tuple(self._marstek_bindings.values())
+            for binding in bindings:
+                task = asyncio.create_task(
+                    self._serve_marstek_poll(
+                        client, binding, MarstekPollContext(echo_cd=1, slave_id=None)
+                    )
+                )
+                self._marstek_tasks.add(task)
+                task.add_done_callback(self._marstek_tasks.discard)
+            await asyncio.sleep(interval)
+
     async def _handle_marstek_message(
         self, client: aiomqtt.Client, message: aiomqtt.Message
     ) -> None:
@@ -705,33 +729,69 @@ class MqttInsightsService:
             return
 
         body = message.payload if isinstance(message.payload, bytes) else b""
-        if not is_poll_payload(body):
+        poll = parse_marstek_poll_payload(body)
+        if poll is None:
             logger.debug("Marstek MQTT: non-poll payload on %s", topic)
             return
 
-        task = asyncio.create_task(self._serve_marstek_poll(client, binding))
+        task = asyncio.create_task(self._serve_marstek_poll(client, binding, poll))
         self._marstek_tasks.add(task)
         task.add_done_callback(self._marstek_tasks.discard)
 
     async def _serve_marstek_poll(
-        self, client: aiomqtt.Client, binding: MarstekMqttBinding
+        self,
+        client: aiomqtt.Client,
+        binding: MarstekMqttBinding,
+        poll: MarstekPollContext,
     ) -> None:
-        try:
-            watts = await binding.get_values()
-        except Exception:
-            if binding.device_id not in self._marstek_get_values_failed:
-                logger.exception(
-                    "Marstek MQTT: get_values failed for %s; suppressing "
-                    "further failures until values recover",
+        if poll.echo_cd == 4:
+            try:
+                if binding.get_cd4_slave_csv is None:
+                    slv = ""
+                else:
+                    slv = binding.get_cd4_slave_csv()
+                payload = build_cd4_response(slv)
+            except Exception:
+                if binding.device_id not in self._marstek_get_values_failed:
+                    logger.exception(
+                        "Marstek MQTT: cd=4 slave list failed for %s; suppressing "
+                        "further failures until recovery",
+                        binding.device_id,
+                    )
+                    self._marstek_get_values_failed.add(binding.device_id)
+                return
+            if binding.device_id in self._marstek_get_values_failed:
+                logger.info(
+                    "Marstek MQTT: poll value fetch recovered for %s",
                     binding.device_id,
                 )
-                self._marstek_get_values_failed.add(binding.device_id)
-            return
-        if binding.device_id in self._marstek_get_values_failed:
-            logger.info("Marstek MQTT: get_values recovered for %s", binding.device_id)
-            self._marstek_get_values_failed.discard(binding.device_id)
+                self._marstek_get_values_failed.discard(binding.device_id)
+        else:
+            try:
+                watts = await binding.get_values()
+            except Exception:
+                if binding.device_id not in self._marstek_get_values_failed:
+                    logger.exception(
+                        "Marstek MQTT: poll value fetch failed for %s; suppressing "
+                        "further failures until values recover",
+                        binding.device_id,
+                    )
+                    self._marstek_get_values_failed.add(binding.device_id)
+                return
+            if binding.device_id in self._marstek_get_values_failed:
+                logger.info(
+                    "Marstek MQTT: poll value fetch recovered for %s",
+                    binding.device_id,
+                )
+                self._marstek_get_values_failed.discard(binding.device_id)
 
-        payload = build_response(binding, list(watts))
+            n_slaves = 0
+            if binding.get_connected_slave_count is not None:
+                n_slaves = binding.get_connected_slave_count()
+            payload = build_response(
+                binding, list(watts), poll=poll, connected_slave_count=n_slaves
+            )
+
         for reply_topic in device_topics_for(binding):
             with contextlib.suppress(aiomqtt.MqttError):
                 await client.publish(reply_topic, payload=payload, qos=0, retain=False)

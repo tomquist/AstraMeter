@@ -735,5 +735,12 @@ def read_mqtt_insights_config(
                 marstek_mqtt_enabled=config.getboolean(
                     section, "MARSTEK_MQTT_ENABLED", fallback=True
                 ),
+                marstek_mqtt_interval=float(raw_interval)
+                if (
+                    raw_interval := config.get(
+                        section, "MARSTEK_MQTT_INTERVAL", fallback=""
+                    ).strip()
+                )
+                else 300,
             )
     return None

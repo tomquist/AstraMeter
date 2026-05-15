@@ -1,6 +1,6 @@
 import logging
 
-from astrameter.ct002.ct002 import CT002
+from astrameter.ct002 import CT002, ReportingConsumerRow
 from astrameter.ct002.protocol import (
     ETX,
     RESPONSE_LABELS,
@@ -72,6 +72,27 @@ def test_ct002_response_field_count_stable():
     )
 
     assert len(response_fields) == len(RESPONSE_LABELS)
+
+
+def test_reporting_consumer_count() -> None:
+    device = CT002()
+    assert device.reporting_consumer_count() == 0
+    device._update_consumer_report("a", "A", 1)
+    device._update_consumer_report("b", "B", -2)
+    assert device.reporting_consumer_count() == 2
+
+
+def test_reporting_consumer_rows_order_and_shape() -> None:
+    device = CT002()
+    assert device.reporting_consumer_rows() == ()
+
+    device._update_consumer_report("z-mac", "C", 1, "HMA-2", source_ip="192.168.1.51")
+    device._update_consumer_report("a-mac", "A", 2, "HME-4", source_ip="192.168.1.50")
+    rows = device.reporting_consumer_rows()
+    assert rows == (
+        ReportingConsumerRow("HME-4", "a-mac", "192.168.1.50", "a"),
+        ReportingConsumerRow("HMA-2", "z-mac", "192.168.1.51", "c"),
+    )
 
 
 def test_ct002_relays_sum_of_all_storage_reports_by_phase():

@@ -204,6 +204,7 @@ def _add_device(
         "bluetooth_name": f"MST-SMR_{suffix}",
         "position": "{}",
         "timeZone": cfg.timezone,
+        "version": "121",
     }
 
     headers = {

@@ -424,3 +424,8 @@ THROTTLE_INTERVAL = 0
 ## working [MARSTEK] section: the MAC used in the MQTT topics is the
 ## managed fake device AstraMeter registers in the Marstek cloud.
 #MARSTEK_MQTT_ENABLED = true
+## Periodic broadcast interval (seconds) for Marstek MQTT responses.
+## Publishes power values for all registered bindings at this cadence
+## so the Marstek app stays up-to-date without relying solely on its own polls.
+## Set to 0 to disable periodic broadcasts (respond only to polls).
+#MARSTEK_MQTT_INTERVAL = 300

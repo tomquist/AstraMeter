@@ -7,7 +7,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, cast
 
 from astrameter.config.logger import logger
 from astrameter.request_dedupe import RequestDeduplicator
@@ -41,6 +41,8 @@ __all__ = [
     "SOH",
     "STX",
     "UDP_PORT",
+    "ReportingConsumerRow",
+    "ReportingPhase",
     "build_payload",
     "calculate_checksum",
     "compute_length",
@@ -75,6 +77,21 @@ class Consumer:
     manual_target: float = 0.0
     manual_enabled: bool = False
     active: bool = True
+    # Last UDP source address seen for this consumer, if the protocol provides it.
+    last_ip: str = ""
+
+
+ReportingPhase = Literal["a", "b", "c"]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ReportingConsumerRow:
+    """One UDP-reporting consumer, for integrations that need a stable device list."""
+
+    device_type: str
+    consumer_id: str
+    last_ip: str
+    phase: ReportingPhase
 
 
 class _CT002Protocol(asyncio.DatagramProtocol):
@@ -259,7 +276,15 @@ class CT002:
                 "event_listener failed for %s: %s", consumer_id, exc, exc_info=True
             )
 
-    def _update_consumer_report(self, consumer_id, phase, power, device_type=""):
+    def _update_consumer_report(
+        self,
+        consumer_id,
+        phase,
+        power,
+        device_type="",
+        *,
+        source_ip: str | None = None,
+    ):
         normalized_phase = str(phase).upper() if phase else "A"
         consumer = self._get_consumer(consumer_id)
         previous_phase = consumer.phase if consumer.timestamp > 0 else None
@@ -278,6 +303,8 @@ class CT002:
         consumer.power = parse_int(power, 0)
         consumer.timestamp = now
         consumer.device_type = device_type
+        if source_ip:
+            consumer.last_ip = source_ip
 
         if normalized_phase in ("A", "B", "C") and previous_phase != normalized_phase:
             if previous_phase in ("A", "B", "C"):
@@ -372,6 +399,36 @@ class CT002:
             else:
                 by_phase[phase]["dchrg_power"] += power
         return by_phase
+
+    def reporting_consumer_count(self) -> int:
+        """Number of consumers that have reported at least once over UDP."""
+        return sum(1 for c in self._consumers.values() if c.timestamp > 0)
+
+    def reporting_consumer_rows(self) -> tuple[ReportingConsumerRow, ...]:
+        """Stable-ordered view of reporting consumers for integrations.
+
+        *phase* is normalized to ``a``/``b``/``c``; *last_ip* may be empty when unknown.
+        Rows follow sorted ``consumer_id`` so list position stays predictable.
+        """
+        reporters = sorted(
+            (c for c in self._consumers.values() if c.timestamp > 0),
+            key=lambda c: c.consumer_id,
+        )
+        out: list[ReportingConsumerRow] = []
+        for c in reporters:
+            pu = (c.phase or "A").strip().lower()
+            if pu not in ("a", "b", "c"):
+                pu = "a"
+            host = c.last_ip.strip() if c.last_ip else ""
+            out.append(
+                ReportingConsumerRow(
+                    device_type=(c.device_type or "").strip(),
+                    consumer_id=c.consumer_id.strip(),
+                    last_ip=host,
+                    phase=cast(ReportingPhase, pu),
+                )
+            )
+        return tuple(out)
 
     def _format_status(self, values, phase_values, consumer_id=None, meter_value=None):
         """Concise one-line status: phase consumption and consumer charge/discharge reports."""
@@ -579,6 +636,7 @@ class CT002:
             phase=reported_phase if not in_inspection_mode else "A",
             power=reported_power,
             device_type=meter_dev_type,
+            source_ip=str(addr[0]),
         )
 
         updated = await self._call_before_send(addr, fields, consumer_id)
