@@ -77,7 +77,7 @@ class MqttInsightsConfig:
     # Periodic broadcast interval (seconds). When > 0 and marstek_mqtt_enabled,
     # publish power values for every registered binding at this cadence so the
     # Marstek app stays up-to-date without relying solely on its own polls.
-    marstek_mqtt_interval: float = 1
+    marstek_mqtt_interval: float = 300.0
 
 
 @dataclass

@@ -492,6 +492,9 @@ def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsServi
             base_topic=base_topic,
             ha_discovery=True,
             ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            # Broader E2E tests assert poll-only Marstek behaviour; periodic traffic
+            # is covered by test_marstek_periodic_broadcast.
+            marstek_mqtt_interval=0.0,
         )
     )
 

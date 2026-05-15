@@ -130,6 +130,9 @@ THROTTLE_INTERVAL = 0
 ## Prefix is fixed to 02b250 (locally administered MAC space) for managed fake devices.
 ## Used for add-device request
 #TIMEZONE = Europe/Berlin
+## Optional: live grid in the Marstek mobile app over MQTT uses [MQTT_INSIGHTS]
+## on the same broker as hame-relay (https://github.com/tomquist/hame-relay) >= 1.3.5
+## (HA discovery does not depend on this).
 
 #[SHELLY]
 #TYPE = 1PM #PLUS1PM #EM #3EM #3EMPRO
@@ -398,9 +401,10 @@ THROTTLE_INTERVAL = 0
 #HAMPEL_MIN_THRESHOLD = 50
 
 ## --- MQTT Insights (optional) ---
-## Publishes internal state (grid power, targets, saturation, consumer topology)
-## to MQTT with Home Assistant Device Discovery support.
+## Mainly for Home Assistant: publishes internal state (grid power, targets,
+## saturation, consumer topology) to MQTT with HA Device Discovery.
 ## When running as a Home Assistant app with Mosquitto, this is auto-configured.
+## Optional add-on: Marstek app poll replies use the same broker (see MARSTEK_* below).
 #[MQTT_INSIGHTS]
 #BROKER = 192.168.1.100
 #PORT = 1883
@@ -418,14 +422,10 @@ THROTTLE_INTERVAL = 0
 #HA_DISCOVERY = true
 ## HA discovery prefix (default: homeassistant)
 #HA_DISCOVERY_PREFIX = homeassistant
-## Respond to Marstek CT002/CT003 MQTT polls on this broker (default: true).
-## Combined with hame-relay (https://github.com/tomquist/hame-relay) the
-## emulator's CT readings surface in the Marstek mobile app. Requires a
-## working [MARSTEK] section: the MAC used in the MQTT topics is the
-## managed fake device AstraMeter registers in the Marstek cloud.
+## Optional Marstek mobile app: answer CT002/CT003 MQTT polls on this broker (default: true).
+## Live readings in the app need hame-relay (https://github.com/tomquist/hame-relay) >= 1.3.5
+## on the same broker; older relays may not forward poll/replies. Requires [MARSTEK] so the
+## topic MAC matches the managed fake device. Set false for HA MQTT Insights only.
 #MARSTEK_MQTT_ENABLED = true
-## Periodic broadcast interval (seconds) for Marstek MQTT responses.
-## Publishes power values for all registered bindings at this cadence
-## so the Marstek app stays up-to-date without relying solely on its own polls.
-## Set to 0 to disable periodic broadcasts (respond only to polls).
+## Seconds between optional Marstek aggregate (cd=1) broadcasts when the app is quiet; 0 = polls only.
 #MARSTEK_MQTT_INTERVAL = 300
