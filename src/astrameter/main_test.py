@@ -21,6 +21,9 @@ class _StubPowermeter(Powermeter):
     async def get_powermeter_watts(self) -> list[float]:
         return list(self._values)
 
+    async def get_powermeter_watts_raw(self) -> list[float]:
+        return list(self._values)
+
     async def wait_for_next_message(self, timeout=5):
         self._wait_calls.append(timeout)
         if self._wait_raises is not None:
@@ -55,6 +58,19 @@ async def test_read_ct_powermeter_calls_wait_with_2s_when_enabled():
     powermeters = [(pm, _LOCAL, True)]
     await read_ct_powermeter(("127.0.0.1", 0), powermeters)
     assert pm._wait_calls == [2]
+
+
+async def test_stub_powermeter_raw_matches_watts():
+    pm = _StubPowermeter([3.0, 4.0, 5.0])
+    assert (
+        await pm.get_powermeter_watts_raw()
+        == await pm.get_powermeter_watts()
+        == [
+            3.0,
+            4.0,
+            5.0,
+        ]
+    )
 
 
 async def test_read_ct_powermeter_swallows_timeout_and_serves_cached():
