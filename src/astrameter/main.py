@@ -357,10 +357,10 @@ async def run_device(
         if marstek_mac:
 
             async def _marstek_get_values(
-                _pms: list[tuple[Powermeter, ClientFilter]] = powermeters,
+                _pms: list[tuple[Powermeter, ClientFilter, bool]] = powermeters,
             ) -> list[float]:
                 chosen: Powermeter | None = next(
-                    (pm for pm, cf in _pms if cf.matches("0.0.0.0")), None
+                    (pm for pm, cf, _ in _pms if cf.matches("0.0.0.0")), None
                 )
                 if chosen is None and _pms:
                     chosen = _pms[0][0]
