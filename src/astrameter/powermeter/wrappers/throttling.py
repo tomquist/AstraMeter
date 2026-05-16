@@ -29,6 +29,11 @@ class ThrottledPowermeter(PowermeterWrapper):
         self._last_values: list[float] | None = None
         self._pending_fetch: asyncio.Future[list[float]] | None = None
 
+    async def get_powermeter_watts_raw(self) -> list[float]:
+        # Raw reads skip throttle coalescing so the Marstek app can show sensor-level
+        # watts without being tied to the CT002 control cadence.
+        return await self.wrapped_powermeter.get_powermeter_watts_raw()
+
     async def get_powermeter_watts(self) -> list[float]:
         if self.throttle_interval <= 0:
             return await self.wrapped_powermeter.get_powermeter_watts()

@@ -10,6 +10,9 @@ class PowermeterWrapper(Powermeter):
     async def get_powermeter_watts(self) -> list[float]:
         raise NotImplementedError()
 
+    async def get_powermeter_watts_raw(self) -> list[float]:
+        return await self.wrapped_powermeter.get_powermeter_watts_raw()
+
     async def wait_for_message(self, timeout=5):
         await self.wrapped_powermeter.wait_for_message(timeout)
 

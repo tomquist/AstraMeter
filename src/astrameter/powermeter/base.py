@@ -3,6 +3,16 @@ class Powermeter:
     async def get_powermeter_watts(self) -> list[float]:
         raise NotImplementedError()
 
+    async def get_powermeter_watts_raw(self) -> list[float]:
+        """Per-phase watts before section/global processing wrappers.
+
+        Used when a consumer (e.g. Marstek MQTT display) should match the physical
+        meter while control still uses :meth:`get_powermeter_watts`. Defaults to
+        the same values as :meth:`get_powermeter_watts` for sources with no inner
+        pipeline.
+        """
+        return await self.get_powermeter_watts()
+
     async def wait_for_message(self, timeout=5):
         pass
 

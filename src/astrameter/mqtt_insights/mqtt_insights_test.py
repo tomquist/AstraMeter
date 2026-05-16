@@ -23,6 +23,7 @@ from .discovery import (
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
+from .marstek_mqtt import MarstekMqttBinding
 from .service import MqttInsightsConfig, MqttInsightsService, _arp_lookup
 
 # ── Discovery payload unit tests ──────────────────────────────────────────
@@ -386,6 +387,48 @@ def test_read_mqtt_insights_config_absent():
     assert read_mqtt_insights_config(cfg) is None
 
 
+def test_read_mqtt_insights_config_marstek_mqtt_default_true():
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.marstek_mqtt_enabled is True
+
+
+def test_read_mqtt_insights_config_marstek_mqtt_opt_out():
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        "[MQTT_INSIGHTS]\nBROKER = localhost\nMARSTEK_MQTT_ENABLED = false\n"
+    )
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.marstek_mqtt_enabled is False
+
+
+def test_read_mqtt_insights_config_marstek_mqtt_interval_default():
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.marstek_mqtt_interval == 300
+
+
+def test_read_mqtt_insights_config_marstek_mqtt_interval_custom():
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\nMARSTEK_MQTT_INTERVAL = 60\n")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.marstek_mqtt_interval == 60
+
+
+def test_read_mqtt_insights_config_marstek_mqtt_interval_zero():
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\nMARSTEK_MQTT_INTERVAL = 0\n")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.marstek_mqtt_interval == 0
+
+
 # ── Service unit tests (no broker) ───────────────────────────────────────
 
 
@@ -449,6 +492,9 @@ def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsServi
             base_topic=base_topic,
             ha_discovery=True,
             ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            # Broader E2E tests assert poll-only Marstek behaviour; periodic traffic
+            # is covered by test_marstek_periodic_broadcast.
+            marstek_mqtt_interval=0.0,
         )
     )
 
@@ -820,3 +866,454 @@ def test_consumer_state_includes_manual_target_fields():
     }
     assert consumer_state["manual_target"] is None
     assert consumer_state["auto_target"] is True
+
+
+# ── Marstek MQTT responder tests ─────────────────────────────────────────
+
+_MARSTEK_CD1_FULL = (
+    b"pwr_a=100,pwr_b=200,pwr_c=300,pwr_t=600,wif_s=2,wif_r=-50,ver_v=148,slv_n=0,cur_d=0,"
+    b"ble_s=0,fc4_v=202409090159,kwh=0.00,n_kwh=0.00,used_kwh=0.00,fed_kwh=0.00"
+)
+
+
+def _make_binding(
+    *,
+    device_id: str = "ct002-dev1",
+    ct_type: str = "HME-4",
+    mac: str = "02b250aabbcc",
+    wifi_rssi: int = -50,
+    values: list[float] | None = None,
+    raises: BaseException | None = None,
+    cd4_csv: str | None = None,
+) -> tuple[MarstekMqttBinding, list[tuple[object, ...]]]:
+    calls: list[tuple[object, ...]] = []
+    vs = [100.0, 200.0, 300.0] if values is None else values
+
+    async def _get() -> list[float]:
+        calls.append(("meter",))
+        if raises is not None:
+            raise raises
+        return list(vs)
+
+    if cd4_csv is None:
+        get_cd4_fn = None
+    else:
+
+        def _cd4() -> str:
+            calls.append(("cd4",))
+            return cd4_csv
+
+        get_cd4_fn = _cd4
+
+    return (
+        MarstekMqttBinding(
+            device_id=device_id,
+            ct_type=ct_type,
+            mac=mac,
+            get_values=_get,
+            wifi_rssi=wifi_rssi,
+            get_cd4_slave_csv=get_cd4_fn,
+        ),
+        calls,
+    )
+
+
+def test_register_marstek_while_disconnected_stores_binding():
+    """register_marstek before start() only populates the dict."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    binding, _ = _make_binding()
+
+    async def _run() -> None:
+        await service.register_marstek(binding)
+
+    asyncio.run(_run())
+    assert service._marstek_bindings["ct002-dev1"] is binding
+
+
+def test_register_marstek_no_op_when_disabled():
+    service = MqttInsightsService(
+        MqttInsightsConfig(broker="localhost", marstek_mqtt_enabled=False)
+    )
+    binding, _ = _make_binding()
+
+    async def _run() -> None:
+        await service.register_marstek(binding)
+
+    asyncio.run(_run())
+    assert service._marstek_bindings == {}
+
+
+@needs_mosquitto
+async def test_marstek_poll_responds_on_both_topics(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port)
+    binding, calls = _make_binding(values=[100.0, 200.0, 300.0])
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        received = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.subscribe(f"marstek_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl",
+                payload=b"cd=1",
+            )
+            await _collect_messages(
+                client, received, timeout=5, stop=lambda _: len(received) >= 2
+            )
+
+        assert len(received) == 2
+        topics = sorted(str(m.topic) for m in received)
+        assert topics == [
+            f"hame_energy/HME-4/device/{binding.mac}/ctrl",
+            f"marstek_energy/HME-4/device/{binding.mac}/ctrl",
+        ]
+        expected = _MARSTEK_CD1_FULL
+        for msg in received:
+            assert msg.payload == expected
+        assert len(calls) == 1
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_poll_cd4_responds_with_slave_list(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port)
+    inner = (
+        "slv_t=HME-4,slv_id=bat-a,slv_ip=192.168.1.50,slv_p=a,"
+        "slv_t=HMA-2,slv_id=bat-b,slv_ip=192.168.1.51,slv_p=b"
+    )
+    binding, calls = _make_binding(
+        values=[100.0, 200.0, 300.0],
+        cd4_csv=inner,
+    )
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        received = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.subscribe(f"marstek_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl",
+                payload=b"cd=4,p1=0",
+            )
+            await _collect_messages(
+                client, received, timeout=5, stop=lambda _: len(received) >= 2
+            )
+
+        assert len(received) == 2
+        expected = inner.encode()
+        for msg in received:
+            assert msg.payload == expected
+        assert calls == [("cd4",)]
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_ignores_non_poll_payload(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port)
+    binding, calls = _make_binding()
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        received = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=0"
+            )
+            await _collect_messages(client, received, timeout=1)
+
+        assert received == []
+        assert calls == []
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_unregister_stops_replies(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port)
+    binding, _ = _make_binding()
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+
+            # Initial poll — expect one reply
+            first = []
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
+            )
+            await _collect_messages(
+                client, first, timeout=5, stop=lambda _: len(first) >= 1
+            )
+            assert len(first) == 1
+
+            # Unregister and poll again — expect no reply
+            await service.unregister_marstek(binding.device_id)
+            second = []
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
+            )
+            await _collect_messages(client, second, timeout=1)
+            assert second == []
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_opt_out_disables_subscription(mqtt_broker):
+    port = mqtt_broker
+    global _test_counter
+    _test_counter += 1
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="127.0.0.1",
+            port=port,
+            base_topic=f"test_insights_{_test_counter}",
+            ha_discovery=True,
+            ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            marstek_mqtt_enabled=False,
+        )
+    )
+    binding, calls = _make_binding()
+    await service.register_marstek(binding)  # no-op when disabled
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
+            )
+            received = []
+            await _collect_messages(client, received, timeout=1)
+            assert received == []
+            assert calls == []
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_get_values_failure_suppressed(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port)
+    binding, calls = _make_binding(raises=RuntimeError("powermeter offline"))
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
+            )
+            received = []
+            await _collect_messages(client, received, timeout=1)
+            assert received == []
+        # get_values was called but no reply was published
+        await _poll(lambda: binding.device_id in service._marstek_get_values_failed)
+        assert calls == [("meter",)]
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
+    """A binding registered before start() must get its App topics
+    subscribed on the first connect."""
+    port = mqtt_broker
+    service = _make_service(port)
+    binding, _ = _make_binding()
+    # Register *before* start — the service must pick this up on connect.
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await client.publish(
+                f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
+            )
+            received = []
+            await _collect_messages(
+                client, received, timeout=5, stop=lambda _: len(received) >= 1
+            )
+        assert len(received) == 1
+        assert received[0].payload.startswith(
+            b"pwr_a=100,pwr_b=200,pwr_c=300,pwr_t=600,wif_s=2,wif_r=-50,ver_v=148,slv_n=0,cur_d=0,"
+        )
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_periodic_broadcast(mqtt_broker):
+    """When marstek_mqtt_interval > 0, responses are published periodically
+    without requiring a poll request from the app."""
+    port = mqtt_broker
+    global _test_counter
+    _test_counter += 1
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="127.0.0.1",
+            port=port,
+            base_topic=f"test_insights_{_test_counter}",
+            ha_discovery=True,
+            ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            marstek_mqtt_interval=0.2,
+        )
+    )
+    binding, calls = _make_binding(values=[100.0, 200.0, 300.0])
+    await service.register_marstek(binding)
+
+    async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+        await sub.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+        await sub.subscribe(f"marstek_energy/HME-4/device/{binding.mac}/ctrl")
+
+        await service.start()
+        try:
+            await service.wait_connected()
+
+            received: list[aiomqtt.Message] = []
+            # At least 2 broadcast rounds -> 4 messages (2 topics x 2 rounds)
+            await _collect_messages(
+                sub, received, timeout=5, stop=lambda _: len(received) >= 4
+            )
+
+            assert len(received) >= 4
+            expected = _MARSTEK_CD1_FULL
+            for msg in received:
+                assert msg.payload == expected
+            assert len(calls) >= 2
+        finally:
+            await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker):
+    """marstek_mqtt_interval=0 disables the periodic broadcast loop; only
+    explicit poll requests trigger a response."""
+    port = mqtt_broker
+    global _test_counter
+    _test_counter += 1
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="127.0.0.1",
+            port=port,
+            base_topic=f"test_insights_{_test_counter}",
+            ha_discovery=True,
+            ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            marstek_mqtt_interval=0,
+        )
+    )
+    binding, calls = _make_binding(values=[100.0, 200.0, 300.0])
+    await service.register_marstek(binding)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        received: list[aiomqtt.Message] = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
+            await _collect_messages(sub, received, timeout=1)
+
+        assert received == []
+        assert calls == []
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker):
+    """A slow get_values for one binding must not block polls for another.
+
+    With the offload-to-task design, the listener stays responsive even
+    while a prior poll handler is still awaiting its powermeter.
+    """
+    port = mqtt_broker
+    service = _make_service(port)
+
+    slow_gate = asyncio.Event()
+
+    async def _slow_values() -> list[float]:
+        # Block until the test explicitly releases this handler.
+        await slow_gate.wait()
+        return [1.0, 2.0, 3.0]
+
+    slow = MarstekMqttBinding(
+        device_id="slow-ct",
+        ct_type="HME-4",
+        mac="02b250111111",
+        get_values=_slow_values,
+        wifi_rssi=-50,
+    )
+    fast, _ = _make_binding(
+        device_id="fast-ct", mac="02b250222222", values=[10.0, 20.0, 30.0]
+    )
+
+    await service.register_marstek(slow)
+    await service.register_marstek(fast)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
+            await client.subscribe(f"hame_energy/HME-4/device/{fast.mac}/ctrl")
+
+            # Trigger the slow poll first — its handler will block in get_values.
+            await client.publish(
+                f"hame_energy/HME-4/App/{slow.mac}/ctrl", payload=b"cd=1"
+            )
+            # Immediately trigger the fast poll — if the listener were
+            # stalled, we'd never see its reply.
+            await client.publish(
+                f"hame_energy/HME-4/App/{fast.mac}/ctrl", payload=b"cd=1"
+            )
+            received = []
+            await _collect_messages(
+                client, received, timeout=5, stop=lambda _: len(received) >= 1
+            )
+
+        assert len(received) == 1
+        assert received[0].payload.startswith(
+            b"pwr_a=10,pwr_b=20,pwr_c=30,pwr_t=60,wif_s=2,wif_r=-50,ver_v=148,slv_n=0,cur_d=0,"
+        )
+    finally:
+        slow_gate.set()
+        await service.stop()

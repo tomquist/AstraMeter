@@ -336,6 +336,7 @@ Optional Marstek cloud auto-registration:
   - Refresh the CT device list after registration (or log out/in if needed). Then select `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and choose that CT. It should be selectable as soon as it appears in the device list.
   - Marstek credentials are only needed for one-time registration. You can remove `MARSTEK.MAILBOX` / `MARSTEK.PASSWORD` immediately after registration succeeds (or if the managed device already exists).
   - If you use Home Assistant app `custom_config`, values from that file take precedence over app UI fields.
+  - **Marstek app (optional):** live CT grid power over MQTT uses the same `[MQTT_INSIGHTS]` broker as [hame-relay](https://github.com/tomquist/hame-relay) **≥ 1.3.5**; see [MQTT Insights](#mqtt-insights) (optional Marstek subsection). HA entities do not depend on this.
 
 ### Value Transformation
 
@@ -861,11 +862,13 @@ CURRENT_POWER_ENTITY = sensor.current_power
 
 ### MQTT Insights
 
-Publishes internal state (grid power per phase, charge targets, saturation, consumer topology) to MQTT with optional Home Assistant auto-discovery.
+**Primary use:** publish CT002/Shelly internal state (grid power, targets, saturation, topology, switches) to MQTT with **optional Home Assistant MQTT Device Discovery** so entities show up in HA.
 
-**Home Assistant App**: When running as an HA app with the Mosquitto broker app installed, MQTT Insights is auto-configured — no manual setup needed. Entities appear automatically in HA.
+**Home Assistant app:** With the Mosquitto add-on installed, MQTT Insights is auto-configured; entities appear without manual `[MQTT_INSIGHTS]` wiring.
 
-**Manual configuration**:
+**Small add-on:** the same broker connection can optionally answer **Marstek CT002/CT003 MQTT polls** so the Marstek mobile app shows live grid power when you use [hame-relay](https://github.com/tomquist/hame-relay) on that broker (see below). You can turn that off with `MARSTEK_MQTT_ENABLED=false` and keep HA publishing unchanged.
+
+**Manual configuration** (when not using the HA app defaults):
 
 ```ini
 [MQTT_INSIGHTS]
@@ -889,6 +892,24 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `BASE_TOPIC` | `astrameter` | Root topic for all published messages |
 | `HA_DISCOVERY` | `true` | Enable Home Assistant MQTT Device Discovery |
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
+| `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
+| `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
+
+#### Optional: Marstek mobile app (live MQTT)
+
+This is **not** required for Home Assistant. It only helps the **Marstek app** show live CT002/CT003 grid power over the same cloud MQTT path when **[hame-relay](https://github.com/tomquist/hame-relay)** bridges your broker—use **hame-relay ≥ 1.3.5** so poll/replies work reliably. UDP between batteries and AstraMeter is unchanged for control.
+
+**If you want it**
+
+- **`[MARSTEK]`** — Managed fake CT so the **MQTT MAC** matches the cloud device.
+- **Same broker as hame-relay** — `[MQTT_INSIGHTS]` must point at the broker relay uses toward Marstek's cloud.
+
+**Toggles** (defaults in table)
+
+- **`MARSTEK_MQTT_ENABLED`** — `false` = HA MQTT Insights only, no Marstek poll replies.
+- **`MARSTEK_MQTT_INTERVAL`** — Optional periodic aggregate pushes; **`0`** = answer polls only.
+
+Replies follow the usual `hame_energy/…` / `marstek_energy/…` App/device topics for a real CT; AstraMeter matches your CT002/CT003 **type** and **MAC**.
 
 **Published entities** (per CT002 consumer):
 - Grid power (L1/L2/L3/total), charge target (L1/L2/L3), reported power, saturation

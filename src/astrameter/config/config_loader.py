@@ -700,6 +700,9 @@ def read_mqtt_insights_config(
             raw_port = config.get(section, "PORT", fallback="")
             raw_tls = config.get(section, "TLS", fallback="")
             raw_ha_discovery = config.get(section, "HA_DISCOVERY", fallback="")
+            raw_marstek_mqtt_enabled = config.get(
+                section, "MARSTEK_MQTT_ENABLED", fallback=""
+            ).strip()
             uri = config.get(section, "URI", fallback="").strip()
             if uri:
                 parts = parse_mqtt_uri(uri)
@@ -732,5 +735,15 @@ def read_mqtt_insights_config(
                 addon_slug=(
                     config.get(section, "ADDON_SLUG", fallback="").strip() or None
                 ),
+                marstek_mqtt_enabled=config.getboolean(section, "MARSTEK_MQTT_ENABLED")
+                if raw_marstek_mqtt_enabled
+                else True,
+                marstek_mqtt_interval=float(raw_interval)
+                if (
+                    raw_interval := config.get(
+                        section, "MARSTEK_MQTT_INTERVAL", fallback=""
+                    ).strip()
+                )
+                else 300,
             )
     return None
