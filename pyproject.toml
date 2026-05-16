@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astrameter"
-version = "2.0.0"
+version = "2.0.1"
 description = "Power-meter monitoring for Marstek battery inverters (formerly b2500-meter)"
 readme = "README.md"
 requires-python = ">=3.10"
