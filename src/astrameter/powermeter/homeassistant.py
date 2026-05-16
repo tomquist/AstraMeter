@@ -127,16 +127,20 @@ class HomeAssistant(Powermeter):
                 raise
             except Exception as e:
                 logger.error("Home Assistant WebSocket error: %s", e, exc_info=True)
-            # Reset protocol state and invalidate cached values so
-            # ``get_powermeter_watts`` raises (and ``wait_for_message``
-            # blocks) until the reconnected ``subscribe_entities``
-            # snapshot repopulates them.
-            self._msg_id = 0
-            self._subscribe_entities_id = None
-            for eid in list(self._entity_values):
-                self._entity_values[eid] = None
-            self._entities_ready.clear()
+            self._reset_for_reconnect()
             await asyncio.sleep(5)
+
+    def _reset_for_reconnect(self) -> None:
+        """Reset protocol state and invalidate cached values so
+        ``get_powermeter_watts`` raises (and ``wait_for_message`` blocks)
+        until the reconnected ``subscribe_entities`` snapshot repopulates
+        them.
+        """
+        self._msg_id = 0
+        self._subscribe_entities_id = None
+        for eid in list(self._entity_values):
+            self._entity_values[eid] = None
+        self._entities_ready.clear()
 
     def _handle_compressed_entity_event(self, ev: dict[str, Any]) -> None:
         """Apply subscribe_entities payloads (initial + diffs)."""

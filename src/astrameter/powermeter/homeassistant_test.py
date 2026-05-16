@@ -490,16 +490,18 @@ async def test_entities_ready_cleared_when_value_becomes_none():
 # --- state_reported and reconnect behavior --------------------------------
 
 
-async def test_state_reported_event_wakes_wait_for_next_message():
+@pytest.mark.parametrize("ts_key", ["lu", "lc"])
+async def test_state_reported_event_wakes_wait_for_next_message(ts_key: str):
     """HA's ``subscribe_entities`` omits ``s`` from the diff when a sensor
     is reported with an unchanged value (only ``lu``/``lc`` updates).
     ``wait_for_next_message`` must still wake on those so callers like the
     Shelly emulator don't time out on constant sensors that the
-    integration is still actively reporting.
+    integration is still actively reporting — and the cached numeric value
+    must remain unchanged (the keepalive carries no new ``s``).
     """
     pm = _create_powermeter()
     await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
+        pm, [{"entity_id": "sensor.current_power", "state": "42"}]
     )
     pm._message_event.clear()
     waiter = asyncio.create_task(pm.wait_for_next_message(timeout=1))
@@ -512,12 +514,14 @@ async def test_state_reported_event_wakes_wait_for_next_message():
             {
                 "type": "event",
                 "event": {
-                    "c": {"sensor.current_power": {"+": {"lu": 1000.0}}},
+                    "c": {"sensor.current_power": {"+": {ts_key: 1000.0}}},
                 },
             }
         ),
     )
     await waiter  # would raise TimeoutError if state_reported didn't wake it
+    # Keepalive carries no ``s``; the cached value must be preserved.
+    assert pm._entity_values["sensor.current_power"] == 42.0
 
 
 async def test_state_reported_before_initial_value_is_ignored():
@@ -547,26 +551,26 @@ async def test_state_reported_before_initial_value_is_ignored():
 
 
 async def test_reconnect_invalidates_cached_values():
-    """A websocket disconnect must invalidate cached values and clear the
-    ready flag, so ``get_powermeter_watts`` raises and
-    ``wait_for_message`` blocks again until the reconnected
-    ``subscribe_entities`` snapshot arrives. Without this, callers would
-    serve potentially-old values for the duration of the reconnect.
+    """A websocket disconnect must invalidate cached values, clear the
+    ready flag, and reset the protocol counter so the reconnected
+    ``subscribe_entities`` snapshot is what callers see — not stale
+    cache. Drives the real ``_reset_for_reconnect`` method that
+    ``_ws_loop`` invokes after a disconnect, so a regression in any of
+    its four resets is caught here.
     """
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
     )
+    pm._subscribe_entities_id = 42  # non-default; the reset must clear it
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [100.0]
 
-    # Simulate the reset block in ``_ws_loop`` after a disconnect.
-    pm._msg_id = 0
-    pm._subscribe_entities_id = None
-    for eid in list(pm._entity_values):
-        pm._entity_values[eid] = None
-    pm._entities_ready.clear()
+    pm._reset_for_reconnect()
 
+    assert pm._msg_id == 0
+    assert pm._subscribe_entities_id is None
+    assert pm._entity_values["sensor.current_power"] is None
     assert not pm._entities_ready.is_set()
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
@@ -576,3 +580,33 @@ async def test_reconnect_invalidates_cached_values():
     )
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [250.0]
+
+
+async def test_unavailable_blocks_wait_for_message():
+    """When a sensor transitions to ``unavailable`` mid-stream, the ready
+    flag must clear so ``wait_for_message`` blocks again — callers
+    waiting for a usable reading shouldn't see the immediate return
+    they'd get from a fully-ready snapshot.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
+    )
+    await pm.wait_for_message(timeout=1)  # returns immediately when ready
+
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "c": {"sensor.current_power": {"+": {"s": "unavailable"}}},
+                },
+            }
+        ),
+    )
+
+    assert pm._entity_values["sensor.current_power"] is None
+    with pytest.raises(TimeoutError):
+        await pm.wait_for_message(timeout=0.05)
