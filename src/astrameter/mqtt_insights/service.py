@@ -112,8 +112,9 @@ class MqttInsightsService:
         self._marstek_get_values_failed: set[str] = set()
         # In-flight poll handlers — tracked so one slow powermeter doesn't
         # block the listener loop, and so we can cancel pending tasks on
-        # reconnect / shutdown.
-        self._marstek_tasks: set[asyncio.Task[None]] = set()
+        # reconnect / shutdown. Keyed by binding device_id so we serialize
+        # work per binding (skip spawning while a prior task is in flight).
+        self._marstek_tasks_by_binding: dict[str, asyncio.Task[None]] = {}
 
     # ── Public API (called from device event listeners) ───────────────
 
@@ -206,11 +207,19 @@ class MqttInsightsService:
         async with self._marstek_lock:
             binding = self._marstek_bindings.pop(device_id, None)
             self._marstek_get_values_failed.discard(device_id)
+            # Cancel any in-flight poll handler so it can't publish a stale
+            # reply after the binding is gone. The done_callback removes the
+            # entry from the map.
+            pending_task = self._marstek_tasks_by_binding.get(device_id)
             client = self._client
             if binding is not None and client is not None:
                 for topic in app_topics_for(binding):
                     with contextlib.suppress(aiomqtt.MqttError):
                         await client.unsubscribe(topic)
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pending_task
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -704,13 +713,11 @@ class MqttInsightsService:
             async with self._marstek_lock:
                 bindings = tuple(self._marstek_bindings.values())
             for binding in bindings:
-                task = asyncio.create_task(
-                    self._serve_marstek_poll(
-                        client, binding, MarstekPollContext(echo_cd=1, slave_id=None)
-                    )
+                self._spawn_marstek_poll_task(
+                    client,
+                    binding,
+                    MarstekPollContext(echo_cd=1, slave_id=None),
                 )
-                self._marstek_tasks.add(task)
-                task.add_done_callback(self._marstek_tasks.discard)
             await asyncio.sleep(interval)
 
     async def _handle_marstek_message(
@@ -734,9 +741,34 @@ class MqttInsightsService:
             logger.debug("Marstek MQTT: non-poll payload on %s", topic)
             return
 
+        self._spawn_marstek_poll_task(client, binding, poll)
+
+    def _spawn_marstek_poll_task(
+        self,
+        client: aiomqtt.Client,
+        binding: MarstekMqttBinding,
+        poll: MarstekPollContext,
+    ) -> None:
+        """Spawn a poll handler task, but only if one isn't already in flight
+        for *binding*. Concurrent overlapping reads for the same binding are
+        suppressed so a slow powermeter can't queue up duplicate work."""
+        existing = self._marstek_tasks_by_binding.get(binding.device_id)
+        if existing is not None and not existing.done():
+            logger.debug(
+                "Marstek MQTT: skipping poll for %s — prior handler still running",
+                binding.device_id,
+            )
+            return
         task = asyncio.create_task(self._serve_marstek_poll(client, binding, poll))
-        self._marstek_tasks.add(task)
-        task.add_done_callback(self._marstek_tasks.discard)
+        self._marstek_tasks_by_binding[binding.device_id] = task
+
+        def _done(t: asyncio.Task[None], _device_id: str = binding.device_id) -> None:
+            # Only clear the slot if it still points at *this* task — a later
+            # unregister/register could have replaced it.
+            if self._marstek_tasks_by_binding.get(_device_id) is t:
+                self._marstek_tasks_by_binding.pop(_device_id, None)
+
+        task.add_done_callback(_done)
 
     async def _serve_marstek_poll(
         self,
@@ -792,17 +824,25 @@ class MqttInsightsService:
                 binding, list(watts), poll=poll, connected_slave_count=n_slaves
             )
 
+        # Re-check the active binding before publishing: unregister_marstek
+        # may have run while we awaited get_values, in which case publishing
+        # a reply for a defunct binding would leak stale data.
+        async with self._marstek_lock:
+            current = self._marstek_bindings.get(binding.device_id)
+        if current is not binding:
+            return
+
         for reply_topic in device_topics_for(binding):
             with contextlib.suppress(aiomqtt.MqttError):
                 await client.publish(reply_topic, payload=payload, qos=0, retain=False)
 
     async def _cancel_marstek_tasks(self) -> None:
-        pending = tuple(self._marstek_tasks)
+        pending = tuple(self._marstek_tasks_by_binding.values())
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        self._marstek_tasks.clear()
+        self._marstek_tasks_by_binding.clear()
 
     async def _find_marstek_binding(
         self, ct_type: str, mac: str

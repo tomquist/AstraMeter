@@ -366,7 +366,12 @@ async def run_device(
                     chosen = _pms[0][0]
                 if chosen is None:
                     return [0.0, 0.0, 0.0]
-                await chosen.wait_for_next_message()
+                # Bound the wait so a quiet/offline powermeter can't pin a
+                # Marstek poll responder task; fall back to last-known values.
+                with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+                    await asyncio.wait_for(
+                        chosen.wait_for_next_message(), timeout=2.0
+                    )
                 vs = await chosen.get_powermeter_watts_raw()
                 return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
 
@@ -511,6 +516,74 @@ async def async_main(
                 logger.exception("Error stopping web server")
 
 
+def _build_managed_marstek(
+    cfg: configparser.ConfigParser, device_types: Sequence[str]
+) -> dict[str, tuple[str, int]]:
+    """Register managed fake CT devices with Marstek and return the MAC/ver map.
+
+    Called both at startup and after a config-driven restart so the MAC/version
+    wiring stays in sync with the (possibly reloaded) config and device_types.
+    """
+    managed_marstek: dict[str, tuple[str, int]] = {}
+    if not cfg.getboolean("MARSTEK", "ENABLE", fallback=False):
+        return managed_marstek
+
+    mailbox = cfg.get("MARSTEK", "MAILBOX", fallback="")
+    password = cfg.get("MARSTEK", "PASSWORD", fallback="")
+    base_url = cfg.get("MARSTEK", "BASE_URL", fallback="https://eu.hamedata.com")
+    timezone_name = cfg.get("MARSTEK", "TIMEZONE", fallback="Europe/Berlin")
+
+    if not mailbox or not password:
+        logger.warning(
+            "MARSTEK.ENABLE is true, but MAILBOX/PASSWORD missing; skipping fake-device auto-registration"
+        )
+        return managed_marstek
+
+    marstek_cfg = MarstekConfig(
+        base_url=base_url,
+        mailbox=mailbox,
+        password=password,
+        timezone=timezone_name,
+    )
+    try:
+        any_ct = False
+        for dt in ("ct002", "ct003"):
+            if dt in device_types:
+                any_ct = True
+                created = ensure_managed_fake_device(marstek_cfg, dt)
+                if created is not None:
+                    normalized = normalize_mac(str(created.get("mac", "")))
+                    if normalized:
+                        managed_marstek[dt] = (
+                            normalized,
+                            ver_v_from_marstek_api_version(created.get("version")),
+                        )
+        if any_ct:
+            logger.info(
+                "Managed fake CT registration completed. Fake CT devices appear as offline in the Marstek app CT list (this is expected)."
+            )
+            ct_names = []
+            if "ct002" in device_types:
+                ct_names.append("AstraMeter CT002")
+            if "ct003" in device_types:
+                ct_names.append("AstraMeter CT003")
+            logger.info(
+                "Pairing hint: refresh the CT device list (or log out/in if needed), select %s, switch battery mode to Automatic, and choose that CT."
+                " The CT should be selectable as soon as it appears in the device list.",
+                (" / ".join(ct_names) if ct_names else "the managed AstraMeter CT"),
+            )
+            logger.info(
+                "Credentials are only needed for one-time registration. You can remove MARSTEK mailbox/password from config now."
+            )
+    except MarstekApiError as exc:
+        logger.error("Marstek auto-registration failed: %s", exc, exc_info=True)
+    except Exception as exc:
+        logger.error(
+            "Unexpected Marstek auto-registration error: %s", exc, exc_info=True
+        )
+    return managed_marstek
+
+
 def _apply_cli_overrides(
     cfg: configparser.ConfigParser, args: argparse.Namespace
 ) -> None:
@@ -642,67 +715,7 @@ def main():
     # When registration succeeds, the returned MAC is captured per device
     # type so the Marstek MQTT responder in MQTT Insights uses the same
     # MAC that hame-relay will route back to the Marstek app.
-    managed_marstek: dict[str, tuple[str, int]] = {}
-    marstek_enabled = cfg.getboolean("MARSTEK", "ENABLE", fallback=False)
-    if marstek_enabled:
-        mailbox = cfg.get("MARSTEK", "MAILBOX", fallback="")
-        password = cfg.get("MARSTEK", "PASSWORD", fallback="")
-        base_url = cfg.get("MARSTEK", "BASE_URL", fallback="https://eu.hamedata.com")
-        timezone_name = cfg.get("MARSTEK", "TIMEZONE", fallback="Europe/Berlin")
-
-        if not mailbox or not password:
-            logger.warning(
-                "MARSTEK.ENABLE is true, but MAILBOX/PASSWORD missing; skipping fake-device auto-registration"
-            )
-        else:
-            marstek_cfg = MarstekConfig(
-                base_url=base_url,
-                mailbox=mailbox,
-                password=password,
-                timezone=timezone_name,
-            )
-            try:
-                any_ct = False
-                for dt in ("ct002", "ct003"):
-                    if dt in device_types:
-                        any_ct = True
-                        created = ensure_managed_fake_device(marstek_cfg, dt)
-                        if created is not None:
-                            normalized = normalize_mac(str(created.get("mac", "")))
-                            if normalized:
-                                managed_marstek[dt] = (
-                                    normalized,
-                                    ver_v_from_marstek_api_version(
-                                        created.get("version")
-                                    ),
-                                )
-                if any_ct:
-                    logger.info(
-                        "Managed fake CT registration completed. Fake CT devices appear as offline in the Marstek app CT list (this is expected)."
-                    )
-                    ct_names = []
-                    if "ct002" in device_types:
-                        ct_names.append("AstraMeter CT002")
-                    if "ct003" in device_types:
-                        ct_names.append("AstraMeter CT003")
-                    logger.info(
-                        "Pairing hint: refresh the CT device list (or log out/in if needed), select %s, switch battery mode to Automatic, and choose that CT."
-                        " The CT should be selectable as soon as it appears in the device list.",
-                        (
-                            " / ".join(ct_names)
-                            if ct_names
-                            else "the managed AstraMeter CT"
-                        ),
-                    )
-                    logger.info(
-                        "Credentials are only needed for one-time registration. You can remove MARSTEK mailbox/password from config now."
-                    )
-            except MarstekApiError as exc:
-                logger.error("Marstek auto-registration failed: %s", exc, exc_info=True)
-            except Exception as exc:
-                logger.error(
-                    "Unexpected Marstek auto-registration error: %s", exc, exc_info=True
-                )
+    managed_marstek = _build_managed_marstek(cfg, device_types)
 
     # Map SIGTERM to KeyboardInterrupt so asyncio.run cancels tasks and
     # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).
@@ -737,6 +750,7 @@ def main():
             cfg.read(args.config)
             _apply_cli_overrides(cfg, args)
             device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
+            managed_marstek = _build_managed_marstek(cfg, device_types)
         except RuntimeError as exc:
             logger.error("%s", exc)
             exit(1)
