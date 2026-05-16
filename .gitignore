@@ -1,2 +1,15 @@
 **/__pycache__/*
-.venv
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+test-results.xml
+coverage.xml
+config.ini
+.DS_Store

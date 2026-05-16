@@ -1,45 +1,39 @@
+# syntax=docker/dockerfile:1
 ARG BUILD_FROM
 ARG BUILD_VERSION
 
-# Build stage
 FROM ${BUILD_FROM:-ghcr.io/hassio-addons/base:17.0.1} AS builder
 
 RUN apk add --no-cache \
     python3 \
     py3-pip
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /usr/local/bin/uv
+
 WORKDIR /app
 
-# Copy the source code from build context (current checkout state)
-COPY . ./
-# Save run.sh before removing ha_addon directory and remove ha_addon directory to avoid conflicts
-RUN mv ha_addon/run.sh /tmp/run.sh && rm -rf ha_addon
+COPY pyproject.toml uv.lock README.md ./
+COPY src/ src/
 
-# Create a virtual environment and install dependencies
-RUN python3 -m venv /app/venv
-ENV PATH="/app/venv/bin:$PATH"
+RUN uv sync --frozen --no-dev --no-editable
 
-RUN pip3 install --no-cache-dir pipenv && \
-    pipenv requirements > requirements.txt && \
-    pip3 install --no-cache-dir -r requirements.txt
-
-# Final stage
 FROM ${BUILD_FROM:-ghcr.io/hassio-addons/base:17.0.1}
+
+ARG GIT_COMMIT_SHA=
+ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install Python
 RUN apk add --no-cache python3
 
 WORKDIR /app
 
-# Copy only necessary files from builder
-COPY --from=builder /app /app
+COPY --from=builder /app/.venv /app/.venv
 
-ENV PATH="/app/venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH"
 
-COPY --from=builder /tmp/run.sh /
+COPY ha_addon/run.sh /run.sh
 RUN chmod a+x /run.sh
 
-CMD [ "/run.sh" ]
+CMD ["/run.sh"]

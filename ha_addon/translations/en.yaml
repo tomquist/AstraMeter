@@ -1,25 +1,61 @@
 configuration:
   power_input_alias:
-    name: Power Input Alias
-    description: "The alias of the sensor(s) that provide the current power input. For multi-phase setups, enter multiple sensors separated by commas (e.g., 'sensor.phase1_in,sensor.phase2_in,sensor.phase3_in')."
+    name: Power Input Entity ID
+    description: "The entity ID of the sensor(s) that provide the current power input. For multi-phase setups, enter multiple entity IDs separated by commas (e.g., 'sensor.phase1_in,sensor.phase2_in,sensor.phase3_in')."
   power_output_alias:
-    name: Power Output Alias
-    description: "The alias of the sensor(s) that provide the current power output. For multi-phase setups, enter multiple sensors separated by commas (e.g., 'sensor.phase1_out,sensor.phase2_out,sensor.phase3_out'). If you only have one sensor for both input and output, leave this empty."
-  poll_interval:
-    name: Poll Interval
-    description: "The interval in seconds at which the ct001 should poll the power input and output sensors. Usually you should leave this at 1 second. Ignore this if you are emulating a different device."
-  disable_absolute_values:
-    name: Allow Negative Values
-    description: "If enabled, the ct001 emulator will allow negative values. This is only compatible with newer versions of the B2500 firmware. Ignore this if you are emulating a different device."
+    name: Power Output Entity ID
+    description: "The entity ID of the sensor(s) that provide the current power output. For multi-phase setups, enter multiple entity IDs separated by commas (e.g., 'sensor.phase1_out,sensor.phase2_out,sensor.phase3_out'). If you only have one sensor for both input and output, leave this empty."
   device_types:
     name: Emulated Devices
-    description: "Comma-separated list of devices to emulate (ct001, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new). The device type shellypro3em_old uses port 1010 (used up until B2500 firmware version 224). The device type shellypro3em_new uses the new port 2220 (used for B2500 firmare >=226). If you use shellypro3em, it will use shellypro3em_old and shellypro3em_new simultaneously for backwards compatibility. If possible, always prefer a Shelly device type over ct001."
+    description: "Comma-separated list of devices to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new). Use ct002 or ct003 for multiple storage devices; use a Shelly type otherwise. The device type shellypro3em_old uses port 1010 (used up until B2500 firmware version 224). The device type shellypro3em_new uses the new port 2220 (used for B2500 firmware >=226). If you use shellypro3em, it will use shellypro3em_old and shellypro3em_new simultaneously for backwards compatibility."
+  ct_mac:
+    name: CT MAC Override
+    description: "Optional MAC address of the emulated CT device (the CT MAC addressed in incoming requests). Leave empty to respond regardless of addressed CT MAC and mirror that addressed CT MAC in the response. If set, only requests addressed to this CT MAC are answered."
   throttle_interval:
     name: Throttling Interval
     description: "Minimum time interval (in seconds) between power meter readings. When set to 0, throttling is disabled for maximum performance. For slower data sources or to prevent control instability, set to 1-3 seconds. Supports decimal values (e.g., 1.5 for 1.5 seconds). Increase this value if you're seeing oscillations or instability with slow data sources."
+  wait_for_next_message:
+    name: Wait For Fresh Home Assistant Reading
+    description: "When enabled (default), the app waits briefly (up to 2 seconds) for Home Assistant to push a fresh value before responding to the battery, keeping control loops on the freshest data. Disable this if your source sensor (e.g. a P1 smart meter) updates slower than 2 seconds — turning it off avoids the needless wait and always serves the last-known value immediately."
   log_level:
     name: Log Level
     description: "Controls the verbosity of log messages. Select 'critical' for only critical errors, 'error' for error messages and above, 'warning' for warnings and above, 'info' for informational messages and above (recommended), or 'debug' for detailed debugging information. Use 'debug' for troubleshooting connection or configuration issues."
   custom_config:
     name: Custom Config
-    description: "Optional. Name of a custom config.ini file to use instead of the UI configuration. The file must be placed in the add-on's configuration directory."
+    description: "Optional. Name of a custom config.ini file to use instead of the UI configuration. The file must be placed in the app's configuration directory."
+  mqtt_uri:
+    name: Custom MQTT URI
+    description: "Optional. MQTT broker URI for MQTT Insights, e.g. mqtt://user:pass@broker.example.com:1883 (or mqtts:// for TLS). When set, this overrides Home Assistant's internal MQTT broker. Leave empty to use the Mosquitto add-on automatically."
+  min_efficient_power:
+    name: Min Efficient Power
+    description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."
+  efficiency_rotation_interval:
+    name: Efficiency Rotation Interval
+    description: "Seconds between rotating which battery has priority when Min Efficient Power is active (default 900). Ensures fair wear across batteries by periodically swapping which batteries are active and which are idled. Minimum value is 1. Only applies to CT002/CT003 device types."
+  marstek_auto_register_ct_device:
+    name: Auto-register Managed CT Device (Marstek)
+    description: "If enabled, the app signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."
+  marstek_mailbox:
+    name: Marstek Account Email
+    description: "Email address used to sign in to your Marstek account for managed CT device registration."
+  marstek_password:
+    name: Marstek Account Password
+    description: "Password used to sign in to your Marstek account for managed CT device registration."
+  power_offset:
+    name: Power Offset
+    description: "Optional. Added to each power value after the multiplier is applied. Single value (e.g. -50) or a comma-separated list (one per phase, e.g. -50,-30,-40). Leave empty to disable."
+  power_multiplier:
+    name: Power Multiplier
+    description: "Optional. Scales each power value (formula: value * POWER_MULTIPLIER + POWER_OFFSET). Single value (e.g. 1.05) or a comma-separated list (one per phase, e.g. 1.05,1.02,1.03). Use -1 to flip polarity. Leave empty to disable."
+  dedupe_time_window:
+    name: Deduplication Time Window
+    description: "Optional. Seconds during which repeat requests from the same battery are ignored. Applies to both CT002/CT003 (keyed by consumer id) and Shelly (keyed by battery IP) emulators. Set to 0 or leave empty to disable."
+  smooth_target_alpha:
+    name: Smoothing Alpha (EMA)
+    description: "Optional. Exponential moving-average factor in (0, 1] applied to power readings from Home Assistant. Smaller values smooth more heavily (e.g. 0.1 = heavy smoothing, 0.5 = light). Leave empty to disable."
+  max_smooth_step:
+    name: Max Smoothing Step
+    description: "Optional. Caps the maximum watt change per cycle when smoothing is active. Use together with Smoothing Alpha to bound per-step jumps (e.g. 200). Leave empty or 0 for unlimited."
+  deadband:
+    name: Deadband (W)
+    description: "Optional. Readings with absolute value below this threshold are reported as 0 W to stop battery micro-cycling near zero demand (e.g. 5). Leave empty or 0 to disable."

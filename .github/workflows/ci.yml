@@ -2,66 +2,112 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main", "develop" ]
     tags: [ "*.*.*" ]
   pull_request:
-    branches: [ main ]
+    branches: [ "main", "develop" ]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  packages: write
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy src/
+
   validate:
+    needs: [ lint ]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python-version: [ "3.10", "3.11", "3.12", "3.13" ]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-suffix: ${{ matrix.python-version }}
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install mosquitto (for MQTT integration tests)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto
+
       - name: Install dependencies
-        run: |
-          pip install pipenv
-          pipenv install --dev
+        run: uv sync --frozen --extra dev
 
       - name: Run tests
-        run: pipenv run python3 -m pytest --junitxml=test-results.xml
-
-      - name: Validate Python code with flake8
-        run: pipenv run python3 -m flake8 --select BLK **/*.py
+        run: uv run pytest --cov=astrameter --cov-report=xml --junitxml=test-results.xml
 
       - name: Upload test results
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.python-version }}
           path: test-results.xml
 
+      - name: Upload coverage XML
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+
   build:
+    needs: [ validate ]
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         config:
           - platform: linux/amd64
-            base: distroless
-          - platform: linux/arm/v6
-            base: alpine
+            cache_scope: base-linux-amd64
           - platform: linux/arm/v7
-            base: alpine
+            cache_scope: base-linux-arm-v7
           - platform: linux/arm64
-            base: distroless
+            cache_scope: base-linux-arm64
     uses: ./.github/workflows/build-image.yml
     with:
       registry: ghcr.io
       platform: ${{ matrix.config.platform }}
-      base: ${{ matrix.config.base }}
+      cache_scope: ${{ matrix.config.cache_scope }}
       context: .
       dockerfile: ./Dockerfile
       image-suffix: ""
@@ -69,40 +115,53 @@ jobs:
       push: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
 
   merge:
-    needs: [build]
+    needs: [ build ]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/merge-manifests.yml
     with:
       registry: ghcr.io
       image-suffix: ""
       digest-prefix: "digests-base-"
+      legacy-image-name: tomquist/b2500-meter
 
   build-addon:
+    needs: [ validate ]
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - linux/amd64
-          - linux/arm64
-          - linux/arm/v7
-          - linux/arm/v6
+        include:
+          - platform: linux/amd64
+            cache_scope: addon-linux-amd64
+          - platform: linux/arm64
+            cache_scope: addon-linux-arm64
     uses: ./.github/workflows/build-image.yml
     with:
       registry: ghcr.io
       platform: ${{ matrix.platform }}
+      cache_scope: ${{ matrix.cache_scope }}
       context: .
       dockerfile: ./ha_addon/Dockerfile
       build-args: |
-        BUILD_FROM=ghcr.io/hassio-addons/base:14.2.2
+        BUILD_FROM=ghcr.io/hassio-addons/base:17.0.1
       image-suffix: "-addon"
       digest-prefix: "digests-addon-"
       push: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
 
   merge-addon:
-    needs: [build-addon]
+    needs: [ build-addon ]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/merge-manifests.yml
     with:
       registry: ghcr.io
       image-suffix: "-addon"
       digest-prefix: "digests-addon-"
+      legacy-image-name: tomquist/b2500-meter

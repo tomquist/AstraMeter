@@ -1,5 +1,5 @@
-name: "B2500 Meter"
-url: "https://githubhub.com/tomquist/b2500-meter"
+name: "AstraMeter"
+url: "https://github.com/tomquist/astrameter"
 maintainer: "Tom Quist <tomquist@users.noreply.github.com>"
 addons:
   b2500_meter:

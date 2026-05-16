@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "astrameter"
+version = "2.0.0"
+description = "Power-meter monitoring for Marstek battery inverters (formerly b2500-meter)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "aiohttp>=3.9.0",
+    "requests",
+    "urllib3>=2.6.3,<3",
+    "aiomqtt>=2.0.0,<3",
+    "jsonpath-ng",
+    "pymodbus==3.6.5",
+    "smllib",
+    "pyserial-asyncio-fast",
+    "configupdater>=3.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-timeout>=2.0.0",
+    "mypy>=1.13.0",
+]
+sim = [
+    "textual>=1.0.0",
+    "textual-plot>=0.10.1",
+]
+
+[project.scripts]
+astrameter = "astrameter.main:main"
+astra-sim = "astrameter.simulator.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/astrameter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "src"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-ra -q"
+asyncio_mode = "auto"
+timeout = 90
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# Formatter handles wrapping; avoid duplicate line-length noise with E501
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["astrameter"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+warn_return_any = false
+ignore_missing_imports = true
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = ["src"]
+# Typed surfaces only; full strictness would require annotating the whole codebase
+check_untyped_defs = false
+disallow_incomplete_defs = false
+disable_error_code = ["import-untyped"]

@@ -1,20 +1,24 @@
-# B2500 Meter
+# AstraMeter
 
-This project emulates Smart Meter devices for Marstek storage systems such as the B2500, Marstek Jupiter, and Marstek Venus energy storage systems while allowing integration with almost any smart meter. It does this by emulating one or more of the following devices:
-- CT001
+> **Formerly known as b2500-meter.** The project was renamed to reflect support
+> for the full range of Marstek storage systems (B2500, Jupiter, Venus, …),
+> not just the B2500.
+
+This project emulates Smart Meter devices for Marstek storage systems such as the B2500, Jupiter, and Venus while allowing integration with almost any smart meter. It does this by emulating one or more of the following devices:
+- CT002 / CT003 (Marstek CT protocol; use for **multiple** storage devices)
 - Shelly Pro 3EM
   - Uses port 1010 (B2500 firmware up to version 224) and port 2220 (B2500 firmware version 226+)
   - Can be specifically targeted with shellypro3em_old (port 1010) or shellypro3em_new (port 2220)
 - Shelly EM gen3
 - Shelly Pro EM50
 
-**Note:** If your B2500 or Marstek storage system supports it, always prefer a Shelly device type over CT001 for better compatibility and reliability.
+**Note:** Use **CT002** or **CT003** when you steer **multiple** storage devices; use a **Shelly** device type (`shellypro3em`, `shellyemg3`, `shellyproem50`, …) otherwise. See [Configuration](#configuration) and [docs/ct002-ct003-protocol.md](docs/ct002-ct003-protocol.md) for CT002/CT003.
 
 ## Getting Started
 
-The B2500 Meter project can be installed and run in several ways depending on your needs and environment:
+The AstraMeter project can be installed and run in several ways depending on your needs and environment:
 
-1. **Home Assistant Add-on** (Recommended for Home Assistant users)
+1. **Home Assistant App** (Recommended for Home Assistant users)
    - Easiest installation method if you're using Home Assistant
    - Provides a user-friendly interface for configuration
    - Integrates seamlessly with your Home Assistant installation
@@ -29,48 +33,49 @@ The B2500 Meter project can be installed and run in several ways depending on yo
    - Requires Python environment setup
    - More flexible for customization and development
 
-### Home Assistant Add-on Installation
+### Home Assistant App Installation
 
 1. **Add the Repository to Home Assistant**
 
-   [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fb2500-meter)
+   [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fastrameter%23main)
 
-3. **Install the Add-on**
-   - Click on "Add-on Store" in the bottom right corner
-   - The B2500 Meter add-on should appear in the add-on store
+3. **Install the App**
+   - Click on "App Store" in the bottom right corner
+   - The AstraMeter app should appear in the app store
    - Click on it and then click "Install"
 
-4. **Configure the Add-on**
-   You can configure the add-on in two ways:
+4. **Configure the App**
+   You can configure the app in two ways:
 
-   A) Using the Add-on Configuration Interface:
-   - After installation, go to the add-on's Configuration tab
+   A) Using the App Configuration Interface:
+   - After installation, go to the app's Configuration tab
    - For single-phase monitoring:
-     - Set the `Power Input Alias` and optionally the `Power Output Alias` to the entity IDs of your power sensors
+     - Set the `Power Input Entity ID` and optionally the `Power Output Entity ID` to the entity IDs of your power sensors
    - For three-phase monitoring:
-     - Set the `Power Input Alias` to a comma-separated list of three entity IDs (one for each phase)
-     - If using calculated power, also set the `Power Output Alias` to a comma-separated list of three entity IDs
+     - Set the `Power Input Entity ID` to a comma-separated list of three entity IDs (one for each phase)
+     - If using calculated power, also set the `Power Output Entity ID` to a comma-separated list of three entity IDs
      - Example: `sensor.phase1,sensor.phase2,sensor.phase3`
    - Set `Device Types` (comma-separated list) to the device types you want to emulate:
-     - `ct001`: CT001 emulator
+     - `ct002`: CT002 emulator (Marstek CT002 protocol)
+     - `ct003`: CT003 emulator (same protocol as CT002)
      - `shellypro3em`: Shelly Pro 3EM emulator (uses both ports 1010 and 2220 for compatibility with all B2500 firmware versions)
      - `shellypro3em_old`: Shelly Pro 3EM emulator using port 1010 (for B2500 firmware up to v224)
      - `shellypro3em_new`: Shelly Pro 3EM emulator using port 2220 (for B2500 firmware v226+)
      - `shellyemg3`: Shelly EM gen3 emulator
      - `shellyproem50`: Shelly Pro EM50 emulator
      
-     **Important:** Always prefer a Shelly device type over CT001 if supported by your energy storage system.
+     **Tip:** Use `ct002`/`ct003` for multiple devices; use a Shelly type (e.g. `shellypro3em` or `_old`/`_new`) otherwise.
    - Click "Save" to apply the configuration
 
    B) Using a Custom Configuration File for Advanced Configuration:
    - Create a `config.ini` file based on the examples in the [Configuration](#configuration) section
-   - Place the file in `/addon_configs/a0ef98c5_b2500_meter/`. You can do that via "File editor" Addon in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor Addon config to access the `/addon_configs` folder.
-   - In the add-on configuration, set `Custom Config` to the filename (e.g., "config.ini" without the path)
+   - Place the file in `/addon_configs/a0ef98c5_b2500_meter/` (path uses the legacy slug `b2500_meter` for in-place upgrade compatibility). You can do that via "File editor" app in Home Assistant. Make sure to disable the "Enforce Basepath" setting in the File editor app config to access the `/addon_configs` folder.
+   - In the app configuration, set `Custom Config` to the filename (e.g., "config.ini" without the path)
    - When using a custom configuration file, other configuration options will be ignored
 
-5. **Start the Add-on**
-   - Go to the add-on's Info tab
-   - Click "Start" to run the add-on
+5. **Start the App**
+   - Go to the app's Info tab
+   - Click "Start" to run the app
 
 ### Docker Installation
 
@@ -85,13 +90,40 @@ The B2500 Meter project can be installed and run in several ways depending on yo
    ```bash
    docker-compose up -d
    ```
-Note: Host network mode is required because the B2500 device uses UDP broadcasts for device discovery. Without host networking, the container won't be able to receive these broadcasts properly.
+   You can control the verbosity by setting the `LOG_LEVEL` environment
+   variable (for example `-e LOG_LEVEL=debug`). If not set the container
+   defaults to `info`.
+Note: Host network mode is required because Marstek devices use UDP broadcasts for device discovery. Without host networking, the container won't be able to receive these broadcasts properly.
+
+### Pre-release builds (`next`)
+
+CI publishes **pre-release** container images from the **`develop`** branch with the **`next`** tag on GitHub Container Registry. These track the latest changes before a stable release and **may be less stable** than **`latest`**—use them to try fixes early or to validate the app before it lands on **`main`**.
+
+**Home Assistant App**
+
+1. Add the repository pointing at the **`develop`** branch (same flow as [Home Assistant App Installation](#home-assistant-app-installation), but use this URL):
+
+   `https://github.com/tomquist/astrameter#develop`
+
+   [![Add develop repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ftomquist%2Fastrameter%23develop)
+
+2. Install or update the **AstraMeter** app from the store. Supervisor will pull the **`next`**-tagged image (`ghcr.io/tomquist/astrameter-addon:next`).
+
+To return to stable releases, remove this repository and add the normal URL without `#develop` ([step 1 under Home Assistant App Installation](#home-assistant-app-installation)), then reinstall or wait for an update to the **`latest`** track.
+
+**Docker**
+
+Use the **`next`** image instead of **`latest`** in `docker-compose.yaml` (or `docker run`):
+
+```yaml
+image: ghcr.io/tomquist/astrameter:next
+```
 
 ### Direct Installation
 
 #### Prerequisites
 
-1. **Python Installation:** Make sure you have Python 3.8 or higher installed. You can download it from the [official Python website](https://www.python.org/downloads/).
+1. **Python Installation:** Use Python **3.10 or newer** (see [CONTRIBUTING.md](CONTRIBUTING.md)). You can download Python from the [official Python website](https://www.python.org/downloads/).
 2. **Configuration:** Create a `config.ini` file in the root directory of the project and add the appropriate configuration as described in the [Configuration](#configuration) section.
 
 #### Installation Steps
@@ -103,24 +135,25 @@ Note: Host network mode is required because the B2500 device uses UDP broadcasts
 
 2. **Navigate to Project Directory**
    ```bash
-   cd path/to/b2500-meter
+   cd path/to/astrameter
    ```
 
-3. **Install Dependencies**
-   ```bash
-   pipenv install
-   ```
+3. **Install [uv](https://docs.astral.sh/uv/getting-started/installation/)** (dependency manager).
 
-4. **Run the Script**
+4. **Install dependencies and run**
    ```bash
-   pipenv run python main.py
+   uv sync
+   uv run astrameter
    ```
+   With dev tools (tests, ruff, mypy): `uv sync --extra dev`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 All commands above work across Windows, macOS, and Linux. The only difference is how you open your terminal.
 
 ## Additional Notes
 
-When the script is running, switch your B2500 to "Self-Adaptation" mode to enable the powermeter functionality.
+When the script is running, switch your Marstek battery to "Self-Adaptation" mode to enable the powermeter functionality.
+
+For details on the CT002/CT003 UDP protocol used by Marstek storage systems, see [docs/ct002-ct003-protocol.md](docs/ct002-ct003-protocol.md).
 
 ## Configuration
 
@@ -130,20 +163,257 @@ Configuration is managed via `config.ini`. Each powermeter type has specific set
 
 ```ini
 [GENERAL]
-# Comma-separated list of device types to emulate (ct001, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new)
-DEVICE_TYPE = ct001
+# Use ct002/ct003 for multiple storage devices; use shelly* types otherwise.
+# Comma-separated list of device types to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new)
+DEVICE_TYPE = shellypro3em
+# Optional: comma-separated device IDs, same order as DEVICE_TYPE (auto-generated if omitted). Use for stable IDs across reinstalls or to match an existing device.
+#DEVICE_IDS = shellypro3em-c59b15461a21
 # Skip initial powermeter test on startup
 SKIP_POWERMETER_TEST = False
-# Sum power values of all phases and report on phase 1 (ct001 only and default is False)
-DISABLE_SUM_PHASES = False
-# Send absolute values (necessary for storage system) (ct001 only and default is False)
-DISABLE_ABSOLUTE_VALUES = False
-# Interval for sending power values in seconds (ct001 only and default is 1)
-POLL_INTERVAL = 1
 # Global throttling interval in seconds to prevent control instability or oscillation
 # Set to 0 to disable throttling (default). Recommended: 1-3 seconds for slow data sources
 # Can be overridden per powermeter section
 THROTTLE_INTERVAL = 0
+# Briefly wait (up to 2s) for a fresh push from event-driven powermeters
+# (MQTT, Home Assistant, HomeWizard, SMA, ...) before responding to the
+# battery. Set to false to skip the wait and always serve the last-known
+# value — recommended when the underlying meter updates slower than 2s
+# (e.g. P1 smart meter behind Home Assistant) so that the inevitable timeout
+# doesn't add latency to every CT002 response. Default: true.
+# Can be overridden per powermeter section.
+#WAIT_FOR_NEXT_MESSAGE = true
+# Ignore repeated requests from the same emulator client within this window
+# (seconds). Applies to CT002/CT003 (keyed by consumer id) and Shelly (keyed
+# by battery IP). Can be overridden in the [CT002]/[CT003] section. 0 disables.
+#DEDUPE_TIME_WINDOW = 0
+```
+
+Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[HOMEASSISTANT]`, or globally under `[GENERAL]`):
+- **THROTTLE_INTERVAL** — Override global throttling for this powermeter
+- **WAIT_FOR_NEXT_MESSAGE** — Override the global wait-for-fresh-push behaviour
+  for this powermeter (set to `false` to opt out of the wait entirely)
+- **SMOOTH_TARGET_ALPHA** (default 0 = disabled) — EMA factor for the powermeter
+  reading in (0, 1]. Higher values track load changes faster; lower values filter
+  noise but add lag. Values close to 1.0 work well when the powermeter updates at
+  ≥ 1 Hz; reduce toward 0.3 if it updates significantly slower than 1 Hz.
+- **MAX_SMOOTH_STEP** (default 0 = unlimited) — Maximum watts the smoothed reading
+  may change per request cycle when `SMOOTH_TARGET_ALPHA` is active. Acts as a
+  slew-rate limit.
+- **DEADBAND** (default 0 = disabled, W) — When the absolute reading is below this
+  value, the wrapper emits zeros instead of chasing noise. Keeps batteries from
+  hunting around the zero-crossing; 10–30 W is a sensible range.
+- **HAMPEL_WINDOW** (default 0 = disabled) — Rolling window size for
+  median-based outlier rejection. Typical values 5–7. Useful for MQTT/HTTP
+  sources that occasionally emit wild samples; applied after throttling and
+  before EMA smoothing.
+- **HAMPEL_N_SIGMA** (default 3.0) — Rejection threshold in MAD-derived sigmas.
+  Lower values reject more aggressively.
+- **HAMPEL_MIN_THRESHOLD** (default 0, W) — Minimum rejection threshold in
+  watts. Prevents spikes from passing through during long periods of constant
+  readings (the MAD=0 degenerate case); 50 W is a reasonable starting value.
+
+CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
+- **ACTIVE_CONTROL** — When true (default), the emulator smooths the grid reading, splits
+  the target across batteries, and balances their load.
+  When false, the emulator relays raw meter values and batteries decide on their own.
+
+*Fair distribution — balancing load across multiple batteries:*
+- **FAIR_DISTRIBUTION** (default true) — Adjust each battery's target so they share the
+  load evenly. Only matters with two or more batteries.
+- **BALANCE_GAIN** (default 0.2) — How aggressively to correct imbalance between batteries.
+  0.0 = no correction (equal split only); 0.3–0.5 = faster rebalancing but may overshoot.
+- **BALANCE_DEADBAND** (default 15 W) — Ignore imbalance smaller than this.
+  Prevents micro-corrections when batteries are already close.
+- **MAX_CORRECTION_PER_STEP** (default 80 W) — Cap on the per-cycle balance correction.
+  Limits how much a single battery's target can deviate from its fair share in one step.
+- **ERROR_BOOST_THRESHOLD** / **ERROR_BOOST_MAX** (defaults 150 W / 0.5) — When the
+  imbalance exceeds the threshold, the balance gain is multiplied by up to
+  (1 + ERROR_BOOST_MAX). With the defaults, effective gain rises from 0.2 to at most 0.3
+  at ≥ 150 W imbalance. Helps large imbalances converge faster.
+- **ERROR_REDUCE_THRESHOLD** (default 20 W) — Below this imbalance, the gain is scaled
+  down proportionally, producing gentler corrections as batteries approach equilibrium.
+- **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
+  relative to its current output. A hard clamp on per-cycle change.
+
+*Battery efficiency optimization — concentrating power on fewer batteries,
+probing handoffs, and swapping away from ones that cannot follow:*
+
+Batteries have a minimum operating power below which their DC-DC converter
+efficiency drops sharply. When multiple batteries split a small load, each
+one may operate in this inefficient range, wasting energy as heat. The
+efficiency optimization detects this situation and concentrates the load on
+fewer batteries so each one stays above its efficient minimum, idling the
+rest. Batteries rotate periodically so wear is shared evenly.
+
+When a timed rotation or forced swap promotes a new battery, the handoff now
+uses a **probe phase** instead of dropping the previous active battery to zero
+immediately. During probe, the promoted battery gets the real CT002
+delta-control signal while the previous active battery (or batteries) stays
+online as backup and covers the signed residual shortfall based on the
+promoted battery's latest reported power. Once the promoted battery shows
+meaningful real output, the probe commits and the backup fades out. If it
+never ramps, the probe times out and the balancer restores the previous active
+battery. After a successful probe, saturation detection stays active so
+mid-interval failures still trigger a swap.
+
+- **MIN_EFFICIENT_POWER** (default 0 = disabled) — When the per-battery share of
+  total demand falls below this threshold (watts), excess batteries are
+  deprioritized so the remaining ones operate above their efficient minimum.
+  Example: 2 batteries, 200 W demand, threshold 150 → one battery gets 200 W,
+  the other idles. Hysteresis (×1.2) prevents oscillation at the boundary.
+- **EFFICIENCY_ROTATION_INTERVAL** (default 900 s, minimum 10) — Seconds between
+  rotating which battery has priority. Ensures fair wear across batteries.
+- **EFFICIENCY_FADE_ALPHA** (default 0.15) — EMA factor controlling how quickly
+  batteries transition during efficiency switchovers. It mainly controls how
+  quickly the old battery fades out **after a successful probe** (and also
+  smooths ordinary efficiency transitions). Lower values produce smoother,
+  slower transitions; higher values are faster. Set to 1.0 for instant
+  switching.
+- **EFFICIENCY_SATURATION_THRESHOLD** (default 0.4) — When an active battery's
+  saturation score exceeds this value (i.e. it can't follow its target because
+  it is full, empty, or externally limited), it is immediately swapped out for a
+  healthy deprioritized battery instead of waiting for the next timed rotation.
+  During a probe, the probe timeout is the main "never ramps" control; this
+  threshold still matters after the probe succeeds and for already-active
+  batteries. Set to 0 to disable. The saturation EMA is time-weighted, so
+  batteries with slower powermeters (>10 s update interval) accumulate saturation
+  faster per sample — if you see unnecessary swaps with a slow powermeter,
+  raise this value (e.g. to 0.8).
+- **SATURATION_DETECTION** (default true) — Track how well each battery follows
+  its target. When a battery cannot deliver (full or empty), its share is
+  reduced and redistributed to others.
+- **SATURATION_ALPHA** (default 0.15) — EMA factor for the saturation score.
+  Lower = slower to declare a battery saturated (and slower to recover).
+- **MIN_TARGET_FOR_SATURATION** (default 20 W) — Ignore saturation tracking when
+  the target is below this value (avoids false positives at low power). Probe
+  success uses the same threshold.
+- **SATURATION_GRACE_SECONDS** (default 90 s) — The maximum **probe window** when
+  a deprioritized battery is promoted by timed rotation or forced swap. During
+  this window the previous active battery stays available as backup and covers
+  the residual shortfall while the promoted battery ramps. If the promoted
+  battery reaches meaningful output earlier, the probe commits early.
+- **SATURATION_STALL_TIMEOUT_SECONDS** (default 60 s) — Stall escape for
+  non-probe grace cases, such as batteries rejoining auto control after being
+  paused or switched out of manual mode. Probe handoffs themselves now use the
+  full probe window above as the primary timer.
+- **SATURATION_DECAY_FACTOR** (default 0.995) — How quickly a swapped-out
+  battery's saturation score decays while it has no target. Applied each cycle.
+  Lower values allow faster recovery; 1.0 means the battery never becomes
+  eligible again.
+
+### CT002 / CT003
+
+```ini
+[CT002]
+# CT type is derived from the emulated device (ct002 -> HME-4, ct003 -> HME-3).
+# CT MAC (12 hex digits, from Marstek app).
+# If empty, the emulator accepts any request CT MAC and echoes the request’s
+# CT MAC in responses. If set, the emulator responds only to that CT MAC.
+CT_MAC = 001122334455
+# UDP port to bind for CT002/CT003 (default 12345).
+UDP_PORT = 12345
+# WiFi RSSI reported to the storage system
+WIFI_RSSI = -50
+# Ignore repeated requests from the same consumer within this window (seconds).
+# Also supported by the Shelly emulator (keyed by battery IP); set it under
+# [GENERAL] to apply regardless of the emulated device type.
+DEDUPE_TIME_WINDOW = 0
+# Forget consumers after this many seconds without updates (multi-consumer support)
+CONSUMER_TTL = 120
+```
+
+Optional Marstek cloud auto-registration:
+- **MARSTEK.ENABLE** — auto-create/check managed fake CT device(s) at startup
+- **MARSTEK.MAILBOX / PASSWORD** — credentials used to call Marstek API
+- For `ct002` a managed `HME-4` device is ensured, for `ct003` a managed `HME-3` device.
+- Device fields created by astrameter:
+  - `devid == mac` (random lowercase hex)
+  - `bluetooth_name = MST-SMR_<last4(mac)>`
+  - `name = AstraMeter CT002` / `AstraMeter CT003`
+- If a matching managed device of expected type already exists, no new device is created.
+- Important behavior notes:
+  - Managed fake CT devices appear as **offline** in the app CT list (expected behavior).
+  - Refresh the CT device list after registration (or log out/in if needed). Then select `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and choose that CT. It should be selectable as soon as it appears in the device list.
+  - Marstek credentials are only needed for one-time registration. You can remove `MARSTEK.MAILBOX` / `MARSTEK.PASSWORD` immediately after registration succeeds (or if the managed device already exists).
+  - If you use Home Assistant app `custom_config`, values from that file take precedence over app UI fields.
+  - **Marstek app (optional):** live CT grid power over MQTT uses the same `[MQTT_INSIGHTS]` broker as [hame-relay](https://github.com/tomquist/hame-relay) **≥ 1.3.5**; see [MQTT Insights](#mqtt-insights) (optional Marstek subsection). HA entities do not depend on this.
+
+### Value Transformation
+
+You can optionally apply a linear transformation to the power values returned by any powermeter. This is useful for calibrating readings (e.g., correcting a consistent offset) or scaling values (e.g., adjusting for a CT clamp ratio).
+
+The formula applied to each value is: `value * POWER_MULTIPLIER + POWER_OFFSET`
+
+For example, if your meter reads 1050W and you set `POWER_MULTIPLIER=0.95` and `POWER_OFFSET=-50`, the result is `1050 * 0.95 + (-50) = 947.5W`.
+
+Both settings are optional and can be added to any powermeter section:
+- `POWER_MULTIPLIER` — Scales each power value. Default: 1 (no scaling).
+- `POWER_OFFSET` — Added to each power value after the multiplier is applied. Default: 0 (no offset).
+
+For three-phase meters, you can specify a single value (applied to all phases) or comma-separated values (one per phase):
+
+```ini
+# Single value — applies to all phases
+[SHELLY_1]
+TYPE = 1PM
+IP = 192.168.1.100
+POWER_OFFSET = -50
+POWER_MULTIPLIER = 1.05
+
+# Per-phase values — if the list length does not match the device phase count,
+# values are applied cyclically and a runtime warning is emitted
+[SHELLY_2]
+TYPE = 3EMPro
+IP = 192.168.1.101
+POWER_OFFSET = -50,-30,-40
+POWER_MULTIPLIER = 1.05,1.02,1.03
+
+# Flip the sign of all readings (e.g. when import/export polarity is reversed)
+[SHELLY_3]
+TYPE = 1PM
+IP = 192.168.1.102
+POWER_MULTIPLIER = -1
+
+# Null a single phase on a three-phase meter
+[SHELLY_4]
+TYPE = 3EMPro
+IP = 192.168.1.103
+POWER_MULTIPLIER = 1,0,1
+```
+
+**Note:** Transforms are applied when readings are taken from the powermeter, before values are passed to the emulated device (Shelly, CT002/CT003, etc.).
+
+### PID Controller
+
+You can optionally layer a PID (Proportional-Integral-Derivative) controller on top of any powermeter. The controller uses the grid power reading as its process variable and steers the reported value toward zero (net-zero grid exchange). This creates a second, software-level closed loop that can accelerate convergence or compensate for slow storage device response.
+
+**How it works:**
+
+- `PID_MODE = bias` (default) — adds the PID output to the raw meter reading. The storage device's own closed-loop controller still acts, so the effective gain is `(1 − Kp) × Kb` where `Kb` is the device's internal gain. Use `0 < Kp < 1`; `Kp = 0.5` is the recommended starting point.
+- `PID_MODE = replace` — uses only the PID output as the reported value, bypassing the device's own loop entirely.
+
+**Anti-windup** is built in: the integral term is clamped so that the total PID output never exceeds `±PID_OUTPUT_MAX`, and accumulation pauses while the output is saturated.
+
+All parameters can be set globally in `[GENERAL]` or per powermeter section (per-section values override the global ones):
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `PID_KP` | Proportional gain. Set > 0 to enable the PID. | `0` (disabled) |
+| `PID_KI` | Integral gain. Usually not needed; risks windup. | `0` |
+| `PID_KD` | Derivative gain. Noisy on real meters; leave at 0. | `0` |
+| `PID_OUTPUT_MAX` | Maximum absolute PID output in watts. | `800` |
+| `PID_MODE` | `bias` or `replace`. | `bias` |
+
+For a small import safety buffer that prevents accidental export, combine with a negative `POWER_OFFSET` (applied before the PID):
+
+```ini
+[SHELLY]
+TYPE = 1PM
+IP = 192.168.1.100
+POWER_OFFSET = -20     # 20 W safety buffer toward import
+PID_KP = 0.5
+PID_OUTPUT_MAX = 800
+PID_MODE = bias
 ```
 
 ### Shelly
@@ -213,6 +483,29 @@ JSON_POWER_OUTPUT_MQTT_LABEL = Power2
 JSON_POWER_CALCULATE = True
 ```
 
+For 3-phase meters, use comma-separated labels:
+
+```ini
+[TASMOTA]
+IP = 192.168.1.101
+JSON_STATUS = StatusSNS
+JSON_PAYLOAD_MQTT_PREFIX = eBZ
+JSON_POWER_MQTT_LABEL = Power_L1,Power_L2,Power_L3
+```
+
+For 3-phase with `JSON_POWER_CALCULATE`, provide matching comma-separated
+input and output labels (counts must be equal):
+
+```ini
+[TASMOTA]
+IP = 192.168.1.101
+JSON_STATUS = StatusSNS
+JSON_PAYLOAD_MQTT_PREFIX = SML
+JSON_POWER_INPUT_MQTT_LABEL = Power_In_L1,Power_In_L2,Power_In_L3
+JSON_POWER_OUTPUT_MQTT_LABEL = Power_Out_L1,Power_Out_L2,Power_Out_L3
+JSON_POWER_CALCULATE = True
+```
+
 ### Shrdzm
 
 ```ini
@@ -255,9 +548,9 @@ ACCESSTOKEN = YOUR_ACCESS_TOKEN
 CURRENT_POWER_ENTITY = ""|sensor.current_power|sensor.phase1,sensor.phase2,sensor.phase3
 # If False or Empty the power is not calculated - if empty False is Fallback
 POWER_CALCULATE = ""|True|False 
-# The entity or entities (comma-separated for 3-phase) that provide power input
+# The entity ID or IDs (comma-separated for 3-phase) that provide power input
 POWER_INPUT_ALIAS = ""|sensor.power_input|sensor.power_in_1,sensor.power_in_2,sensor.power_in_3
-# The entity or entities (comma-separated for 3-phase) that provide power output
+# The entity ID or IDs (comma-separated for 3-phase) that provide power output
 POWER_OUTPUT_ALIAS = ""|sensor.power_output|sensor.power_out_1,sensor.power_out_2,sensor.power_out_3
 # Is a Path Prefix needed?
 API_PATH_PREFIX = ""|/core
@@ -320,6 +613,16 @@ PORT = 8080
 UUID = your-uuid
 ```
 
+For 3-phase meters, provide comma-separated UUIDs (one per phase); phases are
+fetched in parallel:
+
+```ini
+[VZLOGGER]
+IP = 192.168.1.106
+PORT = 8080
+UUID = uuid-l1, uuid-l2, uuid-l3
+```
+
 ### ESPHome
 
 ```ini
@@ -362,12 +665,47 @@ TOPIC = home/powermeter
 JSON_PATH = $.path.to.value (Optional for JSON payloads)
 USERNAME = mqtt_user (Optional)
 PASSWORD = mqtt_pass (Optional)
+# Optional: connect over TLS (mqtts://) — default false
+# TLS = false
 # Per-powermeter throttling override
 # THROTTLE_INTERVAL = 2
 ```
 
+Instead of `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS`, you can provide a single `URI` of the form `mqtt[s]://[user[:pass]@]host[:port]` (use `mqtts://` for TLS; credentials and port are optional). When `URI` is set, the individual `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS` fields are ignored.
+
+```ini
+[MQTT]
+URI = mqtts://user:pass@broker.example.com:8883
+TOPIC = home/powermeter
+```
+
 The `JSON_PATH` option is used to extract the power value from a JSON payload. The path must be a [valid JSONPath expression](https://goessner.net/articles/JsonPath/).
 If the payload is a simple integer value, you can omit this option.
+
+Both `JSON_PATH` and `JSON_PATHS` are parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage a payload value before it's converted to a float — for instance `$.state.`split( , 0, -1)`` or `$.state.`sub(/[^0-9.\-]+$/, )`` to strip a unit suffix like `"331.74 W"`. See the [JSON HTTP](#json-http) section below for more examples.
+
+#### Multi-phase MQTT
+
+For three-phase setups, there are two options:
+
+**Option 1: Multiple topics** — one topic per phase, each publishing a plain numeric value (or JSON with the same path):
+
+```ini
+[MQTT]
+BROKER = broker.example.com
+TOPICS = home/power/l1, home/power/l2, home/power/l3
+```
+
+**Option 2: Single topic with multiple JSON paths** — one topic publishing a JSON message containing all phases:
+
+```ini
+[MQTT]
+BROKER = broker.example.com
+TOPIC = home/powermeter
+JSON_PATHS = $.phases[0].power, $.phases[1].power, $.phases[2].power
+```
+
+`TOPICS` takes precedence over `TOPIC`, and `JSON_PATHS` takes precedence over `JSON_PATH`. You can combine `TOPICS` with `JSON_PATH` (same path applied to each topic) or with `JSON_PATHS` (one path per topic, counts must match).
 
 ### JSON HTTP
 
@@ -382,6 +720,13 @@ PASSWORD = pass (Optional)
 HEADERS = Authorization: Bearer token
 ```
 
+`JSON_PATHS` is parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage the value before it's converted to a float. For example, an openHAB `Number:Power` item returns `"331.74 W"` — strip the unit with either of:
+
+```ini
+JSON_PATHS = $.state.`split( , 0, -1)`
+JSON_PATHS = $.state.`sub(/[^0-9.\-]+$/, )`
+```
+
 ### TQ Energy Manager
 
 ```ini
@@ -389,6 +734,58 @@ HEADERS = Authorization: Bearer token
 IP = 192.168.1.100
 #PASSWORD = pass
 #TIMEOUT = 5.0 (Optional)
+```
+
+### HomeWizard
+
+Reads a [HomeWizard](https://www.homewizard.com/) P1 dongle (or compatible device) over the local **WebSocket** API (`wss://`). Obtain a token once via `POST /api/user` while confirming on the device; see the [HomeWizard API docs](https://api-documentation.homewizard.com/docs/v2/).
+
+```ini
+[HOMEWIZARD]
+IP = 192.168.1.110
+TOKEN = YOUR_32_CHAR_HEX_TOKEN
+SERIAL = your_device_serial
+# Optional: disable TLS certificate verification on a trusted LAN if verification fails (default True)
+# VERIFY_SSL = True
+# THROTTLE_INTERVAL = 0
+```
+
+### Enphase Envoy (IQ Gateway)
+
+Reads grid power from an [Enphase IQ Gateway / Envoy](https://enphase.com/installers/microinverters/iq-gateway) over the local HTTPS API (`/production.json?details=1`). The reading comes from the `net-consumption` measurement (positive = grid import, negative = export). Per-phase readings are reported automatically when the gateway exposes them; otherwise the aggregate single-phase value is used. Requires consumption CTs installed on the Envoy.
+
+```ini
+[ENVOY]
+HOST = 192.168.1.120
+# Option A: pre-obtained long-lived JWT (recommended)
+TOKEN = eyJ...
+# Option B: let AstraMeter fetch and refresh tokens via the Enphase Enlighten cloud
+# USERNAME = you@example.com
+# PASSWORD = your-enphase-password
+# SERIAL = 123456789012
+# Envoy ships a self-signed certificate; verification is disabled by default.
+# VERIFY_SSL = False
+```
+
+**Token acquisition.** Generate a long-lived (~1 year) static token at <https://entrez.enphaseenergy.com/>. Alternatively, configure `USERNAME`/`PASSWORD`/`SERIAL` and AstraMeter will fetch a token on first use and refresh it automatically when the Envoy returns 401.
+
+**TLS.** `VERIFY_SSL` defaults to `False` because Enphase does not publish a CA bundle for the IQ Gateway's self-signed certificate. This option **only affects the local Envoy connection** — Enphase Enlighten cloud requests (login and token endpoints) always verify TLS using the system trust store, regardless of this setting.
+
+**MFA.** The auto-fetch flow does not support Enlighten accounts with multi-factor authentication enabled. Those users must supply a static `TOKEN`.
+
+**CT direction.** If your readings have the wrong sign (export shows as import or vice versa), one or more CTs are mounted backwards. Flip them in software with the global `POWER_MULTIPLIER = -1` (or per-phase, e.g. `POWER_MULTIPLIER = 1, -1, 1`).
+
+### SMA Energy Meter
+
+Reads an [SMA Energy Meter](https://www.sma.de/) (EM 1.0/2.0) or Sunny Home Manager via the **Speedwire** multicast protocol (UDP). The listener joins the default multicast group and reports per-phase active power (L1, L2, L3). Use `SERIAL_NUMBER = 0` to auto-detect the first meter seen on the network, or set the device serial to pin a specific unit. Like other UDP-based features, this requires the host to receive multicast traffic (use Docker host networking or equivalent).
+
+```ini
+[SMA_ENERGY_METER]
+MULTICAST_GROUP = 239.12.255.254
+PORT = 9522
+SERIAL_NUMBER = 0
+# INTERFACE = 192.168.1.10
+# THROTTLE_INTERVAL = 0
 ```
 
 ### Modbus
@@ -413,6 +810,24 @@ You can also use a custom script to get the power values. The script should outp
 [SCRIPT]
 COMMAND = /path/to/your/script.sh
 ```
+
+### SML
+
+```ini
+[SML]
+SERIAL = /dev/ttyUSB0
+# Optional: override default OBIS hex registers (12 hex digits each; defaults match common German eHZ meters)
+#OBIS_POWER_CURRENT = 0100100700ff
+#OBIS_POWER_L1 = 0100240700ff
+#OBIS_POWER_L2 = 0100380700ff
+#OBIS_POWER_L3 = 01004c0700ff
+```
+
+Read from a powermeter that is connected via USB and that transmits SML (Smart Message Language) data via an IR head. **`SERIAL` is required**: local device path to the serial interface (e.g. `/dev/ttyUSB0` on Linux).
+
+**Multi-phase:** If the meter exposes per-phase instantaneous active power for L1–L3 (`Summenwirkleistung` / default OBIS above), those three values are used automatically. Otherwise the aggregate instantaneous power register (`aktuelle Wirkleistung` / `OBIS_POWER_CURRENT`) is used as a single reading. When both are present in the same SML list, per-phase values take precedence.
+
+**OBIS overrides:** Only needed if your meter uses different register addresses; values must be exactly 12 hexadecimal characters (lowercase or uppercase).
 
 ### Multiple Powermeters
 
@@ -445,27 +860,69 @@ CURRENT_POWER_ENTITY = sensor.current_power
 # No NETMASK specified - will match all clients (0.0.0.0/0)
 ```
 
-## Node-RED Implementation
+### MQTT Insights
 
-This project also provides a Node-RED implementation, allowing integration with various smart meters. The Node-RED flow is available in the `nodered.json` file. Note that the Node-RED implementation only supports emulating a CT001.
+**Primary use:** publish CT002/Shelly internal state (grid power, targets, saturation, topology, switches) to MQTT with **optional Home Assistant MQTT Device Discovery** so entities show up in HA.
 
-### Installation and Setup
+**Home Assistant app:** With the Mosquitto add-on installed, MQTT Insights is auto-configured; entities appear without manual `[MQTT_INSIGHTS]` wiring.
 
-1. **Import the Node-RED Flow**
-   - Open your Node-RED dashboard.
-   - Navigate to the menu in the top right corner, select "Import" and then "Clipboard".
-   - Copy the content of `nodered.json` and paste it into the import dialog, then click "Import".
+**Small add-on:** the same broker connection can optionally answer **Marstek CT002/CT003 MQTT polls** so the Marstek mobile app shows live grid power when you use [hame-relay](https://github.com/tomquist/hame-relay) on that broker (see below). You can turn that off with `MARSTEK_MQTT_ENABLED=false` and keep HA publishing unchanged.
 
-2. **Hooking Powermeter Readings**
-   - Ensure your powermeter readings are available as a Node-RED message with the power values in the payload.
-   - Connect the output of your powermeter reading nodes to the input node of the subflow named "B2500". The subflow can handle:
-     - An array of 3 numbers or strings containing numbers, representing the power values of each phase, e.g. `[100, 200, 300]`.
-     - A single number or string containing a number, which will be interpreted as the value for the first phase, with the other two phases set to 0.
-   - Ensure that a fresh powermeter reading is sent to the flow every second.
+**Manual configuration** (when not using the HA app defaults):
 
-3. **Running the Flow**
-   - Deploy the flow by clicking the "Deploy" button on the top right corner of the Node-RED dashboard.
-   - The flow will now listen for powermeter readings and handle the UDP and TCP communications as configured.
+```ini
+[MQTT_INSIGHTS]
+BROKER = 192.168.1.100
+PORT = 1883
+USERNAME = mqtt_user
+PASSWORD = mqtt_pass
+TLS = false
+BASE_TOPIC = astrameter
+HA_DISCOVERY = true
+HA_DISCOVERY_PREFIX = homeassistant
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `URI` | — | MQTT URI (`mqtt[s]://user:pass@host:port`); when set, overrides `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS` |
+| `BROKER` | `localhost` | MQTT broker hostname/IP |
+| `PORT` | `1883` | MQTT broker port |
+| `USERNAME` / `PASSWORD` | — | Credentials (optional) |
+| `TLS` | `false` | Enable TLS encryption |
+| `BASE_TOPIC` | `astrameter` | Root topic for all published messages |
+| `HA_DISCOVERY` | `true` | Enable Home Assistant MQTT Device Discovery |
+| `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
+| `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
+| `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
+
+#### Optional: Marstek mobile app (live MQTT)
+
+This is **not** required for Home Assistant. It only helps the **Marstek app** show live CT002/CT003 grid power over the same cloud MQTT path when **[hame-relay](https://github.com/tomquist/hame-relay)** bridges your broker—use **hame-relay ≥ 1.3.5** so poll/replies work reliably. UDP between batteries and AstraMeter is unchanged for control.
+
+**If you want it**
+
+- **`[MARSTEK]`** — Managed fake CT so the **MQTT MAC** matches the cloud device.
+- **Same broker as hame-relay** — `[MQTT_INSIGHTS]` must point at the broker relay uses toward Marstek's cloud.
+
+**Toggles** (defaults in table)
+
+- **`MARSTEK_MQTT_ENABLED`** — `false` = HA MQTT Insights only, no Marstek poll replies.
+- **`MARSTEK_MQTT_INTERVAL`** — Optional periodic aggregate pushes; **`0`** = answer polls only.
+
+Replies follow the usual `hame_energy/…` / `marstek_energy/…` App/device topics for a real CT; AstraMeter matches your CT002/CT003 **type** and **MAC**.
+
+**Published entities** (per CT002 consumer):
+- Grid power (L1/L2/L3/total), charge target (L1/L2/L3), reported power, saturation
+- Diagnostic: phase, device type, battery IP, CT type, CT MAC, last seen
+- **Active switch**: pause/resume individual consumers (targets zeroed when inactive)
+
+**Published entities** (per CT002 device):
+- Smooth target, active control status, consumer count
+
+**Published entities** (per Shelly battery):
+- Grid power (L1/L2/L3/total), active status, last seen
+
+**Topics**: `{base}/ct002/{id}/consumer/{cid}`, `{base}/ct002/{id}/status`, `{base}/shelly/{id}/battery/{ip}`, `{base}/shelly/{id}/status`, `{base}/status` (LWT)
 
 # Frequently Asked Questions (FAQ)
 
@@ -482,6 +939,8 @@ A: Common causes include:
 - **Network setup:** Ensure both devices are on the same subnet (255.255.255.0)
 - **Bluetooth interference:** Disconnect any Bluetooth connections during setup
 - **Docker configuration:** When using Docker, set `network_mode: host` to enable UDP broadcast reception
+- **CT002/CT003 pairing flow:** For managed fake CTs, refresh the CT device list (or log out/in), then pick `AstraMeter CT002` / `AstraMeter CT003`, switch battery mode to automatic, and select that CT. It should be selectable as soon as it appears in the device list. The fake CT appears as offline in the CT list (expected).
+- **Config source confusion:** If Home Assistant app `custom_config` is used, it overrides app UI credentials/options.
 
 ### The emulator isn't visible in the Shelly app or network scanners. Is this normal?
 
@@ -490,9 +949,9 @@ A: Yes. The emulator only implements the minimal protocol needed for Marstek sto
 ### How do I autostart the script on boot?
 
 A: Use systemd to create a service:
-1. Create a unit file (e.g., `/etc/systemd/system/b2500-meter.service`)
+1. Create a unit file (e.g., `/etc/systemd/system/astrameter.service`)
 2. Set `ExecStart` to your startup command
-3. Enable and start: `sudo systemctl enable b2500-meter && sudo systemctl start b2500-meter`
+3. Enable and start: `sudo systemctl enable astrameter && sudo systemctl start astrameter`
 
 ### Can I run multiple instances for different storage devices?
 
@@ -512,7 +971,7 @@ A: Create a template sensor in Home Assistant:
 {{ states('sensor.power_in_kilowatts') | float * 1000 }}
 ```
 
-### How do I set up three-phase measurement in the Home Assistant Addon?
+### How do I set up three-phase measurement in the Home Assistant App?
 
 A: Use comma-separated entity IDs:
 ```
@@ -523,7 +982,7 @@ sensor.phase1,sensor.phase2,sensor.phase3
 
 A: 
 - `CURRENT_POWER_ENTITY`: For a single bidirectional sensor (positive/negative values)
-- `POWER_INPUT_ALIAS`/`POWER_OUTPUT_ALIAS`: For separate import/export sensors (with `POWER_CALCULATE = True`)
+  - `POWER_INPUT_ALIAS`/`POWER_OUTPUT_ALIAS`: Entity IDs for separate import/export sensors (with `POWER_CALCULATE = True`)
 
 ## Device and Firmware Specific
 
@@ -549,11 +1008,11 @@ A: No, this project is Marstek-specific. For other brands, see [uni-meter](https
 ### I get permission errors when binding to port 1010/2220.
 
 A: Ports below 1024 require root privileges on Linux. Solutions:
-- Use Docker or Home Assistant Add-on (recommended)
+- Use Docker or Home Assistant App (recommended)
 - Use `setcap` to grant permissions
 - Run as root (not recommended)
 
-### I get parsing errors on startup or the add-on crashes.
+### I get parsing errors on startup or the app crashes.
 
 A: Common causes:
 - Incorrect entity IDs or API access
@@ -566,9 +1025,250 @@ A: You can only verify the initial configuration. Full testing requires a Marste
 
 ## Advanced
 
-### How do I handle negative values for CT001?
+### How do signed (positive/negative) power values work with the emulator?
 
-A: The CT001 protocol can't handle negative values on some firmware versions. By default, the emulator sends absolute values or clamps negatives to zero, adjustable via `DISABLE_ABSOLUTE_VALUES`.
+A: Powermeters typically report import as positive and export as negative (see [What's the correct power value convention?](#whats-the-correct-power-value-convention) above). Shelly and CT002/CT003 emulators forward those signed watts into the Marstek protocols; behavior on the battery side depends on your firmware and device type.
+
+## Simulator
+
+The project includes a standalone battery and powermeter simulator (`astra-sim`) that lets you test the CT002 emulator without real hardware. It simulates N batteries speaking the CT002 UDP protocol and exposes an HTTP endpoint that astrameter reads as a powermeter.
+
+### Install
+
+```bash
+pip install 'astrameter[sim]'
+# or with uv:
+uv pip install 'astrameter[sim]'
+```
+
+### Quick Start
+
+**Terminal 1** — Start the simulator (1 battery, single-phase, with TUI):
+```bash
+astra-sim run --batteries 1 --phases 1
+```
+
+**Terminal 2** — Start astrameter with the matching config:
+```bash
+astra-sim config > config.ini   # generate a config snippet
+astrameter -c config.ini
+```
+
+The generated `config.ini` looks like:
+```ini
+[GENERAL]
+DEVICE_TYPE = ct002
+
+[CT002]
+UDP_PORT = 12345
+ACTIVE_CONTROL = True
+
+[JSON_HTTP]
+URL = http://localhost:8080/power
+JSON_PATHS = $.phase_a
+```
+
+For three-phase setups, use `JSON_PATHS = $.phase_a,$.phase_b,$.phase_c`.
+
+### Multi-Battery 3-Phase Setup
+
+```bash
+# 3 batteries distributed across 3 phases
+astra-sim run --batteries 3 --phases 3
+
+# Custom base load and initial SOC
+astra-sim run --batteries 2 --phases 3 --base-load 500,300,200 --soc 0.8
+```
+
+### JSON Config File
+
+For full control, use a JSON config file:
+
+```bash
+astra-sim run -c sim_config.json
+```
+
+Example `sim_config.json`:
+```json
+{
+  "ct": {
+    "mac": "112233445566",
+    "host": "127.0.0.1",
+    "port": 12345
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "powermeter": {
+    "base_load": [100, 100, 100],
+    "loads": [
+      {"name": "LED lights", "power": 30, "phase": "A"},
+      {"name": "TV + entertainment", "power": 80, "phase": "B"},
+      {"name": "Router + NAS", "power": 40, "phase": "A"},
+      {"name": "Microwave", "power": 800, "phase": "A"},
+      {"name": "Washing machine", "power": 400, "phase": "B"}
+    ],
+    "solar_max": 2000,
+    "solar_phases": ["A"]
+  },
+  "power_update_delay_ticks": 0,
+  "batteries": [
+    {"mac": "02B250000001", "phase": "A", "capacity_wh": 2560, "initial_soc": 0.5},
+    {"mac": "02B250000002", "phase": "B", "capacity_wh": 2560, "initial_soc": 0.8}
+  ]
+}
+```
+
+Optional top-level `power_update_delay_ticks` (or per-battery `power_update_delay_ticks`) delays how many simulator ticks pass before the battery applies each new CT-derived power setpoint (`reported_power + grid_reading` from the response; `0` = immediate). The same delay can be set from the CLI with `astra-sim run --power-update-delay N` (also supported on `astra-sim start`). With a non-zero delay, `GET /status` and the TUI expose **`target`** as the latest CT-requested watts and **`applied_target`** as the setpoint the battery is ramping toward after the delay. When delay is `0`, both match.
+
+A more complete example simulating a European 3-phase household with rooftop solar,
+multiple appliances, and 4 batteries (two on the heaviest phase):
+
+```json
+{
+  "ct": {
+    "mac": "AABBCCDDEEFF",
+    "host": "127.0.0.1",
+    "port": 12345
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "powermeter": {
+    "base_load": [120, 80, 60],
+    "base_noise": 30,
+    "loads": [
+      {"name": "LED lights",        "power":   30, "phase": "A"},
+      {"name": "Router + NAS",      "power":   40, "phase": "A"},
+      {"name": "Coffee machine",    "power":  200, "phase": "A"},
+      {"name": "TV + entertainment","power":   80, "phase": "B"},
+      {"name": "Washing machine",   "power":  400, "phase": "B"},
+      {"name": "Laptop charger",    "power":   65, "phase": "B"},
+      {"name": "Microwave",         "power":  800, "phase": "A"},
+      {"name": "Fridge/freezer",    "power":  120, "phase": "C"},
+      {"name": "Vacuum cleaner",    "power":  600, "phase": "C"}
+    ],
+    "solar_max": 5000,
+    "solar_phases": ["A", "B", "C"]
+  },
+  "batteries": [
+    {
+      "mac": "02B250000001",
+      "phase": "A",
+      "max_charge_power": 800,
+      "max_discharge_power": 800,
+      "capacity_wh": 2560,
+      "initial_soc": 0.9,
+      "ramp_rate": 150,
+      "poll_interval": 1.0
+    },
+    {
+      "mac": "02B250000002",
+      "phase": "A",
+      "max_charge_power": 800,
+      "max_discharge_power": 800,
+      "capacity_wh": 2560,
+      "initial_soc": 0.7
+    },
+    {
+      "mac": "02B250000003",
+      "phase": "B",
+      "max_charge_power": 800,
+      "max_discharge_power": 800,
+      "capacity_wh": 5120,
+      "initial_soc": 0.4
+    },
+    {
+      "mac": "02B250000004",
+      "phase": "C",
+      "max_charge_power": 800,
+      "max_discharge_power": 800,
+      "capacity_wh": 2560,
+      "initial_soc": 0.2
+    }
+  ],
+  "auto_mode": true,
+  "auto_interval": [15, 45],
+  "log_interval": 10
+}
+```
+
+This configuration demonstrates:
+- **Phase imbalance**: Kitchen loads (coffee machine, microwave) are concentrated on phase A with two batteries to compensate; entertainment/laundry on B; fridge/cleaning on C
+- **Two batteries on one phase**: Batteries `0001` and `0002` both serve phase A — CT002's fair distribution algorithm splits the target between them
+- **Mixed capacities**: Battery `0003` has a larger 5.12 kWh capacity (simulating a newer model)
+- **Varied SOC**: Batteries start at different charge levels (90%, 70%, 40%, 20%) to test saturation timing
+- **3-phase solar**: 5 kWp rooftop system balanced across all three phases — even moderate production exceeds the base load, causing grid export (negative readings) and battery charging
+- **Custom ramp rate**: Battery `0001` ramps at 150 W/s instead of the default 200 W/s
+- **Auto mode**: Randomly toggles loads and solar every 15–45 seconds for hands-free testing
+
+### Interactive Controls
+
+When running with the TUI (`astra-sim run`, without `--no-tui`), you can interact with the simulation using keyboard shortcuts displayed on screen. The TUI shows live battery state (power, SOC, targets), grid readings per phase, and active loads. If `power_update_delay_ticks` is non-zero, the battery table adds **Req** (CT request) and **Appl** (delayed setpoint) columns so you can see the latency effect; otherwise a single **Target** column shows the setpoint.
+
+Without the TUI, you can control the simulation via the HTTP API:
+
+```bash
+# Toggle a load on/off (1-based index)
+astra-sim load toggle 1
+
+# Set solar production (watts)
+astra-sim solar set 800
+astra-sim solar set off
+
+# Set a battery's SOC (for testing saturation)
+astra-sim battery 02B250000001 soc 0.0
+
+# Show full status
+astra-sim status
+```
+
+### Daemon Mode
+
+Run the simulator in the background and attach/detach the TUI:
+
+```bash
+# Start headless daemon
+astra-sim start -c sim_config.json
+
+# Attach TUI to running daemon
+astra-sim attach
+
+# Stop daemon
+astra-sim stop
+```
+
+### Custom Ports
+
+If you need non-default ports (e.g. to avoid conflicts):
+
+```bash
+# Simulator on custom ports
+astra-sim run --batteries 2 --phases 3 --ct-port 54321 --http-port 9090
+
+# Generate matching astrameter config
+astra-sim config --ct-port 54321 --http-port 9090 > config.ini
+```
+
+### Headless Mode
+
+For CI or scripted testing, run without the TUI:
+
+```bash
+astra-sim run --batteries 2 --phases 3 --no-tui
+```
+
+### How It Works
+
+The simulator is fully decoupled from astrameter — it communicates purely over the network:
+
+- **Battery simulators** send UDP requests to astrameter's CT002 emulator using the same protocol as real Marstek batteries
+- **Powermeter simulator** serves an HTTP JSON endpoint (`GET /power`) that astrameter reads via its `[JSON_HTTP]` powermeter config
+- Grid power is computed as: `grid = base_load + active_loads + noise - solar - battery_output`
+- When solar exceeds consumption, grid goes negative (export) and batteries charge
+- Batteries track SOC and saturate at 0%/100%
 
 ## License
 

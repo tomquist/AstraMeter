@@ -11,11 +11,10 @@ on:
         required: true
         type: string
         description: "Platform to build for (e.g. linux/amd64)"
-      base:
-        required: false
+      cache_scope:
+        required: true
         type: string
-        description: "Base image to use (e.g. distroless, alpine)"
-        default: ""
+        description: "Unique GHA cache scope for this platform/image (avoid matrix collisions)"
       context:
         required: true
         type: string
@@ -57,6 +56,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ inputs.registry }}/${{ steps.lower-repo.outputs.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha
+            type=raw,value=next,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=semver,pattern={{version}},enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{major}},enable=${{ github.ref_type == 'tag' }}
           flavor: |
             latest=${{ github.ref == 'refs/heads/main' }}
       - name: Set up Docker Buildx
@@ -71,7 +79,7 @@ jobs:
       - name: Build and push by digest
         id: build
         if: inputs.push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
           platforms: ${{ inputs.platform }}
@@ -81,13 +89,13 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             ${{ inputs.build-args }}
-            BASE=${{ inputs.base }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            GIT_COMMIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=${{ inputs.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.cache_scope }}
       - name: Build (no push)
         id: build-no-push
         if: inputs.push == false
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
           platforms: ${{ inputs.platform }}
@@ -96,9 +104,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             ${{ inputs.build-args }}
-            BASE=${{ inputs.base }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            GIT_COMMIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=${{ inputs.cache_scope }}
       - name: Export digest
         if: inputs.push
         run: |

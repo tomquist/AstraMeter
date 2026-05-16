@@ -1,14 +1,15 @@
 [GENERAL]
-# Comma-separated list of device types to emulate (ct001, shellypro3em, shellyemg3, shellyproem50)
-DEVICE_TYPE = ct001
+# Use ct002/ct003 for multiple storage devices; use shelly* types otherwise.
+# Comma-separated list of device types to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50)
+DEVICE_TYPE = shellypro3em
+# Comma-separated list of device IDs (optional, auto-generated if not set)
+#DEVICE_IDS = shellypro3em-c59b15461a21
 # Skip initial powermeter test on startup
 SKIP_POWERMETER_TEST = False
-# Sum power values of all phases and report on phase 1 (ct001 only and default is False)
-DISABLE_SUM_PHASES = False
-# Send absolute values (necessary for storage system) (ct001 only and default is False)
-DISABLE_ABSOLUTE_VALUES = False
-# Interval for sending power values in seconds (ct001 only and default is 1)
-POLL_INTERVAL = 1
+# Enable the web-based configuration editor at http://<host>:<port>/config (opt-in, default False)
+#WEB_CONFIG_ENABLED = False
+# Port for the embedded web server (health check + config editor). Default: 52500
+#WEB_SERVER_PORT = 52500
 # Global throttling configuration (in seconds) - applies to all powermeters unless overridden
 # Enforces minimum time between power meter readings by waiting when called too frequently
 # This helps prevent instability or oscillation for slower data sources
@@ -16,6 +17,122 @@ POLL_INTERVAL = 1
 # Recommended values: 1-3 seconds for slower data sources
 # Can be overridden per powermeter section
 THROTTLE_INTERVAL = 0
+# Wait briefly (up to 2s) for a fresh push from event-driven powermeters
+# (MQTT, Home Assistant, HomeWizard, SMA energy meter, ...) before responding
+# to the battery. Keeps battery control loops on the freshest data.
+# Set to false to skip the wait entirely and always serve the last-known
+# value — recommended for sources that update slower than 2s (e.g. a P1 smart
+# meter behind Home Assistant) or whenever you'd rather have an instant
+# response than a fresh one. Defaults to true.
+# Can be overridden per powermeter section.
+#WAIT_FOR_NEXT_MESSAGE = true
+# Ignore repeated requests from the same emulator client within this window
+# (seconds). Applies to CT002/CT003 (keyed by consumer id) and Shelly (keyed
+# by battery IP). Can be overridden in the [CT002]/[CT003] section. 0 disables.
+#DEDUPE_TIME_WINDOW = 0
+
+#[CT002]
+## CT type is derived from the emulated device (ct002 -> HME-4, ct003 -> HME-3).
+## Note: CT003 can optionally use its own [CT003] section with the same keys.
+## CT MAC (12 hex digits, from Marstek app).
+## If empty, the emulator accepts any request CT MAC and echoes the request's
+## CT MAC in responses. If set, the emulator responds only to the configured MAC.
+#CT_MAC = 001122334455
+## UDP port to bind for CT002/CT003 (default 12345).
+#UDP_PORT = 12345
+## WiFi RSSI reported to the storage system
+#WIFI_RSSI = -50
+## Ignore repeated requests from the same consumer within this window (seconds).
+## Overrides the [GENERAL] DEDUPE_TIME_WINDOW for this section.
+#DEDUPE_TIME_WINDOW = 0
+## Forget consumers after this many seconds without updates (multi-consumer support)
+#CONSUMER_TTL = 120
+## Log concise status (phase consumption + consumer charge/discharge) on each request when enabled
+#DEBUG_STATUS = False
+## --- Active control ---
+## When True (default), the emulator smooths the grid reading, splits the target
+## across batteries, and balances their load. When False, raw meter values are
+## relayed and batteries decide on their own.
+#ACTIVE_CONTROL = True
+
+## --- Fair distribution (multi-battery balancing) ---
+## Adjust each battery's target so they share the load evenly.
+## Only matters with 2+ batteries.
+#FAIR_DISTRIBUTION = True
+## How aggressively to correct imbalance between batteries.
+## 0 = no correction (equal split only); 0.3-0.5 = faster rebalancing.
+#BALANCE_GAIN = 0.2
+## Ignore imbalance smaller than this (W). Prevents micro-corrections.
+#BALANCE_DEADBAND = 15
+## Cap on the per-cycle balance correction (W). Limits how fast a single
+## battery's target can deviate from its fair share.
+#MAX_CORRECTION_PER_STEP = 80
+## When imbalance exceeds ERROR_BOOST_THRESHOLD (W), the balance gain is
+## multiplied by up to (1 + ERROR_BOOST_MAX). For example with the defaults
+## (gain=0.2, threshold=150, max=0.5): at 150 W imbalance the effective gain
+## is 0.2 * 1.5 = 0.3; below the threshold gain stays at 0.2.
+#ERROR_BOOST_THRESHOLD = 150
+#ERROR_BOOST_MAX = 0.5
+## Below this imbalance (W), the gain is scaled down proportionally for
+## gentler corrections as batteries approach equilibrium.
+#ERROR_REDUCE_THRESHOLD = 20
+## Hard clamp on target change relative to current battery output (W). 0 disables.
+#MAX_TARGET_STEP = 0
+
+## --- Saturation detection (full/empty battery handling) ---
+## Track how well each battery follows its target. When a battery can't deliver
+## (full or empty), its share is reduced and redistributed to others.
+#SATURATION_DETECTION = True
+## EMA factor for the saturation score. Lower = slower to declare saturated.
+#SATURATION_ALPHA = 0.15
+## Ignore saturation tracking when target is below this (W).
+#MIN_TARGET_FOR_SATURATION = 20
+
+## --- Efficiency optimization (opt-in low-demand power concentration + probe handoff) ---
+## At low total demand, concentrates power on fewer batteries to avoid
+## inefficient low-power operation. Each active battery gets at least this
+## many watts. 0 disables (default). Batteries rotate for fairness, and newly
+## promoted batteries are probed before the previous active battery fades out.
+## Example: 2 batteries, 200W demand, threshold 150 → one gets 200W, other 0W.
+#MIN_EFFICIENT_POWER = 0
+## Seconds between rotating which battery has priority (minimum 10).
+#EFFICIENCY_ROTATION_INTERVAL = 900
+## Minimum target (W) sent when probing a newly promoted battery.
+## Batteries that ignore tiny commands need a higher floor (default 80).
+#PROBE_MIN_POWER = 80
+## How quickly the old battery fades out after a successful probe
+## (0.01=very slow, 1.0=instant).
+#EFFICIENCY_FADE_ALPHA = 0.15
+## Force-rotate when a battery can't follow its target (e.g. externally limited
+## to 0 W or fully discharged). After a probe succeeds, this still swaps out an
+## active battery within a few seconds instead of waiting for the full rotation
+## interval. 0 disables. The saturation EMA is time-weighted, so slow
+## powermeters (>10 s updates) accumulate saturation faster per sample; raise
+## this value (e.g. 0.8) if you see unnecessary swaps with a slow meter.
+#EFFICIENCY_SATURATION_THRESHOLD = 0.4
+## How quickly a swapped-out battery becomes eligible again. Applied each cycle
+## while the battery has no target. 1.0 = never recover, lower = faster recovery.
+#SATURATION_DECAY_FACTOR = 0.995
+## Probe window for a newly promoted battery. During this time the previous
+## active battery stays online as backup and covers the residual shortfall until
+## the promoted battery shows meaningful real output.
+#SATURATION_GRACE_SECONDS = 90
+## Stall escape for non-probe grace cases such as batteries rejoining auto mode.
+## Probe handoffs use the probe window above as the primary timer.
+#SATURATION_STALL_TIMEOUT_SECONDS = 60
+
+#[MARSTEK]
+## Optional: auto-register managed fake CT devices in Marstek cloud on startup.
+#ENABLE = False
+#BASE_URL = https://eu.hamedata.com
+#MAILBOX = your@email.example
+#PASSWORD = your_password
+## Prefix is fixed to 02b250 (locally administered MAC space) for managed fake devices.
+## Used for add-device request
+#TIMEZONE = Europe/Berlin
+## Optional: live grid in the Marstek mobile app over MQTT uses [MQTT_INSIGHTS]
+## on the same broker as hame-relay (https://github.com/tomquist/hame-relay) >= 1.3.5
+## (HA discovery does not depend on this).
 
 #[SHELLY]
 #TYPE = 1PM #PLUS1PM #EM #3EM #3EMPRO
@@ -26,6 +143,14 @@ THROTTLE_INTERVAL = 0
 ## Per-powermeter throttling override (optional)
 ## Shelly devices are typically fast, so throttling may not be needed
 #THROTTLE_INTERVAL = 0
+## Per-powermeter smoothing (optional, defaults come from [GENERAL])
+## EMA alpha (0.0-1.0). Higher = tracks faster; lower = filters noise.
+## 0.9 works well at >= 1 Hz; reduce toward 0.3 for slower powermeters.
+#SMOOTH_TARGET_ALPHA = 0.9
+## Return zeros when |grid total| < DEADBAND (W). 10-30 W sensible; 0 disables.
+#DEADBAND = 20
+## Max watts the smoothed target may change per cycle (slew-rate limit). 0 disables.
+#MAX_SMOOTH_STEP = 0
 
 #[TASMOTA]
 #IP = 192.168.1.101
@@ -34,6 +159,8 @@ THROTTLE_INTERVAL = 0
 #JSON_STATUS = StatusSNS
 #JSON_PAYLOAD_MQTT_PREFIX = SML
 #JSON_POWER_MQTT_LABEL = Power
+## For 3-phase meters, use comma-separated labels:
+#JSON_POWER_MQTT_LABEL = Power_L1,Power_L2,Power_L3
 #JSON_POWER_INPUT_MQTT_LABEL = Power1
 #JSON_POWER_OUTPUT_MQTT_LABEL = Power2
 #JSON_POWER_CALCULATE = True
@@ -73,22 +200,27 @@ THROTTLE_INTERVAL = 0
 ## Single sensor mode - comma-separated list for multiple phases
 #CURRENT_POWER_ENTITY = sensor.phase1_power, sensor.phase2_power, sensor.phase3_power
 
-## Or for separate input/output sensors
+## Or for separate input/output sensors (use entity IDs)
 #POWER_CALCULATE = True
 #POWER_INPUT_ALIAS = sensor.phase1_input, sensor.phase2_input, sensor.phase3_input
 #POWER_OUTPUT_ALIAS = sensor.phase1_output, sensor.phase2_output, sensor.phase3_output
 
 ## Per-powermeter throttling override (optional)
-#THROTTLE_INTERVAL = 1
-
-## Per-powermeter throttling override (optional)
 ## HomeAssistant typically needs 2-3 seconds due to network latency
 #THROTTLE_INTERVAL = 2
+## Skip the up-to-2s wait for a fresh push from this powermeter and always
+## serve the last-known value. Useful when the underlying sensor (e.g. P1
+## smart meter) updates slower than 2s, so the wait would always time out
+## and the cached value would be served anyway. Defaults to the global
+## [GENERAL] WAIT_FOR_NEXT_MESSAGE setting (true).
+#WAIT_FOR_NEXT_MESSAGE = false
 
 #[VZLOGGER]
 #IP = 192.168.1.106
 #PORT = 8080
 #UUID = your-uuid
+## For 3-phase meters, use comma-separated UUIDs (one per phase):
+#UUID = uuid-l1, uuid-l2, uuid-l3
 ## Per-powermeter throttling override (optional)
 #THROTTLE_INTERVAL = 1
 
@@ -121,6 +253,12 @@ THROTTLE_INTERVAL = 0
 #[MQTT]
 #BROKER = broker.example.com
 #PORT = 1883
+## Optional: enable TLS to connect over mqtts:// (default false)
+#TLS = false
+## Alternatively, provide a single MQTT URI in place of BROKER/PORT/USERNAME/PASSWORD/TLS:
+##   mqtt://user:pass@broker.example.com:1883
+##   mqtts://user:pass@broker.example.com:8883
+#URI = mqtt://user:pass@broker.example.com:1883
 #TOPIC = home/powermeter
 #JSON_PATH = path.to.value (Optional)
 #USERNAME = mqtt_user (Optional)
@@ -129,9 +267,25 @@ THROTTLE_INTERVAL = 0
 ## MQTT can have variable latency depending on broker and network
 #THROTTLE_INTERVAL = 1
 
+## Multi-phase: replace the [MQTT] section above with one of these alternatives
+## Option 1: one topic per phase (comma-separated)
+#[MQTT]
+#BROKER = broker.example.com
+#TOPICS = home/power/l1, home/power/l2, home/power/l3
+
+## Option 2: single topic with multiple JSON paths
+#[MQTT]
+#BROKER = broker.example.com
+#TOPIC = home/powermeter
+#JSON_PATHS = $.phases[0].power, $.phases[1].power, $.phases[2].power
+
 # [JSON_HTTP]
 #URL = http://example.com/api
 #JSON_PATHS = $.power
+## JSON_PATHS supports jsonpath-ng extensions; strip a unit suffix like
+## "331.74 W" with `split` or `sub`:
+##JSON_PATHS = $.state.`split( , 0, -1)`
+##JSON_PATHS = $.state.`sub(/[^0-9.\-]+$/, )`
 #USERNAME = user
 #PASSWORD = pass
 #HEADERS = Authorization: Bearer token
@@ -142,7 +296,136 @@ THROTTLE_INTERVAL = 0
 #TIMEOUT = 5.0 (Optional)
 #THROTTLE_INTERVAL = 1
 
+#[HOMEWIZARD]
+## HomeWizard P1 Meter via WebSocket API (v2)
+## Connects over WSS and subscribes to real-time measurement updates
+## Token must be obtained once via POST /api/user while pressing the device button
+## See: https://api-documentation.homewizard.com/docs/v2/
+#IP = 192.168.1.110
+#TOKEN = YOUR_32_CHAR_HEX_TOKEN
+#SERIAL = your_device_serial
+## Verify server TLS using the bundled HomeWizard CA (default True).
+## Set False only if you get certificate errors on a trusted LAN (insecure).
+#VERIFY_SSL = True
+## Per-powermeter throttling override (optional)
+#THROTTLE_INTERVAL = 0
+
+#[ENVOY]
+## Enphase IQ Gateway (Envoy) via local HTTPS API
+## Reads grid power from /production.json?details=1 (net-consumption).
+## Auto-detects single- vs three-phase from the response.
+#HOST = 192.168.1.120
+## Option A: long-lived JWT token from https://entrez.enphaseenergy.com/
+#TOKEN = eyJ...
+## Option B: let AstraMeter obtain a token via the Enphase Enlighten cloud
+##   (auto-refreshes on 401; not compatible with MFA-enabled Enlighten accounts)
+#USERNAME = you@example.com
+#PASSWORD = your-enphase-password
+#SERIAL = 123456789012
+## Envoy uses a self-signed certificate; verification is disabled by default.
+## Affects only the local Envoy connection — cloud requests always verify TLS.
+#VERIFY_SSL = False
+
+#[SMA_ENERGY_METER]
+## SMA Energy Meter / Sunny Home Manager via Speedwire multicast
+## Listens for UDP multicast broadcasts and reports per-phase power (L1, L2, L3)
+#MULTICAST_GROUP = 239.12.255.254
+#PORT = 9522
+## Serial number of the meter (0 = auto-detect first meter found)
+#SERIAL_NUMBER = 0
+## Network interface IP to bind to (optional, leave empty for all interfaces)
+#INTERFACE =
+## Per-powermeter throttling override (optional)
+#THROTTLE_INTERVAL = 0
+
 #[SCRIPT]
 #COMMAND = /path/to/your/script.sh
 ## Per-powermeter throttling override (optional)
 #THROTTLE_INTERVAL = 1
+
+#[SML]
+#SERIAL = /dev/ttyUSB0
+# Required: device path to the serial interface.
+## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
+#OBIS_POWER_CURRENT = 0100100700ff
+#OBIS_POWER_L1 = 0100240700ff
+#OBIS_POWER_L2 = 0100380700ff
+#OBIS_POWER_L3 = 01004c0700ff
+
+## --- PID controller (grid-balance feedback loop) ---
+## When PID_KP > 0, a Proportional-Integral-Derivative controller is layered
+## on top of the configured powermeter.  It uses the measured grid power as its
+## process variable and steers the reported value toward zero (net-zero grid).
+##
+## Recommended starting point (P-only, bias mode):
+##   PID_KP         = 0.5   # gain; 0.5 is a safe start for one storage device
+##   PID_KI         = 0     # integral — usually not needed; risks windup
+##   PID_KD         = 0     # derivative — noisy on real meters; leave at 0
+##   PID_OUTPUT_MAX = 800   # cap the PID output at ± 800 W
+##   PID_MODE       = bias  # add PID output to raw reading (alternative: replace)
+##
+## In bias mode the PID and the storage device's own closed-loop controller
+## act together; the system is stable for 0 < Kp < 1.
+## In replace mode the PID output replaces the raw reading entirely.
+##
+## To keep a small import safety buffer (prevent accidental export), combine
+## with a negative POWER_OFFSET applied before the PID:
+##   POWER_OFFSET   = -20   # bias 20 W toward import
+##
+## Parameters can be set globally in [GENERAL] or per powermeter section.
+## Per-section values override the global ones.
+#PID_KP = 0.5
+#PID_KI = 0
+#PID_KD = 0
+#PID_OUTPUT_MAX = 800
+#PID_MODE = bias
+
+## --- Hampel outlier filter (optional) ---
+## Stateful rolling-median rejection of wild samples (e.g. MQTT/WiFi glitches).
+## Outliers are replaced with the window median; normal samples pass through
+## unchanged.  Disabled by default.
+##
+## When HAMPEL_WINDOW > 0, the wrapper is inserted after throttling and before
+## EMA smoothing.  This is orthogonal to the EMA: Hampel rejects impulse noise,
+## the EMA smooths the cleaned signal.
+##
+## Recommended starting point for flaky HTTP/MQTT sources:
+##   HAMPEL_WINDOW        = 5    # odd sizes recommended; 5–7 works well
+##   HAMPEL_N_SIGMA       = 3.0  # reject beyond ~3σ (MAD-derived)
+##   HAMPEL_MIN_THRESHOLD = 50   # watts; floor for constant-signal (MAD=0) case
+##
+## Parameters can be set globally in [GENERAL] or per powermeter section.
+## Per-section values override the global ones.
+#HAMPEL_WINDOW = 5
+#HAMPEL_N_SIGMA = 3.0
+#HAMPEL_MIN_THRESHOLD = 50
+
+## --- MQTT Insights (optional) ---
+## Mainly for Home Assistant: publishes internal state (grid power, targets,
+## saturation, consumer topology) to MQTT with HA Device Discovery.
+## When running as a Home Assistant app with Mosquitto, this is auto-configured.
+## Optional add-on: Marstek app poll replies use the same broker (see MARSTEK_* below).
+#[MQTT_INSIGHTS]
+#BROKER = 192.168.1.100
+#PORT = 1883
+#USERNAME = mqtt_user
+#PASSWORD = mqtt_pass
+## Enable TLS (default: false)
+#TLS = false
+## Alternatively, provide a single MQTT URI in place of BROKER/PORT/USERNAME/PASSWORD/TLS:
+##   mqtt://user:pass@broker.example.com:1883
+##   mqtts://user:pass@broker.example.com:8883
+#URI = mqtt://user:pass@192.168.1.100:1883
+## Base topic for all MQTT Insights messages (default: astrameter)
+#BASE_TOPIC = astrameter
+## Enable Home Assistant MQTT Device Discovery (default: true)
+#HA_DISCOVERY = true
+## HA discovery prefix (default: homeassistant)
+#HA_DISCOVERY_PREFIX = homeassistant
+## Optional Marstek mobile app: answer CT002/CT003 MQTT polls on this broker (default: true).
+## Live readings in the app need hame-relay (https://github.com/tomquist/hame-relay) >= 1.3.5
+## on the same broker; older relays may not forward poll/replies. Requires [MARSTEK] so the
+## topic MAC matches the managed fake device. Set false for HA MQTT Insights only.
+#MARSTEK_MQTT_ENABLED = true
+## Seconds between optional Marstek aggregate (cd=1) broadcasts when the app is quiet; 0 = polls only.
+#MARSTEK_MQTT_INTERVAL = 300

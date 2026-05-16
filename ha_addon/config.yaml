@@ -1,49 +1,64 @@
-name: "B2500 Meter"
-version: "1.0.8"
+name: "AstraMeter"
+version: "2.0.0"
 slug: b2500_meter
 description: >-
-  "Replicates a Smart Meter device for a B2500 energy storage system while allowing integration with various smart meters."
+  "Replicates a Smart Meter device for Marstek energy storage systems (formerly B2500 Meter) while allowing integration with various smart meters."
 arch:
   - amd64
   - aarch64
-  - armv7
-url: "https://github.com/tomquist/b2500-meter"
-image: "ghcr.io/tomquist/b2500-meter-addon"
+url: "https://github.com/tomquist/astrameter"
+image: "ghcr.io/tomquist/astrameter-addon"
 panel_icon: "mdi:meter-electric"
 init: false
 startup: application
 boot: auto
 auto_restart: true
 watchdog: "http://[HOST]:[PORT:52500]/health"
+services:
+  - "mqtt:want"
 homeassistant_api: true
 hassio_api: true
 hassio_role: homeassistant
 host_network: true
 ports:
-  12345/tcp: 12345
   12345/udp: 12345
   1010/udp: 1010
   2220/udp: 2220
   2222/udp: 2222
   2223/udp: 2223
-  52500/tcp: 52500
 map:
   - type: addon_config
     read_only: false
 options:
   power_input_alias: "sensor.current_power_in"
   power_output_alias: ""
-  poll_interval: 1
-  disable_absolute_values: false
   device_types: "shellypro3em"
   throttle_interval: 0
+  wait_for_next_message: true
+  marstek_auto_register_ct_device: false
+  marstek_mailbox: ""
+  marstek_password: ""
+  min_efficient_power: 0
+  efficiency_rotation_interval: 900
   log_level: "info"
 schema:
   power_input_alias: str
   power_output_alias: str?
-  poll_interval: int(1,)
-  disable_absolute_values: bool
   device_types: str
   throttle_interval: float(0,)
+  wait_for_next_message: bool
+  ct_mac: str?
+  marstek_auto_register_ct_device: bool?
+  marstek_mailbox: str?
+  marstek_password: password?
+  min_efficient_power: int(0,)?
+  efficiency_rotation_interval: int(1,)?
   log_level: list(critical|error|warning|info|debug)
+  power_offset: str?
+  power_multiplier: str?
+  dedupe_time_window: float(0,)?
+  smooth_target_alpha: float(0,1)?
+  max_smooth_step: float(0,)?
+  deadband: float(0,)?
   custom_config: str?
+  mqtt_uri: str?
