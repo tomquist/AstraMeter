@@ -551,6 +551,102 @@ async def test_fresh_state_clears_staleness():
     assert await pm.get_powermeter_watts() == [250.0]
 
 
+async def test_state_reported_event_refreshes_staleness():
+    """Regression for issue #363: HA's ``subscribe_entities`` only includes
+    ``s`` in the diff when the state value actually changes. For sensors
+    whose value stays constant (e.g. solar production on an unused phase)
+    HA still pushes state_reported events, but their compressed diff only
+    carries an updated ``lu`` (last_updated timestamp). Treat those as
+    keepalives so the staleness check does not falsely fire on legitimately
+    constant sensors.
+    """
+    clock = _FakeClock()
+    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
+    )
+    assert await pm.get_powermeter_watts() == [0.0]
+
+    # 29 s in, an integration push reports the same value. HA emits a
+    # state_reported diff with only ``lu`` populated.
+    clock.advance(29.0)
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "c": {"sensor.current_power": {"+": {"lu": 1000.0}}},
+                },
+            }
+        ),
+    )
+
+    # The keepalive refreshed liveness; another 29 s should still be fresh.
+    clock.advance(29.0)
+    assert await pm.get_powermeter_watts() == [0.0]
+
+    # But continued silence past the threshold still trips staleness.
+    clock.advance(2.0)
+    with pytest.raises(ValueError, match="stale"):
+        await pm.get_powermeter_watts()
+
+
+async def test_state_reported_event_sets_message_event():
+    """``wait_for_next_message`` must wake on state_reported keepalives —
+    otherwise the Shelly / CT002 emulator's per-request fresh-push wait
+    times out for sensors whose value doesn't change between polls.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
+    )
+    pm._message_event.clear()
+    waiter = asyncio.create_task(pm.wait_for_next_message(timeout=1))
+    await asyncio.sleep(0)
+
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "c": {"sensor.current_power": {"+": {"lu": 1000.0}}},
+                },
+            }
+        ),
+    )
+    await waiter  # would raise TimeoutError if state_reported didn't wake it
+
+
+async def test_state_reported_before_initial_state_is_ignored():
+    """If a state_reported keepalive arrives before any state value, the
+    entity must remain ``None`` — we cannot claim liveness for an entity
+    we have never received a value for.
+    """
+    clock = _FakeClock()
+    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
+    ws = AsyncMock()
+    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "id": pm._subscribe_entities_id,
+                "type": "event",
+                "event": {
+                    "c": {"sensor.current_power": {"+": {"lu": 1000.0}}},
+                },
+            }
+        ),
+    )
+    assert pm._entity_values.get("sensor.current_power") is None
+    assert pm._entity_update_time.get("sensor.current_power") is None
+
+
 async def test_max_state_age_zero_disables_check():
     clock = _FakeClock()
     pm = _create_powermeter(max_state_age_seconds=0.0, clock=clock)

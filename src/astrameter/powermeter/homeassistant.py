@@ -15,6 +15,8 @@ logger = logging.getLogger("astrameter")
 
 # Home Assistant websocket subscribe_entities compressed state (homeassistant.const)
 _HA_S = "s"
+_HA_LU = "lu"
+_HA_LC = "lc"
 _HA_DIFF_ADD = "+"
 
 # WebSocket heartbeat (seconds) — same rationale as HomeWizard.
@@ -167,8 +169,17 @@ class HomeAssistant(Powermeter):
                 if eid not in self._tracked_entities or not isinstance(diff, dict):
                     continue
                 plus = diff.get(_HA_DIFF_ADD)
-                if isinstance(plus, dict) and _HA_S in plus:
+                if not isinstance(plus, dict):
+                    continue
+                if _HA_S in plus:
                     self._update_entity_value(eid, plus.get(_HA_S))
+                elif _HA_LU in plus or _HA_LC in plus:
+                    # state_reported (value unchanged): HA omits ``s`` and
+                    # sends only ``lu``. Treat as a keepalive so the
+                    # staleness check does not fire on sensors whose value
+                    # is legitimately constant (e.g. solar production at
+                    # night, an unloaded phase).
+                    self._mark_entity_alive(eid)
         removals = ev.get("r")
         if isinstance(removals, list):
             for eid in removals:
@@ -234,6 +245,12 @@ class HomeAssistant(Powermeter):
             self._entity_values[entity_id] = None
             self._entity_update_time[entity_id] = None
         self._check_entities_ready()
+        self._message_event.set()
+
+    def _mark_entity_alive(self, entity_id: str) -> None:
+        if self._entity_values.get(entity_id) is None:
+            return
+        self._entity_update_time[entity_id] = self._clock()
         self._message_event.set()
 
     def _check_entities_ready(self) -> None:
