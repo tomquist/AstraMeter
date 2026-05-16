@@ -369,9 +369,7 @@ async def run_device(
                 # Bound the wait so a quiet/offline powermeter can't pin a
                 # Marstek poll responder task; fall back to last-known values.
                 with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
-                    await asyncio.wait_for(
-                        chosen.wait_for_next_message(), timeout=2.0
-                    )
+                    await asyncio.wait_for(chosen.wait_for_next_message(), timeout=2.0)
                 vs = await chosen.get_powermeter_watts_raw()
                 return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
 
