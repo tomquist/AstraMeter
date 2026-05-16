@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** Home Assistant sensors falsely reported as stale when their value doesn't change for a while (e.g. solar production on an unloaded phase, or at night) ([#363](https://github.com/tomquist/astrameter/issues/363)).
+- **Fixed** false "Home Assistant sensor is stale" errors for sensors that update infrequently or push only on value changes — including constant readings (e.g. solar production at night) and push-based integrations. The Home Assistant powermeter now treats a sensor as stale only when Home Assistant itself marks it `unavailable`/`unknown` or the websocket connection is lost ([#363](https://github.com/tomquist/astrameter/issues/363)).
 
 ## 2.0.0
 
