@@ -1012,7 +1012,7 @@ A: Ports below 1024 require root privileges on Linux. Solutions:
 - Use `setcap` to grant permissions
 - Run as root (not recommended)
 
-Note: the Docker image runs as a non-root user, so binding port 1010 (`shellypro3em_old`) still fails with `PermissionError: [Errno 13]` under `network_mode: host`. Either lower the host's privileged-port range (`sudo sysctl -w net.ipv4.ip_unprivileged_port_start=1010`, persist via `/etc/sysctl.d/`) or run the container as root (`user: "0:0"` in compose). Publishing the port via bridge networking does **not** work, because the Marstek discovery packets are UDP broadcasts to the subnet address and aren't forwarded by Docker's port mapping.
+Note: the Docker image runs as a non-root user, so binding port 1010 (used by `shellypro3em_old` and the combined `shellypro3em`, which starts both listeners) still fails with `PermissionError: [Errno 13]` under `network_mode: host`. Port 2220 (`shellypro3em_new`) is unaffected. Either lower the host's privileged-port range (`sudo sysctl -w net.ipv4.ip_unprivileged_port_start=1010`, persist via `/etc/sysctl.d/`) or run the container as root (`user: "0:0"` in compose). Publishing the port via bridge networking does **not** work, because the Marstek discovery packets are UDP broadcasts to the subnet address and aren't forwarded by Docker's port mapping.
 
 ### I get parsing errors on startup or the app crashes.
 
