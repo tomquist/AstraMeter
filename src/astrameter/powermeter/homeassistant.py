@@ -56,6 +56,13 @@ class HomeAssistant(Powermeter):
         )
         self.path_prefix = path_prefix
 
+        if self.power_calculate and len(self.power_input_alias) != len(
+            self.power_output_alias
+        ):
+            raise ValueError(
+                "Home Assistant power_input_alias and power_output_alias lengths differ"
+            )
+
         # ``None`` = no usable value (never received, or the integration
         # reported ``unavailable`` / ``unknown``). Freshness is owned by
         # the integration: it sets sensors to ``unavailable`` when its
@@ -255,10 +262,6 @@ class HomeAssistant(Powermeter):
             return [
                 self._get_entity_value(entity) for entity in self.current_power_entity
             ]
-        if len(self.power_input_alias) != len(self.power_output_alias):
-            raise ValueError(
-                "Home Assistant power_input_alias and power_output_alias lengths differ"
-            )
         results = []
         for in_entity, out_entity in zip(
             self.power_input_alias, self.power_output_alias, strict=False

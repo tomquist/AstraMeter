@@ -300,24 +300,16 @@ async def test_three_phase_calculated():
 
 
 async def test_power_alias_length_mismatch():
-    pm = _create_powermeter(
-        current_power_entity="",
-        power_calculate=True,
-        power_input_alias=["sensor.power_in_1", "sensor.power_in_2"],
-        power_output_alias=["sensor.power_out_1"],
-    )
-    await _simulate_auth_and_states(
-        pm,
-        [
-            {"entity_id": "sensor.power_in_1", "state": "100"},
-            {"entity_id": "sensor.power_in_2", "state": "200"},
-            {"entity_id": "sensor.power_out_1", "state": "50"},
-        ],
-    )
-
+    """A static config invariant — fail fast at construction rather than
+    on every ``get_powermeter_watts`` call.
+    """
     with pytest.raises(ValueError) as exc_info:
-        await pm.get_powermeter_watts()
-
+        _create_powermeter(
+            current_power_entity="",
+            power_calculate=True,
+            power_input_alias=["sensor.power_in_1", "sensor.power_in_2"],
+            power_output_alias=["sensor.power_out_1"],
+        )
     assert (
         str(exc_info.value)
         == "Home Assistant power_input_alias and power_output_alias lengths differ"
