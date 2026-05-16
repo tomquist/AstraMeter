@@ -326,6 +326,10 @@ class HomeAssistant(Powermeter):
 
     async def _fetch_rest_state(self, entity_id: str) -> None:
         assert self._session is not None
+        # Snapshot the local update time so we can detect a concurrent
+        # websocket push (or another in-flight REST refresh) and avoid
+        # clobbering newer data with a potentially-older REST response.
+        pre_update = self._entity_update_time.get(entity_id)
         url = self._build_rest_state_url(entity_id)
         headers = {"Authorization": f"Bearer {self.access_token}"}
         try:
@@ -342,6 +346,8 @@ class HomeAssistant(Powermeter):
             logger.debug(
                 "Home Assistant REST refresh for %s failed: %s", entity_id, exc
             )
+            return
+        if self._entity_update_time.get(entity_id) != pre_update:
             return
         if isinstance(data, dict):
             self._apply_rest_state(entity_id, data)

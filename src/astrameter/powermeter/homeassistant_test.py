@@ -955,6 +955,57 @@ async def test_rest_fallback_swallows_http_errors():
         await pm.get_powermeter_watts()
 
 
+async def test_rest_fallback_does_not_clobber_concurrent_websocket_push():
+    """If a websocket push lands while a REST refresh for the same entity
+    is in flight, the WS value (which is at least as fresh as anything
+    REST can return) must win — REST must not overwrite it.
+    """
+    clock = _FakeClock(start=10_000.0)
+    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
+    session = _FakeSession()
+    pm._session = session  # type: ignore[assignment]
+
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
+    )
+    clock.advance(45.0)  # entity is now locally stale
+
+    # REST response advertises a fresh last_reported, but a websocket
+    # push will arrive while the REST round-trip is in flight.
+    session.delay = 0.05
+    session.set_state(
+        _state_url(pm, "sensor.current_power"),
+        state="0",
+        last_reported=datetime.now(timezone.utc),
+    )
+
+    refresh_task = asyncio.create_task(pm._refresh_stale_via_rest(timeout=1.0))
+    # Spin until _fetch_rest_state has snapshotted pre_update and is
+    # parked inside the FakeSession's delay (URL recorded).
+    for _ in range(50):
+        if session.requested:
+            break
+        await asyncio.sleep(0)
+    assert session.requested, "REST request did not start"
+    # Concurrent WS push with a different value.
+    await pm._handle_message(
+        AsyncMock(),
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "c": {"sensor.current_power": {"+": {"s": "123"}}},
+                },
+            }
+        ),
+    )
+    await refresh_task
+
+    # REST returned "0" but the WS push of 123 happened during the
+    # round-trip; the guard must skip the REST apply.
+    assert pm._entity_values["sensor.current_power"] == 123.0
+
+
 async def test_rest_fallback_url_respects_path_prefix_and_scheme():
     pm = _create_powermeter(
         ip="example.test",
