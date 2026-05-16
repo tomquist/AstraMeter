@@ -1,7 +1,5 @@
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -489,116 +487,15 @@ async def test_entities_ready_cleared_when_value_becomes_none():
     assert not pm._entities_ready.is_set()
 
 
-# --- Staleness detection ---------------------------------------------------
+# --- state_reported and reconnect behavior --------------------------------
 
 
-class _FakeClock:
-    def __init__(self, start: float = 0.0) -> None:
-        self.now = start
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
-async def test_stale_state_raises_in_get_powermeter_watts():
-    """Regression: if the websocket feed goes silent (half-open TCP or
-    stuck template sensor) the cached state age crosses
-    ``max_state_age_seconds`` and :meth:`get_powermeter_watts` must
-    raise instead of silently serving the frozen value.
-    """
-    clock = _FakeClock()
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
-    )
-    assert await pm.get_powermeter_watts() == [100.0]
-
-    clock.advance(29.0)
-    assert await pm.get_powermeter_watts() == [100.0]
-
-    clock.advance(2.0)
-    with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts()
-
-
-async def test_fresh_state_clears_staleness():
-    clock = _FakeClock()
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
-    )
-    clock.advance(50.0)
-    with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts()
-
-    ws = AsyncMock()
-    await pm._handle_message(
-        ws,
-        json.dumps(
-            {
-                "type": "event",
-                "event": {
-                    "c": {
-                        "sensor.current_power": {
-                            "+": {"s": "250"},
-                        }
-                    }
-                },
-            }
-        ),
-    )
-    assert await pm.get_powermeter_watts() == [250.0]
-
-
-async def test_state_reported_event_refreshes_staleness():
-    """Regression for issue #363: HA's ``subscribe_entities`` only includes
-    ``s`` in the diff when the state value actually changes. For sensors
-    whose value stays constant (e.g. solar production on an unused phase)
-    HA still pushes state_reported events, but their compressed diff only
-    carries an updated ``lu`` (last_updated timestamp). Treat those as
-    keepalives so the staleness check does not falsely fire on legitimately
-    constant sensors.
-    """
-    clock = _FakeClock()
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    assert await pm.get_powermeter_watts() == [0.0]
-
-    # 29 s in, an integration push reports the same value. HA emits a
-    # state_reported diff with only ``lu`` populated.
-    clock.advance(29.0)
-    ws = AsyncMock()
-    await pm._handle_message(
-        ws,
-        json.dumps(
-            {
-                "type": "event",
-                "event": {
-                    "c": {"sensor.current_power": {"+": {"lu": 1000.0}}},
-                },
-            }
-        ),
-    )
-
-    # The keepalive refreshed liveness; another 29 s should still be fresh.
-    clock.advance(29.0)
-    assert await pm.get_powermeter_watts() == [0.0]
-
-    # But continued silence past the threshold still trips staleness.
-    clock.advance(2.0)
-    with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts()
-
-
-async def test_state_reported_event_sets_message_event():
-    """``wait_for_next_message`` must wake on state_reported keepalives —
-    otherwise the Shelly / CT002 emulator's per-request fresh-push wait
-    times out for sensors whose value doesn't change between polls.
+async def test_state_reported_event_wakes_wait_for_next_message():
+    """HA's ``subscribe_entities`` omits ``s`` from the diff when a sensor
+    is reported with an unchanged value (only ``lu``/``lc`` updates).
+    ``wait_for_next_message`` must still wake on those so callers like the
+    Shelly emulator don't time out on constant sensors that the
+    integration is still actively reporting.
     """
     pm = _create_powermeter()
     await _simulate_auth_and_states(
@@ -623,16 +520,16 @@ async def test_state_reported_event_sets_message_event():
     await waiter  # would raise TimeoutError if state_reported didn't wake it
 
 
-async def test_state_reported_before_initial_state_is_ignored():
-    """If a state_reported keepalive arrives before any state value, the
-    entity must remain ``None`` — we cannot claim liveness for an entity
-    we have never received a value for.
+async def test_state_reported_before_initial_value_is_ignored():
+    """A bare ``lu``/``lc`` keepalive that arrives before any state value
+    must not wake ``wait_for_next_message`` — there is no usable value
+    yet, so claiming the sensor is alive would be misleading.
     """
-    clock = _FakeClock()
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
+    pm = _create_powermeter()
     ws = AsyncMock()
     await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    pm._message_event.clear()
     await pm._handle_message(
         ws,
         json.dumps(
@@ -646,384 +543,36 @@ async def test_state_reported_before_initial_state_is_ignored():
         ),
     )
     assert pm._entity_values.get("sensor.current_power") is None
-    assert pm._entity_update_time.get("sensor.current_power") is None
+    assert not pm._message_event.is_set()
 
 
-async def test_max_state_age_zero_disables_check():
-    clock = _FakeClock()
-    pm = _create_powermeter(max_state_age_seconds=0.0, clock=clock)
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "100"}]
-    )
-    clock.advance(100000.0)
-    assert await pm.get_powermeter_watts() == [100.0]
-
-
-async def test_reconnect_clears_entity_update_times_and_ready_flag():
-    """A websocket disconnect must clear the entity update times and
-    the ``_entities_ready`` event, so ``get_powermeter_watts`` raises
-    and ``wait_for_message`` blocks again until fresh state arrives
-    from the reconnect's ``subscribe_entities`` snapshot.
+async def test_reconnect_invalidates_cached_values():
+    """A websocket disconnect must invalidate cached values and clear the
+    ready flag, so ``get_powermeter_watts`` raises and
+    ``wait_for_message`` blocks again until the reconnected
+    ``subscribe_entities`` snapshot arrives. Without this, callers would
+    serve potentially-old values for the duration of the reconnect.
     """
-    clock = _FakeClock()
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
+    pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
     )
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [100.0]
 
-    # Simulate exactly what ``_ws_loop`` does in its reconnect block.
+    # Simulate the reset block in ``_ws_loop`` after a disconnect.
     pm._msg_id = 0
     pm._subscribe_entities_id = None
-    for eid in list(pm._entity_update_time):
-        pm._entity_update_time[eid] = None
+    for eid in list(pm._entity_values):
+        pm._entity_values[eid] = None
     pm._entities_ready.clear()
 
     assert not pm._entities_ready.is_set()
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
 
-    # Fresh state arrives from the reconnected subscribe_entities
-    # snapshot — both signals recover.
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "250"}]
     )
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [250.0]
-
-
-# --- REST fallback for state_reported -------------------------------------
-
-
-class _FakeResponse:
-    def __init__(self, status: int, data: Any) -> None:
-        self.status = status
-        self._data = data
-
-    async def __aenter__(self) -> "_FakeResponse":
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        return None
-
-    async def json(self) -> Any:
-        return self._data
-
-
-class _FakeSession:
-    """Minimal stand-in for ``aiohttp.ClientSession`` covering ``get``."""
-
-    def __init__(self) -> None:
-        self.responses: dict[str, _FakeResponse | Exception] = {}
-        self.requested: list[str] = []
-        self.delay: float = 0.0
-
-    def set_state(
-        self,
-        url: str,
-        *,
-        state: str,
-        last_reported: datetime | None,
-        status: int = 200,
-    ) -> None:
-        payload: dict[str, Any] = {"state": state}
-        if last_reported is not None:
-            payload["last_reported"] = last_reported.isoformat()
-        self.responses[url] = _FakeResponse(status, payload)
-
-    def set_error(self, url: str, exc: Exception) -> None:
-        self.responses[url] = exc
-
-    def get(
-        self, url: str, headers: dict[str, str] | None = None
-    ) -> "_DelayedResponse":
-        return _DelayedResponse(self, url)
-
-
-class _DelayedResponse:
-    """Awaitable context manager that records the URL and may sleep."""
-
-    def __init__(self, session: _FakeSession, url: str) -> None:
-        self._session = session
-        self._url = url
-
-    async def __aenter__(self) -> _FakeResponse:
-        self._session.requested.append(self._url)
-        if self._session.delay:
-            await asyncio.sleep(self._session.delay)
-        entry = self._session.responses.get(self._url)
-        if isinstance(entry, Exception):
-            raise entry
-        if entry is None:
-            return _FakeResponse(404, {})
-        return entry
-
-    async def __aexit__(self, *_: object) -> None:
-        return None
-
-
-def _state_url(pm: HomeAssistant, entity_id: str) -> str:
-    return pm._build_rest_state_url(entity_id)
-
-
-async def test_rest_fallback_refreshes_stale_entity_via_last_reported():
-    """Regression for issue #363: a sensor whose value is constant (e.g.
-    solar production on an unloaded phase) produces no ``state_changed``
-    pushes, so the local push timer drifts past ``max_state_age_seconds``
-    even though HA itself is current. ``get_powermeter_watts`` must REST-
-    poll ``/api/states/{entity}`` and use HA's authoritative
-    ``last_reported`` to confirm freshness.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    session = _FakeSession()
-    pm._session = session  # type: ignore[assignment]
-
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    clock.advance(45.0)
-    session.set_state(
-        _state_url(pm, "sensor.current_power"),
-        state="0",
-        last_reported=datetime.now(timezone.utc),
-    )
-
-    assert await pm.get_powermeter_watts() == [0.0]
-    assert session.requested == [_state_url(pm, "sensor.current_power")]
-
-
-async def test_rest_fallback_raises_when_ha_last_reported_is_truly_stale():
-    """If HA's own ``last_reported`` is older than the staleness window
-    (the sensor's source has actually gone silent), don't refresh the
-    local cache — let the staleness check raise.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    session = _FakeSession()
-    pm._session = session  # type: ignore[assignment]
-
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    clock.advance(45.0)
-    session.set_state(
-        _state_url(pm, "sensor.current_power"),
-        state="0",
-        last_reported=datetime.now(timezone.utc) - timedelta(minutes=5),
-    )
-
-    with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts()
-
-
-async def test_rest_fallback_only_polls_stale_entities():
-    """Fresh entities must not be re-fetched — only those past the local
-    push threshold.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(
-        power_calculate=True,
-        power_input_alias=["sensor.in_a", "sensor.in_b"],
-        power_output_alias=["sensor.out_a", "sensor.out_b"],
-        max_state_age_seconds=30.0,
-        clock=clock,
-    )
-    session = _FakeSession()
-    pm._session = session  # type: ignore[assignment]
-
-    await _simulate_auth_and_states(
-        pm,
-        [
-            {"entity_id": "sensor.in_a", "state": "100"},
-            {"entity_id": "sensor.in_b", "state": "200"},
-            {"entity_id": "sensor.out_a", "state": "0"},
-            {"entity_id": "sensor.out_b", "state": "50"},
-        ],
-    )
-
-    # Only sensor.out_a stays silent; the other three get fresh pushes.
-    clock.advance(20.0)
-    await pm._handle_message(
-        AsyncMock(),
-        json.dumps(
-            {
-                "type": "event",
-                "event": {
-                    "c": {
-                        "sensor.in_a": {"+": {"s": "110"}},
-                        "sensor.in_b": {"+": {"s": "210"}},
-                        "sensor.out_b": {"+": {"s": "60"}},
-                    }
-                },
-            }
-        ),
-    )
-    clock.advance(20.0)  # in_*/out_b: 20 s ago; out_a: 40 s ago
-
-    session.set_state(
-        _state_url(pm, "sensor.out_a"),
-        state="0",
-        last_reported=datetime.now(timezone.utc),
-    )
-
-    await pm.get_powermeter_watts()
-    assert session.requested == [_state_url(pm, "sensor.out_a")]
-
-
-async def test_rest_fallback_bounded_by_timeout():
-    """The REST fallback budget is total wall-clock across all stale
-    entities, not per-entity. If the network is slow enough that the
-    deadline expires before any response, the local cache is left
-    unrefreshed and the subsequent staleness check raises.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    session = _FakeSession()
-    session.delay = 5.0  # well past the budget
-    pm._session = session  # type: ignore[assignment]
-
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    clock.advance(45.0)
-    session.set_state(
-        _state_url(pm, "sensor.current_power"),
-        state="0",
-        last_reported=datetime.now(timezone.utc),
-    )
-
-    start = asyncio.get_event_loop().time()
-    await pm._refresh_stale_via_rest(timeout=0.05)
-    elapsed = asyncio.get_event_loop().time() - start
-    # Bounded by ~0.05 s — definitely well under the response's 5 s delay.
-    assert elapsed < 0.5
-    # Cache wasn't refreshed (response never returned), so the staleness
-    # check still raises with the original error.
-    with pytest.raises(ValueError, match="stale"):
-        await pm._refresh_stale_via_rest(timeout=0.05)
-        # Don't call get_powermeter_watts here — it would re-trigger
-        # the (slow) refresh with the default 1 s budget.
-        pm._get_entity_value("sensor.current_power")
-
-
-async def test_rest_fallback_ignores_unavailable_state():
-    """``state: "unavailable"`` (or "unknown") from REST is not a fresh
-    value — leave the local cache stale and raise.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    session = _FakeSession()
-    pm._session = session  # type: ignore[assignment]
-
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    clock.advance(45.0)
-    session.set_state(
-        _state_url(pm, "sensor.current_power"),
-        state="unavailable",
-        last_reported=datetime.now(timezone.utc),
-    )
-
-    with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts()
-
-
-async def test_rest_fallback_swallows_http_errors():
-    """Network/HTTP errors during the REST fallback must not propagate —
-    the staleness check raises with the original "stale" message instead,
-    so the caller's exception handling stays simple.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    session = _FakeSession()
-    pm._session = session  # type: ignore[assignment]
-    import aiohttp  # local import: only this test needs the type
-
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    clock.advance(45.0)
-    session.set_error(
-        _state_url(pm, "sensor.current_power"),
-        aiohttp.ClientConnectionError("boom"),
-    )
-
-    with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts()
-
-
-async def test_rest_fallback_does_not_clobber_concurrent_websocket_push():
-    """If a websocket push lands while a REST refresh for the same entity
-    is in flight, the WS value (which is at least as fresh as anything
-    REST can return) must win — REST must not overwrite it.
-    """
-    clock = _FakeClock(start=10_000.0)
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=clock)
-    session = _FakeSession()
-    pm._session = session  # type: ignore[assignment]
-
-    await _simulate_auth_and_states(
-        pm, [{"entity_id": "sensor.current_power", "state": "0"}]
-    )
-    clock.advance(45.0)  # entity is now locally stale
-
-    # REST response advertises a fresh last_reported, but a websocket
-    # push will arrive while the REST round-trip is in flight.
-    session.delay = 0.05
-    session.set_state(
-        _state_url(pm, "sensor.current_power"),
-        state="0",
-        last_reported=datetime.now(timezone.utc),
-    )
-
-    refresh_task = asyncio.create_task(pm._refresh_stale_via_rest(timeout=1.0))
-    # Spin until _fetch_rest_state has snapshotted pre_update and is
-    # parked inside the FakeSession's delay (URL recorded).
-    for _ in range(50):
-        if session.requested:
-            break
-        await asyncio.sleep(0)
-    assert session.requested, "REST request did not start"
-    # Concurrent WS push with a different value.
-    await pm._handle_message(
-        AsyncMock(),
-        json.dumps(
-            {
-                "type": "event",
-                "event": {
-                    "c": {"sensor.current_power": {"+": {"s": "123"}}},
-                },
-            }
-        ),
-    )
-    await refresh_task
-
-    # REST returned "0" but the WS push of 123 happened during the
-    # round-trip; the guard must skip the REST apply.
-    assert pm._entity_values["sensor.current_power"] == 123.0
-
-
-async def test_rest_fallback_url_respects_path_prefix_and_scheme():
-    pm = _create_powermeter(
-        ip="example.test",
-        port="8123",
-        use_https=True,
-        path_prefix="/core",
-    )
-    assert (
-        pm._build_rest_state_url("sensor.foo")
-        == "https://example.test:8123/core/api/states/sensor.foo"
-    )
-
-
-async def test_rest_fallback_noop_when_no_session():
-    """Without a live session (no ``start()``), the REST refresh is a
-    silent no-op so unit tests that drive the WebSocket handlers directly
-    don't accidentally hit the network.
-    """
-    pm = _create_powermeter(max_state_age_seconds=30.0, clock=_FakeClock())
-    # _session is None by default.
-    await pm._refresh_stale_via_rest()  # must not raise
