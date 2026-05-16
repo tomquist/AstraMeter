@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
@@ -22,11 +23,21 @@ _HA_DIFF_ADD = "+"
 # WebSocket heartbeat (seconds) — same rationale as HomeWizard.
 WS_HEARTBEAT_SECONDS = 30.0
 
-# An entity older than this is considered stale.  HA typically pushes
-# state changes on every update plus periodic keepalives; anything
-# past 60 s without a push from a power sensor is strongly suspicious
-# and consistent with a stalled websocket stream.
+# An entity older than this is considered stale by the local push timer.
+# Crossing this threshold triggers the REST fallback (see below), not an
+# immediate error: HA's ``subscribe_entities`` only forwards
+# ``state_changed`` events, so a sensor with a constant value (e.g. solar
+# production on an unloaded phase) produces no pushes even when HA itself
+# is up to date.
 DEFAULT_MAX_STATE_AGE_SECONDS = 60.0
+
+# Total wall-clock budget for the REST staleness fallback. When local push
+# silence exceeds ``max_state_age_seconds`` for any tracked entity, we
+# fan out parallel ``GET /api/states/{entity}`` requests bounded by this
+# deadline; HA returns ``last_reported`` (mutated on every state write,
+# including same-value reports), which we use as the authoritative
+# freshness signal. Bounded so a battery's UDP request never stalls.
+REST_REFRESH_TIMEOUT_SECONDS = 1.0
 
 
 class HomeAssistant(Powermeter):
@@ -93,6 +104,11 @@ class HomeAssistant(Powermeter):
         prefix = self.path_prefix or ""
         return f"{scheme}://{self.ip}:{self.port}{prefix}/api/websocket"
 
+    def _build_rest_state_url(self, entity_id: str) -> str:
+        scheme = "https" if self.use_https else "http"
+        prefix = self.path_prefix or ""
+        return f"{scheme}://{self.ip}:{self.port}{prefix}/api/states/{entity_id}"
+
     def _next_id(self) -> int:
         self._msg_id += 1
         return self._msg_id
@@ -139,12 +155,13 @@ class HomeAssistant(Powermeter):
                 logger.error("Home Assistant WebSocket error: %s", e, exc_info=True)
             # Reset protocol state for reconnection; keep _entity_values
             # as a courtesy, but mark them all stale so the staleness
-            # check in _get_entity_value will raise until fresh state
-            # pushes arrive from the reconnect.  ``_entities_ready``
-            # must also clear, otherwise ``wait_for_message()`` would
-            # return immediately for any caller relying on it as a
-            # readiness signal even though every entity is effectively
-            # stale until the next ``subscribe_entities`` snapshot.
+            # check in _get_entity_value falls back to REST (or raises)
+            # until fresh state pushes arrive from the reconnect.
+            # ``_entities_ready`` must also clear, otherwise
+            # ``wait_for_message()`` would return immediately for any
+            # caller relying on it as a readiness signal even though
+            # every entity is effectively stale until the next
+            # ``subscribe_entities`` snapshot.
             self._msg_id = 0
             self._subscribe_entities_id = None
             for eid in list(self._entity_update_time):
@@ -264,6 +281,100 @@ class HomeAssistant(Powermeter):
         else:
             self._entities_ready.clear()
 
+    def _locally_stale_entities(self) -> list[str]:
+        if self._max_state_age_seconds <= 0:
+            return []
+        now = self._clock()
+        stale: list[str] = []
+        for eid in self._tracked_entities:
+            if self._entity_values.get(eid) is None:
+                stale.append(eid)
+                continue
+            last = self._entity_update_time.get(eid)
+            if last is None or (now - last) > self._max_state_age_seconds:
+                stale.append(eid)
+        return stale
+
+    async def _refresh_stale_via_rest(
+        self, timeout: float = REST_REFRESH_TIMEOUT_SECONDS
+    ) -> None:
+        """REST-poll any entity whose local push timer has crossed the
+        staleness threshold, bounded by ``timeout`` total wall-clock.
+
+        ``subscribe_entities`` only forwards ``state_changed``; sensors with
+        a constant value (e.g. solar production on an unloaded phase) never
+        push, so the per-entity timer is not a reliable freshness signal.
+        ``GET /api/states/{eid}`` returns HA's ``last_reported``, which is
+        mutated on every state write — including same-value reports — and
+        is the authoritative source of truth.
+        """
+        if self._session is None:
+            return
+        stale = self._locally_stale_entities()
+        if not stale:
+            return
+        # Whatever finishes in-budget is already applied; anything still
+        # stale after the timeout will be caught by ``_get_entity_value``.
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *(self._fetch_rest_state(eid) for eid in stale),
+                    return_exceptions=True,
+                ),
+                timeout=timeout,
+            )
+
+    async def _fetch_rest_state(self, entity_id: str) -> None:
+        assert self._session is not None
+        url = self._build_rest_state_url(entity_id)
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        try:
+            async with self._session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.debug(
+                        "Home Assistant REST refresh for %s: HTTP %s",
+                        entity_id,
+                        resp.status,
+                    )
+                    return
+                data = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.debug(
+                "Home Assistant REST refresh for %s failed: %s", entity_id, exc
+            )
+            return
+        if isinstance(data, dict):
+            self._apply_rest_state(entity_id, data)
+
+    def _apply_rest_state(self, entity_id: str, data: dict[str, Any]) -> None:
+        state_val = data.get("state")
+        if state_val in (None, "unknown", "unavailable"):
+            return
+        try:
+            value = float(state_val)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            return
+        # Trust HA's ``last_reported`` (mutated on every state write).
+        # If HA itself hasn't seen an update within the staleness window,
+        # don't refresh local cache — let the staleness check raise.
+        if self._max_state_age_seconds > 0:
+            reported_iso = data.get("last_reported") or data.get("last_updated")
+            if not isinstance(reported_iso, str):
+                return
+            try:
+                reported_dt = datetime.fromisoformat(reported_iso)
+            except ValueError:
+                return
+            if reported_dt.tzinfo is None:
+                reported_dt = reported_dt.replace(tzinfo=timezone.utc)
+            ha_age = (datetime.now(timezone.utc) - reported_dt).total_seconds()
+            if ha_age > self._max_state_age_seconds:
+                return
+        self._entity_values[entity_id] = value
+        self._entity_update_time[entity_id] = self._clock()
+        self._check_entities_ready()
+        self._message_event.set()
+
     def _get_entity_value(self, entity_id: str) -> float:
         val = self._entity_values.get(entity_id)
         if val is None:
@@ -283,6 +394,7 @@ class HomeAssistant(Powermeter):
         return val
 
     async def get_powermeter_watts(self) -> list[float]:
+        await self._refresh_stale_via_rest()
         if not self.power_calculate:
             return [
                 self._get_entity_value(entity) for entity in self.current_power_entity

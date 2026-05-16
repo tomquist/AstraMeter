@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** spurious "Home Assistant sensor … is stale" errors on `subscribe_entities` feeds for sensors whose value doesn't change (e.g. solar production on an unloaded phase, an empty production sensor at night). HA omits the state field from compressed diffs when the value is unchanged and sends only an updated timestamp; AstraMeter now treats those state_reported keepalives as liveness signals so the 60 s staleness check no longer fires falsely ([#363](https://github.com/tomquist/astrameter/issues/363)).
+- **Fixed** spurious "Home Assistant sensor … is stale" errors on sensors whose value doesn't change (e.g. solar production on an unloaded phase, an empty production sensor at night). HA's `subscribe_entities` only forwards `state_changed` events, so a constant-value sensor produces no pushes even when HA itself is current; the previous 60 s per-entity timer therefore fired falsely. AstraMeter now falls back to `GET /api/states/{entity}` (parallel, bounded to 1 s total) and uses HA's authoritative `last_reported` timestamp — which is mutated on every state write including same-value reports — to confirm freshness. State_reported keepalives over the websocket (attribute-only diffs) also refresh liveness ([#363](https://github.com/tomquist/astrameter/issues/363)).
 
 ## 2.0.0
 
