@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.2
+
+- **Fixed** EMA smoother slowing down across zero-crossings when `SMOOTH_TARGET_ALPHA` was configured above 0.5: the sign-flip "catchup" branch capped the effective alpha at 0.5, which actually reduced responsiveness for users who picked a larger alpha (e.g. 1.0 for near-instant tracking). The catchup boost now never drops below the configured alpha ([#371](https://github.com/tomquist/astrameter/issues/371)).
+
 ## 2.0.1
 
 - **Fixed** false "Home Assistant sensor is stale" errors for sensors that update infrequently or push only on value changes — including constant readings (e.g. solar production at night) and push-based integrations. The Home Assistant powermeter now treats a sensor as stale only when Home Assistant itself marks it `unavailable`/`unknown` or the websocket connection is lost ([#363](https://github.com/tomquist/astrameter/issues/363)).

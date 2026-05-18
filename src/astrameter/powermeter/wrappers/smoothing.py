@@ -74,7 +74,7 @@ class SmoothedPowermeter(PowermeterWrapper):
 
         catchup_alpha = self._alpha
         if (raw_total > 0) != (self._value > 0):
-            catchup_alpha = min(0.5, self._alpha * 4)
+            catchup_alpha = max(self._alpha, min(0.5, self._alpha * 4))
         delta = catchup_alpha * (raw_total - self._value)
 
         if self._max_step > 0:

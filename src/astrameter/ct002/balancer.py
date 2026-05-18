@@ -907,7 +907,8 @@ class LoadBalancer:
         if all_dc_under_surplus and not self._all_dc_surplus_warned:
             logger.info(
                 "CT002: %.0f W surplus but no AC-chargeable battery "
-                "reporting — holding all at 0 W. Reporting device_types: %s",
+                "reporting — nothing here can absorb it. Reporting "
+                "device_types: %s",
                 -grid_total,
                 sorted({reports[cid].get("device_type", "") or "?" for cid in reports}),
             )
