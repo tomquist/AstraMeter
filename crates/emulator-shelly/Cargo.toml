@@ -5,11 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shelly battery emulator (UDP) for Marstek inverters."
+description = "Shelly EM/EM1 emulator: UDP server that answers RPC GetStatus calls with values from an upstream powermeter."
 
 [dependencies]
 astrameter-core = { workspace = true }
+astrameter-config = { workspace = true }
 astrameter-platform = { workspace = true }
 async-trait = { workspace = true }
+parking_lot = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
+tokio-util = "0.7"
 tracing = { workspace = true }
+chrono = { workspace = true }
