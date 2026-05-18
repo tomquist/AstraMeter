@@ -1,5 +1,15 @@
 # AstraMeter
 
+> **3.0 alpha:** AstraMeter has been rewritten in Rust and now supports
+> running on an ESP32-S3 in addition to Linux/Docker. The `config.ini`
+> format and Docker entry point are unchanged. Some features
+> (active-control CT002 balancer, full Home Assistant MQTT discovery,
+> Marstek cloud full integration) are still being ported — see
+> `CHANGELOG.md`'s `## Next` section and module docs under `crates/` for
+> the live status. Build from source with `cargo build --release -p
+> astrameter-host`; build ESP32 firmware with `cargo +esp build -p
+> astrameter-esp32 --target xtensa-esp32s3-espidf`.
+
 > **Formerly known as b2500-meter.** The project was renamed to reflect support
 > for the full range of Marstek storage systems (B2500, Jupiter, Venus, …),
 > not just the B2500.

@@ -29,9 +29,7 @@ mod imp {
         //   * Serial      : esp_idf_hal::uart
         //   * Timer       : tokio::time on the esp-idf pthread layer
         //   * Filesystem  : LittleFS partition mounted at /littlefs
-        unimplemented!(
-            "Phase 8: platform-espidf needs concrete impls (see crate docs)"
-        );
+        unimplemented!("Phase 8: platform-espidf needs concrete impls (see crate docs)");
     }
 }
 

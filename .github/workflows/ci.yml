@@ -15,81 +15,10 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
-
-      - name: Ruff check
-        run: uv run ruff check .
-
-      - name: Ruff format
-        run: uv run ruff format --check .
-
-      - name: Mypy
-        run: uv run mypy src/
-
-  validate:
-    needs: [ lint ]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: [ "3.10", "3.11", "3.12", "3.13" ]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-suffix: ${{ matrix.python-version }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install mosquitto (for MQTT integration tests)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
-
-      - name: Run tests
-        run: uv run pytest --cov=astrameter --cov-report=xml --junitxml=test-results.xml
-
-      - name: Upload test results
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.python-version }}
-          path: test-results.xml
-
-      - name: Upload coverage XML
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ matrix.python-version }}
-          path: coverage.xml
+  # Rust lint + test runs as a parallel workflow (.github/workflows/rust-ci.yml).
+  # This workflow only orchestrates the container images.
 
   build:
-    needs: [ validate ]
     permissions:
       contents: read
       packages: write
@@ -99,8 +28,6 @@ jobs:
         config:
           - platform: linux/amd64
             cache_scope: base-linux-amd64
-          - platform: linux/arm/v7
-            cache_scope: base-linux-arm-v7
           - platform: linux/arm64
             cache_scope: base-linux-arm64
     uses: ./.github/workflows/build-image.yml
@@ -128,7 +55,6 @@ jobs:
       legacy-image-name: tomquist/b2500-meter
 
   build-addon:
-    needs: [ validate ]
     permissions:
       contents: read
       packages: write

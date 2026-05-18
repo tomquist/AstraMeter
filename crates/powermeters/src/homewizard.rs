@@ -14,8 +14,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::Notify;
 
-const HOMEWIZARD_CA_PEM: &[u8] =
-    include_bytes!("../../../src/astrameter/powermeter/homewizard_ca.pem");
+const HOMEWIZARD_CA_PEM: &[u8] = include_bytes!("../assets/homewizard_ca.pem");
 
 const WS_HEARTBEAT_SECONDS: u32 = 30;
 const DEFAULT_MAX_AGE_SECS: f64 = 30.0;

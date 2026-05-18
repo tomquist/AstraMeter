@@ -1,42 +1,47 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim AS builder
-
-RUN pip install --no-cache-dir "uv==0.11.2"
+FROM rust:1.83-slim AS builder
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock README.md ./
-COPY src/ src/
+# Build dependencies needed for reqwest/rustls/openssl-free TLS stack.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        ca-certificates \
+        libudev-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN uv sync --frozen --no-dev --no-editable
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY .cargo .cargo
+COPY crates crates
+COPY bins bins
 
-FROM python:3.12-slim
+RUN cargo build --release -p astrameter-host
+
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+        ca-certificates \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r astra && useradd -r -g astra -s /sbin/nologin astra
 
 WORKDIR /app
 
-COPY --from=builder /app /app
+COPY --from=builder /app/target/release/astrameter /usr/local/bin/astrameter
 
 RUN chown -R astra:astra /app
 
-ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=info
 
 ARG GIT_COMMIT_SHA=
 ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
 
 EXPOSE 12345/udp
-EXPOSE 52500/tcp
+EXPOSE 8080/tcp
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:52500/health || exit 1
+  CMD curl -f http://localhost:8080/health || exit 1
 
 USER astra
 

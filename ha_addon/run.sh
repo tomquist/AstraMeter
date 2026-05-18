@@ -197,10 +197,16 @@ print_redacted_config "$CONFIG"
 # Wait for Home Assistant to be ready before starting
 wait_for_homeassistant
 
-. /app/.venv/bin/activate
 cd /app
 
-# Get log level from configuration (defaults to info)
+# Map the Home Assistant add-on log level to RUST_LOG. Mirrors the levels
+# the Python build supported (debug/info/warning/error).
 LOG_LEVEL=$(bashio::config 'log_level')
-bashio::log.info "Starting AstraMeter with log level: $LOG_LEVEL"
-astrameter --loglevel "$LOG_LEVEL"
+case "$LOG_LEVEL" in
+    debug) export RUST_LOG="astrameter=debug" ;;
+    warning) export RUST_LOG="astrameter=warn" ;;
+    error) export RUST_LOG="astrameter=error" ;;
+    *) export RUST_LOG="astrameter=info" ;;
+esac
+bashio::log.info "Starting AstraMeter (Rust) with RUST_LOG=$RUST_LOG"
+exec astrameter "$CONFIG"

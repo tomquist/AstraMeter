@@ -90,19 +90,19 @@ END { if (in_next) exit !found; exit 0 }
   exit 1
 fi
 
-CURRENT_VER=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/^version = "([^"]+)".*/\1/')
+CURRENT_VER=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/^version = "([^"]+)".*/\1/')
 if [ -z "$CURRENT_VER" ]; then
-  print_error "Could not read version from pyproject.toml (expected: version = \"…\")."
+  print_error "Could not read version from Cargo.toml workspace.package (expected: version = \"…\")."
   exit 1
 fi
 
 if [ "$VERSION" = "$CURRENT_VER" ]; then
-  print_error "Release version $VERSION equals current pyproject.toml version. Bump to a newer version."
+  print_error "Release version $VERSION equals current Cargo.toml version. Bump to a newer version."
   exit 1
 fi
 
 if [ "$(printf '%s\n' "$CURRENT_VER" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
-  print_error "Release version $VERSION must be strictly greater than pyproject.toml version $CURRENT_VER."
+  print_error "Release version $VERSION must be strictly greater than Cargo.toml version $CURRENT_VER."
   exit 1
 fi
 
@@ -111,9 +111,12 @@ print_info "Pre-checks passed. Starting release $VERSION"
 print_info "Creating branch $RELEASE_BRANCH"
 git checkout -b "$RELEASE_BRANCH"
 
-print_info "Setting version in pyproject.toml"
-sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-rm -f pyproject.toml.bak
+print_info "Setting version in Cargo.toml workspace.package"
+sed -i.bak -E "0,/^version = \"[^\"]+\"$/s//version = \"$VERSION\"/" Cargo.toml
+rm -f Cargo.toml.bak
+
+print_info "Refreshing Cargo.lock"
+cargo update --workspace --offline 2>/dev/null || cargo update --workspace
 
 print_info "Setting ha_addon/config.yaml version"
 yq eval --inplace ".version = \"$VERSION\"" ha_addon/config.yaml
@@ -123,10 +126,10 @@ LINE=$(grep -n '^## Next$' CHANGELOG.md | head -1 | cut -d: -f1)
 sed -i.bak "${LINE}s/^## Next$/## $VERSION/" CHANGELOG.md
 rm -f CHANGELOG.md.bak
 
-git add pyproject.toml ha_addon/config.yaml CHANGELOG.md
+git add Cargo.toml Cargo.lock ha_addon/config.yaml CHANGELOG.md
 git commit -m "Release v${VERSION}
 
-- Set version in pyproject.toml and ha_addon/config.yaml
+- Set version in Cargo.toml workspace.package and ha_addon/config.yaml
 - Finalize CHANGELOG for v${VERSION}"
 
 print_success "Release commit created on $RELEASE_BRANCH"
