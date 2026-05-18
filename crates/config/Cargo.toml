@@ -9,7 +9,12 @@ description = "INI parsing + section dispatch for AstraMeter."
 
 [dependencies]
 astrameter-core = { workspace = true }
-rust-ini = { workspace = true }
+ini = { package = "rust-ini", version = "0.21" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+ipnet = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

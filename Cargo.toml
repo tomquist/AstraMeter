@@ -67,6 +67,8 @@ astrameter-testkit = { path = "crates/testkit" }
 tokio = { version = "1.42", default-features = false }
 async-trait = "0.1"
 futures = { version = "0.3", default-features = false, features = ["std"] }
+bytes = "1"
+parking_lot = "0.12"
 
 # Serialization & config
 serde = { version = "1", features = ["derive"] }
@@ -79,9 +81,36 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Networking
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
+rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+url = "2"
+
+# Modbus + Serial + multicast
+tokio-modbus = { version = "0.16", default-features = false, features = ["tcp", "rtu"] }
+tokio-serial = "5"
+socket2 = { version = "0.5", features = ["all"] }
+
+# Parsing helpers
+jsonpath-rust = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+crc = "3"
+hex = "0.4"
+base64 = "0.22"
+
+# IP parsing
+ipnet = "2"
+
+# Web (host only)
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tower-http = { version = "0.6", default-features = false, features = ["fs", "trace"] }
+
 # Testing
 insta = "1"
 proptest = "1"
+tokio-test = "0.4"
+wiremock = "0.6"
 
 [profile.release]
 opt-level = "z"

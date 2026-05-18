@@ -5,9 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Platform-abstraction traits (HTTP/WebSocket/MQTT/UDP/Serial/FS/Timer) that let AstraMeter run on both desktop hosts and ESP32."
+description = "Platform-abstraction traits (HTTP/WebSocket/MQTT/UDP/Serial/FS/Timer)."
 
 [dependencies]
 astrameter-core = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
+rumqttc = { workspace = true }

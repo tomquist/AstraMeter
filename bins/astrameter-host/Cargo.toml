@@ -26,6 +26,7 @@ astrameter-marstek-api = { workspace = true }
 astrameter-web = { workspace = true }
 
 anyhow = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
+tokio-util = "0.7"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

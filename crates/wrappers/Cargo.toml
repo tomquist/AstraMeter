@@ -9,5 +9,11 @@ description = "Composable Powermeter wrappers: transform, throttling, smoothing,
 
 [dependencies]
 astrameter-core = { workspace = true }
+astrameter-platform = { workspace = true }
 async-trait = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time"] }

@@ -12,4 +12,12 @@ astrameter-core = { workspace = true }
 astrameter-platform = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util"] }
+tokio-tungstenite = { workspace = true }
+tokio-serial = { workspace = true }
+reqwest = { workspace = true }
+rumqttc = { workspace = true }
+socket2 = { workspace = true }
+url = { workspace = true }
 tracing = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }

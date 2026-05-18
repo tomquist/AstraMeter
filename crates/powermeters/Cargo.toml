@@ -5,13 +5,30 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "All 17 powermeter implementations, registered into the runtime PowermeterRegistry."
+description = "All 17 powermeter implementations + runtime registry."
 
 [dependencies]
 astrameter-core = { workspace = true }
+astrameter-config = { workspace = true }
 astrameter-platform = { workspace = true }
 astrameter-sml = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+parking_lot = { workspace = true }
+jsonpath-rust = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
+tokio-modbus = { workspace = true }
+rumqttc = { workspace = true }
 tracing = { workspace = true }
+bytes = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_os = "espidf"))'.dependencies]
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+wiremock = { workspace = true }
