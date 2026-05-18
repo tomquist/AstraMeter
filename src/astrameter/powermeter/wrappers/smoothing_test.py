@@ -82,9 +82,26 @@ class TestSmoothedPowermeter:
         # Sign flip: raw goes negative
         fake.set([-100.0])
         await sm.get_powermeter_watts()
-        # catchup_alpha = min(0.5, 0.1 * 4) = 0.4
+        # catchup_alpha = max(0.1, min(0.5, 0.1 * 4)) = 0.4
         # delta = 0.4 * (-100 - 100) = -80 → new = 20
         assert sm.smoothed_value == pytest.approx(20.0)
+
+    @pytest.mark.asyncio
+    async def test_sign_change_does_not_slow_high_alpha(self):
+        fake = FakePowermeter([1.0])
+        sm = SmoothedPowermeter(fake, alpha=1.0)
+
+        await sm.get_powermeter_watts()
+        assert sm.smoothed_value == 1.0
+
+        # Sign flip: the catchup branch must not reduce alpha below the
+        # configured value, otherwise large user-chosen alphas (e.g. 1.0)
+        # respond slower across zero-crossings than they do anywhere else.
+        fake.set([-99.0])
+        await sm.get_powermeter_watts()
+        # catchup_alpha = max(1.0, min(0.5, 4.0)) = 1.0
+        # delta = 1.0 * (-99 - 1) = -100 → new = -99
+        assert sm.smoothed_value == pytest.approx(-99.0)
 
     @pytest.mark.asyncio
     async def test_max_step_limits_delta(self):
