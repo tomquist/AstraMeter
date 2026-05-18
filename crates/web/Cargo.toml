@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Health endpoint + web config editor. Shared handlers, target-specific router (axum on host, EspHttpServer on ESP32)."
+description = "Health endpoint + web config editor."
 
 [dependencies]
 astrameter-core = { workspace = true }
@@ -15,3 +15,9 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync", "fs", "macros", "rt"] }
+parking_lot = { workspace = true }
+
+[target.'cfg(not(target_os = "espidf"))'.dependencies]
+axum = { workspace = true }
+tower-http = { workspace = true }

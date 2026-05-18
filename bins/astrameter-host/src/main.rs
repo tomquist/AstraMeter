@@ -1,5 +1,6 @@
 //! AstraMeter host entry point.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,6 +8,8 @@ use anyhow::{Context, Result};
 use astrameter_config::Config;
 use astrameter_platform::Platform;
 use astrameter_powermeters::{register_all, PowermeterRegistry};
+use astrameter_web::{AppState, ReloadCommand, Status};
+use parking_lot::Mutex;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -27,80 +30,159 @@ async fn main() -> Result<()> {
     );
 
     let platform = Arc::new(astrameter_platform_std::build_platform());
-
-    if !config_path.exists() {
-        tracing::warn!(
-            "config file not found at {} — running idle. Pass a path as the \
-             first CLI argument, or place config.ini in the working directory.",
-            config_path.display()
-        );
-        return tokio::signal::ctrl_c().await.context("waiting for ctrl-c");
-    }
-
-    let config = astrameter_config::load_file(&config_path)?;
     let mut reg = PowermeterRegistry::new();
     register_all(&mut reg);
+    let registry = Arc::new(reg);
 
-    let supervisor = Supervisor::new(platform.clone(), reg);
-    supervisor.start(&config).await?;
+    let (reload_tx, mut reload_rx) = tokio::sync::mpsc::channel::<ReloadCommand>(8);
+    let status = Arc::new(Mutex::new(Status {
+        healthy: false,
+        ..Default::default()
+    }));
+    let app_state = AppState {
+        config_path: config_path.clone(),
+        reload_tx: Arc::new(reload_tx),
+        status: status.clone(),
+    };
+
+    // Web server (host-only).
+    let web_state = app_state.clone();
+    tokio::spawn(async move {
+        let app = axum::Router::new()
+            .merge(astrameter_web::health::axum_router::build(
+                web_state.clone(),
+            ))
+            .merge(astrameter_web::config_ui::axum_router::build(web_state));
+        let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                tracing::info!("web server listening on {addr}");
+                if let Err(e) = axum::serve(listener, app).await {
+                    tracing::error!("web server: {e}");
+                }
+            }
+            Err(e) => tracing::error!("web bind {addr}: {e}"),
+        }
+    });
+
+    let supervisor = Arc::new(Supervisor::new(platform.clone(), registry.clone()));
+    if config_path.exists() {
+        match supervisor.start_from_file(&config_path).await {
+            Ok(()) => {
+                let mut s = status.lock();
+                s.healthy = true;
+                s.last_reload_ok = Some(true);
+            }
+            Err(e) => {
+                tracing::error!("initial supervisor start: {e}");
+                let mut s = status.lock();
+                s.last_reload_ok = Some(false);
+                s.last_error = Some(e.to_string());
+            }
+        }
+    } else {
+        tracing::warn!(
+            "config file not found at {} — services idle until a config is submitted",
+            config_path.display()
+        );
+    }
+
+    // Reload loop (Supervisor receives ReloadCommand from web routes).
+    let sup = supervisor.clone();
+    let status_for_loop = status.clone();
+    let path_for_loop = config_path.clone();
+    tokio::spawn(async move {
+        while let Some(_cmd) = reload_rx.recv().await {
+            tracing::info!("supervisor: hot-reload requested");
+            sup.stop().await;
+            match sup.start_from_file(&path_for_loop).await {
+                Ok(()) => {
+                    let mut s = status_for_loop.lock();
+                    s.healthy = true;
+                    s.last_reload_ok = Some(true);
+                    s.last_error = None;
+                }
+                Err(e) => {
+                    tracing::error!("reload failed: {e}");
+                    let mut s = status_for_loop.lock();
+                    s.healthy = false;
+                    s.last_reload_ok = Some(false);
+                    s.last_error = Some(e.to_string());
+                }
+            }
+        }
+    });
 
     tokio::signal::ctrl_c()
         .await
         .context("waiting for ctrl-c")?;
-    supervisor.shutdown().await;
+    supervisor.stop().await;
     Ok(())
 }
 
-/// Minimal supervisor: builds powermeters from a [`Config`], runs them in
-/// parallel, and logs a sample every 10 s. Phase 7 expands this into the full
-/// hot-reload Supervisor described in the plan.
+/// Supervisor with hot-reload. Keeps a set of running meter tasks under a
+/// shared cancellation token so the whole tree can be torn down and rebuilt
+/// from a fresh config without restarting the process.
 struct Supervisor {
     platform: Arc<Platform>,
-    registry: PowermeterRegistry,
-    cancel: tokio_util::sync::CancellationToken,
+    registry: Arc<PowermeterRegistry>,
+    inner: tokio::sync::Mutex<SupervisorInner>,
+}
+
+#[derive(Default)]
+struct SupervisorInner {
+    cancel: Option<tokio_util::sync::CancellationToken>,
+    handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Supervisor {
-    fn new(platform: Arc<Platform>, registry: PowermeterRegistry) -> Self {
+    fn new(platform: Arc<Platform>, registry: Arc<PowermeterRegistry>) -> Self {
         Self {
             platform,
             registry,
-            cancel: tokio_util::sync::CancellationToken::new(),
+            inner: tokio::sync::Mutex::new(SupervisorInner::default()),
         }
     }
 
+    async fn start_from_file(&self, path: &std::path::Path) -> Result<()> {
+        let raw = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        let cfg = Config::parse(&raw)?;
+        self.start(&cfg).await
+    }
+
     async fn start(&self, config: &Config) -> Result<()> {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         for section_name in config.sections().collect::<Vec<_>>() {
-            let section = match config.section(section_name) {
-                Some(s) => s,
-                None => continue,
-            };
-            let Some(factory) = self.registry.lookup(section_name) else {
+            let Some(section) = config.section(section_name) else {
                 continue;
             };
-            // Skip MQTT_INSIGHTS via prefix-precedence: registered MQTT prefix
-            // would match it too, so an explicit guard keeps insights out.
             if section_name.starts_with("MQTT_INSIGHTS") {
                 continue;
             }
+            let Some(factory) = self.registry.lookup(section_name) else {
+                continue;
+            };
             tracing::info!(section = section_name, "instantiating powermeter");
             let meter = match factory(&section, self.platform.clone()) {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::error!(section = section_name, "failed to instantiate: {e}");
+                    tracing::error!(section = section_name, "failed: {e}");
                     continue;
                 }
             };
-            let cancel = self.cancel.clone();
+            let cancel_clone = cancel.clone();
             let name = section_name.to_string();
-            tokio::spawn(async move {
+            let h = tokio::spawn(async move {
                 if let Err(e) = meter.start().await {
                     tracing::error!(section = %name, "start() failed: {e}");
                     return;
                 }
                 loop {
                     tokio::select! {
-                        _ = cancel.cancelled() => break,
+                        _ = cancel_clone.cancelled() => break,
                         _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
                             match meter.get_powermeter_watts().await {
                                 Ok(v) => tracing::info!(section = %name, watts = ?v, "sample"),
@@ -111,13 +193,21 @@ impl Supervisor {
                 }
                 let _ = meter.stop().await;
             });
+            handles.push(h);
         }
+        let mut inner = self.inner.lock().await;
+        inner.cancel = Some(cancel);
+        inner.handles = handles;
         Ok(())
     }
 
-    async fn shutdown(&self) {
-        self.cancel.cancel();
-        // Best-effort grace period for spawned tasks to drop.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    async fn stop(&self) {
+        let mut inner = self.inner.lock().await;
+        if let Some(token) = inner.cancel.take() {
+            token.cancel();
+        }
+        for h in inner.handles.drain(..) {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), h).await;
+        }
     }
 }

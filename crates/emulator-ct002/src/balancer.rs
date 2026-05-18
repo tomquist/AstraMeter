@@ -66,12 +66,10 @@ impl Balancer {
         let mut st = self.state.lock();
         let now = Instant::now();
         for id in battery_ids {
-            st.batteries
-                .entry(id.clone())
-                .or_insert(BatteryState {
-                    last_seen: now,
-                    last_reported_power: 0.0,
-                });
+            st.batteries.entry(id.clone()).or_insert(BatteryState {
+                last_seen: now,
+                last_reported_power: 0.0,
+            });
         }
         if !self.cfg.active_control {
             // Relay mode: forward the same total to every battery; they

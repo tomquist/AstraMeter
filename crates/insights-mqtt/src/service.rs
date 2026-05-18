@@ -1,1 +1,3 @@
-//! Port of `src/astrameter/mqtt_insights/service.py`. Phase 6.
+//! See parent `lib.rs::InsightsService`. The Python `service.py` (858 LOC)
+//! handles per-section topics, Marstek MQTT bridge, retain/QoS toggles and
+//! status reporting; that work is TODO in the Rust port.

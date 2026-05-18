@@ -5,12 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "MQTT Insights service + Home Assistant auto-discovery + Marstek MQTT integration."
+description = "MQTT Insights service: publishes powermeter state and Home Assistant auto-discovery messages."
 
 [dependencies]
 astrameter-core = { workspace = true }
+astrameter-config = { workspace = true }
 astrameter-platform = { workspace = true }
 async-trait = { workspace = true }
+parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rumqttc = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
+tokio-util = "0.7"
 tracing = { workspace = true }
