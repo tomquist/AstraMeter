@@ -18,8 +18,10 @@ serde_json = { workspace = true }
 parking_lot = { workspace = true }
 jsonpath-rust = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
+tokio-util = "0.7"
 tokio-modbus = { workspace = true }
 rumqttc = { workspace = true }
+futures = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 hex = { workspace = true }
