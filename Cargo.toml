@@ -1,0 +1,97 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/config",
+    "crates/platform",
+    "crates/platform-std",
+    "crates/platform-espidf",
+    "crates/powermeters",
+    "crates/wrappers",
+    "crates/emulator-ct002",
+    "crates/emulator-shelly",
+    "crates/insights-mqtt",
+    "crates/marstek-api",
+    "crates/web",
+    "crates/sml",
+    "crates/testkit",
+    "bins/astrameter-host",
+    "bins/astrameter-esp32",
+]
+
+# Default `cargo check` / `cargo build` skip the ESP32 binary; it requires the
+# Xtensa toolchain and an --target argument. Build it explicitly via
+# `cargo +esp build -p astrameter-esp32 --target xtensa-esp32s3-espidf`.
+default-members = [
+    "crates/core",
+    "crates/config",
+    "crates/platform",
+    "crates/platform-std",
+    "crates/powermeters",
+    "crates/wrappers",
+    "crates/emulator-ct002",
+    "crates/emulator-shelly",
+    "crates/insights-mqtt",
+    "crates/marstek-api",
+    "crates/web",
+    "crates/sml",
+    "crates/testkit",
+    "bins/astrameter-host",
+]
+
+[workspace.package]
+version = "3.0.0-alpha.0"
+edition = "2021"
+rust-version = "1.83"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/tomquist/astrameter"
+authors = ["AstraMeter contributors"]
+
+[workspace.dependencies]
+# Internal crates
+astrameter-core = { path = "crates/core" }
+astrameter-config = { path = "crates/config" }
+astrameter-platform = { path = "crates/platform" }
+astrameter-platform-std = { path = "crates/platform-std" }
+astrameter-powermeters = { path = "crates/powermeters" }
+astrameter-wrappers = { path = "crates/wrappers" }
+astrameter-emulator-ct002 = { path = "crates/emulator-ct002" }
+astrameter-emulator-shelly = { path = "crates/emulator-shelly" }
+astrameter-insights-mqtt = { path = "crates/insights-mqtt" }
+astrameter-marstek-api = { path = "crates/marstek-api" }
+astrameter-web = { path = "crates/web" }
+astrameter-sml = { path = "crates/sml" }
+astrameter-testkit = { path = "crates/testkit" }
+
+# Async runtime & utilities
+tokio = { version = "1.42", default-features = false }
+async-trait = "0.1"
+futures = { version = "0.3", default-features = false, features = ["std"] }
+
+# Serialization & config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-ini = "0.21"
+
+# Errors & logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+insta = "1"
+proptest = "1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.release-host]
+inherits = "release"
+opt-level = 3
+strip = "debuginfo"
+panic = "unwind"

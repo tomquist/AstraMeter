@@ -1,0 +1,34 @@
+[package]
+name = "astrameter-esp32"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AstraMeter ESP32-S3 firmware binary."
+
+[[bin]]
+name = "astrameter-esp32"
+path = "src/main.rs"
+
+[dependencies]
+astrameter-core = { workspace = true }
+
+# esp-idf-svc / esp-idf-hal are gated on the espidf target so that host
+# tooling (cargo check on a Linux box) does not try to pull the Xtensa
+# sysroot. They land in Phase 8.
+[target.'cfg(target_os = "espidf")'.dependencies]
+# esp-idf-svc = { version = "0.49", features = ["binstart", "embassy-time-driver"] }
+# esp-idf-hal = "0.44"
+# astrameter-platform-espidf = { workspace = true }
+# astrameter-powermeters     = { workspace = true }
+# astrameter-config          = { workspace = true }
+# astrameter-emulator-ct002  = { workspace = true }
+# astrameter-emulator-shelly = { workspace = true }
+# astrameter-insights-mqtt   = { workspace = true }
+# astrameter-marstek-api     = { workspace = true }
+# astrameter-web             = { workspace = true }
+
+# Build script will be wired in Phase 8 (embuild for sdkconfig + partitions).
+# [build-dependencies]
+# embuild = "0.32"

@@ -1,0 +1,1 @@
+//! POWER_OFFSET + POWER_MULTIPLIER. Ported in Phase 2.

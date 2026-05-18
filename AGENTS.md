@@ -1,5 +1,17 @@
 # Agent notes
 
+This repository is in the middle of a Python → Rust migration with ESP32
+support. See `/root/.claude/plans/migrate-this-project-to-witty-globe.md` for
+the full plan. Both stacks coexist on disk during the transition:
+
+- **Python** code lives in `src/astrameter/` and remains the reference
+  implementation until cutover (Phase 9 of the plan).
+- **Rust** code lives in `crates/` and `bins/`, organised as a Cargo
+  workspace (see top-level `Cargo.toml`). Phase 0 is a skeleton only; real
+  implementations land in Phases 1 onwards.
+
+## Python (still active)
+
 Resolved versions live in **`uv.lock`**. Install dev dependencies the same way CI does:
 
 ```bash
@@ -15,7 +27,31 @@ uv run mypy src/
 uv run pytest
 ```
 
-CI runs the same steps (see `.github/workflows/ci.yml`).
+Python CI: `.github/workflows/ci.yml`.
+
+## Rust (new, alongside Python)
+
+Resolved versions live in **`Cargo.lock`**. Before finishing Rust changes,
+run (from repo root):
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+cargo test --workspace --doc
+```
+
+Rust CI: `.github/workflows/rust-ci.yml`. The ESP32 cross-compile job is
+commented out until Phase 8.
+
+The ESP32 binary (`bins/astrameter-esp32`) is excluded from the default
+workspace members so `cargo check` works on a stock host. Build it with:
+
+```bash
+cargo +esp build -p astrameter-esp32 --target xtensa-esp32s3-espidf
+```
+
+(requires `espup` and the Xtensa toolchain — Phase 8 onwards).
 
 ## Changelog
 

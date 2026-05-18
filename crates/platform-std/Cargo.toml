@@ -1,0 +1,15 @@
+[package]
+name = "astrameter-platform-std"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host (Linux/macOS/Windows) implementations of astrameter-platform traits."
+
+[dependencies]
+astrameter-core = { workspace = true }
+astrameter-platform = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util"] }
+tracing = { workspace = true }

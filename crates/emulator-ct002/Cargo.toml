@@ -1,0 +1,15 @@
+[package]
+name = "astrameter-emulator-ct002"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Marstek CT002 / CT003 UDP emulator: protocol, UDP server, and load-balancer."
+
+[dependencies]
+astrameter-core = { workspace = true }
+astrameter-platform = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

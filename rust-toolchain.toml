@@ -1,0 +1,7 @@
+[toolchain]
+# Pin the host toolchain. Bump in lockstep with `rust-version` in
+# `Cargo.toml`'s `[workspace.package]`. The ESP32 build uses the Xtensa fork
+# installed by `espup` and is unaffected by this file.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

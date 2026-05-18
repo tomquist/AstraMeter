@@ -1,0 +1,13 @@
+[package]
+name = "astrameter-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared test fixtures: golden vectors, MockPlatform, deterministic clock."
+
+[dependencies]
+astrameter-core = { workspace = true }
+astrameter-platform = { workspace = true }
+async-trait = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "astrameter-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "INI parsing + section dispatch for AstraMeter."
+
+[dependencies]
+astrameter-core = { workspace = true }
+rust-ini = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "astrameter-powermeters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "All 17 powermeter implementations, registered into the runtime PowermeterRegistry."
+
+[dependencies]
+astrameter-core = { workspace = true }
+astrameter-platform = { workspace = true }
+astrameter-sml = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

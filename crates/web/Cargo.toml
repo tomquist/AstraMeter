@@ -1,0 +1,17 @@
+[package]
+name = "astrameter-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Health endpoint + web config editor. Shared handlers, target-specific router (axum on host, EspHttpServer on ESP32)."
+
+[dependencies]
+astrameter-core = { workspace = true }
+astrameter-config = { workspace = true }
+astrameter-platform = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,20 @@
+# AstraMeter ESP32-S3 sdkconfig defaults. Phase 8 fills these in and the
+# embuild build script applies them. Listed here so reviewers see the
+# intended chip configuration.
+
+# Target: ESP32-S3 with 8 MB octal PSRAM
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Main task headroom (rumqttc + tokio + rustls)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# LittleFS
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# rumqttc uses rustls; let lwIP / mbedTLS sit out of Rust's TLS path.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y

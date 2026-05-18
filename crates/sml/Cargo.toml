@@ -1,0 +1,11 @@
+[package]
+name = "astrameter-sml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Smart Meter Language (SML / IEC 62056) decoder. Replaces Python `smllib`."
+
+[dependencies]
+thiserror = { workspace = true }

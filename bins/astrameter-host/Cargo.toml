@@ -1,0 +1,31 @@
+[package]
+name = "astrameter-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AstraMeter host binary (Linux/macOS/Docker)."
+default-run = "astrameter"
+
+[[bin]]
+name = "astrameter"
+path = "src/main.rs"
+
+[dependencies]
+astrameter-core = { workspace = true }
+astrameter-config = { workspace = true }
+astrameter-platform = { workspace = true }
+astrameter-platform-std = { workspace = true }
+astrameter-powermeters = { workspace = true }
+astrameter-wrappers = { workspace = true }
+astrameter-emulator-ct002 = { workspace = true }
+astrameter-emulator-shelly = { workspace = true }
+astrameter-insights-mqtt = { workspace = true }
+astrameter-marstek-api = { workspace = true }
+astrameter-web = { workspace = true }
+
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

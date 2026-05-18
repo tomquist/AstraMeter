@@ -1,0 +1,13 @@
+[package]
+name = "astrameter-wrappers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Composable Powermeter wrappers: transform, throttling, smoothing, hampel, pid."
+
+[dependencies]
+astrameter-core = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }

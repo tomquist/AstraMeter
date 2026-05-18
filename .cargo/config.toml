@@ -1,0 +1,9 @@
+# Workspace-wide cargo config. The ESP32 binary uses its own
+# bins/astrameter-esp32/.cargo/config.toml that overrides the linker / runner
+# when targeting xtensa-esp32s3-espidf.
+
+[build]
+# Use the host triple by default; ESP32 builds pass --target explicitly.
+
+[net]
+git-fetch-with-cli = true
