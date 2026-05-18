@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 2.0.2
 
 - **Fixed** EMA smoother slowing down across zero-crossings when `SMOOTH_TARGET_ALPHA` was configured above 0.5: the sign-flip "catchup" branch capped the effective alpha at 0.5, which actually reduced responsiveness for users who picked a larger alpha (e.g. 1.0 for near-instant tracking). The catchup boost now never drops below the configured alpha ([#371](https://github.com/tomquist/astrameter/issues/371)).
 
