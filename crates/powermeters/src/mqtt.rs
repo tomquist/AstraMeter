@@ -95,8 +95,10 @@ impl Powermeter for MqttPowermeter {
                             }
                             parsed.as_ref().and_then(|j| {
                                 j.clone().path(p).ok().and_then(|res| match &res {
-                                    Value::Array(arr) => arr.first().and_then(|v| v.as_f64()),
-                                    other => other.as_f64(),
+                                    Value::Array(arr) => arr
+                                        .first()
+                                        .and_then(|v| crate::json_http::value_to_f64(v).ok()),
+                                    other => crate::json_http::value_to_f64(other).ok(),
                                 })
                             })
                         }

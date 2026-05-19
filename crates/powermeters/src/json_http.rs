@@ -94,13 +94,40 @@ pub(crate) fn value_to_f64(v: &Value) -> Result<f64> {
         Value::Number(n) => n
             .as_f64()
             .ok_or_else(|| Error::decode(format!("number not representable as f64: {v}"))),
-        Value::String(s) => s
-            .trim()
-            .parse::<f64>()
-            .map_err(|e| Error::decode(format!("string {s:?} not a float: {e}"))),
+        Value::String(s) => parse_numeric_string(s)
+            .ok_or_else(|| Error::decode(format!("string {s:?} not a float"))),
         Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
         _ => Err(Error::decode(format!("can't coerce {v} to f64"))),
     }
+}
+
+/// Lenient float parser: tries the whole string first, then strips a
+/// trailing unit suffix (everything that isn't a digit, `.`, `+`, `-` or
+/// `e`/`E`). This mirrors Python's `jsonpath_ng.ext` ``.sub(/[^0-9.\-]+$/, )``
+/// pattern that Tasmota / SMA-derived endpoints expect.
+fn parse_numeric_string(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if let Ok(v) = trimmed.parse::<f64>() {
+        return Some(v);
+    }
+    // Find the longest prefix that parses as a float — skip past leading
+    // sign, then walk while the char looks numeric.
+    let mut end = 0;
+    let chars: Vec<char> = trimmed.chars().collect();
+    while end < chars.len() {
+        let c = chars[end];
+        let in_numeric =
+            c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
+        if !in_numeric {
+            break;
+        }
+        end += 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    let head: String = chars[..end].iter().collect();
+    head.trim().parse::<f64>().ok()
 }
 
 /// Parse a `HEADERS = "Name: value; Other: x"` string into key/value pairs.
@@ -145,4 +172,35 @@ pub fn create(section: &Section<'_>, platform: Arc<Platform>) -> Result<Arc<dyn 
         headers,
         platform.http.clone(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_plain_float() {
+        assert_eq!(parse_numeric_string("331.74"), Some(331.74));
+        assert_eq!(parse_numeric_string("-12"), Some(-12.0));
+    }
+
+    #[test]
+    fn strips_trailing_unit() {
+        // Matches Python ``$.state.`sub(/[^0-9.\\-]+$/, )` `` behaviour.
+        assert_eq!(parse_numeric_string("331.74 W"), Some(331.74));
+        assert_eq!(parse_numeric_string("100kWh"), Some(100.0));
+    }
+
+    #[test]
+    fn rejects_non_numeric() {
+        assert!(parse_numeric_string("hello").is_none());
+        assert!(parse_numeric_string("").is_none());
+    }
+
+    #[test]
+    fn coerces_bool_and_number() {
+        assert_eq!(value_to_f64(&serde_json::json!(true)).unwrap(), 1.0);
+        assert_eq!(value_to_f64(&serde_json::json!(42)).unwrap(), 42.0);
+        assert_eq!(value_to_f64(&serde_json::json!("2.5")).unwrap(), 2.5);
+    }
 }
