@@ -37,6 +37,17 @@ CONFIG_HTTPD_MAX_URI_LEN=1024
 # HomeWizard powermeters need TLS).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 
+# Allow FreeRTOS task stacks to live in PSRAM. Our tokio worker
+# pthread needs ~192 KB so MQTT's mbedTLS context init has room,
+# and tokio's blocking-task thread pool spawns one pthread per
+# concurrent blocking call (UDP bind / read, TCP read, UART read,
+# spawn_blocking) — each of those needs its own ~8 KB stack. With
+# only ~300 KB of internal SRAM free after IDF + Wi-Fi, the worker
+# stack alone exhausts internal RAM and the next pthread creation
+# fails with ENOMEM ("Failed to create task!"). Putting pthread
+# stacks in PSRAM removes that pressure entirely.
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
 # Keep the default ESP_LOG level at INFO. The websocket_client tag
 # already emits its handshake / TLS / TCP failures at WARN/ERROR
 # level — our Rust wrapper adds extra context (URL, scheme, custom CA,
