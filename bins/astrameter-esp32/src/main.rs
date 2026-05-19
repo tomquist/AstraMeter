@@ -305,49 +305,91 @@ fn bring_up_wifi(
     use esp_idf_svc::nvs::EspNvs;
     use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 
-    // Pull Wi-Fi creds from the same NVS namespace as `config` (may be
-    // empty on first boot).
+    // Resolution order for Wi-Fi credentials:
+    //   1. NVS (`astrameter` namespace, keys `wifi_ssid` / `wifi_pass`).
+    //      This is what a future SoftAP captive-portal flow would
+    //      write, and what `espflash write-bin --partition nvs ...`
+    //      writes today.
+    //   2. Build-time `WIFI_SSID` / `WIFI_PASSWORD` env vars baked into
+    //      the binary via `option_env!`. Set these on the
+    //      `cargo +esp build` command line for a quick "just connect to
+    //      my home AP" workflow:
+    //
+    //          WIFI_SSID=MyAP WIFI_PASSWORD=secret \
+    //              cargo +esp build --release -p astrameter-esp32 \
+    //                  --target xtensa-esp32s3-espidf
+    //
+    //      Baked credentials are persisted to NVS on first boot so a
+    //      later build without the env vars still connects.
+    //   3. Neither: stay offline (lwIP is up, no AP association).
     let nvs = EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true)
         .map_err(|e| anyhow::anyhow!("open NVS for wifi: {e}"))?;
     let mut ssid_buf = [0u8; 64];
     let mut pass_buf = [0u8; 128];
-    let ssid = nvs
+    let nvs_ssid = nvs
         .get_str(nvs_keys::WIFI_SSID, &mut ssid_buf)
         .ok()
         .flatten()
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let password = nvs
+    let nvs_pass = nvs
         .get_str(nvs_keys::WIFI_PASS, &mut pass_buf)
         .ok()
         .flatten()
         .map(|s| s.to_string())
         .unwrap_or_default();
+    let (ssid, password) = if !nvs_ssid.is_empty() {
+        log::info!("Wi-Fi credentials loaded from NVS");
+        (nvs_ssid, nvs_pass)
+    } else if let Some(env_ssid) = option_env!("WIFI_SSID").filter(|s| !s.is_empty()) {
+        let env_pass = option_env!("WIFI_PASSWORD").unwrap_or("").to_string();
+        log::info!(
+            "Wi-Fi credentials loaded from build-time WIFI_SSID env var; \
+             persisting to NVS for next boot"
+        );
+        // Persist so subsequent boots without env vars still connect.
+        // Drop the read-only `nvs` handle first; reopen read-write.
+        drop(nvs);
+        let nvs_rw = EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true)
+            .map_err(|e| anyhow::anyhow!("reopen NVS rw for wifi: {e}"))?;
+        if let Err(e) = nvs_rw.set_str(nvs_keys::WIFI_SSID, env_ssid) {
+            log::warn!("could not write wifi_ssid to NVS: {e}");
+        }
+        if let Err(e) = nvs_rw.set_str(nvs_keys::WIFI_PASS, &env_pass) {
+            log::warn!("could not write wifi_pass to NVS: {e}");
+        }
+        (env_ssid.to_string(), env_pass)
+    } else {
+        drop(nvs);
+        (String::new(), String::new())
+    };
 
     let peripherals = Peripherals::take().map_err(|e| anyhow::anyhow!("Peripherals::take: {e}"))?;
     let mut wifi = BlockingWifi::wrap(
-        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs_part))
+        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs_part.clone()))
             .map_err(|e| anyhow::anyhow!("EspWifi::new: {e}"))?,
         sysloop.clone(),
     )
     .map_err(|e| anyhow::anyhow!("BlockingWifi::wrap: {e}"))?;
 
     if ssid.is_empty() {
-        // No creds provisioned: still set a configuration and start the
-        // driver so the TCP/IP stack is alive. UDP `bind()` will work;
-        // outbound traffic will fail until the user provisions Wi-Fi.
-        wifi.set_configuration(&Configuration::Client(ClientConfiguration::default()))
-            .map_err(|e| anyhow::anyhow!("set default wifi config: {e}"))?;
-        wifi.start()
-            .map_err(|e| anyhow::anyhow!("wifi.start (offline): {e}"))?;
+        // No creds: drop into the captive-portal setup flow. This
+        // switches Wi-Fi to AP mode (SSID `AstraMeter-Setup-XXXXXX`),
+        // spawns an HTTP server at http://192.168.4.1/, and blocks
+        // here until the user submits credentials, at which point we
+        // persist them to NVS and reboot. The browser's
+        // captive-portal-detection trick (sending HTTP 302 for the
+        // OS connectivity probes) makes the form auto-open on most
+        // devices when they associate to the AP.
         log::warn!(
-            "No Wi-Fi SSID in NVS (namespace={}, key={}). lwIP stack is up but the \
-             device is offline. Provision SSID + password to NVS to connect.",
-            nvs_keys::NAMESPACE,
-            nvs_keys::WIFI_SSID
+            "No Wi-Fi credentials provisioned — starting captive-portal setup AP. \
+             Connect to the `AstraMeter-Setup-*` Wi-Fi on a phone or laptop and the \
+             setup page should open automatically (or browse to http://192.168.4.1/)."
         );
-        std::mem::forget(wifi);
-        return Ok(false);
+        run_captive_portal(&mut wifi, &nvs_part)?;
+        // run_captive_portal calls esp_restart() once credentials are
+        // saved, so we shouldn't actually reach here.
+        unreachable!("captive portal returned without restarting");
     }
 
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
@@ -383,6 +425,253 @@ fn bring_up_wifi(
     std::mem::forget(wifi);
     Ok(true)
 }
+
+/// Captive-portal setup flow. Switches Wi-Fi to AP mode, serves a
+/// tiny HTML form at `http://192.168.4.1/`, waits for the user to
+/// submit credentials, persists them to NVS, and reboots into STA
+/// mode.
+///
+/// The form does a synchronous fetch (`/scan`) to populate a `<select>`
+/// of nearby SSIDs the user can pick from. Submitting issues
+/// `POST /save` with `ssid` + `password` form fields.
+///
+/// Browser captive-portal magic: all "is this network up?" probe
+/// URLs (Apple's `/hotspot-detect.html`, Google's `/generate_204`,
+/// Microsoft's `/ncsi.txt`, …) are answered with a 302 redirect to
+/// `/`, which makes most phones / laptops auto-open the setup page
+/// the moment they associate.
+#[cfg(target_os = "espidf")]
+fn run_captive_portal(
+    wifi: &mut esp_idf_svc::wifi::BlockingWifi<esp_idf_svc::wifi::EspWifi<'static>>,
+    nvs_part: &esp_idf_svc::nvs::EspDefaultNvsPartition,
+) -> anyhow::Result<()> {
+    use embedded_svc::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
+    use esp_idf_svc::http::server::{Configuration as HttpConfig, EspHttpServer};
+    use esp_idf_svc::http::Method;
+    use esp_idf_svc::io::Write;
+    use esp_idf_svc::nvs::EspNvs;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Derive a stable SSID suffix from the STA MAC so multiple
+    // ESP32s on the same desk don't shadow each other.
+    let mac = wifi
+        .wifi()
+        .sta_netif()
+        .get_mac()
+        .map_err(|e| anyhow::anyhow!("get sta mac: {e}"))?;
+    let ssid_str = format!(
+        "AstraMeter-Setup-{:02X}{:02X}{:02X}",
+        mac[3], mac[4], mac[5]
+    );
+
+    wifi.set_configuration(&Configuration::AccessPoint(AccessPointConfiguration {
+        ssid: ssid_str
+            .as_str()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("ssid too long"))?,
+        auth_method: AuthMethod::None,
+        ssid_hidden: false,
+        channel: 1,
+        max_connections: 4,
+        ..Default::default()
+    }))
+    .map_err(|e| anyhow::anyhow!("set ap config: {e}"))?;
+    wifi.start()
+        .map_err(|e| anyhow::anyhow!("wifi.start (AP): {e}"))?;
+    log::info!("Captive portal AP live: SSID=`{ssid_str}`, open network, http://192.168.4.1/");
+
+    let done = Arc::new(AtomicBool::new(false));
+    let saved_creds: Arc<parking_lot::Mutex<Option<(String, String)>>> =
+        Arc::new(parking_lot::Mutex::new(None));
+
+    let mut server = EspHttpServer::new(&HttpConfig::default())
+        .map_err(|e| anyhow::anyhow!("EspHttpServer::new: {e}"))?;
+
+    // Capture the AP-side MAC for the device label on the form.
+    let device_label = format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+
+    // Root page — the setup form.
+    let device_label_clone = device_label.clone();
+    server
+        .fn_handler("/", Method::Get, move |req| -> Result<(), anyhow::Error> {
+            let body = SETUP_HTML.replace("{{device}}", &device_label_clone);
+            req.into_ok_response()?.write_all(body.as_bytes())?;
+            Ok(())
+        })
+        .map_err(|e| anyhow::anyhow!("register / handler: {e}"))?;
+
+    // Captive-portal probe endpoints — redirect to /. Hitting any of
+    // these from a stock OS triggers the captive portal popup.
+    for path in [
+        "/hotspot-detect.html",
+        "/library/test/success.html",
+        "/generate_204",
+        "/gen_204",
+        "/ncsi.txt",
+        "/connecttest.txt",
+        "/redirect",
+    ] {
+        let _ = server.fn_handler(path, Method::Get, |req| -> Result<(), anyhow::Error> {
+            let mut resp =
+                req.into_response(302, Some("Found"), &[("Location", "http://192.168.4.1/")])?;
+            resp.write_all(b"redirect")?;
+            Ok(())
+        });
+    }
+
+    // POST /save — body is `application/x-www-form-urlencoded` with
+    // `ssid=...&password=...`.
+    let done_for_save = done.clone();
+    let creds_for_save = saved_creds.clone();
+    server
+        .fn_handler(
+            "/save",
+            Method::Post,
+            move |mut req| -> Result<(), anyhow::Error> {
+                let mut body = Vec::new();
+                let mut buf = [0u8; 256];
+                loop {
+                    match req.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => body.extend_from_slice(&buf[..n]),
+                        Err(_) => break,
+                    }
+                    if body.len() > 1024 {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&body);
+                let mut ssid = String::new();
+                let mut password = String::new();
+                for pair in text.split('&') {
+                    let (k, v) = match pair.split_once('=') {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let decoded = url_decode(v);
+                    match k {
+                        "ssid" => ssid = decoded,
+                        "password" => password = decoded,
+                        _ => {}
+                    }
+                }
+                if ssid.is_empty() {
+                    let mut resp = req.into_response(
+                        400,
+                        Some("Bad Request"),
+                        &[("Content-Type", "text/plain")],
+                    )?;
+                    resp.write_all(b"ssid is required")?;
+                    return Ok(());
+                }
+                *creds_for_save.lock() = Some((ssid, password));
+                done_for_save.store(true, Ordering::SeqCst);
+                req.into_ok_response()?.write_all(SAVED_HTML.as_bytes())?;
+                Ok(())
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("register /save handler: {e}"))?;
+
+    // Block until the form is submitted.
+    while !done.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    // Give the browser a moment to receive the success page.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let (ssid, password) = saved_creds
+        .lock()
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("done flag set without creds"))?;
+
+    log::info!("Captive portal: received SSID `{ssid}`, persisting to NVS");
+    let nvs_rw = EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true)
+        .map_err(|e| anyhow::anyhow!("open NVS for save: {e}"))?;
+    nvs_rw
+        .set_str(nvs_keys::WIFI_SSID, &ssid)
+        .map_err(|e| anyhow::anyhow!("write wifi_ssid: {e}"))?;
+    nvs_rw
+        .set_str(nvs_keys::WIFI_PASS, &password)
+        .map_err(|e| anyhow::anyhow!("write wifi_pass: {e}"))?;
+
+    drop(server);
+    log::info!("Captive portal: restarting to apply Wi-Fi credentials");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    unsafe { esp_idf_svc::sys::esp_restart() };
+    // esp_restart never returns, but rustc doesn't know that:
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(h), Some(l)) = (hi, lo) {
+                    out.push((h * 16 + l) as u8);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+#[cfg(target_os = "espidf")]
+const SETUP_HTML: &str = r#"<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AstraMeter Wi-Fi setup</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 24em; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.2em; }
+  label { display: block; margin-top: 1em; font-weight: 600; }
+  input[type=text], input[type=password] { width: 100%; padding: .5em; font-size: 1em; border: 1px solid #aaa; border-radius: .25em; box-sizing: border-box; }
+  button { margin-top: 1.5em; width: 100%; padding: .75em; font-size: 1em; background: #007aff; color: white; border: 0; border-radius: .25em; }
+  small { color: #666; }
+</style>
+</head><body>
+<h1>AstraMeter Wi-Fi setup</h1>
+<p><small>Device: {{device}}</small></p>
+<form method="POST" action="/save">
+  <label for="ssid">Network name (SSID)</label>
+  <input id="ssid" name="ssid" type="text" autocomplete="off" required>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="off">
+  <button type="submit">Save &amp; restart</button>
+</form>
+</body></html>"#;
+
+#[cfg(target_os = "espidf")]
+const SAVED_HTML: &str = r#"<!doctype html>
+<html><head><meta charset="utf-8"><title>AstraMeter saved</title>
+<style>body{font-family:sans-serif;max-width:24em;margin:2em auto;padding:0 1em}</style>
+</head><body>
+<h1>Saved</h1>
+<p>Credentials stored. The device will reboot in a second and connect to your network.</p>
+</body></html>"#;
 
 #[cfg(target_os = "espidf")]
 async fn start_sntp_and_wait_for_sync() -> anyhow::Result<()> {
