@@ -1,9 +1,36 @@
-# Workspace-wide cargo config. The ESP32 binary uses its own
-# bins/astrameter-esp32/.cargo/config.toml that overrides the linker / runner
-# when targeting xtensa-esp32s3-espidf.
+# Workspace-wide cargo config. Host builds use the default target;
+# `cargo +esp build -p astrameter-esp32 --target xtensa-esp32s3-espidf`
+# (run from the workspace root) uses the target-scoped block below plus
+# the `[unstable]` build-std directive (which the Xtensa Rust fork from
+# `espup` requires because it ships only `rust-src`, no precompiled
+# std).
 
 [build]
 # Use the host triple by default; ESP32 builds pass --target explicitly.
+
+[target.xtensa-esp32s3-espidf]
+# `ldproxy` (installed via `cargo install ldproxy`) is needed by
+# `esp-idf-sys` to thread linker arguments through to the IDF build.
+linker = "ldproxy"
+# `espflash flash --monitor` opens a serial console after writing the
+# firmware. Override at the command line if you only want to flash.
+runner = "espflash flash --monitor"
+# Required so `chrono` / `tokio` etc. pick the espidf time bindings.
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+# The Xtensa Rust fork ships only `rust-src`, so every espidf build has
+# to recompile std + panic_abort from source. Setting this at workspace
+# scope is safe: stable rustc silently ignores `[unstable]` directives
+# and host builds never see `--target xtensa-esp32s3-espidf` anyway, so
+# build-std doesn't apply to them.
+build-std = ["std", "panic_abort"]
+
+[env]
+# Pin the underlying ESP-IDF SDK version that `esp-idf-sys` pulls down
+# on the first build. Bumping this re-runs the IDF build.
+MCU = "esp32s3"
+ESP_IDF_VERSION = "v5.2.3"
 
 [net]
 git-fetch-with-cli = true

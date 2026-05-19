@@ -167,20 +167,27 @@ const EMBEDDED_DEFAULT_CONFIG: &[u8] = b"[GENERAL]\nDEVICE_TYPE=ct002\n";
 
 #[cfg(target_os = "espidf")]
 fn mount_littlefs() -> anyhow::Result<()> {
-    use esp_idf_svc::sys::{esp_vfs_littlefs_conf_t, esp_vfs_littlefs_register, EspError, ESP_OK};
+    // The `esp_littlefs` component isn't part of `esp_idf_svc::sys` by
+    // default — it lives in an optional ESP-IDF managed component that
+    // would have to be pulled in via `idf_component.yml`. The partition
+    // table (partitions.csv) declares this slot as `spiffs`, which IS
+    // built into ESP-IDF, so use that. The mount path is kept at
+    // `/littlefs` for source-code parity with the migration plan and
+    // the host fallback.
+    use esp_idf_svc::sys::{esp_vfs_spiffs_conf_t, esp_vfs_spiffs_register, EspError, ESP_OK};
     let base = std::ffi::CString::new("/littlefs")?;
     let partition = std::ffi::CString::new("storage")?;
-    let conf = esp_vfs_littlefs_conf_t {
+    let conf = esp_vfs_spiffs_conf_t {
         base_path: base.as_ptr(),
         partition_label: partition.as_ptr(),
-        format_if_mount_failed: 1,
-        ..Default::default()
+        max_files: 5,
+        format_if_mount_failed: true,
     };
-    let err = unsafe { esp_vfs_littlefs_register(&conf) };
+    let err = unsafe { esp_vfs_spiffs_register(&conf) };
     if err != ESP_OK {
-        anyhow::bail!("littlefs mount failed: {:?}", EspError::from(err));
+        anyhow::bail!("spiffs mount failed: {:?}", EspError::from(err));
     }
-    log::info!("LittleFS mounted at /littlefs");
+    log::info!("SPIFFS mounted at /littlefs");
     Ok(())
 }
 

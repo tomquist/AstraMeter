@@ -17,3 +17,7 @@ config.ini
 # Rust
 target/
 **/*.rs.bk
+
+# ESP-IDF / embuild downloads the SDK + toolchain cache into .embuild/
+# on first build. Multi-GB, target-specific — never check in.
+.embuild/

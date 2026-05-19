@@ -15,9 +15,9 @@ path = "src/main.rs"
 astrameter-core = { workspace = true }
 
 [target.'cfg(target_os = "espidf")'.dependencies]
-esp-idf-svc = { version = "0.49", default-features = false, features = ["std", "binstart", "embassy-time-driver"] }
-esp-idf-hal = { version = "0.44", default-features = false }
-embedded-svc = "0.28"
+esp-idf-svc = { version = "0.52", default-features = false, features = ["std", "binstart", "embassy-time-driver"] }
+esp-idf-hal = { version = "0.46", default-features = false }
+embedded-svc = "0.29"
 log = "0.4"
 anyhow = { workspace = true }
 serde_json = { workspace = true }
@@ -34,5 +34,8 @@ astrameter-insights-mqtt = { workspace = true }
 astrameter-marstek-api = { workspace = true }
 astrameter-web = { workspace = true }
 
-[target.'cfg(target_os = "espidf")'.build-dependencies]
-embuild = "0.32"
+# build-dependencies are keyed off the *host* platform, not the target,
+# so a `cfg(target_os = "espidf")` gate would always be false. List
+# embuild unconditionally; it's a thin helper and harmless on the host.
+[build-dependencies]
+embuild = { version = "0.32", features = ["espidf"] }

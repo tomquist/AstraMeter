@@ -127,7 +127,12 @@ wiremock = "0.6"
 
 [profile.release]
 opt-level = "z"
-lto = "fat"
+# Fat LTO trips the Xtensa LLVM backend on some rustls codegen ("Cannot
+# select: XtensaISD::PCREL_WRAPPER ..." against
+# `rustls::msgs::handshake::ServerExtensions::read`). `thin` keeps most
+# of the size win without crossing the per-TU boundary that exposes
+# the bug.
+lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"

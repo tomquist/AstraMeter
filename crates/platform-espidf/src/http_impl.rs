@@ -23,20 +23,29 @@ fn blocking_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
     // mbedTLS lets us set: (a) the global crt bundle, (b) extra single
     // certificate pinned to this request, (c) `use_global_ca_store` OFF
     // for verify-disabled mode. `Configuration` exposes all three.
+    //
+    // esp-idf-svc 0.52 changed `client_certificate` from `Option<CString>`
+    // to `Option<X509<'static>>` — `X509::pem_until_nul` takes a NUL-
+    // terminated PEM slice and stores it as &CStr internally. We have to
+    // leak the buffer because the X509 borrows from it for the request
+    // duration; one-extra-PEM-per-request is fine for the typical use
+    // case (one HomeWizard meter pinned for the life of the process).
+    let pem_static: Option<&'static [u8]> =
+        req.extra_root_cert_pem.as_ref().map(|pem| -> &'static [u8] {
+            let mut owned = pem.clone();
+            if owned.last() != Some(&0) {
+                owned.push(0);
+            }
+            Box::leak(owned.into_boxed_slice())
+        });
     let cfg = Configuration {
         crt_bundle_attach: if req.verify_tls && req.extra_root_cert_pem.is_none() {
             Some(esp_idf_svc::sys::esp_crt_bundle_attach)
         } else {
             None
         },
-        client_certificate: req.extra_root_cert_pem.clone().map(|pem| {
-            // EspHttpConnection takes the PEM as a single &CStr — make
-            // sure it's NUL-terminated.
-            let mut owned = pem;
-            if owned.last() != Some(&0) {
-                owned.push(0);
-            }
-            std::ffi::CString::from_vec_with_nul(owned).expect("PEM contains interior NUL")
+        client_certificate: pem_static.map(|pem| {
+            esp_idf_svc::tls::X509::pem_until_nul(pem)
         }),
         use_global_ca_store: req.verify_tls,
         // `crt_bundle_attach=None + use_global_ca_store=false` disables
