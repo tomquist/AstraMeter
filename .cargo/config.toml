@@ -31,6 +31,14 @@ build-std = ["std", "panic_abort"]
 # on the first build. Bumping this re-runs the IDF build.
 MCU = "esp32s3"
 ESP_IDF_VERSION = "v5.2.3"
+# Multi-crate workspaces: `cargo metadata` returns `root_package = None`
+# unless cargo is invoked from inside a single crate's directory. Without
+# a known root, esp-idf-sys can't read
+# `package.metadata.esp-idf-sys.{extra_components, esp_idf_sdkconfig_defaults}`
+# — so our `partitions.csv`, `sdkconfig.defaults`, and the
+# `esp_websocket_client` managed-component request all silently get
+# ignored. Pin the root crate explicitly so all of those go through.
+ESP_IDF_SYS_ROOT_CRATE = "astrameter-esp32"
 
 [net]
 git-fetch-with-cli = true

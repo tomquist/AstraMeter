@@ -39,3 +39,17 @@ astrameter-web = { workspace = true }
 # embuild unconditionally; it's a thin helper and harmless on the host.
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
+
+# Apply our `sdkconfig.defaults`. Paths are resolved against the
+# *workspace* root (not this crate), so use the full relative path.
+# Combined with `ESP_IDF_SYS_ROOT_CRATE` in the workspace .cargo/config.toml,
+# this is what actually plumbs our IDF Kconfig overrides through.
+[package.metadata.esp-idf-sys]
+esp_idf_sdkconfig_defaults = ["bins/astrameter-esp32/sdkconfig.defaults"]
+
+# Pull `espressif/esp_websocket_client` (managed component) into the
+# IDF build so esp-idf-svc's `ws::client::EspWebSocketClient` is
+# available. Without this the `homeassistant` / `homewizard`
+# powermeters (which both need WSS) can't connect on ESP32.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_websocket_client", version = "1.5.0" }

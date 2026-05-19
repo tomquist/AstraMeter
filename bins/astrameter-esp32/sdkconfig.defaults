@@ -1,20 +1,38 @@
-# AstraMeter ESP32-S3 sdkconfig defaults. Phase 8 fills these in and the
-# embuild build script applies them. Listed here so reviewers see the
-# intended chip configuration.
+# AstraMeter ESP32-S3 sdkconfig defaults. Applied by esp-idf-sys via
+# `[package.metadata.esp-idf-sys] esp_idf_sdkconfig_defaults = [...]`
+# in bins/astrameter-esp32/Cargo.toml + ESP_IDF_SYS_ROOT_CRATE in
+# .cargo/config.toml.
 
-# Target: ESP32-S3 with 8 MB octal PSRAM
+# Target: ESP32-S3 with 8 MB octal PSRAM (N16R8 module).
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
-# Main task headroom (rumqttc + tokio + rustls)
+# Headroom for the FreeRTOS "main" task. We spawn a worker pthread with
+# its own large stack for the tokio runtime, but the main task still
+# runs `app_main` (which does `EspLogger::initialize_default` + spawn)
+# so give it a comfortable margin.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
-# LittleFS
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# Custom partition table (`partitions.csv`): disabled for now because
+# ESP-IDF's CMake resolves `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME`
+# against its own build directory (`target/.../build/esp-idf-sys-…/out/`),
+# not our crate root, and esp-idf-sys doesn't auto-copy the file. The
+# default "single app, large" layout has a 16 MB factory partition +
+# NVS, which is everything the current firmware needs (config and Wi-Fi
+# creds live in NVS, no OTA yet). When OTA support lands, switch to a
+# custom layout via a build.rs that writes `out/partitions.csv` instead.
 
-# rumqttc uses rustls; let lwIP / mbedTLS sit out of Rust's TLS path.
+# Bigger HTTP server header buffer. The default 512 bytes is way smaller
+# than what a real browser sends (User-Agent + Cookie + Accept headers
+# alone push past 512), causing a `431 Request Header Fields Too Large`
+# on POST submissions. 4 KB is plenty for any modern browser without
+# burning much RAM.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
+CONFIG_HTTPD_MAX_URI_LEN=1024
+
+# Use the ESP-IDF bundled CA store for HTTPS / WSS (HomeAssistant +
+# HomeWizard powermeters need TLS).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
