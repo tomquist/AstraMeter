@@ -8,7 +8,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use astrameter_platform::mqtt::{
     MqttClient, MqttError, MqttEvent, MqttEventStream, MqttFactory, MqttOptions, MqttQos,
@@ -56,24 +55,16 @@ impl MqttFactory for EspMqttFactory {
         let (client, connection) = EspAsyncMqttClient::new(&url, &cfg)
             .map_err(|e| MqttError::Connect(format!("esp mqtt new: {e}")))?;
 
-        // Block until the IDF fires Connected (or fails). Without this
-        // the insights service's first `publish("online")` races the
-        // broker handshake and errors with "client is not connected".
+        // The IDF MQTT client connects asynchronously; the
+        // `Connected`/`Disconnected` events arrive on the connection's
+        // poll stream. The `connected` flag is flipped by
+        // `build_event_stream` once the insights service starts driving
+        // that stream. `EspClient::publish` / `subscribe` short-circuit
+        // until then, so callers get a clean "broker disconnected"
+        // error instead of the cryptic IDF "client is not connected"
+        // string during the handshake window.
         let connected = Arc::new(AtomicBool::new(false));
         let events = build_event_stream(connection, connected.clone(), url.clone());
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !connected.load(Ordering::SeqCst) {
-            if std::time::Instant::now() > deadline {
-                return Err(MqttError::Connect(format!(
-                    "broker handshake did not complete within 10 s for {url}"
-                )));
-            }
-            // We're not in an async context here (factory.connect is
-            // sync), so spin with a short sleep on the calling FreeRTOS
-            // task. The Stream we just built runs on the IDF event
-            // task, so the flag will flip independently.
-            std::thread::sleep(Duration::from_millis(50));
-        }
 
         let arc_client: Arc<dyn MqttClient> = Arc::new(EspClient {
             inner: Arc::new(Mutex::new(client)),

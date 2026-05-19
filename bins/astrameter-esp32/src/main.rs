@@ -158,6 +158,8 @@ async fn async_main() -> anyhow::Result<()> {
         .unwrap_or(0.0);
 
     log::info!("step: start emulator (DEVICE_TYPE={device_type})");
+    let mut ct002_for_handlers: Option<Arc<Ct002Emulator>> = None;
+    let mut shelly_for_listeners: Vec<Arc<ShellyEmulator>> = Vec::new();
     let _emu = match device_type.as_str() {
         "ct002" | "ct003" => {
             let section_name = if device_type == "ct003" && config.section("CT003").is_some() {
@@ -165,32 +167,34 @@ async fn async_main() -> anyhow::Result<()> {
             } else {
                 "CT002"
             };
-            let section = match config.section(section_name) {
-                Some(s) => s,
-                None => {
-                    log::warn!("[{section_name}] missing — skipping emulator");
-                    return Ok(());
+            match config.section(section_name) {
+                Some(section) => {
+                    let udp_port = section.get_int("UDP_PORT", 12345)? as u16;
+                    let ct_mac = section.get_string("CT_MAC", "");
+                    let meters: Vec<Ct002BoundMeter> = bound
+                        .iter()
+                        .map(|bp| Ct002BoundMeter {
+                            meter: bp.meter.clone(),
+                            filter: bp.client_filter.clone(),
+                            wait_for_next: bp.wait_for_next_message,
+                        })
+                        .collect();
+                    let emu = Arc::new(Ct002Emulator::new(
+                        udp_port,
+                        ct_mac,
+                        meters,
+                        astrameter_emulator_ct002::balancer::BalancerConfig::default(),
+                        platform.clone(),
+                    ));
+                    emu.start().await?;
+                    ct002_for_handlers = Some(emu.clone());
+                    Some(EsplEmu::Ct002(emu))
                 }
-            };
-            let udp_port = section.get_int("UDP_PORT", 12345)? as u16;
-            let ct_mac = section.get_string("CT_MAC", "");
-            let meters: Vec<Ct002BoundMeter> = bound
-                .iter()
-                .map(|bp| Ct002BoundMeter {
-                    meter: bp.meter.clone(),
-                    filter: bp.client_filter.clone(),
-                    wait_for_next: bp.wait_for_next_message,
-                })
-                .collect();
-            let emu = Arc::new(Ct002Emulator::new(
-                udp_port,
-                ct_mac,
-                meters,
-                astrameter_emulator_ct002::balancer::BalancerConfig::default(),
-                platform.clone(),
-            ));
-            emu.start().await?;
-            Some(EsplEmu::Ct002(emu))
+                None => {
+                    log::warn!("[{section_name}] missing — emulator not started");
+                    None
+                }
+            }
         }
         s if s.starts_with("shelly") => {
             let port = match s {
@@ -216,6 +220,7 @@ async fn async_main() -> anyhow::Result<()> {
                 platform.clone(),
             ));
             emu.start().await?;
+            shelly_for_listeners.push(emu.clone());
             Some(EsplEmu::Shelly(emu))
         }
         other => {
@@ -223,6 +228,33 @@ async fn async_main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // MQTT Insights + Marstek HA discovery (matches host main.rs:533-607).
+    // Without this block the ESP32 build was silently skipping MQTT
+    // entirely — no `mqtt: connecting to ...` log line ever appeared
+    // because the `MqttFactory::connect` call site only lives inside
+    // `InsightsService::start`.
+    let _insights = match start_mqtt_insights(
+        &config,
+        &device_type,
+        &bound,
+        ct002_for_handlers.clone(),
+        &shelly_for_listeners,
+        platform.clone(),
+    )
+    .await
+    {
+        Ok(svc) => svc,
+        Err(e) => {
+            log::warn!("MQTT Insights not started: {e}");
+            None
+        }
+    };
+
+    // Marstek cloud auto-register (matches host main.rs:572-607). Spawn
+    // as a detached task so a slow/failing HTTPS round-trip doesn't
+    // block the supervisor.
+    spawn_marstek_registration(&config, &device_type, platform.clone());
 
     // Web config editor — serves the config.ini editor + Wi-Fi reset at
     // http://<sta-ip>/ on the AP's STA-side address (e.g.
@@ -252,6 +284,276 @@ async fn async_main() -> anyhow::Result<()> {
 enum EsplEmu {
     Ct002(std::sync::Arc<astrameter_emulator_ct002::server::Ct002Emulator>),
     Shelly(std::sync::Arc<astrameter_emulator_shelly::ShellyEmulator>),
+}
+
+/// Start the MQTT Insights service if `[MQTT_INSIGHTS]` is configured,
+/// wire CT002 / Shelly emulator events into its event channel, and
+/// install command handlers + Marstek bindings. Mirrors the host
+/// supervisor's `start_insights` + `wire_*_to_insights` calls.
+#[cfg(target_os = "espidf")]
+async fn start_mqtt_insights(
+    config: &astrameter_config::Config,
+    device_type: &str,
+    bound: &[astrameter_powermeters::BoundPowermeter],
+    ct002: Option<std::sync::Arc<astrameter_emulator_ct002::server::Ct002Emulator>>,
+    shelly_emus: &[std::sync::Arc<astrameter_emulator_shelly::ShellyEmulator>],
+    platform: std::sync::Arc<astrameter_platform::Platform>,
+) -> anyhow::Result<Option<std::sync::Arc<astrameter_insights_mqtt::InsightsService>>> {
+    use std::sync::Arc;
+
+    use astrameter_insights_mqtt::{
+        CommandHandlers, InsightsEvent, InsightsService, MarstekBinding, MqttInsightsConfig,
+    };
+
+    let Some(section_name) = config.sections().find(|s| s.starts_with("MQTT_INSIGHTS")) else {
+        log::info!("MQTT Insights: no [MQTT_INSIGHTS*] section in config — skipping");
+        return Ok(None);
+    };
+    let Some(section) = config.section(section_name) else {
+        return Ok(None);
+    };
+    log::info!("MQTT Insights: [{section_name}] found, starting service");
+
+    let (broker, port, username, password, tls) = match section.get_opt_string("URI") {
+        Some(uri) => {
+            let parts = astrameter_config::parse_mqtt_uri(&uri)
+                .map_err(|e| anyhow::anyhow!("[{section_name}] URI parse: {e}"))?;
+            (
+                parts.host,
+                parts.port,
+                parts.username,
+                parts.password,
+                parts.tls,
+            )
+        }
+        None => (
+            section.get_string("BROKER", "localhost"),
+            section.get_int("PORT", 1883)? as u16,
+            section.get_opt_string("USERNAME"),
+            section.get_opt_string("PASSWORD"),
+            section.get_bool("TLS", false)?,
+        ),
+    };
+    let cfg = MqttInsightsConfig {
+        broker,
+        port,
+        username,
+        password,
+        tls,
+        base_topic: section.get_string("BASE_TOPIC", "astrameter"),
+        ha_discovery: section.get_bool("HA_DISCOVERY", true)?,
+        ha_discovery_prefix: section.get_string("HA_DISCOVERY_PREFIX", "homeassistant"),
+        addon_slug: section.get_opt_string("ADDON_SLUG"),
+        marstek_mqtt_enabled: section.get_bool("MARSTEK_MQTT_ENABLED", true)?,
+        marstek_mqtt_interval: section.get_float("MARSTEK_MQTT_INTERVAL", 300.0)?,
+    };
+    let service = Arc::new(InsightsService::new(cfg, platform.clone()));
+
+    // CT002 command handlers (set_active / manual_target / auto_target /
+    // force_rotation) — same wiring as the host supervisor.
+    if let Some(ct) = ct002.clone() {
+        let ct_act = ct.clone();
+        let ct_mt = ct.clone();
+        let ct_at = ct.clone();
+        let ct_fr = ct.clone();
+        service.set_command_handlers(CommandHandlers {
+            set_active: Some(Arc::new(move |_dev: &str, consumer: &str, active: bool| {
+                ct_act.set_consumer_active(consumer, active);
+            })),
+            set_manual_target: Some(Arc::new(move |_dev: &str, consumer: &str, target: f64| {
+                ct_mt.set_consumer_manual_target(consumer, target);
+            })),
+            set_auto_target: Some(Arc::new(move |_dev: &str, consumer: &str, auto: bool| {
+                ct_at.set_consumer_auto_target(consumer, auto);
+            })),
+            force_rotation: Some(Arc::new(move |_dev: &str| {
+                ct_fr.force_efficiency_rotation();
+            })),
+        });
+    }
+
+    // Marstek MQTT binding (drives `hame_energy/...` poll responses +
+    // the periodic broadcast loop).
+    if let Some(ct) = ct002.as_ref() {
+        let dt = device_type.to_lowercase();
+        if dt == "ct002" || dt == "ct003" {
+            let section_name_ct = if dt == "ct003" && config.section("CT003").is_some() {
+                "CT003"
+            } else {
+                "CT002"
+            };
+            if let Some(cs) = config.section(section_name_ct) {
+                let ct_mac_raw = cs.get_string("CT_MAC", "");
+                let mac_norm = astrameter_insights_mqtt::marstek::normalize_mac(&ct_mac_raw);
+                let ct_type = if dt == "ct003" {
+                    "HME-3".to_string()
+                } else {
+                    "HME-4".to_string()
+                };
+                let device_id = cs
+                    .get_opt_string("DEVICE_ID")
+                    .unwrap_or_else(|| ct.device_id());
+                let wifi_rssi = cs.get_int("WIFI_RSSI", -50).unwrap_or(-50);
+                if !mac_norm.is_empty() {
+                    let ct_for_count = ct.clone();
+                    let ct_for_csv = ct.clone();
+                    service.add_marstek_binding(MarstekBinding {
+                        device_id,
+                        ct_type,
+                        mac: mac_norm,
+                        wifi_rssi,
+                        ver_v: astrameter_insights_mqtt::marstek::DEFAULT_VER_V,
+                        ble_s: 0,
+                        fc4_v: astrameter_insights_mqtt::marstek::DEFAULT_FC4_V.to_string(),
+                        get_connected_slave_count: Some(Arc::new(move || {
+                            ct_for_count.reporting_consumer_count() as i64
+                        })),
+                        get_cd4_slave_csv: Some(Arc::new(move || {
+                            ct_for_csv.reporting_consumer_csv()
+                        })),
+                    });
+                } else if !ct_mac_raw.is_empty() {
+                    log::warn!(
+                        "[{section_name_ct}] CT_MAC={ct_mac_raw:?} could not be normalised; \
+                         Marstek MQTT binding skipped"
+                    );
+                }
+            }
+        }
+    }
+
+    // Wire CT002 + Shelly event listeners into the insights event
+    // channel — without this the InsightsService only sees Marstek
+    // poll responses; HA Device Discovery and consumer-state publishes
+    // never fire.
+    let tx = service.event_sender();
+    if let Some(ct) = ct002.as_ref() {
+        let tx_ct = tx.clone();
+        ct.set_event_listener(Arc::new(
+            move |device_id: &str, consumer_id: &str, data: &serde_json::Value| {
+                let removed = data
+                    .get("_removed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if removed {
+                    let _ = tx_ct.try_send(InsightsEvent::Ct002Remove {
+                        device_id: device_id.to_string(),
+                        consumer_id: consumer_id.to_string(),
+                    });
+                    return;
+                }
+                let _ = tx_ct.try_send(InsightsEvent::Ct002 {
+                    device_id: device_id.to_string(),
+                    consumer_id: consumer_id.to_string(),
+                    data: data.clone(),
+                });
+                let status = serde_json::json!({
+                    "smooth_target": data.get("smooth_target").cloned().unwrap_or(serde_json::Value::Null),
+                    "active_control": data.get("active_control").cloned().unwrap_or(serde_json::Value::Null),
+                    "consumer_count": data.get("consumer_count").cloned().unwrap_or(serde_json::Value::Null),
+                });
+                let _ = tx_ct.try_send(InsightsEvent::Ct002DeviceStatus {
+                    device_id: device_id.to_string(),
+                    data: status,
+                });
+            },
+        ));
+    }
+    for sh in shelly_emus {
+        let tx_sh = tx.clone();
+        sh.set_event_listener(Arc::new(
+            move |device_id: &str, battery_ip: &str, data: &serde_json::Value| {
+                let removed = data
+                    .get("_removed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if removed {
+                    let _ = tx_sh.try_send(InsightsEvent::ShellyRemove {
+                        device_id: device_id.to_string(),
+                        battery_ip: battery_ip.to_string(),
+                    });
+                    return;
+                }
+                let _ = tx_sh.try_send(InsightsEvent::Shelly {
+                    device_id: device_id.to_string(),
+                    battery_ip: battery_ip.to_string(),
+                    data: data.clone(),
+                });
+            },
+        ));
+    }
+
+    // Meter-watts callback — emits raw (pre-wrapper) values for the
+    // Marstek wire format. Same shape as the host supervisor.
+    let meters: Vec<(String, Arc<dyn astrameter_core::Powermeter>)> = bound
+        .iter()
+        .map(|bp| (bp.section.clone(), bp.meter.clone()))
+        .collect();
+    let meters_arc = Arc::new(meters);
+    let meters_cb = meters_arc.clone();
+    service
+        .start(move |_device_id: &str| {
+            let meters_cb = meters_cb.clone();
+            Box::pin(async move {
+                if let Some((_, m)) = meters_cb.first() {
+                    m.get_powermeter_watts_raw().await
+                } else {
+                    Ok(vec![0.0, 0.0, 0.0])
+                }
+            })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("InsightsService::start: {e}"))?;
+
+    log::info!("MQTT Insights: service started");
+    Ok(Some(service))
+}
+
+/// Marstek cloud HTTPS auto-registration. Detached so a slow connect
+/// doesn't block the boot-time supervisor wiring.
+#[cfg(target_os = "espidf")]
+fn spawn_marstek_registration(
+    config: &astrameter_config::Config,
+    device_type: &str,
+    platform: std::sync::Arc<astrameter_platform::Platform>,
+) {
+    let Some(section_name) = config.sections().find(|s| s.starts_with("MARSTEK")) else {
+        return;
+    };
+    let Some(section) = config.section(section_name) else {
+        return;
+    };
+    if !section.get_bool("ENABLE", false).unwrap_or(false) {
+        log::info!("[{section_name}] disabled (ENABLE=false) — skipping cloud registration");
+        return;
+    }
+    let base_url = section.get_string("BASE_URL", "https://eu.hamedata.com");
+    let mailbox = section.get_string("MAILBOX", "");
+    let password = section.get_string("PASSWORD", "");
+    if mailbox.is_empty() || password.is_empty() {
+        log::warn!("[{section_name}] missing MAILBOX or PASSWORD — skipping registration");
+        return;
+    }
+    let dt_norm = device_type.to_lowercase();
+    let device_type_for_reg = if dt_norm == "ct002" || dt_norm == "ct003" {
+        dt_norm
+    } else {
+        log::info!("[{section_name}] only ct002/ct003 supported for cloud registration");
+        return;
+    };
+    let http = platform.http.clone();
+    tokio::spawn(async move {
+        let client = astrameter_marstek_api::MarstekClient::new(http);
+        let cfg = astrameter_marstek_api::MarstekConfig::new(base_url, mailbox, password);
+        match client
+            .ensure_managed_fake_device(&cfg, &device_type_for_reg)
+            .await
+        {
+            Ok(Some(d)) => log::info!("Marstek registration ok: {d:?}"),
+            Ok(None) => log::info!("Marstek: nothing to register for {device_type_for_reg}"),
+            Err(e) => log::warn!("Marstek registration failed: {e}"),
+        }
+    });
 }
 
 /// Embedded fallback when NVS has no `astrameter/config` key — first
