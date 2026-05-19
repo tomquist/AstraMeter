@@ -107,14 +107,22 @@ async fn async_main() -> anyhow::Result<()> {
     let config = Config::parse(&cfg_raw).map_err(|e| anyhow::anyhow!("parse config: {e}"))?;
     log::info!("step: config loaded ({} bytes)", cfg_raw.len());
 
-    log::info!("step: bring up Wi-Fi");
-    if let Err(e) = bring_up_wifi(&sysloop, nvs_part.clone()) {
-        // Don't abort the boot — log loudly and keep going so the user
-        // sees the next step. Without Wi-Fi most powermeters will fail
-        // their initial connect, but the firmware itself stays alive
-        // for OTA recovery and serial debugging.
-        log::error!("Wi-Fi bring-up failed: {e}. Continuing without network.");
-    } else {
+    log::info!("step: bring up Wi-Fi / lwIP");
+    // `bring_up_wifi` always initialises the lwIP TCP/IP stack and
+    // brings the Wi-Fi driver up in IDLE state, even when no SSID is
+    // provisioned. That's required: the CT002 / Shelly emulators bind
+    // UDP sockets which would otherwise hit
+    // `assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)`.
+    // Association is best-effort — `Ok(true)` means we associated,
+    // `Ok(false)` means stack-up-but-offline.
+    let online = match bring_up_wifi(&sysloop, nvs_part.clone()) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("Wi-Fi / lwIP bring-up failed: {e}. Continuing without network.");
+            false
+        }
+    };
+    if online {
         log::info!("step: Wi-Fi up; starting SNTP");
         if let Err(e) = start_sntp_and_wait_for_sync().await {
             log::warn!("SNTP sync skipped: {e}");
@@ -274,17 +282,31 @@ fn load_config_from_nvs(part: esp_idf_svc::nvs::EspDefaultNvsPartition) -> anyho
     }
 }
 
+/// Bring up the lwIP TCP/IP stack and (optionally) connect to Wi-Fi.
+///
+/// **Always** initialises `EspWifi` even when no SSID is provisioned,
+/// because that's what spins up the lwIP TCP/IP thread + default
+/// network interface — without it, the very first UDP `bind()` in
+/// the CT002 / Shelly emulator hits
+/// `assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)` and
+/// the whole firmware panics.
+///
+/// `Ok(true)` means we associated with an AP; `Ok(false)` means the
+/// stack is up but we're offline (no creds in NVS, or association
+/// failed). Either way the firmware keeps running; powermeters that
+/// need network connectivity will surface their own runtime errors.
 #[cfg(target_os = "espidf")]
 fn bring_up_wifi(
     sysloop: &esp_idf_svc::eventloop::EspSystemEventLoop,
     nvs_part: esp_idf_svc::nvs::EspDefaultNvsPartition,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
     use esp_idf_svc::hal::peripherals::Peripherals;
     use esp_idf_svc::nvs::EspNvs;
     use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 
-    // Pull Wi-Fi creds from the same NVS namespace as `config`.
+    // Pull Wi-Fi creds from the same NVS namespace as `config` (may be
+    // empty on first boot).
     let nvs = EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true)
         .map_err(|e| anyhow::anyhow!("open NVS for wifi: {e}"))?;
     let mut ssid_buf = [0u8; 64];
@@ -301,14 +323,6 @@ fn bring_up_wifi(
         .flatten()
         .map(|s| s.to_string())
         .unwrap_or_default();
-    if ssid.is_empty() {
-        anyhow::bail!(
-            "no Wi-Fi SSID in NVS (namespace={}, key={}). Set with `esp-idf-mfg-util` or \
-             the future captive portal.",
-            nvs_keys::NAMESPACE,
-            nvs_keys::WIFI_SSID
-        );
-    }
 
     let peripherals = Peripherals::take().map_err(|e| anyhow::anyhow!("Peripherals::take: {e}"))?;
     let mut wifi = BlockingWifi::wrap(
@@ -317,6 +331,25 @@ fn bring_up_wifi(
         sysloop.clone(),
     )
     .map_err(|e| anyhow::anyhow!("BlockingWifi::wrap: {e}"))?;
+
+    if ssid.is_empty() {
+        // No creds provisioned: still set a configuration and start the
+        // driver so the TCP/IP stack is alive. UDP `bind()` will work;
+        // outbound traffic will fail until the user provisions Wi-Fi.
+        wifi.set_configuration(&Configuration::Client(ClientConfiguration::default()))
+            .map_err(|e| anyhow::anyhow!("set default wifi config: {e}"))?;
+        wifi.start()
+            .map_err(|e| anyhow::anyhow!("wifi.start (offline): {e}"))?;
+        log::warn!(
+            "No Wi-Fi SSID in NVS (namespace={}, key={}). lwIP stack is up but the \
+             device is offline. Provision SSID + password to NVS to connect.",
+            nvs_keys::NAMESPACE,
+            nvs_keys::WIFI_SSID
+        );
+        std::mem::forget(wifi);
+        return Ok(false);
+    }
+
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: ssid
             .as_str()
@@ -348,7 +381,7 @@ fn bring_up_wifi(
             .map_err(|e| anyhow::anyhow!("sta_netif.get_ip_info: {e}"))?
     );
     std::mem::forget(wifi);
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(target_os = "espidf")]
