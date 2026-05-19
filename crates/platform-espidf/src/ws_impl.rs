@@ -187,9 +187,38 @@ impl WebSocketClient for TungsteniteClient {
                     }
                 },
                 Err(e) => {
-                    let msg = format!("{e:?}");
-                    log::error!("ws[{url_for_log}]: event error: {msg}");
-                    let _ = tx_for_cb.send(Err(WsError::Protocol(msg)));
+                    // Upstream esp-idf-svc 0.52 has two well-known cases
+                    // that fire as "Err" here but are NOT real protocol
+                    // errors — they'd kill the connection if forwarded:
+                    //
+                    //   * ESP_ERR_NOT_SUPPORTED (262): the close-reason
+                    //     decoder in WebSocketClosingReason::new reads
+                    //     the EVENT pointer value as if it were a u16
+                    //     reason code, so ~every Close frame produces
+                    //     a "reason code" outside 1000..=1015 and the
+                    //     enum decoder returns NOT_SUPPORTED. The Close
+                    //     itself still arrives as a normal `Close(...)` /
+                    //     `Closed` event right after.
+                    //   * ESP_ERR_INVALID_ARG (258): IDF 5.x fires extra
+                    //     event IDs (BEGIN/FINISH) that esp-idf-svc 0.52
+                    //     doesn't recognise yet. Informational, the
+                    //     underlying state machine is fine.
+                    //
+                    // Log them at DEBUG so they show up if the user is
+                    // actively troubleshooting, but don't push them into
+                    // the mpsc — otherwise the HA powermeter (which
+                    // reads from there) would treat every Close frame as
+                    // a fatal `recv` error and skip the actual auth
+                    // exchange.
+                    use esp_idf_svc::sys::{ESP_ERR_INVALID_ARG, ESP_ERR_NOT_SUPPORTED};
+                    let code = e.0.code();
+                    if code == ESP_ERR_NOT_SUPPORTED || code == ESP_ERR_INVALID_ARG {
+                        log::debug!("ws[{url_for_log}]: harmless upstream event error: {e:?}");
+                    } else {
+                        let msg = format!("{e:?}");
+                        log::error!("ws[{url_for_log}]: event error: {msg}");
+                        let _ = tx_for_cb.send(Err(WsError::Protocol(msg)));
+                    }
                 }
             },
         )

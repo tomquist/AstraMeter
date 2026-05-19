@@ -263,13 +263,18 @@ async fn handle_message(
         }
     };
     let mt = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    tracing::debug!("HA recv: {mt} ({} bytes)", raw.len());
     match mt {
         "auth_required" => {
-            let _ = conn
+            tracing::info!("HA: auth_required received, sending token");
+            let send_result = conn
                 .send(WsMessage::Text(
                     json!({"type": "auth", "access_token": access_token}).to_string(),
                 ))
                 .await;
+            if let Err(e) = send_result {
+                tracing::error!("HA: failed to send auth: {e}");
+            }
         }
         "auth_ok" => {
             tracing::info!("Home Assistant: authenticated");
