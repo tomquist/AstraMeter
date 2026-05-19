@@ -73,6 +73,15 @@ struct ServiceCtx {
     marstek_bindings: Arc<Mutex<Vec<MarstekBinding>>>,
     command_handlers: Arc<Mutex<super::CommandHandlers>>,
     get_meter_watts: MeterWattsFn,
+    /// device_ids whose last `get_powermeter_watts*` call failed. Used to
+    /// rate-limit log spam — matches Python's
+    /// `_marstek_get_values_failed: set[str]`.
+    failed_meters: Arc<Mutex<HashSet<String>>>,
+    /// Per-binding in-flight poll guard. If `Some(true)` for a device_id,
+    /// a `serve_marstek_poll` is still running for it; we skip subsequent
+    /// poll spawns until it clears. Matches Python's
+    /// `_marstek_tasks_by_binding`.
+    inflight: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Default)]
@@ -81,6 +90,11 @@ struct DiscoveryCache {
     ct002_devices: HashSet<String>,
     shelly_batteries: HashSet<String>,
     shelly_devices: HashSet<String>,
+    /// CT002 consumer keys (`device_id::consumer_id`) for which the
+    /// first-sight ARP lookup returned empty. We retry the lookup on every
+    /// subsequent event until a MAC is found — matches Python's
+    /// `_pending_arp` retry set.
+    pending_arp: HashSet<String>,
 }
 
 pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::CancellationToken) {
@@ -97,6 +111,8 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
         marstek_bindings: marstek_bindings.clone(),
         command_handlers: command_handlers.clone(),
         get_meter_watts,
+        failed_meters: Arc::new(Mutex::new(HashSet::new())),
+        inflight: Arc::new(Mutex::new(HashSet::new())),
     };
     loop {
         let connect_result = factory.connect(MqttOptions {
@@ -167,12 +183,16 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                 let bcast_client = client.clone();
                 let bcast_bindings = ctx.marstek_bindings.clone();
                 let bcast_get = ctx.get_meter_watts.clone();
+                let bcast_failed = ctx.failed_meters.clone();
+                let bcast_inflight = ctx.inflight.clone();
                 let bcast_cancel = drain_cancel.clone();
                 Some(tokio::spawn(async move {
                     marstek_broadcast_loop(
                         bcast_client,
                         bcast_bindings,
                         bcast_get,
+                        bcast_failed,
+                        bcast_inflight,
                         interval,
                         bcast_cancel,
                     )
@@ -242,7 +262,12 @@ async fn handle_event(
                 cache.ct002_devices.insert(device_id.clone());
             }
             let cache_key = format!("{device_id}::{consumer_id}");
-            if ha && !cache.ct002_consumers.contains(&cache_key) {
+            // ARP retry: republish consumer-discovery on every event for
+            // entries whose first lookup returned empty until we resolve
+            // a MAC. Matches Python `_pending_arp`.
+            let need_first_discovery = !cache.ct002_consumers.contains(&cache_key);
+            let need_arp_retry = cache.pending_arp.contains(&cache_key);
+            if ha && (need_first_discovery || need_arp_retry) {
                 let device_type = data
                     .get("device_type")
                     .and_then(|v| v.as_str())
@@ -251,10 +276,6 @@ async fn handle_event(
                     .get("battery_ip")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                // Prefer payload-supplied MAC; fall back to a /proc/net/arp
-                // lookup keyed on `battery_ip` so consumer entities surface
-                // a connections=[mac]. This mirrors `_arp_lookup` in the
-                // Python service.
                 let payload_mac = data
                     .get("network_mac")
                     .and_then(|v| v.as_str())
@@ -270,17 +291,27 @@ async fn handle_event(
                 } else {
                     mac_via_arp.as_str()
                 };
-                let (topic, payload) = discovery::build_ct002_consumer_discovery(
-                    base,
-                    &device_id,
-                    &consumer_id,
-                    ha_prefix,
-                    device_type,
-                    network_mac,
-                    battery_ip,
-                );
-                publish_json(client, &topic, &payload, true).await?;
-                cache.ct002_consumers.insert(cache_key);
+                if need_first_discovery {
+                    cache.ct002_consumers.insert(cache_key.clone());
+                    if !battery_ip.is_empty() && network_mac.is_empty() {
+                        cache.pending_arp.insert(cache_key.clone());
+                    }
+                }
+                if !network_mac.is_empty() {
+                    cache.pending_arp.remove(&cache_key);
+                }
+                if need_first_discovery || !network_mac.is_empty() {
+                    let (topic, payload) = discovery::build_ct002_consumer_discovery(
+                        base,
+                        &device_id,
+                        &consumer_id,
+                        ha_prefix,
+                        device_type,
+                        network_mac,
+                        battery_ip,
+                    );
+                    publish_json(client, &topic, &payload, true).await?;
+                }
             }
             let state_topic = format!("{base}/ct002/{device_id}/consumer/{consumer_id}");
             let avail_topic = format!("{state_topic}/availability");
@@ -298,6 +329,9 @@ async fn handle_event(
             let _ = client
                 .publish(&avail_topic, rumqttc::QoS::AtLeastOnce, true, "offline")
                 .await;
+            let key = format!("{device_id}::{consumer_id}");
+            cache.ct002_consumers.remove(&key);
+            cache.pending_arp.remove(&key);
         }
         InsightsEvent::Ct002DeviceStatus { device_id, data } => {
             let state_topic = format!("{base}/ct002/{device_id}/status");
@@ -384,7 +418,15 @@ async fn handle_incoming(
     let Some(poll) = parse_poll_payload(payload) else {
         return;
     };
-    serve_marstek_poll(client, &binding, poll, &ctx.get_meter_watts).await;
+    serve_marstek_poll(
+        client,
+        &binding,
+        poll,
+        &ctx.get_meter_watts,
+        &ctx.failed_meters,
+        &ctx.inflight,
+    )
+    .await;
 }
 
 async fn serve_marstek_poll(
@@ -392,15 +434,43 @@ async fn serve_marstek_poll(
     binding: &MarstekBinding,
     poll: PollContext,
     get_meter_watts: &MeterWattsFn,
+    failed_meters: &Arc<Mutex<HashSet<String>>>,
+    inflight: &Arc<Mutex<HashSet<String>>>,
 ) {
+    // In-flight guard — skip if a previous poll for this binding is still
+    // running. Matches Python `_marstek_tasks_by_binding` suppression.
+    {
+        let mut g = inflight.lock();
+        if !g.insert(binding.device_id.clone()) {
+            tracing::debug!(
+                "Marstek MQTT: skipping poll for {} — prior handler still running",
+                binding.device_id
+            );
+            return;
+        }
+    }
+    let _guard = scopeguard_remove(inflight, binding.device_id.clone());
+
     let (old_dev_t, new_dev_t) = marstek::device_topics_for(binding);
     let device_id = binding.device_id.clone();
     let body = match poll.echo_cd {
         1 => {
             let watts = match get_meter_watts(&device_id).await {
-                Ok(w) => w,
+                Ok(w) => {
+                    let mut fm = failed_meters.lock();
+                    if fm.remove(&device_id) {
+                        tracing::info!("Marstek MQTT: poll value fetch recovered for {device_id}");
+                    }
+                    w
+                }
                 Err(e) => {
-                    tracing::warn!("Marstek poll: meter read for {device_id} failed: {e}");
+                    let first_failure = failed_meters.lock().insert(device_id.clone());
+                    if first_failure {
+                        tracing::warn!(
+                            "Marstek MQTT: poll value fetch failed for {device_id} ({e}); \
+                             suppressing further failures until recovery"
+                        );
+                    }
                     return;
                 }
             };
@@ -431,12 +501,29 @@ async fn serve_marstek_poll(
         .await;
 }
 
+/// RAII-style helper: remove `key` from `set` on drop.
+fn scopeguard_remove(set: &Arc<Mutex<HashSet<String>>>, key: String) -> impl Drop + '_ {
+    struct Guard<'a> {
+        set: &'a Arc<Mutex<HashSet<String>>>,
+        key: String,
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            self.set.lock().remove(&self.key);
+        }
+    }
+    Guard { set, key }
+}
+
 /// Periodically issue a synthetic `cd=1` poll for every binding so the
 /// Marstek app sees up-to-date power without relying on its own polls.
+#[allow(clippy::too_many_arguments)]
 async fn marstek_broadcast_loop(
     client: rumqttc::AsyncClient,
     bindings: Arc<Mutex<Vec<MarstekBinding>>>,
     get_meter_watts: MeterWattsFn,
+    failed_meters: Arc<Mutex<HashSet<String>>>,
+    inflight: Arc<Mutex<HashSet<String>>>,
     interval: Duration,
     cancel: tokio_util::sync::CancellationToken,
 ) {
@@ -451,6 +538,8 @@ async fn marstek_broadcast_loop(
                     slave_id: None,
                 },
                 &get_meter_watts,
+                &failed_meters,
+                &inflight,
             )
             .await;
         }

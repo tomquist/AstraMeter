@@ -135,12 +135,14 @@ impl ShellyEmulator {
         let inactive_timeout = self.inactive_timeout.clone();
         let device_id_for_inactive = self.device_id.clone();
         let listener_for_inactive = self.listener.lock().clone();
+        let dedupe_for_purge = self.dedupe_window;
         let handle = tokio::spawn(async move {
             let inactive = tokio::spawn(inactive_check_loop(
                 state.clone(),
                 inactive_timeout,
                 device_id_for_inactive,
                 listener_for_inactive,
+                dedupe_for_purge,
             ));
             let mut buf = vec![0u8; 4096];
             loop {
@@ -191,12 +193,18 @@ async fn inactive_check_loop(
     timeout: Arc<Mutex<Duration>>,
     device_id: String,
     listener: Option<EventListener>,
+    dedupe_window: Duration,
 ) {
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     loop {
         ticker.tick().await;
         let now = Instant::now();
         let timeout_d = *timeout.lock();
+        // Dedupe state must outlive the longer of the inactivity timeout
+        // and the configured dedupe window, otherwise replays inside the
+        // dedupe window can leak through after a quiet period — matches
+        // Python `max(BATTERY_INACTIVE_TIMEOUT_SECONDS, _dedupe_time_window)`.
+        let purge_d = timeout_d.max(dedupe_window);
         let newly_inactive: Vec<String> = {
             let mut s = state.lock();
             let mut newly = Vec::new();
@@ -210,7 +218,7 @@ async fn inactive_check_loop(
                 s.inactive_batteries.insert(ip.clone());
             }
             s.last_dedupe
-                .retain(|_, t| now.duration_since(*t) < timeout_d);
+                .retain(|_, t| now.duration_since(*t) < purge_d);
             newly
         };
         for ip in newly_inactive {

@@ -30,6 +30,88 @@ pub struct MarstekBinding {
     pub get_cd4_slave_csv: Option<std::sync::Arc<dyn Fn() -> String + Send + Sync>>,
 }
 
+/// Normalise the Marstek-API `version` field into the `ver_v` integer the
+/// MQTT app expects. Booleans / unparseable strings fall back to
+/// `DEFAULT_VER_V`. Mirrors Python's `ver_v_from_marstek_api_version`.
+pub fn ver_v_from_marstek_api_version(value: &serde_json::Value) -> i64 {
+    match value {
+        serde_json::Value::Bool(_) => DEFAULT_VER_V,
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i
+            } else if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 {
+                    f as i64
+                } else {
+                    DEFAULT_VER_V
+                }
+            } else {
+                DEFAULT_VER_V
+            }
+        }
+        serde_json::Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                DEFAULT_VER_V
+            } else {
+                t.parse::<i64>().unwrap_or(DEFAULT_VER_V)
+            }
+        }
+        _ => DEFAULT_VER_V,
+    }
+}
+
+/// Escape a CT002 reporting-row field for the `cd=4` CSV reply: the
+/// Marstek app naïvely splits on `,` then `=`, so anything that could
+/// confuse that parser is folded to `_`. Matches Python's
+/// `_cd4_escape_field`.
+pub fn cd4_escape_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| {
+            if c == ',' || c == ';' || c == '=' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// A flattened CT002 reporting row used to build the `cd=4` slave-list CSV.
+#[derive(Debug, Clone)]
+pub struct Cd4Row {
+    pub device_type: String,
+    pub consumer_id: String,
+    pub last_ip: String,
+    pub phase: i64,
+}
+
+/// Format CT002 reporting rows as the flat repeated `slv_t/slv_id/slv_ip/slv_p`
+/// token list expected by the Marstek mobile app. Mirrors Python's
+/// `format_cd4_slave_csv`.
+pub fn format_cd4_slave_csv(rows: &[Cd4Row]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let host = if row.last_ip.trim().is_empty() {
+            "0.0.0.0"
+        } else {
+            row.last_ip.trim()
+        };
+        parts.push(format!(
+            "slv_t={},slv_id={},slv_ip={},slv_p={}",
+            cd4_escape_field(&row.device_type),
+            cd4_escape_field(&row.consumer_id),
+            cd4_escape_field(host),
+            row.phase
+        ));
+    }
+    parts.join(",")
+}
+
 pub fn normalize_mac(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
@@ -252,5 +334,62 @@ mod tests {
     fn cd4_response_is_passthrough() {
         let body = build_cd4_response("slv_t=HMK,slv_id=1");
         assert_eq!(body, b"slv_t=HMK,slv_id=1");
+    }
+
+    #[test]
+    fn ver_v_from_api_handles_all_shapes() {
+        assert_eq!(ver_v_from_marstek_api_version(&serde_json::json!(200)), 200);
+        assert_eq!(
+            ver_v_from_marstek_api_version(&serde_json::json!("201")),
+            201
+        );
+        assert_eq!(
+            ver_v_from_marstek_api_version(&serde_json::json!(123.0)),
+            123
+        );
+        assert_eq!(
+            ver_v_from_marstek_api_version(&serde_json::json!(123.5)),
+            DEFAULT_VER_V
+        );
+        assert_eq!(
+            ver_v_from_marstek_api_version(&serde_json::json!(true)),
+            DEFAULT_VER_V
+        );
+        assert_eq!(
+            ver_v_from_marstek_api_version(&serde_json::json!("")),
+            DEFAULT_VER_V
+        );
+        assert_eq!(
+            ver_v_from_marstek_api_version(&serde_json::json!(null)),
+            DEFAULT_VER_V
+        );
+    }
+
+    #[test]
+    fn cd4_csv_escapes_separators() {
+        let rows = vec![
+            Cd4Row {
+                device_type: "HM,A=2".into(),
+                consumer_id: "abc".into(),
+                last_ip: "10.0.0.1".into(),
+                phase: 1,
+            },
+            Cd4Row {
+                device_type: "HMG-50".into(),
+                consumer_id: "id;2".into(),
+                last_ip: "".into(),
+                phase: 2,
+            },
+        ];
+        let s = format_cd4_slave_csv(&rows);
+        assert!(s.contains("slv_t=HM_A_2"));
+        assert!(s.contains("slv_id=id_2"));
+        assert!(s.contains("slv_ip=0.0.0.0"));
+        assert!(s.contains("slv_p=2"));
+    }
+
+    #[test]
+    fn cd4_csv_empty_rows() {
+        assert_eq!(format_cd4_slave_csv(&[]), "");
     }
 }

@@ -100,8 +100,14 @@ async fn main() -> Result<()> {
     }
 
     let supervisor = Arc::new(Supervisor::new(platform.clone(), registry.clone()));
+    let overrides = ConfigOverrides {
+        device_types: cli.device_types.clone(),
+        device_ids: cli.device_ids.clone(),
+        throttle_interval: cli.throttle_interval.clone(),
+        skip_powermeter_test: cli.skip_powermeter_test,
+    };
     if config_path.exists() {
-        match supervisor.start_from_file(&config_path).await {
+        match supervisor.start_from_file(&config_path, &overrides).await {
             Ok(()) => {
                 let mut s = status.lock();
                 s.healthy = true;
@@ -125,11 +131,15 @@ async fn main() -> Result<()> {
     let sup = supervisor.clone();
     let status_for_loop = status.clone();
     let path_for_loop = config_path.clone();
+    let overrides_for_loop = overrides.clone();
     tokio::spawn(async move {
         while let Some(_cmd) = reload_rx.recv().await {
             tracing::info!("supervisor: hot-reload requested");
             sup.stop().await;
-            match sup.start_from_file(&path_for_loop).await {
+            match sup
+                .start_from_file(&path_for_loop, &overrides_for_loop)
+                .await
+            {
                 Ok(()) => {
                     let mut s = status_for_loop.lock();
                     s.healthy = true;
@@ -175,68 +185,63 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 struct Cli {
     config: PathBuf,
     log_level: Option<String>,
+    device_types: Option<String>,
+    device_ids: Option<String>,
+    throttle_interval: Option<String>,
+    skip_powermeter_test: bool,
 }
 
-/// Minimal CLI parity with the Python argparse interface — accepts `-c`,
-/// `--config`, `-log`, `--loglevel`. `--skip-powermeter-test`,
-/// `--throttle-interval`, and `--device-ids` are accepted but ignored
-/// (their config-file counterparts still work).
+/// CLI parity with the Python argparse interface. Values that have an INI
+/// counterpart (`DEVICE_TYPE`, `DEVICE_IDS`, `THROTTLE_INTERVAL`,
+/// `SKIP_POWERMETER_TEST`) are applied as overrides on top of `[GENERAL]`
+/// at config-load time — matching Python's `_apply_cli_overrides`.
 fn parse_cli() -> Cli {
     let mut args = std::env::args().skip(1);
-    let mut config: Option<PathBuf> = None;
-    let mut log_level: Option<String> = None;
+    let mut cli = Cli::default();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "-c" | "--config" => {
-                config = args.next().map(PathBuf::from);
-            }
-            "-log" | "--loglevel" => {
-                log_level = args.next();
-            }
-            "-t" | "--skip-powermeter-test" => {}
-            "--throttle-interval" => {
-                let _ = args.next();
-            }
-            "-d" | "--device-types" => {
-                let _ = args.next();
-            }
-            "--device-ids" => {
-                let _ = args.next();
-            }
+            "-c" | "--config" => cli.config = args.next().map(PathBuf::from).unwrap_or_default(),
+            "-log" | "--loglevel" => cli.log_level = args.next(),
+            "-t" | "--skip-powermeter-test" => cli.skip_powermeter_test = true,
+            "--throttle-interval" => cli.throttle_interval = args.next(),
+            "-d" | "--device-types" => cli.device_types = args.next(),
+            "--device-ids" => cli.device_ids = args.next(),
             "-h" | "--help" => {
                 eprintln!(
-                    "Usage: astrameter [--config PATH] [--loglevel LEVEL]\n\
-                     \n\
+                    "Usage: astrameter [OPTIONS]\n\n\
                      Options:\n\
-                     \x20 -c, --config PATH       Path to config.ini (default: ./config.ini)\n\
-                     \x20 -log, --loglevel LEVEL  debug|info|warning|error (default: info)"
+                     \x20 -c, --config PATH             Path to config.ini (default: ./config.ini)\n\
+                     \x20 -log, --loglevel LEVEL        debug|info|warning|error\n\
+                     \x20 -d, --device-types LIST       Override [GENERAL] DEVICE_TYPE\n\
+                     \x20     --device-ids LIST         Override [GENERAL] DEVICE_IDS\n\
+                     \x20     --throttle-interval SECS  Override [GENERAL] THROTTLE_INTERVAL\n\
+                     \x20 -t, --skip-powermeter-test    Skip the initial powermeter probe"
                 );
                 std::process::exit(0);
             }
-            other if !other.starts_with('-') && config.is_none() => {
-                config = Some(PathBuf::from(other));
+            other if !other.starts_with('-') && cli.config.as_os_str().is_empty() => {
+                cli.config = PathBuf::from(other);
             }
             other => {
                 eprintln!("unknown arg: {other}");
             }
         }
     }
-    // LOG_LEVEL env var as a fallback before RUST_LOG (Python compat).
-    if log_level.is_none() {
+    if cli.log_level.is_none() {
         if let Ok(v) = std::env::var("LOG_LEVEL") {
             if !v.is_empty() {
-                log_level = Some(v);
+                cli.log_level = Some(v);
             }
         }
     }
-    Cli {
-        config: config.unwrap_or_else(|| PathBuf::from("config.ini")),
-        log_level,
+    if cli.config.as_os_str().is_empty() {
+        cli.config = PathBuf::from("config.ini");
     }
+    cli
 }
 
 /// Supervisor with hot-reload. Keeps a set of running meter tasks under a
@@ -257,6 +262,41 @@ struct SupervisorInner {
     meters: Vec<Arc<dyn astrameter_core::Powermeter>>,
 }
 
+/// CLI-derived overrides applied on top of the INI at load time.
+#[derive(Debug, Default, Clone)]
+struct ConfigOverrides {
+    device_types: Option<String>,
+    device_ids: Option<String>,
+    throttle_interval: Option<String>,
+    skip_powermeter_test: bool,
+}
+
+/// Mutate [GENERAL] keys to reflect CLI overrides, mirroring Python's
+/// `_apply_cli_overrides` in `main.py`.
+fn apply_cli_overrides(cfg: &mut Config, ov: &ConfigOverrides) {
+    let want_general = ov.device_types.is_some()
+        || ov.device_ids.is_some()
+        || ov.throttle_interval.is_some()
+        || ov.skip_powermeter_test;
+    if !want_general {
+        return;
+    }
+    let ini = cfg.raw_mut();
+    let mut s = ini.with_section(Some("GENERAL"));
+    if let Some(v) = &ov.device_types {
+        s.set("DEVICE_TYPE", v.clone());
+    }
+    if let Some(v) = &ov.device_ids {
+        s.set("DEVICE_IDS", v.clone());
+    }
+    if let Some(v) = &ov.throttle_interval {
+        s.set("THROTTLE_INTERVAL", v.clone());
+    }
+    if ov.skip_powermeter_test {
+        s.set("SKIP_POWERMETER_TEST", "true");
+    }
+}
+
 impl Supervisor {
     fn new(platform: Arc<Platform>, registry: Arc<PowermeterRegistry>) -> Self {
         Self {
@@ -266,11 +306,16 @@ impl Supervisor {
         }
     }
 
-    async fn start_from_file(&self, path: &std::path::Path) -> Result<()> {
+    async fn start_from_file(
+        &self,
+        path: &std::path::Path,
+        overrides: &ConfigOverrides,
+    ) -> Result<()> {
         let raw = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("read {}", path.display()))?;
-        let cfg = Config::parse(&raw)?;
+        let mut cfg = Config::parse(&raw)?;
+        apply_cli_overrides(&mut cfg, overrides);
         self.start(&cfg).await
     }
 
