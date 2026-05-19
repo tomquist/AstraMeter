@@ -134,16 +134,26 @@ impl WebSocketClient for TungsteniteClient {
         let connected = Arc::new(AtomicBool::new(false));
         let connected_for_cb = connected.clone();
         let tx_for_cb = tx.clone();
+        let url_for_log = url.clone();
+        log::info!(
+            "ws: connecting to {url_for_log} (tls={is_tls}, verify_tls={}, sni_override={:?}, custom_ca={})",
+            req.verify_tls,
+            req.sni_override,
+            pem_static.is_some()
+        );
         let client = EspWebSocketClient::new(
             &url,
             &cfg,
             Duration::from_secs(10),
             move |evt: &Result<esp_idf_svc::ws::client::WebSocketEvent<'_>, _>| match evt {
                 Ok(ev) => match &ev.event_type {
+                    WebSocketEventType::BeforeConnect => {
+                        log::debug!("ws[{url_for_log}]: BeforeConnect");
+                    }
                     WebSocketEventType::Connected => {
+                        log::info!("ws[{url_for_log}]: Connected");
                         connected_for_cb.store(true, Ordering::SeqCst);
                     }
-                    WebSocketEventType::BeforeConnect => {}
                     WebSocketEventType::Text(s) => {
                         let _ = tx_for_cb.send(Ok(WsMessage::Text((*s).to_string())));
                     }
@@ -156,17 +166,29 @@ impl WebSocketClient for TungsteniteClient {
                     WebSocketEventType::Pong => {
                         let _ = tx_for_cb.send(Ok(WsMessage::Pong(Vec::new())));
                     }
-                    WebSocketEventType::Close(_) | WebSocketEventType::Closed => {
+                    WebSocketEventType::Close(reason) => {
+                        log::warn!("ws[{url_for_log}]: Close (reason={reason:?})");
+                        connected_for_cb.store(false, Ordering::SeqCst);
+                        let _ = tx_for_cb.send(Ok(WsMessage::Close));
+                    }
+                    WebSocketEventType::Closed => {
+                        log::warn!("ws[{url_for_log}]: Closed by peer");
                         connected_for_cb.store(false, Ordering::SeqCst);
                         let _ = tx_for_cb.send(Ok(WsMessage::Close));
                     }
                     WebSocketEventType::Disconnected => {
+                        log::warn!(
+                            "ws[{url_for_log}]: Disconnected — check Wi-Fi reach, URL host:port, \
+                             scheme (ws:// vs wss://), and that the peer is actually a WebSocket \
+                             endpoint"
+                        );
                         connected_for_cb.store(false, Ordering::SeqCst);
                         let _ = tx_for_cb.send(Err(WsError::Closed));
                     }
                 },
                 Err(e) => {
                     let msg = format!("{e:?}");
+                    log::error!("ws[{url_for_log}]: event error: {msg}");
                     let _ = tx_for_cb.send(Err(WsError::Protocol(msg)));
                 }
             },

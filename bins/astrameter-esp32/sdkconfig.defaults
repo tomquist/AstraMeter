@@ -36,3 +36,9 @@ CONFIG_HTTPD_MAX_URI_LEN=1024
 # Use the ESP-IDF bundled CA store for HTTPS / WSS (HomeAssistant +
 # HomeWizard powermeters need TLS).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+
+# Keep the default ESP_LOG level at INFO. The websocket_client tag
+# already emits its handshake / TLS / TCP failures at WARN/ERROR
+# level — our Rust wrapper adds extra context (URL, scheme, custom CA,
+# every event we receive) before each retry to make diagnosis easy
+# from serial output.
