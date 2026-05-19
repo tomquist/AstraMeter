@@ -68,8 +68,15 @@ fn main() -> anyhow::Result<()> {
             // `platform-espidf::net_impl`'s blocking-`std::net` +
             // `spawn_blocking` path so the lack of an IO driver doesn't
             // break the emulators.
+            // `thread_stack_size` sets the stack size for tokio's
+            // blocking-pool pthreads. Without this, they inherit
+            // CONFIG_PTHREAD_TASK_STACK_DEFAULT (3 KB by IDF default),
+            // which is too tight for std::net::* syscalls via Rust's
+            // newlib stubs. 16 KB is generous but cheap — blocking
+            // pthreads come and go and don't sit in memory long-term.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
+                .thread_stack_size(16 * 1024)
                 .build()
                 .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
             log::info!("step: enter async_main");
