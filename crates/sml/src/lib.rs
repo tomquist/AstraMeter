@@ -267,25 +267,31 @@ fn walk(cur: &mut Cursor<'_>, out: &mut Vec<ObisEntry>) {
             continue;
         };
         if let Tlv::List(items) = tlv {
-            if let Some(entry) = list_entry_to_obis(&items) {
-                out.push(entry);
-            }
-            // Recurse into the list contents for nested records.
-            for item in items {
-                if let Tlv::List(inner) = item {
-                    let mut buf = Vec::new();
-                    encode_back(&Tlv::List(inner), &mut buf);
-                    let mut sub = Cursor { data: &buf, pos: 0 };
-                    walk(&mut sub, out);
-                }
-            }
+            walk_list(&items, out);
         }
     }
 }
 
-/// Round-trip helper for recursion (re-encodes a TLV so the recursive walk
-/// can re-parse and re-traverse without juggling lifetimes). Cheap because
-/// the body is small (< 1 KB per frame).
+/// Recurse into a decoded list without re-encoding (avoids the previous
+/// `encode_back` recursion that asserted `len < 16` and panicked on real
+/// SmlGetListResponse bodies with 20+ entries).
+fn walk_list(items: &[Tlv], out: &mut Vec<ObisEntry>) {
+    if let Some(entry) = list_entry_to_obis(items) {
+        out.push(entry);
+    }
+    for item in items {
+        if let Tlv::List(inner) = item {
+            walk_list(inner, out);
+        }
+    }
+}
+
+/// Round-trip helper. Kept for test-fixture synthesis (`synth_frame` below
+/// uses raw byte construction; this stayed as a reference for the inverse
+/// of `parse_value`). Not invoked from the production path any more — the
+/// walker now recurses on the already-decoded `Tlv::List` directly.
+#[cfg(test)]
+#[allow(dead_code)]
 fn encode_back(tlv: &Tlv, out: &mut Vec<u8>) {
     match tlv {
         Tlv::EndOfMsg => out.push(0x00),
@@ -339,6 +345,11 @@ fn encode_back(tlv: &Tlv, out: &mut Vec<u8>) {
     }
 }
 
+/// SML unit codes (per IEC 62056-7-5). Only Watt is treated as a valid
+/// power reading; everything else (VA, var, kW, …) is silently rejected,
+/// matching Python `smllib._expect_unit("W")`.
+const SML_UNIT_WATT: u64 = 27;
+
 fn list_entry_to_obis(items: &[Tlv]) -> Option<ObisEntry> {
     if items.len() < 6 {
         return None;
@@ -351,6 +362,16 @@ fn list_entry_to_obis(items: &[Tlv]) -> Option<ObisEntry> {
     }
     let mut obis = [0u8; 6];
     obis.copy_from_slice(obis_bytes);
+    // items[3] is the unit code. When present it must be Watt (27); other
+    // units mean this list-entry is voltage / current / energy / etc and
+    // we must NOT scale it as a wattage.
+    match &items[3] {
+        Tlv::Uint(u) if *u == SML_UNIT_WATT => {}
+        // Optional / EndOfMsg means the meter did not specify a unit;
+        // keep Python's lenient behaviour and accept.
+        Tlv::Optional | Tlv::EndOfMsg => {}
+        _ => return None,
+    }
     let scaler = match &items[4] {
         Tlv::Int(i) => *i as i32,
         Tlv::Optional | Tlv::EndOfMsg => 0,

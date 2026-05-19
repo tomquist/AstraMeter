@@ -53,8 +53,11 @@ async fn ct002_request_response_round_trip() {
         .await
         .expect("client bind");
     let target: SocketAddr = (Ipv4Addr::LOCALHOST, port).into();
-    // Build a CT002 query frame: a single payload field "QUERY".
-    let frame = build_payload(&["QUERY"]).expect("build");
+    // Real CT002 requests carry meter_dev_type / meter_mac_code / ct_type
+    // / ct_mac / phase / power. Use inspection-mode phase ("0") so the
+    // balancer is bypassed and the response forwards the raw grid reading.
+    let frame = build_payload(&["HMG-50", "112233445566", "HME-4", "AABBCCDDEEFF", "0", "0"])
+        .expect("build");
     client.send_to(&frame, target).await.expect("send");
 
     let mut buf = vec![0u8; 4096];

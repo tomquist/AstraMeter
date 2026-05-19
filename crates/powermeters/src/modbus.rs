@@ -79,10 +79,13 @@ fn decode(
 #[async_trait]
 impl Powermeter for ModbusPowermeter {
     async fn start(&self) -> Result<()> {
-        let addr = format!("{}:{}", self.host, self.port);
-        let socket: std::net::SocketAddr = addr
-            .parse()
-            .map_err(|e| Error::config(format!("modbus address {addr}: {e}")))?;
+        // Resolve the host the way Python pymodbus does (hostname or IP).
+        let addr_str = format!("{}:{}", self.host, self.port);
+        let socket = tokio::net::lookup_host(&addr_str)
+            .await
+            .map_err(|e| Error::transport(format!("modbus DNS lookup {addr_str}: {e}")))?
+            .next()
+            .ok_or_else(|| Error::config(format!("modbus: no addresses for {addr_str}")))?;
         let ctx = tcp::connect_slave(socket, tokio_modbus::Slave(self.unit_id))
             .await
             .map_err(|e| Error::transport(format!("modbus connect: {e}")))?;

@@ -87,6 +87,7 @@ dependencies = [
  "astrameter-platform",
  "astrameter-platform-std",
  "async-trait",
+ "chrono",
  "parking_lot",
  "serde",
  "serde_json",

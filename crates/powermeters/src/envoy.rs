@@ -171,11 +171,23 @@ fn urlencode(s: &str) -> String {
 impl Powermeter for Envoy {
     async fn get_powermeter_watts(&self) -> Result<Vec<f64>> {
         self.ensure_token().await?;
+        let token_at_start = self.token.lock().await.clone();
         let data = match self.get_production().await {
             Ok(d) => d,
             Err(Error::Transport(s)) if s.contains("401") && self.has_credentials => {
-                tracing::info!("Envoy: token rejected (401), refreshing");
-                self.refresh_token().await?;
+                // Avoid duplicate Enlighten logins under concurrent 401s:
+                // if another caller already refreshed while we were
+                // awaiting, skip our own refresh.
+                {
+                    let guard = self.token.lock().await;
+                    if *guard != token_at_start {
+                        tracing::debug!("Envoy: token already refreshed by peer; retrying");
+                    } else {
+                        drop(guard);
+                        tracing::info!("Envoy: token rejected (401), refreshing");
+                        self.refresh_token().await?;
+                    }
+                }
                 self.get_production().await?
             }
             Err(e) => return Err(e),

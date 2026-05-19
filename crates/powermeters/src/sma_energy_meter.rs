@@ -27,6 +27,16 @@ const C_L3_MINUS: u32 = 0x003E0400;
 const C_END: u32 = 0x00000000;
 const C_SOFTWARE: u32 = 0x90000000;
 
+/// SMA SUSY-ID -> device-family name (mirrors Python `SMA_SUSY_IDS`).
+fn susy_id_to_name(susy: u16) -> Option<&'static str> {
+    match susy {
+        270 => Some("SMA Energy Meter 1.0"),
+        349 => Some("SMA Energy Meter 2.0"),
+        372 | 501 => Some("Sunny Home Manager 2.0"),
+        _ => None,
+    }
+}
+
 pub struct SmaEnergyMeter {
     multicast_group: String,
     port: u16,
@@ -64,16 +74,23 @@ fn handle_packet(state: &Arc<Mutex<SharedState>>, serial_filter: u32, data: &[u8
     if u16::from_be_bytes([data[16], data[17]]) != 0x6069 {
         return false;
     }
+    let susy_id = u16::from_be_bytes([data[18], data[19]]);
     let serial = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
     if serial_filter != 0 {
         if serial != serial_filter {
             return false;
         }
     } else {
+        // Only auto-adopt when the SUSY ID is in the known table —
+        // mirrors Python sma_energy_meter.py:303-313.
+        let device_name = susy_id_to_name(susy_id);
         let mut st = state.lock();
         match st.detected_serial {
             None => {
-                tracing::info!("SMA Energy Meter: auto-detected device with serial {serial}");
+                let Some(name) = device_name else {
+                    return false;
+                };
+                tracing::info!("SMA Energy Meter: auto-detected {name} with serial {serial}");
                 st.detected_serial = Some(serial);
             }
             Some(s) if s != serial => return false,

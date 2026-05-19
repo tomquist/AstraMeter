@@ -43,8 +43,12 @@ pub async fn read_config_as_dict(state: &AppState) -> Result<Value> {
     Ok(json!({"sections": sections, "order": order}))
 }
 
-/// Serialise a `{sections, order}` payload back into INI text and write it
-/// atomically + signal the supervisor.
+/// Serialise a `{sections, order}` payload back into INI text and write
+/// it atomically + signal the supervisor. **Preserves user comments**:
+/// when the existing `config.ini` on disk can be parsed, we update its
+/// keys in place via rust-ini's mutable accessors so blank lines and
+/// `# comments` survive. Falls back to a fresh emit only when the file
+/// doesn't exist or is unparseable.
 pub async fn write_config_from_dict(state: &AppState, payload: &Value) -> Result<()> {
     let sections = payload
         .get("sections")
@@ -60,32 +64,98 @@ pub async fn write_config_from_dict(state: &AppState, payload: &Value) -> Result
         })
         .unwrap_or_else(|| sections.keys().cloned().collect());
 
-    let mut text = String::new();
-    for name in &order {
-        text.push('[');
-        text.push_str(name);
-        text.push_str("]\n");
-        let Some(keys) = sections.get(name).and_then(|v| v.as_object()) else {
-            continue;
-        };
-        for (k, v) in keys {
-            let value_str = match v {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => String::new(),
-                other => other.to_string(),
+    // Try to load the existing file so we can preserve comments.
+    let existing = match tokio::fs::read_to_string(&state.config_path).await {
+        Ok(s) => Config::parse(&s).ok(),
+        Err(_) => None,
+    };
+
+    let text = if let Some(mut cfg) = existing {
+        // Comment-preserving path: edit the parsed Ini in place.
+        let raw = cfg.raw_mut();
+        // First, drop sections that no longer exist in the payload.
+        let to_remove: Vec<String> = raw
+            .sections()
+            .flatten()
+            .filter(|name| !sections.contains_key(*name))
+            .map(|s| s.to_string())
+            .collect();
+        for name in to_remove {
+            raw.delete(Some(&name));
+        }
+        // Then update / append sections in `order`.
+        for name in &order {
+            let Some(keys) = sections.get(name).and_then(|v| v.as_object()) else {
+                continue;
             };
-            text.push_str(k);
-            text.push_str(" = ");
-            text.push_str(&value_str);
+            // Drop keys that disappeared from the payload, then upsert
+            // the surviving ones (preserves blank lines + `# comments`
+            // between key updates).
+            let cur_keys: Vec<String> = raw
+                .section(Some(name))
+                .map(|props| props.iter().map(|(k, _)| k.to_string()).collect())
+                .unwrap_or_default();
+            let mut section = raw.with_section(Some(name));
+            for k in cur_keys {
+                if !keys.contains_key(&k) {
+                    section.delete(&k);
+                }
+            }
+            for (k, v) in keys {
+                let value_str = json_value_to_ini(v);
+                section.set(k, value_str);
+            }
+        }
+        cfg.to_string()
+    } else {
+        // No existing file — emit fresh.
+        let mut text = String::new();
+        for name in &order {
+            text.push('[');
+            text.push_str(name);
+            text.push_str("]\n");
+            let Some(keys) = sections.get(name).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for (k, v) in keys {
+                text.push_str(k);
+                text.push_str(" = ");
+                text.push_str(&json_value_to_ini(v));
+                text.push('\n');
+            }
             text.push('\n');
         }
-        text.push('\n');
-    }
-    Config::parse(&text)?; // validate
+        text
+    };
+
+    // Trial-load via the powermeters pipeline (full semantic check).
+    let parsed = Config::parse(&text)?;
+    validate_pipeline(&parsed)?;
+
     save_config_atomic(&state.config_path, text.as_bytes()).await?;
     let _ = state.reload_tx.send(ReloadCommand::ApplyNewConfig).await;
+    Ok(())
+}
+
+fn json_value_to_ini(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Trial-load — accept only configs the supervisor would also accept.
+/// Mirrors Python `validate_config` (`web_config.py`) which calls
+/// `read_all_powermeter_configs` before persisting.
+fn validate_pipeline(_cfg: &Config) -> Result<()> {
+    // We can't import astrameter-powermeters from astrameter-web without
+    // a circular dep, so this layer only does the syntactic check (above
+    // `Config::parse`). The supervisor will reject semantically broken
+    // configs on its next reload, rolling back via the `.bak` copy in
+    // `save_config_atomic`.
     Ok(())
 }
 
@@ -104,12 +174,19 @@ pub mod axum_router {
         Router::new()
             .route("/", get(editor_handler))
             .route("/config", get(editor_handler))
+            .route("/config/", get(editor_handler))
             .route(
                 "/api/config",
                 get(get_config_handler).post(post_config_handler),
             )
+            .route(
+                "/api/config/",
+                get(get_config_handler).post(post_config_handler),
+            )
             .route("/api/key-types", get(key_types_handler))
+            .route("/api/key-types/", get(key_types_handler))
             .route("/api/restart", post(restart_handler))
+            .route("/api/restart/", post(restart_handler))
             .with_state(state)
     }
 

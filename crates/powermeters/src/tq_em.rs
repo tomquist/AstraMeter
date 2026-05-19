@@ -63,10 +63,10 @@ impl TqEm {
             return Ok(());
         }
 
-        let mut body = format!("login={serial}&save_login=1");
+        let mut body = format!("login={}&save_login=1", urlencode_form(&serial));
         if !self.password.is_empty() {
             body.push_str("&password=");
-            body.push_str(&self.password);
+            body.push_str(&urlencode_form(&self.password));
         }
         let req = HttpRequest {
             method: HttpMethod::Post,
@@ -197,4 +197,20 @@ pub fn create(section: &Section<'_>, platform: Arc<Platform>) -> Result<Arc<dyn 
         last_use: Mutex::new(None),
         serial: Mutex::new(None),
     }))
+}
+
+/// `application/x-www-form-urlencoded` quoting for POST body fields.
+/// Matches Python `urllib.parse.urlencode` defaults (spaces -> %20 or +;
+/// we use %20 for consistency with the rest of the codebase).
+fn urlencode_form(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }

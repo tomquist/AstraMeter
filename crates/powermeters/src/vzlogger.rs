@@ -22,16 +22,25 @@ pub struct VZLogger {
 #[async_trait]
 impl Powermeter for VZLogger {
     async fn get_powermeter_watts(&self) -> Result<Vec<f64>> {
-        let mut values = Vec::with_capacity(self.uuids.len());
-        // Sequential — keep it simple. The HTTP client is shared; parallelism
-        // can be added later if vzlogger users report latency.
-        for uuid in &self.uuids {
-            let url = format!("http://{}:{}/{}", self.ip, self.port, uuid);
-            let resp = self
-                .http
-                .request(HttpRequest::get(&url).with_timeout(Duration::from_secs(10)))
-                .await
-                .map_err(|e| Error::transport(format!("vzlogger: {e}")))?;
+        // Parallel fetch (mirrors Python `asyncio.gather`); latency stays
+        // bounded by the slowest UUID rather than scaling linearly.
+        let futures: Vec<_> = self
+            .uuids
+            .iter()
+            .map(|uuid| {
+                let url = format!("http://{}:{}/{}", self.ip, self.port, uuid);
+                let http = self.http.clone();
+                async move {
+                    http.request(HttpRequest::get(&url).with_timeout(Duration::from_secs(10)))
+                        .await
+                        .map_err(|e| Error::transport(format!("vzlogger: {e}")))
+                }
+            })
+            .collect();
+        let responses = futures::future::join_all(futures).await;
+        let mut values = Vec::with_capacity(responses.len());
+        for resp in responses {
+            let resp = resp?;
             let json: Value = serde_json::from_slice(&resp.body)
                 .map_err(|e| Error::decode(format!("vzlogger json: {e}")))?;
             let v = json

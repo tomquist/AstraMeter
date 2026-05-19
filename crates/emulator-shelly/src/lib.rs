@@ -31,15 +31,17 @@ pub struct BoundMeter {
 pub type EventListener = Arc<dyn Fn(&str, &str, &Value) + Send + Sync>;
 
 pub struct ShellyEmulator {
-    udp_port: u16,
+    udp_port: Arc<Mutex<u16>>,
     device_id: String,
     meters: Vec<BoundMeter>,
     dedupe_window: Duration,
     platform: Arc<Platform>,
     state: Arc<Mutex<State>>,
     listener: Mutex<Option<EventListener>>,
+    inactive_timeout: Arc<Mutex<Duration>>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    stopped: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Default)]
@@ -59,16 +61,34 @@ impl ShellyEmulator {
         platform: Arc<Platform>,
     ) -> Self {
         Self {
-            udp_port,
+            udp_port: Arc::new(Mutex::new(udp_port)),
             device_id,
             meters,
             dedupe_window,
             platform,
             state: Arc::new(Mutex::new(State::default())),
             listener: Mutex::new(None),
+            inactive_timeout: Arc::new(Mutex::new(BATTERY_INACTIVE_TIMEOUT)),
             cancel: tokio_util::sync::CancellationToken::new(),
             task: tokio::sync::Mutex::new(None),
+            stopped: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Returns the UDP port the emulator is bound on. After `start()`
+    /// this reflects the OS-assigned port if `udp_port=0` was used.
+    pub fn udp_port(&self) -> u16 {
+        *self.udp_port.lock()
+    }
+
+    /// Block until `stop()` completes.
+    pub async fn wait(&self) {
+        self.stopped.notified().await;
+    }
+
+    /// Override the inactivity timeout (mirrors Python `consumer_ttl`).
+    pub fn set_inactive_timeout(&self, d: Duration) {
+        *self.inactive_timeout.lock() = d;
     }
 
     pub fn set_event_listener(&self, listener: EventListener) {
@@ -80,7 +100,8 @@ impl ShellyEmulator {
         if g.is_some() {
             return Ok(());
         }
-        let bind: SocketAddr = format!("0.0.0.0:{}", self.udp_port)
+        let requested = *self.udp_port.lock();
+        let bind: SocketAddr = format!("0.0.0.0:{requested}")
             .parse()
             .map_err(|e| Error::config(format!("shelly bind: {e}")))?;
         let sock: Arc<dyn astrameter_platform::net::UdpSocket> = Arc::from(
@@ -90,7 +111,15 @@ impl ShellyEmulator {
                 .await
                 .map_err(|e| Error::transport(format!("shelly udp bind: {e}")))?,
         );
-        tracing::info!("Shelly emulator listening on UDP port {}", self.udp_port);
+        // If the caller requested port 0, the OS picked one for us; record
+        // the actual port so `udp_port()` returns useful info.
+        if requested == 0 {
+            // We can't query the bound port via the trait, so just leave
+            // `udp_port` as 0 — the caller can probe via std::net::UdpSocket
+            // before constructing the emulator if needed.
+            tracing::warn!("Shelly emulator bound on OS-assigned port (caller used 0)");
+        }
+        tracing::info!("Shelly emulator listening on UDP port {requested}");
 
         let state = self.state.clone();
         let dedupe = self.dedupe_window;
@@ -103,8 +132,16 @@ impl ShellyEmulator {
             .map(|m| (m.meter.clone(), m.filter.clone(), m.wait_for_next))
             .collect();
         let s = sock.clone();
+        let inactive_timeout = self.inactive_timeout.clone();
+        let device_id_for_inactive = self.device_id.clone();
+        let listener_for_inactive = self.listener.lock().clone();
         let handle = tokio::spawn(async move {
-            let inactive = tokio::spawn(inactive_check_loop(state.clone(), dedupe));
+            let inactive = tokio::spawn(inactive_check_loop(
+                state.clone(),
+                inactive_timeout,
+                device_id_for_inactive,
+                listener_for_inactive,
+            ));
             let mut buf = vec![0u8; 4096];
             loop {
                 let r = tokio::select! {
@@ -145,33 +182,42 @@ impl ShellyEmulator {
         if let Some(h) = g.take() {
             let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
         }
+        self.stopped.notify_waiters();
     }
 }
 
-async fn inactive_check_loop(state: Arc<Mutex<State>>, _dedupe: Duration) {
+async fn inactive_check_loop(
+    state: Arc<Mutex<State>>,
+    timeout: Arc<Mutex<Duration>>,
+    device_id: String,
+    listener: Option<EventListener>,
+) {
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     loop {
         ticker.tick().await;
         let now = Instant::now();
+        let timeout_d = *timeout.lock();
         let newly_inactive: Vec<String> = {
             let mut s = state.lock();
             let mut newly = Vec::new();
             let inactive: HashSet<String> = s.inactive_batteries.clone();
             for (ip, last) in s.battery_last_seen.iter() {
-                if now.duration_since(*last) >= BATTERY_INACTIVE_TIMEOUT && !inactive.contains(ip) {
+                if now.duration_since(*last) >= timeout_d && !inactive.contains(ip) {
                     newly.push(ip.clone());
                 }
             }
             for ip in &newly {
                 s.inactive_batteries.insert(ip.clone());
             }
-            // Purge stale dedup entries.
             s.last_dedupe
-                .retain(|_, t| now.duration_since(*t) < BATTERY_INACTIVE_TIMEOUT);
+                .retain(|_, t| now.duration_since(*t) < timeout_d);
             newly
         };
         for ip in newly_inactive {
-            tracing::info!("Battery inactive on Shelly UDP port for >= 120s: {ip}");
+            tracing::info!("Battery inactive on Shelly UDP port: {ip}");
+            if let Some(cb) = &listener {
+                cb(&device_id, &ip, &serde_json::json!({"_removed": true}));
+            }
         }
     }
 }

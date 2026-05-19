@@ -147,8 +147,13 @@ async fn run_loop(
         match ws.connect(req).await {
             Ok(mut conn) => {
                 tracing::info!("HomeWizard WebSocket connected");
+                // Per-connection cancel token: the watchdog cancels THIS
+                // token to force a reconnect without taking down the whole
+                // task (which the outer `cancel` controls).
+                let conn_cancel = tokio_util::sync::CancellationToken::new();
                 let wd_fresh = fresh.clone();
-                let wd_cancel = cancel.clone();
+                let wd_conn_cancel = conn_cancel.clone();
+                let wd_outer_cancel = cancel.clone();
                 let watchdog = tokio::spawn(async move {
                     loop {
                         let r = tokio::time::timeout(
@@ -160,7 +165,10 @@ async fn run_loop(
                             tracing::warn!(
                                 "HomeWizard watchdog: no measurement for {WATCHDOG_TIMEOUT_SECS:.0}s; reconnecting"
                             );
-                            wd_cancel.cancel();
+                            wd_conn_cancel.cancel();
+                            break;
+                        }
+                        if wd_outer_cancel.is_cancelled() {
                             break;
                         }
                     }
@@ -169,6 +177,7 @@ async fn run_loop(
                 loop {
                     let msg = tokio::select! {
                         _ = cancel.cancelled() => break,
+                        _ = conn_cancel.cancelled() => break,
                         m = conn.recv() => m,
                     };
                     match msg {
@@ -265,12 +274,13 @@ pub fn create(section: &Section<'_>, platform: Arc<Platform>) -> Result<Arc<dyn 
     if !verify_ssl {
         tracing::warn!("HomeWizard: VERIFY_SSL=False — use only on a trusted LAN");
     }
+    let max_age_secs = section.get_float("MAX_MEASUREMENT_AGE_SECONDS", DEFAULT_MAX_AGE_SECS)?;
     Ok(Arc::new(HomeWizard {
         ip: section.get_required("IP")?.to_string(),
         token: section.get_required("TOKEN")?.to_string(),
         serial: section.get_string("SERIAL", ""),
         verify_ssl,
-        max_age_secs: DEFAULT_MAX_AGE_SECS,
+        max_age_secs: max_age_secs.max(0.0),
         ws: platform.ws.clone(),
         timer: platform.timer.clone(),
         state: Arc::new(Mutex::new(State::default())),

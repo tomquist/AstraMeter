@@ -158,12 +158,37 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
         let mut cache = DiscoveryCache::default();
         let drain_cancel = cancel.clone();
 
+        // Periodic Marstek broadcast — matches Python's
+        // `_marstek_broadcast_loop`. Spawned per-connection so it dies
+        // automatically on disconnect.
+        let broadcast_handle =
+            if ctx.config.marstek_mqtt_enabled && ctx.config.marstek_mqtt_interval > 0.0 {
+                let interval = Duration::from_secs_f64(ctx.config.marstek_mqtt_interval.max(0.1));
+                let bcast_client = client.clone();
+                let bcast_bindings = ctx.marstek_bindings.clone();
+                let bcast_get = ctx.get_meter_watts.clone();
+                let bcast_cancel = drain_cancel.clone();
+                Some(tokio::spawn(async move {
+                    marstek_broadcast_loop(
+                        bcast_client,
+                        bcast_bindings,
+                        bcast_get,
+                        interval,
+                        bcast_cancel,
+                    )
+                    .await;
+                }))
+            } else {
+                None
+            };
+
         loop {
             tokio::select! {
                 _ = drain_cancel.cancelled() => {
                     let _ = client
                         .publish(&status_topic, rumqttc::QoS::AtLeastOnce, true, "offline")
                         .await;
+                    if let Some(h) = broadcast_handle.as_ref() { h.abort(); }
                     return;
                 }
                 event = event_rx.recv() => {
@@ -182,6 +207,7 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                         Ok(_) => {}
                         Err(e) => {
                             tracing::warn!("insights MQTT poll: {e}; reconnecting in 5s");
+                            if let Some(h) = broadcast_handle.as_ref() { h.abort(); }
                             tokio::time::sleep(RECONNECT_DELAY).await;
                             break;
                         }
@@ -221,14 +247,29 @@ async fn handle_event(
                     .get("device_type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let network_mac = data
-                    .get("network_mac")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
                 let battery_ip = data
                     .get("battery_ip")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                // Prefer payload-supplied MAC; fall back to a /proc/net/arp
+                // lookup keyed on `battery_ip` so consumer entities surface
+                // a connections=[mac]. This mirrors `_arp_lookup` in the
+                // Python service.
+                let payload_mac = data
+                    .get("network_mac")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mac_via_arp = if payload_mac.is_empty() && !battery_ip.is_empty() {
+                    arp_lookup(battery_ip).await
+                } else {
+                    String::new()
+                };
+                let network_mac = if !payload_mac.is_empty() {
+                    payload_mac.as_str()
+                } else {
+                    mac_via_arp.as_str()
+                };
                 let (topic, payload) = discovery::build_ct002_consumer_discovery(
                     base,
                     &device_id,
@@ -343,25 +384,32 @@ async fn handle_incoming(
     let Some(poll) = parse_poll_payload(payload) else {
         return;
     };
-    // Resolve the (binding -> device) topic the device-side reply is published on.
-    let (old_dev_t, _new_dev_t) = marstek::device_topics_for(&binding);
-    // Fetch current values.
+    serve_marstek_poll(client, &binding, poll, &ctx.get_meter_watts).await;
+}
+
+async fn serve_marstek_poll(
+    client: &rumqttc::AsyncClient,
+    binding: &MarstekBinding,
+    poll: PollContext,
+    get_meter_watts: &MeterWattsFn,
+) {
+    let (old_dev_t, new_dev_t) = marstek::device_topics_for(binding);
     let device_id = binding.device_id.clone();
-    let watts = match (ctx.get_meter_watts)(&device_id).await {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::warn!("Marstek poll: meter read for {device_id} failed: {e}");
-            return;
-        }
-    };
     let body = match poll.echo_cd {
         1 => {
+            let watts = match get_meter_watts(&device_id).await {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("Marstek poll: meter read for {device_id} failed: {e}");
+                    return;
+                }
+            };
             let connected = binding
                 .get_connected_slave_count
                 .as_ref()
                 .map(|f| f())
                 .unwrap_or(0);
-            build_response(&binding, &watts, Some(poll), connected, None)
+            build_response(binding, &watts, Some(poll), connected, None)
         }
         4 => {
             let csv = binding
@@ -369,15 +417,50 @@ async fn handle_incoming(
                 .as_ref()
                 .map(|f| f())
                 .unwrap_or_default();
-            let _ = poll;
-            let _: Option<PollContext> = Some(poll);
             build_cd4_response(&csv)
         }
         _ => return,
     };
+    // Publish to BOTH legacy `hame_energy/...` and new `marstek_energy/...`
+    // device topics so old and new app builds both see replies.
     let _ = client
-        .publish(&old_dev_t, rumqttc::QoS::AtLeastOnce, false, body)
+        .publish(&old_dev_t, rumqttc::QoS::AtMostOnce, false, body.clone())
         .await;
+    let _ = client
+        .publish(&new_dev_t, rumqttc::QoS::AtMostOnce, false, body)
+        .await;
+}
+
+/// Periodically issue a synthetic `cd=1` poll for every binding so the
+/// Marstek app sees up-to-date power without relying on its own polls.
+async fn marstek_broadcast_loop(
+    client: rumqttc::AsyncClient,
+    bindings: Arc<Mutex<Vec<MarstekBinding>>>,
+    get_meter_watts: MeterWattsFn,
+    interval: Duration,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    loop {
+        let snapshot: Vec<MarstekBinding> = bindings.lock().clone();
+        for binding in &snapshot {
+            serve_marstek_poll(
+                &client,
+                binding,
+                PollContext {
+                    echo_cd: 1,
+                    slave_id: None,
+                },
+                &get_meter_watts,
+            )
+            .await;
+        }
+        if tokio::time::timeout(interval, cancel.cancelled())
+            .await
+            .is_ok()
+        {
+            return;
+        }
+    }
 }
 
 /// Handle a CT002 command MQTT message.
@@ -426,6 +509,28 @@ async fn handle_ct002_command(ctx: &ServiceCtx, rest: &str, payload: &[u8]) {
         }
         _ => tracing::debug!("ct002 command: unrecognised path {rest:?}"),
     }
+}
+
+/// Best-effort `/proc/net/arp` lookup. Returns the MAC in `AA:BB:...` format
+/// or an empty string if not found / not Linux. Mirrors `_arp_lookup` from
+/// the Python service.
+async fn arp_lookup(ip: &str) -> String {
+    let ip = ip.to_string();
+    tokio::task::spawn_blocking(move || {
+        let contents = match std::fs::read_to_string("/proc/net/arp") {
+            Ok(s) => s,
+            Err(_) => return String::new(),
+        };
+        for line in contents.lines().skip(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 4 && parts[0] == ip && parts[3] != "00:00:00:00:00:00" {
+                return parts[3].to_uppercase();
+            }
+        }
+        String::new()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 async fn publish_json(

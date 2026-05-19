@@ -140,12 +140,31 @@ impl Powermeter for MqttPowermeter {
         if self.values.lock().iter().all(|v| v.is_some()) {
             return Ok(());
         }
+        // Loop until ALL configured topics have a value, mirroring Python
+        // (mqtt.py:1210-1225). A single wakeup is not enough for multi-
+        // topic configs because one publish only fills one slot.
         let notify = self.message_notify.clone();
-        match tokio::time::timeout(timeout, notify.notified()).await {
-            Ok(()) => Ok(()),
-            Err(_) => Err(Error::Timeout {
-                millis: timeout.as_millis() as u64,
-            }),
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(Error::Timeout {
+                    millis: timeout.as_millis() as u64,
+                });
+            }
+            let remaining = deadline - now;
+            match tokio::time::timeout(remaining, notify.notified()).await {
+                Ok(()) => {
+                    if self.values.lock().iter().all(|v| v.is_some()) {
+                        return Ok(());
+                    }
+                }
+                Err(_) => {
+                    return Err(Error::Timeout {
+                        millis: timeout.as_millis() as u64,
+                    });
+                }
+            }
         }
     }
 

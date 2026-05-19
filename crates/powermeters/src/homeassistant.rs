@@ -44,6 +44,8 @@ struct State {
     subscribe_id: Option<u64>,
 }
 
+impl State {}
+
 impl HomeAssistant {
     fn build_ws_url(&self) -> String {
         let scheme = if self.use_https { "wss" } else { "ws" };
@@ -297,6 +299,20 @@ async fn handle_message(
                     .and_then(|v| v.as_str())
                     .unwrap_or("(no message)")
             );
+        }
+        "result" => {
+            let id = msg.get("id").and_then(|v| v.as_i64());
+            let sub_id = state.lock().subscribe_id.map(|x| x as i64);
+            if id.is_some() && id == sub_id {
+                let success = msg
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if !success {
+                    let err = msg.get("error").cloned().unwrap_or(serde_json::Value::Null);
+                    tracing::error!("HA subscribe_entities failed: {err}");
+                }
+            }
         }
         "event" => {
             if let Some(ev) = msg.get("event") {

@@ -31,7 +31,9 @@ pub struct Shelly {
 
 impl Shelly {
     fn basic_auth(&self, mut req: HttpRequest) -> HttpRequest {
-        if !self.user.is_empty() || !self.pass_.is_empty() {
+        // Match Python: only send Basic auth when a username is set
+        // (shelly.py:44 `if self.user`).
+        if !self.user.is_empty() {
             req = req.with_basic_auth(&self.user, &self.pass_);
         }
         req
