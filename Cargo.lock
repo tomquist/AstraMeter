@@ -225,10 +225,14 @@ dependencies = [
  "log",
  "parking_lot",
  "rumqttc",
+ "rustls 0.23.40",
+ "rustls-pemfile",
  "socket2 0.5.10",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-tungstenite",
  "tracing",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -270,7 +274,9 @@ dependencies = [
  "futures",
  "hex",
  "jsonpath-rust",
+ "md-5",
  "parking_lot",
+ "rand 0.8.6",
  "rumqttc",
  "serde",
  "serde_json",

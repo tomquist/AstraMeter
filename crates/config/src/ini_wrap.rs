@@ -110,6 +110,11 @@ impl<'a> Section<'a> {
         }
     }
 
+    /// Iterate (key, value) pairs in insertion order.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.props.iter()
+    }
+
     pub fn get_required(&self, key: &str) -> Result<&str> {
         self.props
             .get(key)

@@ -63,6 +63,7 @@ pub struct InsightsRuntime {
     pub factory: Arc<dyn MqttFactory>,
     pub event_rx: tokio::sync::mpsc::Receiver<InsightsEvent>,
     pub marstek_bindings: Arc<Mutex<Vec<MarstekBinding>>>,
+    pub command_handlers: Arc<Mutex<super::CommandHandlers>>,
     pub get_meter_watts: MeterWattsFn,
 }
 
@@ -70,6 +71,7 @@ pub struct InsightsRuntime {
 struct ServiceCtx {
     config: super::MqttInsightsConfig,
     marstek_bindings: Arc<Mutex<Vec<MarstekBinding>>>,
+    command_handlers: Arc<Mutex<super::CommandHandlers>>,
     get_meter_watts: MeterWattsFn,
 }
 
@@ -87,11 +89,13 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
         factory,
         mut event_rx,
         marstek_bindings,
+        command_handlers,
         get_meter_watts,
     } = runtime;
     let ctx = ServiceCtx {
         config: config.clone(),
         marstek_bindings: marstek_bindings.clone(),
+        command_handlers: command_handlers.clone(),
         get_meter_watts,
     };
     loop {
@@ -138,6 +142,18 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
             let _ = client.subscribe(old_t, rumqttc::QoS::AtLeastOnce).await;
             let _ = client.subscribe(new_t, rumqttc::QoS::AtLeastOnce).await;
         }
+        // Subscribe to HA-discovery command topics so HA switches/numbers
+        // and the force-rotation button can drive the emulator.
+        let base = ctx.config.base_topic.clone();
+        let _ = client
+            .subscribe(
+                format!("{base}/ct002/+/consumer/+/set"),
+                rumqttc::QoS::AtLeastOnce,
+            )
+            .await;
+        let _ = client
+            .subscribe(format!("{base}/ct002/+/set"), rumqttc::QoS::AtLeastOnce)
+            .await;
 
         let mut cache = DiscoveryCache::default();
         let drain_cancel = cancel.clone();
@@ -301,6 +317,15 @@ async fn handle_incoming(
     topic: &str,
     payload: &[u8],
 ) {
+    // First check HA-discovery command topics.
+    let base = ctx.config.base_topic.as_str();
+    let trimmed_topic = topic.trim_end_matches('/');
+    if let Some(rest) = trimmed_topic.strip_prefix(&format!("{base}/ct002/")) {
+        if let Some(rest) = rest.strip_suffix("/set") {
+            handle_ct002_command(ctx, rest, payload).await;
+            return;
+        }
+    }
     // Marstek App poll?
     let Some((ct_type, mac)) = parse_app_topic(topic) else {
         return;
@@ -353,6 +378,54 @@ async fn handle_incoming(
     let _ = client
         .publish(&old_dev_t, rumqttc::QoS::AtLeastOnce, false, body)
         .await;
+}
+
+/// Handle a CT002 command MQTT message.
+/// `rest` is everything after `<base>/ct002/` and before `/set`:
+///   * `<device_id>` — device-level (force_rotation)
+///   * `<device_id>/consumer/<consumer_id>` — consumer-level (active /
+///     auto_target / manual_target)
+async fn handle_ct002_command(ctx: &ServiceCtx, rest: &str, payload: &[u8]) {
+    let parts: Vec<&str> = rest.split('/').collect();
+    let body: Value = match serde_json::from_slice(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("ct002 command: bad JSON {e}");
+            return;
+        }
+    };
+    let handlers = ctx.command_handlers.lock().clone();
+    match parts.as_slice() {
+        [device_id] => {
+            if body
+                .get("force_rotation")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                if let Some(cb) = &handlers.force_rotation {
+                    cb(device_id);
+                }
+            }
+        }
+        [device_id, "consumer", consumer_id] => {
+            if let Some(active) = body.get("active").and_then(|v| v.as_bool()) {
+                if let Some(cb) = &handlers.set_active {
+                    cb(device_id, consumer_id, active);
+                }
+            }
+            if let Some(auto) = body.get("auto_target").and_then(|v| v.as_bool()) {
+                if let Some(cb) = &handlers.set_auto_target {
+                    cb(device_id, consumer_id, auto);
+                }
+            }
+            if let Some(t) = body.get("manual_target").and_then(|v| v.as_f64()) {
+                if let Some(cb) = &handlers.set_manual_target {
+                    cb(device_id, consumer_id, t);
+                }
+            }
+        }
+        _ => tracing::debug!("ct002 command: unrecognised path {rest:?}"),
+    }
 }
 
 async fn publish_json(

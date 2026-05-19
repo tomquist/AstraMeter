@@ -18,6 +18,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
 jsonpath-rust = { workspace = true }
+md-5 = "0.10"
+rand = "0.8"
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
 tokio-util = "0.7"
 tokio-modbus = { workspace = true }

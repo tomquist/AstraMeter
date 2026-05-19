@@ -21,6 +21,10 @@ embedded-svc = "0.28"
 log = "0.4"
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net", "io-util"] }
 tokio-tungstenite = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
 rumqttc = { workspace = true }
 socket2 = { workspace = true }
 bytes = { workspace = true }

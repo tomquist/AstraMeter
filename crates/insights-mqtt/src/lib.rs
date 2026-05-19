@@ -55,10 +55,27 @@ impl Default for MqttInsightsConfig {
 
 /// Convenience holder. The supervisor instantiates it once with the
 /// platform handle, then `start()` to wire up the MQTT loop.
+/// `(device_id, consumer_id, value) -> ()` callback type.
+pub type ConsumerBoolFn = Arc<dyn Fn(&str, &str, bool) + Send + Sync>;
+pub type ConsumerFloatFn = Arc<dyn Fn(&str, &str, f64) + Send + Sync>;
+pub type DeviceFn = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Callbacks the supervisor registers so HA control entities can drive
+/// emulator state. All are optional; missing handlers are silently
+/// ignored when the matching MQTT command arrives.
+#[derive(Default, Clone)]
+pub struct CommandHandlers {
+    pub set_active: Option<ConsumerBoolFn>,
+    pub set_manual_target: Option<ConsumerFloatFn>,
+    pub set_auto_target: Option<ConsumerBoolFn>,
+    pub force_rotation: Option<DeviceFn>,
+}
+
 pub struct InsightsService {
     cfg: MqttInsightsConfig,
     platform: Arc<Platform>,
     bindings: Arc<Mutex<Vec<MarstekBinding>>>,
+    handlers: Arc<Mutex<CommandHandlers>>,
     event_tx: tokio::sync::mpsc::Sender<InsightsEvent>,
     event_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<InsightsEvent>>>,
     cancel: tokio_util::sync::CancellationToken,
@@ -72,11 +89,16 @@ impl InsightsService {
             cfg,
             platform,
             bindings: Arc::new(Mutex::new(Vec::new())),
+            handlers: Arc::new(Mutex::new(CommandHandlers::default())),
             event_tx: tx,
             event_rx: tokio::sync::Mutex::new(Some(rx)),
             cancel: tokio_util::sync::CancellationToken::new(),
             task: tokio::sync::Mutex::new(None),
         }
+    }
+
+    pub fn set_command_handlers(&self, handlers: CommandHandlers) {
+        *self.handlers.lock() = handlers;
     }
 
     pub fn event_sender(&self) -> tokio::sync::mpsc::Sender<InsightsEvent> {
@@ -106,6 +128,7 @@ impl InsightsService {
             factory: self.platform.mqtt.clone(),
             event_rx: rx,
             marstek_bindings: self.bindings.clone(),
+            command_handlers: self.handlers.clone(),
             get_meter_watts,
         };
         let cancel = self.cancel.clone();

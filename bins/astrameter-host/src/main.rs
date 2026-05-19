@@ -210,11 +210,16 @@ impl Supervisor {
             .unwrap_or(Ok(0.0))
             .unwrap_or(0.0);
 
+        let mut ct002_for_handlers: Option<Arc<astrameter_emulator_ct002::server::Ct002Emulator>> =
+            None;
         match device_type.as_str() {
             "ct002" | "ct003" => {
                 let h = self
                     .start_ct002(config, &device_type, &bound, &cancel)
                     .await?;
+                if let EmulatorHandle::Ct002(ref e) = h {
+                    ct002_for_handlers = Some(e.clone());
+                }
                 emulator_handles.push(h);
             }
             "shellypro3em_old" => {
@@ -263,7 +268,10 @@ impl Supervisor {
             .find(|s| s.starts_with("MQTT_INSIGHTS"))
             .and_then(|n| config.section(n))
         {
-            match self.start_insights(&section, &bound, &cancel).await {
+            match self
+                .start_insights(&section, &bound, ct002_for_handlers.clone(), &cancel)
+                .await
+            {
                 Ok(h) => insights_handle = Some(h),
                 Err(e) => tracing::error!("MQTT Insights failed: {e}"),
             }
@@ -381,9 +389,10 @@ impl Supervisor {
         &self,
         section: &astrameter_config::Section<'_>,
         bound: &[astrameter_powermeters::BoundPowermeter],
+        ct002: Option<Arc<astrameter_emulator_ct002::server::Ct002Emulator>>,
         _cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<InsightsHandle> {
-        use astrameter_insights_mqtt::{InsightsService, MqttInsightsConfig};
+        use astrameter_insights_mqtt::{CommandHandlers, InsightsService, MqttInsightsConfig};
         let (broker, port, username, password, tls) = match section.get_opt_string("URI") {
             Some(uri) => {
                 let parts = astrameter_config::parse_mqtt_uri(&uri)?;
@@ -417,6 +426,28 @@ impl Supervisor {
             marstek_mqtt_interval: section.get_float("MARSTEK_MQTT_INTERVAL", 300.0)?,
         };
         let service = Arc::new(InsightsService::new(cfg, self.platform.clone()));
+        if let Some(ct) = ct002.clone() {
+            let ct_act = ct.clone();
+            let ct_mt = ct.clone();
+            let ct_at = ct.clone();
+            let ct_fr = ct.clone();
+            service.set_command_handlers(CommandHandlers {
+                set_active: Some(Arc::new(move |_dev: &str, consumer: &str, active: bool| {
+                    ct_act.set_consumer_active(consumer, active);
+                })),
+                set_manual_target: Some(Arc::new(
+                    move |_dev: &str, consumer: &str, target: f64| {
+                        ct_mt.set_consumer_manual_target(consumer, target);
+                    },
+                )),
+                set_auto_target: Some(Arc::new(move |_dev: &str, consumer: &str, auto: bool| {
+                    ct_at.set_consumer_auto_target(consumer, auto);
+                })),
+                force_rotation: Some(Arc::new(move |_dev: &str| {
+                    ct_fr.force_efficiency_rotation();
+                })),
+            });
+        }
         // The meter-watts callback maps a device id to whichever bound meter
         // matches `0.0.0.0` (i.e. accepts any caller); falls back to the
         // first meter so single-meter configs still work.

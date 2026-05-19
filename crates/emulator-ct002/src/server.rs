@@ -25,6 +25,24 @@ pub struct BoundMeter {
     pub wait_for_next: bool,
 }
 
+/// Per-consumer control state — manual targets, active flag.
+#[derive(Debug, Clone)]
+pub struct ConsumerControl {
+    pub active: bool,
+    pub auto_target: bool,
+    pub manual_target: f64,
+}
+
+impl Default for ConsumerControl {
+    fn default() -> Self {
+        Self {
+            active: true,
+            auto_target: true,
+            manual_target: 0.0,
+        }
+    }
+}
+
 pub struct Ct002Emulator {
     udp_port: u16,
     meter_mac: String,
@@ -33,6 +51,7 @@ pub struct Ct002Emulator {
     #[allow(dead_code)]
     balancer: LoadBalancer,
     sessions: Arc<Mutex<HashSet<String>>>,
+    consumers: Arc<Mutex<std::collections::HashMap<String, ConsumerControl>>>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -52,6 +71,7 @@ impl Ct002Emulator {
             platform,
             balancer: LoadBalancer::new(balancer_cfg, 0.2, 10.0, 0.9, 90.0, 60.0, true, None, None),
             sessions: Arc::new(Mutex::new(HashSet::new())),
+            consumers: Arc::new(Mutex::new(std::collections::HashMap::new())),
             cancel: tokio_util::sync::CancellationToken::new(),
             task: tokio::sync::Mutex::new(None),
         }
@@ -98,6 +118,54 @@ impl Ct002Emulator {
         if let Some(h) = g.take() {
             let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
         }
+    }
+
+    // ── Consumer control surface (matches `ct002.py:set_consumer_*`) ──
+
+    pub fn set_consumer_active(&self, consumer_id: &str, active: bool) {
+        let mut map = self.consumers.lock();
+        map.entry(consumer_id.to_string())
+            .or_default()
+            .active = active;
+        tracing::info!(consumer = consumer_id, active, "CT002 set_consumer_active");
+    }
+
+    pub fn set_consumer_manual_target(&self, consumer_id: &str, target: f64) {
+        let mut map = self.consumers.lock();
+        let entry = map
+            .entry(consumer_id.to_string())
+            .or_default();
+        entry.manual_target = target;
+        entry.auto_target = false;
+        tracing::info!(
+            consumer = consumer_id,
+            target,
+            "CT002 set_consumer_manual_target"
+        );
+    }
+
+    pub fn set_consumer_auto_target(&self, consumer_id: &str, auto: bool) {
+        let mut map = self.consumers.lock();
+        map.entry(consumer_id.to_string())
+            .or_default()
+            .auto_target = auto;
+        tracing::info!(
+            consumer = consumer_id,
+            auto,
+            "CT002 set_consumer_auto_target"
+        );
+    }
+
+    pub fn force_efficiency_rotation(&self) {
+        let known: std::collections::HashSet<String> =
+            self.consumers.lock().keys().cloned().collect();
+        self.balancer.force_rotation(&known);
+        tracing::info!("CT002 force_efficiency_rotation");
+    }
+
+    /// Snapshot of current per-consumer control state.
+    pub fn consumers_snapshot(&self) -> std::collections::HashMap<String, ConsumerControl> {
+        self.consumers.lock().clone()
     }
 }
 

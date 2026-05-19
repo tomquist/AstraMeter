@@ -1,0 +1,246 @@
+{
+  "GENERAL": {
+    "DEVICE_TYPE": {"type": "select", "options": ["ct002", "ct003", "shellypro3em", "shellyemg3", "shellyproem50"]},
+    "SKIP_POWERMETER_TEST": {"type": "boolean"},
+    "WEB_CONFIG_ENABLED": {"type": "boolean"},
+    "ENABLE_WEB_SERVER": {"type": "boolean"},
+    "WEB_SERVER_PORT": {"type": "integer"},
+    "DISABLE_SUM_PHASES": {"type": "boolean"},
+    "DISABLE_ABSOLUTE_VALUES": {"type": "boolean"},
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
+    "SMOOTH_TARGET_ALPHA": {"type": "float", "min": 0, "max": 1},
+    "MAX_SMOOTH_STEP": {"type": "float", "min": 0},
+    "DEADBAND": {"type": "float", "min": 0},
+    "PID_KP": {"type": "float"},
+    "PID_KI": {"type": "float"},
+    "PID_KD": {"type": "float"},
+    "PID_OUTPUT_MAX": {"type": "float"},
+    "PID_MODE": {"type": "select", "options": ["bias", "replace"]},
+    "HAMPEL_WINDOW": {"type": "integer", "min": 0},
+    "HAMPEL_N_SIGMA": {"type": "float", "min": 0},
+    "HAMPEL_MIN_THRESHOLD": {"type": "float", "min": 0}
+  },
+  "CT002": {
+    "UDP_PORT": {"type": "integer"},
+    "WIFI_RSSI": {"type": "integer"},
+    "CT_MAC": {},
+    "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
+    "CONSUMER_TTL": {"type": "integer"},
+    "DEBUG_STATUS": {"type": "boolean"},
+    "ACTIVE_CONTROL": {"type": "boolean"},
+    "FAIR_DISTRIBUTION": {"type": "boolean"},
+    "BALANCE_GAIN": {"type": "float"},
+    "BALANCE_DEADBAND": {"type": "integer"},
+    "MAX_CORRECTION_PER_STEP": {"type": "integer"},
+    "ERROR_BOOST_THRESHOLD": {"type": "integer"},
+    "ERROR_BOOST_MAX": {"type": "float"},
+    "ERROR_REDUCE_THRESHOLD": {"type": "integer"},
+    "MAX_TARGET_STEP": {"type": "integer"},
+    "SATURATION_DETECTION": {"type": "boolean"},
+    "SATURATION_ALPHA": {"type": "float", "min": 0, "max": 1},
+    "MIN_TARGET_FOR_SATURATION": {"type": "integer"},
+    "MIN_EFFICIENT_POWER": {"type": "integer"},
+    "EFFICIENCY_ROTATION_INTERVAL": {"type": "integer"},
+    "PROBE_MIN_POWER": {"type": "integer"},
+    "EFFICIENCY_FADE_ALPHA": {"type": "float", "min": 0, "max": 1},
+    "EFFICIENCY_SATURATION_THRESHOLD": {"type": "float", "min": 0, "max": 1},
+    "SATURATION_DECAY_FACTOR": {"type": "float", "min": 0, "max": 1},
+    "SATURATION_GRACE_SECONDS": {"type": "float"},
+    "SATURATION_STALL_TIMEOUT_SECONDS": {"type": "float"}
+  },
+  "CT003": {
+    "UDP_PORT": {"type": "integer"},
+    "WIFI_RSSI": {"type": "integer"},
+    "CT_MAC": {},
+    "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
+    "CONSUMER_TTL": {"type": "integer"},
+    "DEBUG_STATUS": {"type": "boolean"},
+    "ACTIVE_CONTROL": {"type": "boolean"},
+    "FAIR_DISTRIBUTION": {"type": "boolean"},
+    "BALANCE_GAIN": {"type": "float"},
+    "BALANCE_DEADBAND": {"type": "integer"},
+    "MAX_CORRECTION_PER_STEP": {"type": "integer"},
+    "ERROR_BOOST_THRESHOLD": {"type": "integer"},
+    "ERROR_BOOST_MAX": {"type": "float"},
+    "ERROR_REDUCE_THRESHOLD": {"type": "integer"},
+    "MAX_TARGET_STEP": {"type": "integer"},
+    "SATURATION_DETECTION": {"type": "boolean"},
+    "SATURATION_ALPHA": {"type": "float", "min": 0, "max": 1},
+    "MIN_TARGET_FOR_SATURATION": {"type": "integer"},
+    "MIN_EFFICIENT_POWER": {"type": "integer"},
+    "EFFICIENCY_ROTATION_INTERVAL": {"type": "integer"},
+    "PROBE_MIN_POWER": {"type": "integer"},
+    "EFFICIENCY_FADE_ALPHA": {"type": "float", "min": 0, "max": 1},
+    "EFFICIENCY_SATURATION_THRESHOLD": {"type": "float", "min": 0, "max": 1},
+    "SATURATION_DECAY_FACTOR": {"type": "float", "min": 0, "max": 1},
+    "SATURATION_GRACE_SECONDS": {"type": "float"},
+    "SATURATION_STALL_TIMEOUT_SECONDS": {"type": "float"}
+  },
+  "MARSTEK": {
+    "ENABLE": {"type": "boolean"},
+    "PASSWORD": {"type": "password"}
+  },
+  "SHELLY": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PID_KP": {"type": "float"},
+    "PID_KI": {"type": "float"},
+    "PID_KD": {"type": "float"},
+    "PID_OUTPUT_MAX": {"type": "float"},
+    "PID_MODE": {"type": "select", "options": ["bias", "replace"]},
+    "TYPE": {"type": "select", "options": ["1PM", "PLUS1PM", "EM", "3EM", "3EMPro"]},
+    "PASS": {"type": "password"}
+  },
+  "TASMOTA": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PASS": {"type": "password"},
+    "JSON_POWER_CALCULATE": {"type": "boolean"}
+  },
+  "SHRDZM": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PASS": {"type": "password"}
+  },
+  "EMLOG": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "METER_INDEX": {"type": "integer"},
+    "JSON_POWER_CALCULATE": {"type": "boolean"}
+  },
+  "IOBROKER": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"},
+    "POWER_CALCULATE": {"type": "boolean"}
+  },
+  "HOMEASSISTANT": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"},
+    "HTTPS": {"type": "boolean"},
+    "ACCESSTOKEN": {"type": "password"},
+    "POWER_CALCULATE": {"type": "boolean"}
+  },
+  "VZLOGGER": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"}
+  },
+  "ESPHOME": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"}
+  },
+  "AMIS_READER": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {}
+  },
+  "MODBUS": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"},
+    "UNIT_ID": {"type": "integer"},
+    "ADDRESS": {"type": "integer"},
+    "COUNT": {"type": "integer"},
+    "DATA_TYPE": {"type": "select", "options": ["UINT16", "INT16", "UINT32", "INT32", "FLOAT32", "FLOAT64"]},
+    "BYTE_ORDER": {"type": "select", "options": ["BIG", "LITTLE"]},
+    "WORD_ORDER": {"type": "select", "options": ["BIG", "LITTLE"]},
+    "REGISTER_TYPE": {"type": "select", "options": ["HOLDING", "INPUT"]}
+  },
+  "MQTT": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"},
+    "TLS": {"type": "boolean"},
+    "PASSWORD": {"type": "password"}
+  },
+  "JSON_HTTP": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PASSWORD": {"type": "password"}
+  },
+  "TQ_EM": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PASSWORD": {"type": "password"},
+    "TIMEOUT": {"type": "float"}
+  },
+  "HOMEWIZARD": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "TOKEN": {"type": "password"},
+    "VERIFY_SSL": {"type": "boolean"}
+  },
+  "ENVOY": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "TOKEN": {"type": "password"},
+    "PASSWORD": {"type": "password"},
+    "VERIFY_SSL": {"type": "boolean"}
+  },
+  "SMA_ENERGY_METER": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {},
+    "PORT": {"type": "integer"},
+    "SERIAL_NUMBER": {"type": "integer"}
+  },
+  "SCRIPT": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {}
+  },
+  "SML": {
+    "THROTTLE_INTERVAL": {"type": "float"},
+    "POWER_OFFSET": {"type": "float"},
+    "POWER_MULTIPLIER": {"type": "float"},
+    "NETMASK": {}
+  },
+  "MQTT_INSIGHTS": {
+    "PORT": {"type": "integer"},
+    "TLS": {"type": "boolean"},
+    "PASSWORD": {"type": "password"},
+    "HA_DISCOVERY": {"type": "boolean"}
+  }
+}
