@@ -446,10 +446,8 @@ fn run_captive_portal(
     nvs_part: &esp_idf_svc::nvs::EspDefaultNvsPartition,
 ) -> anyhow::Result<()> {
     use embedded_svc::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
-    use esp_idf_svc::http::server::{Configuration as HttpConfig, EspHttpServer};
-    use esp_idf_svc::http::Method;
-    use esp_idf_svc::io::Write;
     use esp_idf_svc::nvs::EspNvs;
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -497,15 +495,16 @@ fn run_captive_portal(
     let saved_creds: Arc<parking_lot::Mutex<Option<(String, String)>>> =
         Arc::new(parking_lot::Mutex::new(None));
 
-    let mut server = EspHttpServer::new(&HttpConfig::default())
-        .map_err(|e| anyhow::anyhow!("EspHttpServer::new: {e}"))?;
-
-    // Spawn a tiny DNS responder that answers every A query with the
-    // AP IP. This is the bit that makes the captive-portal sheet
-    // auto-pop on phones / laptops — they only trigger it when the
-    // OS-level connectivity probe URL fails to resolve to a normal
-    // server.
+    // DNS hijack: every A query → AP IP. Without this, OS connectivity
+    // probes never reach our HTTP server and the captive-portal sheet
+    // doesn't auto-pop.
     let _dns_thread = start_dns_hijack(ap_ip)?;
+
+    // Raw-TCP HTTP server. We can't use `EspHttpServer` because IDF's
+    // httpd has a 512-byte hard-coded request-header buffer
+    // (`CONFIG_HTTPD_MAX_REQ_HDR_LEN`), which any real browser blows
+    // past instantly ("431 Request Header Fields Too Large"). Writing
+    // ~150 lines of TCP+HTTP-parser here sidesteps that completely.
 
     // Capture the AP-side MAC for the device label on the form.
     let device_label = format!(
@@ -513,100 +512,28 @@ fn run_captive_portal(
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     );
 
-    // Root page — the setup form.
-    let device_label_clone = device_label.clone();
-    server
-        .fn_handler("/", Method::Get, move |req| -> Result<(), anyhow::Error> {
-            let body = SETUP_HTML.replace("{{device}}", &device_label_clone);
-            req.into_ok_response()?.write_all(body.as_bytes())?;
-            Ok(())
-        })
-        .map_err(|e| anyhow::anyhow!("register / handler: {e}"))?;
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 80)))
+        .map_err(|e| anyhow::anyhow!("bind TCP/80 for portal: {e}"))?;
+    listener
+        .set_nonblocking(false)
+        .map_err(|e| anyhow::anyhow!("set blocking: {e}"))?;
+    log::info!("Captive-portal HTTP server listening on TCP/80");
 
-    // Captive-portal probe endpoints — redirect to /. Hitting any of
-    // these from a stock OS triggers the captive portal popup.
-    let location_header = portal_url.clone();
-    for path in [
-        "/hotspot-detect.html",
-        "/library/test/success.html",
-        "/generate_204",
-        "/gen_204",
-        "/ncsi.txt",
-        "/connecttest.txt",
-        "/redirect",
-    ] {
-        let loc = location_header.clone();
-        let _ = server.fn_handler(path, Method::Get, move |req| -> Result<(), anyhow::Error> {
-            let mut resp = req.into_response(302, Some("Found"), &[("Location", loc.as_str())])?;
-            resp.write_all(b"redirect")?;
-            Ok(())
-        });
-    }
-    // Wildcard catch-all: if any unknown URL is hit, also redirect to
-    // the setup form. (Some browsers probe random paths.)
-    let loc_404 = location_header.clone();
-    let _ = server.fn_handler("/*", Method::Get, move |req| -> Result<(), anyhow::Error> {
-        let mut resp = req.into_response(302, Some("Found"), &[("Location", loc_404.as_str())])?;
-        resp.write_all(b"redirect")?;
-        Ok(())
-    });
-
-    // POST /save — body is `application/x-www-form-urlencoded` with
-    // `ssid=...&password=...`.
-    let done_for_save = done.clone();
-    let creds_for_save = saved_creds.clone();
-    server
-        .fn_handler(
-            "/save",
-            Method::Post,
-            move |mut req| -> Result<(), anyhow::Error> {
-                let mut body = Vec::new();
-                let mut buf = [0u8; 256];
-                loop {
-                    match req.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => body.extend_from_slice(&buf[..n]),
-                        Err(_) => break,
-                    }
-                    if body.len() > 1024 {
-                        break;
-                    }
-                }
-                let text = String::from_utf8_lossy(&body);
-                let mut ssid = String::new();
-                let mut password = String::new();
-                for pair in text.split('&') {
-                    let (k, v) = match pair.split_once('=') {
-                        Some(p) => p,
-                        None => continue,
-                    };
-                    let decoded = url_decode(v);
-                    match k {
-                        "ssid" => ssid = decoded,
-                        "password" => password = decoded,
-                        _ => {}
-                    }
-                }
-                if ssid.is_empty() {
-                    let mut resp = req.into_response(
-                        400,
-                        Some("Bad Request"),
-                        &[("Content-Type", "text/plain")],
-                    )?;
-                    resp.write_all(b"ssid is required")?;
-                    return Ok(());
-                }
-                *creds_for_save.lock() = Some((ssid, password));
-                done_for_save.store(true, Ordering::SeqCst);
-                req.into_ok_response()?.write_all(SAVED_HTML.as_bytes())?;
-                Ok(())
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("register /save handler: {e}"))?;
-
-    // Block until the form is submitted.
     while !done.load(Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        let (stream, peer) = match listener.accept() {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("portal accept: {e}");
+                continue;
+            }
+        };
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
+        if let Err(e) =
+            handle_portal_connection(stream, &portal_url, &device_label, &saved_creds, &done)
+        {
+            log::debug!("portal conn from {peer}: {e}");
+        }
     }
     // Give the browser a moment to receive the success page.
     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -626,13 +553,149 @@ fn run_captive_portal(
         .set_str(nvs_keys::WIFI_PASS, &password)
         .map_err(|e| anyhow::anyhow!("write wifi_pass: {e}"))?;
 
-    drop(server);
     log::info!("Captive portal: restarting to apply Wi-Fi credentials");
     std::thread::sleep(std::time::Duration::from_secs(1));
     unsafe { esp_idf_svc::sys::esp_restart() };
     // esp_restart never returns, but rustc doesn't know that:
     #[allow(unreachable_code)]
     Ok(())
+}
+
+/// Read one HTTP request from `stream`, dispatch, write the response,
+/// and close. The DNS hijack means *every* hostname resolves to us, so
+/// we serve the setup form on `/` and 302-redirect everything else to
+/// `/` — which makes phones / laptops auto-pop the captive sheet for
+/// any probe URL their OS happens to use.
+#[cfg(target_os = "espidf")]
+fn handle_portal_connection(
+    mut stream: std::net::TcpStream,
+    portal_url: &str,
+    device_label: &str,
+    saved_creds: &std::sync::Arc<parking_lot::Mutex<Option<(String, String)>>>,
+    done: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
+
+    // Read headers up to \r\n\r\n. 8 KB is plenty for any browser; if
+    // we still go over, just close — the user can retry.
+    let mut buf = vec![0u8; 8192];
+    let mut len = 0;
+    let mut header_end = None;
+    while len < buf.len() {
+        let n = stream.read(&mut buf[len..])?;
+        if n == 0 {
+            break;
+        }
+        len += n;
+        if let Some(idx) = find_header_end(&buf[..len]) {
+            header_end = Some(idx);
+            break;
+        }
+    }
+    let Some(headers_end) = header_end else {
+        // No complete header — give up politely.
+        let _ = stream.write_all(
+            b"HTTP/1.0 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+        return Ok(());
+    };
+    let header_text = std::str::from_utf8(&buf[..headers_end]).unwrap_or("");
+    let first_line = header_text.lines().next().unwrap_or("");
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let raw_path = parts.next().unwrap_or("/").to_string();
+    let path = raw_path.split('?').next().unwrap_or("/").to_string();
+
+    let mut content_length = 0usize;
+    for line in header_text.lines().skip(1) {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse::<usize>().unwrap_or(0);
+            }
+        }
+    }
+
+    // Read body for POST /save.
+    let mut body = Vec::new();
+    if method == "POST" && content_length > 0 {
+        // Anything past the header break is already in `buf`.
+        let header_total = headers_end + 4; // skip "\r\n\r\n"
+        if len > header_total {
+            body.extend_from_slice(&buf[header_total..len]);
+        }
+        while body.len() < content_length && body.len() < 4096 {
+            let mut chunk = [0u8; 512];
+            let n = stream.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..n]);
+        }
+        body.truncate(content_length.min(body.len()));
+    }
+
+    let response: Vec<u8> = if method == "POST" && path == "/save" {
+        let text = String::from_utf8_lossy(&body);
+        let mut ssid = String::new();
+        let mut password = String::new();
+        for pair in text.split('&') {
+            let Some((k, v)) = pair.split_once('=') else {
+                continue;
+            };
+            let decoded = url_decode(v);
+            match k {
+                "ssid" => ssid = decoded,
+                "password" => password = decoded,
+                _ => {}
+            }
+        }
+        if ssid.is_empty() {
+            http_response(
+                400,
+                "Bad Request",
+                "text/plain; charset=utf-8",
+                b"ssid is required",
+            )
+        } else {
+            *saved_creds.lock() = Some((ssid, password));
+            done.store(true, Ordering::SeqCst);
+            http_response(200, "OK", "text/html; charset=utf-8", SAVED_HTML.as_bytes())
+        }
+    } else if method == "GET" && path == "/" {
+        let html = SETUP_HTML.replace("{{device}}", device_label);
+        http_response(200, "OK", "text/html; charset=utf-8", html.as_bytes())
+    } else {
+        // Catch-all: 302 → setup form. Captive-portal probes
+        // (`/hotspot-detect.html`, `/generate_204`, etc.) all funnel
+        // through this.
+        let mut out = Vec::new();
+        let _ = write!(out, "HTTP/1.0 302 Found\r\n");
+        let _ = write!(out, "Location: {portal_url}\r\n");
+        let _ = write!(out, "Connection: close\r\n");
+        let _ = write!(out, "Content-Length: 8\r\n\r\nredirect");
+        out
+    };
+    stream.write_all(&response)?;
+    let _ = stream.flush();
+    Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+#[cfg(target_os = "espidf")]
+fn http_response(status: u16, reason: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut out = Vec::with_capacity(body.len() + 128);
+    let _ = write!(out, "HTTP/1.0 {status} {reason}\r\n");
+    let _ = write!(out, "Content-Type: {content_type}\r\n");
+    let _ = write!(out, "Content-Length: {}\r\n", body.len());
+    let _ = write!(out, "Connection: close\r\n\r\n");
+    out.extend_from_slice(body);
+    out
 }
 
 #[cfg(target_os = "espidf")]
