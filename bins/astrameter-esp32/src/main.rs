@@ -43,8 +43,13 @@ fn main() -> anyhow::Result<()> {
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
 
     log::info!("step: build tokio runtime");
+    // Tokio's IO driver (mio → epoll) doesn't initialise on ESP-IDF —
+    // `enable_io()` returns `Permission denied (os error 13)`. Build
+    // the runtime with `enable_time()` only. Network sockets go through
+    // `platform-espidf::net_impl`'s blocking-`std::net` + spawn_blocking
+    // path so the lack of an IO driver doesn't break the emulators.
     let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+        .enable_time()
         .thread_stack_size(16 * 1024)
         .build()
         .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
