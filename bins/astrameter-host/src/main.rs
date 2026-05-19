@@ -392,14 +392,59 @@ impl Supervisor {
             .unwrap_or(Ok(0.0))
             .unwrap_or(0.0);
 
+        // Resolve per-device IDs the same way Python's main.py does:
+        // honour [GENERAL].DEVICE_IDS (or `--device-ids`) by position,
+        // then auto-fill with `device-{i+1}` (or
+        // `{type}-ec4609c439c{i+1}` for Shelly types) for any missing
+        // entries. This is load-bearing for HA Device Discovery: the
+        // discovery node_id and every component's unique_id are derived
+        // from device_id, so changing the default would silently
+        // duplicate every entity a previous Python run created.
+        let configured_device_ids: Vec<String> = config
+            .section("GENERAL")
+            .and_then(|s| s.get_opt_string("DEVICE_IDS"))
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let resolved_device_ids: Vec<String> = device_types
+            .iter()
+            .enumerate()
+            .map(|(i, dt)| {
+                if let Some(s) = configured_device_ids.get(i) {
+                    s.clone()
+                } else if matches!(dt.as_str(), "shellypro3em" | "shellyemg3" | "shellyproem50") {
+                    format!("{dt}-ec4609c439c{}", i + 1)
+                } else {
+                    format!("device-{}", i + 1)
+                }
+            })
+            .collect();
+        // `shellypro3em` expands to two emulators that share the same id.
+        let resolve_device_id = |type_index: usize, sub_type: &str| -> String {
+            let base = resolved_device_ids
+                .get(type_index)
+                .cloned()
+                .unwrap_or_else(|| format!("device-{}", type_index + 1));
+            // Both halves of a shellypro3em split keep the original id.
+            let _ = sub_type;
+            base
+        };
+
         let mut ct002_for_handlers: Option<Arc<astrameter_emulator_ct002::server::Ct002Emulator>> =
             None;
         let mut shelly_for_listeners: Vec<Arc<astrameter_emulator_shelly::ShellyEmulator>> =
             Vec::new();
-        for dt in &device_types {
+        for (i, dt) in device_types.iter().enumerate() {
+            let dev_id = resolve_device_id(i, dt);
             match dt.as_str() {
                 "ct002" | "ct003" => {
-                    let h = self.start_ct002(config, dt, &bound, &cancel).await?;
+                    let h = self
+                        .start_ct002(config, dt, &dev_id, &bound, &cancel)
+                        .await?;
                     if let EmulatorHandle::Ct002(ref e) = h {
                         ct002_for_handlers = Some(e.clone());
                     }
@@ -407,7 +452,7 @@ impl Supervisor {
                 }
                 "shellypro3em_old" => {
                     let h = self
-                        .start_shelly(config, dt, 1010, global_dedupe, &bound, &cancel)
+                        .start_shelly(config, dt, &dev_id, 1010, global_dedupe, &bound, &cancel)
                         .await?;
                     if let EmulatorHandle::Shelly(ref e) = h {
                         shelly_for_listeners.push(e.clone());
@@ -416,7 +461,7 @@ impl Supervisor {
                 }
                 "shellypro3em_new" => {
                     let h = self
-                        .start_shelly(config, dt, 2220, global_dedupe, &bound, &cancel)
+                        .start_shelly(config, dt, &dev_id, 2220, global_dedupe, &bound, &cancel)
                         .await?;
                     if let EmulatorHandle::Shelly(ref e) = h {
                         shelly_for_listeners.push(e.clone());
@@ -430,6 +475,7 @@ impl Supervisor {
                         .start_shelly(
                             config,
                             "shellypro3em_old",
+                            &dev_id,
                             1010,
                             global_dedupe,
                             &bound,
@@ -444,6 +490,7 @@ impl Supervisor {
                         .start_shelly(
                             config,
                             "shellypro3em_new",
+                            &dev_id,
                             2220,
                             global_dedupe,
                             &bound,
@@ -457,7 +504,7 @@ impl Supervisor {
                 }
                 "shellyemg3" => {
                     let h = self
-                        .start_shelly(config, dt, 2222, global_dedupe, &bound, &cancel)
+                        .start_shelly(config, dt, &dev_id, 2222, global_dedupe, &bound, &cancel)
                         .await?;
                     if let EmulatorHandle::Shelly(ref e) = h {
                         shelly_for_listeners.push(e.clone());
@@ -466,7 +513,7 @@ impl Supervisor {
                 }
                 "shellyproem50" => {
                     let h = self
-                        .start_shelly(config, dt, 2223, global_dedupe, &bound, &cancel)
+                        .start_shelly(config, dt, &dev_id, 2223, global_dedupe, &bound, &cancel)
                         .await?;
                     if let EmulatorHandle::Shelly(ref e) = h {
                         shelly_for_listeners.push(e.clone());
@@ -572,6 +619,7 @@ impl Supervisor {
         &self,
         config: &Config,
         device_type: &str,
+        device_id: &str,
         bound: &[astrameter_powermeters::BoundPowermeter],
         _cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<EmulatorHandle> {
@@ -644,7 +692,12 @@ impl Supervisor {
                 wait_for_next: bp.wait_for_next_message,
             })
             .collect();
-        let device_id = section.get_string("DEVICE_ID", section_name);
+        // Honour an explicit per-section DEVICE_ID if set, otherwise use
+        // the positional id resolved by the caller (Python-parity:
+        // `device-N` from [GENERAL].DEVICE_IDS).
+        let device_id = section
+            .get_opt_string("DEVICE_ID")
+            .unwrap_or_else(|| device_id.to_string());
         let emu = Arc::new(Ct002Emulator::with_settings(
             udp_port,
             device_id,
@@ -657,9 +710,11 @@ impl Supervisor {
         Ok(EmulatorHandle::Ct002(emu))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_shelly(
         &self,
         _config: &Config,
+        _device_type: &str,
         device_id: &str,
         port: u16,
         dedupe_secs: f64,
@@ -770,7 +825,12 @@ impl Supervisor {
                 } else {
                     "HME-4".to_string()
                 };
-                let device_id = cs.get_string("DEVICE_ID", section_name);
+                // Use the same id the CT002 emulator was constructed with
+                // (Python parity: `device-1` from [GENERAL].DEVICE_IDS by
+                // position, or an explicit DEVICE_ID override).
+                let device_id = cs
+                    .get_opt_string("DEVICE_ID")
+                    .unwrap_or_else(|| ct.device_id());
                 let wifi_rssi = cs.get_int("WIFI_RSSI", -50).unwrap_or(-50);
                 if !mac_norm.is_empty() {
                     let ct_for_count = ct.clone();

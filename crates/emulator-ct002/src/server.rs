@@ -193,6 +193,10 @@ impl Ct002Emulator {
         }
     }
 
+    pub fn device_id(&self) -> String {
+        self.device_id.clone()
+    }
+
     pub fn set_event_listener(&self, listener: EventListenerFn) {
         *self.event_listener.lock() = Some(listener);
     }
