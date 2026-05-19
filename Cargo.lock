@@ -263,6 +263,7 @@ dependencies = [
  "astrameter-platform",
  "astrameter-platform-std",
  "astrameter-sml",
+ "astrameter-wrappers",
  "async-trait",
  "base64",
  "bytes",

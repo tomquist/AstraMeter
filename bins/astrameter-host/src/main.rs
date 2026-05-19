@@ -155,26 +155,23 @@ impl Supervisor {
     async fn start(&self, config: &Config) -> Result<()> {
         let cancel = tokio_util::sync::CancellationToken::new();
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-        for section_name in config.sections().collect::<Vec<_>>() {
-            let Some(section) = config.section(section_name) else {
-                continue;
-            };
-            if section_name.starts_with("MQTT_INSIGHTS") {
-                continue;
-            }
-            let Some(factory) = self.registry.lookup(section_name) else {
-                continue;
-            };
-            tracing::info!(section = section_name, "instantiating powermeter");
-            let meter = match factory(&section, self.platform.clone()) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!(section = section_name, "failed: {e}");
-                    continue;
-                }
-            };
+
+        // Apply the full Python config_loader wrapper chain
+        // (transform/throttle/hampel/smoothing/deadband/pid + NETMASK
+        // ClientFilter + WAIT_FOR_NEXT_MESSAGE) before spawning meters.
+        let bound = astrameter_powermeters::read_all_powermeter_configs(
+            config,
+            &self.registry,
+            self.platform.clone(),
+        )?;
+        if bound.is_empty() {
+            tracing::warn!("config has no recognised powermeter sections");
+        }
+        for bp in bound {
+            tracing::info!(section = %bp.section, "instantiating powermeter");
             let cancel_clone = cancel.clone();
-            let name = section_name.to_string();
+            let name = bp.section.clone();
+            let meter = bp.meter;
             let h = tokio::spawn(async move {
                 if let Err(e) = meter.start().await {
                     tracing::error!(section = %name, "start() failed: {e}");

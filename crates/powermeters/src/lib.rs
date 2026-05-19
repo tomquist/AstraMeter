@@ -35,6 +35,9 @@ pub mod tasmota;
 pub mod tq_em;
 pub mod vzlogger;
 
+pub mod pipeline;
+pub use pipeline::{read_all_powermeter_configs, BoundPowermeter};
+
 /// Builder function for a single powermeter section.
 pub type PowermeterFactory = fn(&Section<'_>, Arc<Platform>) -> Result<Arc<dyn Powermeter>>;
 
