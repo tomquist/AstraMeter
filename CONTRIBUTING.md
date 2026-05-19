@@ -6,7 +6,7 @@ Thanks for helping improve AstraMeter. This document covers local development; f
 
 - **Stable Rust** 1.83 or newer (install via [rustup](https://rustup.rs/))
 - **cargo-nextest** (optional, faster test runner): `cargo install cargo-nextest`
-- **Xtensa toolchain** (only if you want to build the ESP32-S3 firmware): `cargo install espup espflash && espup install`
+- **Xtensa toolchain** (only if you want to build the ESP32-S3 firmware): `cargo install espup espflash ldproxy && espup install`. Source `$HOME/export-esp.sh` in each fresh shell before running `cargo +esp build`. `ldproxy` is the linker wrapper `esp-idf-sys` calls; missing it surfaces as `linker 'ldproxy' not found` at the link stage.
 
 ## Dev setup
 

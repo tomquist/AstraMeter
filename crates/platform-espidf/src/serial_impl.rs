@@ -24,6 +24,11 @@ static UART_REGISTRY: Mutex<Option<HashMap<String, Arc<dyn UartLike>>>> = Mutex:
 
 /// Make a `UartDriver` available to SML/`open` calls. Call once per UART
 /// from the firmware boot path before the supervisor starts.
+///
+/// Currently unused — the boot path in `bins/astrameter-esp32/src/main.rs`
+/// doesn't yet wire any UARTs. Keep it public so a future SML/UART path
+/// just has to call this from boot.
+#[allow(dead_code)]
 pub fn register_uart(name: &str, uart: Arc<dyn UartLike>) {
     let mut guard = UART_REGISTRY.lock();
     let map = guard.get_or_insert_with(HashMap::new);

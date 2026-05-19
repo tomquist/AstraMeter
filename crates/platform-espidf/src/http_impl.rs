@@ -89,7 +89,6 @@ fn blocking_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
     let status = response.status();
     let mut body = Vec::new();
     let mut buf = [0u8; 1024];
-    use embedded_svc::io::Read;
     loop {
         let n = response
             .read(&mut buf)

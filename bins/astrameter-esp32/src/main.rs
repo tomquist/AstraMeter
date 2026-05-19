@@ -157,6 +157,9 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 #[cfg(target_os = "espidf")]
+// Each variant holds the Arc<Emulator> alive for the lifetime of the
+// supervisor; we never read it back, just keep the strong count > 0.
+#[allow(dead_code)]
 enum EsplEmu {
     Ct002(std::sync::Arc<astrameter_emulator_ct002::server::Ct002Emulator>),
     Shelly(std::sync::Arc<astrameter_emulator_shelly::ShellyEmulator>),

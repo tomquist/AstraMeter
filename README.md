@@ -178,9 +178,15 @@ update endpoint are included so the firmware can be re-flashed without
 a serial cable once on the network.
 
 ```bash
-# One-time setup (Xtensa toolchain — see https://esp-rs.github.io/book/)
-cargo install espup espflash
+# One-time setup (Xtensa toolchain — see https://esp-rs.github.io/book/).
+# `ldproxy` is the linker wrapper esp-idf-sys uses to thread ESP-IDF's
+# linker flags through; without it the build errors with
+# "linker `ldproxy` not found".
+cargo install espup espflash ldproxy
 espup install
+
+# Source the espup environment in every fresh shell:
+source $HOME/export-esp.sh
 
 # Build + flash + monitor
 cargo +esp build --release -p astrameter-esp32 --target xtensa-esp32s3-espidf
@@ -190,6 +196,11 @@ espflash flash --monitor target/xtensa-esp32s3-espidf/release/astrameter-esp32
 On first boot the firmware starts a SoftAP captive portal so you can
 enter Wi-Fi credentials; subsequent boots join your network and serve
 the same web UI as the host build.
+
+Powermeter compatibility on ESP32: the `homeassistant` and `homewizard`
+types need a WebSocket TLS client that isn't wired through ESP-IDF's
+mbedTLS yet; pick a different powermeter type (`mqtt`, `modbus`,
+`sml`, `json_http`, `tasmota`, `shelly`, …) on this target.
 
 ## Additional Notes
 
