@@ -15,10 +15,23 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = parse_cli();
+    // Resolution order, matching the Python entry point:
+    //   1. `-log/--loglevel` (CLI flag, or `LOG_LEVEL` env var captured by
+    //      `parse_cli`) — applied as a workspace-wide level since every
+    //      crate name starts with `astrameter_`.
+    //   2. `RUST_LOG` — full directive string for power users.
+    //   3. Fallback to `info`.
     let env_filter = if let Some(level) = &cli.log_level {
-        EnvFilter::try_new(format!("astrameter={level}")).unwrap_or_else(|_| EnvFilter::new("info"))
+        let lvl = level.to_lowercase();
+        // Map Python-style "warning" to tracing's "warn".
+        let lvl = if lvl == "warning" {
+            "warn".to_string()
+        } else {
+            lvl
+        };
+        EnvFilter::try_new(&lvl).unwrap_or_else(|_| EnvFilter::new("info"))
     } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
     };
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 

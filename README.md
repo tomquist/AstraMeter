@@ -1073,6 +1073,155 @@ A: You can only verify the initial configuration. Full testing requires a Marste
 
 A: Powermeters typically report import as positive and export as negative (see [What's the correct power value convention?](#whats-the-correct-power-value-convention) above). Shelly and CT002/CT003 emulators forward those signed watts into the Marstek protocols; behavior on the battery side depends on your firmware and device type.
 
+## Simulator
+
+The project ships a standalone battery and powermeter simulator (`astra-sim`) that lets you test the CT002 emulator without real hardware. It simulates N batteries speaking the CT002 UDP protocol and exposes an HTTP endpoint that astrameter reads as a powermeter.
+
+### Build
+
+`astra-sim` is part of the same Cargo workspace, so a release build of astrameter produces it too:
+
+```bash
+cargo build --release -p astra-sim
+# binary lands at ./target/release/astra-sim
+```
+
+### Quick Start
+
+**Terminal 1** — start the simulator (1 battery, single-phase, with TUI):
+```bash
+astra-sim run --batteries 1 --phases 1
+```
+
+**Terminal 2** — start astrameter with the matching config:
+```bash
+astra-sim config > config.ini   # generate a config snippet
+astrameter -c config.ini
+```
+
+The generated `config.ini` looks like:
+```ini
+[GENERAL]
+DEVICE_TYPE = ct002
+
+[CT002]
+UDP_PORT = 12345
+ACTIVE_CONTROL = True
+
+[JSON_HTTP]
+URL = http://localhost:8080/power
+JSON_PATHS = $.phase_a
+```
+
+For three-phase setups, use `JSON_PATHS = $.phase_a,$.phase_b,$.phase_c`.
+
+### Multi-Battery 3-Phase Setup
+
+```bash
+# 3 batteries distributed across 3 phases
+astra-sim run --batteries 3 --phases 3
+
+# Custom base load and initial SOC
+astra-sim run --batteries 2 --phases 3 --base-load 500,300,200 --soc 0.8
+```
+
+### JSON Config File
+
+For full control, use a JSON config file:
+
+```bash
+astra-sim run -c sim_config.json
+```
+
+Example `sim_config.json`:
+```json
+{
+  "ct": {
+    "mac": "112233445566",
+    "host": "127.0.0.1",
+    "port": 12345
+  },
+  "http": { "host": "127.0.0.1", "port": 8080 },
+  "power_update_delay_ticks": 0,
+  "powermeter": {
+    "base_load": [200.0, 150.0, 100.0],
+    "base_noise": 20.0,
+    "solar_max": 3000.0,
+    "solar_phases": ["A", "B", "C"],
+    "loads": [
+      { "name": "Fridge", "power": 150, "phase": "A" },
+      { "name": "Oven",   "power": 2000, "phase": "B" }
+    ]
+  },
+  "batteries": [
+    { "mac": "02B250000001", "phase": "A", "initial_soc": 0.5 },
+    { "mac": "02B250000002", "phase": "B", "initial_soc": 0.7 }
+  ],
+  "auto_mode": false,
+  "log_interval": 5.0,
+  "time_scale": 1.0
+}
+```
+
+### Daemon Mode
+
+The simulator can run headless and be controlled over HTTP from any other terminal — same commands the in-process TUI uses:
+
+```bash
+# Start in the background (Unix only; uses ~/.astra-sim.pid)
+astra-sim start --http-port 8080
+
+# Check status
+astra-sim status
+
+# Toggle a load (1-based index)
+astra-sim load toggle 1
+
+# Set solar
+astra-sim solar set max
+astra-sim solar set 500       # 500 W
+astra-sim solar set off
+
+# Battery controls
+astra-sim battery 02B250000001 soc 0.9
+astra-sim battery 02B250000001 max-power 800 800
+
+# Toggle auto-mode (random load mutation + solar)
+astra-sim auto on
+
+# Attach the TUI to the running daemon
+astra-sim attach
+
+# Stop the daemon
+astra-sim stop
+```
+
+### TUI Controls
+
+When running with the TUI (`run` without `--no-tui`, or `attach`):
+
+| Key       | Action                          |
+|-----------|---------------------------------|
+| `1`..`8`  | Toggle the corresponding load   |
+| `9` / `0` | Set selected-battery SOC to 100%/0% |
+| `←` / `→` | Adjust selected-battery SOC by ±10% |
+| `↑` / `↓` | Adjust solar by ±100 W          |
+| `s` / `S` | Solar Max / Solar Off           |
+| `b`       | Cycle the selected battery      |
+| `p` / `P` | Adjust selected-battery max ± 100 W |
+| `a`       | Toggle auto-mode                |
+| `q`       | Quit                            |
+
+### How It Works
+
+The simulator is fully decoupled from astrameter — it communicates purely over the network:
+
+- **Battery simulators** send UDP requests to astrameter's CT002 emulator using the same protocol as real Marstek batteries.
+- **Powermeter simulator** serves an HTTP JSON endpoint (`GET /power`) that astrameter reads via its `[JSON_HTTP]` powermeter config.
+- Grid power is computed as: `grid = base_load + active_loads + noise - solar - battery_output`.
+- When solar exceeds consumption, grid goes negative (export) and batteries charge.
+- Batteries track SOC and saturate at 0%/100%.
+
 ## License
 
 This project is licensed under the General Public License v3.0 - see the [LICENSE](LICENSE) file for details.

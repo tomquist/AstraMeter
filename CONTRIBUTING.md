@@ -40,6 +40,7 @@ This is a Cargo workspace. Notable pieces:
 | `crates/testkit` | Shared test fixtures |
 | `bins/astrameter-host` | Linux/Docker binary |
 | `bins/astrameter-esp32` | ESP32-S3 firmware (cross-compile only) |
+| `bins/astra-sim` | Battery + powermeter simulator (dev tool) |
 
 Resolved versions live in `Cargo.lock`.
 

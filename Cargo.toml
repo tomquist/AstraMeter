@@ -17,6 +17,7 @@ members = [
     "crates/testkit",
     "bins/astrameter-host",
     "bins/astrameter-esp32",
+    "bins/astra-sim",
 ]
 
 # Default `cargo check` / `cargo build` skip the ESP32 binary; it requires the
@@ -37,6 +38,7 @@ default-members = [
     "crates/sml",
     "crates/testkit",
     "bins/astrameter-host",
+    "bins/astra-sim",
 ]
 
 [workspace.package]
@@ -111,6 +113,11 @@ ipnet = "2"
 # Web (host only)
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tower-http = { version = "0.6", default-features = false, features = ["fs", "trace"] }
+
+# Simulator (host dev tool)
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = "0.28"
+rand = "0.8"
 
 # Testing
 insta = "1"
