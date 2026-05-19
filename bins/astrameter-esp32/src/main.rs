@@ -132,6 +132,46 @@ async fn async_main() -> anyhow::Result<()> {
     log::info!("step: build platform");
     let platform = Arc::new(astrameter_platform_espidf::build_platform());
 
+    // If the user configured an [SML] section, install the ESP-IDF
+    // UART driver they asked for and register it in `serial_impl`'s
+    // registry. The SML powermeter looks up the registry by name
+    // (`SERIAL` key, e.g. "UART1"). Pin numbers come from the same
+    // section so users don't have to recompile to change hardware.
+    if let Some(sml) = config.section("SML") {
+        let uart_index = sml.get_int("SML_UART_INDEX", 1).unwrap_or(1) as u8;
+        let baud = sml.get_int("BAUD_RATE", 9600).unwrap_or(9600) as u32;
+        let rx_gpio = sml.get_int("SML_RX_GPIO", -1).unwrap_or(-1) as i32;
+        let tx_gpio = sml.get_int("SML_TX_GPIO", -1).unwrap_or(-1) as i32;
+        if rx_gpio < 0 {
+            log::warn!(
+                "[SML] SML_RX_GPIO not set — SML UART not initialised. \
+                 Add `SML_RX_GPIO=<pin>` (and optionally `SML_TX_GPIO`, \
+                 `SML_UART_INDEX`, `BAUD_RATE`) to enable."
+            );
+        } else {
+            match astrameter_platform_espidf::build_uart_driver(uart_index, baud, rx_gpio, tx_gpio)
+            {
+                Ok(uart) => {
+                    let name = format!("UART{uart_index}");
+                    astrameter_platform_espidf::register_uart(&name, uart);
+                    let configured = sml.get_string("SERIAL", "");
+                    if configured.is_empty() {
+                        log::warn!(
+                            "[SML] SERIAL is empty — set `SERIAL={name}` to match the \
+                             UART we just initialised"
+                        );
+                    } else if !configured.eq_ignore_ascii_case(&name) {
+                        log::warn!(
+                            "[SML] SERIAL={configured:?} but the UART we initialised \
+                             is `{name}` — SML open will fail unless these match"
+                        );
+                    }
+                }
+                Err(e) => log::error!("[SML] UART init failed: {e}"),
+            }
+        }
+    }
+
     log::info!("step: register powermeters");
     let mut reg = PowermeterRegistry::new();
     register_all(&mut reg);

@@ -53,3 +53,8 @@ mod imp {
 
 #[cfg(target_os = "espidf")]
 pub use imp::build_platform;
+
+/// Re-exports for the firmware boot path to wire UART hardware before
+/// powermeters (e.g. SML) try to open it.
+#[cfg(target_os = "espidf")]
+pub use serial_impl::{build_uart_driver, register_uart};

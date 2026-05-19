@@ -46,6 +46,6 @@ pub trait TcpConnect: Send + Sync {
 
 pub type TcpStream = Box<dyn TcpStreamLike>;
 
-pub trait TcpStreamLike: AsyncRead + AsyncWrite + Send + Unpin {}
+pub trait TcpStreamLike: AsyncRead + AsyncWrite + Send + Unpin + std::fmt::Debug {}
 
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> TcpStreamLike for T {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin + std::fmt::Debug> TcpStreamLike for T {}

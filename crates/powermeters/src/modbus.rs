@@ -1,10 +1,12 @@
 //! `MODBUS` — Modbus TCP register read. Port of
 //! `src/astrameter/powermeter/modbus.py`.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use astrameter_config::Section;
 use astrameter_core::{Error, Powermeter, Result};
+use astrameter_platform::net::TcpConnect;
 use astrameter_platform::Platform;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -43,6 +45,11 @@ pub struct ModbusPowermeter {
     word_order: Endianness,
     register_type: RegisterType,
     ctx: Mutex<Option<Context>>,
+    /// Plumb every TCP connect through the platform so the ESP32 build
+    /// gets its blocking-`std::net` wrapper while the host keeps using
+    /// `tokio::net::TcpStream` — `tokio_modbus::client::tcp::attach_slave`
+    /// works with any `AsyncRead + AsyncWrite`.
+    tcp: Arc<dyn TcpConnect>,
 }
 
 fn decode(
@@ -81,14 +88,21 @@ impl Powermeter for ModbusPowermeter {
     async fn start(&self) -> Result<()> {
         // Resolve the host the way Python pymodbus does (hostname or IP).
         let addr_str = format!("{}:{}", self.host, self.port);
-        let socket = tokio::net::lookup_host(&addr_str)
-            .await
-            .map_err(|e| Error::transport(format!("modbus DNS lookup {addr_str}: {e}")))?
-            .next()
-            .ok_or_else(|| Error::config(format!("modbus: no addresses for {addr_str}")))?;
-        let ctx = tcp::connect_slave(socket, tokio_modbus::Slave(self.unit_id))
+        let socket: SocketAddr = if let Ok(s) = addr_str.parse() {
+            s
+        } else {
+            tokio::net::lookup_host(&addr_str)
+                .await
+                .map_err(|e| Error::transport(format!("modbus DNS lookup {addr_str}: {e}")))?
+                .next()
+                .ok_or_else(|| Error::config(format!("modbus: no addresses for {addr_str}")))?
+        };
+        let stream = self
+            .tcp
+            .connect(socket)
             .await
             .map_err(|e| Error::transport(format!("modbus connect: {e}")))?;
+        let ctx = tcp::attach_slave(stream, tokio_modbus::Slave(self.unit_id));
         *self.ctx.lock().await = Some(ctx);
         Ok(())
     }
@@ -123,7 +137,7 @@ impl Powermeter for ModbusPowermeter {
     }
 }
 
-pub fn create(section: &Section<'_>, _platform: Arc<Platform>) -> Result<Arc<dyn Powermeter>> {
+pub fn create(section: &Section<'_>, platform: Arc<Platform>) -> Result<Arc<dyn Powermeter>> {
     let data_type = match section
         .get_str("DATA_TYPE", "UINT16")
         .to_uppercase()
@@ -166,5 +180,6 @@ pub fn create(section: &Section<'_>, _platform: Arc<Platform>) -> Result<Arc<dyn
         word_order,
         register_type,
         ctx: Mutex::new(None),
+        tcp: platform.tcp.clone(),
     }))
 }
