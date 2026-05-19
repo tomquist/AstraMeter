@@ -42,55 +42,17 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::log::EspLogger::initialize_default();
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
 
-    // The ESP-IDF "main" task only gets ~3.5 KB of stack by default, and
-    // `sdkconfig.defaults` (where we'd raise `CONFIG_ESP_MAIN_TASK_STACK_SIZE`)
-    // isn't being applied by `esp-idf-sys` against our crate (same root
-    // cause as `partitions.csv` not loading). Side-step the whole issue
-    // by spawning a worker pthread with a large stack and running the
-    // tokio runtime there. `std::thread::Builder::stack_size` on
-    // ESP-IDF maps to `pthread_attr_setstacksize` → FreeRTOS task stack,
-    // so this is honoured.
-    // Route every pthread stack we create from here on out into PSRAM.
-    // Internal SRAM has ~300 KB free after IDF + Wi-Fi; once our tokio
-    // worker grabs 192 KB for itself, the next `spawn_blocking` call
-    // (UDP bind, TCP read, etc.) can't allocate its own ~8 KB pthread
-    // stack and the IDF aborts with `pthread: Failed to create task!
-    // ENOMEM`. With `inherit_cfg = true` the children of our worker —
-    // i.e. tokio's blocking-pool pthreads, plus our DNS-hijack and
-    // config-web helper threads — inherit the same capability and stay
-    // out of internal RAM. Requires `CONFIG_SPIRAM_ALLOW_STACK_\
-    // EXTERNAL_MEMORY=y` in sdkconfig.defaults.
-    unsafe {
-        let name = b"astrameter-pthread\0";
-        let cfg = esp_idf_svc::sys::esp_pthread_cfg_t {
-            // `stack_size` is the default for children that don't set
-            // their own size; tokio sets the blocking-pool size at
-            // creation, so this only matters when nothing else does.
-            stack_size: 16 * 1024,
-            prio: 5,
-            inherit_cfg: true,
-            thread_name: name.as_ptr() as *const _,
-            pin_to_core: 0,
-            stack_alloc_caps: esp_idf_svc::sys::MALLOC_CAP_SPIRAM
-                | esp_idf_svc::sys::MALLOC_CAP_8BIT,
-        };
-        let rc = esp_idf_svc::sys::esp_pthread_set_cfg(&cfg);
-        if rc != esp_idf_svc::sys::ESP_OK {
-            log::warn!(
-                "esp_pthread_set_cfg failed: rc={rc}; pthread stacks will stay in internal SRAM"
-            );
-        }
-    }
-
-    // 64 KB used to be enough but a fully wired pipeline (Wi-Fi STA +
-    // HomeAssistant WebSocket over TLS + EspAsyncMqttClient::new() with
-    // its mbedTLS context init + CT002 emulator + powermeter polling)
-    // shares this single tokio current-thread stack. The MQTT client
-    // constructor is the biggest consumer — bumping to 192 KB gives
-    // ~120 KB headroom over the previous high-water mark.
+    // The ESP-IDF "main" task only gets ~3.5 KB of stack by default, so
+    // we run the tokio runtime on a worker pthread we control. 64 KB is
+    // the sweet spot: enough for HA WebSocket + CT002 + the current-thread
+    // runtime, while leaving ~250 KB of internal SRAM free for tokio's
+    // blocking-pool pthreads (UDP/TCP/UART). The one operation that
+    // doesn't fit on this stack — `EspAsyncMqttClient::new`'s mbedTLS
+    // context init — runs on its own sacrificial pthread inside
+    // `EspMqttFactory::connect` (see `mqtt_impl.rs`).
     let worker = std::thread::Builder::new()
         .name("astrameter".into())
-        .stack_size(192 * 1024)
+        .stack_size(64 * 1024)
         .spawn(|| -> anyhow::Result<()> {
             log::info!("step: build tokio runtime");
             // Tokio's IO driver (mio → epoll) doesn't initialise on

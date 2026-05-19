@@ -26,34 +26,20 @@ impl MqttFactory for EspMqttFactory {
     fn connect(&self, opts: MqttOptions) -> Result<MqttSession, MqttError> {
         let scheme = if opts.tls { "mqtts" } else { "mqtt" };
         let url = format!("{scheme}://{}:{}", opts.host, opts.port);
-        let owned_user = opts.username.clone();
-        let owned_pass = opts.password.clone();
-        let mut cfg = MqttClientConfiguration {
-            client_id: Some(opts.client_id.as_str()),
-            keep_alive_interval: Some(opts.keep_alive),
-            ..Default::default()
-        };
-        if let Some(u) = owned_user.as_deref() {
-            cfg.username = Some(u);
-        }
-        if let Some(p) = owned_pass.as_deref() {
-            cfg.password = Some(p);
-        }
-        if opts.tls {
-            // Use the ESP-IDF bundled CA store. Self-signed certs aren't
-            // supported on this transport — the user has to configure a
-            // publicly-trusted cert at the broker, or run plaintext on
-            // the LAN.
-            cfg.crt_bundle_attach = Some(esp_idf_svc::sys::esp_crt_bundle_attach);
-        }
-
         log::info!(
             "mqtt: connecting to {url} (tls={}, user={:?})",
             opts.tls,
             opts.username
         );
-        let (client, connection) = EspAsyncMqttClient::new(&url, &cfg)
-            .map_err(|e| MqttError::Connect(format!("esp mqtt new: {e}")))?;
+
+        // `EspAsyncMqttClient::new` calls into mbedTLS / esp_mqtt
+        // initialisation, which burns ~80–100 KB of stack on its own.
+        // The tokio worker pthread that drives us is only 64 KB so it
+        // can't hold that on top of the runtime + active futures.
+        // Run the constructor on a sacrificial pthread sized for the
+        // peak; it exits as soon as the client is built, so the big
+        // stack only exists briefly during connect.
+        let (client, connection) = init_on_temp_thread(url.clone(), opts)?;
 
         // The IDF MQTT client connects asynchronously; the
         // `Connected`/`Disconnected` events arrive on the connection's
@@ -64,7 +50,7 @@ impl MqttFactory for EspMqttFactory {
         // error instead of the cryptic IDF "client is not connected"
         // string during the handshake window.
         let connected = Arc::new(AtomicBool::new(false));
-        let events = build_event_stream(connection, connected.clone(), url.clone());
+        let events = build_event_stream(connection, connected.clone(), url);
 
         let arc_client: Arc<dyn MqttClient> = Arc::new(EspClient {
             inner: Arc::new(Mutex::new(client)),
@@ -75,6 +61,44 @@ impl MqttFactory for EspMqttFactory {
             events,
         })
     }
+}
+
+/// Run `EspAsyncMqttClient::new` on a dedicated pthread with a 128 KB
+/// stack and `join` before returning — the `join` is what reclaims
+/// the temp thread's stack, so the 128 KB only overlaps the caller's
+/// stack for the duration of mbedTLS init.
+fn init_on_temp_thread(
+    url: String,
+    opts: MqttOptions,
+) -> Result<(EspAsyncMqttClient, EspAsyncMqttConnection), MqttError> {
+    let handle = std::thread::Builder::new()
+        .name("mqtt-init".into())
+        .stack_size(128 * 1024)
+        .spawn(move || -> Result<_, String> {
+            let mut cfg = MqttClientConfiguration {
+                client_id: Some(opts.client_id.as_str()),
+                keep_alive_interval: Some(opts.keep_alive),
+                ..Default::default()
+            };
+            if let Some(u) = opts.username.as_deref() {
+                cfg.username = Some(u);
+            }
+            if let Some(p) = opts.password.as_deref() {
+                cfg.password = Some(p);
+            }
+            if opts.tls {
+                // Self-signed certs aren't supported on this transport —
+                // the user has to configure a publicly-trusted cert at the
+                // broker, or run plaintext on the LAN.
+                cfg.crt_bundle_attach = Some(esp_idf_svc::sys::esp_crt_bundle_attach);
+            }
+            EspAsyncMqttClient::new(&url, &cfg).map_err(|e| e.to_string())
+        })
+        .map_err(|e| MqttError::Connect(format!("spawn mqtt-init thread: {e}")))?;
+    handle
+        .join()
+        .map_err(|_| MqttError::Connect("mqtt-init thread panicked".into()))?
+        .map_err(|e| MqttError::Connect(format!("esp mqtt new: {e}")))
 }
 
 struct EspClient {
