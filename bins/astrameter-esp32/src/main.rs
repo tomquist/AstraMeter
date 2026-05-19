@@ -479,7 +479,19 @@ fn run_captive_portal(
     .map_err(|e| anyhow::anyhow!("set ap config: {e}"))?;
     wifi.start()
         .map_err(|e| anyhow::anyhow!("wifi.start (AP): {e}"))?;
-    log::info!("Captive portal AP live: SSID=`{ssid_str}`, open network, http://192.168.4.1/");
+
+    // Read the AP-side IP dynamically — ESP-IDF's default changed from
+    // 192.168.4.1 (pre-5.x) to 192.168.71.1 (5.x). The DHCP server
+    // assigns clients from this subnet, so we have to redirect them to
+    // *that* IP for the captive portal to be reachable.
+    let ap_ip = wifi
+        .wifi()
+        .ap_netif()
+        .get_ip_info()
+        .map_err(|e| anyhow::anyhow!("get ap ip: {e}"))?
+        .ip;
+    let portal_url = format!("http://{ap_ip}/");
+    log::info!("Captive portal AP live: SSID=`{ssid_str}`, open network, {portal_url}");
 
     let done = Arc::new(AtomicBool::new(false));
     let saved_creds: Arc<parking_lot::Mutex<Option<(String, String)>>> =
@@ -487,6 +499,13 @@ fn run_captive_portal(
 
     let mut server = EspHttpServer::new(&HttpConfig::default())
         .map_err(|e| anyhow::anyhow!("EspHttpServer::new: {e}"))?;
+
+    // Spawn a tiny DNS responder that answers every A query with the
+    // AP IP. This is the bit that makes the captive-portal sheet
+    // auto-pop on phones / laptops — they only trigger it when the
+    // OS-level connectivity probe URL fails to resolve to a normal
+    // server.
+    let _dns_thread = start_dns_hijack(ap_ip)?;
 
     // Capture the AP-side MAC for the device label on the form.
     let device_label = format!(
@@ -506,6 +525,7 @@ fn run_captive_portal(
 
     // Captive-portal probe endpoints — redirect to /. Hitting any of
     // these from a stock OS triggers the captive portal popup.
+    let location_header = portal_url.clone();
     for path in [
         "/hotspot-detect.html",
         "/library/test/success.html",
@@ -515,13 +535,21 @@ fn run_captive_portal(
         "/connecttest.txt",
         "/redirect",
     ] {
-        let _ = server.fn_handler(path, Method::Get, |req| -> Result<(), anyhow::Error> {
-            let mut resp =
-                req.into_response(302, Some("Found"), &[("Location", "http://192.168.4.1/")])?;
+        let loc = location_header.clone();
+        let _ = server.fn_handler(path, Method::Get, move |req| -> Result<(), anyhow::Error> {
+            let mut resp = req.into_response(302, Some("Found"), &[("Location", loc.as_str())])?;
             resp.write_all(b"redirect")?;
             Ok(())
         });
     }
+    // Wildcard catch-all: if any unknown URL is hit, also redirect to
+    // the setup form. (Some browsers probe random paths.)
+    let loc_404 = location_header.clone();
+    let _ = server.fn_handler("/*", Method::Get, move |req| -> Result<(), anyhow::Error> {
+        let mut resp = req.into_response(302, Some("Found"), &[("Location", loc_404.as_str())])?;
+        resp.write_all(b"redirect")?;
+        Ok(())
+    });
 
     // POST /save — body is `application/x-www-form-urlencoded` with
     // `ssid=...&password=...`.
@@ -636,6 +664,104 @@ fn url_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+/// Spawn a minimal DNS hijack on UDP/53 that resolves *every* A query
+/// to `ap_ip`. This is what makes phones / laptops auto-pop the
+/// captive portal: their OS-level connectivity-check expects to
+/// resolve a known hostname (e.g. `connectivitycheck.gstatic.com`)
+/// to a real server, then GET a known URL on it; if either the DNS
+/// resolution or the GET goes sideways, the OS shows the captive
+/// portal sheet. We hijack DNS so the connectivity probe lands on
+/// our HTTP server, which then 302-redirects to `/`.
+///
+/// Returns the worker `JoinHandle` so the caller can drop / abort it
+/// after the form is submitted (here we just let it run until
+/// `esp_restart`).
+#[cfg(target_os = "espidf")]
+fn start_dns_hijack(ap_ip: std::net::Ipv4Addr) -> anyhow::Result<std::thread::JoinHandle<()>> {
+    use std::net::{SocketAddr, UdpSocket};
+    let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 53)))
+        .map_err(|e| anyhow::anyhow!("bind UDP/53 for DNS hijack: {e}"))?;
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+        .ok();
+    let ap_bytes = ap_ip.octets();
+    let handle = std::thread::Builder::new()
+        .name("dns-hijack".into())
+        .stack_size(8 * 1024)
+        .spawn(move || {
+            let mut buf = [0u8; 512];
+            loop {
+                let (n, peer) = match sock.recv_from(&mut buf) {
+                    Ok(p) => p,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+                    Err(e) => {
+                        log::warn!("dns-hijack recv: {e}");
+                        continue;
+                    }
+                };
+                if n < 12 {
+                    continue;
+                }
+                let mut reply = build_dns_reply(&buf[..n], ap_bytes);
+                if reply.is_empty() {
+                    continue;
+                }
+                // Send response (best effort).
+                let _ = sock.send_to(&mut reply, peer);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("spawn dns thread: {e}"))?;
+    log::info!("DNS hijack listening on UDP/53 → {ap_ip}");
+    Ok(handle)
+}
+
+/// Build a synthetic DNS A response that points the asked hostname at
+/// `ap_ip`. We copy the question section verbatim, flip the header
+/// flags to "response, no error, recursion available", then append a
+/// single answer RR with TTL=60 pointing at `ap_ip`.
+#[cfg(target_os = "espidf")]
+fn build_dns_reply(query: &[u8], ap_ip: [u8; 4]) -> Vec<u8> {
+    if query.len() < 12 {
+        return Vec::new();
+    }
+    // Walk the question section to find its end (one QNAME label list
+    // terminated by a 0 byte, then QTYPE + QCLASS = 4 more bytes).
+    let mut pos = 12;
+    while pos < query.len() {
+        let len = query[pos] as usize;
+        if len == 0 {
+            pos += 1;
+            break;
+        }
+        if len & 0xc0 != 0 {
+            // Compression in the question is illegal but defensive.
+            return Vec::new();
+        }
+        pos += 1 + len;
+    }
+    pos += 4; // QTYPE + QCLASS
+    if pos > query.len() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(pos + 16);
+    out.extend_from_slice(&query[..pos]);
+    // Header tweaks: bit-15 (QR) set, RA set, ANCOUNT = 1.
+    out[2] |= 0x80; // QR
+    out[3] = (out[3] & !0x0F) | 0x80; // RCODE=0, RA=1 (bit-7 of byte 3)
+    out[6] = 0x00;
+    out[7] = 0x01; // ANCOUNT = 1
+                   // Answer section: name pointer to offset 12 (start of question),
+                   // TYPE=A (1), CLASS=IN (1), TTL=60, RDLENGTH=4, RDATA=ap_ip.
+    out.extend_from_slice(&[0xc0, 0x0c]); // pointer to QNAME
+    out.extend_from_slice(&[0x00, 0x01]); // TYPE A
+    out.extend_from_slice(&[0x00, 0x01]); // CLASS IN
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x3c]); // TTL = 60
+    out.extend_from_slice(&[0x00, 0x04]); // RDLENGTH
+    out.extend_from_slice(&ap_ip);
+    out
 }
 
 #[cfg(target_os = "espidf")]
