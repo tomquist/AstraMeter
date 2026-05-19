@@ -50,9 +50,15 @@ fn main() -> anyhow::Result<()> {
     // tokio runtime there. `std::thread::Builder::stack_size` on
     // ESP-IDF maps to `pthread_attr_setstacksize` → FreeRTOS task stack,
     // so this is honoured.
+    // 64 KB used to be enough but a fully wired pipeline (Wi-Fi STA +
+    // HomeAssistant WebSocket over TLS + EspAsyncMqttClient::new() with
+    // its mbedTLS context init + CT002 emulator + powermeter polling)
+    // shares this single tokio current-thread stack. The MQTT client
+    // constructor is the biggest consumer — bumping to 192 KB gives
+    // ~120 KB headroom over the previous high-water mark.
     let worker = std::thread::Builder::new()
         .name("astrameter".into())
-        .stack_size(64 * 1024)
+        .stack_size(192 * 1024)
         .spawn(|| -> anyhow::Result<()> {
             log::info!("step: build tokio runtime");
             // Tokio's IO driver (mio → epoll) doesn't initialise on
