@@ -42,25 +42,44 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::log::EspLogger::initialize_default();
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
 
-    log::info!("step: build tokio runtime");
-    // Tokio's IO driver (mio → epoll) doesn't initialise on ESP-IDF —
-    // `enable_io()` returns `Permission denied (os error 13)`. Build
-    // the runtime with `enable_time()` only. Network sockets go through
-    // `platform-espidf::net_impl`'s blocking-`std::net` + spawn_blocking
-    // path so the lack of an IO driver doesn't break the emulators.
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .thread_stack_size(16 * 1024)
-        .build()
-        .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
-    log::info!("step: enter async_main");
-    let result = runtime.block_on(async_main());
-    if let Err(e) = &result {
-        // Log before propagating so the error is visible even if the
-        // outer espidf wrapper just prints `Error: ...` and reboots.
-        log::error!("async_main exited: {e:?}");
-    }
-    result
+    // The ESP-IDF "main" task only gets ~3.5 KB of stack by default, and
+    // `sdkconfig.defaults` (where we'd raise `CONFIG_ESP_MAIN_TASK_STACK_SIZE`)
+    // isn't being applied by `esp-idf-sys` against our crate (same root
+    // cause as `partitions.csv` not loading). Side-step the whole issue
+    // by spawning a worker pthread with a large stack and running the
+    // tokio runtime there. `std::thread::Builder::stack_size` on
+    // ESP-IDF maps to `pthread_attr_setstacksize` → FreeRTOS task stack,
+    // so this is honoured.
+    let worker = std::thread::Builder::new()
+        .name("astrameter".into())
+        .stack_size(64 * 1024)
+        .spawn(|| -> anyhow::Result<()> {
+            log::info!("step: build tokio runtime");
+            // Tokio's IO driver (mio → epoll) doesn't initialise on
+            // ESP-IDF — `enable_io()` returns
+            // `Permission denied (os error 13)`. Build the runtime with
+            // `enable_time()` only. Network sockets go through
+            // `platform-espidf::net_impl`'s blocking-`std::net` +
+            // `spawn_blocking` path so the lack of an IO driver doesn't
+            // break the emulators.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
+            log::info!("step: enter async_main");
+            let result = runtime.block_on(async_main());
+            if let Err(e) = &result {
+                log::error!("async_main exited: {e:?}");
+            }
+            result
+        })
+        .map_err(|e| anyhow::anyhow!("spawn worker thread: {e}"))?;
+    // `join()` blocks the main task forever; that's intentional —
+    // returning from `app_main` would cause ESP-IDF to consider the
+    // app finished.
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("worker thread panicked"))?
 }
 
 #[cfg(target_os = "espidf")]
