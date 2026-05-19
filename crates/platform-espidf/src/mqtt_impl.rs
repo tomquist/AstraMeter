@@ -6,7 +6,9 @@
 //! where ring has no working cross-compile path for
 //! `xtensa-esp32s3-espidf`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use astrameter_platform::mqtt::{
     MqttClient, MqttError, MqttEvent, MqttEventStream, MqttFactory, MqttOptions, MqttQos,
@@ -46,12 +48,37 @@ impl MqttFactory for EspMqttFactory {
             cfg.crt_bundle_attach = Some(esp_idf_svc::sys::esp_crt_bundle_attach);
         }
 
+        log::info!(
+            "mqtt: connecting to {url} (tls={}, user={:?})",
+            opts.tls,
+            opts.username
+        );
         let (client, connection) = EspAsyncMqttClient::new(&url, &cfg)
             .map_err(|e| MqttError::Connect(format!("esp mqtt new: {e}")))?;
+
+        // Block until the IDF fires Connected (or fails). Without this
+        // the insights service's first `publish("online")` races the
+        // broker handshake and errors with "client is not connected".
+        let connected = Arc::new(AtomicBool::new(false));
+        let events = build_event_stream(connection, connected.clone(), url.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !connected.load(Ordering::SeqCst) {
+            if std::time::Instant::now() > deadline {
+                return Err(MqttError::Connect(format!(
+                    "broker handshake did not complete within 10 s for {url}"
+                )));
+            }
+            // We're not in an async context here (factory.connect is
+            // sync), so spin with a short sleep on the calling FreeRTOS
+            // task. The Stream we just built runs on the IDF event
+            // task, so the flag will flip independently.
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
         let arc_client: Arc<dyn MqttClient> = Arc::new(EspClient {
             inner: Arc::new(Mutex::new(client)),
+            connected,
         });
-        let events = build_event_stream(connection);
         Ok(MqttSession {
             client: arc_client,
             events,
@@ -64,6 +91,11 @@ struct EspClient {
     /// guard it with a `tokio::sync::Mutex` (safe to hold across
     /// `.await`s, unlike a `parking_lot::Mutex`).
     inner: Arc<Mutex<EspAsyncMqttClient>>,
+    /// Mirrors the IDF Connected/Disconnected events. `publish` /
+    /// `subscribe` short-circuit-error when we're not connected so a
+    /// caller doesn't see the cryptic IDF "not connected" message in
+    /// the middle of a reconnect cycle.
+    connected: Arc<AtomicBool>,
 }
 
 fn map_qos(q: MqttQos) -> QoS {
@@ -83,6 +115,9 @@ impl MqttClient for EspClient {
         retain: bool,
         payload: Vec<u8>,
     ) -> Result<(), MqttError> {
+        if !self.connected.load(Ordering::SeqCst) {
+            return Err(MqttError::Publish("broker disconnected".into()));
+        }
         let mut guard = self.inner.lock().await;
         guard
             .publish(topic, map_qos(qos), retain, &payload)
@@ -92,6 +127,9 @@ impl MqttClient for EspClient {
     }
 
     async fn subscribe(&self, topic: &str, qos: MqttQos) -> Result<(), MqttError> {
+        if !self.connected.load(Ordering::SeqCst) {
+            return Err(MqttError::Subscribe("broker disconnected".into()));
+        }
         let mut guard = self.inner.lock().await;
         guard
             .subscribe(topic, map_qos(qos))
@@ -107,31 +145,71 @@ impl MqttClient for EspClient {
     }
 }
 
-/// Convert the esp-idf-svc connection into a `Stream` of platform events.
-fn build_event_stream(connection: EspAsyncMqttConnection) -> MqttEventStream {
-    Box::pin(stream::unfold(Some(connection), |state| async move {
-        let mut conn = state?;
-        match conn.next().await {
-            Ok(msg) => {
-                let event = match msg.payload() {
-                    EventPayload::Received { topic, data, .. } => MqttEvent::Publish {
-                        topic: topic.unwrap_or_default().to_string(),
-                        payload: data.to_vec(),
-                        // The IDF MQTT client doesn't expose the retain
-                        // flag on incoming messages — set it to false.
-                        // Subscribers in this codebase don't branch on it.
-                        retain: false,
-                    },
-                    EventPayload::Disconnected => {
-                        // Surface disconnect as a terminating error so
-                        // the service reconnects via the factory.
-                        return Some((Err(MqttError::Connect("disconnected".into())), None));
-                    }
-                    _ => MqttEvent::Other,
-                };
-                Some((Ok(event), Some(conn)))
+/// Convert the esp-idf-svc connection into a `Stream` of platform events
+/// and side-effect the shared `connected` flag on every Connected /
+/// Disconnected event so `publish` / `subscribe` can short-circuit.
+fn build_event_stream(
+    connection: EspAsyncMqttConnection,
+    connected: Arc<AtomicBool>,
+    url: String,
+) -> MqttEventStream {
+    Box::pin(stream::unfold(
+        (Some(connection), connected, url),
+        |(state, connected, url)| async move {
+            let mut conn = state?;
+            match conn.next().await {
+                Ok(msg) => {
+                    let event = match msg.payload() {
+                        EventPayload::Connected(session_present) => {
+                            log::info!(
+                                "mqtt[{url}]: Connected (session_present={session_present})"
+                            );
+                            connected.store(true, Ordering::SeqCst);
+                            MqttEvent::Other
+                        }
+                        EventPayload::Received { topic, data, .. } => MqttEvent::Publish {
+                            topic: topic.unwrap_or_default().to_string(),
+                            payload: data.to_vec(),
+                            // The IDF MQTT client doesn't expose the retain
+                            // flag on incoming messages — set it to false.
+                            // Subscribers in this codebase don't branch on it.
+                            retain: false,
+                        },
+                        EventPayload::Disconnected => {
+                            log::warn!(
+                                "mqtt[{url}]: Disconnected — check broker reach, port, \
+                                 username/password, and that the broker accepts plaintext / TLS \
+                                 as you configured"
+                            );
+                            connected.store(false, Ordering::SeqCst);
+                            // Surface disconnect as a terminating error so
+                            // the service reconnects via the factory.
+                            return Some((
+                                Err(MqttError::Connect("disconnected".into())),
+                                (None, connected, url),
+                            ));
+                        }
+                        EventPayload::Error(e) => {
+                            log::error!("mqtt[{url}]: Error event: {e:?}");
+                            MqttEvent::Other
+                        }
+                        EventPayload::BeforeConnect => {
+                            log::debug!("mqtt[{url}]: BeforeConnect");
+                            MqttEvent::Other
+                        }
+                        _ => MqttEvent::Other,
+                    };
+                    Some((Ok(event), (Some(conn), connected, url)))
+                }
+                Err(e) => {
+                    log::error!("mqtt[{url}]: connection poll error: {e}");
+                    connected.store(false, Ordering::SeqCst);
+                    Some((
+                        Err(MqttError::Connect(e.to_string())),
+                        (None, connected, url),
+                    ))
+                }
             }
-            Err(e) => Some((Err(MqttError::Connect(e.to_string())), None)),
-        }
-    }))
+        },
+    ))
 }
