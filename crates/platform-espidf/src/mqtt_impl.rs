@@ -26,10 +26,19 @@ impl MqttFactory for EspMqttFactory {
     fn connect(&self, opts: MqttOptions) -> Result<MqttSession, MqttError> {
         let scheme = if opts.tls { "mqtts" } else { "mqtt" };
         let url = format!("{scheme}://{}:{}", opts.host, opts.port);
+        // Diagnostic: capture the caller's task handle + remaining
+        // stack so we can pinpoint who's overflowing during MQTT init.
+        // Stack overflow detection only knows the FreeRTOS task name
+        // (which is "pthread" for every Rust thread), but the handle
+        // is unique.
+        let caller = unsafe { esp_idf_svc::sys::xTaskGetCurrentTaskHandle() };
+        let high_water_words =
+            unsafe { esp_idf_svc::sys::uxTaskGetStackHighWaterMark(caller) };
         log::info!(
-            "mqtt: connecting to {url} (tls={}, user={:?})",
+            "mqtt: connecting to {url} (tls={}, user={:?}, caller_handle={caller:p}, caller_stack_free={} bytes)",
             opts.tls,
-            opts.username
+            opts.username,
+            high_water_words * 4,
         );
 
         // `EspAsyncMqttClient::new` calls into mbedTLS / esp_mqtt
@@ -94,6 +103,11 @@ fn init_on_temp_thread(
         // of scope.
         let args: Box<Args> = unsafe { Box::from_raw(arg as *mut Args) };
         let Args { opts, url, tx } = *args;
+
+        // Diagnostic: log our own handle so a stack-overflow report
+        // can be cross-referenced.
+        let self_handle = unsafe { sys::xTaskGetCurrentTaskHandle() };
+        log::info!("mqtt-init task entered: handle={self_handle:p}");
 
         let result: InitResult = (|| {
             let mut cfg = MqttClientConfiguration {

@@ -41,6 +41,7 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
+    log_task_handle("main (app_main)");
 
     // The ESP-IDF "main" task only gets ~3.5 KB of stack by default, so
     // we run the tokio runtime on a worker pthread we control. 96 KB
@@ -58,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         .name("astrameter".into())
         .stack_size(96 * 1024)
         .spawn(|| -> anyhow::Result<()> {
+            log_task_handle("worker (astrameter)");
             log::info!("step: build tokio runtime");
             // Tokio's IO driver (mio → epoll) doesn't initialise on
             // ESP-IDF — `enable_io()` returns
@@ -1127,6 +1129,7 @@ fn start_dns_hijack(ap_ip: std::net::Ipv4Addr) -> anyhow::Result<std::thread::Jo
         .name("dns-hijack".into())
         .stack_size(8 * 1024)
         .spawn(move || {
+            log_task_handle("dns-hijack");
             let mut buf = [0u8; 512];
             loop {
                 let (n, peer) = match sock.recv_from(&mut buf) {
@@ -1285,6 +1288,7 @@ async fn start_sntp_and_wait_for_sync() -> anyhow::Result<()> {
 fn run_config_web_server(nvs_part: esp_idf_svc::nvs::EspDefaultNvsPartition) {
     use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 
+    log_task_handle("config-web");
     let listener = match TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 80))) {
         Ok(l) => l,
         Err(e) => {
@@ -1590,6 +1594,53 @@ fn write_nvs_config_from_dict(
         .set_str(nvs_keys::CONFIG, &text)
         .map_err(|e| anyhow::anyhow!("nvs write: {e}"))?;
     Ok(())
+}
+
+/// Log the current FreeRTOS task handle alongside a human-readable
+/// label, so a later stack-overflow report (which only knows the
+/// FreeRTOS task name — and Rust pthreads all share the default
+/// "pthread" name because `Builder::name` doesn't propagate to the
+/// FreeRTOS layer on IDF) can be cross-referenced back to which
+/// Rust thread it actually was.
+#[cfg(target_os = "espidf")]
+fn log_task_handle(label: &str) {
+    let h = unsafe { esp_idf_svc::sys::xTaskGetCurrentTaskHandle() };
+    log::info!("task[{label}]: handle={h:p}");
+}
+
+/// Override FreeRTOS's default stack-overflow hook (which is
+/// declared `__attribute__((weak))` in port_common.c) so we can
+/// surface the offending task's *handle* in addition to its name.
+/// All Rust pthreads share the FreeRTOS-level name "pthread", so
+/// the name alone doesn't identify the culprit — the handle does
+/// (cross-reference against the `task[…]: handle=0x…` lines logged
+/// at thread spawn).
+#[cfg(target_os = "espidf")]
+#[no_mangle]
+pub unsafe extern "C" fn vApplicationStackOverflowHook(
+    task: esp_idf_svc::sys::TaskHandle_t,
+    name: *const core::ffi::c_char,
+) {
+    let name_ptr = if name.is_null() {
+        b"(null)\0".as_ptr() as *const core::ffi::c_char
+    } else {
+        name
+    };
+    // `esp_rom_printf` is safe to call from any context (no malloc,
+    // no FreeRTOS APIs) — important because we're already in a bad
+    // state when this fires.
+    unsafe {
+        esp_idf_svc::sys::esp_rom_printf(
+            b"\n*** AstraMeter STACK OVERFLOW: task=\"%s\" handle=%p ***\n\0".as_ptr()
+                as *const core::ffi::c_char,
+            name_ptr,
+            task,
+        );
+        esp_idf_svc::sys::esp_system_abort(
+            b"stack overflow (see ROM printf line above for task handle)\0".as_ptr()
+                as *const core::ffi::c_char,
+        );
+    }
 }
 
 #[cfg(target_os = "espidf")]
