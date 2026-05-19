@@ -10,9 +10,14 @@
 //!
 //! The boot sequence (espidf target):
 //!   1. `esp_idf_svc::sys::link_patches()` + log bridge.
-//!   2. Mount LittleFS partition at `/littlefs`. Seed `config.ini` from
-//!      the embedded default if absent.
-//!   3. Bring up Wi-Fi STA from `wifi.json`.
+//!   2. Open NVS for config + Wi-Fi credentials. (Custom-partition path
+//!      for a separate SPIFFS / LittleFS image needs partitions.csv to
+//!      actually reach the IDF build — esp-idf-sys doesn't auto-copy
+//!      it — so we keep config in NVS instead, which is always present
+//!      in the default ESP-IDF partition layout.)
+//!   3. Bring up Wi-Fi STA from `wifi.{ssid,password}` NVS keys. Boot
+//!      continues even on failure so the user sees the next log line
+//!      and can fix the credentials over serial or via OTA.
 //!   4. Start SNTP and wait until at least one timestamp arrives.
 //!   5. Build the `Platform`, instantiate the `PowermeterRegistry`, and
 //!      drive the same emulator / insights / Marstek wiring the host
@@ -37,16 +42,24 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::log::EspLogger::initialize_default();
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
 
+    log::info!("step: build tokio runtime");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .thread_stack_size(16 * 1024)
-        .build()?;
-    runtime.block_on(async_main())
+        .build()
+        .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
+    log::info!("step: enter async_main");
+    let result = runtime.block_on(async_main());
+    if let Err(e) = &result {
+        // Log before propagating so the error is visible even if the
+        // outer espidf wrapper just prints `Error: ...` and reboots.
+        log::error!("async_main exited: {e:?}");
+    }
+    result
 }
 
 #[cfg(target_os = "espidf")]
 async fn async_main() -> anyhow::Result<()> {
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -54,27 +67,51 @@ async fn async_main() -> anyhow::Result<()> {
     use astrameter_emulator_ct002::server::{BoundMeter as Ct002BoundMeter, Ct002Emulator};
     use astrameter_emulator_shelly::{BoundMeter as ShellyBoundMeter, ShellyEmulator};
     use astrameter_powermeters::{read_all_powermeter_configs, register_all, PowermeterRegistry};
+    use esp_idf_svc::eventloop::EspSystemEventLoop;
+    use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
-    mount_littlefs()?;
-    let cfg_path = PathBuf::from("/littlefs/config.ini");
-    if !cfg_path.exists() {
-        log::warn!("config.ini missing on LittleFS — seeding from embedded default");
-        std::fs::write(&cfg_path, EMBEDDED_DEFAULT_CONFIG)?;
+    log::info!("step: take system event loop");
+    let sysloop =
+        EspSystemEventLoop::take().map_err(|e| anyhow::anyhow!("EspSystemEventLoop::take: {e}"))?;
+
+    log::info!("step: take NVS partition");
+    let nvs_part = EspDefaultNvsPartition::take()
+        .map_err(|e| anyhow::anyhow!("EspDefaultNvsPartition::take: {e}"))?;
+
+    log::info!("step: load config from NVS");
+    let cfg_raw = load_config_from_nvs(nvs_part.clone())?;
+    let config = Config::parse(&cfg_raw).map_err(|e| anyhow::anyhow!("parse config: {e}"))?;
+    log::info!("step: config loaded ({} bytes)", cfg_raw.len());
+
+    log::info!("step: bring up Wi-Fi");
+    if let Err(e) = bring_up_wifi(&sysloop, nvs_part.clone()) {
+        // Don't abort the boot — log loudly and keep going so the user
+        // sees the next step. Without Wi-Fi most powermeters will fail
+        // their initial connect, but the firmware itself stays alive
+        // for OTA recovery and serial debugging.
+        log::error!("Wi-Fi bring-up failed: {e}. Continuing without network.");
+    } else {
+        log::info!("step: Wi-Fi up; starting SNTP");
+        if let Err(e) = start_sntp_and_wait_for_sync().await {
+            log::warn!("SNTP sync skipped: {e}");
+        }
     }
 
-    bring_up_wifi()?;
-    start_sntp_and_wait_for_sync().await?;
-
-    let raw = std::fs::read_to_string(&cfg_path)?;
-    let config = Config::parse(&raw)?;
+    log::info!("step: build platform");
     let platform = Arc::new(astrameter_platform_espidf::build_platform());
+
+    log::info!("step: register powermeters");
     let mut reg = PowermeterRegistry::new();
     register_all(&mut reg);
     let registry = Arc::new(reg);
 
-    let bound = read_all_powermeter_configs(&config, &registry, platform.clone())?;
+    log::info!("step: bind powermeters from config");
+    let bound = read_all_powermeter_configs(&config, &registry, platform.clone())
+        .map_err(|e| anyhow::anyhow!("bind powermeters: {e}"))?;
     for bp in &bound {
-        let _ = bp.meter.start().await;
+        if let Err(e) = bp.meter.start().await {
+            log::warn!("powermeter [{}] start: {e}", bp.section);
+        }
     }
 
     let device_type = config
@@ -88,6 +125,7 @@ async fn async_main() -> anyhow::Result<()> {
         .unwrap_or(Ok(0.0))
         .unwrap_or(0.0);
 
+    log::info!("step: start emulator (DEVICE_TYPE={device_type})");
     let _emu = match device_type.as_str() {
         "ct002" | "ct003" => {
             let section_name = if device_type == "ct003" && config.section("CT003").is_some() {
@@ -95,9 +133,13 @@ async fn async_main() -> anyhow::Result<()> {
             } else {
                 "CT002"
             };
-            let section = config
-                .section(section_name)
-                .ok_or_else(|| anyhow::anyhow!("section [{section_name}] missing"))?;
+            let section = match config.section(section_name) {
+                Some(s) => s,
+                None => {
+                    log::warn!("[{section_name}] missing — skipping emulator");
+                    return Ok(());
+                }
+            };
             let udp_port = section.get_int("UDP_PORT", 12345)? as u16;
             let ct_mac = section.get_string("CT_MAC", "");
             let meters: Vec<Ct002BoundMeter> = bound
@@ -165,62 +207,99 @@ enum EsplEmu {
     Shelly(std::sync::Arc<astrameter_emulator_shelly::ShellyEmulator>),
 }
 
+/// Embedded fallback when NVS has no `astrameter/config` key — first
+/// boot, or after a factory wipe.
 #[cfg(target_os = "espidf")]
-const EMBEDDED_DEFAULT_CONFIG: &[u8] = b"[GENERAL]\nDEVICE_TYPE=ct002\n";
+const EMBEDDED_DEFAULT_CONFIG: &str = "[GENERAL]\nDEVICE_TYPE=ct002\n\n[CT002]\nUDP_PORT=12345\n";
 
+/// NVS keys for the (small) state we persist between boots. NVS values
+/// are limited to ~4000 bytes — fine for a config.ini that fits in a
+/// typical ESP32 SRAM budget anyway.
 #[cfg(target_os = "espidf")]
-fn mount_littlefs() -> anyhow::Result<()> {
-    // The `esp_littlefs` component isn't part of `esp_idf_svc::sys` by
-    // default — it lives in an optional ESP-IDF managed component that
-    // would have to be pulled in via `idf_component.yml`. The partition
-    // table (partitions.csv) declares this slot as `spiffs`, which IS
-    // built into ESP-IDF, so use that. The mount path is kept at
-    // `/littlefs` for source-code parity with the migration plan and
-    // the host fallback.
-    use esp_idf_svc::sys::{esp_vfs_spiffs_conf_t, esp_vfs_spiffs_register, EspError, ESP_OK};
-    let base = std::ffi::CString::new("/littlefs")?;
-    let partition = std::ffi::CString::new("storage")?;
-    let conf = esp_vfs_spiffs_conf_t {
-        base_path: base.as_ptr(),
-        partition_label: partition.as_ptr(),
-        max_files: 5,
-        format_if_mount_failed: true,
-    };
-    let err = unsafe { esp_vfs_spiffs_register(&conf) };
-    if err != ESP_OK {
-        anyhow::bail!("spiffs mount failed: {:?}", EspError::from(err));
+mod nvs_keys {
+    pub const NAMESPACE: &str = "astrameter";
+    pub const CONFIG: &str = "config";
+    pub const WIFI_SSID: &str = "wifi_ssid";
+    pub const WIFI_PASS: &str = "wifi_pass";
+}
+
+/// Read `config.ini` text from NVS, seeding the embedded default on
+/// first boot. Returns the config string ready for `Config::parse`.
+#[cfg(target_os = "espidf")]
+fn load_config_from_nvs(part: esp_idf_svc::nvs::EspDefaultNvsPartition) -> anyhow::Result<String> {
+    use esp_idf_svc::nvs::EspNvs;
+    let nvs = EspNvs::new(part, nvs_keys::NAMESPACE, true)
+        .map_err(|e| anyhow::anyhow!("open NVS namespace: {e}"))?;
+    let mut buf = vec![0u8; 4096];
+    match nvs.get_str(nvs_keys::CONFIG, &mut buf) {
+        Ok(Some(s)) => {
+            let owned = s.to_string();
+            log::info!("config loaded from NVS ({} bytes)", owned.len());
+            Ok(owned)
+        }
+        Ok(None) => {
+            log::warn!(
+                "NVS has no `{}` — seeding embedded default",
+                nvs_keys::CONFIG
+            );
+            nvs.set_str(nvs_keys::CONFIG, EMBEDDED_DEFAULT_CONFIG)
+                .map_err(|e| anyhow::anyhow!("seed NVS config: {e}"))?;
+            Ok(EMBEDDED_DEFAULT_CONFIG.to_string())
+        }
+        Err(e) => Err(anyhow::anyhow!("read NVS config: {e}")),
     }
-    log::info!("SPIFFS mounted at /littlefs");
-    Ok(())
 }
 
 #[cfg(target_os = "espidf")]
-fn bring_up_wifi() -> anyhow::Result<()> {
+fn bring_up_wifi(
+    sysloop: &esp_idf_svc::eventloop::EspSystemEventLoop,
+    nvs_part: esp_idf_svc::nvs::EspDefaultNvsPartition,
+) -> anyhow::Result<()> {
     use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
-    use esp_idf_svc::eventloop::EspSystemEventLoop;
     use esp_idf_svc::hal::peripherals::Peripherals;
-    use esp_idf_svc::nvs::EspDefaultNvsPartition;
+    use esp_idf_svc::nvs::EspNvs;
     use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 
-    let peripherals = Peripherals::take()?;
-    let sysloop = EspSystemEventLoop::take()?;
-    let nvs = EspDefaultNvsPartition::take()?;
+    // Pull Wi-Fi creds from the same NVS namespace as `config`.
+    let nvs = EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true)
+        .map_err(|e| anyhow::anyhow!("open NVS for wifi: {e}"))?;
+    let mut ssid_buf = [0u8; 64];
+    let mut pass_buf = [0u8; 128];
+    let ssid = nvs
+        .get_str(nvs_keys::WIFI_SSID, &mut ssid_buf)
+        .ok()
+        .flatten()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let password = nvs
+        .get_str(nvs_keys::WIFI_PASS, &mut pass_buf)
+        .ok()
+        .flatten()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    if ssid.is_empty() {
+        anyhow::bail!(
+            "no Wi-Fi SSID in NVS (namespace={}, key={}). Set with `esp-idf-mfg-util` or \
+             the future captive portal.",
+            nvs_keys::NAMESPACE,
+            nvs_keys::WIFI_SSID
+        );
+    }
 
-    let raw = std::fs::read_to_string("/littlefs/wifi.json").unwrap_or_else(|_| "{}".to_string());
-    let creds: serde_json::Value = serde_json::from_str(&raw)?;
-    let ssid = creds
-        .get("ssid")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("wifi.json: ssid missing"))?;
-    let password = creds.get("password").and_then(|v| v.as_str()).unwrap_or("");
-
+    let peripherals = Peripherals::take().map_err(|e| anyhow::anyhow!("Peripherals::take: {e}"))?;
     let mut wifi = BlockingWifi::wrap(
-        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?,
-        sysloop,
-    )?;
+        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs_part))
+            .map_err(|e| anyhow::anyhow!("EspWifi::new: {e}"))?,
+        sysloop.clone(),
+    )
+    .map_err(|e| anyhow::anyhow!("BlockingWifi::wrap: {e}"))?;
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: ssid.parse().map_err(|_| anyhow::anyhow!("ssid too long"))?,
+        ssid: ssid
+            .as_str()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("ssid too long"))?,
         password: password
+            .as_str()
             .parse()
             .map_err(|_| anyhow::anyhow!("password too long"))?,
         auth_method: if password.is_empty() {
@@ -229,13 +308,20 @@ fn bring_up_wifi() -> anyhow::Result<()> {
             AuthMethod::WPA2Personal
         },
         ..Default::default()
-    }))?;
-    wifi.start()?;
-    wifi.connect()?;
-    wifi.wait_netif_up()?;
+    }))
+    .map_err(|e| anyhow::anyhow!("set wifi config: {e}"))?;
+    wifi.start()
+        .map_err(|e| anyhow::anyhow!("wifi.start: {e}"))?;
+    wifi.connect()
+        .map_err(|e| anyhow::anyhow!("wifi.connect: {e}"))?;
+    wifi.wait_netif_up()
+        .map_err(|e| anyhow::anyhow!("wifi.wait_netif_up: {e}"))?;
     log::info!(
         "Wi-Fi connected; IP info: {:?}",
-        wifi.wifi().sta_netif().get_ip_info()?
+        wifi.wifi()
+            .sta_netif()
+            .get_ip_info()
+            .map_err(|e| anyhow::anyhow!("sta_netif.get_ip_info: {e}"))?
     );
     std::mem::forget(wifi);
     Ok(())
@@ -249,7 +335,8 @@ async fn start_sntp_and_wait_for_sync() -> anyhow::Result<()> {
         servers: ["pool.ntp.org"],
         operating_mode: OperatingMode::Poll,
         sync_mode: SyncMode::Immediate,
-    })?;
+    })
+    .map_err(|e| anyhow::anyhow!("EspSntp::new: {e}"))?;
     for _ in 0..30 {
         if matches!(sntp.get_sync_status(), SyncStatus::Completed) {
             log::info!("SNTP sync OK");
