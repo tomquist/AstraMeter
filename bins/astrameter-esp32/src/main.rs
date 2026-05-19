@@ -224,6 +224,21 @@ async fn async_main() -> anyhow::Result<()> {
         }
     };
 
+    // Web config editor — serves the config.ini editor + Wi-Fi reset at
+    // http://<sta-ip>/ on the AP's STA-side address (e.g.
+    // http://192.168.178.90/ in the user's network). Uses raw TCP for
+    // the same reason as the captive portal (esp-idf-svc's httpd has a
+    // 512-byte header limit that real browsers blow past instantly).
+    if online {
+        let cfg_nvs = nvs_part.clone();
+        std::thread::Builder::new()
+            .name("config-web".into())
+            .stack_size(16 * 1024)
+            .spawn(move || run_config_web_server(cfg_nvs))
+            .map_err(|e| anyhow::anyhow!("spawn config web thread: {e}"))?;
+        log::info!("astrameter-esp32: config web UI at http://<this-device>/ (port 80)");
+    }
+
     log::info!("astrameter-esp32: services running");
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
@@ -882,3 +897,275 @@ async fn start_sntp_and_wait_for_sync() -> anyhow::Result<()> {
     }
     anyhow::bail!("SNTP did not sync within 30s")
 }
+
+/// Runtime web UI for editing `config.ini` in NVS and resetting the
+/// Wi-Fi credentials. Listens on TCP/80 on the STA interface. Uses the
+/// same raw-TCP HTTP approach as the captive portal so we're not bound
+/// by `esp_http_server`'s 512-byte request-header limit.
+///
+/// Endpoints:
+///   * `GET  /`              — HTML form with the current `config.ini`
+///                             in a `<textarea>` plus a Save button +
+///                             a "Reset Wi-Fi" button.
+///   * `GET  /api/config`    — `text/plain` body = current config.ini.
+///   * `POST /api/config`    — body is the new config.ini text; saved
+///                             to NVS, then `esp_restart()`.
+///   * `POST /api/wifi/reset` — clears `wifi_ssid` / `wifi_pass` in
+///                             NVS so the next boot drops back to the
+///                             captive-portal setup AP.
+#[cfg(target_os = "espidf")]
+fn run_config_web_server(nvs_part: esp_idf_svc::nvs::EspDefaultNvsPartition) {
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+
+    let listener = match TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 80))) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("config web: bind TCP/80: {e}");
+            return;
+        }
+    };
+    if let Err(e) = listener.set_nonblocking(false) {
+        log::warn!("config web: set blocking: {e}");
+    }
+    log::info!("config web: listening on TCP/80");
+    loop {
+        let (stream, peer) = match listener.accept() {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("config web accept: {e}");
+                continue;
+            }
+        };
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
+        if let Err(e) = handle_config_connection(stream, &nvs_part) {
+            log::debug!("config web conn from {peer}: {e}");
+        }
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn handle_config_connection(
+    mut stream: std::net::TcpStream,
+    nvs_part: &esp_idf_svc::nvs::EspDefaultNvsPartition,
+) -> std::io::Result<()> {
+    use esp_idf_svc::nvs::EspNvs;
+    use std::io::{Read, Write};
+
+    let mut buf = vec![0u8; 8192];
+    let mut len = 0;
+    let mut header_end = None;
+    while len < buf.len() {
+        let n = stream.read(&mut buf[len..])?;
+        if n == 0 {
+            break;
+        }
+        len += n;
+        if let Some(idx) = find_header_end(&buf[..len]) {
+            header_end = Some(idx);
+            break;
+        }
+    }
+    let Some(headers_end) = header_end else {
+        let _ = stream.write_all(
+            b"HTTP/1.0 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+        return Ok(());
+    };
+    let header_text = std::str::from_utf8(&buf[..headers_end]).unwrap_or("");
+    let first_line = header_text.lines().next().unwrap_or("");
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let raw_path = parts.next().unwrap_or("/").to_string();
+    let path = raw_path.split('?').next().unwrap_or("/").to_string();
+
+    let mut content_length = 0usize;
+    for line in header_text.lines().skip(1) {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse::<usize>().unwrap_or(0);
+            }
+        }
+    }
+
+    let mut body = Vec::new();
+    if matches!(method.as_str(), "POST" | "PUT") && content_length > 0 && content_length < 64 * 1024
+    {
+        let header_total = headers_end + 4;
+        if len > header_total {
+            body.extend_from_slice(&buf[header_total..len]);
+        }
+        while body.len() < content_length {
+            let mut chunk = [0u8; 1024];
+            let n = stream.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..n]);
+        }
+        body.truncate(content_length.min(body.len()));
+    }
+
+    let response: Vec<u8> = match (method.as_str(), path.as_str()) {
+        ("GET", "/") => {
+            // Form page: textarea pre-filled with current config.ini.
+            let nvs = match EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true) {
+                Ok(n) => n,
+                Err(e) => {
+                    return Err(std::io::Error::other(format!("nvs open: {e}")));
+                }
+            };
+            let mut cfg_buf = vec![0u8; 4096];
+            let cfg = nvs
+                .get_str(nvs_keys::CONFIG, &mut cfg_buf)
+                .ok()
+                .flatten()
+                .unwrap_or(EMBEDDED_DEFAULT_CONFIG);
+            // Escape `<` / `&` for the textarea body.
+            let escaped: String = cfg
+                .chars()
+                .map(|c| match c {
+                    '<' => "&lt;".to_string(),
+                    '&' => "&amp;".to_string(),
+                    other => other.to_string(),
+                })
+                .collect();
+            let html = CONFIG_HTML.replace("{{config}}", &escaped);
+            http_response(200, "OK", "text/html; charset=utf-8", html.as_bytes())
+        }
+        ("GET", "/api/config") => {
+            let nvs = match EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true) {
+                Ok(n) => n,
+                Err(e) => {
+                    return Err(std::io::Error::other(format!("nvs open: {e}")));
+                }
+            };
+            let mut cfg_buf = vec![0u8; 4096];
+            let cfg = nvs
+                .get_str(nvs_keys::CONFIG, &mut cfg_buf)
+                .ok()
+                .flatten()
+                .unwrap_or(EMBEDDED_DEFAULT_CONFIG);
+            http_response(200, "OK", "text/plain; charset=utf-8", cfg.as_bytes())
+        }
+        ("POST", "/api/config") => {
+            let new_cfg = String::from_utf8_lossy(&body).to_string();
+            // Try to parse so we don't persist garbage.
+            if astrameter_config::Config::parse(&new_cfg).is_err() {
+                http_response(
+                    400,
+                    "Bad Request",
+                    "text/plain; charset=utf-8",
+                    b"config.ini is not parseable; not saved",
+                )
+            } else {
+                let nvs_rw = match EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        return Err(std::io::Error::other(format!("nvs open rw: {e}")));
+                    }
+                };
+                if let Err(e) = nvs_rw.set_str(nvs_keys::CONFIG, &new_cfg) {
+                    return Err(std::io::Error::other(format!("nvs save config: {e}")));
+                }
+                log::info!(
+                    "config web: saved {} bytes to NVS; restarting",
+                    new_cfg.len()
+                );
+                let out =
+                    http_response(200, "OK", "text/plain; charset=utf-8", b"saved; rebooting");
+                stream.write_all(&out)?;
+                let _ = stream.flush();
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                unsafe { esp_idf_svc::sys::esp_restart() };
+                #[allow(unreachable_code)]
+                Vec::new()
+            }
+        }
+        ("POST", "/api/wifi/reset") => {
+            let nvs_rw = match EspNvs::new(nvs_part.clone(), nvs_keys::NAMESPACE, true) {
+                Ok(n) => n,
+                Err(e) => {
+                    return Err(std::io::Error::other(format!("nvs open rw: {e}")));
+                }
+            };
+            let _ = nvs_rw.remove(nvs_keys::WIFI_SSID);
+            let _ = nvs_rw.remove(nvs_keys::WIFI_PASS);
+            log::info!("config web: Wi-Fi creds cleared; restarting");
+            let out = http_response(
+                200,
+                "OK",
+                "text/plain; charset=utf-8",
+                b"wifi creds cleared; rebooting to captive portal",
+            );
+            stream.write_all(&out)?;
+            let _ = stream.flush();
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            unsafe { esp_idf_svc::sys::esp_restart() };
+            #[allow(unreachable_code)]
+            Vec::new()
+        }
+        _ => http_response(404, "Not Found", "text/plain; charset=utf-8", b"not found"),
+    };
+    stream.write_all(&response)?;
+    let _ = stream.flush();
+    Ok(())
+}
+
+/// HTML for the runtime config editor. Single page with a `<textarea>`
+/// pre-filled with the current config.ini and a "Reset Wi-Fi" button.
+#[cfg(target_os = "espidf")]
+const CONFIG_HTML: &str = r#"<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AstraMeter config</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 50em; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.2em; }
+  textarea { width: 100%; height: 20em; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; padding: .5em; box-sizing: border-box; border: 1px solid #aaa; border-radius: .25em; }
+  .row { display: flex; gap: .5em; margin-top: 1em; }
+  button { padding: .75em 1.2em; font-size: 1em; border: 0; border-radius: .25em; cursor: pointer; }
+  .primary { background: #007aff; color: white; }
+  .danger  { background: #d33; color: white; }
+  #status { margin-top: 1em; min-height: 1.5em; color: #666; }
+</style>
+</head><body>
+<h1>AstraMeter config (NVS)</h1>
+<form id="cfg">
+  <textarea id="ini" name="ini">{{config}}</textarea>
+  <div class="row">
+    <button type="submit" class="primary">Save &amp; reboot</button>
+    <button type="button" class="danger" id="reset">Reset Wi-Fi (back to captive portal)</button>
+  </div>
+</form>
+<div id="status"></div>
+<script>
+const $ = id => document.getElementById(id);
+$("cfg").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  $("status").textContent = "Saving…";
+  try {
+    const r = await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: $("ini").value
+    });
+    const t = await r.text();
+    $("status").textContent = r.ok
+      ? "Saved; device is rebooting. Re-open this page in ~10s."
+      : "Error " + r.status + ": " + t;
+  } catch (e) {
+    $("status").textContent = "Saved; device is rebooting. Re-open this page in ~10s.";
+  }
+});
+$("reset").addEventListener("click", async () => {
+  if (!confirm("Clear Wi-Fi creds and reboot into setup mode?")) return;
+  $("status").textContent = "Clearing…";
+  try {
+    await fetch("/api/wifi/reset", { method: "POST" });
+  } catch (e) {}
+  $("status").textContent = "Done. Device will reboot into AstraMeter-Setup-* AP.";
+});
+</script>
+</body></html>"#;
