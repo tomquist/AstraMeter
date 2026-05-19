@@ -32,6 +32,7 @@ use esp_idf_svc::ws::client::{
     EspWebSocketClient, EspWebSocketClientConfig, EspWebSocketTransport, WebSocketEventType,
 };
 use parking_lot::Mutex as ParkingMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,7 +84,18 @@ impl WebSocketClient for TungsteniteClient {
         let headers_owned = headers_blob;
         let heartbeat = req.heartbeat_secs;
         let skip_cn = req.sni_override.is_some() || !req.verify_tls;
-        let crt_bundle = if req.verify_tls && pem_static.is_none() {
+
+        // URL scheme picks transport. `wss://` → SSL, anything else →
+        // plain TCP. Hard-coding SSL fails instantly on `ws://`
+        // (HomeAssistant's default `ws://homeassistant.local:8123/api/websocket`).
+        let scheme_lower = url.split("://").next().unwrap_or("").to_ascii_lowercase();
+        let is_tls = matches!(scheme_lower.as_str(), "wss" | "https");
+        let transport = if is_tls {
+            EspWebSocketTransport::TransportOverSSL
+        } else {
+            EspWebSocketTransport::TransportOverTCP
+        };
+        let crt_bundle = if is_tls && req.verify_tls && pem_static.is_none() {
             Some(
                 esp_idf_svc::sys::esp_crt_bundle_attach
                     as unsafe extern "C" fn(*mut std::ffi::c_void) -> i32,
@@ -91,16 +103,20 @@ impl WebSocketClient for TungsteniteClient {
         } else {
             None
         };
-        let server_cert: Option<X509<'static>> = pem_static.map(X509::pem_until_nul);
+        let server_cert: Option<X509<'static>> = if is_tls {
+            pem_static.map(X509::pem_until_nul)
+        } else {
+            None
+        };
 
         // Build the config + open the client + connection. Returns a
         // `'static` client + the event sink.
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<WsMessage, WsError>>();
         let cfg = EspWebSocketClientConfig {
-            transport: EspWebSocketTransport::TransportOverSSL,
+            transport,
             disable_auto_reconnect: false,
-            use_global_ca_store: req.verify_tls,
-            skip_cert_common_name_check: skip_cn,
+            use_global_ca_store: is_tls && req.verify_tls,
+            skip_cert_common_name_check: is_tls && skip_cn,
             crt_bundle_attach: crt_bundle,
             server_cert,
             headers: headers_owned.as_deref(),
@@ -111,15 +127,23 @@ impl WebSocketClient for TungsteniteClient {
             ..Default::default()
         };
 
+        // Wait for the IDF to signal CONNECTED before we hand the
+        // wrapper back. Otherwise the first `send()` races the
+        // handshake and esp_websocket_client returns
+        // "Websocket client is not connected".
+        let connected = Arc::new(AtomicBool::new(false));
+        let connected_for_cb = connected.clone();
         let tx_for_cb = tx.clone();
-        // `EspWebSocketClient::new` takes a closure invoked from the
-        // IDF event task; we forward each event into the mpsc.
         let client = EspWebSocketClient::new(
             &url,
             &cfg,
             Duration::from_secs(10),
             move |evt: &Result<esp_idf_svc::ws::client::WebSocketEvent<'_>, _>| match evt {
                 Ok(ev) => match &ev.event_type {
+                    WebSocketEventType::Connected => {
+                        connected_for_cb.store(true, Ordering::SeqCst);
+                    }
+                    WebSocketEventType::BeforeConnect => {}
                     WebSocketEventType::Text(s) => {
                         let _ = tx_for_cb.send(Ok(WsMessage::Text((*s).to_string())));
                     }
@@ -133,13 +157,12 @@ impl WebSocketClient for TungsteniteClient {
                         let _ = tx_for_cb.send(Ok(WsMessage::Pong(Vec::new())));
                     }
                     WebSocketEventType::Close(_) | WebSocketEventType::Closed => {
+                        connected_for_cb.store(false, Ordering::SeqCst);
                         let _ = tx_for_cb.send(Ok(WsMessage::Close));
                     }
                     WebSocketEventType::Disconnected => {
+                        connected_for_cb.store(false, Ordering::SeqCst);
                         let _ = tx_for_cb.send(Err(WsError::Closed));
-                    }
-                    WebSocketEventType::Connected | WebSocketEventType::BeforeConnect => {
-                        // Connection lifecycle events — no message to surface.
                     }
                 },
                 Err(e) => {
@@ -150,9 +173,23 @@ impl WebSocketClient for TungsteniteClient {
         )
         .map_err(|e| WsError::Connect(format!("EspWebSocketClient::new: {e}")))?;
 
+        // Wait up to 10 s for the IDF to fire `Connected`. We block
+        // the calling tokio task via `tokio::task::yield_now` polls so
+        // the rest of the runtime keeps running.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !connected.load(Ordering::SeqCst) {
+            if std::time::Instant::now() > deadline {
+                return Err(WsError::Connect(format!(
+                    "handshake did not complete within 10 s for {url}"
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
         Ok(Box::new(EspWsConn {
             client: Arc::new(ParkingMutex::new(client)),
             rx,
+            connected,
         }))
     }
 }
@@ -160,11 +197,26 @@ impl WebSocketClient for TungsteniteClient {
 struct EspWsConn {
     client: Arc<ParkingMutex<EspWebSocketClient<'static>>>,
     rx: tokio::sync::mpsc::UnboundedReceiver<Result<WsMessage, WsError>>,
+    /// Mirrors the IDF Connected/Disconnected callbacks. `send` checks
+    /// it before calling into the underlying client so we don't
+    /// surface the cryptic "Websocket client is not connected" error
+    /// during a transient reconnect.
+    connected: Arc<AtomicBool>,
 }
 
 #[async_trait]
 impl WsConnection for EspWsConn {
     async fn send(&mut self, msg: WsMessage) -> Result<(), WsError> {
+        // Wait briefly for a transient reconnect to complete so a
+        // caller calling `send` right after a `Closed`/`Disconnected`
+        // event doesn't immediately see another `Closed`.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !self.connected.load(Ordering::SeqCst) {
+            if std::time::Instant::now() > deadline {
+                return Err(WsError::Closed);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let client = self.client.clone();
         let send_result = tokio::task::spawn_blocking(move || -> Result<(), WsError> {
             let mut g = client.lock();
