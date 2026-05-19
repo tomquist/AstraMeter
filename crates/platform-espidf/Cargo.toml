@@ -12,11 +12,18 @@ astrameter-core = { workspace = true }
 astrameter-platform = { workspace = true }
 async-trait = { workspace = true }
 
-# The esp-idf-svc / esp-idf-hal crates require the Xtensa toolchain. Gating
-# them behind cfg(target_os = "espidf") keeps host `cargo check` working
-# without espup installed.
+# The Xtensa toolchain isn't available on host CI, so all heavy ESP-IDF
+# deps are gated. Host `cargo check --workspace` builds an empty stub.
 [target.'cfg(target_os = "espidf")'.dependencies]
-esp-idf-svc = { version = "0.49", default-features = false, features = ["std", "binstart"] }
+esp-idf-svc = { version = "0.49", default-features = false, features = ["std", "binstart", "embassy-time-driver"] }
 esp-idf-hal = { version = "0.44", default-features = false }
 embedded-svc = "0.28"
 log = "0.4"
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net", "io-util"] }
+tokio-tungstenite = { workspace = true }
+rumqttc = { workspace = true }
+socket2 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }

@@ -14,21 +14,25 @@ path = "src/main.rs"
 [dependencies]
 astrameter-core = { workspace = true }
 
-# esp-idf-svc / esp-idf-hal are gated on the espidf target so that host
-# tooling (cargo check on a Linux box) does not try to pull the Xtensa
-# sysroot. They land in Phase 8.
 [target.'cfg(target_os = "espidf")'.dependencies]
-# esp-idf-svc = { version = "0.49", features = ["binstart", "embassy-time-driver"] }
-# esp-idf-hal = "0.44"
-# astrameter-platform-espidf = { workspace = true }
-# astrameter-powermeters     = { workspace = true }
-# astrameter-config          = { workspace = true }
-# astrameter-emulator-ct002  = { workspace = true }
-# astrameter-emulator-shelly = { workspace = true }
-# astrameter-insights-mqtt   = { workspace = true }
-# astrameter-marstek-api     = { workspace = true }
-# astrameter-web             = { workspace = true }
+esp-idf-svc = { version = "0.49", default-features = false, features = ["std", "binstart", "embassy-time-driver"] }
+esp-idf-hal = { version = "0.44", default-features = false }
+embedded-svc = "0.28"
+log = "0.4"
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net"] }
+tokio-util = "0.7"
+parking_lot = { workspace = true }
+astrameter-config = { workspace = true }
+astrameter-platform = { workspace = true }
+astrameter-platform-espidf = { workspace = true }
+astrameter-powermeters = { workspace = true }
+astrameter-emulator-ct002 = { workspace = true }
+astrameter-emulator-shelly = { workspace = true }
+astrameter-insights-mqtt = { workspace = true }
+astrameter-marstek-api = { workspace = true }
+astrameter-web = { workspace = true }
 
-# Build script will be wired in Phase 8 (embuild for sdkconfig + partitions).
-# [build-dependencies]
-# embuild = "0.32"
+[target.'cfg(target_os = "espidf")'.build-dependencies]
+embuild = "0.32"

@@ -115,7 +115,26 @@ dependencies = [
 name = "astrameter-esp32"
 version = "3.0.0-alpha.0"
 dependencies = [
+ "anyhow",
+ "astrameter-config",
  "astrameter-core",
+ "astrameter-emulator-ct002",
+ "astrameter-emulator-shelly",
+ "astrameter-insights-mqtt",
+ "astrameter-marstek-api",
+ "astrameter-platform",
+ "astrameter-platform-espidf",
+ "astrameter-powermeters",
+ "astrameter-web",
+ "embedded-svc",
+ "embuild",
+ "esp-idf-hal",
+ "esp-idf-svc",
+ "log",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -196,10 +215,18 @@ dependencies = [
  "astrameter-core",
  "astrameter-platform",
  "async-trait",
+ "bytes",
  "embedded-svc",
  "esp-idf-hal",
  "esp-idf-svc",
+ "futures",
  "log",
+ "parking_lot",
+ "rumqttc",
+ "socket2 0.5.10",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]
@@ -831,6 +858,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -854,6 +890,15 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "heapless",
+]
+
+[[package]]
+name = "embassy-time-driver"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e0c214077aaa9206958b16411c157961fb7990d4ea628120a78d1a5a28aed24"
+dependencies = [
+ "document-features",
 ]
 
 [[package]]
@@ -1042,6 +1087,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac42f9303792348e3217c570b0f0d8280a381d053bcb730c3018ec6873928513"
 dependencies = [
  "embassy-futures",
+ "embassy-time-driver",
  "embedded-hal-async",
  "embedded-svc",
  "embuild",
@@ -1767,6 +1813,12 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lock_api"

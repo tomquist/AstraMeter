@@ -53,6 +53,7 @@ astrameter-core = { path = "crates/core" }
 astrameter-config = { path = "crates/config" }
 astrameter-platform = { path = "crates/platform" }
 astrameter-platform-std = { path = "crates/platform-std" }
+astrameter-platform-espidf = { path = "crates/platform-espidf" }
 astrameter-powermeters = { path = "crates/powermeters" }
 astrameter-wrappers = { path = "crates/wrappers" }
 astrameter-emulator-ct002 = { path = "crates/emulator-ct002" }
