@@ -1,14 +1,11 @@
 # AstraMeter
 
-> **3.0 alpha:** AstraMeter has been rewritten in Rust and now supports
-> running on an ESP32-S3 in addition to Linux/Docker. The `config.ini`
-> format and Docker entry point are unchanged. Some features
-> (active-control CT002 balancer, full Home Assistant MQTT discovery,
-> Marstek cloud full integration) are still being ported — see
-> `CHANGELOG.md`'s `## Next` section and module docs under `crates/` for
-> the live status. Build from source with `cargo build --release -p
-> astrameter-host`; build ESP32 firmware with `cargo +esp build -p
-> astrameter-esp32 --target xtensa-esp32s3-espidf`.
+> **3.0:** AstraMeter has been rewritten in Rust with full feature parity
+> against the previous Python release and now supports running on
+> ESP32-S3 in addition to Linux/Docker. The `config.ini` format and
+> Docker entry point are unchanged. Build from source with
+> `cargo build --release -p astrameter-host`; build ESP32 firmware with
+> `cargo +esp build -p astrameter-esp32 --target xtensa-esp32s3-espidf`.
 
 > **Formerly known as b2500-meter.** The project was renamed to reflect support
 > for the full range of Marstek storage systems (B2500, Jupiter, Venus, …),
@@ -39,9 +36,14 @@ The AstraMeter project can be installed and run in several ways depending on you
    - Consistent environment across different platforms
 
 3. **Direct Installation** (For development or custom setups)
-   - Manual installation on Windows, macOS, or Linux
-   - Requires Python environment setup
+   - Build the Rust binary on Windows, macOS, or Linux
+   - Requires the stable Rust toolchain
    - More flexible for customization and development
+
+4. **ESP32-S3 Firmware** (For embedded deployment)
+   - Cross-compile firmware that runs the same `config.ini` on an
+     ESP32-S3-N16R8 (16 MB flash, 8 MB octal PSRAM)
+   - Web UI for config editing + OTA updates included
 
 ### Home Assistant App Installation
 
@@ -133,7 +135,7 @@ image: ghcr.io/tomquist/astrameter:next
 
 #### Prerequisites
 
-1. **Python Installation:** Use Python **3.10 or newer** (see [CONTRIBUTING.md](CONTRIBUTING.md)). You can download Python from the [official Python website](https://www.python.org/downloads/).
+1. **Rust toolchain:** Stable Rust **1.83 or newer** (install via [rustup](https://rustup.rs/)).
 2. **Configuration:** Create a `config.ini` file in the root directory of the project and add the appropriate configuration as described in the [Configuration](#configuration) section.
 
 #### Installation Steps
@@ -148,16 +150,46 @@ image: ghcr.io/tomquist/astrameter:next
    cd path/to/astrameter
    ```
 
-3. **Install [uv](https://docs.astral.sh/uv/getting-started/installation/)** (dependency manager).
-
-4. **Install dependencies and run**
+3. **Build and run**
    ```bash
-   uv sync
-   uv run astrameter
+   cargo run --release -p astrameter-host -- --config config.ini
    ```
-   With dev tools (tests, ruff, mypy): `uv sync --extra dev`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+
+   For a one-off binary you can copy elsewhere:
+   ```bash
+   cargo build --release -p astrameter-host
+   ./target/release/astrameter --config config.ini
+   ```
+
+   CLI flags mirror the previous Python entry point:
+   `-c/--config <PATH>`, `-log/--loglevel <LEVEL>`,
+   `-d/--device-types <LIST>`, `--device-ids <LIST>`,
+   `--throttle-interval <SECS>`, `-t/--skip-powermeter-test`.
+   See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev workflow (fmt,
+   clippy, nextest).
 
 All commands above work across Windows, macOS, and Linux. The only difference is how you open your terminal.
+
+### ESP32-S3 Firmware
+
+The same `config.ini` can run on an ESP32-S3 (16 MB flash + 8 MB octal
+PSRAM, e.g. ESP32-S3-WROOM-1-N16R8). The web config editor and OTA
+update endpoint are included so the firmware can be re-flashed without
+a serial cable once on the network.
+
+```bash
+# One-time setup (Xtensa toolchain — see https://esp-rs.github.io/book/)
+cargo install espup espflash
+espup install
+
+# Build + flash + monitor
+cargo +esp build --release -p astrameter-esp32 --target xtensa-esp32s3-espidf
+espflash flash --monitor target/xtensa-esp32s3-espidf/release/astrameter-esp32
+```
+
+On first boot the firmware starts a SoftAP captive portal so you can
+enter Wi-Fi credentials; subsequent boots join your network and serve
+the same web UI as the host build.
 
 ## Additional Notes
 
@@ -1040,247 +1072,6 @@ A: You can only verify the initial configuration. Full testing requires a Marste
 ### How do signed (positive/negative) power values work with the emulator?
 
 A: Powermeters typically report import as positive and export as negative (see [What's the correct power value convention?](#whats-the-correct-power-value-convention) above). Shelly and CT002/CT003 emulators forward those signed watts into the Marstek protocols; behavior on the battery side depends on your firmware and device type.
-
-## Simulator
-
-The project includes a standalone battery and powermeter simulator (`astra-sim`) that lets you test the CT002 emulator without real hardware. It simulates N batteries speaking the CT002 UDP protocol and exposes an HTTP endpoint that astrameter reads as a powermeter.
-
-### Install
-
-```bash
-pip install 'astrameter[sim]'
-# or with uv:
-uv pip install 'astrameter[sim]'
-```
-
-### Quick Start
-
-**Terminal 1** — Start the simulator (1 battery, single-phase, with TUI):
-```bash
-astra-sim run --batteries 1 --phases 1
-```
-
-**Terminal 2** — Start astrameter with the matching config:
-```bash
-astra-sim config > config.ini   # generate a config snippet
-astrameter -c config.ini
-```
-
-The generated `config.ini` looks like:
-```ini
-[GENERAL]
-DEVICE_TYPE = ct002
-
-[CT002]
-UDP_PORT = 12345
-ACTIVE_CONTROL = True
-
-[JSON_HTTP]
-URL = http://localhost:8080/power
-JSON_PATHS = $.phase_a
-```
-
-For three-phase setups, use `JSON_PATHS = $.phase_a,$.phase_b,$.phase_c`.
-
-### Multi-Battery 3-Phase Setup
-
-```bash
-# 3 batteries distributed across 3 phases
-astra-sim run --batteries 3 --phases 3
-
-# Custom base load and initial SOC
-astra-sim run --batteries 2 --phases 3 --base-load 500,300,200 --soc 0.8
-```
-
-### JSON Config File
-
-For full control, use a JSON config file:
-
-```bash
-astra-sim run -c sim_config.json
-```
-
-Example `sim_config.json`:
-```json
-{
-  "ct": {
-    "mac": "112233445566",
-    "host": "127.0.0.1",
-    "port": 12345
-  },
-  "http": {
-    "host": "0.0.0.0",
-    "port": 8080
-  },
-  "powermeter": {
-    "base_load": [100, 100, 100],
-    "loads": [
-      {"name": "LED lights", "power": 30, "phase": "A"},
-      {"name": "TV + entertainment", "power": 80, "phase": "B"},
-      {"name": "Router + NAS", "power": 40, "phase": "A"},
-      {"name": "Microwave", "power": 800, "phase": "A"},
-      {"name": "Washing machine", "power": 400, "phase": "B"}
-    ],
-    "solar_max": 2000,
-    "solar_phases": ["A"]
-  },
-  "power_update_delay_ticks": 0,
-  "batteries": [
-    {"mac": "02B250000001", "phase": "A", "capacity_wh": 2560, "initial_soc": 0.5},
-    {"mac": "02B250000002", "phase": "B", "capacity_wh": 2560, "initial_soc": 0.8}
-  ]
-}
-```
-
-Optional top-level `power_update_delay_ticks` (or per-battery `power_update_delay_ticks`) delays how many simulator ticks pass before the battery applies each new CT-derived power setpoint (`reported_power + grid_reading` from the response; `0` = immediate). The same delay can be set from the CLI with `astra-sim run --power-update-delay N` (also supported on `astra-sim start`). With a non-zero delay, `GET /status` and the TUI expose **`target`** as the latest CT-requested watts and **`applied_target`** as the setpoint the battery is ramping toward after the delay. When delay is `0`, both match.
-
-A more complete example simulating a European 3-phase household with rooftop solar,
-multiple appliances, and 4 batteries (two on the heaviest phase):
-
-```json
-{
-  "ct": {
-    "mac": "AABBCCDDEEFF",
-    "host": "127.0.0.1",
-    "port": 12345
-  },
-  "http": {
-    "host": "0.0.0.0",
-    "port": 8080
-  },
-  "powermeter": {
-    "base_load": [120, 80, 60],
-    "base_noise": 30,
-    "loads": [
-      {"name": "LED lights",        "power":   30, "phase": "A"},
-      {"name": "Router + NAS",      "power":   40, "phase": "A"},
-      {"name": "Coffee machine",    "power":  200, "phase": "A"},
-      {"name": "TV + entertainment","power":   80, "phase": "B"},
-      {"name": "Washing machine",   "power":  400, "phase": "B"},
-      {"name": "Laptop charger",    "power":   65, "phase": "B"},
-      {"name": "Microwave",         "power":  800, "phase": "A"},
-      {"name": "Fridge/freezer",    "power":  120, "phase": "C"},
-      {"name": "Vacuum cleaner",    "power":  600, "phase": "C"}
-    ],
-    "solar_max": 5000,
-    "solar_phases": ["A", "B", "C"]
-  },
-  "batteries": [
-    {
-      "mac": "02B250000001",
-      "phase": "A",
-      "max_charge_power": 800,
-      "max_discharge_power": 800,
-      "capacity_wh": 2560,
-      "initial_soc": 0.9,
-      "ramp_rate": 150,
-      "poll_interval": 1.0
-    },
-    {
-      "mac": "02B250000002",
-      "phase": "A",
-      "max_charge_power": 800,
-      "max_discharge_power": 800,
-      "capacity_wh": 2560,
-      "initial_soc": 0.7
-    },
-    {
-      "mac": "02B250000003",
-      "phase": "B",
-      "max_charge_power": 800,
-      "max_discharge_power": 800,
-      "capacity_wh": 5120,
-      "initial_soc": 0.4
-    },
-    {
-      "mac": "02B250000004",
-      "phase": "C",
-      "max_charge_power": 800,
-      "max_discharge_power": 800,
-      "capacity_wh": 2560,
-      "initial_soc": 0.2
-    }
-  ],
-  "auto_mode": true,
-  "auto_interval": [15, 45],
-  "log_interval": 10
-}
-```
-
-This configuration demonstrates:
-- **Phase imbalance**: Kitchen loads (coffee machine, microwave) are concentrated on phase A with two batteries to compensate; entertainment/laundry on B; fridge/cleaning on C
-- **Two batteries on one phase**: Batteries `0001` and `0002` both serve phase A — CT002's fair distribution algorithm splits the target between them
-- **Mixed capacities**: Battery `0003` has a larger 5.12 kWh capacity (simulating a newer model)
-- **Varied SOC**: Batteries start at different charge levels (90%, 70%, 40%, 20%) to test saturation timing
-- **3-phase solar**: 5 kWp rooftop system balanced across all three phases — even moderate production exceeds the base load, causing grid export (negative readings) and battery charging
-- **Custom ramp rate**: Battery `0001` ramps at 150 W/s instead of the default 200 W/s
-- **Auto mode**: Randomly toggles loads and solar every 15–45 seconds for hands-free testing
-
-### Interactive Controls
-
-When running with the TUI (`astra-sim run`, without `--no-tui`), you can interact with the simulation using keyboard shortcuts displayed on screen. The TUI shows live battery state (power, SOC, targets), grid readings per phase, and active loads. If `power_update_delay_ticks` is non-zero, the battery table adds **Req** (CT request) and **Appl** (delayed setpoint) columns so you can see the latency effect; otherwise a single **Target** column shows the setpoint.
-
-Without the TUI, you can control the simulation via the HTTP API:
-
-```bash
-# Toggle a load on/off (1-based index)
-astra-sim load toggle 1
-
-# Set solar production (watts)
-astra-sim solar set 800
-astra-sim solar set off
-
-# Set a battery's SOC (for testing saturation)
-astra-sim battery 02B250000001 soc 0.0
-
-# Show full status
-astra-sim status
-```
-
-### Daemon Mode
-
-Run the simulator in the background and attach/detach the TUI:
-
-```bash
-# Start headless daemon
-astra-sim start -c sim_config.json
-
-# Attach TUI to running daemon
-astra-sim attach
-
-# Stop daemon
-astra-sim stop
-```
-
-### Custom Ports
-
-If you need non-default ports (e.g. to avoid conflicts):
-
-```bash
-# Simulator on custom ports
-astra-sim run --batteries 2 --phases 3 --ct-port 54321 --http-port 9090
-
-# Generate matching astrameter config
-astra-sim config --ct-port 54321 --http-port 9090 > config.ini
-```
-
-### Headless Mode
-
-For CI or scripted testing, run without the TUI:
-
-```bash
-astra-sim run --batteries 2 --phases 3 --no-tui
-```
-
-### How It Works
-
-The simulator is fully decoupled from astrameter — it communicates purely over the network:
-
-- **Battery simulators** send UDP requests to astrameter's CT002 emulator using the same protocol as real Marstek batteries
-- **Powermeter simulator** serves an HTTP JSON endpoint (`GET /power`) that astrameter reads via its `[JSON_HTTP]` powermeter config
-- Grid power is computed as: `grid = base_load + active_loads + noise - solar - battery_output`
-- When solar exceeds consumption, grid goes negative (export) and batteries charge
-- Batteries track SOC and saturate at 0%/100%
 
 ## License
 
