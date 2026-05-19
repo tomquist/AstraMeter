@@ -51,6 +51,13 @@ pub fn build_uart_driver(
     tx_gpio: i32,
 ) -> Result<Arc<dyn UartLike>, String> {
     let port: uart_port_t = uart_index as uart_port_t;
+    // `uart_config_t`'s clock-source field moved into an anonymous
+    // union in ESP-IDF v5.2 (`__bindgen_anon_1`), and the symbol that
+    // used to be `UART_SCLK_DEFAULT` was renamed under the new
+    // `soc_module_clk_t` enum. Leaving the union zeroed (via
+    // `Default::default()`) selects the default source on every IDF
+    // 5.x we care about and avoids having to fish out the new enum
+    // value by name through bindgen's mangling.
     let cfg = sys::uart_config_t {
         baud_rate: baud_rate as i32,
         data_bits: sys::uart_word_length_t_UART_DATA_8_BITS,
@@ -58,7 +65,6 @@ pub fn build_uart_driver(
         stop_bits: sys::uart_stop_bits_t_UART_STOP_BITS_1,
         flow_ctrl: sys::uart_hw_flowcontrol_t_UART_HW_FLOWCTRL_DISABLE,
         rx_flow_ctrl_thresh: 0,
-        source_clk: sys::uart_sclk_t_UART_SCLK_DEFAULT,
         ..Default::default()
     };
     unsafe {
