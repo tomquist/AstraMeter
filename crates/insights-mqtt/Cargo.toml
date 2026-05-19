@@ -16,7 +16,6 @@ futures = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rumqttc = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
 tokio-util = "0.7"
 tracing = { workspace = true }

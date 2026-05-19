@@ -23,7 +23,6 @@ rand = "0.8"
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
 tokio-util = "0.7"
 tokio-modbus = { workspace = true }
-rumqttc = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }

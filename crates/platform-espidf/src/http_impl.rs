@@ -31,22 +31,22 @@ fn blocking_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
     // duration; one-extra-PEM-per-request is fine for the typical use
     // case (one HomeWizard meter pinned for the life of the process).
     let pem_static: Option<&'static [u8]> =
-        req.extra_root_cert_pem.as_ref().map(|pem| -> &'static [u8] {
-            let mut owned = pem.clone();
-            if owned.last() != Some(&0) {
-                owned.push(0);
-            }
-            Box::leak(owned.into_boxed_slice())
-        });
+        req.extra_root_cert_pem
+            .as_ref()
+            .map(|pem| -> &'static [u8] {
+                let mut owned = pem.clone();
+                if owned.last() != Some(&0) {
+                    owned.push(0);
+                }
+                Box::leak(owned.into_boxed_slice())
+            });
     let cfg = Configuration {
         crt_bundle_attach: if req.verify_tls && req.extra_root_cert_pem.is_none() {
             Some(esp_idf_svc::sys::esp_crt_bundle_attach)
         } else {
             None
         },
-        client_certificate: pem_static.map(|pem| {
-            esp_idf_svc::tls::X509::pem_until_nul(pem)
-        }),
+        client_certificate: pem_static.map(|pem| esp_idf_svc::tls::X509::pem_until_nul(pem)),
         use_global_ca_store: req.verify_tls,
         // `crt_bundle_attach=None + use_global_ca_store=false` disables
         // server certificate validation in mbedtls.

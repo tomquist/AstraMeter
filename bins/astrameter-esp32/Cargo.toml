@@ -15,7 +15,7 @@ path = "src/main.rs"
 astrameter-core = { workspace = true }
 
 [target.'cfg(target_os = "espidf")'.dependencies]
-esp-idf-svc = { version = "0.52", default-features = false, features = ["std", "binstart", "embassy-time-driver"] }
+esp-idf-svc = { version = "0.52", default-features = false, features = ["std", "binstart"] }
 esp-idf-hal = { version = "0.46", default-features = false }
 embedded-svc = "0.29"
 log = "0.4"

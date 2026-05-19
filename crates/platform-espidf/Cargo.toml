@@ -14,27 +14,22 @@ async-trait = { workspace = true }
 
 # The Xtensa toolchain isn't available on host CI, so all heavy ESP-IDF
 # deps are gated. Host `cargo check --workspace` builds an empty stub.
+#
+# Note: NO rumqttc / tokio-rustls / rustls here. The MQTT impl uses
+# `esp_idf_svc::mqtt::client::EspAsyncMqttClient` which talks to the
+# ESP-IDF bundled mbedTLS — that's the path that actually compiles for
+# xtensa-esp32s3-espidf. Same idea for the HTTP client (uses
+# `EspHttpConnection` with the ESP-IDF crt-bundle). The WebSocket path
+# still uses tokio-tungstenite for now; if it hits the same ring/rustls
+# block we can route it through `esp_websocket_client_*` later.
 [target.'cfg(target_os = "espidf")'.dependencies]
-esp-idf-svc = { version = "0.52", default-features = false, features = ["std", "binstart", "embassy-time-driver"] }
+esp-idf-svc = { version = "0.52", default-features = false, features = ["std", "binstart"] }
 esp-idf-hal = { version = "0.46", default-features = false }
 embedded-svc = "0.29"
 log = "0.4"
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net", "io-util"] }
-tokio-tungstenite = { workspace = true }
-tokio-rustls = { workspace = true }
-rustls = { workspace = true }
-rustls-pemfile = { workspace = true }
-webpki-roots = { workspace = true }
-rumqttc = { workspace = true }
 socket2 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
-# Force-enable ring's espidf RNG path. Without this feature, rustls's
-# `SystemRandom::fill` doesn't compile on xtensa-esp32s3-espidf because
-# upstream ring leaves the `SecureRandom` impl gated off for that target.
-# Cargo feature unification then enables it for every other crate
-# (tokio-rustls 0.25 / rustls 0.22 pulled in by rumqttc, our own
-# rustls 0.23, etc.).
-ring = { version = "0.17", features = ["less-safe-getrandom-espidf"] }

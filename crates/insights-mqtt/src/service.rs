@@ -6,13 +6,21 @@
 //! Command-side handling (HA discovery for control switches feeding back
 //! into the supervisor) is part of the same module so the InsightsService
 //! is end-to-end usable.
+//!
+//! Backed by the `astrameter_platform::mqtt::MqttClient` trait so this
+//! crate doesn't depend on `rumqttc` directly — the host build uses
+//! rumqttc via `platform-std`, the ESP32 build uses esp-idf-svc's
+//! native MQTT client via `platform-espidf`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use astrameter_core::{Error, Result};
-use astrameter_platform::mqtt::{MqttFactory, MqttOptions};
+use astrameter_platform::mqtt::{
+    MqttClient, MqttEvent, MqttFactory, MqttOptions, MqttQos, MqttSession,
+};
+use futures::StreamExt;
 use parking_lot::Mutex;
 use serde_json::Value;
 
@@ -77,10 +85,8 @@ struct ServiceCtx {
     /// rate-limit log spam — matches Python's
     /// `_marstek_get_values_failed: set[str]`.
     failed_meters: Arc<Mutex<HashSet<String>>>,
-    /// Per-binding in-flight poll guard. If `Some(true)` for a device_id,
-    /// a `serve_marstek_poll` is still running for it; we skip subsequent
-    /// poll spawns until it clears. Matches Python's
-    /// `_marstek_tasks_by_binding`.
+    /// Per-binding in-flight poll guard. Matches Python's
+    /// `_marstek_tasks_by_binding` suppression.
     inflight: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -115,7 +121,7 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
         inflight: Arc::new(Mutex::new(HashSet::new())),
     };
     loop {
-        let connect_result = factory.connect(MqttOptions {
+        let session = match factory.connect(MqttOptions {
             host: config.broker.clone(),
             port: config.port,
             client_id: "astrameter-insights".into(),
@@ -124,9 +130,8 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
             tls: config.tls,
             keep_alive: Duration::from_secs(60),
             clean_session: true,
-        });
-        let (client, mut eventloop) = match connect_result {
-            Ok(c) => c,
+        }) {
+            Ok(s) => s,
             Err(e) => {
                 tracing::warn!("insights MQTT connect error: {e}; retrying in 5s");
                 if tokio::time::timeout(RECONNECT_DELAY, cancel.cancelled())
@@ -139,15 +144,16 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                 }
             }
         };
+        let MqttSession { client, mut events } = session;
 
         // Publish system online + subscribe to Marstek app polls + command sets.
         let status_topic = format!("{}/status", ctx.config.base_topic);
         let _ = client
             .publish(
-                status_topic.clone(),
-                rumqttc::QoS::AtLeastOnce,
+                &status_topic,
+                MqttQos::AtLeastOnce,
                 true,
-                "online",
+                b"online".to_vec(),
             )
             .await;
         let topics_to_subscribe: Vec<(String, String)> = {
@@ -155,20 +161,20 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
             bindings.iter().map(app_topics_for).collect()
         };
         for (old_t, new_t) in &topics_to_subscribe {
-            let _ = client.subscribe(old_t, rumqttc::QoS::AtLeastOnce).await;
-            let _ = client.subscribe(new_t, rumqttc::QoS::AtLeastOnce).await;
+            let _ = client.subscribe(old_t, MqttQos::AtLeastOnce).await;
+            let _ = client.subscribe(new_t, MqttQos::AtLeastOnce).await;
         }
         // Subscribe to HA-discovery command topics so HA switches/numbers
         // and the force-rotation button can drive the emulator.
         let base = ctx.config.base_topic.clone();
         let _ = client
             .subscribe(
-                format!("{base}/ct002/+/consumer/+/set"),
-                rumqttc::QoS::AtLeastOnce,
+                &format!("{base}/ct002/+/consumer/+/set"),
+                MqttQos::AtLeastOnce,
             )
             .await;
         let _ = client
-            .subscribe(format!("{base}/ct002/+/set"), rumqttc::QoS::AtLeastOnce)
+            .subscribe(&format!("{base}/ct002/+/set"), MqttQos::AtLeastOnce)
             .await;
 
         let mut cache = DiscoveryCache::default();
@@ -206,8 +212,9 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
             tokio::select! {
                 _ = drain_cancel.cancelled() => {
                     let _ = client
-                        .publish(&status_topic, rumqttc::QoS::AtLeastOnce, true, "offline")
+                        .publish(&status_topic, MqttQos::AtLeastOnce, true, b"offline".to_vec())
                         .await;
+                    let _ = client.disconnect().await;
                     if let Some(h) = broadcast_handle.as_ref() { h.abort(); }
                     return;
                 }
@@ -215,18 +222,24 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                     let Some(event) = event else {
                         return;
                     };
-                    if let Err(e) = handle_event(&ctx, &client, &mut cache, event).await {
+                    if let Err(e) = handle_event(&ctx, &*client, &mut cache, event).await {
                         tracing::warn!("insights event handling: {e}");
                     }
                 }
-                poll = eventloop.poll() => {
+                poll = events.next() => {
                     match poll {
-                        Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p))) => {
-                            handle_incoming(&ctx, &client, &p.topic, &p.payload).await;
+                        Some(Ok(MqttEvent::Publish { topic, payload, retain: _ })) => {
+                            handle_incoming(&ctx, &*client, &topic, &payload).await;
                         }
-                        Ok(_) => {}
-                        Err(e) => {
+                        Some(Ok(MqttEvent::Other)) => {}
+                        Some(Err(e)) => {
                             tracing::warn!("insights MQTT poll: {e}; reconnecting in 5s");
+                            if let Some(h) = broadcast_handle.as_ref() { h.abort(); }
+                            tokio::time::sleep(RECONNECT_DELAY).await;
+                            break;
+                        }
+                        None => {
+                            tracing::warn!("insights MQTT event stream closed; reconnecting in 5s");
                             if let Some(h) = broadcast_handle.as_ref() { h.abort(); }
                             tokio::time::sleep(RECONNECT_DELAY).await;
                             break;
@@ -240,7 +253,7 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
 
 async fn handle_event(
     ctx: &ServiceCtx,
-    client: &rumqttc::AsyncClient,
+    client: &dyn MqttClient,
     cache: &mut DiscoveryCache,
     event: InsightsEvent,
 ) -> Result<()> {
@@ -317,7 +330,7 @@ async fn handle_event(
             let avail_topic = format!("{state_topic}/availability");
             publish_json(client, &state_topic, &data, false).await?;
             let _ = client
-                .publish(&avail_topic, rumqttc::QoS::AtLeastOnce, true, "online")
+                .publish(&avail_topic, MqttQos::AtLeastOnce, true, b"online".to_vec())
                 .await;
         }
         InsightsEvent::Ct002Remove {
@@ -327,7 +340,12 @@ async fn handle_event(
             let state_topic = format!("{base}/ct002/{device_id}/consumer/{consumer_id}");
             let avail_topic = format!("{state_topic}/availability");
             let _ = client
-                .publish(&avail_topic, rumqttc::QoS::AtLeastOnce, true, "offline")
+                .publish(
+                    &avail_topic,
+                    MqttQos::AtLeastOnce,
+                    true,
+                    b"offline".to_vec(),
+                )
                 .await;
             let key = format!("{device_id}::{consumer_id}");
             cache.ct002_consumers.remove(&key);
@@ -365,7 +383,7 @@ async fn handle_event(
             let avail_topic = format!("{state_topic}/availability");
             publish_json(client, &state_topic, &data, false).await?;
             let _ = client
-                .publish(&avail_topic, rumqttc::QoS::AtLeastOnce, true, "online")
+                .publish(&avail_topic, MqttQos::AtLeastOnce, true, b"online".to_vec())
                 .await;
         }
         InsightsEvent::ShellyRemove {
@@ -375,7 +393,12 @@ async fn handle_event(
             let safe_ip = battery_ip.replace('.', "_");
             let avail_topic = format!("{base}/shelly/{device_id}/battery/{safe_ip}/availability");
             let _ = client
-                .publish(&avail_topic, rumqttc::QoS::AtLeastOnce, true, "offline")
+                .publish(
+                    &avail_topic,
+                    MqttQos::AtLeastOnce,
+                    true,
+                    b"offline".to_vec(),
+                )
                 .await;
         }
         InsightsEvent::ShellyDeviceStatus { device_id, data } => {
@@ -386,12 +409,7 @@ async fn handle_event(
     Ok(())
 }
 
-async fn handle_incoming(
-    ctx: &ServiceCtx,
-    client: &rumqttc::AsyncClient,
-    topic: &str,
-    payload: &[u8],
-) {
+async fn handle_incoming(ctx: &ServiceCtx, client: &dyn MqttClient, topic: &str, payload: &[u8]) {
     // First check HA-discovery command topics.
     let base = ctx.config.base_topic.as_str();
     let trimmed_topic = topic.trim_end_matches('/');
@@ -430,7 +448,7 @@ async fn handle_incoming(
 }
 
 async fn serve_marstek_poll(
-    client: &rumqttc::AsyncClient,
+    client: &dyn MqttClient,
     binding: &MarstekBinding,
     poll: PollContext,
     get_meter_watts: &MeterWattsFn,
@@ -494,10 +512,10 @@ async fn serve_marstek_poll(
     // Publish to BOTH legacy `hame_energy/...` and new `marstek_energy/...`
     // device topics so old and new app builds both see replies.
     let _ = client
-        .publish(&old_dev_t, rumqttc::QoS::AtMostOnce, false, body.clone())
+        .publish(&old_dev_t, MqttQos::AtMostOnce, false, body.clone())
         .await;
     let _ = client
-        .publish(&new_dev_t, rumqttc::QoS::AtMostOnce, false, body)
+        .publish(&new_dev_t, MqttQos::AtMostOnce, false, body)
         .await;
 }
 
@@ -519,7 +537,7 @@ fn scopeguard_remove(set: &Arc<Mutex<HashSet<String>>>, key: String) -> impl Dro
 /// Marstek app sees up-to-date power without relying on its own polls.
 #[allow(clippy::too_many_arguments)]
 async fn marstek_broadcast_loop(
-    client: rumqttc::AsyncClient,
+    client: Arc<dyn MqttClient>,
     bindings: Arc<Mutex<Vec<MarstekBinding>>>,
     get_meter_watts: MeterWattsFn,
     failed_meters: Arc<Mutex<HashSet<String>>>,
@@ -531,7 +549,7 @@ async fn marstek_broadcast_loop(
         let snapshot: Vec<MarstekBinding> = bindings.lock().clone();
         for binding in &snapshot {
             serve_marstek_poll(
-                &client,
+                &*client,
                 binding,
                 PollContext {
                     echo_cd: 1,
@@ -623,7 +641,7 @@ async fn arp_lookup(ip: &str) -> String {
 }
 
 async fn publish_json(
-    client: &rumqttc::AsyncClient,
+    client: &dyn MqttClient,
     topic: &str,
     payload: &Value,
     retain: bool,
@@ -631,7 +649,7 @@ async fn publish_json(
     let body =
         serde_json::to_vec(payload).map_err(|e| Error::Other(format!("encode {topic}: {e}")))?;
     client
-        .publish(topic, rumqttc::QoS::AtLeastOnce, retain, body)
+        .publish(topic, MqttQos::AtLeastOnce, retain, body)
         .await
         .map_err(|e| Error::transport(format!("publish {topic}: {e}")))
 }

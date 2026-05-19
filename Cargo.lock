@@ -203,7 +203,6 @@ dependencies = [
  "async-trait",
  "futures",
  "parking_lot",
- "rumqttc",
  "serde",
  "serde_json",
  "tokio",
@@ -234,7 +233,7 @@ version = "3.0.0-alpha.0"
 dependencies = [
  "astrameter-core",
  "async-trait",
- "rumqttc",
+ "futures",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -254,16 +253,9 @@ dependencies = [
  "futures",
  "log",
  "parking_lot",
- "ring",
- "rumqttc",
- "rustls 0.23.40",
- "rustls-pemfile",
  "socket2 0.5.10",
  "tokio",
- "tokio-rustls 0.26.4",
- "tokio-tungstenite",
  "tracing",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -275,6 +267,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "parking_lot",
  "reqwest",
  "rumqttc",
  "rustls 0.23.40",
@@ -308,7 +301,6 @@ dependencies = [
  "md-5",
  "parking_lot",
  "rand 0.8.6",
- "rumqttc",
  "serde",
  "serde_json",
  "tokio",
@@ -975,25 +967,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "document-features"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
-dependencies = [
- "litrs",
-]
-
-[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
-
-[[package]]
-name = "embassy-executor-timer-queue"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc328bf943af66b80b98755db9106bf7e7471b0cf47dc8559cd9a6be504cc9c"
 
 [[package]]
 name = "embassy-futures"
@@ -1013,25 +990,6 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "heapless 0.8.0",
-]
-
-[[package]]
-name = "embassy-time-driver"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ee71af1b3a0deaa53eaf2d39252f83504c853646e472400b763060389b9fcc9"
-dependencies = [
- "document-features",
-]
-
-[[package]]
-name = "embassy-time-queue-utils"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "168297bf80aaf114b3c9ad589bf38b01b3009b9af7f97cd18086c5bbf96f5693"
-dependencies = [
- "embassy-executor-timer-queue",
- "heapless 0.9.3",
 ]
 
 [[package]]
@@ -1256,8 +1214,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "033432e951f49284a4b8874cdb2d7fb940a3b0181460f452ca7414ebe66babca"
 dependencies = [
  "embassy-futures",
- "embassy-time-driver",
- "embassy-time-queue-utils",
  "embedded-hal-async",
  "embedded-svc",
  "embuild 0.33.1",
@@ -2033,12 +1989,6 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
-
-[[package]]
-name = "litrs"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lock_api"

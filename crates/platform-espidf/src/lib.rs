@@ -41,7 +41,7 @@ mod imp {
     pub fn build_platform() -> Platform {
         Platform {
             http: Arc::new(super::http_impl::EspHttpClient),
-            mqtt: Arc::new(super::mqtt_impl::RumqttcFactory),
+            mqtt: Arc::new(super::mqtt_impl::EspMqttFactory),
             ws: Arc::new(super::ws_impl::TungsteniteClient::new()),
             udp: Arc::new(super::net_impl::TokioUdpBind),
             tcp: Arc::new(super::net_impl::TokioTcpConnect),

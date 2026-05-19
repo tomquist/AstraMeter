@@ -6,10 +6,11 @@ use std::time::Duration;
 use astrameter_config::{parse_mqtt_uri, Section};
 use astrameter_core::{Error, Powermeter, Result};
 use astrameter_platform::{
-    mqtt::{MqttFactory, MqttOptions},
+    mqtt::{MqttEvent, MqttFactory, MqttOptions, MqttQos, MqttSession},
     Platform,
 };
 use async_trait::async_trait;
+use futures::StreamExt;
 use jsonpath_rust::JsonPathQuery;
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -47,14 +48,14 @@ impl Powermeter for MqttPowermeter {
             keep_alive: Duration::from_secs(60),
             clean_session: true,
         };
-        let (client, mut eventloop) = self
+        let MqttSession { client, mut events } = self
             .factory
             .connect(opts)
             .map_err(|e| Error::transport(format!("mqtt connect: {e}")))?;
         let unique_topics: Vec<String> = self.topic_to_indices.keys().cloned().collect();
         for t in &unique_topics {
             client
-                .subscribe(t, rumqttc::QoS::AtMostOnce)
+                .subscribe(t, MqttQos::AtMostOnce)
                 .await
                 .map_err(|e| Error::transport(format!("mqtt subscribe {t}: {e}")))?;
         }
@@ -68,22 +69,26 @@ impl Powermeter for MqttPowermeter {
             loop {
                 let evt = tokio::select! {
                     _ = cancel.cancelled() => break,
-                    e = eventloop.poll() => e,
+                    e = events.next() => e,
                 };
-                let pkt = match evt {
-                    Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p))) => p,
-                    Ok(_) => continue,
-                    Err(e) => {
+                let (topic_str, payload_bytes) = match evt {
+                    Some(Ok(MqttEvent::Publish { topic, payload, .. })) => (topic, payload),
+                    Some(Ok(MqttEvent::Other)) => continue,
+                    Some(Err(e)) => {
                         tracing::warn!("MQTT poll error: {e}. Reconnecting in 5s");
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         continue;
                     }
+                    None => {
+                        tracing::warn!("MQTT event stream closed; sleeping before retry");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
                 };
-                let topic_str = pkt.topic;
                 let Some(indices) = topic_indices.get(&topic_str) else {
                     continue;
                 };
-                let payload = String::from_utf8_lossy(&pkt.payload).to_string();
+                let payload = String::from_utf8_lossy(&payload_bytes).to_string();
                 let mut parsed: Option<Value> = None;
                 for &i in indices {
                     let (_, jp) = &subs[i];

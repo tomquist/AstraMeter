@@ -10,7 +10,7 @@ description = "Platform-abstraction traits (HTTP/WebSocket/MQTT/UDP/Serial/FS/Ti
 [dependencies]
 astrameter-core = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util"] }
-rumqttc = { workspace = true }
