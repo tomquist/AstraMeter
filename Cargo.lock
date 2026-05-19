@@ -186,6 +186,7 @@ dependencies = [
  "astrameter-wrappers",
  "axum",
  "parking_lot",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

@@ -394,6 +394,8 @@ impl Supervisor {
 
         let mut ct002_for_handlers: Option<Arc<astrameter_emulator_ct002::server::Ct002Emulator>> =
             None;
+        let mut shelly_for_listeners: Vec<Arc<astrameter_emulator_shelly::ShellyEmulator>> =
+            Vec::new();
         for dt in &device_types {
             match dt.as_str() {
                 "ct002" | "ct003" => {
@@ -407,12 +409,18 @@ impl Supervisor {
                     let h = self
                         .start_shelly(config, dt, 1010, global_dedupe, &bound, &cancel)
                         .await?;
+                    if let EmulatorHandle::Shelly(ref e) = h {
+                        shelly_for_listeners.push(e.clone());
+                    }
                     emulator_handles.push(h);
                 }
                 "shellypro3em_new" => {
                     let h = self
                         .start_shelly(config, dt, 2220, global_dedupe, &bound, &cancel)
                         .await?;
+                    if let EmulatorHandle::Shelly(ref e) = h {
+                        shelly_for_listeners.push(e.clone());
+                    }
                     emulator_handles.push(h);
                 }
                 // `shellypro3em` is shorthand for both legacy ports
@@ -428,6 +436,9 @@ impl Supervisor {
                             &cancel,
                         )
                         .await?;
+                    if let EmulatorHandle::Shelly(ref e) = h_old {
+                        shelly_for_listeners.push(e.clone());
+                    }
                     emulator_handles.push(h_old);
                     let h_new = self
                         .start_shelly(
@@ -439,18 +450,27 @@ impl Supervisor {
                             &cancel,
                         )
                         .await?;
+                    if let EmulatorHandle::Shelly(ref e) = h_new {
+                        shelly_for_listeners.push(e.clone());
+                    }
                     emulator_handles.push(h_new);
                 }
                 "shellyemg3" => {
                     let h = self
                         .start_shelly(config, dt, 2222, global_dedupe, &bound, &cancel)
                         .await?;
+                    if let EmulatorHandle::Shelly(ref e) = h {
+                        shelly_for_listeners.push(e.clone());
+                    }
                     emulator_handles.push(h);
                 }
                 "shellyproem50" => {
                     let h = self
                         .start_shelly(config, dt, 2223, global_dedupe, &bound, &cancel)
                         .await?;
+                    if let EmulatorHandle::Shelly(ref e) = h {
+                        shelly_for_listeners.push(e.clone());
+                    }
                     emulator_handles.push(h);
                 }
                 other => {
@@ -483,7 +503,20 @@ impl Supervisor {
                 )
                 .await
             {
-                Ok(h) => insights_handle = Some(h),
+                Ok(h) => {
+                    // Bridge emulator events into the insights event channel.
+                    // Without this, the InsightsService only sees Marstek
+                    // app polls; HA Device Discovery and consumer-state
+                    // publishes never fire.
+                    let tx = h.event_sender();
+                    if let Some(ct) = ct002_for_handlers.clone() {
+                        wire_ct002_to_insights(&ct, tx.clone());
+                    }
+                    for sh in &shelly_for_listeners {
+                        wire_shelly_to_insights(sh, tx.clone());
+                    }
+                    insights_handle = Some(h);
+                }
                 Err(e) => tracing::error!("MQTT Insights failed: {e}"),
             }
         }
@@ -816,6 +849,82 @@ impl InsightsHandle {
     async fn stop(&self) {
         self.0.stop().await;
     }
+
+    fn event_sender(&self) -> tokio::sync::mpsc::Sender<astrameter_insights_mqtt::InsightsEvent> {
+        self.0.event_sender()
+    }
+}
+
+/// Bridge a CT002 emulator's event callback into the InsightsService's
+/// event channel. Converts the JSON payload into `InsightsEvent::Ct002`
+/// (regular state update) or `InsightsEvent::Ct002Remove` (TTL eviction),
+/// then publishes the `Ct002DeviceStatus` snapshot too — matching the
+/// three separate event kinds the Python service emits.
+fn wire_ct002_to_insights(
+    ct: &astrameter_emulator_ct002::server::Ct002Emulator,
+    tx: tokio::sync::mpsc::Sender<astrameter_insights_mqtt::InsightsEvent>,
+) {
+    use astrameter_insights_mqtt::InsightsEvent;
+    ct.set_event_listener(Arc::new(
+        move |device_id: &str, consumer_id: &str, data: &serde_json::Value| {
+            let removed = data
+                .get("_removed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if removed {
+                let _ = tx.try_send(InsightsEvent::Ct002Remove {
+                    device_id: device_id.to_string(),
+                    consumer_id: consumer_id.to_string(),
+                });
+                return;
+            }
+            // Per-consumer event (Python `_handle_ct002_event`).
+            let _ = tx.try_send(InsightsEvent::Ct002 {
+                device_id: device_id.to_string(),
+                consumer_id: consumer_id.to_string(),
+                data: data.clone(),
+            });
+            // Per-device status snapshot (Python publishes `<base>/ct002/<id>/status`).
+            let status = serde_json::json!({
+                "smooth_target": data.get("smooth_target").cloned().unwrap_or(serde_json::Value::Null),
+                "active_control": data.get("active_control").cloned().unwrap_or(serde_json::Value::Null),
+                "consumer_count": data.get("consumer_count").cloned().unwrap_or(serde_json::Value::Null),
+            });
+            let _ = tx.try_send(InsightsEvent::Ct002DeviceStatus {
+                device_id: device_id.to_string(),
+                data: status,
+            });
+        },
+    ));
+}
+
+/// Same bridge for the Shelly emulator. `_removed: true` payloads
+/// become `ShellyRemove`; everything else is a state update.
+fn wire_shelly_to_insights(
+    shelly: &astrameter_emulator_shelly::ShellyEmulator,
+    tx: tokio::sync::mpsc::Sender<astrameter_insights_mqtt::InsightsEvent>,
+) {
+    use astrameter_insights_mqtt::InsightsEvent;
+    shelly.set_event_listener(Arc::new(
+        move |device_id: &str, battery_ip: &str, data: &serde_json::Value| {
+            let removed = data
+                .get("_removed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if removed {
+                let _ = tx.try_send(InsightsEvent::ShellyRemove {
+                    device_id: device_id.to_string(),
+                    battery_ip: battery_ip.to_string(),
+                });
+                return;
+            }
+            let _ = tx.try_send(InsightsEvent::Shelly {
+                device_id: device_id.to_string(),
+                battery_ip: battery_ip.to_string(),
+                data: data.clone(),
+            });
+        },
+    ));
 }
 
 impl Supervisor {

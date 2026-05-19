@@ -37,7 +37,7 @@ pub struct ShellyEmulator {
     dedupe_window: Duration,
     platform: Arc<Platform>,
     state: Arc<Mutex<State>>,
-    listener: Mutex<Option<EventListener>>,
+    listener: Arc<Mutex<Option<EventListener>>>,
     inactive_timeout: Arc<Mutex<Duration>>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -67,7 +67,7 @@ impl ShellyEmulator {
             dedupe_window,
             platform,
             state: Arc::new(Mutex::new(State::default())),
-            listener: Mutex::new(None),
+            listener: Arc::new(Mutex::new(None)),
             inactive_timeout: Arc::new(Mutex::new(BATTERY_INACTIVE_TIMEOUT)),
             cancel: tokio_util::sync::CancellationToken::new(),
             task: tokio::sync::Mutex::new(None),
@@ -125,7 +125,9 @@ impl ShellyEmulator {
         let dedupe = self.dedupe_window;
         let device_id = self.device_id.clone();
         let cancel = self.cancel.clone();
-        let listener = self.listener.lock().clone();
+        // Share the listener slot so `set_event_listener` after `start()`
+        // is picked up on the very next event.
+        let listener_slot = self.listener.clone();
         let bound_meters: Vec<(Arc<dyn Powermeter>, ClientFilter, bool)> = self
             .meters
             .iter()
@@ -134,7 +136,7 @@ impl ShellyEmulator {
         let s = sock.clone();
         let inactive_timeout = self.inactive_timeout.clone();
         let device_id_for_inactive = self.device_id.clone();
-        let listener_for_inactive = self.listener.lock().clone();
+        let listener_for_inactive = self.listener.clone();
         let dedupe_for_purge = self.dedupe_window;
         let handle = tokio::spawn(async move {
             let inactive = tokio::spawn(inactive_check_loop(
@@ -164,7 +166,7 @@ impl ShellyEmulator {
                 let bound = bound_meters.clone();
                 let device_id = device_id.clone();
                 let dedupe = dedupe;
-                let listener = listener.clone();
+                let listener = listener_slot.lock().clone();
                 tokio::spawn(async move {
                     handle_request(
                         &sock, &state, &bound, &device_id, dedupe, &listener, data, addr,
@@ -192,7 +194,7 @@ async fn inactive_check_loop(
     state: Arc<Mutex<State>>,
     timeout: Arc<Mutex<Duration>>,
     device_id: String,
-    listener: Option<EventListener>,
+    listener: Arc<Mutex<Option<EventListener>>>,
     dedupe_window: Duration,
 ) {
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
@@ -223,7 +225,7 @@ async fn inactive_check_loop(
         };
         for ip in newly_inactive {
             tracing::info!("Battery inactive on Shelly UDP port: {ip}");
-            if let Some(cb) = &listener {
+            if let Some(cb) = listener.lock().clone() {
                 cb(&device_id, &ip, &serde_json::json!({"_removed": true}));
             }
         }

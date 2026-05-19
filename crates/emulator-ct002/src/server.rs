@@ -129,7 +129,7 @@ pub struct Ct002Emulator {
     last_dedupe: Arc<Mutex<HashMap<String, Instant>>>,
     info_idx: Arc<AtomicU8>,
     last_smooth_target: Arc<Mutex<f64>>,
-    event_listener: Mutex<Option<EventListenerFn>>,
+    event_listener: Arc<Mutex<Option<EventListenerFn>>>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -187,7 +187,7 @@ impl Ct002Emulator {
             last_dedupe: Arc::new(Mutex::new(HashMap::new())),
             info_idx: Arc::new(AtomicU8::new(0)),
             last_smooth_target: Arc::new(Mutex::new(0.0)),
-            event_listener: Mutex::new(None),
+            event_listener: Arc::new(Mutex::new(None)),
             cancel: tokio_util::sync::CancellationToken::new(),
             task: tokio::sync::Mutex::new(None),
         }
@@ -336,7 +336,7 @@ impl Ct002Emulator {
             last_dedupe: self.last_dedupe.clone(),
             info_idx: self.info_idx.clone(),
             last_smooth_target: self.last_smooth_target.clone(),
-            event_listener: self.event_listener.lock().clone(),
+            event_listener: self.event_listener.clone(),
             meters: self
                 .meters
                 .iter()
@@ -379,7 +379,7 @@ struct ServerCtx {
     last_dedupe: Arc<Mutex<HashMap<String, Instant>>>,
     info_idx: Arc<AtomicU8>,
     last_smooth_target: Arc<Mutex<f64>>,
-    event_listener: Option<EventListenerFn>,
+    event_listener: Arc<Mutex<Option<EventListenerFn>>>,
     meters: Vec<(Arc<dyn Powermeter>, ClientFilter, bool)>,
     cancel: tokio_util::sync::CancellationToken,
 }
@@ -432,7 +432,7 @@ async fn cleanup_loop(ctx: Arc<ServerCtx>) {
             for k in &stale {
                 consumers.remove(k);
                 ctx.balancer.remove_consumer(k);
-                if let Some(cb) = &ctx.event_listener {
+                if let Some(cb) = ctx.event_listener.lock().clone() {
                     cb(&ctx.device_id, k, &serde_json::json!({"_removed": true}));
                 }
             }
@@ -580,7 +580,8 @@ async fn handle(ctx: Arc<ServerCtx>, data: &[u8], addr: SocketAddr) -> Result<()
 
     // Event listener (CT002 consumer event).
     if !in_inspection_mode {
-        if let Some(cb) = &ctx.event_listener {
+        let listener = ctx.event_listener.lock().clone();
+        if let Some(cb) = listener {
             let consumer = ctx.consumers.lock().get(&consumer_id).cloned();
             let phase_s = consumer
                 .as_ref()
