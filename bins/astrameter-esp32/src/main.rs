@@ -180,11 +180,9 @@ async fn async_main() -> anyhow::Result<()> {
     log::info!("step: bind powermeters from config");
     let bound = read_all_powermeter_configs(&config, &registry, platform.clone())
         .map_err(|e| anyhow::anyhow!("bind powermeters: {e}"))?;
-    for bp in &bound {
-        if let Err(e) = bp.meter.start().await {
-            log::warn!("powermeter [{}] start: {e}", bp.section);
-        }
-    }
+    // NOTE: meter `start()` is deferred until after MQTT Insights has
+    // been initialised — see the comment above `start_mqtt_insights`
+    // for why.
 
     let device_type = config
         .section("GENERAL")
@@ -269,11 +267,13 @@ async fn async_main() -> anyhow::Result<()> {
         }
     };
 
-    // MQTT Insights + Marstek HA discovery (matches host main.rs:533-607).
-    // Without this block the ESP32 build was silently skipping MQTT
-    // entirely — no `mqtt: connecting to ...` log line ever appeared
-    // because the `MqttFactory::connect` call site only lives inside
-    // `InsightsService::start`.
+    // MQTT Insights runs BEFORE we kick off powermeter `start()`s
+    // because `EspAsyncMqttClient::new` needs a 128 KB sacrificial
+    // pthread for its mbedTLS context init (see `mqtt_impl.rs`), and
+    // once the HomeAssistant powermeter's WebSocket task is up,
+    // internal SRAM no longer has a contiguous 128 KB block free.
+    // ESP-IDF v5.2.3 has no API to put pthread stacks in PSRAM, so
+    // we order the startup instead.
     let _insights = match start_mqtt_insights(
         &config,
         &device_type,
@@ -295,6 +295,19 @@ async fn async_main() -> anyhow::Result<()> {
     // as a detached task so a slow/failing HTTPS round-trip doesn't
     // block the supervisor.
     spawn_marstek_registration(&config, &device_type, platform.clone());
+
+    // Now that MQTT init is done (and its 128 KB temp pthread is
+    // joined + reclaimed), bring up the powermeters. Push-based
+    // meters like HomeAssistant/HomeWizard each open their own
+    // WebSocket task here; doing that before MQTT init would
+    // fragment internal SRAM past the point where the 128 KB
+    // sacrificial stack fits.
+    log::info!("step: start powermeters");
+    for bp in &bound {
+        if let Err(e) = bp.meter.start().await {
+            log::warn!("powermeter [{}] start: {e}", bp.section);
+        }
+    }
 
     // Web config editor — serves the config.ini editor + Wi-Fi reset at
     // http://<sta-ip>/ on the AP's STA-side address (e.g.
