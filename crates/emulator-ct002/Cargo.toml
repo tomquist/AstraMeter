@@ -20,4 +20,6 @@ tokio-util = "0.7"
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+astrameter-platform-std = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+async-trait = { workspace = true }

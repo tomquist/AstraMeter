@@ -32,5 +32,7 @@ url = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
+astrameter-platform-std = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+serde_json = { workspace = true }
 wiremock = { workspace = true }

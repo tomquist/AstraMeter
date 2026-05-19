@@ -19,3 +19,7 @@ tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
 tokio-util = "0.7"
 tracing = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+astrameter-platform-std = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
