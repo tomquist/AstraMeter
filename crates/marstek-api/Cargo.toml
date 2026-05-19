@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Marstek cloud HTTPS registration client."
+description = "Marstek cloud HTTPS client (login, device-list, register managed CT002/CT003)."
 
 [dependencies]
 astrameter-core = { workspace = true }
@@ -13,5 +13,9 @@ astrameter-platform = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+md-5 = "0.10"
+hex = { workspace = true }
+rand = "0.8"
 tokio = { workspace = true, features = ["sync"] }
+thiserror = { workspace = true }
 tracing = { workspace = true }

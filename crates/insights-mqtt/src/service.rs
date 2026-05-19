@@ -109,7 +109,10 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("insights MQTT connect error: {e}; retrying in 5s");
-                if tokio::time::timeout(RECONNECT_DELAY, cancel.cancelled()).await.is_err() {
+                if tokio::time::timeout(RECONNECT_DELAY, cancel.cancelled())
+                    .await
+                    .is_err()
+                {
                     continue;
                 } else {
                     return;
