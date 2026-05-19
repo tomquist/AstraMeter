@@ -37,6 +37,13 @@ CONFIG_HTTPD_MAX_URI_LEN=1024
 # HomeWizard powermeters need TLS).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 
+# Default stack size for pthreads created without an explicit
+# `stack_size`. Tokio's blocking-pool spawns its workers via
+# `thread::Builder::new()` (no stack hint), so they pick this up.
+# 3 KB is the IDF default and is too tight for `std::net::*` calls
+# that go through Rust's syscall stubs — bump to 8 KB.
+CONFIG_PTHREAD_TASK_STACK_DEFAULT=8192
+
 # Allow FreeRTOS task stacks to live in PSRAM. Our tokio worker
 # pthread needs ~192 KB so MQTT's mbedTLS context init has room,
 # and tokio's blocking-task thread pool spawns one pthread per

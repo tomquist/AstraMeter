@@ -43,16 +43,20 @@ fn main() -> anyhow::Result<()> {
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
 
     // The ESP-IDF "main" task only gets ~3.5 KB of stack by default, so
-    // we run the tokio runtime on a worker pthread we control. 64 KB is
-    // the sweet spot: enough for HA WebSocket + CT002 + the current-thread
-    // runtime, while leaving ~250 KB of internal SRAM free for tokio's
-    // blocking-pool pthreads (UDP/TCP/UART). The one operation that
-    // doesn't fit on this stack — `EspAsyncMqttClient::new`'s mbedTLS
-    // context init — runs on its own sacrificial pthread inside
-    // `EspMqttFactory::connect` (see `mqtt_impl.rs`).
+    // we run the tokio runtime on a worker pthread we control. 96 KB
+    // covers the deepest call chain we've observed: the worker holds
+    // tokio's runtime frame, the insights service's poll frame, and
+    // the synchronous mpsc::recv waiting for `EspAsyncMqttClient::new`
+    // (which itself runs on a separate PSRAM-stack FreeRTOS task —
+    // see `mqtt_impl.rs`). With 8 MB PSRAM available we'd happily go
+    // bigger, but IDF v5.2.3's pthread layer has no API to put pthread
+    // stacks in PSRAM, so this 96 KB does come out of internal SRAM —
+    // tested to leave enough heap for tokio's blocking-pool pthreads
+    // (UDP/TCP/UART), HA WebSocket's underlying IDF task, and the
+    // MQTT IDF task.
     let worker = std::thread::Builder::new()
         .name("astrameter".into())
-        .stack_size(64 * 1024)
+        .stack_size(96 * 1024)
         .spawn(|| -> anyhow::Result<()> {
             log::info!("step: build tokio runtime");
             // Tokio's IO driver (mio → epoll) doesn't initialise on
