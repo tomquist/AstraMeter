@@ -150,6 +150,7 @@ dependencies = [
  "astrameter-core",
  "astrameter-platform",
  "async-trait",
+ "futures",
  "parking_lot",
  "rumqttc",
  "serde",
