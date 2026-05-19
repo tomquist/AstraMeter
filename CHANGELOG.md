@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Rewrote AstraMeter in Rust with ESP32 support.** The Python codebase has been replaced by a Rust workspace under `crates/` and `bins/`. The host binary (`astrameter`) is a drop-in replacement for the previous CLI and reads the same `config.ini` format. A new `bins/astrameter-esp32` target produces firmware for the ESP32-S3 (build with `cargo +esp build -p astrameter-esp32 --target xtensa-esp32s3-espidf`). The web config editor and MQTT/Home Assistant integration are simpler in this release — see the migration plan and module-level docs for a list of features still being ported.
+- **Rewrote AstraMeter in Rust with ESP32 support.** The Python codebase has been replaced by a Rust workspace under `crates/` and `bins/`. The host binary (`astrameter`) is a drop-in replacement for the previous CLI and reads the same `config.ini` format with full parity: all 17 powermeters, both UDP emulators (Shelly + CT002/CT003), MQTT Insights with Home Assistant Device Discovery, the Marstek MQTT responder (with periodic broadcast on both `hame_energy/` and `marstek_energy/` topics), Marstek cloud auto-registration, ARP-based MAC enrichment, and the web config editor with comment-preserving atomic saves. A new `bins/astrameter-esp32` target produces firmware for the ESP32-S3 (build with `cargo +esp build -p astrameter-esp32 --target xtensa-esp32s3-espidf`).
 
 ## 2.0.2
 
