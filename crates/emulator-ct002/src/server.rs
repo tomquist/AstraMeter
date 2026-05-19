@@ -16,7 +16,7 @@ use astrameter_core::{Error, Powermeter, Result};
 use astrameter_platform::Platform;
 use parking_lot::Mutex;
 
-use crate::balancer::{Balancer, BalancerConfig};
+use crate::balancer::{BalancerConfig, LoadBalancer};
 use crate::protocol::{build_payload, parse_request, RESPONSE_LABELS};
 
 pub struct BoundMeter {
@@ -31,7 +31,7 @@ pub struct Ct002Emulator {
     meters: Vec<BoundMeter>,
     platform: Arc<Platform>,
     #[allow(dead_code)]
-    balancer: Balancer,
+    balancer: LoadBalancer,
     sessions: Arc<Mutex<HashSet<String>>>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -50,7 +50,7 @@ impl Ct002Emulator {
             meter_mac,
             meters,
             platform,
-            balancer: Balancer::new(balancer_cfg),
+            balancer: LoadBalancer::new(balancer_cfg, 0.2, 10.0, 0.9, 90.0, 60.0, true, None, None),
             sessions: Arc::new(Mutex::new(HashSet::new())),
             cancel: tokio_util::sync::CancellationToken::new(),
             task: tokio::sync::Mutex::new(None),
