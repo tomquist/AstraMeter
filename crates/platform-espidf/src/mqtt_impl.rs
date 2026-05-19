@@ -63,18 +63,39 @@ impl MqttFactory for EspMqttFactory {
     }
 }
 
-/// Run `EspAsyncMqttClient::new` on a dedicated pthread with a 128 KB
-/// stack and `join` before returning — the `join` is what reclaims
-/// the temp thread's stack, so the 128 KB only overlaps the caller's
-/// stack for the duration of mbedTLS init.
+/// Run `EspAsyncMqttClient::new` on a dedicated FreeRTOS task whose
+/// stack lives in **PSRAM**. The mbedTLS context init burns ~80–100 KB
+/// of stack, which is too much for the tokio worker pthread (64 KB)
+/// and also doesn't fit in internal SRAM once Wi-Fi + HA WebSocket are
+/// up. IDF v5.2.3 has no API to put pthread stacks in PSRAM, but
+/// `xTaskCreatePinnedToCoreWithCaps` (added in 5.1) accepts a heap-caps
+/// mask and routes the stack allocation accordingly.
+///
+/// The caller blocks on `rx.recv()` until the task finishes; the task
+/// `vTaskDelete`s itself after sending the result, releasing the PSRAM
+/// stack back to the heap.
 fn init_on_temp_thread(
     url: String,
     opts: MqttOptions,
 ) -> Result<(EspAsyncMqttClient, EspAsyncMqttConnection), MqttError> {
-    let handle = std::thread::Builder::new()
-        .name("mqtt-init".into())
-        .stack_size(128 * 1024)
-        .spawn(move || -> Result<_, String> {
+    use esp_idf_svc::sys;
+
+    type InitResult = Result<(EspAsyncMqttClient, EspAsyncMqttConnection), String>;
+
+    struct Args {
+        opts: MqttOptions,
+        url: String,
+        tx: std::sync::mpsc::SyncSender<InitResult>,
+    }
+
+    extern "C" fn task_entry(arg: *mut std::ffi::c_void) {
+        // SAFETY: `arg` is the `Box::into_raw` pointer the spawner
+        // handed us; we take ownership and the box is dropped at end
+        // of scope.
+        let args: Box<Args> = unsafe { Box::from_raw(arg as *mut Args) };
+        let Args { opts, url, tx } = *args;
+
+        let result: InitResult = (|| {
             let mut cfg = MqttClientConfiguration {
                 client_id: Some(opts.client_id.as_str()),
                 keep_alive_interval: Some(opts.keep_alive),
@@ -88,16 +109,50 @@ fn init_on_temp_thread(
             }
             if opts.tls {
                 // Self-signed certs aren't supported on this transport —
-                // the user has to configure a publicly-trusted cert at the
-                // broker, or run plaintext on the LAN.
-                cfg.crt_bundle_attach = Some(esp_idf_svc::sys::esp_crt_bundle_attach);
+                // the user has to configure a publicly-trusted cert at
+                // the broker, or run plaintext on the LAN.
+                cfg.crt_bundle_attach = Some(sys::esp_crt_bundle_attach);
             }
             EspAsyncMqttClient::new(&url, &cfg).map_err(|e| e.to_string())
-        })
-        .map_err(|e| MqttError::Connect(format!("spawn mqtt-init thread: {e}")))?;
-    handle
-        .join()
-        .map_err(|_| MqttError::Connect("mqtt-init thread panicked".into()))?
+        })();
+
+        let _ = tx.send(result);
+        // SAFETY: passing `NULL` to `vTaskDelete` deletes the calling
+        // task. This is the last thing we do — the stack is reclaimed
+        // by the IDF idle task once we return from it.
+        unsafe { sys::vTaskDelete(std::ptr::null_mut()) };
+    }
+
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let args = Box::new(Args { opts, url, tx });
+    let arg_ptr = Box::into_raw(args) as *mut std::ffi::c_void;
+
+    let mut handle: sys::TaskHandle_t = std::ptr::null_mut();
+    let rc = unsafe {
+        sys::xTaskCreatePinnedToCoreWithCaps(
+            Some(task_entry),
+            b"mqtt-init\0".as_ptr() as *const _,
+            128 * 1024,
+            arg_ptr,
+            5,
+            &mut handle,
+            // `tskNO_AFFINITY` is `(BaseType_t)0x7FFFFFFF` in FreeRTOS;
+            // bindgen mangles it inconsistently across IDF versions, so
+            // use the literal directly.
+            0x7FFF_FFFFi32,
+            sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT,
+        )
+    };
+    if rc != 1 {
+        // pdPASS == 1; reclaim the box on failure so we don't leak.
+        unsafe { drop(Box::from_raw(arg_ptr as *mut Args)) };
+        return Err(MqttError::Connect(format!(
+            "xTaskCreatePinnedToCoreWithCaps(mqtt-init): rc={rc}"
+        )));
+    }
+
+    rx.recv()
+        .map_err(|e| MqttError::Connect(format!("recv mqtt-init: {e}")))?
         .map_err(|e| MqttError::Connect(format!("esp mqtt new: {e}")))
 }
 
