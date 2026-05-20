@@ -13,10 +13,38 @@ pub struct EspHttpClient;
 #[async_trait]
 impl HttpClient for EspHttpClient {
     async fn request(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
+        log_heap_before_spawn(&req);
         tokio::task::spawn_blocking(move || blocking_request(req))
             .await
             .map_err(|e| HttpError::Other(format!("spawn_blocking: {e}")))?
     }
+}
+
+/// Log internal-SRAM state before tokio asks pthread for a new
+/// blocking-pool worker. If `pthread_create` returns ENOMEM, the
+/// largest contiguous free internal block is the metric to look at —
+/// total free can be plenty while the largest block is too small for
+/// the pthread stack.
+fn log_heap_before_spawn(req: &HttpRequest) {
+    use esp_idf_svc::sys::{
+        heap_caps_get_free_size, heap_caps_get_largest_free_block, MALLOC_CAP_INTERNAL,
+    };
+    let (int_free, int_largest) = unsafe {
+        (
+            heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+        )
+    };
+    let method = match req.method {
+        HttpMethod::Get => "GET",
+        HttpMethod::Post => "POST",
+        HttpMethod::Put => "PUT",
+        HttpMethod::Delete => "DELETE",
+    };
+    log::info!(
+        "http_impl: spawn_blocking for {method} {} (internal free={int_free} largest={int_largest})",
+        req.url
+    );
 }
 
 fn blocking_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {

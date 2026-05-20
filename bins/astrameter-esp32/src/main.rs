@@ -43,23 +43,25 @@ fn main() -> anyhow::Result<()> {
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
     log_task_handle("main (app_main)");
 
+    log_heap("boot, before worker spawn");
+
     // The ESP-IDF "main" task only gets ~3.5 KB of stack by default, so
-    // we run the tokio runtime on a worker pthread we control. 96 KB
-    // covers the deepest call chain we've observed: the worker holds
-    // tokio's runtime frame, the insights service's poll frame, and
-    // the synchronous mpsc::recv waiting for `EspAsyncMqttClient::new`
-    // (which itself runs on a separate PSRAM-stack FreeRTOS task —
-    // see `mqtt_impl.rs`). With 8 MB PSRAM available we'd happily go
-    // bigger, but IDF v5.2.3's pthread layer has no API to put pthread
-    // stacks in PSRAM, so this 96 KB does come out of internal SRAM —
-    // tested to leave enough heap for tokio's blocking-pool pthreads
-    // (UDP/TCP/UART), HA WebSocket's underlying IDF task, and the
-    // MQTT IDF task.
+    // we run the tokio runtime on a worker pthread we control. 64 KB
+    // covers the deepest call chain we've observed now that the heavy
+    // mbedTLS init has been moved off the worker into a PSRAM-stack
+    // FreeRTOS task (see `mqtt_impl.rs`). IDF v5.2.3's pthread layer
+    // allocates pthread stacks from internal SRAM regardless of
+    // `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY` (that option only
+    // affects `xTaskCreateWithCaps`, not pthread_create), so every KB
+    // here comes out of the ~280 KiB internal heap that also has to
+    // host Wi-Fi/lwIP, mbedTLS, esp_http_server, and tokio's
+    // blocking-pool pthread stacks.
     let worker = std::thread::Builder::new()
         .name("astrameter".into())
-        .stack_size(96 * 1024)
+        .stack_size(64 * 1024)
         .spawn(|| -> anyhow::Result<()> {
             log_task_handle("worker (astrameter)");
+            log_heap("worker entered");
             log::info!("step: build tokio runtime");
             // Tokio's IO driver (mio → epoll) doesn't initialise on
             // ESP-IDF — `enable_io()` returns
@@ -218,6 +220,7 @@ async fn async_main() -> anyhow::Result<()> {
         .unwrap_or(Ok(0.0))
         .unwrap_or(0.0);
 
+    log_heap("before emulator");
     log::info!("step: start emulator (DEVICE_TYPE={device_type})");
     let mut ct002_for_handlers: Option<Arc<Ct002Emulator>> = None;
     let mut shelly_for_listeners: Vec<Arc<ShellyEmulator>> = Vec::new();
@@ -325,6 +328,7 @@ async fn async_main() -> anyhow::Result<()> {
     // WebSocket task here; doing that before MQTT init would
     // fragment internal SRAM past the point where the 128 KB
     // sacrificial stack fits.
+    log_heap("before powermeter start");
     log::info!("step: start powermeters");
     for bp in &bound {
         if let Err(e) = bp.meter.start().await {
@@ -1623,6 +1627,28 @@ fn write_nvs_config_from_dict(
 fn log_task_handle(label: &str) {
     let h = unsafe { esp_idf_svc::sys::xTaskGetCurrentTaskHandle() };
     log::info!("task[{label}]: handle={h:p}");
+}
+
+/// Log internal-SRAM and PSRAM heap state. `pthread_create` allocates
+/// task stacks from internal SRAM only, so the "largest free internal
+/// block" is the metric that determines whether the next blocking
+/// thread can be spawned — total free is misleading once the heap is
+/// fragmented.
+#[cfg(target_os = "espidf")]
+pub(crate) fn log_heap(label: &str) {
+    use esp_idf_svc::sys::{
+        heap_caps_get_free_size, heap_caps_get_largest_free_block, MALLOC_CAP_INTERNAL,
+        MALLOC_CAP_SPIRAM,
+    };
+    unsafe {
+        let int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        let int_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        let psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        let psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        log::info!(
+            "heap[{label}]: internal free={int_free} largest={int_largest} | psram free={psram_free} largest={psram_largest}"
+        );
+    }
 }
 
 /// Override FreeRTOS's default stack-overflow hook (which is
