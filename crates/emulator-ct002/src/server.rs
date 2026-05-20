@@ -398,10 +398,20 @@ async fn recv_loop(ctx: Arc<ServerCtx>) {
     let mut buf = vec![0u8; 4096];
     let mut got_first_packet = false;
     loop {
-        let r = tokio::select! {
-            _ = ctx.cancel.cancelled() => break,
-            r = ctx.sock.recv_from(&mut buf) => r,
-        };
+        // Don't race the CancellationToken against `recv_from` via
+        // `tokio::select!`. On ESP32 / current-thread runtimes
+        // dropping a `spawn_blocking` JoinHandle mid-flight (which
+        // is what the losing branch of the select does) leaves the
+        // tokio task state inconsistent — the blocking thread later
+        // panics in `transition_to_complete` with
+        // `assertion failed: prev.is_running()`. The platform layer
+        // sets a 1 s read timeout on the socket, so we get
+        // responsive cancellation by just polling the token between
+        // recvs.
+        if ctx.cancel.is_cancelled() {
+            break;
+        }
+        let r = ctx.sock.recv_from(&mut buf).await;
         let (n, addr) = match r {
             Ok(p) => p,
             Err(e) => {
