@@ -235,6 +235,26 @@ async fn async_main() -> anyhow::Result<()> {
                 Some(section) => {
                     let udp_port = section.get_int("UDP_PORT", 12345)? as u16;
                     let ct_mac = section.get_string("CT_MAC", "");
+                    // Resolve device_id the same way the host supervisor
+                    // does: honour the per-section `DEVICE_ID` override,
+                    // else the first entry of `[GENERAL].DEVICE_IDS`,
+                    // else `device-1` (Python parity — the HA Discovery
+                    // node_id is derived from this, so an empty value
+                    // produces a broken topic like
+                    // `homeassistant/device/astrameter_ct002_/config`).
+                    let device_id = section
+                        .get_opt_string("DEVICE_ID")
+                        .or_else(|| {
+                            config
+                                .section("GENERAL")
+                                .and_then(|s| s.get_opt_string("DEVICE_IDS"))
+                                .and_then(|v| {
+                                    v.split(',')
+                                        .map(|s| s.trim().to_string())
+                                        .find(|s| !s.is_empty())
+                                })
+                        })
+                        .unwrap_or_else(|| "device-1".to_string());
                     let meters: Vec<Ct002BoundMeter> = bound
                         .iter()
                         .map(|bp| Ct002BoundMeter {
@@ -243,11 +263,21 @@ async fn async_main() -> anyhow::Result<()> {
                             wait_for_next: bp.wait_for_next_message,
                         })
                         .collect();
-                    let emu = Arc::new(Ct002Emulator::new(
-                        udp_port,
+                    let settings = astrameter_emulator_ct002::server::Ct002Settings {
                         ct_mac,
-                        meters,
+                        ct_type: if device_type == "ct003" {
+                            "HME-3".to_string()
+                        } else {
+                            "HME-4".to_string()
+                        },
+                        ..Default::default()
+                    };
+                    let emu = Arc::new(Ct002Emulator::with_settings(
+                        udp_port,
+                        device_id,
+                        settings,
                         astrameter_emulator_ct002::balancer::BalancerConfig::default(),
+                        meters,
                         platform.clone(),
                     ));
                     emu.start().await?;
