@@ -100,13 +100,21 @@ fn main() -> anyhow::Result<()> {
             // `max_blocking_threads` caps the pool so we can't
             // exhaust internal RAM by spawning unbounded pthreads.
             // The default is 512, which on a chip with ~280 KiB of
-            // internal RAM is a footgun. 4 slots × 24 KiB = 96 KiB
-            // ceiling covers the long-lived UDP recv loop plus a
-            // couple of transient HTTP/UART calls.
+            // internal RAM is a footgun. In steady state we only
+            // have one long-lived consumer (the CT002 UDP recv
+            // loop) plus the occasional transient (UDP send-back,
+            // HA WS send, Marstek HTTPS at boot). 2 slots × 24 KiB
+            // = 48 KiB ceiling fits comfortably with everything
+            // else; 4 slots × 24 KiB = 96 KiB was reproducibly
+            // exhausting internal heap over ~30 min as Wi-Fi
+            // reconnects + the HA WS auth dance fragmented the
+            // remaining space, eventually failing
+            // `pthread_create` for the next `recv_from` worker
+            // with ENOMEM.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .thread_stack_size(24 * 1024)
-                .max_blocking_threads(4)
+                .max_blocking_threads(2)
                 .build()
                 .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
             log::info!("step: enter async_main");
@@ -400,8 +408,17 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     log::info!("astrameter-esp32: services running");
+    let mut tick: u64 = 0;
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
+        tick += 1;
+        // Periodic heap snapshot. Catches slow drift (Wi-Fi reconnects,
+        // HA WS dance leaks, mbedTLS scratch fragmenting internal SRAM,
+        // …) early — if the largest internal block trends down toward
+        // the blocking-pool stack size we'll know the firmware is on a
+        // path to the next `pthread_create` ENOMEM before it actually
+        // happens.
+        log_heap(&format!("uptime {}m", tick));
     }
 }
 
