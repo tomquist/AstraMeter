@@ -112,6 +112,21 @@ fn init_on_temp_thread(
             let mut cfg = MqttClientConfiguration {
                 client_id: Some(opts.client_id.as_str()),
                 keep_alive_interval: Some(opts.keep_alive),
+                // IDF defaults `out_buffer_size` to
+                // `CONFIG_MQTT_BUFFER_SIZE` (1024 bytes). HA Device
+                // Discovery payloads for a single CT002 consumer
+                // run ~6.8 KiB — `esp_mqtt_client_publish` hangs
+                // silently when the serialized PUBLISH packet
+                // (topic + headers + payload) doesn't fit the
+                // outgoing buffer. Bump to 16 KiB so the full
+                // discovery message fits in one MQTT frame, and
+                // bump the rx buffer to match in case the broker
+                // ever sends us large retained messages we
+                // subscribed to. The buffers come out of the
+                // default heap, which routes to PSRAM under our
+                // `CONFIG_SPIRAM_USE_MALLOC` setup.
+                buffer_size: 16 * 1024,
+                out_buffer_size: 16 * 1024,
                 ..Default::default()
             };
             if let Some(u) = opts.username.as_deref() {
