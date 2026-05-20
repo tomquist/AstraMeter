@@ -155,9 +155,15 @@ impl WebSocketClient for TungsteniteClient {
                         connected_for_cb.store(true, Ordering::SeqCst);
                     }
                     WebSocketEventType::Text(s) => {
+                        log::info!(
+                            "ws[{url_for_log}]: recv Text ({} bytes): {}",
+                            s.len(),
+                            &s[..s.len().min(200)]
+                        );
                         let _ = tx_for_cb.send(Ok(WsMessage::Text((*s).to_string())));
                     }
                     WebSocketEventType::Binary(b) => {
+                        log::info!("ws[{url_for_log}]: recv Binary ({} bytes)", b.len());
                         let _ = tx_for_cb.send(Ok(WsMessage::Binary(b.to_vec())));
                     }
                     WebSocketEventType::Ping => {
