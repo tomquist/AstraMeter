@@ -390,6 +390,7 @@ struct ServerCtx {
 
 async fn recv_loop(ctx: Arc<ServerCtx>) {
     let mut buf = vec![0u8; 4096];
+    let mut got_first_packet = false;
     loop {
         let r = tokio::select! {
             _ = ctx.cancel.cancelled() => break,
@@ -398,11 +399,30 @@ async fn recv_loop(ctx: Arc<ServerCtx>) {
         let (n, addr) = match r {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("CT002 recv: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                // The platform layer sets a 1 s read timeout on the
+                // UDP socket so the recv future can periodically check
+                // the cancellation token. When it expires the OS
+                // returns EAGAIN / EWOULDBLOCK / "operation timed
+                // out" — that's expected idle behaviour, not an
+                // error. `NetError` wraps everything as a string, so
+                // match on the rendered message to filter it out.
+                let msg = e.to_string();
+                let is_timeout = msg.contains("temporarily unavailable")
+                    || msg.contains("No more processes") // newlib strerror(EAGAIN)
+                    || msg.contains("timed out")
+                    || msg.contains("would block");
+                if !is_timeout {
+                    tracing::warn!("CT002 recv: {e}");
+                }
                 continue;
             }
         };
+        if !got_first_packet {
+            got_first_packet = true;
+            tracing::info!(
+                "CT002 recv: first packet from {addr} ({n} bytes) — Marstek device is reaching the emulator"
+            );
+        }
         let data = buf[..n].to_vec();
         let ctx = ctx.clone();
         tokio::spawn(async move {

@@ -1688,11 +1688,7 @@ impl tracing_core::Subscriber for TracingToLog {
     fn event(&self, event: &tracing_core::Event<'_>) {
         struct Visitor(String);
         impl tracing_core::field::Visit for Visitor {
-            fn record_debug(
-                &mut self,
-                field: &tracing_core::Field,
-                value: &dyn core::fmt::Debug,
-            ) {
+            fn record_debug(&mut self, field: &tracing_core::Field, value: &dyn core::fmt::Debug) {
                 use core::fmt::Write;
                 if field.name() == "message" {
                     let _ = write!(self.0, "{value:?}");
