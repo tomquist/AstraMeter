@@ -238,7 +238,7 @@ impl WebSocketClient for TungsteniteClient {
         }
 
         Ok(Box::new(EspWsConn {
-            client: Arc::new(ParkingMutex::new(client)),
+            client: Some(Arc::new(ParkingMutex::new(client))),
             rx,
             connected,
         }))
@@ -246,13 +246,73 @@ impl WebSocketClient for TungsteniteClient {
 }
 
 struct EspWsConn {
-    client: Arc<ParkingMutex<EspWebSocketClient<'static>>>,
+    /// `Option` so our `Drop` can `take()` the inner Arc and run a
+    /// graceful teardown that tolerates `ESP_FAIL` from
+    /// `esp_websocket_client_close` (which fires whenever the peer
+    /// closed first — esp-idf-svc 0.52.1's own `Drop` impl `unwrap()`s
+    /// that and aborts the firmware).
+    client: Option<Arc<ParkingMutex<EspWebSocketClient<'static>>>>,
     rx: tokio::sync::mpsc::UnboundedReceiver<Result<WsMessage, WsError>>,
     /// Mirrors the IDF Connected/Disconnected callbacks. `send` checks
     /// it before calling into the underlying client so we don't
     /// surface the cryptic "Websocket client is not connected" error
     /// during a transient reconnect.
     connected: Arc<AtomicBool>,
+}
+
+impl Drop for EspWsConn {
+    fn drop(&mut self) {
+        // Take the Arc out of the Option so the upstream Drop doesn't
+        // run via the field destructor. If we hold the only ref we can
+        // unwrap the Arc + Mutex and run a teardown that tolerates
+        // ESP_FAIL — esp-idf-svc 0.52.1's `Drop for EspWebSocketClient`
+        // calls `esp_websocket_client_close(handle, timeout).unwrap()`,
+        // which panics whenever the peer closed first (IDF returns
+        // ESP_FAIL with "Client was not started"). That panic aborts
+        // the whole firmware, so we have to bypass it.
+        //
+        // Trade-off: we `mem::forget` the inner `EspWebSocketClient` to
+        // skip its `Drop`, which leaks the boxed event callback
+        // (~200 B per connection). That's acceptable for a process
+        // that lives for days — the alternative is a hard abort on
+        // every HA-initiated WS close. Remove this workaround when
+        // upgrading past whatever esp-idf-svc version fixes the
+        // unwrap upstream.
+        use esp_idf_svc::handle::RawHandle;
+        let Some(arc) = self.client.take() else {
+            return;
+        };
+        match Arc::try_unwrap(arc) {
+            Ok(mutex) => {
+                let client = mutex.into_inner();
+                let handle = client.handle();
+                std::mem::forget(client);
+                unsafe {
+                    // `close` returns ESP_FAIL if the peer closed
+                    // already; `destroy` returns ESP_FAIL if `close`
+                    // didn't fully tear down the task. Both are
+                    // expected during peer-initiated close — ignore
+                    // them. The IDF still frees the client struct on
+                    // `destroy` even when it reports failure.
+                    let _ = esp_idf_svc::sys::esp_websocket_client_close(handle, 0);
+                    let _ = esp_idf_svc::sys::esp_websocket_client_destroy(handle);
+                }
+            }
+            Err(arc) => {
+                // Other refs still alive (in-flight `send` typically).
+                // We can't safely tear down here — drop our share and
+                // hope the last holder is on a path that doesn't
+                // trigger the upstream `Drop` panic. In our codebase
+                // `send` clones the Arc only across one
+                // `spawn_blocking`, which is bounded.
+                log::warn!(
+                    "ws_impl: EspWsConn dropped while other refs alive ({} extra) — upstream Drop will run and may panic on ESP_FAIL",
+                    Arc::strong_count(&arc) - 1
+                );
+                drop(arc);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -268,7 +328,9 @@ impl WsConnection for EspWsConn {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let client = self.client.clone();
+        let Some(client) = self.client.clone() else {
+            return Err(WsError::Closed);
+        };
         let send_result = tokio::task::spawn_blocking(move || -> Result<(), WsError> {
             let mut g = client.lock();
             match msg {

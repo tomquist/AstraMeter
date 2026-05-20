@@ -37,6 +37,25 @@ CONFIG_HTTPD_MAX_URI_LEN=1024
 # HomeWizard powermeters need TLS).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 
+# Shrink mbedTLS content buffers from the 16 KiB IDF default to 4 KiB.
+# `mbedtls_ssl_setup` allocates one of each per TLS connection out of
+# the internal heap, and with Wi-Fi + lwIP + tokio worker + emulators
+# all running the largest contiguous internal block is ~23 KiB — not
+# enough for a 16 KiB allocation, so HTTPS calls fail with
+# `mbedtls_ssl_setup returned -0x7F00` (MBEDTLS_ERR_SSL_ALLOC_FAILED).
+# 4 KiB covers HA WS auth frames + Marstek API JSON; anything larger
+# than 4 KiB in a TLS record would be rejected by the peer at
+# handshake (max_fragment_length extension). Saves ~24 KiB internal
+# heap per TLS connection.
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
+
+# Free mbedTLS handshake buffers after handshake completes — they're
+# only needed while exchanging certificates and key material, not
+# during the steady-state data phase. Reclaims another ~10–20 KiB
+# internal heap per long-lived TLS connection (e.g. HA WSS).
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
 # Default stack size for pthreads created without an explicit
 # `stack_size`. Tokio's blocking-pool spawns its workers via
 # `thread::Builder::new()` (no stack hint), so they pick this up.
