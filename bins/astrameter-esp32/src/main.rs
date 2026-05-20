@@ -82,42 +82,34 @@ fn main() -> anyhow::Result<()> {
             // which is too tight for std::net::* syscalls via Rust's
             // newlib stubs.
             //
-            // 24 KiB is enough headroom for mbedTLS' RSA verify
-            // chain walking during a TLS handshake. We previously
-            // ran at 12 KiB to fit in internal SRAM; with mbedTLS
-            // and Wi-Fi/lwIP now routed to PSRAM
-            // (CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y +
-            // CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y) we have
-            // headroom to grow the stack back. Symptom of an
-            // undersized stack here is _not_ a clean overflow trap —
-            // mbedTLS scribbles past the bottom of the stack into
-            // the next page, which on these pthreads is the tokio
-            // task state struct. The RUNNING bit gets cleared by
-            // the scribble, and the blocking thread later panics in
-            // `transition_to_complete` with
-            // `assertion failed: prev.is_running()`.
+            // 12 KiB is plenty for everything that legitimately
+            // belongs in tokio's blocking pool on this target: UDP
+            // recv/send (`std::net`), HA WS send over `ws://`
+            // (plaintext, no TLS in the send path), and the Marstek
+            // MQTT broadcast publish path. HTTPS (mbedTLS RSA verify
+            // chain walking, ~24 KiB stack) has been moved off the
+            // pool entirely — `http_impl.rs` spawns a dedicated
+            // FreeRTOS task with PSRAM stack per request via
+            // `xTaskCreatePinnedToCoreWithCaps`. With HTTPS off the
+            // pool we don't have to size every blocking slot for
+            // the worst case.
             //
-            // `max_blocking_threads` caps the pool so we can't
-            // exhaust internal RAM by spawning unbounded pthreads.
-            // The default is 512, which on a chip with ~280 KiB of
-            // internal RAM is a footgun. In steady state we have
-            // one long-lived consumer (the CT002 UDP recv loop)
-            // plus a couple of transients (UDP send-back, HA WS
-            // send, Marstek HTTPS at boot). 3 slots × 24 KiB =
-            // 72 KiB ceiling: one for the recv, one for the
-            // current transient, one spare so a burst doesn't
-            // force the pool to churn threads in/out.
+            // IDF pthread always allocates task stacks from
+            // internal SRAM (the non-WithCaps `xTaskCreate*`), so
+            // `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY` doesn't
+            // route them to PSRAM — only WithCaps variants honour
+            // that. 3 slots × 12 KiB = 36 KiB ceiling, low enough
+            // to not pressure boot-time heap fragmentation.
             //
             // `thread_keep_alive` is bumped from tokio's 10 s
             // default to 5 min so an idle blocking thread sticks
-            // around instead of exiting and being respawned —
-            // that thread churn under contention was a reliable
-            // trigger for a `prev.is_running()` panic in tokio's
-            // task state machine after WS Drop + reconnect
-            // bursts.
+            // around between bursts instead of being respawned —
+            // pthread churn under contention reliably triggers a
+            // `prev.is_running()` panic in tokio's task state
+            // machine.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .thread_stack_size(24 * 1024)
+                .thread_stack_size(12 * 1024)
                 .max_blocking_threads(3)
                 .thread_keep_alive(std::time::Duration::from_secs(300))
                 .build()
