@@ -72,11 +72,21 @@ fn main() -> anyhow::Result<()> {
             // blocking-pool pthreads. Without this, they inherit
             // CONFIG_PTHREAD_TASK_STACK_DEFAULT (3 KB by IDF default),
             // which is too tight for std::net::* syscalls via Rust's
-            // newlib stubs. 16 KB is generous but cheap — blocking
-            // pthreads come and go and don't sit in memory long-term.
+            // newlib stubs.
+            //
+            // `max_blocking_threads` caps the pool so we can't exhaust
+            // internal RAM by spawning unbounded pthreads. The default
+            // is 512, which on a chip with ~280 KiB of internal RAM is
+            // a footgun — `pthread_create` fails with ENOMEM the
+            // moment several concurrent `spawn_blocking` calls land
+            // (e.g. CT002 UDP recv parked + Marstek HTTP request +
+            // UDP send). 4 slots × 12 KiB = 48 KiB ceiling covers the
+            // long-lived UDP recv loops plus a couple of transient
+            // HTTP/UART calls.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .thread_stack_size(16 * 1024)
+                .thread_stack_size(12 * 1024)
+                .max_blocking_threads(4)
                 .build()
                 .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
             log::info!("step: enter async_main");

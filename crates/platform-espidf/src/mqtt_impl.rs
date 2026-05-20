@@ -32,8 +32,7 @@ impl MqttFactory for EspMqttFactory {
         // (which is "pthread" for every Rust thread), but the handle
         // is unique.
         let caller = unsafe { esp_idf_svc::sys::xTaskGetCurrentTaskHandle() };
-        let high_water_words =
-            unsafe { esp_idf_svc::sys::uxTaskGetStackHighWaterMark(caller) };
+        let high_water_words = unsafe { esp_idf_svc::sys::uxTaskGetStackHighWaterMark(caller) };
         log::info!(
             "mqtt: connecting to {url} (tls={}, user={:?}, caller_handle={caller:p}, caller_stack_free={} bytes)",
             opts.tls,
