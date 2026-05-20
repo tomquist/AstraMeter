@@ -352,6 +352,16 @@ async fn async_main() -> anyhow::Result<()> {
     // once the HomeAssistant powermeter's WebSocket task is up,
     // internal SRAM no longer has a contiguous 128 KB block free.
     // ESP-IDF v5.2.3 has no API to put pthread stacks in PSRAM, so
+    // Marstek cloud auto-register first (matches host main.rs's
+    // `_build_managed_marstek` flow): the cloud's response carries the
+    // MAC that hame-relay will route control messages through, and
+    // we need that MAC at MQTT-insights startup so the
+    // MarstekBinding subscribes to the correct `App/<mac>/ctrl`
+    // topic. If registration fails we still start insights — there
+    // just won't be a Marstek MQTT binding.
+    let marstek_mac =
+        register_marstek_managed_device(&config, &device_type, platform.clone()).await;
+
     // we order the startup instead.
     let _insights = match start_mqtt_insights(
         &config,
@@ -360,6 +370,7 @@ async fn async_main() -> anyhow::Result<()> {
         ct002_for_handlers.clone(),
         &shelly_for_listeners,
         platform.clone(),
+        marstek_mac.as_deref(),
     )
     .await
     {
@@ -369,11 +380,6 @@ async fn async_main() -> anyhow::Result<()> {
             None
         }
     };
-
-    // Marstek cloud auto-register (matches host main.rs:572-607). Spawn
-    // as a detached task so a slow/failing HTTPS round-trip doesn't
-    // block the supervisor.
-    spawn_marstek_registration(&config, &device_type, platform.clone());
 
     // Now that MQTT init is done (and its 128 KB temp pthread is
     // joined + reclaimed), bring up the powermeters. Push-based
@@ -440,6 +446,12 @@ async fn start_mqtt_insights(
     ct002: Option<std::sync::Arc<astrameter_emulator_ct002::server::Ct002Emulator>>,
     shelly_emus: &[std::sync::Arc<astrameter_emulator_shelly::ShellyEmulator>],
     platform: std::sync::Arc<astrameter_platform::Platform>,
+    /// MAC from the Marstek cloud registration response. Used as the
+    /// `MarstekBinding::mac` so we subscribe to the correct
+    /// `App/<mac>/ctrl` topic. If `None`, the binding falls back to
+    /// `[CT002].CT_MAC` (manual override) and ultimately to no
+    /// binding at all if neither is set.
+    marstek_mac: Option<&str>,
 ) -> anyhow::Result<Option<std::sync::Arc<astrameter_insights_mqtt::InsightsService>>> {
     use std::sync::Arc;
 
@@ -534,8 +546,35 @@ async fn start_mqtt_insights(
                 "CT002"
             };
             if let Some(cs) = config.section(section_name_ct) {
-                let ct_mac_raw = cs.get_string("CT_MAC", "");
-                let mac_norm = astrameter_insights_mqtt::marstek::normalize_mac(&ct_mac_raw);
+                // Source priority for the binding MAC:
+                //   1. MAC returned by Marstek cloud registration
+                //      (preferred — that's what hame-relay routes
+                //      `App/<mac>/ctrl` through).
+                //   2. `[CT002].CT_MAC` manual override.
+                // No fallback after that — no binding means no
+                // subscription to Marstek control topics, which is
+                // the right behaviour if the user hasn't set
+                // [MARSTEK].ENABLE.
+                let override_raw = cs.get_string("CT_MAC", "");
+                let override_norm = astrameter_insights_mqtt::marstek::normalize_mac(&override_raw);
+                let (binding_mac, source): (String, &str) = if let Some(m) = marstek_mac {
+                    (m.to_string(), "Marstek cloud registration")
+                } else if !override_norm.is_empty() {
+                    (override_norm, "[CT002].CT_MAC override")
+                } else if !override_raw.is_empty() {
+                    log::warn!(
+                        "[{section_name_ct}] CT_MAC={override_raw:?} could not be normalised; \
+                         Marstek MQTT binding skipped"
+                    );
+                    (String::new(), "")
+                } else {
+                    log::warn!(
+                        "[{section_name_ct}] no Marstek MAC available — Marstek cloud \
+                         registration didn't run (or didn't return a mac) and CT_MAC isn't \
+                         set; InsightsService will NOT subscribe to App/<mac>/ctrl topics"
+                    );
+                    (String::new(), "")
+                };
                 let ct_type = if dt == "ct003" {
                     "HME-3".to_string()
                 } else {
@@ -545,16 +584,17 @@ async fn start_mqtt_insights(
                     .get_opt_string("DEVICE_ID")
                     .unwrap_or_else(|| ct.device_id());
                 let wifi_rssi = cs.get_int("WIFI_RSSI", -50).unwrap_or(-50);
-                if !mac_norm.is_empty() {
+                if !binding_mac.is_empty() {
                     let ct_for_count = ct.clone();
                     let ct_for_csv = ct.clone();
                     log::info!(
-                        "[{section_name_ct}] adding Marstek MQTT binding: ct_type={ct_type} mac={mac_norm} device_id={device_id}"
+                        "[{section_name_ct}] adding Marstek MQTT binding: ct_type={ct_type} \
+                         mac={binding_mac} device_id={device_id} (source: {source})"
                     );
                     service.add_marstek_binding(MarstekBinding {
                         device_id,
                         ct_type,
-                        mac: mac_norm,
+                        mac: binding_mac,
                         wifi_rssi,
                         ver_v: astrameter_insights_mqtt::marstek::DEFAULT_VER_V,
                         ble_s: 0,
@@ -566,16 +606,6 @@ async fn start_mqtt_insights(
                             ct_for_csv.reporting_consumer_csv()
                         })),
                     });
-                } else if !ct_mac_raw.is_empty() {
-                    log::warn!(
-                        "[{section_name_ct}] CT_MAC={ct_mac_raw:?} could not be normalised; \
-                         Marstek MQTT binding skipped"
-                    );
-                } else {
-                    log::warn!(
-                        "[{section_name_ct}] CT_MAC not set; Marstek MQTT binding skipped \
-                         (the InsightsService will NOT subscribe to App/<mac>/ctrl topics)"
-                    );
                 }
             }
         }
@@ -681,48 +711,63 @@ async fn start_mqtt_insights(
 /// Marstek cloud HTTPS auto-registration. Detached so a slow connect
 /// doesn't block the boot-time supervisor wiring.
 #[cfg(target_os = "espidf")]
-fn spawn_marstek_registration(
+async fn register_marstek_managed_device(
     config: &astrameter_config::Config,
     device_type: &str,
     platform: std::sync::Arc<astrameter_platform::Platform>,
-) {
-    let Some(section_name) = config.sections().find(|s| s.starts_with("MARSTEK")) else {
-        return;
-    };
-    let Some(section) = config.section(section_name) else {
-        return;
-    };
+) -> Option<String> {
+    let section_name = config.sections().find(|s| s.starts_with("MARSTEK"))?;
+    let section = config.section(section_name)?;
     if !section.get_bool("ENABLE", false).unwrap_or(false) {
         log::info!("[{section_name}] disabled (ENABLE=false) — skipping cloud registration");
-        return;
+        return None;
     }
     let base_url = section.get_string("BASE_URL", "https://eu.hamedata.com");
     let mailbox = section.get_string("MAILBOX", "");
     let password = section.get_string("PASSWORD", "");
     if mailbox.is_empty() || password.is_empty() {
         log::warn!("[{section_name}] missing MAILBOX or PASSWORD — skipping registration");
-        return;
+        return None;
     }
     let dt_norm = device_type.to_lowercase();
     let device_type_for_reg = if dt_norm == "ct002" || dt_norm == "ct003" {
         dt_norm
     } else {
         log::info!("[{section_name}] only ct002/ct003 supported for cloud registration");
-        return;
+        return None;
     };
     let http = platform.http.clone();
-    tokio::spawn(async move {
-        let client = astrameter_marstek_api::MarstekClient::new(http);
-        let cfg = astrameter_marstek_api::MarstekConfig::new(base_url, mailbox, password);
-        match client
-            .ensure_managed_fake_device(&cfg, &device_type_for_reg)
-            .await
-        {
-            Ok(Some(d)) => log::info!("Marstek registration ok: {d:?}"),
-            Ok(None) => log::info!("Marstek: nothing to register for {device_type_for_reg}"),
-            Err(e) => log::warn!("Marstek registration failed: {e}"),
+    let client = astrameter_marstek_api::MarstekClient::new(http);
+    let cfg = astrameter_marstek_api::MarstekConfig::new(base_url, mailbox, password);
+    match client
+        .ensure_managed_fake_device(&cfg, &device_type_for_reg)
+        .await
+    {
+        Ok(Some(d)) => {
+            log::info!("Marstek registration ok: {d:?}");
+            // The Marstek cloud returns the MAC the hame-relay will
+            // route control messages through — use it verbatim as the
+            // binding's mac so we subscribe to the right
+            // `App/<mac>/ctrl` topic. Matches the Python supervisor's
+            // `_build_managed_marstek` flow.
+            let raw = d.get("mac").and_then(|v| v.as_str()).unwrap_or("");
+            let normalized = astrameter_insights_mqtt::marstek::normalize_mac(raw);
+            if normalized.is_empty() {
+                log::warn!("Marstek registration response had no usable `mac` field (raw={raw:?})");
+                None
+            } else {
+                Some(normalized)
+            }
         }
-    });
+        Ok(None) => {
+            log::info!("Marstek: nothing to register for {device_type_for_reg}");
+            None
+        }
+        Err(e) => {
+            log::warn!("Marstek registration failed: {e}");
+            None
+        }
+    }
 }
 
 /// Embedded fallback when NVS has no `astrameter/config` key — first
