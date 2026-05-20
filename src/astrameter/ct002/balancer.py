@@ -35,6 +35,14 @@ SATURATION_REFERENCE_DT = 1.0
 # rather than dosing the EMA with a huge rise or decay step.
 SATURATION_LONG_GAP_SECONDS = 30.0
 
+# "Stuck-at-zero" detection thresholds (see ``SaturationTracker.update``).
+# A battery reporting essentially 0 W while we keep nudging it for any
+# non-trivial movement is saturated regardless of how small each nudge
+# is — the ``min_target`` gate is sized for the EMA's noise floor on
+# healthy batteries, not for this rail-pinned case. See issue #377.
+SATURATION_RAIL_FLOOR_W = 1.0
+SATURATION_RAIL_DELTA_FLOOR_W = 1.0
+
 # Device-type prefixes of the only Marstek battery families that can charge
 # via AC (the Venus lineup).  ``HMG`` covers HMG-*; ``VNS`` covers VNSE3,
 # VNSA, VNSD, and any other Venus-family variant.  Every other reporting
@@ -244,6 +252,22 @@ class SaturationTracker:
         if dt > SATURATION_LONG_GAP_SECONDS:
             return
         ratio = dt / SATURATION_REFERENCE_DT
+        # Stuck-at-rail path (issue #377): a battery reporting ~0 W while
+        # we keep nudging it in either direction is saturated even if the
+        # per-tick delta is tiny. Without this the empty-battery case
+        # with a small residual grid offset never accumulates a score —
+        # ``target_abs`` (the delta) stays below ``min_target`` and the
+        # decay branch below clears the signal on every tick.
+        if (
+            abs(actual) < SATURATION_RAIL_FLOOR_W
+            and target_abs >= SATURATION_RAIL_DELTA_FLOOR_W
+            and not sign_reversing
+        ):
+            alpha_eff = 1.0 - (1.0 - self._alpha) ** ratio
+            state.saturation_score = (
+                alpha_eff * 1.0 + (1 - alpha_eff) * state.saturation_score
+            )
+            return
         if target_abs < self._min_target or sign_reversing:
             prev = state.saturation_score
             if prev > 0:

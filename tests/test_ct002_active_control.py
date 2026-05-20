@@ -266,6 +266,34 @@ class TestSaturationDetection:
         assert out2[0] > out1[0]
 
     def test_saturation_ignores_low_target(self):
+        # Both batteries are producing modest power and only being asked
+        # for a small per-tick adjustment. The small delta alone is not a
+        # saturation signal — a healthy battery at any reasonable output
+        # level should keep its full eff_part. (The "actual = 0 with a
+        # small delta" case is rail-pinned and *is* a saturation signal;
+        # that's covered by test_saturation_rail_pinned_with_small_delta.)
+        device = CT002(
+            active_control=True,
+            fair_distribution=False,
+            saturation_detection=True,
+            saturation_alpha=1.0,
+            min_target_for_saturation=100,
+        )
+        device._update_consumer_report("a", "A", 5)
+        device._update_consumer_report("b", "A", 5)
+        device._balancer._get_consumer("a").last_target = 10
+        device._balancer._get_consumer("b").last_target = 10
+        out = device._compute_smooth_target([20, 0, 0], "a")
+        assert out[0] == 10
+        assert device._balancer._get_consumer("a").saturation_score == 0.0
+
+    def test_saturation_rail_pinned_with_small_delta(self):
+        # Regression for issue #377: a battery stuck at ~0 W output while
+        # being asked for any non-trivial movement should be flagged as
+        # saturated even if the per-tick delta is below
+        # ``min_target_for_saturation``. Without this, the empty-battery
+        # case with a small persistent grid residual never deprioritizes
+        # the empty battery and the residual never gets routed.
         device = CT002(
             active_control=True,
             fair_distribution=False,
@@ -274,11 +302,11 @@ class TestSaturationDetection:
             min_target_for_saturation=100,
         )
         device._update_consumer_report("a", "A", 0)
-        device._update_consumer_report("b", "A", 0)
-        device._balancer._get_consumer("a").last_target = 10
-        device._balancer._get_consumer("b").last_target = 10
-        out = device._compute_smooth_target([20, 0, 0], "a")
-        assert out[0] == 10
+        device._update_consumer_report("b", "A", 50)
+        device._balancer._get_consumer("a").last_target = 5
+        device._balancer._get_consumer("b").last_target = 5
+        device._compute_smooth_target([10, 0, 0], "a")
+        assert device._balancer._get_consumer("a").saturation_score == 1.0
 
     def test_saturation_off_no_reduction(self):
         device = CT002(

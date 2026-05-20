@@ -127,6 +127,46 @@ class TestSaturationTracker:
         # 0.001 * 0.5 = 0.0005 < 0.001 → floored to 0.0
         assert state.saturation_score == 0.0
 
+    def test_update_rail_pinned_with_small_delta_saturates(self):
+        # Regression for #377: a battery stuck at ~0 W output while we
+        # keep nudging it for any non-trivial movement is saturated,
+        # even when the per-tick delta is below ``min_target`` and the
+        # decay branch would otherwise clear the signal.
+        tracker = self._make_tracker(alpha=1.0, min_target=20)
+        state = BalancerConsumerState()
+        tracker.update(state, last_target=5, actual=0)
+        assert state.saturation_score == 1.0
+
+    def test_update_rail_pinned_in_charge_direction_saturates(self):
+        # Analogous case for a full battery being asked to charge a tiny
+        # amount: actual stuck at 0 while last_target is negative.
+        tracker = self._make_tracker(alpha=1.0, min_target=20)
+        state = BalancerConsumerState()
+        tracker.update(state, last_target=-5, actual=0)
+        assert state.saturation_score == 1.0
+
+    def test_update_rail_pinned_path_skipped_when_delta_below_floor(self):
+        # The per-tick delta has to clear a tiny noise floor (1 W) so
+        # idle batteries (no demand, last_target ~ 0) don't get flagged.
+        tracker = self._make_tracker(alpha=1.0, min_target=20)
+        state = BalancerConsumerState(saturation_score=0.5)
+        tracker.update(state, last_target=0, actual=0)
+        # Falls through to the existing decay branch — same as before.
+        assert state.saturation_score < 0.5
+
+    def test_update_rail_pinned_does_not_affect_score_when_actual_above_floor(
+        self,
+    ) -> None:
+        # The rail-pinned path requires |actual| < 1 W; a battery
+        # producing even 2 W with a low delta still takes the existing
+        # decay branch (the original "ignore low target" semantic
+        # remains intact for healthy batteries).
+        tracker = self._make_tracker(alpha=1.0, min_target=20, decay_factor=0.9)
+        state = BalancerConsumerState(saturation_score=0.5)
+        tracker.update(state, last_target=5, actual=2)
+        # Decay applied: 0.5 * 0.9.
+        assert abs(state.saturation_score - 0.45) < 1e-6
+
     def test_grace_period_skips_update(self):
         tracker = self._make_tracker(alpha=1.0, min_target=20)
         state = BalancerConsumerState(saturation_grace_until=time.time() + 100)

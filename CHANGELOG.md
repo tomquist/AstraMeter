@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** small persistent grid offset (~4–6 W) when one battery in a CT002 pool is empty and another is healthy: the saturation detector now flags a battery pinned at ~0 W output regardless of how small the per-tick adjustment is, so the empty battery is deprioritized and the residual gets routed to the battery that can actually clear it ([#377](https://github.com/tomquist/astrameter/issues/377)).
 
 ## 2.0.2
 
