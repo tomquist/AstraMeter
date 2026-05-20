@@ -100,21 +100,26 @@ fn main() -> anyhow::Result<()> {
             // `max_blocking_threads` caps the pool so we can't
             // exhaust internal RAM by spawning unbounded pthreads.
             // The default is 512, which on a chip with ~280 KiB of
-            // internal RAM is a footgun. In steady state we only
-            // have one long-lived consumer (the CT002 UDP recv
-            // loop) plus the occasional transient (UDP send-back,
-            // HA WS send, Marstek HTTPS at boot). 2 slots × 24 KiB
-            // = 48 KiB ceiling fits comfortably with everything
-            // else; 4 slots × 24 KiB = 96 KiB was reproducibly
-            // exhausting internal heap over ~30 min as Wi-Fi
-            // reconnects + the HA WS auth dance fragmented the
-            // remaining space, eventually failing
-            // `pthread_create` for the next `recv_from` worker
-            // with ENOMEM.
+            // internal RAM is a footgun. In steady state we have
+            // one long-lived consumer (the CT002 UDP recv loop)
+            // plus a couple of transients (UDP send-back, HA WS
+            // send, Marstek HTTPS at boot). 3 slots × 24 KiB =
+            // 72 KiB ceiling: one for the recv, one for the
+            // current transient, one spare so a burst doesn't
+            // force the pool to churn threads in/out.
+            //
+            // `thread_keep_alive` is bumped from tokio's 10 s
+            // default to 5 min so an idle blocking thread sticks
+            // around instead of exiting and being respawned —
+            // that thread churn under contention was a reliable
+            // trigger for a `prev.is_running()` panic in tokio's
+            // task state machine after WS Drop + reconnect
+            // bursts.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .thread_stack_size(24 * 1024)
-                .max_blocking_threads(2)
+                .max_blocking_threads(3)
+                .thread_keep_alive(std::time::Duration::from_secs(300))
                 .build()
                 .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
             log::info!("step: enter async_main");
