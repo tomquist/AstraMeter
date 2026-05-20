@@ -328,6 +328,7 @@ async fn handle_event(
             }
             let state_topic = format!("{base}/ct002/{device_id}/consumer/{consumer_id}");
             let avail_topic = format!("{state_topic}/availability");
+            tracing::info!("publishing CT002 state to {state_topic}");
             publish_json(client, &state_topic, &data, false).await?;
             let _ = client
                 .publish(&avail_topic, MqttQos::AtLeastOnce, true, b"online".to_vec())

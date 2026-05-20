@@ -573,26 +573,36 @@ async fn start_mqtt_insights(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if removed {
-                    let _ = tx_ct.try_send(InsightsEvent::Ct002Remove {
+                    if let Err(e) = tx_ct.try_send(InsightsEvent::Ct002Remove {
                         device_id: device_id.to_string(),
                         consumer_id: consumer_id.to_string(),
-                    });
+                    }) {
+                        log::warn!(
+                            "CT002 listener: dropped Ct002Remove event for {consumer_id}: {e}"
+                        );
+                    }
                     return;
                 }
-                let _ = tx_ct.try_send(InsightsEvent::Ct002 {
+                if let Err(e) = tx_ct.try_send(InsightsEvent::Ct002 {
                     device_id: device_id.to_string(),
                     consumer_id: consumer_id.to_string(),
                     data: data.clone(),
-                });
+                }) {
+                    log::warn!("CT002 listener: dropped Ct002 event for {consumer_id}: {e}");
+                }
                 let status = serde_json::json!({
                     "smooth_target": data.get("smooth_target").cloned().unwrap_or(serde_json::Value::Null),
                     "active_control": data.get("active_control").cloned().unwrap_or(serde_json::Value::Null),
                     "consumer_count": data.get("consumer_count").cloned().unwrap_or(serde_json::Value::Null),
                 });
-                let _ = tx_ct.try_send(InsightsEvent::Ct002DeviceStatus {
+                if let Err(e) = tx_ct.try_send(InsightsEvent::Ct002DeviceStatus {
                     device_id: device_id.to_string(),
                     data: status,
-                });
+                }) {
+                    log::warn!(
+                        "CT002 listener: dropped Ct002DeviceStatus event for {device_id}: {e}"
+                    );
+                }
             },
         ));
     }

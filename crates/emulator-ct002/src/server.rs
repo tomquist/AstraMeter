@@ -676,7 +676,7 @@ async fn handle(ctx: Arc<ServerCtx>, data: &[u8], addr: SocketAddr) -> Result<()
                     .filter(|c| c.timestamp > 0.0)
                     .count(),
             });
-            tracing::debug!(
+            tracing::info!(
                 "CT002 event listener fired for consumer {consumer_id} (phase={phase_s})"
             );
             cb(&ctx.device_id, &consumer_id, &event);
