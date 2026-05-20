@@ -306,6 +306,13 @@ async fn handle_event(
                 };
                 if need_first_discovery {
                     cache.ct002_consumers.insert(cache_key.clone());
+                    // Only schedule an ARP retry on Linux — see
+                    // `arp_lookup` above for why no other target can
+                    // satisfy this lookup. Without this guard,
+                    // `need_arp_retry` would be perpetually true on
+                    // ESP-IDF, re-entering this block (and its
+                    // `spawn_blocking` churn) for every CT002 event.
+                    #[cfg(target_os = "linux")]
                     if !battery_ip.is_empty() && network_mac.is_empty() {
                         cache.pending_arp.insert(cache_key.clone());
                     }
@@ -623,22 +630,39 @@ async fn handle_ct002_command(ctx: &ServiceCtx, rest: &str, payload: &[u8]) {
 /// or an empty string if not found / not Linux. Mirrors `_arp_lookup` from
 /// the Python service.
 async fn arp_lookup(ip: &str) -> String {
-    let ip = ip.to_string();
-    tokio::task::spawn_blocking(move || {
-        let contents = match std::fs::read_to_string("/proc/net/arp") {
-            Ok(s) => s,
-            Err(_) => return String::new(),
-        };
-        for line in contents.lines().skip(1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 && parts[0] == ip && parts[3] != "00:00:00:00:00:00" {
-                return parts[3].to_uppercase();
+    #[cfg(not(target_os = "linux"))]
+    {
+        // `/proc/net/arp` is Linux-specific. On macOS / Windows /
+        // ESP-IDF / etc. there's no procfs equivalent that's safe to
+        // poke from a `spawn_blocking` task (on ESP-IDF in particular
+        // a missing VFS prefix can cause `std::fs::read_to_string` to
+        // hang rather than return ENOENT, wedging the
+        // InsightsService event loop for every subsequent CT002
+        // event). Return empty so the caller falls back to whatever
+        // MAC was in the device payload.
+        let _ = ip;
+        return String::new();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let ip = ip.to_string();
+        tokio::task::spawn_blocking(move || {
+            let contents = match std::fs::read_to_string("/proc/net/arp") {
+                Ok(s) => s,
+                Err(_) => return String::new(),
+            };
+            for line in contents.lines().skip(1) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 4 && parts[0] == ip && parts[3] != "00:00:00:00:00:00" {
+                    return parts[3].to_uppercase();
+                }
             }
-        }
-        String::new()
-    })
-    .await
-    .unwrap_or_default()
+            String::new()
+        })
+        .await
+        .unwrap_or_default()
+    }
 }
 
 async fn publish_json(
