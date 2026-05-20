@@ -220,11 +220,34 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                 }
                 event = event_rx.recv() => {
                     let Some(event) = event else {
+                        tracing::warn!("insights: event channel closed, exiting run loop");
                         return;
                     };
+                    let variant = match &event {
+                        InsightsEvent::Ct002 { device_id, consumer_id, .. } => {
+                            format!("Ct002({device_id}/{consumer_id})")
+                        }
+                        InsightsEvent::Ct002Remove { device_id, consumer_id } => {
+                            format!("Ct002Remove({device_id}/{consumer_id})")
+                        }
+                        InsightsEvent::Ct002DeviceStatus { device_id, .. } => {
+                            format!("Ct002DeviceStatus({device_id})")
+                        }
+                        InsightsEvent::Shelly { device_id, battery_ip, .. } => {
+                            format!("Shelly({device_id}/{battery_ip})")
+                        }
+                        InsightsEvent::ShellyRemove { device_id, battery_ip } => {
+                            format!("ShellyRemove({device_id}/{battery_ip})")
+                        }
+                        InsightsEvent::ShellyDeviceStatus { device_id, .. } => {
+                            format!("ShellyDeviceStatus({device_id})")
+                        }
+                    };
+                    tracing::info!("insights: handling event {variant}");
                     if let Err(e) = handle_event(&ctx, &*client, &mut cache, event).await {
-                        tracing::warn!("insights event handling: {e}");
+                        tracing::warn!("insights event handling failed for {variant}: {e}");
                     }
+                    tracing::info!("insights: finished event {variant}");
                 }
                 poll = events.next() => {
                     match poll {
@@ -267,12 +290,15 @@ async fn handle_event(
             consumer_id,
             data,
         } => {
+            tracing::info!("ct002 handle: enter (device={device_id}, consumer={consumer_id})");
             if ha && !cache.ct002_devices.contains(&device_id) {
+                tracing::info!("ct002 handle: publishing device discovery");
                 let (topic, payload) = discovery::build_ct002_device_discovery(
                     base, &device_id, ha_prefix, addon_slug,
                 );
                 publish_json(client, &topic, &payload, true).await?;
                 cache.ct002_devices.insert(device_id.clone());
+                tracing::info!("ct002 handle: device discovery published");
             }
             let cache_key = format!("{device_id}::{consumer_id}");
             // ARP retry: republish consumer-discovery on every event for
@@ -280,6 +306,9 @@ async fn handle_event(
             // a MAC. Matches Python `_pending_arp`.
             let need_first_discovery = !cache.ct002_consumers.contains(&cache_key);
             let need_arp_retry = cache.pending_arp.contains(&cache_key);
+            tracing::info!(
+                "ct002 handle: cache lookup need_first_discovery={need_first_discovery} need_arp_retry={need_arp_retry}"
+            );
             if ha && (need_first_discovery || need_arp_retry) {
                 let device_type = data
                     .get("device_type")
@@ -294,11 +323,13 @@ async fn handle_event(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                tracing::info!("ct002 handle: arp_lookup start ({battery_ip})");
                 let mac_via_arp = if payload_mac.is_empty() && !battery_ip.is_empty() {
                     arp_lookup(battery_ip).await
                 } else {
                     String::new()
                 };
+                tracing::info!("ct002 handle: arp_lookup done (mac={mac_via_arp:?})");
                 let network_mac = if !payload_mac.is_empty() {
                     payload_mac.as_str()
                 } else {
@@ -321,6 +352,7 @@ async fn handle_event(
                     cache.pending_arp.remove(&cache_key);
                 }
                 if need_first_discovery || !network_mac.is_empty() {
+                    tracing::info!("ct002 handle: publishing consumer discovery");
                     let (topic, payload) = discovery::build_ct002_consumer_discovery(
                         base,
                         &device_id,
@@ -331,15 +363,18 @@ async fn handle_event(
                         battery_ip,
                     );
                     publish_json(client, &topic, &payload, true).await?;
+                    tracing::info!("ct002 handle: consumer discovery published");
                 }
             }
             let state_topic = format!("{base}/ct002/{device_id}/consumer/{consumer_id}");
             let avail_topic = format!("{state_topic}/availability");
             tracing::info!("publishing CT002 state to {state_topic}");
             publish_json(client, &state_topic, &data, false).await?;
+            tracing::info!("ct002 handle: state published, publishing availability");
             let _ = client
                 .publish(&avail_topic, MqttQos::AtLeastOnce, true, b"online".to_vec())
                 .await;
+            tracing::info!("ct002 handle: exit");
         }
         InsightsEvent::Ct002Remove {
             device_id,
@@ -673,8 +708,15 @@ async fn publish_json(
 ) -> Result<()> {
     let body =
         serde_json::to_vec(payload).map_err(|e| Error::Other(format!("encode {topic}: {e}")))?;
-    client
+    let len = body.len();
+    tracing::info!("publish_json: -> {topic} ({len} bytes, retain={retain})");
+    let result = client
         .publish(topic, MqttQos::AtLeastOnce, retain, body)
         .await
-        .map_err(|e| Error::transport(format!("publish {topic}: {e}")))
+        .map_err(|e| Error::transport(format!("publish {topic}: {e}")));
+    match &result {
+        Ok(()) => tracing::info!("publish_json: <- {topic} ok"),
+        Err(e) => tracing::warn!("publish_json: <- {topic} err: {e}"),
+    }
+    result
 }
