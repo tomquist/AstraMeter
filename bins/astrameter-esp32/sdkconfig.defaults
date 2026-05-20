@@ -56,6 +56,26 @@ CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
 # internal heap per long-lived TLS connection (e.g. HA WSS).
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 
+# Route mbedTLS allocations through `heap_caps_malloc_default()` instead
+# of internal-RAM-only. With `CONFIG_SPIRAM_USE_MALLOC=y` (default with
+# PSRAM enabled) `MALLOC_CAP_DEFAULT` falls back to PSRAM when the
+# internal heap is too fragmented for a given size. Without this,
+# `mbedtls_ssl_handshake` fails with `Dynamic Impl: alloc(4437 bytes)
+# failed` during RSA certificate verification because the largest free
+# internal block is smaller than the 4–6 KiB the RSA verify needs once
+# Wi-Fi + lwIP + the WS/MQTT contexts are warm. Routing to PSRAM moves
+# those big handshake allocations to the 8 MiB of external RAM and
+# keeps small frequent allocations in internal RAM for speed.
+CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
+
+# Allow Wi-Fi and lwIP to allocate their per-connection buffers in
+# PSRAM. ESP-IDF defaults them to internal RAM, which sits permanently
+# resident — moving them to PSRAM frees tens of KiB that mbedTLS, the
+# tokio blocking pool, and the HTTP server can use instead. Per-packet
+# latency is slightly higher (PSRAM is slower than SRAM) but well
+# within tolerance for our workloads.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
 # Default stack size for pthreads created without an explicit
 # `stack_size`. Tokio's blocking-pool spawns its workers via
 # `thread::Builder::new()` (no stack hint), so they pick this up.
