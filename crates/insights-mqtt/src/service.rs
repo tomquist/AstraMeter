@@ -161,21 +161,24 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
             bindings.iter().map(app_topics_for).collect()
         };
         for (old_t, new_t) in &topics_to_subscribe {
-            let _ = client.subscribe(old_t, MqttQos::AtLeastOnce).await;
-            let _ = client.subscribe(new_t, MqttQos::AtLeastOnce).await;
+            if let Err(e) = client.subscribe(old_t, MqttQos::AtLeastOnce).await {
+                tracing::warn!("subscribe {old_t} failed: {e}");
+            }
+            if let Err(e) = client.subscribe(new_t, MqttQos::AtLeastOnce).await {
+                tracing::warn!("subscribe {new_t} failed: {e}");
+            }
         }
         // Subscribe to HA-discovery command topics so HA switches/numbers
         // and the force-rotation button can drive the emulator.
         let base = ctx.config.base_topic.clone();
-        let _ = client
-            .subscribe(
-                &format!("{base}/ct002/+/consumer/+/set"),
-                MqttQos::AtLeastOnce,
-            )
-            .await;
-        let _ = client
-            .subscribe(&format!("{base}/ct002/+/set"), MqttQos::AtLeastOnce)
-            .await;
+        let consumer_set = format!("{base}/ct002/+/consumer/+/set");
+        if let Err(e) = client.subscribe(&consumer_set, MqttQos::AtLeastOnce).await {
+            tracing::warn!("subscribe {consumer_set} failed: {e}");
+        }
+        let device_set = format!("{base}/ct002/+/set");
+        if let Err(e) = client.subscribe(&device_set, MqttQos::AtLeastOnce).await {
+            tracing::warn!("subscribe {device_set} failed: {e}");
+        }
 
         let mut cache = DiscoveryCache::default();
         let drain_cancel = cancel.clone();
@@ -453,6 +456,10 @@ async fn handle_event(
 }
 
 async fn handle_incoming(ctx: &ServiceCtx, client: &dyn MqttClient, topic: &str, payload: &[u8]) {
+    tracing::info!(
+        "handle_incoming: topic={topic} payload={}",
+        String::from_utf8_lossy(payload)
+    );
     // First check HA-discovery command topics.
     let base = ctx.config.base_topic.as_str();
     let trimmed_topic = topic.trim_end_matches('/');

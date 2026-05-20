@@ -237,10 +237,17 @@ fn handle_event(
             connected.store(false, Ordering::SeqCst);
             OwnedMqttEvent::Disconnected
         }
-        EventPayload::Received { topic, data, .. } => OwnedMqttEvent::Received {
-            topic: topic.unwrap_or_default().to_string(),
-            data: data.to_vec(),
-        },
+        EventPayload::Received { topic, data, .. } => {
+            let topic_owned = topic.unwrap_or_default().to_string();
+            log::info!(
+                "mqtt[{url}]: received {} bytes on {topic_owned}",
+                data.len()
+            );
+            OwnedMqttEvent::Received {
+                topic: topic_owned,
+                data: data.to_vec(),
+            }
+        }
         EventPayload::Error(e) => {
             log::error!("mqtt[{url}]: Error event: {e:?}");
             OwnedMqttEvent::Error(format!("{e:?}"))
@@ -275,6 +282,32 @@ fn map_qos(q: MqttQos) -> QoS {
     }
 }
 
+impl EspClient {
+    /// Wait briefly for the IDF callback to flip `connected` to true.
+    /// `factory.connect()` returns before the broker handshake
+    /// completes (the IDF connect is async + driven by the C
+    /// callback), so the InsightsService's very first calls to
+    /// `subscribe`/`publish` race against that — and the IDF rejects
+    /// both with -1 ("client not connected") if it hasn't seen the
+    /// CONNACK yet. Spin asynchronously here so callers see a clean
+    /// success after the handshake instead of silent failures.
+    async fn await_connected(&self, op: &'static str) -> Result<(), MqttError> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !self.connected.load(Ordering::SeqCst) {
+            if std::time::Instant::now() > deadline {
+                return Err(match op {
+                    "subscribe" => {
+                        MqttError::Subscribe("broker did not signal Connected within 10s".into())
+                    }
+                    _ => MqttError::Publish("broker did not signal Connected within 10s".into()),
+                });
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl MqttClient for EspClient {
     async fn publish(
@@ -284,9 +317,7 @@ impl MqttClient for EspClient {
         retain: bool,
         payload: Vec<u8>,
     ) -> Result<(), MqttError> {
-        if !self.connected.load(Ordering::SeqCst) {
-            return Err(MqttError::Publish("broker disconnected".into()));
-        }
+        self.await_connected("publish").await?;
         let mut guard = self.inner.lock();
         guard
             .enqueue(topic, map_qos(qos), retain, &payload)
@@ -295,9 +326,8 @@ impl MqttClient for EspClient {
     }
 
     async fn subscribe(&self, topic: &str, qos: MqttQos) -> Result<(), MqttError> {
-        if !self.connected.load(Ordering::SeqCst) {
-            return Err(MqttError::Subscribe("broker disconnected".into()));
-        }
+        self.await_connected("subscribe").await?;
+        log::info!("mqtt: subscribing to {topic}");
         let mut guard = self.inner.lock();
         guard
             .subscribe(topic, map_qos(qos))
