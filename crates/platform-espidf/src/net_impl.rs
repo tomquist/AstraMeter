@@ -1,14 +1,22 @@
-//! TCP + UDP using blocking `std::net` sockets wrapped in
-//! `tokio::task::spawn_blocking`.
+//! TCP + UDP using blocking `std::net` sockets.
 //!
 //! Tokio's IO driver (mio → epoll) can't initialise on `esp-idf` —
 //! `tokio::runtime::Builder::enable_io()` returns
 //! `Permission denied (os error 13)`. The runtime is therefore built
 //! with `enable_time()` only on this target, which means
-//! `tokio::net::{TcpStream, UdpSocket}` aren't usable. Fall back to
-//! blocking `std::net::*` for the actual syscalls and dispatch via
-//! `spawn_blocking` so the current-thread runtime keeps making
-//! progress on other tasks.
+//! `tokio::net::{TcpStream, UdpSocket}` aren't usable.
+//!
+//! `send_to` and the TCP wrapper dispatch via `spawn_blocking` (the
+//! tokio blocking pool). UDP `recv_from` is special: it's a
+//! long-lived consumer (the CT002 emulator's recv loop blocks here
+//! for every UDP poll from a Marstek battery), and pinning a
+//! pthread permanently to internal SRAM via tokio's pool eventually
+//! exhausts the internal heap as it fragments around the
+//! permanently-held slot. So `bind` spawns a dedicated FreeRTOS
+//! task whose stack lives in PSRAM (`xTaskCreatePinnedToCoreWithCaps`
+//! with `MALLOC_CAP_SPIRAM`), and that task pushes received packets
+//! into a tokio mpsc channel that `recv_from` awaits. No internal
+//! SRAM is committed for the recv path at all.
 
 use astrameter_platform::net::{
     NetError, TcpConnect, TcpStream as PlatformTcpStream, UdpBind, UdpSocket,
@@ -19,18 +27,45 @@ use std::future::Future;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream as StdTcp, UdpSocket as StdUdp};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::Mutex as AsyncMutex;
 
 pub struct TokioUdpBind;
 
-struct BlockingUdp(Arc<StdUdp>);
+/// One packet received by the dedicated recv task.
+struct RxPacket {
+    data: Vec<u8>,
+    from: SocketAddr,
+}
+
+struct BlockingUdp {
+    /// Cloned for `send_to` so multiple sends can run concurrently
+    /// without contending with the recv task.
+    sock: Arc<StdUdp>,
+    /// Owned by `recv_from`. `AsyncMutex` because awaiting from
+    /// the receiver across `.await` boundaries needs to hold the
+    /// guard across `.await`s.
+    rx: AsyncMutex<tokio::sync::mpsc::UnboundedReceiver<RxPacket>>,
+    /// Signals the recv task to exit on Drop.
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for BlockingUdp {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        // The recv task picks up the flag on its next 1 s
+        // `recv_from` timeout and self-deletes. We don't join it —
+        // the OS reclaims the PSRAM stack via the idle task.
+    }
+}
 
 #[async_trait]
 impl UdpSocket for BlockingUdp {
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, NetError> {
-        let sock = self.0.clone();
+        let sock = self.sock.clone();
         let buf = buf.to_vec();
         tokio::task::spawn_blocking(move || sock.send_to(&buf, target))
             .await
@@ -39,20 +74,111 @@ impl UdpSocket for BlockingUdp {
     }
 
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), NetError> {
-        let sock = self.0.clone();
-        let cap = buf.len();
-        let (got_n, from, data) = tokio::task::spawn_blocking(move || {
-            let mut inner = vec![0u8; cap];
-            let (n, from) = sock.recv_from(&mut inner)?;
-            inner.truncate(n);
-            std::io::Result::Ok((n, from, inner))
-        })
-        .await
-        .map_err(|e| NetError::Recv(format!("join: {e}")))?
-        .map_err(|e| NetError::Recv(e.to_string()))?;
-        buf[..got_n].copy_from_slice(&data);
-        Ok((got_n, from))
+        let mut rx = self.rx.lock().await;
+        let pkt = rx
+            .recv()
+            .await
+            .ok_or_else(|| NetError::Recv("recv task ended (channel closed)".to_string()))?;
+        let n = pkt.data.len().min(buf.len());
+        buf[..n].copy_from_slice(&pkt.data[..n]);
+        Ok((n, pkt.from))
     }
+}
+
+/// Spawn the long-lived recv task on a PSRAM-stack FreeRTOS task
+/// and return a `BlockingUdp` wired to its output channel.
+fn spawn_recv_task(sock: Arc<StdUdp>) -> Result<BlockingUdp, NetError> {
+    use esp_idf_svc::sys;
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<RxPacket>();
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    struct Args {
+        sock: Arc<StdUdp>,
+        tx: tokio::sync::mpsc::UnboundedSender<RxPacket>,
+        cancel: Arc<AtomicBool>,
+    }
+
+    extern "C" fn task_entry(arg: *mut std::ffi::c_void) {
+        // SAFETY: `arg` is the `Box::into_raw` pointer the spawner
+        // handed us. We take ownership and the box is dropped at
+        // end of scope.
+        let args: Box<Args> = unsafe { Box::from_raw(arg as *mut Args) };
+        let Args { sock, tx, cancel } = *args;
+
+        let mut buf = vec![0u8; 4096];
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
+            match sock.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    let pkt = RxPacket {
+                        data: buf[..n].to_vec(),
+                        from,
+                    };
+                    if tx.send(pkt).is_err() {
+                        // Receiver dropped — caller is gone. Exit.
+                        break;
+                    }
+                }
+                Err(e) => {
+                    // 1 s read timeout fires constantly when nothing
+                    // is arriving — silent. Log only real failures.
+                    let kind = e.kind();
+                    let is_timeout =
+                        matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut);
+                    if !is_timeout {
+                        log::warn!("net_impl: udp recv task: {e}");
+                    }
+                }
+            }
+        }
+        // SAFETY: `NULL` to `vTaskDelete` deletes the calling task;
+        // the IDF idle task reclaims our PSRAM stack.
+        unsafe { sys::vTaskDelete(std::ptr::null_mut()) };
+    }
+
+    // Stash a second Arc clone for `BlockingUdp::send_to` BEFORE
+    // moving the original into the task's Args.
+    let sock_for_send = sock.clone();
+    let args = Box::new(Args {
+        sock,
+        tx,
+        cancel: cancel.clone(),
+    });
+    let arg_ptr = Box::into_raw(args) as *mut std::ffi::c_void;
+
+    let mut handle: sys::TaskHandle_t = std::ptr::null_mut();
+    let rc = unsafe {
+        sys::xTaskCreatePinnedToCoreWithCaps(
+            Some(task_entry),
+            b"udp-recv\0".as_ptr() as *const _,
+            // 12 KiB is plenty for `std::net::UdpSocket::recv_from`
+            // (lwIP recv + newlib syscall stubs). Lives in PSRAM so
+            // the size has no internal-SRAM cost.
+            12 * 1024,
+            arg_ptr,
+            5,
+            &mut handle,
+            // `tskNO_AFFINITY` — bindgen mangles it across IDF
+            // versions, so use the literal directly.
+            0x7FFF_FFFFi32,
+            sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT,
+        )
+    };
+    if rc != 1 {
+        unsafe { drop(Box::from_raw(arg_ptr as *mut Args)) };
+        return Err(NetError::Bind(format!(
+            "xTaskCreatePinnedToCoreWithCaps(udp-recv): rc={rc}"
+        )));
+    }
+
+    Ok(BlockingUdp {
+        sock: sock_for_send,
+        rx: AsyncMutex::new(rx),
+        cancel,
+    })
 }
 
 #[async_trait]
@@ -62,11 +188,11 @@ impl UdpBind for TokioUdpBind {
             .await
             .map_err(|e| NetError::Bind(format!("join: {e}")))?
             .map_err(|e| NetError::Bind(e.to_string()))?;
-        // Blocking timeouts let `recv_from` wake periodically so the
-        // outer cancellation tokens get a chance to fire even on quiet
-        // links.
+        // 1 s read timeout lets the dedicated recv task observe the
+        // cancellation flag periodically without blocking forever
+        // on an idle socket.
         let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
-        Ok(Box::new(BlockingUdp(Arc::new(sock))))
+        Ok(Box::new(spawn_recv_task(Arc::new(sock))?))
     }
 
     async fn bind_multicast(
@@ -90,7 +216,7 @@ impl UdpBind for TokioUdpBind {
         .map_err(|e| NetError::Bind(format!("join: {e}")))?
         .map_err(|e| NetError::Bind(e.to_string()))?;
         let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
-        Ok(Box::new(BlockingUdp(Arc::new(sock))))
+        Ok(Box::new(spawn_recv_task(Arc::new(sock))?))
     }
 }
 
