@@ -166,6 +166,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-core",
 ]
 
 [[package]]

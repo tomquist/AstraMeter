@@ -40,6 +40,12 @@ fn main() {
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
+    // Bridge tracing events to the `log` crate so EspLogger captures
+    // them. Crates like `insights-mqtt` use `tracing::info!` / `warn!`
+    // for their runtime diagnostics, and without a Subscriber installed
+    // those events vanish — leaving the firmware silent about MQTT
+    // connect failures, event-handling errors, etc.
+    let _ = tracing::subscriber::set_global_default(TracingToLog);
     log::info!("AstraMeter ESP32 {} booting", astrameter_core::VERSION);
     log_task_handle("main (app_main)");
 
@@ -1657,6 +1663,64 @@ fn write_nvs_config_from_dict(
 fn log_task_handle(label: &str) {
     let h = unsafe { esp_idf_svc::sys::xTaskGetCurrentTaskHandle() };
     log::info!("task[{label}]: handle={h:p}");
+}
+
+/// Tracing `Subscriber` that forwards every event to the `log` crate.
+/// Installed once at boot so `tracing::info!` / `warn!` / `error!`
+/// calls from deps (notably `insights-mqtt`) show up on the serial
+/// console via `EspLogger`. Span machinery is no-op — we only care
+/// about events for diagnostics.
+#[cfg(target_os = "espidf")]
+struct TracingToLog;
+
+#[cfg(target_os = "espidf")]
+impl tracing_core::Subscriber for TracingToLog {
+    fn enabled(&self, _: &tracing_core::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing_core::span::Attributes<'_>) -> tracing_core::span::Id {
+        tracing_core::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing_core::span::Id, _: &tracing_core::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing_core::span::Id, _: &tracing_core::span::Id) {}
+    fn enter(&self, _: &tracing_core::span::Id) {}
+    fn exit(&self, _: &tracing_core::span::Id) {}
+    fn event(&self, event: &tracing_core::Event<'_>) {
+        struct Visitor(String);
+        impl tracing_core::field::Visit for Visitor {
+            fn record_debug(
+                &mut self,
+                field: &tracing_core::Field,
+                value: &dyn core::fmt::Debug,
+            ) {
+                use core::fmt::Write;
+                if field.name() == "message" {
+                    let _ = write!(self.0, "{value:?}");
+                } else {
+                    let _ = write!(self.0, " {}={value:?}", field.name());
+                }
+            }
+            fn record_str(&mut self, field: &tracing_core::Field, value: &str) {
+                use core::fmt::Write;
+                if field.name() == "message" {
+                    self.0.push_str(value);
+                } else {
+                    let _ = write!(self.0, " {}={value:?}", field.name());
+                }
+            }
+        }
+        let meta = event.metadata();
+        let level = match *meta.level() {
+            tracing_core::Level::ERROR => log::Level::Error,
+            tracing_core::Level::WARN => log::Level::Warn,
+            tracing_core::Level::INFO => log::Level::Info,
+            tracing_core::Level::DEBUG => log::Level::Debug,
+            tracing_core::Level::TRACE => log::Level::Trace,
+        };
+        let mut v = Visitor(String::new());
+        event.record(&mut v);
+        log::log!(target: meta.target(), level, "{}", v.0);
+    }
 }
 
 /// Log internal-SRAM and PSRAM heap state. `pthread_create` allocates
