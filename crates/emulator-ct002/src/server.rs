@@ -347,6 +347,7 @@ impl Ct002Emulator {
                 .map(|m| (m.meter.clone(), m.filter.clone(), m.wait_for_next))
                 .collect(),
             cancel: self.cancel.clone(),
+            logged_consumers: Arc::new(Mutex::new(HashSet::new())),
         };
         let ctx = Arc::new(ctx);
         let recv_ctx = ctx.clone();
@@ -386,6 +387,11 @@ struct ServerCtx {
     event_listener: Arc<Mutex<Option<EventListenerFn>>>,
     meters: Vec<(Arc<dyn Powermeter>, ClientFilter, bool)>,
     cancel: tokio_util::sync::CancellationToken,
+    /// Consumers we've already logged a "seen" line for. Keeps the
+    /// boot log small while still surfacing one diagnostic per
+    /// distinct battery so users can see whether their device is
+    /// being filtered out (CT MAC mismatch, inspection mode, …).
+    logged_consumers: Arc<Mutex<HashSet<String>>>,
 }
 
 async fn recv_loop(ctx: Arc<ServerCtx>) {
@@ -536,6 +542,19 @@ async fn handle(ctx: Arc<ServerCtx>, data: &[u8], addr: SocketAddr) -> Result<()
         .unwrap_or(0);
     let meter_dev_type = fields.first().cloned().unwrap_or_default();
 
+    // One-time log per consumer so users can tell from the serial
+    // console whether their battery is being seen at all and whether
+    // it advanced past the protocol's "inspection mode" (the only
+    // mode in which the InsightsService event listener — and thus the
+    // MQTT state publishes — fires).
+    if ctx.logged_consumers.lock().insert(consumer_id.clone()) {
+        tracing::info!(
+            "CT002: first packet from consumer {consumer_id} @ {addr} \
+             (device_type={meter_dev_type:?}, phase_field={reported_phase_raw:?}, \
+             in_inspection_mode={in_inspection_mode}, reported_power={reported_power})"
+        );
+    }
+
     // Update Consumer.
     update_consumer_report(
         &ctx,
@@ -647,6 +666,9 @@ async fn handle(ctx: Arc<ServerCtx>, data: &[u8], addr: SocketAddr) -> Result<()
                     .filter(|c| c.timestamp > 0.0)
                     .count(),
             });
+            tracing::debug!(
+                "CT002 event listener fired for consumer {consumer_id} (phase={phase_s})"
+            );
             cb(&ctx.device_id, &consumer_id, &event);
         }
     }
