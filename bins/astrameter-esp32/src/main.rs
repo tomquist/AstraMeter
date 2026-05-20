@@ -548,6 +548,9 @@ async fn start_mqtt_insights(
                 if !mac_norm.is_empty() {
                     let ct_for_count = ct.clone();
                     let ct_for_csv = ct.clone();
+                    log::info!(
+                        "[{section_name_ct}] adding Marstek MQTT binding: ct_type={ct_type} mac={mac_norm} device_id={device_id}"
+                    );
                     service.add_marstek_binding(MarstekBinding {
                         device_id,
                         ct_type,
@@ -567,6 +570,11 @@ async fn start_mqtt_insights(
                     log::warn!(
                         "[{section_name_ct}] CT_MAC={ct_mac_raw:?} could not be normalised; \
                          Marstek MQTT binding skipped"
+                    );
+                } else {
+                    log::warn!(
+                        "[{section_name_ct}] CT_MAC not set; Marstek MQTT binding skipped \
+                         (the InsightsService will NOT subscribe to App/<mac>/ctrl topics)"
                     );
                 }
             }

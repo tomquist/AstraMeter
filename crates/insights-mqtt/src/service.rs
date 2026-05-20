@@ -471,6 +471,10 @@ async fn handle_incoming(ctx: &ServiceCtx, client: &dyn MqttClient, topic: &str,
     }
     // Marstek App poll?
     let Some((ct_type, mac)) = parse_app_topic(topic) else {
+        tracing::warn!(
+            "handle_incoming: topic {topic} did not match any known prefix \
+             (expected hame_energy/<ct_type>/App/<mac>/ctrl or marstek_energy/...)"
+        );
         return;
     };
     let binding_match = {
@@ -481,9 +485,17 @@ async fn handle_incoming(ctx: &ServiceCtx, client: &dyn MqttClient, topic: &str,
             .cloned()
     };
     let Some(binding) = binding_match else {
+        tracing::warn!(
+            "handle_incoming: no MarstekBinding for ct_type={ct_type} mac={mac} \
+             — message dropped. Did you set [CT002].CT_MAC to this device's MAC?"
+        );
         return;
     };
     let Some(poll) = parse_poll_payload(payload) else {
+        tracing::warn!(
+            "handle_incoming: payload on {topic} did not parse as a Marstek poll: {}",
+            String::from_utf8_lossy(payload)
+        );
         return;
     };
     serve_marstek_poll(
