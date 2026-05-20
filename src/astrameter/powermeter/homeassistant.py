@@ -73,6 +73,7 @@ class HomeAssistant(Powermeter):
         self._tracked_entities = self._collect_entities()
         self._msg_id = 0
         self._subscribe_entities_id: int | None = None
+        self._get_states_id: int | None = None
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._entities_ready = asyncio.Event()
@@ -145,6 +146,7 @@ class HomeAssistant(Powermeter):
         """
         self._msg_id = 0
         self._subscribe_entities_id = None
+        self._get_states_id = None
         for eid in list(self._entity_values):
             self._entity_values[eid] = None
         self._entities_ready.clear()
@@ -212,17 +214,41 @@ class HomeAssistant(Powermeter):
                     "entity_ids": sorted(self._tracked_entities),
                 }
             )
+            # subscribe_entities is supposed to push an initial snapshot,
+            # but in setups where the entity isn't loaded yet at
+            # subscribe time, no initial event arrives and we'd block
+            # forever waiting for a state change. Seed the cache once.
+            self._get_states_id = self._next_id()
+            await ws.send_json({"id": self._get_states_id, "type": "get_states"})
         elif msg_type == "auth_invalid":
             logger.error(f"Home Assistant auth failed: {msg.get('message', '')}")
         elif msg_type == "result":
-            if msg.get("id") == self._subscribe_entities_id and not msg.get("success"):
+            msg_id = msg.get("id")
+            if msg_id == self._subscribe_entities_id and not msg.get("success"):
                 logger.error(
                     f"Home Assistant subscribe_entities failed: {msg.get('error')}"
                 )
+            elif msg_id == self._get_states_id:
+                if msg.get("success"):
+                    self._apply_get_states_result(msg.get("result"))
+                else:
+                    logger.error(
+                        f"Home Assistant get_states failed: {msg.get('error')}"
+                    )
         elif msg_type == "event":
             ev = msg.get("event")
             if isinstance(ev, dict):
                 self._handle_compressed_entity_event(ev)
+
+    def _apply_get_states_result(self, result: object) -> None:
+        if not isinstance(result, list):
+            return
+        for state_obj in result:
+            if not isinstance(state_obj, dict):
+                continue
+            eid = state_obj.get("entity_id")
+            if isinstance(eid, str) and eid in self._tracked_entities:
+                self._update_entity_value(eid, state_obj.get("state"))
 
     def _update_entity_value(self, entity_id: str, state_val: object) -> None:
         logger.debug(f"Home Assistant: update_entity_value: {entity_id}, {state_val}")

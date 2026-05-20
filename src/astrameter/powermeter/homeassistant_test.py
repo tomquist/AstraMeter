@@ -71,11 +71,15 @@ async def test_auth_ok_subscribes_entities():
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
 
     calls = ws.send_json.call_args_list
-    assert len(calls) == 1
+    assert len(calls) == 2
 
     subscribe_msg = calls[0][0][0]
     assert subscribe_msg["type"] == "subscribe_entities"
     assert "sensor.current_power" in subscribe_msg["entity_ids"]
+
+    get_states_msg = calls[1][0][0]
+    assert get_states_msg["type"] == "get_states"
+    assert get_states_msg["id"] != subscribe_msg["id"]
 
 
 async def test_auth_invalid_does_not_crash():
@@ -399,6 +403,93 @@ async def test_subscribe_entities_contains_all_entities_calculate_mode():
     entity_ids = subscribe_msg["entity_ids"]
     assert "sensor.power_input" in entity_ids
     assert "sensor.power_output" in entity_ids
+
+
+# get_states bootstrap tests
+
+
+async def test_get_states_result_seeds_value_when_initial_event_missing():
+    """If ``subscribe_entities`` never pushes an initial snapshot (entity
+    not yet loaded, integration warming up), the explicit ``get_states``
+    fetch must still populate the cache so ``wait_for_message`` can
+    return.
+    """
+    pm = _create_powermeter()
+    ws = AsyncMock()
+    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    gid = pm._get_states_id
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "id": gid,
+                "type": "result",
+                "success": True,
+                "result": [
+                    {"entity_id": "sensor.current_power", "state": "123"},
+                ],
+            }
+        ),
+    )
+    assert pm._entities_ready.is_set()
+    assert await pm.get_powermeter_watts() == [123.0]
+
+
+async def test_get_states_result_ignores_untracked_entities():
+    pm = _create_powermeter()
+    ws = AsyncMock()
+    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    gid = pm._get_states_id
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "id": gid,
+                "type": "result",
+                "success": True,
+                "result": [
+                    {"entity_id": "sensor.other", "state": "999"},
+                    {"entity_id": "sensor.current_power", "state": "50"},
+                ],
+            }
+        ),
+    )
+    assert await pm.get_powermeter_watts() == [50.0]
+
+
+async def test_get_states_failure_is_logged_not_raised():
+    pm = _create_powermeter()
+    ws = AsyncMock()
+    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    gid = pm._get_states_id
+    # Should not raise even if HA returns an error result for get_states.
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "id": gid,
+                "type": "result",
+                "success": False,
+                "error": {"code": "unknown_error", "message": "boom"},
+            }
+        ),
+    )
+    with pytest.raises(ValueError):
+        await pm.get_powermeter_watts()
+
+
+async def test_reconnect_clears_get_states_id():
+    pm = _create_powermeter()
+    ws = AsyncMock()
+    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    assert pm._get_states_id is not None
+
+    pm._reset_for_reconnect()
+    assert pm._get_states_id is None
 
 
 # Lifecycle tests

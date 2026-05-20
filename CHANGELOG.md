@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** Home Assistant powermeter timing out on startup with "Timeout waiting for Home Assistant state" when the `subscribe_entities` initial snapshot never arrives (e.g. entity not yet loaded when AstraMeter starts). The Home Assistant powermeter now also issues an explicit `get_states` fetch right after subscribing to seed the cache.
 
 ## 2.0.2
 
