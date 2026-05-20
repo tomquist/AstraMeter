@@ -446,11 +446,11 @@ async fn start_mqtt_insights(
     ct002: Option<std::sync::Arc<astrameter_emulator_ct002::server::Ct002Emulator>>,
     shelly_emus: &[std::sync::Arc<astrameter_emulator_shelly::ShellyEmulator>],
     platform: std::sync::Arc<astrameter_platform::Platform>,
-    /// MAC from the Marstek cloud registration response. Used as the
-    /// `MarstekBinding::mac` so we subscribe to the correct
-    /// `App/<mac>/ctrl` topic. If `None`, the binding falls back to
-    /// `[CT002].CT_MAC` (manual override) and ultimately to no
-    /// binding at all if neither is set.
+    // MAC from the Marstek cloud registration response. Used as the
+    // `MarstekBinding::mac` so we subscribe to the correct
+    // `App/<mac>/ctrl` topic. If `None`, the binding falls back to
+    // `[CT002].CT_MAC` (manual override) and ultimately to no
+    // binding at all if neither is set.
     marstek_mac: Option<&str>,
 ) -> anyhow::Result<Option<std::sync::Arc<astrameter_insights_mqtt::InsightsService>>> {
     use std::sync::Arc;
