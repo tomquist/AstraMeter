@@ -463,6 +463,15 @@ async fn start_mqtt_insights(
         marstek_mqtt_enabled: section.get_bool("MARSTEK_MQTT_ENABLED", true)?,
         marstek_mqtt_interval: section.get_float("MARSTEK_MQTT_INTERVAL", 300.0)?,
     };
+    log::info!(
+        "MQTT Insights: broker={}:{} tls={} base_topic={:?} ha_discovery={} ha_discovery_prefix={:?}",
+        cfg.broker,
+        cfg.port,
+        cfg.tls,
+        cfg.base_topic,
+        cfg.ha_discovery,
+        cfg.ha_discovery_prefix,
+    );
     let service = Arc::new(InsightsService::new(cfg, platform.clone()));
 
     // CT002 command handlers (set_active / manual_target / auto_target /
