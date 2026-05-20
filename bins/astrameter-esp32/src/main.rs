@@ -82,18 +82,30 @@ fn main() -> anyhow::Result<()> {
             // which is too tight for std::net::* syscalls via Rust's
             // newlib stubs.
             //
-            // `max_blocking_threads` caps the pool so we can't exhaust
-            // internal RAM by spawning unbounded pthreads. The default
-            // is 512, which on a chip with ~280 KiB of internal RAM is
-            // a footgun — `pthread_create` fails with ENOMEM the
-            // moment several concurrent `spawn_blocking` calls land
-            // (e.g. CT002 UDP recv parked + Marstek HTTP request +
-            // UDP send). 4 slots × 12 KiB = 48 KiB ceiling covers the
-            // long-lived UDP recv loops plus a couple of transient
-            // HTTP/UART calls.
+            // 24 KiB is enough headroom for mbedTLS' RSA verify
+            // chain walking during a TLS handshake. We previously
+            // ran at 12 KiB to fit in internal SRAM; with mbedTLS
+            // and Wi-Fi/lwIP now routed to PSRAM
+            // (CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y +
+            // CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y) we have
+            // headroom to grow the stack back. Symptom of an
+            // undersized stack here is _not_ a clean overflow trap —
+            // mbedTLS scribbles past the bottom of the stack into
+            // the next page, which on these pthreads is the tokio
+            // task state struct. The RUNNING bit gets cleared by
+            // the scribble, and the blocking thread later panics in
+            // `transition_to_complete` with
+            // `assertion failed: prev.is_running()`.
+            //
+            // `max_blocking_threads` caps the pool so we can't
+            // exhaust internal RAM by spawning unbounded pthreads.
+            // The default is 512, which on a chip with ~280 KiB of
+            // internal RAM is a footgun. 4 slots × 24 KiB = 96 KiB
+            // ceiling covers the long-lived UDP recv loop plus a
+            // couple of transient HTTP/UART calls.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .thread_stack_size(12 * 1024)
+                .thread_stack_size(24 * 1024)
                 .max_blocking_threads(4)
                 .build()
                 .map_err(|e| anyhow::anyhow!("tokio runtime build: {e}"))?;
