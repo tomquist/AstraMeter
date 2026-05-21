@@ -8,6 +8,7 @@ use std::time::Duration;
 use astrameter_config::Section;
 use astrameter_core::{Error, Powermeter, Result};
 use astrameter_platform::{
+    http::{HttpClient, HttpRequest},
     ws::{WebSocketClient, WsMessage, WsRequest},
     Platform,
 };
@@ -30,11 +31,18 @@ pub struct HomeAssistant {
     path_prefix: Option<String>,
     tracked: HashSet<String>,
     ws: Arc<dyn WebSocketClient>,
+    http: Arc<dyn HttpClient>,
     state: Arc<Mutex<State>>,
     ready_notify: Arc<Notify>,
     message_notify: Arc<Notify>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// JoinHandle for the REST bootstrap task spawned after `auth_ok`.
+    /// Aborted on reconnect (in `run_loop`'s reset block) and on
+    /// `stop()` so a late response can't resurrect a stale value
+    /// after the cache has been cleared. Matches the Python
+    /// supervisor's `_fetch_states_task` (PR #383).
+    bootstrap_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 #[derive(Default)]
@@ -42,16 +50,6 @@ struct State {
     entity_values: HashMap<String, Option<f64>>,
     msg_id: u64,
     subscribe_id: Option<u64>,
-    /// `subscribe_entities` is supposed to push an initial snapshot
-    /// of every entity, but in setups where an entity isn't loaded
-    /// yet at subscribe time (HA still warming up after restart, or
-    /// the integration providing the sensor hasn't initialised) no
-    /// initial event arrives and `wait_for_message` blocks until
-    /// timeout. We compensate by issuing an explicit `get_states`
-    /// request right after subscribing — this is the message id we
-    /// expect the result to come back with. Matches the Python
-    /// supervisor's `_get_states_id` (PR #382).
-    get_states_id: Option<u64>,
 }
 
 impl State {}
@@ -61,6 +59,14 @@ impl HomeAssistant {
         let scheme = if self.use_https { "wss" } else { "ws" };
         let prefix = self.path_prefix.as_deref().unwrap_or("");
         format!("{scheme}://{}:{}{prefix}/api/websocket", self.ip, self.port)
+    }
+
+    /// Per-entity REST URL: `<scheme>://<ip>:<port><prefix>/api/states/<entity_id>`.
+    /// Matches the Python supervisor's `_build_state_url` (PR #383).
+    fn build_state_base_url(&self) -> String {
+        let scheme = if self.use_https { "https" } else { "http" };
+        let prefix = self.path_prefix.as_deref().unwrap_or("");
+        format!("{scheme}://{}:{}{prefix}/api/states/", self.ip, self.port)
     }
 
     fn collect_entities(&self) -> HashSet<String> {
@@ -95,6 +101,7 @@ impl Powermeter for HomeAssistant {
             return Ok(());
         }
         let url = self.build_ws_url();
+        let state_base_url = self.build_state_base_url();
         let tracked = self.tracked.clone();
         let access_token = self.access_token.clone();
         let state = self.state.clone();
@@ -102,9 +109,12 @@ impl Powermeter for HomeAssistant {
         let message = self.message_notify.clone();
         let cancel = self.cancel.clone();
         let ws = self.ws.clone();
+        let http = self.http.clone();
+        let bootstrap_task = self.bootstrap_task.clone();
         let handle = tokio::spawn(async move {
             run_loop(
                 url,
+                state_base_url,
                 tracked,
                 access_token,
                 state,
@@ -112,6 +122,8 @@ impl Powermeter for HomeAssistant {
                 message,
                 cancel,
                 ws,
+                http,
+                bootstrap_task,
             )
             .await;
         });
@@ -124,6 +136,14 @@ impl Powermeter for HomeAssistant {
         let mut g = self.task.lock().await;
         if let Some(h) = g.take() {
             let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+        }
+        // Abort any in-flight REST bootstrap so it can't keep firing
+        // requests against the (no-longer-tracked) entities, and so
+        // that on a subsequent start() we don't accidentally see a
+        // late response resurrect a stale value.
+        let mut b = self.bootstrap_task.lock().await;
+        if let Some(h) = b.take() {
+            h.abort();
         }
         Ok(())
     }
@@ -188,6 +208,7 @@ impl Powermeter for HomeAssistant {
 #[allow(clippy::too_many_arguments)]
 async fn run_loop(
     url: String,
+    state_base_url: String,
     tracked: HashSet<String>,
     access_token: String,
     state: Arc<Mutex<State>>,
@@ -195,6 +216,8 @@ async fn run_loop(
     message: Arc<Notify>,
     cancel: tokio_util::sync::CancellationToken,
     ws: Arc<dyn WebSocketClient>,
+    http: Arc<dyn HttpClient>,
+    bootstrap_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 ) {
     loop {
         let req = WsRequest {
@@ -208,14 +231,23 @@ async fn run_loop(
         match ws.connect(req).await {
             Ok(mut conn) => {
                 tracing::info!("Home Assistant WebSocket connected to {url}");
-                // Reset protocol state.
+                // Reset protocol state. Abort any REST bootstrap from
+                // the previous connection so a late response can't
+                // resurrect a stale value after we just cleared the
+                // cache. Matches Python `_reset_for_reconnect`
+                // (PR #383).
                 {
                     let mut s = state.lock();
                     s.msg_id = 0;
                     s.subscribe_id = None;
-                    s.get_states_id = None;
                     for v in s.entity_values.values_mut() {
                         *v = None;
+                    }
+                }
+                {
+                    let mut b = bootstrap_task.lock().await;
+                    if let Some(h) = b.take() {
+                        h.abort();
                     }
                 }
                 loop {
@@ -233,6 +265,9 @@ async fn run_loop(
                                 &state,
                                 &ready,
                                 &message,
+                                &http,
+                                &state_base_url,
+                                &bootstrap_task,
                             )
                             .await;
                         }
@@ -257,6 +292,7 @@ async fn run_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_message(
     raw: &str,
     conn: &mut dyn astrameter_platform::ws::WsConnection,
@@ -265,6 +301,9 @@ async fn handle_message(
     state: &Arc<Mutex<State>>,
     ready: &Arc<Notify>,
     message: &Arc<Notify>,
+    http: &Arc<dyn HttpClient>,
+    state_base_url: &str,
+    bootstrap_task: &Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 ) {
     let msg: Value = match serde_json::from_str(raw) {
         Ok(v) => v,
@@ -289,15 +328,11 @@ async fn handle_message(
         }
         "auth_ok" => {
             tracing::info!("Home Assistant: authenticated");
-            let (sub_id, get_id) = {
+            let sub_id = {
                 let mut s = state.lock();
                 s.msg_id += 1;
                 s.subscribe_id = Some(s.msg_id);
-                let sub = s.msg_id;
-                s.msg_id += 1;
-                s.get_states_id = Some(s.msg_id);
-                let get = s.msg_id;
-                (sub, get)
+                s.msg_id
             };
             let mut ents: Vec<&String> = tracked.iter().collect();
             ents.sort();
@@ -315,13 +350,34 @@ async fn handle_message(
             // snapshot, but in setups where the entity isn't loaded
             // yet at subscribe time, no initial event arrives and
             // `wait_for_message` blocks until timeout. Seed the cache
-            // once via an explicit `get_states` request. Matches the
-            // Python supervisor's PR #382 fix.
-            let _ = conn
-                .send(WsMessage::Text(
-                    json!({"id": get_id, "type": "get_states"}).to_string(),
-                ))
-                .await;
+            // once via per-entity REST `/api/states/<entity_id>`
+            // fetches (vs. WebSocket `get_states`, which would ship
+            // every entity in HA). Matches Python PR #383.
+            {
+                let mut b = bootstrap_task.lock().await;
+                if let Some(h) = b.take() {
+                    h.abort();
+                }
+                let http = http.clone();
+                let tracked = tracked.clone();
+                let access_token = access_token.to_string();
+                let state_base_url = state_base_url.to_string();
+                let state = state.clone();
+                let ready = ready.clone();
+                let message = message.clone();
+                *b = Some(tokio::spawn(async move {
+                    fetch_initial_states(
+                        &http,
+                        &state_base_url,
+                        &access_token,
+                        &tracked,
+                        &state,
+                        &ready,
+                        &message,
+                    )
+                    .await;
+                }));
+            }
         }
         "auth_invalid" => {
             tracing::error!(
@@ -333,30 +389,15 @@ async fn handle_message(
         }
         "result" => {
             let id = msg.get("id").and_then(|v| v.as_i64());
-            let (sub_id, get_id) = {
-                let s = state.lock();
-                (
-                    s.subscribe_id.map(|x| x as i64),
-                    s.get_states_id.map(|x| x as i64),
-                )
-            };
-            let success = msg
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let sub_id = state.lock().subscribe_id.map(|x| x as i64);
             if id.is_some() && id == sub_id {
+                let success = msg
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if !success {
                     let err = msg.get("error").cloned().unwrap_or(serde_json::Value::Null);
                     tracing::error!("HA subscribe_entities failed: {err}");
-                }
-            } else if id.is_some() && id == get_id {
-                if success {
-                    if let Some(result) = msg.get("result") {
-                        apply_get_states_result(result, tracked, state, ready, message);
-                    }
-                } else {
-                    let err = msg.get("error").cloned().unwrap_or(serde_json::Value::Null);
-                    tracing::error!("HA get_states failed: {err}");
                 }
             }
         }
@@ -434,31 +475,63 @@ fn apply_event(
     }
 }
 
-/// Apply a `get_states` HA-API result to the entity cache. The
-/// result shape is `[ {"entity_id": "...", "state": "..."}, ... ]`
-/// — same envelope a REST `/api/states` call would return.
-fn apply_get_states_result(
-    result: &Value,
+/// Per-entity REST bootstrap. `subscribe_entities` is supposed to
+/// push an initial snapshot, but doesn't when an entity isn't loaded
+/// yet at subscribe time. We GET each tracked entity's
+/// `/api/states/<entity_id>` once to seed the cache.
+///
+/// Skips entities that the WS snapshot has already populated and
+/// swallows any per-entity error (404, network, decode) so a single
+/// missing entity doesn't break the whole bootstrap. Matches the
+/// Python supervisor's `_fetch_initial_states` (PR #383).
+async fn fetch_initial_states(
+    http: &Arc<dyn HttpClient>,
+    state_base_url: &str,
+    access_token: &str,
     tracked: &HashSet<String>,
     state: &Arc<Mutex<State>>,
     ready: &Arc<Notify>,
     message: &Arc<Notify>,
 ) {
-    let Some(arr) = result.as_array() else {
-        return;
-    };
+    let mut eids: Vec<&String> = tracked.iter().collect();
+    eids.sort();
     let mut changed = false;
-    for entry in arr {
-        let Some(obj) = entry.as_object() else {
-            continue;
-        };
-        let Some(eid) = obj.get("entity_id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if !tracked.contains(eid) {
+    for eid in eids {
+        // Skip if the WS snapshot already populated this entity.
+        if state
+            .lock()
+            .entity_values
+            .get(eid)
+            .and_then(|v| *v)
+            .is_some()
+        {
             continue;
         }
-        if let Some(st) = obj.get("state") {
+        let url = format!("{state_base_url}{eid}");
+        let req = HttpRequest::get(url.clone())
+            .with_header("Authorization", format!("Bearer {access_token}"));
+        let resp = match http.request(req).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!("HA REST state fetch for {eid} failed: {e}");
+                continue;
+            }
+        };
+        if resp.status != 200 {
+            tracing::debug!(
+                "HA REST state fetch for {eid} returned status {}",
+                resp.status
+            );
+            continue;
+        }
+        let body: Value = match serde_json::from_slice(&resp.body) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!("HA REST state fetch for {eid} decode: {e}");
+                continue;
+            }
+        };
+        if let Some(st) = body.get("state") {
             update_value(state, eid, st);
             changed = true;
         }
@@ -518,11 +591,13 @@ pub fn create(section: &Section<'_>, platform: Arc<Platform>) -> Result<Arc<dyn 
         path_prefix: prefix,
         tracked: HashSet::new(),
         ws: platform.ws.clone(),
+        http: platform.http.clone(),
         state: Arc::new(Mutex::new(State::default())),
         ready_notify: Arc::new(Notify::new()),
         message_notify: Arc::new(Notify::new()),
         cancel: tokio_util::sync::CancellationToken::new(),
         task: tokio::sync::Mutex::new(None),
+        bootstrap_task: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let tracked = ha.collect_entities();
     // Seed entity_values map.
