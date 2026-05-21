@@ -641,6 +641,13 @@ async fn start_mqtt_insights(
                     data: data.clone(),
                 }) {
                     log::warn!("CT002 listener: dropped Ct002 event for {consumer_id}: {e}");
+                    // Surface heap state alongside the first drop in a
+                    // burst so we can tell whether the queue is full
+                    // because the InsightsService loop is wedged
+                    // (handle_event hung on a publish) or because
+                    // internal RAM is exhausted and the loop can't
+                    // make progress.
+                    log_heap("CT002 listener drop");
                 }
                 let status = serde_json::json!({
                     "smooth_target": data.get("smooth_target").cloned().unwrap_or(serde_json::Value::Null),

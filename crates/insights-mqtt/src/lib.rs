@@ -84,7 +84,13 @@ pub struct InsightsService {
 
 impl InsightsService {
     pub fn new(cfg: MqttInsightsConfig, platform: Arc<Platform>) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        // 1024 slots × ~150 B per InsightsEvent ≈ 150 KiB ceiling.
+        // 256 was getting drained too slowly under MQTT-broker
+        // pressure (consumer discovery 6.8 KiB publish + WS Drop's
+        // 10 s teardown stack up over hours) — see the
+        // `dropped Ct002 event for ...: no available capacity`
+        // warnings reported by the user.
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
         Self {
             cfg,
             platform,

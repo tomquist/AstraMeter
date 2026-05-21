@@ -211,8 +211,23 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                 None
             };
 
+        // Heartbeat so we can tell from the console whether the
+        // event loop is alive — if events get dropped at the
+        // listener with no recent `insights: loop heartbeat` line,
+        // we know `handle_event` (or the MQTT poll branch) is hung,
+        // not just slow.
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut events_since_heartbeat: u64 = 0;
+
         loop {
             tokio::select! {
+                _ = heartbeat.tick() => {
+                    tracing::info!(
+                        "insights: loop heartbeat (events processed in last 60s: {events_since_heartbeat})"
+                    );
+                    events_since_heartbeat = 0;
+                }
                 _ = drain_cancel.cancelled() => {
                     let _ = client
                         .publish(&status_topic, MqttQos::AtLeastOnce, true, b"offline".to_vec())
@@ -251,6 +266,7 @@ pub async fn run(runtime: InsightsRuntime, cancel: tokio_util::sync::Cancellatio
                         tracing::warn!("insights event handling failed for {variant}: {e}");
                     }
                     tracing::info!("insights: finished event {variant}");
+                    events_since_heartbeat += 1;
                 }
                 poll = events.next() => {
                     match poll {
