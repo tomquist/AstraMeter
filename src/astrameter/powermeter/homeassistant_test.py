@@ -1,6 +1,6 @@
 import asyncio
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -69,17 +69,15 @@ async def test_auth_ok_subscribes_entities():
     ws.send_json.reset_mock()
 
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    if pm._fetch_states_task:
+        pm._fetch_states_task.cancel()
 
     calls = ws.send_json.call_args_list
-    assert len(calls) == 2
+    assert len(calls) == 1
 
     subscribe_msg = calls[0][0][0]
     assert subscribe_msg["type"] == "subscribe_entities"
     assert "sensor.current_power" in subscribe_msg["entity_ids"]
-
-    get_states_msg = calls[1][0][0]
-    assert get_states_msg["type"] == "get_states"
-    assert get_states_msg["id"] != subscribe_msg["id"]
 
 
 async def test_auth_invalid_does_not_crash():
@@ -405,91 +403,199 @@ async def test_subscribe_entities_contains_all_entities_calculate_mode():
     assert "sensor.power_output" in entity_ids
 
 
-# get_states bootstrap tests
+# REST bootstrap tests
 
 
-async def test_get_states_result_seeds_value_when_initial_event_missing():
-    """If ``subscribe_entities`` never pushes an initial snapshot (entity
-    not yet loaded, integration warming up), the explicit ``get_states``
-    fetch must still populate the cache so ``wait_for_message`` can
-    return.
+def _make_rest_session(responses: dict[str, dict | None]):
+    """Build a ``ClientSession`` mock where ``session.get(url)`` returns
+    the configured JSON (or 404 when the mapped value is ``None``).
+    ``responses`` is keyed by full URL.
+    """
+    captured_headers: dict[str, str] = {}
+
+    def _get(url, headers=None):
+        captured_headers.clear()
+        if headers:
+            captured_headers.update(headers)
+        body = responses.get(url)
+        resp = MagicMock()
+        if body is None:
+            resp.status = 404
+            resp.json = AsyncMock(return_value={})
+        else:
+            resp.status = 200
+            resp.json = AsyncMock(return_value=body)
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+        return resp
+
+    session = MagicMock()
+    session.get = MagicMock(side_effect=_get)
+    session.close = AsyncMock()
+    session._captured_headers = captured_headers
+    return session
+
+
+async def test_fetch_initial_states_seeds_value():
+    """When ``subscribe_entities`` never pushes an initial snapshot
+    (entity not yet loaded, integration warming up), the REST bootstrap
+    must still populate the cache so ``wait_for_message`` can return.
     """
     pm = _create_powermeter()
-    ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
-    gid = pm._get_states_id
-    await pm._handle_message(
-        ws,
-        json.dumps(
-            {
-                "id": gid,
-                "type": "result",
-                "success": True,
-                "result": [
-                    {"entity_id": "sensor.current_power", "state": "123"},
-                ],
-            }
-        ),
+    pm._session = _make_rest_session(
+        {
+            "http://192.168.1.8:8123/api/states/sensor.current_power": {
+                "entity_id": "sensor.current_power",
+                "state": "123",
+            },
+        }
     )
+    await pm._fetch_initial_states()
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [123.0]
 
 
-async def test_get_states_result_ignores_untracked_entities():
+async def test_fetch_initial_states_sends_bearer_token():
     pm = _create_powermeter()
-    ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
-    gid = pm._get_states_id
-    await pm._handle_message(
-        ws,
-        json.dumps(
-            {
-                "id": gid,
-                "type": "result",
-                "success": True,
-                "result": [
-                    {"entity_id": "sensor.other", "state": "999"},
-                    {"entity_id": "sensor.current_power", "state": "50"},
-                ],
-            }
-        ),
+    session = _make_rest_session(
+        {
+            "http://192.168.1.8:8123/api/states/sensor.current_power": {
+                "entity_id": "sensor.current_power",
+                "state": "10",
+            },
+        }
     )
-    assert await pm.get_powermeter_watts() == [50.0]
+    pm._session = session
+    await pm._fetch_initial_states()
+    assert session._captured_headers.get("Authorization") == "Bearer token"
 
 
-async def test_get_states_failure_is_logged_not_raised():
-    pm = _create_powermeter()
-    ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
-    gid = pm._get_states_id
-    # Should not raise even if HA returns an error result for get_states.
-    await pm._handle_message(
-        ws,
-        json.dumps(
-            {
-                "id": gid,
-                "type": "result",
-                "success": False,
-                "error": {"code": "unknown_error", "message": "boom"},
-            }
-        ),
+async def test_fetch_initial_states_uses_https_and_path_prefix():
+    pm = _create_powermeter(use_https=True, path_prefix="/core")
+    session = _make_rest_session(
+        {
+            "https://192.168.1.8:8123/core/api/states/sensor.current_power": {
+                "entity_id": "sensor.current_power",
+                "state": "42",
+            },
+        }
     )
+    pm._session = session
+    await pm._fetch_initial_states()
+    assert await pm.get_powermeter_watts() == [42.0]
+
+
+async def test_fetch_initial_states_fetches_each_tracked_entity():
+    pm = _create_powermeter(
+        current_power_entity=[
+            "sensor.power_phase1",
+            "sensor.power_phase2",
+            "sensor.power_phase3",
+        ]
+    )
+    session = _make_rest_session(
+        {
+            "http://192.168.1.8:8123/api/states/sensor.power_phase1": {
+                "entity_id": "sensor.power_phase1",
+                "state": "100",
+            },
+            "http://192.168.1.8:8123/api/states/sensor.power_phase2": {
+                "entity_id": "sensor.power_phase2",
+                "state": "200",
+            },
+            "http://192.168.1.8:8123/api/states/sensor.power_phase3": {
+                "entity_id": "sensor.power_phase3",
+                "state": "300",
+            },
+        }
+    )
+    pm._session = session
+    await pm._fetch_initial_states()
+    assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
+    # Only the tracked entities — no full-state dump like WS ``get_states``.
+    assert session.get.call_count == 3
+
+
+async def test_fetch_initial_states_skips_already_populated_entity():
+    """If the ``subscribe_entities`` snapshot arrived first and already
+    seeded a value, the REST fetch shouldn't waste a request — and must
+    not clobber the (potentially newer) cached value.
+    """
+    pm = _create_powermeter()
+    pm._update_entity_value("sensor.current_power", "999")
+    session = _make_rest_session(
+        {
+            "http://192.168.1.8:8123/api/states/sensor.current_power": {
+                "entity_id": "sensor.current_power",
+                "state": "1",
+            },
+        }
+    )
+    pm._session = session
+    await pm._fetch_initial_states()
+    assert session.get.call_count == 0
+    assert await pm.get_powermeter_watts() == [999.0]
+
+
+async def test_fetch_initial_states_handles_404():
+    pm = _create_powermeter()
+    # 404: entity doesn't exist (or normalized differently); we mustn't
+    # raise — the WS stream may still deliver a value later.
+    pm._session = _make_rest_session(
+        {"http://192.168.1.8:8123/api/states/sensor.current_power": None}
+    )
+    await pm._fetch_initial_states()
+    assert not pm._entities_ready.is_set()
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
 
 
-async def test_reconnect_clears_get_states_id():
+async def test_fetch_initial_states_swallows_request_exceptions():
     pm = _create_powermeter()
+    session = MagicMock()
+    session.get = MagicMock(side_effect=RuntimeError("boom"))
+    pm._session = session
+    # Must not raise — the WS connection may still deliver a value later.
+    await pm._fetch_initial_states()
+    assert not pm._entities_ready.is_set()
+
+
+async def test_auth_ok_schedules_rest_bootstrap():
+    pm = _create_powermeter()
+    pm._session = _make_rest_session(
+        {
+            "http://192.168.1.8:8123/api/states/sensor.current_power": {
+                "entity_id": "sensor.current_power",
+                "state": "7",
+            },
+        }
+    )
     ws = AsyncMock()
     await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
     await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
-    assert pm._get_states_id is not None
+    assert pm._fetch_states_task is not None
+    await pm._fetch_states_task
+    assert await pm.get_powermeter_watts() == [7.0]
 
+
+async def test_reconnect_cancels_in_flight_fetch():
+    """An in-flight REST bootstrap from the previous connection must be
+    cancelled by ``_reset_for_reconnect``; otherwise it could resurrect
+    a stale value after the reset.
+    """
+    pm = _create_powermeter()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hang():
+        started.set()
+        await release.wait()
+
+    pm._fetch_states_task = asyncio.create_task(_hang())
+    await started.wait()
     pm._reset_for_reconnect()
-    assert pm._get_states_id is None
+    with pytest.raises(asyncio.CancelledError):
+        await pm._fetch_states_task
 
 
 # Lifecycle tests

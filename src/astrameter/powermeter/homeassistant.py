@@ -73,9 +73,9 @@ class HomeAssistant(Powermeter):
         self._tracked_entities = self._collect_entities()
         self._msg_id = 0
         self._subscribe_entities_id: int | None = None
-        self._get_states_id: int | None = None
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
+        self._fetch_states_task: asyncio.Task[None] | None = None
         self._entities_ready = asyncio.Event()
         self._message_event = asyncio.Event()
 
@@ -91,6 +91,11 @@ class HomeAssistant(Powermeter):
         prefix = self.path_prefix or ""
         return f"{scheme}://{self.ip}:{self.port}{prefix}/api/websocket"
 
+    def _build_state_url(self, entity_id: str) -> str:
+        scheme = "https" if self.use_https else "http"
+        prefix = self.path_prefix or ""
+        return f"{scheme}://{self.ip}:{self.port}{prefix}/api/states/{entity_id}"
+
     def _next_id(self) -> int:
         self._msg_id += 1
         return self._msg_id
@@ -102,6 +107,11 @@ class HomeAssistant(Powermeter):
         self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def stop(self) -> None:
+        if self._fetch_states_task:
+            self._fetch_states_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._fetch_states_task
+            self._fetch_states_task = None
         if self._ws_task:
             self._ws_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -146,7 +156,11 @@ class HomeAssistant(Powermeter):
         """
         self._msg_id = 0
         self._subscribe_entities_id = None
-        self._get_states_id = None
+        if self._fetch_states_task and not self._fetch_states_task.done():
+            # An in-flight REST bootstrap from the previous connection
+            # could otherwise race in after the reset and resurrect a
+            # stale value.
+            self._fetch_states_task.cancel()
         for eid in list(self._entity_values):
             self._entity_values[eid] = None
         self._entities_ready.clear()
@@ -217,38 +231,51 @@ class HomeAssistant(Powermeter):
             # subscribe_entities is supposed to push an initial snapshot,
             # but in setups where the entity isn't loaded yet at
             # subscribe time, no initial event arrives and we'd block
-            # forever waiting for a state change. Seed the cache once.
-            self._get_states_id = self._next_id()
-            await ws.send_json({"id": self._get_states_id, "type": "get_states"})
+            # forever waiting for a state change. Seed the cache once
+            # via per-entity REST fetches (vs. WebSocket ``get_states``,
+            # which would ship every entity in HA).
+            if self._fetch_states_task and not self._fetch_states_task.done():
+                self._fetch_states_task.cancel()
+            self._fetch_states_task = asyncio.create_task(self._fetch_initial_states())
         elif msg_type == "auth_invalid":
             logger.error(f"Home Assistant auth failed: {msg.get('message', '')}")
         elif msg_type == "result":
-            msg_id = msg.get("id")
-            if msg_id == self._subscribe_entities_id and not msg.get("success"):
+            if msg.get("id") == self._subscribe_entities_id and not msg.get("success"):
                 logger.error(
                     f"Home Assistant subscribe_entities failed: {msg.get('error')}"
                 )
-            elif msg_id == self._get_states_id:
-                if msg.get("success"):
-                    self._apply_get_states_result(msg.get("result"))
-                else:
-                    logger.error(
-                        f"Home Assistant get_states failed: {msg.get('error')}"
-                    )
         elif msg_type == "event":
             ev = msg.get("event")
             if isinstance(ev, dict):
                 self._handle_compressed_entity_event(ev)
 
-    def _apply_get_states_result(self, result: object) -> None:
-        if not isinstance(result, list):
+    async def _fetch_initial_states(self) -> None:
+        if not self._session:
             return
-        for state_obj in result:
-            if not isinstance(state_obj, dict):
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        for eid in sorted(self._tracked_entities):
+            if self._entity_values.get(eid) is not None:
                 continue
-            eid = state_obj.get("entity_id")
-            if isinstance(eid, str) and eid in self._tracked_entities:
-                self._update_entity_value(eid, state_obj.get("state"))
+            url = self._build_state_url(eid)
+            try:
+                async with self._session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.debug(
+                            "Home Assistant: REST state fetch for %s returned %s",
+                            eid,
+                            resp.status,
+                        )
+                        continue
+                    data = await resp.json()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug(
+                    "Home Assistant: REST state fetch for %s failed: %s", eid, e
+                )
+                continue
+            if isinstance(data, dict):
+                self._update_entity_value(eid, data.get("state"))
 
     def _update_entity_value(self, entity_id: str, state_val: object) -> None:
         logger.debug(f"Home Assistant: update_entity_value: {entity_id}, {state_val}")
