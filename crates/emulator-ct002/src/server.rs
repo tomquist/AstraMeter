@@ -440,12 +440,19 @@ async fn recv_loop(ctx: Arc<ServerCtx>) {
             );
         }
         let data = buf[..n].to_vec();
-        let ctx = ctx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle(ctx, &data, addr).await {
-                tracing::warn!("CT002 handle: {e}");
-            }
-        });
+        // Process the packet inline rather than `tokio::spawn`ing a
+        // fresh task per packet. With 2 consumers polling every ~1 s
+        // that was generating ~7,200 tokio Task allocations/hour,
+        // and the resulting heap churn around tokio's task pool
+        // intermittently corrupted task state on this current_thread
+        // runtime (manifesting as `transition_to_running` /
+        // `prev.is_running()` / `next.is_notified()` assertion
+        // panics deep inside tokio). `handle()` typically runs in
+        // <100 ms — well within the poll interval — so serialising
+        // costs us nothing and removes the churn.
+        if let Err(e) = handle(ctx.clone(), &data, addr).await {
+            tracing::warn!("CT002 handle: {e}");
+        }
     }
 }
 
