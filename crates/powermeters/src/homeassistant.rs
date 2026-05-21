@@ -42,6 +42,16 @@ struct State {
     entity_values: HashMap<String, Option<f64>>,
     msg_id: u64,
     subscribe_id: Option<u64>,
+    /// `subscribe_entities` is supposed to push an initial snapshot
+    /// of every entity, but in setups where an entity isn't loaded
+    /// yet at subscribe time (HA still warming up after restart, or
+    /// the integration providing the sensor hasn't initialised) no
+    /// initial event arrives and `wait_for_message` blocks until
+    /// timeout. We compensate by issuing an explicit `get_states`
+    /// request right after subscribing — this is the message id we
+    /// expect the result to come back with. Matches the Python
+    /// supervisor's `_get_states_id` (PR #382).
+    get_states_id: Option<u64>,
 }
 
 impl State {}
@@ -203,6 +213,7 @@ async fn run_loop(
                     let mut s = state.lock();
                     s.msg_id = 0;
                     s.subscribe_id = None;
+                    s.get_states_id = None;
                     for v in s.entity_values.values_mut() {
                         *v = None;
                     }
@@ -278,22 +289,37 @@ async fn handle_message(
         }
         "auth_ok" => {
             tracing::info!("Home Assistant: authenticated");
-            let id = {
+            let (sub_id, get_id) = {
                 let mut s = state.lock();
                 s.msg_id += 1;
                 s.subscribe_id = Some(s.msg_id);
-                s.msg_id
+                let sub = s.msg_id;
+                s.msg_id += 1;
+                s.get_states_id = Some(s.msg_id);
+                let get = s.msg_id;
+                (sub, get)
             };
             let mut ents: Vec<&String> = tracked.iter().collect();
             ents.sort();
             let _ = conn
                 .send(WsMessage::Text(
                     json!({
-                        "id": id,
+                        "id": sub_id,
                         "type": "subscribe_entities",
                         "entity_ids": ents,
                     })
                     .to_string(),
+                ))
+                .await;
+            // `subscribe_entities` is supposed to push an initial
+            // snapshot, but in setups where the entity isn't loaded
+            // yet at subscribe time, no initial event arrives and
+            // `wait_for_message` blocks until timeout. Seed the cache
+            // once via an explicit `get_states` request. Matches the
+            // Python supervisor's PR #382 fix.
+            let _ = conn
+                .send(WsMessage::Text(
+                    json!({"id": get_id, "type": "get_states"}).to_string(),
                 ))
                 .await;
         }
@@ -307,15 +333,30 @@ async fn handle_message(
         }
         "result" => {
             let id = msg.get("id").and_then(|v| v.as_i64());
-            let sub_id = state.lock().subscribe_id.map(|x| x as i64);
+            let (sub_id, get_id) = {
+                let s = state.lock();
+                (
+                    s.subscribe_id.map(|x| x as i64),
+                    s.get_states_id.map(|x| x as i64),
+                )
+            };
+            let success = msg
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if id.is_some() && id == sub_id {
-                let success = msg
-                    .get("success")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
                 if !success {
                     let err = msg.get("error").cloned().unwrap_or(serde_json::Value::Null);
                     tracing::error!("HA subscribe_entities failed: {err}");
+                }
+            } else if id.is_some() && id == get_id {
+                if success {
+                    if let Some(result) = msg.get("result") {
+                        apply_get_states_result(result, tracked, state, ready, message);
+                    }
+                } else {
+                    let err = msg.get("error").cloned().unwrap_or(serde_json::Value::Null);
+                    tracing::error!("HA get_states failed: {err}");
                 }
             }
         }
@@ -377,6 +418,49 @@ fn apply_event(
                     changed = true;
                 }
             }
+        }
+    }
+    if changed {
+        message.notify_waiters();
+        let all_ready = {
+            let s = state.lock();
+            tracked
+                .iter()
+                .all(|e| s.entity_values.get(e).and_then(|v| *v).is_some())
+        };
+        if all_ready {
+            ready.notify_waiters();
+        }
+    }
+}
+
+/// Apply a `get_states` HA-API result to the entity cache. The
+/// result shape is `[ {"entity_id": "...", "state": "..."}, ... ]`
+/// — same envelope a REST `/api/states` call would return.
+fn apply_get_states_result(
+    result: &Value,
+    tracked: &HashSet<String>,
+    state: &Arc<Mutex<State>>,
+    ready: &Arc<Notify>,
+    message: &Arc<Notify>,
+) {
+    let Some(arr) = result.as_array() else {
+        return;
+    };
+    let mut changed = false;
+    for entry in arr {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        let Some(eid) = obj.get("entity_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !tracked.contains(eid) {
+            continue;
+        }
+        if let Some(st) = obj.get("state") {
+            update_value(state, eid, st);
+            changed = true;
         }
     }
     if changed {
