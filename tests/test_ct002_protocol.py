@@ -179,12 +179,14 @@ def test_ct002_splits_mixed_sign_instructions_per_storage_before_aggregation():
 
 
 def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
-    """Regression for #376: positive *report* but negative *instruction* must
-    not populate *_dchrg_power (otherwise other batteries idle)."""
+    """Regression for #376: positive *report* but negative *net instruction*
+    must not populate *_dchrg_power (otherwise other batteries idle)."""
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "C", "-100"]
 
-    # Venus D reports +500 (PV passthrough) but we instructed -500 (charge).
+    # Venus D reports +500 (PV passthrough) but its net instructed target is
+    # -500 (we expect it to charge, even though firmware will keep
+    # passing PV through).
     device._update_consumer_report("venus-d", phase="A", power=500)
     device._consumers["venus-d"].last_instructed_power = -500.0
 
@@ -194,7 +196,28 @@ def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
     )
 
     assert response[20] == "0"  # A_dchrg_power must be 0
-    assert response[15] == "-500"  # A_chrg_power reflects the instruction
+    assert response[15] == "-500"  # A_chrg_power reflects the net instruction
+
+
+def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal():
+    """Net-power semantics: a battery discharging at +500 W that we just
+    corrected down by 100 must still register as discharging (+400 W),
+    not flip into the charge bucket on the strength of the delta alone."""
+    device = CT002()
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "0"]
+
+    # Venus on phase A is discharging at 500 W; we just sent it a -100 W
+    # correction (charge a little) → net target 400 W (still discharging).
+    device._update_consumer_report("venus-a", phase="A", power=500)
+    device._consumers["venus-a"].last_instructed_power = 400.0
+
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[0, 0, 0],
+    )
+
+    assert response[20] == "400"  # A_dchrg_power = net 400 W discharge
+    assert response[15] == "0"  # A_chrg_power stays 0
 
 
 def test_ct002_info_idx_increments_and_wraps():
