@@ -674,14 +674,16 @@ class CT002:
         # per phase so other batteries can see who is actively
         # charging/discharging cells; storing only the delta would lose
         # the steady-state signal and flip signs on small corrections.
-        # Inspection-mode requests are recorded the same way — the only
-        # difference there is that ``values`` carries raw meter readings
-        # rather than balancer-computed deltas, so the battery can
-        # observe per-phase grid response and identify its phase.
-        # See issue #376.
-        consumer = self._get_consumer(consumer_id)
-        phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
-        consumer.last_instructed_power = float(reported_power + values[phase_idx])
+        # Skip during inspection mode: there is no instruction to record
+        # (we send raw meter readings as information, not a target; the
+        # battery is running its phase-discovery routine, not our
+        # integral controller), and we don't even know which phase to
+        # credit since ``consumer.phase`` defaults to "A" until the
+        # battery declares its real phase.  See issue #376.
+        if not in_inspection_mode:
+            consumer = self._get_consumer(consumer_id)
+            phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
+            consumer.last_instructed_power = float(reported_power + values[phase_idx])
 
         try:
             response_fields = self._build_response_fields(fields, values)
