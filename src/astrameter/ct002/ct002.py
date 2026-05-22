@@ -70,6 +70,11 @@ class Consumer:
     # Report data (updated each UDP request)
     phase: str = "A"
     power: int = 0
+    # The last per-phase target we returned to this consumer (i.e. what we
+    # *told* it to do on its own phase: negative = charge, positive =
+    # discharge).  Used to populate cross-talk *_dchrg / *_chrg fields in
+    # responses to other batteries — see _collect_reports_by_phase.
+    last_instructed_power: float = 0.0
     timestamp: float = 0.0
     device_type: str = ""
     poll_interval: float | None = None
@@ -390,7 +395,12 @@ class CT002:
             phase = consumer.phase.upper()
             if phase not in by_phase:
                 phase = "A"
-            power = consumer.power
+            # Use what AstraMeter *instructed* this consumer to do, not
+            # what it reported doing.  A battery passing PV through to AC
+            # at 100% SoC reports positive power even though we told it to
+            # charge; reporting the instruction here keeps the cross-talk
+            # dchrg signal free of those involuntary outputs (issue #376).
+            power = round(consumer.last_instructed_power)
             if power == 0:
                 continue
             by_phase[phase]["active"] = True
@@ -652,6 +662,13 @@ class CT002:
         if self.active_control and not in_inspection_mode:
             values = self._compute_smooth_target(values, consumer_id)
         values = ([*list(values), 0, 0, 0])[:3]
+
+        # Record the instruction we're about to send so cross-talk in
+        # *_chrg_power / *_dchrg_power fields reflects what AstraMeter
+        # *told* each battery to do, not what they reported (issue #376).
+        consumer = self._get_consumer(consumer_id)
+        phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
+        consumer.last_instructed_power = float(values[phase_idx])
 
         try:
             response_fields = self._build_response_fields(fields, values)

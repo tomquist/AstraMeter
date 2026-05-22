@@ -95,20 +95,34 @@ def test_reporting_consumer_rows_order_and_shape() -> None:
     )
 
 
-def test_ct002_relays_sum_of_all_storage_reports_by_phase():
+def _set_instruction(
+    device: CT002, consumer_id: str, phase: str, instructed: float
+) -> None:
+    """Record an instruction value for *consumer_id* on *phase*.
+
+    The cross-talk *_chrg_power / *_dchrg_power fields aggregate the
+    *instructions* AstraMeter sends to each battery, not the powers they
+    report.  Tests that want to assert on the aggregate must populate the
+    instruction state, not just the report.
+    """
+    device._update_consumer_report(consumer_id, phase=phase, power=0)
+    device._consumers[consumer_id].last_instructed_power = float(instructed)
+
+
+def test_ct002_relays_sum_of_charge_instructions_by_phase():
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "-100"]
 
-    # consumer-a reports charge-like value on phase A, consumer-b on phase B
-    device._update_consumer_report("consumer-a", phase="A", power=-180)
-    device._update_consumer_report("consumer-b", phase="B", power=-240)
+    # We *instructed* consumer-a to charge on A and consumer-b to charge on B.
+    _set_instruction(device, "consumer-a", phase="A", instructed=-180)
+    _set_instruction(device, "consumer-b", phase="B", instructed=-240)
 
     response_for_a = device._build_response_fields(
         request_fields=request_fields,
         values=[10, 20, 30],
     )
 
-    # negative sums are forwarded into *_chrg_power
+    # negative instructions are forwarded into *_chrg_power
     assert response_for_a[15] == "-180"  # A_chrg_power
     assert response_for_a[16] == "-240"  # B_chrg_power
     assert response_for_a[21] == "0"  # B_dchrg_power
@@ -124,19 +138,19 @@ def test_ct002_relays_sum_of_all_storage_reports_by_phase():
     assert response_for_b[16] == "-240"  # B_chrg_power
 
 
-def test_ct002_splits_positive_phase_sum_into_dchrg_fields():
+def test_ct002_splits_positive_instructions_into_dchrg_fields():
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "100"]
 
-    device._update_consumer_report("consumer-a", phase="A", power=500)
-    device._update_consumer_report("consumer-b", phase="B", power=800)
+    _set_instruction(device, "consumer-a", phase="A", instructed=500)
+    _set_instruction(device, "consumer-b", phase="B", instructed=800)
 
     response = device._build_response_fields(
         request_fields=request_fields,
         values=[10, 20, 30],
     )
 
-    # positive sums are forwarded into *_dchrg_power
+    # positive instructions are forwarded into *_dchrg_power
     assert response[15] == "0"  # A_chrg_power
     assert response[16] == "0"  # B_chrg_power
     assert response[20] == "500"  # A_dchrg_power
@@ -145,23 +159,42 @@ def test_ct002_splits_positive_phase_sum_into_dchrg_fields():
     assert response[9] == "1"  # B_chrg_nb
 
 
-def test_ct002_splits_mixed_sign_reports_per_storage_before_aggregation():
+def test_ct002_splits_mixed_sign_instructions_per_storage_before_aggregation():
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
 
-    # Same phase, opposite directions from different storages.
-    device._update_consumer_report("consumer-a", phase="A", power=-300)
-    device._update_consumer_report("consumer-b", phase="A", power=120)
+    # Same phase, opposite instructions to different storages.
+    _set_instruction(device, "consumer-a", phase="A", instructed=-300)
+    _set_instruction(device, "consumer-b", phase="A", instructed=120)
 
     response = device._build_response_fields(
         request_fields=request_fields,
         values=[10, 20, 30],
     )
 
-    # Split is done per storage report before phase aggregation.
+    # Split is done per storage instruction before phase aggregation.
     assert response[15] == "-300"  # A_chrg_power
     assert response[20] == "120"  # A_dchrg_power
     assert response[8] == "1"  # A_chrg_nb active flag
+
+
+def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
+    """Regression for #376: positive *report* but negative *instruction* must
+    not populate *_dchrg_power (otherwise other batteries idle)."""
+    device = CT002()
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "C", "-100"]
+
+    # Venus D reports +500 (PV passthrough) but we instructed -500 (charge).
+    device._update_consumer_report("venus-d", phase="A", power=500)
+    device._consumers["venus-d"].last_instructed_power = -500.0
+
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[0, 0, -500],
+    )
+
+    assert response[20] == "0"  # A_dchrg_power must be 0
+    assert response[15] == "-500"  # A_chrg_power reflects the instruction
 
 
 def test_ct002_info_idx_increments_and_wraps():
