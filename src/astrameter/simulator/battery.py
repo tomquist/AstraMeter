@@ -77,10 +77,8 @@ class BatterySimulator:
         self._startup_elapsed: float = 0.0
         self._step_index: int = 0
         self._pending_power_targets: list[tuple[int, float]] = []
-        self._dc_input_power: float = max(
-            0.0, min(float(self.max_dc_input), dc_input_power)
-        )
-        self._last_response_dchrg: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._dc_input_power: float = 0.0
+        self.dc_input_power = dc_input_power  # reuse setter clamp
 
     # -- public read-only properties ---------------------------------------
 
@@ -111,10 +109,6 @@ class BatterySimulator:
     @dc_input_power.setter
     def dc_input_power(self, value: float) -> None:
         self._dc_input_power = max(0.0, min(float(self.max_dc_input), float(value)))
-
-    @property
-    def last_response_dchrg(self) -> tuple[float, float, float]:
-        return self._last_response_dchrg
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
@@ -257,48 +251,35 @@ class BatterySimulator:
         If the opt-in firmware-mimic flag is on, a charging battery also
         idles when it sees another phase being instructed to discharge.
         """
-        try:
-            phase_a = int(response_fields[4]) if len(response_fields) > 4 else 0
-            phase_b = int(response_fields[5]) if len(response_fields) > 5 else 0
-            phase_c = int(response_fields[6]) if len(response_fields) > 6 else 0
-            grid_reading = phase_a + phase_b + phase_c
-            new_target: float = self._current_power + grid_reading
 
-            # *_dchrg_power live at fields 20/21/22 (A/B/C).
-            a_dchrg = int(response_fields[20]) if len(response_fields) > 20 else 0
-            b_dchrg = int(response_fields[21]) if len(response_fields) > 21 else 0
-            c_dchrg = int(response_fields[22]) if len(response_fields) > 22 else 0
-            self._last_response_dchrg = (
-                float(a_dchrg),
-                float(b_dchrg),
-                float(c_dchrg),
-            )
+        def field(idx: int) -> int:
+            try:
+                return int(response_fields[idx])
+            except (IndexError, ValueError, TypeError):
+                return 0
 
-            # Real Marstek firmware idles a charging battery when it sees
-            # another battery (on a different phase) being instructed to
-            # discharge — to avoid one battery feeding the other through
-            # the grid.  Opt-in; default off keeps existing simulator
-            # tests stable.
-            if (
-                self.idle_on_cross_phase_discharge
-                and new_target < 0
-                and self._other_phase_discharging((a_dchrg, b_dchrg, c_dchrg))
-            ):
-                new_target = 0.0
+        grid_reading = field(4) + field(5) + field(6)
+        dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
+        new_target: float = self._current_power + grid_reading
 
-            self._apply_ct_derived_target(new_target)
-        except (ValueError, TypeError):
-            pass
+        # Real Marstek firmware idles a charging battery when it sees
+        # another battery (on a different phase) being instructed to
+        # discharge — to avoid one battery feeding the other through
+        # the grid.  Opt-in; default off keeps existing simulator
+        # tests stable.
+        if (
+            self.idle_on_cross_phase_discharge
+            and new_target < 0
+            and self._other_phase_discharging(dchrg)
+        ):
+            new_target = 0.0
 
-    def _other_phase_discharging(self, dchrg_vec: tuple[int, int, int]) -> bool:
+        self._apply_ct_derived_target(new_target)
+
+    def _other_phase_discharging(self, dchrg: tuple[int, int, int]) -> bool:
         """True if a phase other than this battery's reports a positive dchrg."""
-        own_idx = {"A": 0, "B": 1, "C": 2}.get(self.phase, 0)
-        for i, value in enumerate(dchrg_vec):
-            if i == own_idx:
-                continue
-            if value > 0:
-                return True
-        return False
+        own_idx = "ABC".index(self.phase)
+        return any(v > 0 for i, v in enumerate(dchrg) if i != own_idx)
 
     # -- main loop ---------------------------------------------------------
 
@@ -353,7 +334,6 @@ class BatterySimulator:
             "max_discharge": self.max_discharge_power,
             "max_dc_input": self.max_dc_input,
             "dc_input": round(self._dc_input_power),
-            "last_response_dchrg": [round(v) for v in self._last_response_dchrg],
         }
 
 

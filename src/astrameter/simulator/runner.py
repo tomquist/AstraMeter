@@ -231,7 +231,7 @@ def validate_config(cfg: SimulationConfig) -> None:
             raise ValueError(
                 f"Battery {bc.mac}: max_dc_input must be >= 0, got {bc.max_dc_input}"
             )
-        if not (0.0 <= bc.dc_input_power <= max(0.0, float(bc.max_dc_input))):
+        if not 0.0 <= bc.dc_input_power <= bc.max_dc_input:
             raise ValueError(
                 f"Battery {bc.mac}: dc_input_power must be within "
                 f"[0, max_dc_input={bc.max_dc_input}], got {bc.dc_input_power}"
