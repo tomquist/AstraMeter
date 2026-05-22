@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -177,6 +178,8 @@ class PowermeterSimulator:
         try:
             watts = float(raw)
         except (ValueError, TypeError):
+            return web.json_response({"error": "invalid 'watts'"}, status=400)
+        if not math.isfinite(watts):
             return web.json_response({"error": "invalid 'watts'"}, status=400)
         if watts < 0 or watts > battery.max_dc_input:
             return web.json_response(
