@@ -283,19 +283,24 @@ async def test_handle_request_pv_passthrough_records_zero_net_target():
     assert by_phase["A"]["chrg_power"] == 0
 
 
-async def test_handle_request_skips_instruction_update_in_inspection_mode():
-    """Inspection-mode requests (phase ``0``) must not pollute
-    ``last_instructed_power`` — the battery isn't applying the value yet."""
+async def test_handle_request_records_net_target_in_inspection_mode():
+    """Inspection-mode requests record ``last_instructed_power`` the same
+    way normal requests do — only the values sent over differ (raw
+    meter readings rather than balancer-computed deltas).  The battery
+    in inspection mode is actively probing each phase to learn which
+    one reacts to its output, so it applies the response normally."""
     device = CT002(ct_mac="112233445566", active_control=False)
     await _drive_request(
         device,
         battery_mac="AABBCCDDEEFF",
-        phase="0",
-        reported_power=0,
-        delta_values=[123, 456, 789],
+        phase="0",  # inspection
+        reported_power=100,
+        delta_values=[50, 60, 70],
     )
     consumer = device._consumers["aabbccddeeff"]
-    assert consumer.last_instructed_power == 0.0
+    # Phase defaults to "A" during inspection, so phase_idx=0; net target
+    # = reported_power + values[0] = 100 + 50 = 150.
+    assert consumer.last_instructed_power == 150.0
 
 
 def test_ct002_info_idx_increments_and_wraps():
