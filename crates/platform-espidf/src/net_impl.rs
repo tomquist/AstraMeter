@@ -65,11 +65,20 @@ impl Drop for BlockingUdp {
 #[async_trait]
 impl UdpSocket for BlockingUdp {
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, NetError> {
-        let sock = self.sock.clone();
-        let buf = buf.to_vec();
-        tokio::task::spawn_blocking(move || sock.send_to(&buf, target))
-            .await
-            .map_err(|e| NetError::Send(format!("join: {e}")))?
+        // Call `std::net::UdpSocket::send_to` directly rather than
+        // bouncing through `tokio::task::spawn_blocking`. UDP sends
+        // are non-blocking on lwIP — the datagram is handed to the
+        // TCP/IP stack and the syscall returns in microseconds. With
+        // 2 Marstek batteries polling every ~1 s, the previous
+        // spawn_blocking path was generating ~7,200 blocking-pool
+        // task allocations/hour, the resulting Task-struct churn
+        // intermittently corrupted tokio's task state machine, and
+        // we kept hitting `prev.is_running()` /
+        // `next.is_notified()` assertion panics in
+        // `transition_to_complete`. Calling sync send_to inline
+        // removes that churn entirely.
+        self.sock
+            .send_to(buf, target)
             .map_err(|e| NetError::Send(e.to_string()))
     }
 
