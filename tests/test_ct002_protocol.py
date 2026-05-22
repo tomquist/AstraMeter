@@ -1,4 +1,5 @@
 import logging
+from unittest.mock import MagicMock
 
 from astrameter.ct002 import CT002, ReportingConsumerRow
 from astrameter.ct002.protocol import (
@@ -218,6 +219,83 @@ def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal():
 
     assert response[20] == "400"  # A_dchrg_power = net 400 W discharge
     assert response[15] == "0"  # A_chrg_power stays 0
+
+
+async def _drive_request(
+    device: CT002,
+    battery_mac: str,
+    phase: str,
+    reported_power: int,
+    delta_values: list[float],
+) -> None:
+    """Send one UDP request through ``_handle_request`` with a pinned
+    ``before_send`` that injects *delta_values* as the per-phase deltas
+    AstraMeter will return.  Drives the production path that populates
+    ``last_instructed_power``."""
+    transport = MagicMock()
+
+    async def before_send(_addr, _fields, _consumer_id):
+        return list(delta_values)
+
+    device.before_send = before_send
+    request = build_payload(
+        ["HMG-50", battery_mac, "HME-4", "112233445566", phase, str(reported_power)]
+    )
+    await device._handle_request(request, ("1.1.1.1", 12345), transport)
+
+
+async def test_handle_request_records_net_instructed_power_not_delta():
+    """Regression for the delta-vs-net mistake.
+
+    Venus discharging at +500 W, we correct down by 100 W.  The simulator
+    interprets the response as ``new_target = current_power + grid_reading``,
+    so the *net* target is +400 W.  ``last_instructed_power`` must record
+    400, not the raw -100 delta."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="A",
+        reported_power=500,
+        delta_values=[-100, 0, 0],
+    )
+    consumer = device._consumers["aabbccddeeff"]
+    assert consumer.last_instructed_power == 400.0, (
+        f"Expected net target 500 + (-100) = 400, got {consumer.last_instructed_power}"
+    )
+
+
+async def test_handle_request_pv_passthrough_records_zero_net_target():
+    """Venus D scenario from issue #376: reports +500 (passthrough), we
+    send a -500 charge delta → net target 0, A_dchrg_power must be 0."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="A",
+        reported_power=500,
+        delta_values=[-500, 0, 0],
+    )
+    consumer = device._consumers["aabbccddeeff"]
+    assert consumer.last_instructed_power == 0.0
+    by_phase = device._collect_reports_by_phase()
+    assert by_phase["A"]["dchrg_power"] == 0
+    assert by_phase["A"]["chrg_power"] == 0
+
+
+async def test_handle_request_skips_instruction_update_in_inspection_mode():
+    """Inspection-mode requests (phase ``0``) must not pollute
+    ``last_instructed_power`` — the battery isn't applying the value yet."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="0",
+        reported_power=0,
+        delta_values=[123, 456, 789],
+    )
+    consumer = device._consumers["aabbccddeeff"]
+    assert consumer.last_instructed_power == 0.0
 
 
 def test_ct002_info_idx_increments_and_wraps():
