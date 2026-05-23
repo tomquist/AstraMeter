@@ -71,14 +71,19 @@ std::string desired_type(const std::string &device_type) {
 // emitting both depending on endpoint. Returns "" if the field is
 // missing or some other type. Always lowercased.
 std::string read_code(JsonObject root) {
-  if (root["code"].is<const char *>()) {
-    const char *s = root["code"].as<const char *>();
+  auto v = root["code"];
+  if (v.is<const char *>()) {
+    const char *s = v.as<const char *>();
     return s == nullptr ? std::string() : std::string(s);
   }
-  if (root["code"].is<int>() || root["code"].is<long>() || root["code"].is<long long>()) {
+  // ArduinoJson's typed `is<>` is conservative — `is<long long>` is not a
+  // stable specialization across builds (esp32-arduino's bundled
+  // ArduinoJson can refuse the template), so probe with `is<int>` /
+  // `is<long>` only and read as `long`. Marstek codes are single-digit
+  // integers, so no overflow risk.
+  if (v.is<int>() || v.is<long>()) {
     char buf[16];
-    std::snprintf(buf, sizeof(buf), "%lld",
-                  static_cast<long long>(root["code"].as<long long>()));
+    std::snprintf(buf, sizeof(buf), "%ld", static_cast<long>(v.as<long>()));
     return std::string(buf);
   }
   return {};
