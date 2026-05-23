@@ -108,10 +108,15 @@ def running_binary(host_binary: Path):
         proc.wait()
 
 
-@pytest.mark.timeout(30)
+@pytest.mark.timeout(30, func_only=True)
 def test_battery_simulator_round_trip(running_binary: subprocess.Popen) -> None:
     """One BatterySimulator step against the host binary returns parsed fields
-    matching the canonical CT002 response shape."""
+    matching the canonical CT002 response shape.
+
+    func_only=True so the 30s bound covers only the UDP round-trip — the
+    module-scoped host_binary fixture's `esphome compile` (cold builds can
+    take minutes) is deliberately left unbounded.
+    """
 
     async def go() -> list[str] | None:
         battery = BatterySimulator(
