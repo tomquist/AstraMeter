@@ -8,10 +8,9 @@ balancer → response builder → wire). Any drift between Python's BatterySimul
 expectations and the C++ port's response is caught here in a single integration
 test.
 
-Skipped when the ESPHome toolchain is not installed locally. The matching CI
-job (.github/workflows/ci.yml :: ct002-esphome-compile) builds the binary as
-part of its matrix, but does not yet wire this test in — that lands once the
-test is proven stable in development.
+Skipped when the ESPHome toolchain is not installed locally. Runs in CI
+via the dedicated ``ct002-host-e2e`` job (.github/workflows/ci.yml), which
+installs esphome, builds the host binary, and runs this test.
 """
 
 from __future__ import annotations
