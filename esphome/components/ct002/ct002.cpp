@@ -223,6 +223,13 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
                             reinterpret_cast<struct sockaddr *>(&to), to_len);
     }
   }
+
+  // Fire listeners after a successful reply so mqtt_insights can publish
+  // fresh state. Skipped during inspection mode since per-phase grid_power
+  // is not yet meaningful (consumer is still discovering its phase).
+  if (!in_inspection_mode) {
+    for (auto &cb : this->consumer_event_listeners_) cb(consumer_id);
+  }
 }
 
 std::string CT002Component::consumer_key_(const std::string &meter_mac,
@@ -307,7 +314,16 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
 
 std::vector<float> CT002Component::compute_smooth_target_(const std::vector<float> &values,
                                                           const std::string &consumer_id) {
-  if (!this->active_control_ || values.empty() || !this->balancer_) return values;
+  // Cache the pre-balancer grid power for snapshot_consumer / Marstek
+  // MQTT broadcasts. We do this even when active_control is off so the
+  // insights component still gets fresh L1/L2/L3 readings.
+  for (size_t i = 0; i < 3 && i < values.size(); ++i) this->last_grid_power_[i] = values[i];
+  for (size_t i = values.size(); i < 3; ++i) this->last_grid_power_[i] = 0.0f;
+
+  if (!this->active_control_ || values.empty() || !this->balancer_) {
+    for (size_t i = 0; i < 3; ++i) this->last_target_[i] = this->last_grid_power_[i];
+    return values;
+  }
 
   auto reports = this->collect_reports_for_balancer_();
   std::unordered_set<std::string> inactive;
@@ -327,6 +343,8 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   for (float v : values) grid_total += v;
   auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, grid_total,
                                                  inactive, manual, values);
+  for (size_t i = 0; i < 3; ++i) this->last_target_[i] = out_arr[i];
+  this->last_smooth_target_ = out_arr[0] + out_arr[1] + out_arr[2];
   return {out_arr[0], out_arr[1], out_arr[2]};
 }
 
@@ -407,6 +425,110 @@ void CT002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Active Control: %s", YESNO(this->active_control_));
   ESP_LOGCONFIG(TAG, "  Max Sensor Age: %u ms", this->max_sensor_age_ms_);
   ESP_LOGCONFIG(TAG, "  Reporting Consumers: %u", static_cast<unsigned>(this->reporting_consumer_count()));
+}
+
+// ── MQTT-insights integration ─────────────────────────────────────────
+
+CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
+    const std::string &consumer_id) const {
+  ConsumerSnapshot snap;
+  snap.consumer_id = consumer_id;
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) return snap;
+  const auto &c = it->second;
+  snap.phase = c.phase;
+  snap.device_type = c.device_type;
+  snap.last_ip = c.last_ip;
+  snap.reported_power = c.power;
+  snap.active = c.active;
+  snap.auto_target = !c.manual_enabled;
+  if (c.manual_enabled) snap.manual_target = c.manual_target;
+  snap.poll_interval = c.poll_interval;
+  snap.timestamp = c.timestamp;
+  snap.grid_power = this->last_grid_power_;
+  snap.target = this->last_target_;
+  if (this->balancer_) {
+    // Per-consumer saturation, same source the Python ct002 reads at
+    // ct002.py:737 ("saturation": self._balancer.get_saturation(...)).
+    snap.saturation = static_cast<float>(this->balancer_->get_saturation(consumer_id));
+    auto last = this->balancer_->get_last_target(consumer_id);
+    if (last.has_value()) snap.last_target = *last;
+  }
+  return snap;
+}
+
+std::vector<std::string> CT002Component::reporting_consumer_ids() const {
+  std::vector<std::string> out;
+  out.reserve(this->consumers_.size());
+  for (const auto &kv : this->consumers_) {
+    if (kv.second.timestamp > 0.0) out.push_back(kv.first);
+  }
+  return out;
+}
+
+std::vector<float> CT002Component::latest_grid_power() const {
+  const uint32_t now_ms = ::esphome::millis();
+  std::vector<float> out;
+  out.reserve(3);
+  for (size_t i = 0; i < 3; ++i) {
+    const uint32_t age = (this->raw_stamp_ms_[i] == 0) ? UINT32_MAX
+                                                       : (now_ms - this->raw_stamp_ms_[i]);
+    if (age > this->max_sensor_age_ms_) {
+      out.push_back(0.0f);
+    } else {
+      out.push_back(this->raw_values_[i]);
+    }
+  }
+  return out;
+}
+
+size_t CT002Component::connected_slave_count() const {
+  return this->reporting_consumer_count();
+}
+
+std::vector<CT002Component::ReportingConsumerRow> CT002Component::reporting_consumer_rows() const {
+  std::vector<ReportingConsumerRow> out;
+  out.reserve(this->consumers_.size());
+  for (const auto &kv : this->consumers_) {
+    if (kv.second.timestamp <= 0.0) continue;
+    ReportingConsumerRow row;
+    row.consumer_id = kv.first;
+    row.device_type = kv.second.device_type;
+    row.last_ip = kv.second.last_ip;
+    row.phase = kv.second.phase;
+    out.push_back(std::move(row));
+  }
+  return out;
+}
+
+void CT002Component::set_consumer_active(const std::string &consumer_id, bool active) {
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) return;
+  it->second.active = active;
+}
+
+void CT002Component::set_consumer_manual_target(const std::string &consumer_id, float target) {
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) return;
+  it->second.manual_enabled = true;
+  it->second.manual_target = target;
+}
+
+void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bool auto_target) {
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) return;
+  it->second.manual_enabled = !auto_target;
+}
+
+void CT002Component::force_balancer_rotation() {
+  if (!this->balancer_) return;
+  // Mirror the Python rotation handler: pass the current active consumer
+  // pool (all reporting consumer ids) so the balancer can rebuild from it.
+  std::unordered_set<std::string> pool;
+  for (const auto &kv : this->consumers_) {
+    if (kv.second.timestamp > 0.0) pool.insert(kv.first);
+  }
+  this->balancer_->force_rotation(pool);
 }
 
 }  // namespace ct002

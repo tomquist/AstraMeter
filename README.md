@@ -187,7 +187,29 @@ ct002:
 
 See `esphome.example.yaml` at the repo root for an annotated template covering every knob.
 
-**Status:** experimental — UDP emulator, balancer, and filter pipeline are functional. MQTT-insights (Home Assistant Device Discovery + Marstek MQTT responder) and Marstek cloud device registration will land in subsequent releases.
+**Optional MQTT-insights sub-block.** Add the companion `astrameter_mqtt_insights:` component to publish Home Assistant Device Discovery and (optionally) answer Marstek-app polls on the same broker — no hame-relay round-tripping:
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@main
+    components: [ct002, astrameter_mqtt_insights]
+
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
+
+astrameter_mqtt_insights:
+  ct002_id: ct002_main
+  base_topic: astrameter             # per-installation namespace
+  ha_discovery: true                 # HA Device Discovery (per-consumer + device-level)
+  ha_discovery_prefix: homeassistant
+  marstek_mqtt_enabled: true         # answer Marstek-app polls on this broker
+  marstek_mqtt_interval: 300s        # periodic broadcast cadence; 0s = reply-only
+```
+
+HA discovery publishes one device per battery (grid_power L1/L2/L3 + total sensors, target L1/L2/L3, reported/last target, saturation, phase, device type, manual-target number, auto-target/active switches) plus a parent CT002 device (smooth_target, active_control binary_sensor, consumer_count, force_rotation button). The Marstek responder subscribes to both `hame_energy/<ct_type>/App/<mac>/ctrl` and `marstek_energy/<ct_type>/App/<mac>/ctrl`, answers `cd=1` aggregate polls and `cd=4` slave-list polls, and broadcasts the current state on the configured interval.
+
+**Status:** experimental — UDP emulator, balancer, filter pipeline, and MQTT-insights are functional. Marstek cloud device registration will land in a subsequent release.
 
 **Requirements:** ESP32 with ≥4 MB flash (default for `esp32dev`, `esp32-s3-devkitc-1`, etc.). ESP8266 is not supported in v1 — RAM and flash budgets are too tight once HTTPS+TLS, MQTT, and the balancer are linked together. Pick a board with `flash_size: 4MB` or larger; for ESP-IDF builds you may need a custom partition table when you also add HTTPS+MQTT — there is no top-level `flash_size:` YAML key, set it via your `board:` choice and (for ESP-IDF) `esp32: framework: type: esp-idf` with appropriate `sdkconfig_options:` or a partition CSV.
 

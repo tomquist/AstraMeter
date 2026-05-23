@@ -105,3 +105,25 @@ ct002:
     enabled: true
     alpha: 0.15
     min_target: 20
+
+# ─────────────────────────────────────────────────────────────────────────
+# Optional: MQTT Insights sub-block. Publishes per-consumer state to MQTT
+# with full Home Assistant Device Discovery, and answers Marstek-app polls
+# on the same broker so the emulator shows up in the app without round-
+# tripping through hame-relay.
+#
+# Requires the upstream `mqtt:` block above. Mirrors the Python
+# [MQTT_INSIGHTS] section in config.ini.example.
+# ─────────────────────────────────────────────────────────────────────────
+#
+# mqtt:
+#   broker: 192.168.1.10
+#   port: 1883
+#
+# astrameter_mqtt_insights:
+#   ct002_id: ct002_main
+#   base_topic: astrameter          # per-installation namespace
+#   ha_discovery: true              # publish HA Device Discovery
+#   ha_discovery_prefix: homeassistant
+#   marstek_mqtt_enabled: true      # answer Marstek-app polls on the broker
+#   marstek_mqtt_interval: 300s     # periodic broadcast cadence (0 = poll-only)

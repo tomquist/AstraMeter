@@ -1,0 +1,55 @@
+esphome:
+  name: ct002-insights-esp32-ard
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002, astrameter_mqtt_insights]
+
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
+  discovery: false
+
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+  - platform: template
+    id: grid_l2
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+  - platform: template
+    id: grid_l3
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  ct_type: HME-4
+  ct_mac: "aabbccddeeff"
+  udp_port: 12345
+
+astrameter_mqtt_insights:
+  ct002_id: ct002_main
+  base_topic: astrameter
+  ha_discovery: true
+  marstek_mqtt_enabled: true
+  marstek_mqtt_interval: 60s

@@ -57,6 +57,9 @@ When you fix a bug in:
 - `src/astrameter/ct002/ct002.py` → `ct002.{h,cpp}` (including the response-builder math, MAC validation, and `_compute_smooth_target` dispatch).
 - `src/astrameter/ct002/protocol.py` → `protocol.{h,cpp}`. Add a vector to `tests/components/ct002/fixtures/protocol_golden_vectors.json` if the behaviour change affects wire bytes; both the Python pytest and the host-gcc gtest will pick it up automatically once `_populate_wire_hex.py` is re-run.
 - `src/astrameter/powermeter/wrappers/{hampel,smoothing,pid}.py` → the matching `{hampel,smoothing,pid}.{h,cpp}` in the component directory.
+- `src/astrameter/mqtt_insights/marstek_mqtt.py` → `esphome/components/astrameter_mqtt_insights/marstek_responder.{h,cpp}`. Wire-format changes (topic templates, `cd=1`/`cd=4` payload tokens, k=v ordering) must keep host-gcc `host_marstek_responder_test` green so the Marstek app and hm2mqtt-style parsers see identical bytes from both stacks.
+- `src/astrameter/mqtt_insights/discovery.py` → `esphome/components/astrameter_mqtt_insights/discovery.{h,cpp}`. Keep `node_id`/`unique_id`/`value_template` strings identical so HA dedupe across the Python and ESPHome paths works correctly when both happen to share a broker.
+- `src/astrameter/mqtt_insights/service.py` → `esphome/components/astrameter_mqtt_insights/mqtt_insights.{h,cpp}`. The ESPHome port intentionally omits the asyncio queue, the reconnect loop, and the ARP lookup — see the header for the documented architectural diff.
 
 Fixes to `src/astrameter/powermeter/wrappers/{transform,throttling}.py` have **no** C++ counterpart — those wrappers are delegated to ESPHome's standard `sensor: filters:` (`offset:`, `multiply:`, `throttle:`) on the upstream sensor.
 

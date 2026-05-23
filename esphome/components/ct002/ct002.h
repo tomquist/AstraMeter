@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -88,6 +89,77 @@ class CT002Component : public Component {
   // Observability (MQTT insights and future automation hooks read these).
   size_t reporting_consumer_count() const;
 
+  // ── MQTT-insights integration API ────────────────────────────────────
+  // Snapshot of one consumer's state for publish-time JSON building.
+  // Mirrors src/astrameter/mqtt_insights/service.py::_handle_ct002_event's
+  // `consumer_state` dict. Returned by value (small POD-ish; per-event
+  // copies are negligible vs the MQTT publish cost).
+  struct ConsumerSnapshot {
+    std::string consumer_id;
+    std::string phase;
+    std::string device_type;
+    std::string last_ip;
+    float reported_power{0.0f};
+    bool active{true};
+    bool auto_target{true};
+    std::optional<float> manual_target;
+    std::optional<float> poll_interval;
+    double timestamp{0.0};
+    // Cross-phase grid power last observed at the pipeline head (post-
+    // filters, pre-balancer). Mirrors Python's `grid_power.{l1,l2,l3}`.
+    std::array<float, 3> grid_power{0.0f, 0.0f, 0.0f};
+    // Per-phase balancer-issued targets from the most recent reply.
+    std::array<float, 3> target{0.0f, 0.0f, 0.0f};
+    // Saturation (0..1) of this consumer's phase, from the LoadBalancer.
+    float saturation{0.0f};
+    std::optional<float> last_target;
+  };
+  ConsumerSnapshot snapshot_consumer(const std::string &consumer_id) const;
+  std::vector<std::string> reporting_consumer_ids() const;
+
+  // Read-only view of the most recent grid_power values (for the Marstek
+  // MQTT responder's get_values()). Returns up to 3 phases; values that
+  // age past max_sensor_age_ms_ are zeroed (mirrors Python's
+  // SensorBackedPowermeter behaviour).
+  std::vector<float> latest_grid_power() const;
+  size_t connected_slave_count() const;
+
+  // Configured ct_type/ct_mac forwarded to the Marstek MQTT topics.
+  const std::string &ct_type() const { return this->ct_type_; }
+  const std::string &ct_mac() const { return this->ct_mac_; }
+  int wifi_rssi() const { return this->wifi_rssi_; }
+
+  // Reporting-row shape that mirrors src/astrameter/ct002/__init__.py's
+  // `ReportingConsumerRow` — used by the Marstek cd=4 slave list and by
+  // mqtt_insights when it needs `device_type`/`consumer_id`/`last_ip`/`phase`
+  // for one published row. Keep field names aligned with Python.
+  struct ReportingConsumerRow {
+    std::string consumer_id;
+    std::string device_type;
+    std::string last_ip;
+    std::string phase;
+  };
+  std::vector<ReportingConsumerRow> reporting_consumer_rows() const;
+
+  // Command path (called by mqtt_insights when an HA-discovery entity
+  // is acted on). All are no-ops if consumer_id is unknown.
+  void set_consumer_active(const std::string &consumer_id, bool active);
+  void set_consumer_manual_target(const std::string &consumer_id, float target);
+  void set_consumer_auto_target(const std::string &consumer_id, bool auto_target);
+  void force_balancer_rotation();
+
+  // Listener registration — mqtt_insights subscribes once at setup() to
+  // be notified after every successful UDP poll-reply round trip. Allows
+  // the insights component to push fresh state without polling.
+  using ConsumerEventCallback = std::function<void(const std::string &consumer_id)>;
+  void add_consumer_event_listener(ConsumerEventCallback cb) {
+    this->consumer_event_listeners_.push_back(std::move(cb));
+  }
+  using ConsumerRemovedCallback = std::function<void(const std::string &consumer_id)>;
+  void add_consumer_removed_listener(ConsumerRemovedCallback cb) {
+    this->consumer_removed_listeners_.push_back(std::move(cb));
+  }
+
  protected:
   void start_udp_server_();
   void pump_udp_();
@@ -158,6 +230,21 @@ class CT002Component : public Component {
   // Consumers.
   std::unordered_map<std::string, Consumer> consumers_;
   uint8_t info_idx_counter_{0};
+
+  // Last per-phase grid_power and balancer-issued target observed during
+  // the most recent compute_smooth_target_ call. Read by snapshot_consumer
+  // and latest_grid_power. Mirrors Python's per-consumer caches but is
+  // shared here because ESPHome has at most one ct002 device → one balancer
+  // run at a time, so per-consumer storage would just duplicate.
+  std::array<float, 3> last_grid_power_{0.0f, 0.0f, 0.0f};
+  std::array<float, 3> last_target_{0.0f, 0.0f, 0.0f};
+  std::optional<float> last_smooth_target_;
+
+  // Event listeners — invoked after every successful UDP poll-reply round
+  // trip (event) and after consumer eviction (removed). mqtt_insights
+  // registers callbacks via add_consumer_event_listener / removed_listener.
+  std::vector<ConsumerEventCallback> consumer_event_listeners_;
+  std::vector<ConsumerRemovedCallback> consumer_removed_listeners_;
 
   // UDP socket.
   std::unique_ptr<socket::Socket> socket_;

@@ -56,7 +56,21 @@ target_include_directories(host_balancer_test PRIVATE
 )
 target_link_libraries(host_balancer_test PRIVATE GTest::gtest_main)
 
+# Marstek MQTT responder: pure CSV k=v helpers that mirror
+# src/astrameter/mqtt_insights/marstek_mqtt.py. No ESPHome deps — compiles
+# clean against host-gcc and validates wire-format parity with Python.
+add_executable(host_marstek_responder_test
+  host_marstek_responder_test.cpp
+  ${REPO_ROOT}/esphome/components/astrameter_mqtt_insights/marstek_responder.cpp
+)
+target_include_directories(host_marstek_responder_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(host_marstek_responder_test PRIVATE GTest::gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(host_protocol_test)
 gtest_discover_tests(host_wrappers_test)
 gtest_discover_tests(host_balancer_test)
+gtest_discover_tests(host_marstek_responder_test)

@@ -65,3 +65,7 @@ def test_host_wrappers(cmake_build: Path) -> None:
 
 def test_host_balancer(cmake_build: Path) -> None:
     subprocess.run([str(cmake_build / "host_balancer_test")], check=True)
+
+
+def test_host_marstek_responder(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_marstek_responder_test")], check=True)
