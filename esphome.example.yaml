@@ -1,0 +1,107 @@
+# AstraMeter CT002 emulator running directly on an ESP32 via ESPHome.
+#
+# Drop this file into an esphome/ directory, edit the wifi/api/board sections
+# to match your hardware, point `power_sensor_l1` (and l2/l3 for three-phase
+# setups) at whatever grid-power sensor your inverter/meter exposes, then
+# `esphome run esphome.example.yaml`.
+#
+# The component answers Marstek CT002 UDP polls on port 12345, runs the same
+# cross-phase filter pipeline + load balancer as the Python AstraMeter add-on,
+# and reports per-phase charge/discharge cross-talk for multi-battery setups.
+
+esphome:
+  name: astrameter-ct002
+  friendly_name: AstraMeter CT002
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+api:
+logger:
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source: github://tomquist/astrameter@main
+    components: [ct002]
+
+# Replace these template sensors with whatever exposes your grid-power
+# measurement. Per-phase offset / multiply / throttle go HERE, on the
+# upstream sensor — not inside `ct002:`. This matches the order Python uses
+# (Transform/Throttle upstream of Hampel).
+sensor:
+  - platform: template
+    id: grid_l1
+    name: Grid L1 Power
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    lambda: |-
+      // Wire up to your inverter/Modbus/MQTT sensor here.
+      return 0.0f;
+    update_interval: 1s
+    filters:
+      # - offset: -20      # small negative offset → import safety buffer
+      # - multiply: 1.0
+      # - throttle: 1s
+
+  # Uncomment l2/l3 for three-phase setups (both required together).
+  # - platform: template
+  #   id: grid_l2
+  #   name: Grid L2 Power
+  #   lambda: 'return 0.0f;'
+  #   update_interval: 1s
+  # - platform: template
+  #   id: grid_l3
+  #   name: Grid L3 Power
+  #   lambda: 'return 0.0f;'
+  #   update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  # power_sensor_l2: grid_l2     # 3-phase: required together with l3
+  # power_sensor_l3: grid_l3
+  ct_type: HME-4                  # HME-4 = CT002 wire type; HME-3 = CT003
+  ct_mac: ""                       # blank → mirror requested MAC; set to a
+                                   # 12-hex-char MAC to filter inbound polls
+  udp_port: 12345
+  wifi_rssi: -50
+  active_control: true             # true → balancer steers batteries to zero
+                                   # false → emulator forwards raw readings
+  max_sensor_age: 30s              # publish unavailable if no update within
+
+  filters:                         # cross-phase only; all sub-blocks optional
+    hampel:
+      window: 7
+      n_sigma: 3.0
+      min_threshold: 50
+    smoothing:
+      alpha: 0.3
+      max_step: 200
+    deadband:
+      deadband: 10
+    pid:
+      kp: 0.5
+      ki: 0.1
+      kd: 0.0
+      output_max: 800
+      mode: bias                   # bias or replace
+
+  balancer:
+    fair_distribution: true
+    balance_gain: 0.2
+    balance_deadband: 15
+    min_efficient_power: 0         # >0 enables efficiency rotation
+    probe_min_power: 80
+
+  saturation:
+    enabled: true
+    alpha: 0.15
+    min_target: 20
