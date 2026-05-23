@@ -96,6 +96,31 @@ jobs:
       - name: Compile ${{ matrix.yaml }}
         run: esphome compile ${{ matrix.yaml }}
 
+  ct002-host-e2e:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (astrameter + esphome)
+        run: |
+          uv sync --frozen --extra dev
+          uv tool install esphome
+
+      - name: Run host-platform E2E against BatterySimulator
+        run: uv run pytest tests/components/ct002/test_host_e2e.py -v
+
   validate:
     needs: [ lint ]
     runs-on: ubuntu-latest
