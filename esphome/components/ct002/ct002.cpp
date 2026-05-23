@@ -1,43 +1,401 @@
 #include "ct002.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
+
+#include "powermeter/hampel.h"
+#include "powermeter/pid.h"
+#include "powermeter/smoothing.h"
+#include "protocol.h"
 
 namespace esphome {
 namespace ct002 {
 
 static const char *const TAG = "ct002";
 
+// Wall-clock seconds for balancer/saturation accounting. Uses ESPHome's
+// monotonic millis() because absolute wall time isn't available on bare
+// metal at boot; the balancer only cares about deltas, so a monotonic
+// reference is fine.
+double CT002Component::now_seconds_() {
+  return static_cast<double>(::esphome::millis()) / 1000.0;
+}
+
+void CT002Component::enable_hampel(size_t window, float n_sigma, float min_threshold) {
+  this->hampel_cfg_ = HampelCfg{window, n_sigma, min_threshold};
+}
+void CT002Component::enable_smoothing(float alpha, float max_step) {
+  this->smoothing_cfg_ = SmoothingCfg{alpha, max_step};
+}
+void CT002Component::enable_deadband(float deadband) { this->deadband_threshold_ = deadband; }
+void CT002Component::enable_pid(float kp, float ki, float kd, float output_max, PidMode mode) {
+  this->pid_cfg_ = PidCfg{kp, ki, kd, output_max, mode};
+}
+
 void CT002Component::setup() {
   this->num_phases_ = (this->power_sensor_l2_ != nullptr) ? 3 : 1;
 
-  auto cache_l1 = [this](float value) {
-    this->raw_values_[0] = value;
-    this->raw_stamp_ms_[0] = millis();
+  auto cache = [this](size_t i, float v) {
+    this->raw_values_[i] = v;
+    this->raw_stamp_ms_[i] = ::esphome::millis();
   };
-  this->power_sensor_l1_->add_on_state_callback(cache_l1);
+  this->power_sensor_l1_->add_on_state_callback([cache](float v) { cache(0, v); });
+  if (this->power_sensor_l2_ != nullptr)
+    this->power_sensor_l2_->add_on_state_callback([cache](float v) { cache(1, v); });
+  if (this->power_sensor_l3_ != nullptr)
+    this->power_sensor_l3_->add_on_state_callback([cache](float v) { cache(2, v); });
 
-  if (this->power_sensor_l2_ != nullptr) {
-    auto cache_l2 = [this](float value) {
-      this->raw_values_[1] = value;
-      this->raw_stamp_ms_[1] = millis();
-    };
-    this->power_sensor_l2_->add_on_state_callback(cache_l2);
+  // Build the filter pipeline. Order matches Python config_loader.py:
+  // SensorBacked → Hampel → Smoothed → Deadband → PID.
+  auto head = std::make_unique<SensorBackedPowermeter>(this->num_phases_, &this->raw_values_,
+                                                      &this->raw_stamp_ms_,
+                                                      this->max_sensor_age_ms_);
+  Powermeter *current = head.get();
+  this->pipeline_.push_back(std::move(head));
+  if (this->hampel_cfg_.has_value()) {
+    auto w = std::make_unique<HampelPowermeter>(current, this->hampel_cfg_->window,
+                                               this->hampel_cfg_->n_sigma,
+                                               this->hampel_cfg_->min_threshold);
+    current = w.get();
+    this->pipeline_.push_back(std::move(w));
   }
-  if (this->power_sensor_l3_ != nullptr) {
-    auto cache_l3 = [this](float value) {
-      this->raw_values_[2] = value;
-      this->raw_stamp_ms_[2] = millis();
-    };
-    this->power_sensor_l3_->add_on_state_callback(cache_l3);
+  if (this->smoothing_cfg_.has_value()) {
+    auto w = std::make_unique<SmoothedPowermeter>(current, this->smoothing_cfg_->alpha,
+                                                 this->smoothing_cfg_->max_step);
+    current = w.get();
+    this->pipeline_.push_back(std::move(w));
   }
+  if (this->deadband_threshold_.has_value()) {
+    auto w = std::make_unique<DeadbandPowermeter>(current, *this->deadband_threshold_);
+    current = w.get();
+    this->pipeline_.push_back(std::move(w));
+  }
+  if (this->pid_cfg_.has_value()) {
+    auto w = std::make_unique<PidPowermeter>(current, this->pid_cfg_->kp, this->pid_cfg_->ki,
+                                            this->pid_cfg_->kd, this->pid_cfg_->output_max,
+                                            this->pid_cfg_->mode);
+    current = w.get();
+    this->pipeline_.push_back(std::move(w));
+  }
+  this->pipeline_head_ = current;
+
+  this->balancer_ = std::make_unique<LoadBalancer>(
+      this->balancer_cfg_, this->saturation_alpha_, this->saturation_min_target_,
+      this->saturation_decay_factor_, this->saturation_grace_seconds_,
+      this->saturation_stall_timeout_seconds_, this->saturation_enabled_,
+      []() { return CT002Component::now_seconds_(); },
+      [this]() {
+        for (auto &p : this->pipeline_) p->reset();
+      });
+
+  this->start_udp_server_();
 
   ESP_LOGCONFIG(TAG, "CT002 setup: %u phase(s), ct_type=%s, udp_port=%u",
                 this->num_phases_, this->ct_type_.c_str(), this->udp_port_);
 }
 
+void CT002Component::start_udp_server_() {
+  this->socket_ = socket::socket_ip(SOCK_DGRAM, IPPROTO_UDP);
+  if (this->socket_ == nullptr) {
+    ESP_LOGW(TAG, "Could not allocate UDP socket");
+    this->mark_failed();
+    return;
+  }
+  int enable = 1;
+  this->socket_->setsockopt(SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+  // SO_BROADCAST is best-effort — some LWIP variants don't expose it; if
+  // the call fails the unicast path still works.
+  this->socket_->setsockopt(SOL_SOCKET, SO_BROADCAST, &enable, sizeof(enable));
+  if (this->socket_->setblocking(false) < 0) {
+    ESP_LOGW(TAG, "Could not put UDP socket into non-blocking mode");
+  }
+  struct sockaddr_storage server;
+  socklen_t server_len = socket::set_sockaddr_any(reinterpret_cast<struct sockaddr *>(&server),
+                                                  sizeof(server), this->udp_port_);
+  if (server_len == 0) {
+    ESP_LOGW(TAG, "Could not set bind address for UDP socket");
+    this->mark_failed();
+    return;
+  }
+  if (this->socket_->bind(reinterpret_cast<struct sockaddr *>(&server), server_len) < 0) {
+    ESP_LOGW(TAG, "Could not bind UDP socket to port %u: errno=%d", this->udp_port_, errno);
+    this->mark_failed();
+    return;
+  }
+  ESP_LOGCONFIG(TAG, "CT002 UDP server listening on port %u", this->udp_port_);
+}
+
 void CT002Component::loop() {
-  // UDP server pump lands in a subsequent commit.
+  if (this->socket_ != nullptr) this->pump_udp_();
+}
+
+void CT002Component::pump_udp_() {
+  // Cap iterations to avoid starving other components if a burst arrives.
+  for (int i = 0; i < 32; ++i) {
+    uint8_t buf[256];
+    struct sockaddr_storage from{};
+    socklen_t from_len = sizeof(from);
+    ssize_t n = this->socket_->recvfrom(buf, sizeof(buf),
+                                        reinterpret_cast<struct sockaddr *>(&from), &from_len);
+    if (n <= 0) break;
+    char ip_str[24]{};
+    uint16_t port = 0;
+    if (from.ss_family == AF_INET) {
+      auto *sin = reinterpret_cast<struct sockaddr_in *>(&from);
+      const uint8_t *octets = reinterpret_cast<const uint8_t *>(&sin->sin_addr);
+      std::snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", octets[0], octets[1], octets[2],
+                    octets[3]);
+      port = static_cast<uint16_t>((sin->sin_port >> 8) | (sin->sin_port << 8));
+    }
+    this->handle_request_(buf, static_cast<size_t>(n), std::string(ip_str), port);
+  }
+}
+
+void CT002Component::handle_request_(const uint8_t *data, size_t len,
+                                     const std::string &addr_ip, uint16_t addr_port) {
+  std::string error;
+  auto parsed = parse_request(data, len, &error);
+  if (!parsed) {
+    ESP_LOGD(TAG, "Invalid CT002 request from %s: %s", addr_ip.c_str(), error.c_str());
+    return;
+  }
+  const auto &fields = *parsed;
+  if (fields.size() < 4) return;
+  if (!this->validate_ct_mac_(fields)) return;
+
+  const std::string meter_mac = fields[1];
+  const std::string consumer_id = this->consumer_key_(meter_mac, addr_ip, addr_port);
+  std::string reported_phase = fields.size() > 4 ? fields[4] : "";
+  for (auto &c : reported_phase) c = static_cast<char>(std::toupper(c));
+  // Trim whitespace (Python uses str.strip().upper()).
+  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.front())))
+    reported_phase.erase(reported_phase.begin());
+  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.back())))
+    reported_phase.pop_back();
+  const bool in_inspection_mode = reported_phase != "A" && reported_phase != "B" && reported_phase != "C";
+  int reported_power = 0;
+  if (fields.size() > 5) {
+    try {
+      reported_power = std::stoi(fields[5]);
+    } catch (...) {
+      reported_power = 0;
+    }
+  }
+
+  const std::string meter_dev_type = fields[0];
+  this->update_consumer_report_(consumer_id, in_inspection_mode ? "A" : reported_phase,
+                                static_cast<float>(reported_power), meter_dev_type, addr_ip);
+
+  // Read the filter pipeline → balancer.
+  std::vector<float> values;
+  if (this->pipeline_head_) values = this->pipeline_head_->get_powermeter_watts();
+  if (values.empty()) values = {0.0f, 0.0f, 0.0f};
+  while (values.size() < 3) values.push_back(0.0f);
+  values.resize(3);
+
+  if (this->active_control_ && !in_inspection_mode) {
+    values = this->compute_smooth_target_(values, consumer_id);
+  }
+  while (values.size() < 3) values.push_back(0.0f);
+  values.resize(3);
+
+  if (!in_inspection_mode) {
+    auto &consumer = this->get_consumer_(consumer_id);
+    size_t phase_idx = 0;
+    if (consumer.phase == "B") phase_idx = 1;
+    else if (consumer.phase == "C") phase_idx = 2;
+    consumer.last_instructed_power = reported_power + values[phase_idx];
+  }
+
+  auto response_fields = this->build_response_fields_(fields, values);
+  auto payload = build_payload(response_fields);
+
+  if (this->socket_ != nullptr && !payload.empty()) {
+    struct sockaddr_storage to{};
+    socklen_t to_len = socket::set_sockaddr(reinterpret_cast<struct sockaddr *>(&to), sizeof(to),
+                                            addr_ip, addr_port);
+    if (to_len > 0) {
+      this->socket_->sendto(payload.data(), payload.size(), 0,
+                            reinterpret_cast<struct sockaddr *>(&to), to_len);
+    }
+  }
+}
+
+std::string CT002Component::consumer_key_(const std::string &meter_mac,
+                                          const std::string &addr_ip, uint16_t addr_port) const {
+  if (!meter_mac.empty()) {
+    std::string lower(meter_mac);
+    for (auto &c : lower) c = static_cast<char>(std::tolower(c));
+    return lower;
+  }
+  return addr_ip + ":" + std::to_string(addr_port);
+}
+
+Consumer &CT002Component::get_consumer_(const std::string &consumer_id) {
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) {
+    Consumer c;
+    c.consumer_id = consumer_id;
+    return this->consumers_.emplace(consumer_id, std::move(c)).first->second;
+  }
+  return it->second;
+}
+
+void CT002Component::update_consumer_report_(const std::string &consumer_id,
+                                            const std::string &phase, float power,
+                                            const std::string &device_type,
+                                            const std::string &source_ip) {
+  std::string normalized_phase = phase.empty() ? std::string("A") : phase;
+  for (auto &c : normalized_phase) c = static_cast<char>(std::toupper(c));
+  auto &consumer = this->get_consumer_(consumer_id);
+  const double now = now_seconds_();
+  consumer.phase = normalized_phase;
+  consumer.power = power;
+  consumer.timestamp = now;
+  consumer.device_type = device_type;
+  if (!source_ip.empty()) consumer.last_ip = source_ip;
+}
+
+bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) const {
+  if (this->ct_mac_.empty()) return true;
+  if (fields.size() < 4) return false;
+  std::string req(fields[3]);
+  for (auto &c : req) c = static_cast<char>(std::tolower(c));
+  std::string cfg(this->ct_mac_);
+  for (auto &c : cfg) c = static_cast<char>(std::tolower(c));
+  return req == cfg;
+}
+
+ReportMap CT002Component::collect_reports_for_balancer_() const {
+  ReportMap out;
+  for (const auto &kv : this->consumers_) {
+    if (kv.second.timestamp > 0.0) {
+      ConsumerReport r;
+      r.device_type = kv.second.device_type;
+      r.phase = kv.second.phase;
+      r.power = kv.second.power;
+      out[kv.first] = std::move(r);
+    }
+  }
+  return out;
+}
+
+CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
+  PhaseReports out;
+  for (const auto &kv : this->consumers_) {
+    const auto &c = kv.second;
+    if (c.timestamp <= 0.0) continue;
+    std::string phase = c.phase;
+    for (auto &ch : phase) ch = static_cast<char>(std::toupper(ch));
+    size_t idx = 0;
+    if (phase == "A") idx = 0;
+    else if (phase == "B") idx = 1;
+    else if (phase == "C") idx = 2;
+    else idx = 0;
+    const float power = std::round(c.last_instructed_power);
+    if (power == 0.0f) continue;
+    out.active[idx] = true;
+    if (power < 0.0f) out.chrg_power[idx] += power;
+    else out.dchrg_power[idx] += power;
+  }
+  return out;
+}
+
+std::vector<float> CT002Component::compute_smooth_target_(const std::vector<float> &values,
+                                                          const std::string &consumer_id) {
+  if (!this->active_control_ || values.empty() || !this->balancer_) return values;
+
+  auto reports = this->collect_reports_for_balancer_();
+  std::unordered_set<std::string> inactive;
+  std::unordered_set<std::string> manual;
+  for (const auto &kv : this->consumers_) {
+    if (!kv.second.active) inactive.insert(kv.first);
+    if (kv.second.manual_enabled) manual.insert(kv.first);
+  }
+  ConsumerMode mode{ConsumerModeKind::AUTO};
+  auto it = this->consumers_.find(consumer_id);
+  if (it != this->consumers_.end()) {
+    if (!it->second.active) mode = ConsumerMode{ConsumerModeKind::INACTIVE};
+    else if (it->second.manual_enabled)
+      mode = ConsumerMode{ConsumerModeKind::MANUAL, it->second.manual_target};
+  }
+  float grid_total = 0.0f;
+  for (float v : values) grid_total += v;
+  auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, grid_total,
+                                                 inactive, manual, values);
+  return {out_arr[0], out_arr[1], out_arr[2]};
+}
+
+std::vector<std::string> CT002Component::build_response_fields_(
+    const std::vector<std::string> &request_fields, const std::vector<float> &values) {
+  std::vector<float> v = values;
+  if (v.size() != 3) v = {0.0f, 0.0f, 0.0f};
+  const float phase_a = v[0];
+  const float phase_b = v[1];
+  const float phase_c = v[2];
+  const float total = phase_a + phase_b + phase_c;
+  const std::string meter_dev_type = request_fields.size() > 0 ? request_fields[0] : "HMG-50";
+  const std::string meter_mac = request_fields.size() > 1 ? request_fields[1] : "";
+  const std::string ct_mac_out =
+      !this->ct_mac_.empty() ? this->ct_mac_
+                             : (request_fields.size() > 3 ? request_fields[3] : "");
+
+  auto to_int_str = [](float f) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(std::lround(f)));
+    return std::string(buf);
+  };
+
+  std::vector<std::string> fields;
+  fields.reserve(RESPONSE_LABEL_COUNT);
+  fields.push_back(this->ct_type_);
+  fields.push_back(ct_mac_out);
+  fields.push_back(meter_dev_type);
+  fields.push_back(meter_mac);
+  fields.push_back(to_int_str(phase_a));
+  fields.push_back(to_int_str(phase_b));
+  fields.push_back(to_int_str(phase_c));
+  fields.push_back(to_int_str(total));
+  fields.push_back("0");  // A_chrg_nb
+  fields.push_back("0");  // B_chrg_nb
+  fields.push_back("0");  // C_chrg_nb
+  fields.push_back("0");  // ABC_chrg_nb
+  fields.push_back(std::to_string(this->wifi_rssi_));
+  fields.push_back(std::to_string(this->info_idx_counter_));
+  fields.push_back("0");  // x_chrg_power
+  fields.push_back("0");  // A_chrg_power
+  fields.push_back("0");  // B_chrg_power
+  fields.push_back("0");  // C_chrg_power
+  fields.push_back("0");  // ABC_chrg_power
+  fields.push_back("0");  // x_dchrg_power
+  fields.push_back("0");  // A_dchrg_power
+  fields.push_back("0");  // B_dchrg_power
+  fields.push_back("0");  // C_dchrg_power
+  fields.push_back("0");  // ABC_dchrg_power
+
+  const auto phase_reports = this->collect_reports_by_phase_();
+  const float phase_power[3] = {phase_a, phase_b, phase_c};
+  for (size_t i = 0; i < 3; ++i) {
+    if (phase_reports.active[i] || phase_power[i] != 0.0f) {
+      fields[8 + i] = "1";
+    }
+    fields[15 + i] = to_int_str(phase_reports.chrg_power[i]);
+    fields[20 + i] = to_int_str(phase_reports.dchrg_power[i]);
+  }
+
+  while (fields.size() < RESPONSE_LABEL_COUNT) fields.push_back("0");
+  this->info_idx_counter_ = (this->info_idx_counter_ + 1) % 256;
+  return fields;
+}
+
+size_t CT002Component::reporting_consumer_count() const {
+  size_t n = 0;
+  for (const auto &kv : this->consumers_) if (kv.second.timestamp > 0.0) ++n;
+  return n;
 }
 
 void CT002Component::dump_config() {
@@ -48,6 +406,7 @@ void CT002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  UDP Port: %u", this->udp_port_);
   ESP_LOGCONFIG(TAG, "  Active Control: %s", YESNO(this->active_control_));
   ESP_LOGCONFIG(TAG, "  Max Sensor Age: %u ms", this->max_sensor_age_ms_);
+  ESP_LOGCONFIG(TAG, "  Reporting Consumers: %u", static_cast<unsigned>(this->reporting_consumer_count()));
 }
 
 }  // namespace ct002
