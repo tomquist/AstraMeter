@@ -105,8 +105,13 @@ class MarstekRegistrationComponent : public Component {
   // HTTP — perform one GET, returning true if a 2xx JSON body was read
   // into *out_body. On failure, logs and returns false. Blocks for up to
   // http_->get_timeout() while the request runs; ESPHome's http_read_fully
-  // feeds the watchdog internally.
+  // feeds the watchdog internally. The extra_headers overload appends
+  // per-call request headers on top of the always-on User-Agent + Accept
+  // (used by the add-device call which needs Content-Type and the
+  // session token).
   bool http_get_json_(const std::string &url, std::string *out_body);
+  bool http_get_json_(const std::string &url, std::string *out_body,
+                      const std::vector<std::pair<std::string, std::string>> &extra_headers);
 
   // Build the full URL: base_url + path + "?" + percent-encoded params.
   std::string build_url_(const std::string &path,

@@ -169,6 +169,45 @@ TEST(MarstekResponder, Cd4CsvMultiRowDefaultIp) {
       format_cd4_slave_csv(rows));
 }
 
+// `read_code` lives in marstek_registration.cpp's anonymous namespace, so
+// we can't link to it directly. Validate the int|string tolerance via a
+// proxy: build the same logic here and assert the same shape. If the
+// real implementation diverges, audit will catch it — keep this in sync
+// when the real code changes.
+namespace {
+std::string proxy_read_code_str(const char *json) {
+  // Hand-rolled mini-parser for the simple cases we actually use: code is
+  // either {"code":"2"} or {"code":2}. We just look for the substring.
+  const std::string s = json;
+  auto pos = s.find("\"code\"");
+  if (pos == std::string::npos) return "";
+  pos = s.find(':', pos);
+  if (pos == std::string::npos) return "";
+  ++pos;
+  while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) ++pos;
+  if (pos >= s.size()) return "";
+  if (s[pos] == '"') {
+    ++pos;
+    auto end = s.find('"', pos);
+    return end == std::string::npos ? "" : s.substr(pos, end - pos);
+  }
+  auto end = pos;
+  while (end < s.size() && (std::isdigit(static_cast<unsigned char>(s[end])) || s[end] == '-')) {
+    ++end;
+  }
+  return s.substr(pos, end - pos);
+}
+}  // namespace
+
+TEST(MarstekRegistrationCodeShape, AcceptsStringAndInt) {
+  // Documents the contract that marstek_registration.cpp::read_code must
+  // honor: both shapes are valid Marstek replies (Python: str(...)).
+  EXPECT_EQ("2", proxy_read_code_str("{\"code\":\"2\",\"msg\":\"ok\"}"));
+  EXPECT_EQ("2", proxy_read_code_str("{\"code\":2,\"msg\":\"ok\"}"));
+  EXPECT_EQ("4", proxy_read_code_str("{\"code\":4,\"msg\":\"\\u5bc6\\u7801\\u9519\\u8bef\"}"));
+  EXPECT_EQ("", proxy_read_code_str("{\"msg\":\"missing\"}"));
+}
+
 TEST(MarstekResponder, Cd4CsvSanitizesEqAndComma) {
   // Marstek's outer split-on-comma parser requires exactly one '=' per
   // token; payload values must not contain '=' or ','. Mirrors

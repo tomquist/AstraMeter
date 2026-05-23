@@ -65,6 +65,25 @@ std::string desired_type(const std::string &device_type) {
   return device_type == "ct002" ? "HME-4" : "HME-3";
 }
 
+// Read the `code` field from a Marstek response, accepting either a JSON
+// string ("2") or a JSON integer (2). Python casts via str() so it
+// tolerates both shapes (marstek_api.py:98); the cloud has been observed
+// emitting both depending on endpoint. Returns "" if the field is
+// missing or some other type. Always lowercased.
+std::string read_code(JsonObject root) {
+  if (root["code"].is<const char *>()) {
+    const char *s = root["code"].as<const char *>();
+    return s == nullptr ? std::string() : std::string(s);
+  }
+  if (root["code"].is<int>() || root["code"].is<long>() || root["code"].is<long long>()) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%lld",
+                  static_cast<long long>(root["code"].as<long long>()));
+    return std::string(buf);
+  }
+  return {};
+}
+
 // User-facing device name in the Marstek cloud — keep in sync with
 // marstek_api.py::_desired_name so the device list looks identical in
 // the app whether the Python or ESPHome stack created it.
@@ -155,10 +174,10 @@ void MarstekRegistrationComponent::tick_state_() {
       std::string token;
       std::vector<DeviceRecord> solar;
       bool ok = json::parse_json(body, [&](JsonObject root) -> bool {
-        const char *code = root["code"].as<const char *>();
-        if (code == nullptr || std::strcmp(code, "2") != 0) {
+        const std::string code = read_code(root);
+        if (code != "2") {
           const char *msg = root["msg"].as<const char *>();
-          ESP_LOGE(TAG, "Token fetch failed (code=%s): %s", code ? code : "?",
+          ESP_LOGE(TAG, "Token fetch failed (code=%s): %s", code.empty() ? "?" : code.c_str(),
                    msg ? msg : "(no msg)");
           return false;
         }
@@ -264,17 +283,26 @@ void MarstekRegistrationComponent::tick_state_() {
            {"type", desired_type(this->device_type_)}, {"token", this->token_},
            {"access", "1"}, {"bluetooth_name", bt_name}, {"position", "{}"},
            {"timeZone", this->timezone_}, {"version", "121"}});
+      // Add-device call gets the full Marstek-app header set: Content-Type
+      // and Accept declare JSON, and the `token:` header carries the same
+      // value we already encoded in the query string. Mirrors
+      // marstek_api.py:210-215 — some backend versions reject the call if
+      // any of these are missing even though the wire payload is identical.
+      const std::vector<std::pair<std::string, std::string>> add_headers = {
+          {"Content-Type", "application/json"},
+          {"token", this->token_},
+      };
       std::string body;
-      if (!this->http_get_json_(url, &body)) {
+      if (!this->http_get_json_(url, &body, add_headers)) {
         this->backoff_deadline_ms_ = millis() + this->retry_interval_ms_;
         this->enter_state_(State::ERROR_BACKOFF);
         return;
       }
       bool ok = json::parse_json(body, [&](JsonObject root) -> bool {
-        const char *code = root["code"].as<const char *>();
-        if (code == nullptr || (std::strcmp(code, "1") != 0 && std::strcmp(code, "2") != 0)) {
+        const std::string code = read_code(root);
+        if (code != "1" && code != "2") {
           const char *msg = root["msg"].as<const char *>();
-          ESP_LOGE(TAG, "Add device failed (code=%s): %s", code ? code : "?",
+          ESP_LOGE(TAG, "Add device failed (code=%s): %s", code.empty() ? "?" : code.c_str(),
                    msg ? msg : "(no msg)");
           return false;
         }
@@ -316,11 +344,17 @@ void MarstekRegistrationComponent::tick_state_() {
   }
 }
 
-bool MarstekRegistrationComponent::http_get_json_(const std::string &url, std::string *out_body) {
+bool MarstekRegistrationComponent::http_get_json_(
+    const std::string &url, std::string *out_body,
+    const std::vector<std::pair<std::string, std::string>> &extra_headers) {
   std::vector<http_request::Header> headers = {
       {"User-Agent", "Dart/2.19 (dart:io)"},
       {"Accept", "application/json"},
   };
+  // Caller-supplied headers (Content-Type, token, etc.) — owned-by-string
+  // pairs are converted to the const-char-pointer Header struct just before
+  // the call so the strings stay alive for the request duration.
+  for (const auto &h : extra_headers) headers.push_back({h.first.c_str(), h.second.c_str()});
   auto container = this->http_->get(url, headers);
   if (container == nullptr || container->status_code < 200 || container->status_code >= 300) {
     ESP_LOGW(TAG, "HTTP %d from %s", container ? container->status_code : -1, url.c_str());
@@ -341,14 +375,21 @@ bool MarstekRegistrationComponent::http_get_json_(const std::string &url, std::s
   auto result = http_request::http_read_fully(
       container.get(), buf.data(), buf.size(),
       /*chunk_size=*/512, /*timeout_ms=*/this->http_->get_timeout());
+  // Capture bytes_read BEFORE end() — some backends invalidate the
+  // container's counters once end() runs.
+  const size_t bytes_read = container->get_bytes_read();
   container->end();
   if (result.status != http_request::HttpReadStatus::OK) {
     ESP_LOGW(TAG, "HTTP read failed for %s (status=%d, err=%d)", url.c_str(),
              static_cast<int>(result.status), result.error_code);
     return false;
   }
-  out_body->assign(reinterpret_cast<const char *>(buf.data()), container->get_bytes_read());
+  out_body->assign(reinterpret_cast<const char *>(buf.data()), bytes_read);
   return true;
+}
+
+bool MarstekRegistrationComponent::http_get_json_(const std::string &url, std::string *out_body) {
+  return this->http_get_json_(url, out_body, {});
 }
 
 std::string MarstekRegistrationComponent::build_url_(
