@@ -2,12 +2,19 @@
 
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 
 #include "esphome/components/json/json_util.h"
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
 #include "discovery.h"
+
+// Floor we treat as "real wall-clock time available" — anything before
+// 2020-01-01 means SNTP hasn't synced yet and time(nullptr) is just
+// returning seconds-since-boot. HA renders sub-1970 timestamps as the
+// epoch start, which is worse than publishing null.
+static constexpr time_t WALL_CLOCK_SANE_THRESHOLD = 1577836800;  // 2020-01-01 UTC
 
 namespace esphome {
 namespace astrameter_mqtt_insights {
@@ -97,6 +104,7 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   ESP_LOGD(TAG, "MQTT disconnected");
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
+  this->discovered_consumers_with_ip_.clear();
 }
 
 void MqttInsightsComponent::subscribe_commands_() {
@@ -176,11 +184,18 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     } else {
       root["poll_interval"] = nullptr;
     }
-    // Last seen timestamp — emit as Unix epoch seconds; HA's timestamp
-    // device_class accepts ISO 8601 OR epoch ints. ESP32 has no RTC by
-    // default; we use millis()-derived monotonic time which surfaces as
-    // an "elapsed since boot" timestamp. Good enough for diagnostic UX.
-    root["last_seen"] = snap.timestamp;
+    // Last seen timestamp — HA's `device_class: timestamp` wants Unix
+    // epoch seconds (or ISO 8601). snap.timestamp is millis()-derived
+    // (monotonic seconds since boot), which HA would render as ~1970+uptime
+    // — clearly wrong. Use the system wall clock if SNTP has synced
+    // (or any other time source has set it), otherwise publish null so
+    // HA shows "unavailable" instead of a wildly-wrong date.
+    const time_t now_wall = std::time(nullptr);
+    if (now_wall >= WALL_CLOCK_SANE_THRESHOLD) {
+      root["last_seen"] = static_cast<long>(now_wall);
+    } else {
+      root["last_seen"] = nullptr;
+    }
     if (snap.manual_target.has_value()) {
       root["manual_target"] = *snap.manual_target;
     } else {
@@ -197,20 +212,37 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     float smooth = 0.0f;
     for (size_t i = 0; i < 3; ++i) smooth += snap.target[i];
     root["smooth_target"] = std::lround(smooth);
-    root["active_control"] = true;  // ct002 active_control_ is config-time only
+    // Reflect the configured active_control setting — HA's binary_sensor
+    // should show "off" when the user disabled active control in YAML
+    // rather than always reading "running".
+    root["active_control"] = this->ct002_->active_control();
     root["consumer_count"] = this->ct002_->reporting_consumer_count();
   });
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);
 
-  // Consumer-level discovery on first sight.
-  if (this->ha_discovery_ &&
-      this->discovered_consumers_.find(consumer_id) == this->discovered_consumers_.end()) {
-    this->discovered_consumers_.insert(consumer_id);
-    auto [topic, payload] = build_ct002_consumer_discovery(
-        this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-        snap.device_type, /*network_mac=*/"", snap.last_ip);
-    this->mqtt_->publish(topic, payload, 0, true);
+  // Consumer-level discovery on first sight — re-published when
+  // battery_ip first becomes known so HA's device.connections array
+  // picks up the ["ip", ...] entry (Python: service.py:447-476 re-runs
+  // discovery whenever ARP lookup succeeds for a previously-unknown
+  // consumer). We track "discovered with IP" separately from
+  // "discovered" so a later IP arrival triggers exactly one
+  // re-discovery, not one per subsequent event.
+  if (this->ha_discovery_) {
+    const bool first_sight =
+        this->discovered_consumers_.find(consumer_id) == this->discovered_consumers_.end();
+    const bool ip_just_arrived =
+        !snap.last_ip.empty() &&
+        this->discovered_consumers_with_ip_.find(consumer_id) ==
+            this->discovered_consumers_with_ip_.end();
+    if (first_sight || ip_just_arrived) {
+      this->discovered_consumers_.insert(consumer_id);
+      if (!snap.last_ip.empty()) this->discovered_consumers_with_ip_.insert(consumer_id);
+      auto [topic, payload] = build_ct002_consumer_discovery(
+          this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
+          snap.device_type, /*network_mac=*/"", snap.last_ip);
+      this->mqtt_->publish(topic, payload, 0, true);
+    }
   }
 }
 
@@ -220,6 +252,7 @@ void MqttInsightsComponent::publish_consumer_removed_(const std::string &consume
                                   "/consumer/" + consumer_id + "/availability";
   this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
   this->discovered_consumers_.erase(consumer_id);
+  this->discovered_consumers_with_ip_.erase(consumer_id);
 }
 
 void MqttInsightsComponent::handle_command_message_(const std::string &topic,

@@ -87,6 +87,10 @@ class MqttInsightsComponent : public Component {
   // Discovery dedupe — keys cleared on disconnect.
   bool device_discovered_{false};
   std::unordered_set<std::string> discovered_consumers_;
+  // Subset of discovered_consumers_ that had a non-empty battery_ip when
+  // discovery was published. Used to trigger exactly one re-publish when
+  // an IP first becomes known (mirrors Python's ARP-success re-discovery).
+  std::unordered_set<std::string> discovered_consumers_with_ip_;
 
   // Marstek broadcast scheduling — uses set_interval, captured here so we
   // can cancel if reconfigured at runtime. Single timer because there's
