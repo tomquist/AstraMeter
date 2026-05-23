@@ -46,6 +46,17 @@ target_include_directories(host_wrappers_test PRIVATE
 target_compile_definitions(host_wrappers_test PRIVATE CT002_HOST_TEST=1)
 target_link_libraries(host_wrappers_test PRIVATE GTest::gtest_main)
 
+add_executable(host_balancer_test
+  host_balancer_test.cpp
+  ${REPO_ROOT}/esphome/components/ct002/balancer.cpp
+)
+target_include_directories(host_balancer_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(host_balancer_test PRIVATE GTest::gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(host_protocol_test)
 gtest_discover_tests(host_wrappers_test)
+gtest_discover_tests(host_balancer_test)
