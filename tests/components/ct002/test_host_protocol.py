@@ -40,9 +40,10 @@ def _build_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("ct002_host_build")
 
 
-def test_host_protocol_parity(tmp_path_factory: pytest.TempPathFactory) -> None:
+@pytest.fixture(scope="module")
+def cmake_build(tmp_path_factory: pytest.TempPathFactory) -> Path:
     _regen_vectors()
-    build_dir = _build_dir(tmp_path_factory)
+    build_dir = tmp_path_factory.mktemp("ct002_host_build")
     subprocess.run(
         ["cmake", "-S", str(HERE), "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release"],
         check=True,
@@ -51,7 +52,12 @@ def test_host_protocol_parity(tmp_path_factory: pytest.TempPathFactory) -> None:
         ["cmake", "--build", str(build_dir), "--parallel"],
         check=True,
     )
-    subprocess.run(
-        [str(build_dir / "host_protocol_test")],
-        check=True,
-    )
+    return build_dir
+
+
+def test_host_protocol_parity(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_protocol_test")], check=True)
+
+
+def test_host_wrappers(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_wrappers_test")], check=True)
