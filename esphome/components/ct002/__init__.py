@@ -257,6 +257,14 @@ async def to_code(config):
             )
         )
 
+    # Time-period config values come back as TimePeriodSeconds objects
+    # when the user supplied them (or when our schema default kicked in
+    # for an explicitly-present block). When the block is absent the
+    # fallback is a plain int. Coerce both to a plain float for the C++
+    # struct field, which is a `float seconds`.
+    def _seconds(value):
+        return float(value.total_seconds if hasattr(value, "total_seconds") else value)
+
     bal = config.get(CONF_BALANCER, {})
     bcfg = cg.StructInitializer(
         BalancerConfig,
@@ -272,7 +280,7 @@ async def to_code(config):
         ("probe_min_power", bal.get(CONF_PROBE_MIN_POWER, 80.0)),
         (
             "efficiency_rotation_interval",
-            float(bal.get(CONF_EFFICIENCY_ROTATION_INTERVAL, 900)),
+            _seconds(bal.get(CONF_EFFICIENCY_ROTATION_INTERVAL, 900)),
         ),
         ("efficiency_fade_alpha", bal.get(CONF_EFFICIENCY_FADE_ALPHA, 0.15)),
         (
@@ -288,8 +296,8 @@ async def to_code(config):
             sat.get(CONF_ALPHA, 0.15),
             sat.get(CONF_MIN_TARGET, 20.0),
             sat.get(CONF_DECAY_FACTOR, 0.995),
-            float(sat.get(CONF_GRACE_SECONDS, 90)),
-            float(sat.get(CONF_STALL_TIMEOUT_SECONDS, 60)),
+            _seconds(sat.get(CONF_GRACE_SECONDS, 90)),
+            _seconds(sat.get(CONF_STALL_TIMEOUT_SECONDS, 60)),
             sat.get(CONF_ENABLED, True),
         )
     )
