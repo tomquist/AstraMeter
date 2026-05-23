@@ -149,6 +149,50 @@ image: ghcr.io/tomquist/astrameter:next
 
 All commands above work across Windows, macOS, and Linux. The only difference is how you open your terminal.
 
+### ESPHome External Component (run on an ESP32)
+
+AstraMeter also ships as an **ESPHome external component** that runs the CT002/CT003 emulator, balancer, and cross-phase filter pipeline directly on an ESP32 — no Python add-on, no Home Assistant required. Useful if you'd rather flash a dedicated board than run a server, and if your grid-power source is already addressable by ESPHome (Modbus, M-Bus, Tasmota, MQTT, Shelly, Envoy, etc.).
+
+Minimal YAML:
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@main
+    components: [ct002]
+
+sensor:
+  - platform: modbus_controller   # or any other ESPHome sensor source
+    id: grid_l1
+    # per-phase offset / multiply / throttle go here, on the upstream
+    # sensor — not inside ct002: (matches Python's order, where Transform
+    # and Throttle sit upstream of the cross-phase filters)
+    filters:
+      - offset: 0
+      - multiply: 1
+      - throttle: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  # power_sensor_l2 / power_sensor_l3: required together for three-phase
+  ct_type: HME-4                  # HME-4 = CT002 wire type; HME-3 = CT003
+  udp_port: 12345
+  active_control: true
+  filters:                        # cross-phase, all optional
+    hampel:    { window: 7, n_sigma: 3.0, min_threshold: 50 }
+    smoothing: { alpha: 0.3, max_step: 200 }
+    deadband:  { deadband: 10 }
+    pid:       { kp: 0.5, ki: 0.1, kd: 0.0, output_max: 800, mode: bias }
+```
+
+See `esphome.example.yaml` at the repo root for an annotated template covering every knob.
+
+**Status:** experimental — UDP emulator, balancer, and filter pipeline are functional. MQTT-insights (Home Assistant Device Discovery + Marstek MQTT responder) and Marstek cloud device registration will land in subsequent releases.
+
+**Requirements:** ESP32 with ≥4 MB flash (default for `esp32dev`, `esp32-s3-devkitc-1`, etc.). ESP8266 is not supported in v1 — RAM and flash budgets are too tight once HTTPS+TLS, MQTT, and the balancer are linked together. Pick a board with `flash_size: 4MB` or larger; for ESP-IDF builds you may need a custom partition table when you also add HTTPS+MQTT — there is no top-level `flash_size:` YAML key, set it via your `board:` choice and (for ESP-IDF) `esp32: framework: type: esp-idf` with appropriate `sdkconfig_options:` or a partition CSV.
+
+**One important divergence from the Python emulator:** per-phase transforms and throttling are *not* part of `ct002:` — they're delegated to ESPHome's standard `sensor: filters:` (`offset:`, `multiply:`, `throttle:`) on the upstream sensor. This matches the canonical order in Python (`Transform → Throttle → Hampel → Smoothed → Deadband → PID`). Put per-phase filters on the sensor itself, not after `ct002:` — they need to apply to the raw input, not the balancer's output.
+
 ## Additional Notes
 
 When the script is running, switch your Marstek battery to "Self-Adaptation" mode to enable the powermeter functionality.

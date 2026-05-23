@@ -35,9 +35,9 @@ target_link_libraries(host_protocol_test PRIVATE GTest::gtest_main)
 
 add_executable(host_wrappers_test
   host_wrappers_test.cpp
-  ${REPO_ROOT}/esphome/components/ct002/powermeter/hampel.cpp
-  ${REPO_ROOT}/esphome/components/ct002/powermeter/smoothing.cpp
-  ${REPO_ROOT}/esphome/components/ct002/powermeter/pid.cpp
+  ${REPO_ROOT}/esphome/components/ct002/hampel.cpp
+  ${REPO_ROOT}/esphome/components/ct002/smoothing.cpp
+  ${REPO_ROOT}/esphome/components/ct002/pid.cpp
 )
 target_include_directories(host_wrappers_test PRIVATE
   ${REPO_ROOT}

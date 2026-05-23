@@ -7,9 +7,9 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
-#include "powermeter/hampel.h"
-#include "powermeter/pid.h"
-#include "powermeter/smoothing.h"
+#include "hampel.h"
+#include "pid.h"
+#include "smoothing.h"
 #include "protocol.h"
 
 namespace esphome {
@@ -178,12 +178,12 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     reported_phase.pop_back();
   const bool in_inspection_mode = reported_phase != "A" && reported_phase != "B" && reported_phase != "C";
   int reported_power = 0;
-  if (fields.size() > 5) {
-    try {
-      reported_power = std::stoi(fields[5]);
-    } catch (...) {
-      reported_power = 0;
-    }
+  if (fields.size() > 5 && !fields[5].empty()) {
+    // ESPHome disables exceptions, so std::stoi would not catch invalid
+    // input — use strtol and check the end pointer / errno.
+    char *end = nullptr;
+    const long parsed = std::strtol(fields[5].c_str(), &end, 10);
+    if (end != fields[5].c_str()) reported_power = static_cast<int>(parsed);
   }
 
   const std::string meter_dev_type = fields[0];

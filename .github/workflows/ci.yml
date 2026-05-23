@@ -66,8 +66,35 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev
 
-      - name: Run host-gcc protocol parity test
+      - name: Run host-gcc protocol + wrappers + balancer parity tests
         run: uv run pytest tests/components/ct002/test_host_protocol.py -v
+
+  ct002-esphome-compile:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        yaml:
+          - tests/components/ct002/test.host.yaml
+          - tests/components/ct002/test.esp32-idf.yaml
+          - tests/components/ct002/test.esp32-ard.yaml
+          - tests/components/ct002/test.1phase.yaml
+          - tests/components/ct002/test.no-filters.yaml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Compile ${{ matrix.yaml }}
+        run: esphome compile ${{ matrix.yaml }}
 
   validate:
     needs: [ lint ]

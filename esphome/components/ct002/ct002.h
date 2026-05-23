@@ -14,8 +14,9 @@
 #include "esphome/components/socket/socket.h"
 
 #include "balancer.h"
-#include "powermeter/base.h"
+#include "pid.h"
 #include "sensor_backed.h"
+#include "wrapper_base.h"
 
 namespace esphome {
 namespace ct002 {

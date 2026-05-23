@@ -13,10 +13,10 @@
 #include <vector>
 
 #define CT002_HOST_TEST 1
-#include "esphome/components/ct002/powermeter/base.h"
-#include "esphome/components/ct002/powermeter/hampel.h"
-#include "esphome/components/ct002/powermeter/pid.h"
-#include "esphome/components/ct002/powermeter/smoothing.h"
+#include "esphome/components/ct002/wrapper_base.h"
+#include "esphome/components/ct002/hampel.h"
+#include "esphome/components/ct002/pid.h"
+#include "esphome/components/ct002/smoothing.h"
 
 namespace {
 

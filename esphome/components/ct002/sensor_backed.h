@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-#include "powermeter/base.h"
+#include "wrapper_base.h"
 
 namespace esphome {
 namespace ct002 {

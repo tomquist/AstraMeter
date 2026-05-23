@@ -3,7 +3,7 @@
 #include <optional>
 #include <vector>
 
-#include "base.h"
+#include "wrapper_base.h"
 
 namespace esphome {
 namespace ct002 {
