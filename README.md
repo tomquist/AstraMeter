@@ -640,7 +640,7 @@ ID = your_id
 IP = 192.168.1.108
 ```
 
-### Modbus TCP
+### Modbus TCP/UDP
 
 ```ini
 [MODBUS]
@@ -653,6 +653,7 @@ DATA_TYPE = UINT16
 BYTE_ORDER = BIG
 WORD_ORDER = BIG
 REGISTER_TYPE = HOLDING  # or INPUT
+TRANSPORT = TCP  # or UDP
 ```
 
 ### MQTT
@@ -801,7 +802,10 @@ DATA_TYPE = UINT16
 BYTE_ORDER = BIG
 WORD_ORDER = BIG
 REGISTER_TYPE = HOLDING
+TRANSPORT = TCP
 ```
+
+`TRANSPORT` selects the Modbus transport: `TCP` (default) or `UDP`.
 
 ### Script
 

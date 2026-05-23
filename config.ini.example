@@ -247,6 +247,8 @@ THROTTLE_INTERVAL = 0
 #BYTE_ORDER = BIG
 #WORD_ORDER = BIG
 #REGISTER_TYPE = HOLDING
+## Transport: TCP (default) or UDP
+#TRANSPORT = TCP
 ## Per-powermeter throttling override (optional)
 #THROTTLE_INTERVAL = 1
 

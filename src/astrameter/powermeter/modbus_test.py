@@ -7,7 +7,7 @@ from pymodbus.datastore import (
     ModbusServerContext,
     ModbusSlaveContext,
 )
-from pymodbus.server import ModbusTcpServer
+from pymodbus.server import ModbusTcpServer, ModbusUdpServer
 
 from astrameter.powermeter import ModbusPowermeter
 
@@ -96,6 +96,21 @@ async def test_read_before_start_raises():
     pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1)
     with pytest.raises(RuntimeError, match="Client not started"):
         await pm.get_powermeter_watts()
+
+
+async def test_udp_transport_creates_udp_client():
+    pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1, transport="UDP")
+    with patch("astrameter.powermeter.modbus.AsyncModbusUdpClient") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.connect = AsyncMock(return_value=True)
+        await pm.start()
+        MockClient.assert_called_once_with("192.168.1.14", port=502)
+        assert pm.client is mock_instance
+
+
+async def test_invalid_transport_raises():
+    with pytest.raises(ValueError, match="Unsupported transport"):
+        ModbusPowermeter("192.168.1.14", 502, 1, 0, 1, transport="BOGUS")
 
 
 # ---------------------------------------------------------------------------
@@ -226,5 +241,34 @@ async def test_e2e_input_registers(modbus_server: int):
     try:
         result = await pm.get_powermeter_watts()
         assert result == [750.0]
+    finally:
+        await pm.stop()
+
+
+@pytest.fixture
+async def modbus_udp_server():
+    """Start a local Modbus UDP server on an ephemeral port."""
+    hr_values = [0] * 100
+    hr_values[0] = 500
+
+    store = ModbusSlaveContext(
+        hr=ModbusSequentialDataBlock(0, hr_values),
+        zero_mode=True,
+    )
+    context = ModbusServerContext(slaves=store, single=True)
+    server = ModbusUdpServer(context, address=("127.0.0.1", 0))
+    await server.listen()
+    # UDP uses a datagram transport (no listening socket list like TCP).
+    port = server.transport.get_extra_info("sockname")[1]  # type: ignore[union-attr]
+    yield port
+    await server.shutdown()
+
+
+async def test_e2e_udp_uint16_holding(modbus_udp_server: int):
+    pm = ModbusPowermeter("127.0.0.1", modbus_udp_server, 1, 0, 1, transport="UDP")
+    await pm.start()
+    try:
+        result = await pm.get_powermeter_watts()
+        assert result == [500.0]
     finally:
         await pm.stop()
