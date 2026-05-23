@@ -139,6 +139,10 @@ class CT002Component : public Component {
   // TTL (seconds) after which a silent consumer is evicted from the
   // tracking map. Defaults to 120 s, matching Python's consumer_ttl.
   void set_consumer_ttl_seconds(uint32_t v) { this->consumer_ttl_seconds_ = v; }
+  // Dedup window (ms). Repeat polls from the same consumer within this
+  // window are dropped. 0 (default) disables dedup. Mirrors Python's
+  // dedupe_time_window (default 0.0).
+  void set_dedupe_window_ms(uint32_t v) { this->dedupe_window_ms_ = v; }
 
   // Reporting-row shape that mirrors src/astrameter/ct002/__init__.py's
   // `ReportingConsumerRow` — used by the Marstek cd=4 slave list and by
@@ -182,8 +186,16 @@ class CT002Component : public Component {
   Consumer &get_consumer_(const std::string &consumer_id);
   // Periodic cleanup driven by set_interval in setup(). Fires
   // consumer_removed_listeners_ and calls balancer_->remove_consumer for
-  // every entry older than consumer_ttl_seconds_.
+  // every entry older than consumer_ttl_seconds_. Also purges the dedup
+  // timestamp map (mirrors Python's _dedup.purge_older_than at the same
+  // cadence).
   void evict_stale_consumers_();
+
+  // Returns false if a poll from consumer_id arrived within
+  // dedupe_window_ms_ of the last accepted one. The window is measured
+  // from the last ACCEPTED request (dropped polls don't refresh the
+  // timestamp), matching RequestDeduplicator.should_process.
+  bool dedup_should_process_(const std::string &consumer_id);
   void update_consumer_report_(const std::string &consumer_id, const std::string &phase,
                               float power, const std::string &device_type,
                               const std::string &source_ip);
@@ -216,6 +228,10 @@ class CT002Component : public Component {
   // Stored in seconds; the cleanup loop runs every 5s and evicts any
   // consumer whose last `timestamp` is older than this value.
   uint32_t consumer_ttl_seconds_{120};
+  uint32_t dedupe_window_ms_{0};
+  // Last-accepted-poll timestamp (monotonic seconds) per consumer_id,
+  // for the dedup gate. Purged alongside consumer eviction.
+  std::unordered_map<std::string, double> dedup_last_;
   // Per-consumer EMA alpha for the poll_interval diagnostic (Python:
   // POLL_INTERVAL_EMA_ALPHA=0.3). Same value here so the published
   // MQTT-insights poll_interval matches between stacks.

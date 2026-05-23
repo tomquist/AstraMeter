@@ -1,7 +1,10 @@
 #include "ct002.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "esphome/core/hal.h"
@@ -16,6 +19,43 @@ namespace esphome {
 namespace ct002 {
 
 static const char *const TAG = "ct002";
+
+namespace {
+
+// Round-half-to-even, matching Python's built-in round() (which the
+// Python emulator uses for every wire value). C++ std::lround is
+// round-half-AWAY-from-zero, so the two diverge on exact .5 ties
+// (round(2.5)==2 in Python, lround(2.5)==3). Reachable on the wire when a
+// filtered sensor value lands on x.5. Implemented explicitly rather than
+// via std::lrint so we don't depend on the global FP rounding mode.
+long round_half_even(double v) {
+  const double fl = std::floor(v);
+  const double frac = v - fl;
+  if (frac < 0.5) return static_cast<long>(fl);
+  if (frac > 0.5) return static_cast<long>(fl) + 1;
+  const long fll = static_cast<long>(fl);
+  return (fll % 2 == 0) ? fll : fll + 1;  // tie → nearest even
+}
+
+// Mirror of src/astrameter/ct002/protocol.py::parse_int → Python int():
+// strips surrounding whitespace and requires the ENTIRE remaining string
+// to be a valid base-10 integer, else returns the default. strtol alone
+// accepts trailing garbage ("5abc"→5, "5.7"→5), which Python's int()
+// rejects.
+int parse_int_strict(const std::string &s, int default_value) {
+  const char *begin = s.c_str();
+  char *end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(begin, &end, 10);
+  if (end == begin || errno != 0) return default_value;
+  while (*end != '\0') {
+    if (!std::isspace(static_cast<unsigned char>(*end))) return default_value;
+    ++end;
+  }
+  return static_cast<int>(parsed);
+}
+
+}  // namespace
 
 // Wall-clock seconds for balancer/saturation accounting. Uses ESPHome's
 // monotonic millis() because absolute wall time isn't available on bare
@@ -185,12 +225,20 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     reported_phase.pop_back();
   const bool in_inspection_mode = reported_phase != "A" && reported_phase != "B" && reported_phase != "C";
   int reported_power = 0;
-  if (fields.size() > 5 && !fields[5].empty()) {
-    // ESPHome disables exceptions, so std::stoi would not catch invalid
-    // input — use strtol and check the end pointer / errno.
-    char *end = nullptr;
-    const long parsed = std::strtol(fields[5].c_str(), &end, 10);
-    if (end != fields[5].c_str()) reported_power = static_cast<int>(parsed);
+  if (fields.size() > 5) {
+    // Match Python's parse_int (int()): reject trailing garbage / float
+    // syntax instead of strtol's lenient prefix parse.
+    reported_power = parse_int_strict(fields[5], 0);
+  }
+
+  // Deduplication — drop repeat polls from the same consumer inside the
+  // configured window (keyed by consumer_id so retransmits are suppressed
+  // regardless of source UDP port). Mirrors ct002.py:636-644. Disabled
+  // (default window 0) means every datagram is processed.
+  if (!this->dedup_should_process_(consumer_id)) {
+    ESP_LOGD(TAG, "Ignoring duplicate request from %s (consumer=%s) — dedupe window",
+             addr_ip.c_str(), consumer_id.c_str());
+    return;
   }
 
   const std::string meter_dev_type = fields[0];
@@ -272,7 +320,10 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   // resolution to match what the Python service publishes to MQTT.
   if (consumer.timestamp > 0.0) {
     const float raw_interval = static_cast<float>(now - consumer.timestamp);
-    auto round_tenth = [](float v) { return std::round(v * 10.0f) / 10.0f; };
+    // Python rounds poll_interval to 1 decimal with round(x, 1) — banker's.
+    auto round_tenth = [](float v) {
+      return static_cast<float>(round_half_even(static_cast<double>(v) * 10.0)) / 10.0f;
+    };
     if (!consumer.poll_interval.has_value()) {
       consumer.poll_interval = round_tenth(raw_interval);
     } else {
@@ -324,7 +375,7 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
     else if (phase == "B") idx = 1;
     else if (phase == "C") idx = 2;
     else idx = 0;
-    const float power = std::round(c.last_instructed_power);
+    const float power = static_cast<float>(round_half_even(c.last_instructed_power));
     if (power == 0.0f) continue;
     out.active[idx] = true;
     if (power < 0.0f) out.chrg_power[idx] += power;
@@ -389,7 +440,8 @@ std::vector<std::string> CT002Component::build_response_fields_(
 
   auto to_int_str = [](float f) {
     char buf[16];
-    std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(std::lround(f)));
+    // round_half_even matches Python's round() on the wire values.
+    std::snprintf(buf, sizeof(buf), "%ld", round_half_even(static_cast<double>(f)));
     return std::string(buf);
   };
 
@@ -585,6 +637,27 @@ void CT002Component::evict_stale_consumers_() {
     ESP_LOGD(TAG, "Evicted %u stale consumer(s) (ttl=%us)",
              static_cast<unsigned>(stale.size()), this->consumer_ttl_seconds_);
   }
+  // Purge dedup timestamps older than the TTL (Python: ct002.py:341
+  // _dedup.purge_older_than(self.consumer_ttl)).
+  if (!this->dedup_last_.empty()) {
+    const double cutoff = now - ttl;
+    for (auto it = this->dedup_last_.begin(); it != this->dedup_last_.end();) {
+      if (it->second < cutoff) it = this->dedup_last_.erase(it);
+      else ++it;
+    }
+  }
+}
+
+bool CT002Component::dedup_should_process_(const std::string &consumer_id) {
+  if (this->dedupe_window_ms_ == 0) return true;
+  const double now = now_seconds_();
+  const double window = static_cast<double>(this->dedupe_window_ms_) / 1000.0;
+  auto it = this->dedup_last_.find(consumer_id);
+  if (it != this->dedup_last_.end() && (now - it->second) < window) {
+    return false;  // within window — drop (does NOT refresh the timestamp)
+  }
+  this->dedup_last_[consumer_id] = now;
+  return true;
 }
 
 void CT002Component::force_balancer_rotation() {
