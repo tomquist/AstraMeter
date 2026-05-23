@@ -23,7 +23,12 @@ namespace {
 // for our payload values (which are all hex/email-style ASCII), conservatively
 // escaping anything outside RFC 3986 unreserved chars.
 std::string url_encode(const std::string &v) {
-  static const char *HEX = "0123456789ABCDEF";
+  // Don't name this `HEX` — Arduino's Print.h has `#define HEX 16` (used
+  // by `Serial.print(x, HEX)`), and the preprocessor mangles our variable
+  // into `static const char *16 = ...` on esp32-arduino. Same macro
+  // collision lurks for any short ALL-CAPS Arduino-flavored name; prefer
+  // descriptive identifiers in this file.
+  static const char *HEX_DIGITS = "0123456789ABCDEF";
   std::string out;
   out.reserve(v.size() * 3);
   for (unsigned char c : v) {
@@ -32,8 +37,8 @@ std::string url_encode(const std::string &v) {
       out.push_back(static_cast<char>(c));
     } else {
       out.push_back('%');
-      out.push_back(HEX[c >> 4]);
-      out.push_back(HEX[c & 0x0F]);
+      out.push_back(HEX_DIGITS[c >> 4]);
+      out.push_back(HEX_DIGITS[c & 0x0F]);
     }
   }
   return out;
