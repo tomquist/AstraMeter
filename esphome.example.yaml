@@ -127,3 +127,26 @@ ct002:
 #   ha_discovery_prefix: homeassistant
 #   marstek_mqtt_enabled: true      # answer Marstek-app polls on the broker
 #   marstek_mqtt_interval: 300s     # periodic broadcast cadence (0 = poll-only)
+
+# ─────────────────────────────────────────────────────────────────────────
+# Optional: Marstek cloud-registration sub-block. Registers a "managed"
+# CT002/CT003 with your Marstek cloud account on first boot; the resulting
+# MAC is assigned to ct002.ct_mac so the UDP + MQTT topics line up with
+# the cloud-side record. Persisted via ESPPreferences so the second boot
+# skips the cloud flow entirely.
+#
+# Mirrors the Python [MARSTEK] section in config.ini.example.
+# ─────────────────────────────────────────────────────────────────────────
+#
+# http_request:
+#   timeout: 20s
+#
+# marstek_registration:
+#   ct002_id: ct002_main
+#   base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
+#   mailbox: you@example.com
+#   password: !secret marstek_password
+#   device_type: ct002                   # or ct003
+#   timezone: Europe/Berlin
+#   retry_interval: 60s
+#   force_reregister: false              # set true to redo the cloud flow

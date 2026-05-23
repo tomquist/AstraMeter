@@ -84,6 +84,11 @@ jobs:
           # mqtt_insights sub-block — depends on the upstream `mqtt:`
           # component which is only available on esp32/esp8266 targets.
           - tests/components/ct002/test.insights.esp32-ard.yaml
+          # marstek_registration sub-block — host-platform compile is
+          # enough to validate the state machine + URL/JSON helpers; the
+          # esp32 target compile is covered by the esp32-ard sibling.
+          - tests/components/ct002/test.registration.host.yaml
+          - tests/components/ct002/test.registration.esp32-ard.yaml
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

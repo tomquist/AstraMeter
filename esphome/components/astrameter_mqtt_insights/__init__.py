@@ -28,9 +28,11 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
 # Pulled in transitively (and we re-export the ct002 namespace, see below).
-# json is required for build_json / parse_json — explicit so ESPHome bundles
-# ArduinoJson into the build even if no other component pulls it in.
-DEPENDENCIES = ["ct002", "mqtt", "json"]
+DEPENDENCIES = ["ct002", "mqtt"]
+# json is auto-loaded so users don't need an explicit `json:` block —
+# it's an internal implementation detail (build_json / parse_json for
+# state payloads and command parsing).
+AUTO_LOAD = ["json"]
 CODEOWNERS = ["@tomquist"]
 
 CONF_CT002_ID = "ct002_id"
