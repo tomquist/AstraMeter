@@ -355,7 +355,7 @@ class CT002:
     def _compute_smooth_target(self, values, consumer_id=None):
         """Active control: smooth the raw grid reading and delegate
         target allocation to the load balancer."""
-        if not self.active_control or not values or len(values) != 3:
+        if not self.active_control or not values:
             return values
 
         total = sum(parse_int(v, 0) for v in values)

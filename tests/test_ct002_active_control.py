@@ -42,6 +42,17 @@ class TestActiveControl:
         assert out[1] == 100
         assert out[2] == 0
 
+    def test_single_phase_input_runs_balancer(self):
+        # 1-phase configurations supply a single grid reading; the balancer
+        # collapses values to a scalar internally, so it must still run
+        # rather than passing the raw reading through unmodified.
+        device = CT002(active_control=True, fair_distribution=False)
+        device._update_consumer_report("a", "A", 0)
+
+        out = device._compute_smooth_target([400], "a")
+
+        assert list(out) == [400, 0, 0]
+
 
 class TestFairDistribution:
     """Tests for fair load distribution across consumers."""

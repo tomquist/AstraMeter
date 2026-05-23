@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** 1-phase active balancing: `_compute_smooth_target` previously bailed out for any non-3-tuple input and returned the raw grid reading unchanged, so single-phase users got passive forwarding instead of balanced targets despite single-phase being a documented supported configuration. The guard now only rejects empty values; the balancer collapses values to a scalar total internally, so any phase count works.
 - **Fixed** Home Assistant powermeter timing out on startup with "Timeout waiting for Home Assistant state" when the `subscribe_entities` initial snapshot never arrives (e.g. entity not yet loaded when AstraMeter starts). The Home Assistant powermeter now also issues an explicit `get_states` fetch right after subscribing to seed the cache.
 - **Fixed** multi-Venus setups where a battery passing PV through to the grid (full SoC with "feed excess to grid" enabled) caused other batteries on different phases to stop charging. AstraMeter now populates the CT002 cross-talk `*_chrg_power` / `*_dchrg_power` fields from the per-battery instruction it sent rather than from the battery's reported AC output, so involuntary PV-passthrough no longer looks like a battery discharge to the rest of the fleet ([#376](https://github.com/tomquist/astrameter/issues/376)).
 
