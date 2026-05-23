@@ -98,6 +98,10 @@ TEST(MarstekResponder, ParseAppTopicRejectsBadShapes) {
   EXPECT_FALSE(parse_app_topic("foo/HMG-50/App/AABBCC/ctrl").has_value());
   EXPECT_FALSE(parse_app_topic("hame_energy/HMG-50/App/AABBCC").has_value());
   EXPECT_FALSE(parse_app_topic("hame_energy/HMG-50/App/AABBCC/ctrl/extra").has_value());
+  // Python's regex captures are `[^/]+` — empty ct_type or mac must be
+  // rejected (marstek_mqtt_test.py:149).
+  EXPECT_FALSE(parse_app_topic("marstek_energy/HME-4/App//ctrl").has_value());
+  EXPECT_FALSE(parse_app_topic("hame_energy//App/AABBCC/ctrl").has_value());
 }
 
 TEST(MarstekResponder, TopicTemplatesEmitBothFlavors) {

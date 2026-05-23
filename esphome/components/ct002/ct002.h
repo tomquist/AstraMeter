@@ -113,6 +113,11 @@ class CT002Component : public Component {
     // Saturation (0..1) of this consumer's phase, from the LoadBalancer.
     float saturation{0.0f};
     std::optional<float> last_target;
+    // Device-level total input grid power (post-filter, pre-balancer) —
+    // mirrors Python's smooth_target. Same for every consumer in a given
+    // poll cycle (it's a device-wide value), carried on the snapshot so
+    // mqtt_insights doesn't need a second ct002 accessor.
+    float smooth_target{0.0f};
   };
   ConsumerSnapshot snapshot_consumer(const std::string &consumer_id) const;
   std::vector<std::string> reporting_consumer_ids() const;

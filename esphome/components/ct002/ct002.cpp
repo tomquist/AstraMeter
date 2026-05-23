@@ -362,10 +362,14 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   }
   float grid_total = 0.0f;
   for (float v : values) grid_total += v;
+  // smooth_target mirrors Python's _last_smooth_target (ct002.py:361-362):
+  // the total INPUT grid power (post-filter, pre-balancer), NOT the sum of
+  // the balancer's per-phase output targets. mqtt_insights publishes this
+  // as the device-level smooth_target sensor.
+  this->last_smooth_target_ = grid_total;
   auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, grid_total,
                                                  inactive, manual, values);
   for (size_t i = 0; i < 3; ++i) this->last_target_[i] = out_arr[i];
-  this->last_smooth_target_ = out_arr[0] + out_arr[1] + out_arr[2];
   return {out_arr[0], out_arr[1], out_arr[2]};
 }
 
@@ -468,6 +472,7 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.timestamp = c.timestamp;
   snap.grid_power = this->last_grid_power_;
   snap.target = this->last_target_;
+  if (this->last_smooth_target_.has_value()) snap.smooth_target = *this->last_smooth_target_;
   if (this->balancer_) {
     // Per-consumer saturation, same source the Python ct002 reads at
     // ct002.py:737 ("saturation": self._balancer.get_saturation(...)).

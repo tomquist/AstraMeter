@@ -160,19 +160,23 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
   const std::string state_topic = this->base_topic_ + "/ct002/" + this->device_id_ +
                                   "/consumer/" + consumer_id;
 
-  // Build per-consumer state JSON. Field set mirrors service.py's
-  // consumer_state dict exactly so HA's value_templates resolve.
+  // Build per-consumer state JSON. Field set + value TYPES mirror
+  // service.py's consumer_state dict (ct002.py:719-744): grid_power.* and
+  // target.* are floats; reported_power is an int (parse_int upstream);
+  // last_target is the balancer's raw float. Emitting floats here matters
+  // because the HA value_templates pass the value through unrounded, so
+  // lrounding would silently truncate fractional watts vs the Python stack.
   auto state_buf = json::build_json([&](JsonObject root) {
     JsonObject gp = root["grid_power"].to<JsonObject>();
     const float total = snap.grid_power[0] + snap.grid_power[1] + snap.grid_power[2];
-    gp["total"] = std::lround(total);
-    gp["l1"] = std::lround(snap.grid_power[0]);
-    gp["l2"] = std::lround(snap.grid_power[1]);
-    gp["l3"] = std::lround(snap.grid_power[2]);
+    gp["total"] = total;
+    gp["l1"] = snap.grid_power[0];
+    gp["l2"] = snap.grid_power[1];
+    gp["l3"] = snap.grid_power[2];
     JsonObject tg = root["target"].to<JsonObject>();
-    tg["l1"] = std::lround(snap.target[0]);
-    tg["l2"] = std::lround(snap.target[1]);
-    tg["l3"] = std::lround(snap.target[2]);
+    tg["l1"] = snap.target[0];
+    tg["l2"] = snap.target[1];
+    tg["l3"] = snap.target[2];
     root["phase"] = snap.phase;
     root["reported_power"] = std::lround(snap.reported_power);
     root["device_type"] = snap.device_type;
@@ -181,7 +185,7 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     root["ct_mac"] = this->ct002_->ct_mac();
     root["saturation"] = snap.saturation;
     if (snap.last_target.has_value()) {
-      root["last_target"] = std::lround(*snap.last_target);
+      root["last_target"] = *snap.last_target;
     } else {
       root["last_target"] = nullptr;
     }
@@ -216,9 +220,10 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
   // Device-level status — published on every consumer update so HA sees
   // fresh smooth_target / consumer_count. Mirrors service.py:425.
   auto device_buf = json::build_json([&](JsonObject root) {
-    float smooth = 0.0f;
-    for (size_t i = 0; i < 3; ++i) smooth += snap.target[i];
-    root["smooth_target"] = std::lround(smooth);
+    // smooth_target is the total input grid power (post-filter,
+    // pre-balancer), mirroring Python's _last_smooth_target — NOT the sum
+    // of the balancer's per-phase output targets.
+    root["smooth_target"] = std::lround(snap.smooth_target);
     // Reflect the configured active_control setting — HA's binary_sensor
     // should show "off" when the user disabled active control in YAML
     // rather than always reading "running".
@@ -354,6 +359,14 @@ void MqttInsightsComponent::publish_marstek_reply_(const PollContext &poll) {
     }
     body = format_cd4_slave_csv(rows);
   } else {
+    // ver_v is hardcoded to DEFAULT_VER_V here. Python derives it per-binding
+    // from the Marstek cloud device list's `version` field
+    // (ver_v_from_marstek_api_version), but on the ESPHome path that value
+    // isn't plumbed from marstek_registration into the responder — and when
+    // the cloud `version` is absent Python falls back to this same default,
+    // so the wire frame matches the common case. Wiring the real firmware
+    // version through would be a registration↔insights data flow we don't
+    // have yet.
     body = build_aggregate_response(this->ct002_->latest_grid_power(), this->ct002_->wifi_rssi(),
                                     DEFAULT_VER_V,
                                     static_cast<int>(this->ct002_->connected_slave_count()),

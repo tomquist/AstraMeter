@@ -147,6 +147,9 @@ std::optional<AppTopic> parse_app_topic(const std::string &topic) {
   AppTopic out;
   out.ct_type = topic.substr(prefix_len, s1 - prefix_len);
   out.mac = to_lower(topic.substr(s1 + 5, s2 - (s1 + 5)));
+  // Python's regex captures are `[^/]+` — both segments must be non-empty.
+  // Reject e.g. `hame_energy//App/.../ctrl` or `.../App//ctrl`.
+  if (out.ct_type.empty() || out.mac.empty()) return std::nullopt;
   return out;
 }
 
