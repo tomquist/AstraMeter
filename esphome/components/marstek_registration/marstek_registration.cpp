@@ -464,7 +464,13 @@ std::string MarstekRegistrationComponent::generate_new_id_() const {
 
 void MarstekRegistrationComponent::persist_mac_(const std::string &mac) {
   StoredMac s{};
-  std::strncpy(s.mac_hex, mac.c_str(), sizeof(s.mac_hex) - 1);
+  // memcpy + explicit null avoids gcc's -Wstringop-truncation warning
+  // (which esp32-arduino's xtensa-gcc-with-Werror treats as a hard error
+  // when strncpy is followed by manual termination — the classic
+  // "you might have just truncated without intending to" pattern).
+  const size_t n = std::min(mac.size(), sizeof(s.mac_hex) - 1);
+  std::memcpy(s.mac_hex, mac.data(), n);
+  s.mac_hex[n] = '\0';
   s.valid = 0xA5;
   if (!this->pref_.save(&s)) {
     ESP_LOGW(TAG, "Could not persist Marstek MAC to flash");
