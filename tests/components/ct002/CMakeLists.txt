@@ -1,0 +1,37 @@
+cmake_minimum_required(VERSION 3.20)
+project(ct002_host_tests CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+  URL_HASH SHA256=8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7
+)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+# Repo root, two levels up from tests/components/ct002.
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+
+add_executable(host_protocol_test
+  host_protocol_test.cpp
+  ${REPO_ROOT}/esphome/components/ct002/protocol.cpp
+)
+target_include_directories(host_protocol_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(host_protocol_test PRIVATE GTest::gtest_main)
+
+include(GoogleTest)
+gtest_discover_tests(host_protocol_test)

@@ -1,0 +1,51 @@
+esphome:
+  name: ct002-esp32-idf-test
+  friendly_name: CT002 ESP32 IDF Test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+api:
+logger:
+wifi:
+  ssid: "test"
+  password: "testpassword"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+sensor:
+  - platform: template
+    id: grid_l1
+    name: Grid L1
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+  - platform: template
+    id: grid_l2
+    name: Grid L2
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+  - platform: template
+    id: grid_l3
+    name: Grid L3
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  ct_type: HME-4
+  ct_mac: "02b25012abcd"
+  udp_port: 12345
+  active_control: true
+  max_sensor_age: 30s
