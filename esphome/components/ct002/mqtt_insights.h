@@ -86,7 +86,11 @@ class MqttInsightsComponent : public Component {
 
   // Subscribe helpers.
   void subscribe_commands_();
-  void subscribe_marstek_();
+  // (Re)subscribe to Marstek App topics once ct002's ct_mac is known.
+  // Idempotent: no-op while the MAC is empty or unchanged; re-subscribes
+  // if the MAC changes (e.g. marstek_registration applies it after we
+  // connected). Called on connect and every loop while connected.
+  void ensure_marstek_subscription_();
 
   // Configuration.
   ct002::CT002Component *ct002_{nullptr};
@@ -115,8 +119,11 @@ class MqttInsightsComponent : public Component {
   // only one ct002 per insights component.
   bool marstek_timer_armed_{false};
 
-  // Marstek normalised mac cached — recomputed when ct002's ct_mac changes
-  // (initially captured at first publish).
+  // Currently-subscribed Marstek identity (normalised MAC + ct_type).
+  // Empty when not subscribed. Set by ensure_marstek_subscription_ once
+  // ct002's ct_mac is known; cleared on disconnect so we re-subscribe on
+  // reconnect. handle_marstek_message_ / publish_marstek_reply_ key off
+  // these, so they're always in sync with the live subscription.
   std::string marstek_mac_;
   std::string marstek_ct_type_;
 };

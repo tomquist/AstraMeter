@@ -1,12 +1,33 @@
 #include "ha_discovery.h"
 
 #include <cctype>
+#include <functional>
 
 #include "esphome/components/json/json_util.h"
 
 namespace esphome {
 namespace ct002 {
 namespace mqtt_insights {
+
+namespace {
+
+// Serialize a JSON object built by `fill` WITHOUT the 5120-byte cap that
+// esphome::json::build_json imposes. The CT002 consumer discovery payload
+// is ~7 KB (20 components inlined in one device-based config); build_json
+// would silently truncate it to invalid JSON, so HA would never create
+// the per-battery device. ArduinoJson itself has no such cap and ESP-IDF's
+// MQTT client fragments large publishes, so building into a JsonDocument
+// and serializing straight to a std::string publishes the full payload.
+std::string serialize_unbounded(const std::function<void(JsonObject)> &fill) {
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  fill(root);
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+}  // namespace
 
 std::string sanitize_id(const std::string &value) {
   std::string out;
@@ -87,7 +108,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
   }
   mac_slug = mac_slug_clean;
 
-  auto buf = json::build_json([&](JsonObject root) {
+  auto buf = serialize_unbounded([&](JsonObject root) {
     JsonObject components = root["components"].to<JsonObject>();
 
     // Power sensors. Same labels / templates as Python.
@@ -295,7 +316,7 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
   const std::string state_topic = base_topic + "/ct002/" + device_id + "/status";
   const std::string uid_prefix = "astrameter_ct002_" + safe_dev;
 
-  auto buf = json::build_json([&](JsonObject root) {
+  auto buf = serialize_unbounded([&](JsonObject root) {
     JsonObject components = root["components"].to<JsonObject>();
 
     JsonObject st = components["smooth_target"].to<JsonObject>();

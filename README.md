@@ -228,7 +228,7 @@ ct002:
     force_reregister: false               # set true to redo the cloud flow
 ```
 
-If you combine both sub-blocks under one `ct002:`, reboot once after the first successful registration so the `mqtt_insights:` sub-block picks up the freshly-assigned MAC for its App-topic subscription.
+When both sub-blocks are combined under one `ct002:`, the `mqtt_insights:` sub-block subscribes to the Marstek App topics automatically as soon as `marstek_registration:` resolves the MAC — no reboot required.
 
 **Status:** experimental — UDP emulator, balancer, filter pipeline, MQTT-insights, and Marstek cloud registration are all functional. Wider field testing welcome.
 

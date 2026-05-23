@@ -45,11 +45,13 @@ void MqttInsightsComponent::setup() {
     return;
   }
 
-  // Capture Marstek topic identity from ct002. We allow these to be empty
-  // (matching Python's behaviour where MAC may be derived later from
-  // registration); subscribe_marstek_ handles that case.
-  this->marstek_ct_type_ = this->ct002_->ct_type();
-  this->marstek_mac_ = normalize_mac(this->ct002_->ct_mac());
+  // Marstek topic identity (ct_type + MAC) is resolved LAZILY from ct002
+  // at connect time and re-checked every loop — NOT captured here. The MAC
+  // often isn't known at setup(): marstek_registration runs at
+  // setup_priority::AFTER_CONNECTION (after this component's AFTER_WIFI
+  // setup) and applies the cloud/persisted MAC via ct002->set_ct_mac()
+  // only then. Capturing it here would permanently miss it. See
+  // ensure_marstek_subscription_.
 
   // Wire up the listeners — ct002 calls these synchronously after a
   // successful poll-reply cycle, mirroring the Python service's
@@ -83,6 +85,15 @@ void MqttInsightsComponent::loop() {
     this->on_mqtt_disconnected_();
   }
   this->was_connected_ = connected;
+
+  // Lazily subscribe to Marstek App topics once the MAC is known. Only
+  // poll while not yet subscribed (marstek_mac_ empty) so there's no
+  // steady-state per-loop cost; the MAC is applied once at boot by
+  // marstek_registration and cleared here only on disconnect, so a
+  // re-subscribe is driven by the reconnect path, not by polling.
+  if (connected && this->marstek_mqtt_enabled_ && this->marstek_mac_.empty()) {
+    this->ensure_marstek_subscription_();
+  }
 }
 
 void MqttInsightsComponent::on_mqtt_connected_() {
@@ -104,7 +115,7 @@ void MqttInsightsComponent::on_mqtt_connected_() {
   }
 
   this->subscribe_commands_();
-  this->subscribe_marstek_();
+  this->ensure_marstek_subscription_();
 }
 
 void MqttInsightsComponent::on_mqtt_disconnected_() {
@@ -112,6 +123,10 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
   this->discovered_consumers_with_ip_.clear();
+  // Drop the subscription record so we re-subscribe on reconnect (the
+  // broker forgets non-persistent subscriptions across a disconnect).
+  this->marstek_mac_.clear();
+  this->marstek_ct_type_.clear();
 }
 
 void MqttInsightsComponent::subscribe_commands_() {
@@ -138,20 +153,30 @@ void MqttInsightsComponent::subscribe_commands_() {
       1);
 }
 
-void MqttInsightsComponent::subscribe_marstek_() {
+void MqttInsightsComponent::ensure_marstek_subscription_() {
   if (!this->marstek_mqtt_enabled_) return;
-  if (this->marstek_mac_.empty()) {
-    ESP_LOGW(TAG,
-             "Marstek MQTT enabled but ct_mac is unset — skipping App-topic subscribe. "
-             "Set ct002.ct_mac (or wait for marstek_registration to derive one).");
-    return;
+  if (!this->mqtt_->is_connected()) return;
+  // Resolve the current identity from ct002 each call — the MAC may be set
+  // by marstek_registration after we first connected.
+  const std::string mac = normalize_mac(this->ct002_->ct_mac());
+  const std::string ct = this->ct002_->ct_type();
+  if (mac.empty()) return;  // not known yet — try again next loop
+  // marstek_mac_/marstek_ct_type_ hold the CURRENTLY-subscribed identity.
+  if (mac == this->marstek_mac_ && ct == this->marstek_ct_type_) return;  // already current
+  // Identity changed (or first subscribe): drop the stale subscription.
+  if (!this->marstek_mac_.empty()) {
+    for (const auto &t : app_topics_for(this->marstek_ct_type_, this->marstek_mac_))
+      this->mqtt_->unsubscribe(t);
   }
-  for (const auto &topic : app_topics_for(this->marstek_ct_type_, this->marstek_mac_)) {
+  for (const auto &t : app_topics_for(ct, mac)) {
     this->mqtt_->subscribe(
-        topic,
-        [this](const std::string &t, const std::string &p) { this->handle_marstek_message_(t, p); },
+        t,
+        [this](const std::string &tp, const std::string &p) { this->handle_marstek_message_(tp, p); },
         0);
   }
+  this->marstek_mac_ = mac;
+  this->marstek_ct_type_ = ct;
+  ESP_LOGI(TAG, "Marstek MQTT: subscribed App topics for %s/%s", ct.c_str(), mac.c_str());
 }
 
 void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_id) {
@@ -385,9 +410,13 @@ void MqttInsightsComponent::dump_config() {
                 this->ha_discovery_prefix_.c_str());
   ESP_LOGCONFIG(TAG, "  Marstek MQTT: %s (interval=%us)", YESNO(this->marstek_mqtt_enabled_),
                 this->marstek_mqtt_interval_ms_ / 1000U);
+  // ct_mac is resolved lazily at connect time; at dump_config (boot) it
+  // may legitimately still be empty if marstek_registration hasn't applied
+  // it yet — the App-topic subscribe happens once it's known.
+  const std::string mac_now = normalize_mac(this->ct002_->ct_mac());
   ESP_LOGCONFIG(TAG, "  Marstek MAC: %s",
-                this->marstek_mac_.empty() ? "(unset — App-topic subscribe skipped)"
-                                           : this->marstek_mac_.c_str());
+                mac_now.empty() ? "(pending — subscribe deferred until MAC known)"
+                                : mac_now.c_str());
 }
 
 }  // namespace mqtt_insights

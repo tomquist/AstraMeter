@@ -502,12 +502,11 @@ std::string MarstekRegistrationComponent::load_persisted_mac_() {
 void MarstekRegistrationComponent::apply_mac_(const std::string &mac) {
   if (mac == this->applied_mac_) return;
   this->applied_mac_ = mac;
-  // Ct002's set_ct_mac is a public setter — fine to call after setup().
-  // Subsequent CT002 responses use the new MAC. The MQTT-insights
-  // component subscribes to App topics at its setup(), so a runtime
-  // MAC change after that point won't be picked up — users with
-  // mqtt_insights AND marstek_registration enabled should expect to
-  // reboot once after first-time registration.
+  // ct002's set_ct_mac is a public setter — fine to call after setup().
+  // Subsequent CT002 responses use the new MAC. The mqtt_insights
+  // sub-block resolves the MAC lazily (ensure_marstek_subscription_ runs
+  // each loop while unsubscribed), so it picks this up automatically —
+  // no reboot needed.
   this->ct002_->set_ct_mac(mac);
 }
 
