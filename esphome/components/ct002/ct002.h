@@ -128,6 +128,12 @@ class CT002Component : public Component {
   const std::string &ct_type() const { return this->ct_type_; }
   const std::string &ct_mac() const { return this->ct_mac_; }
   int wifi_rssi() const { return this->wifi_rssi_; }
+  // Used by mqtt_insights for the device-level "active_control" entity so
+  // HA reflects the configured state instead of always reading "running".
+  bool active_control() const { return this->active_control_; }
+  // TTL (seconds) after which a silent consumer is evicted from the
+  // tracking map. Defaults to 120 s, matching Python's consumer_ttl.
+  void set_consumer_ttl_seconds(uint32_t v) { this->consumer_ttl_seconds_ = v; }
 
   // Reporting-row shape that mirrors src/astrameter/ct002/__init__.py's
   // `ReportingConsumerRow` — used by the Marstek cd=4 slave list and by
@@ -169,6 +175,10 @@ class CT002Component : public Component {
   std::string consumer_key_(const std::string &meter_mac, const std::string &addr_ip,
                             uint16_t addr_port) const;
   Consumer &get_consumer_(const std::string &consumer_id);
+  // Periodic cleanup driven by set_interval in setup(). Fires
+  // consumer_removed_listeners_ and calls balancer_->remove_consumer for
+  // every entry older than consumer_ttl_seconds_.
+  void evict_stale_consumers_();
   void update_consumer_report_(const std::string &consumer_id, const std::string &phase,
                               float power, const std::string &device_type,
                               const std::string &source_ip);
@@ -197,6 +207,14 @@ class CT002Component : public Component {
   uint16_t udp_port_{12345};
   bool active_control_{true};
   uint32_t max_sensor_age_ms_{30000};
+  // Eviction interval for stale consumers (Python: consumer_ttl=120s).
+  // Stored in seconds; the cleanup loop runs every 5s and evicts any
+  // consumer whose last `timestamp` is older than this value.
+  uint32_t consumer_ttl_seconds_{120};
+  // Per-consumer EMA alpha for the poll_interval diagnostic (Python:
+  // POLL_INTERVAL_EMA_ALPHA=0.3). Same value here so the published
+  // MQTT-insights poll_interval matches between stacks.
+  static constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
   BalancerConfig balancer_cfg_;
   float saturation_alpha_{0.15f};
   float saturation_min_target_{20.0f};

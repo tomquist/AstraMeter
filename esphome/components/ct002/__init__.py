@@ -34,6 +34,7 @@ CONF_WIFI_RSSI = "wifi_rssi"
 CONF_UDP_PORT = "udp_port"
 CONF_ACTIVE_CONTROL = "active_control"
 CONF_MAX_SENSOR_AGE = "max_sensor_age"
+CONF_CONSUMER_TTL = "consumer_ttl"
 
 # Filter sub-blocks
 CONF_FILTERS = "filters"
@@ -200,6 +201,13 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_MAX_SENSOR_AGE, default="30s"
             ): cv.positive_time_period_milliseconds,
+            # TTL after which a silent consumer is evicted, matching
+            # Python's consumer_ttl default. Lower it for fleets with
+            # short-lived bench-test batteries; raise it if your network
+            # has long polling gaps.
+            cv.Optional(
+                CONF_CONSUMER_TTL, default="120s"
+            ): cv.positive_time_period_seconds,
             cv.Optional(CONF_FILTERS): FILTERS_SCHEMA,
             cv.Optional(CONF_BALANCER): BALANCER_SCHEMA,
             cv.Optional(CONF_SATURATION): SATURATION_SCHEMA,
@@ -227,6 +235,7 @@ async def to_code(config):
     cg.add(var.set_udp_port(config[CONF_UDP_PORT]))
     cg.add(var.set_active_control(config[CONF_ACTIVE_CONTROL]))
     cg.add(var.set_max_sensor_age_ms(config[CONF_MAX_SENSOR_AGE].total_milliseconds))
+    cg.add(var.set_consumer_ttl_seconds(int(config[CONF_CONSUMER_TTL].total_seconds)))
 
     filters = config.get(CONF_FILTERS, {})
     if CONF_HAMPEL in filters:

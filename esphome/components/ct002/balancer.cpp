@@ -393,7 +393,7 @@ float LoadBalancer::compute_desired_contribution_(
 
 std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
-    float grid_total, const std::unordered_map<std::string, float> &) {
+    float grid_total, const std::unordered_map<std::string, float> &eff_part) {
   if (!this->probe_state_ || !consumer_id) return std::nullopt;
   ProbeState &probe = *this->probe_state_;
   const std::string &candidate_id = probe.candidate_id;
@@ -440,8 +440,19 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
     return split_by_phase_(target, cand_only);
   }
 
+  // Seed backup_weights from the per-consumer efficiency partition the
+  // auto path already computed (Python: balancer.py:612-614). Falling back
+  // to 1.0 mirrors `eff_part.get(cid, 1.0)`; the floor at 0.01 keeps the
+  // fair-share denominator from going to zero when every backup is
+  // saturated. The earlier placeholder value 0.01f wiped out efficiency
+  // weighting during the probe window and made backups share equally
+  // regardless of how well they could actually follow targets.
   std::unordered_map<std::string, float> backup_weights;
-  for (const auto &r : support_reports) backup_weights[r.first] = 0.01f;  // placeholder
+  for (const auto &r : support_reports) {
+    auto it = eff_part.find(r.first);
+    const float w = (it != eff_part.end()) ? it->second : 1.0f;
+    backup_weights[r.first] = std::max(0.01f, w);
+  }
   const float qualified_probe_actual = probe.proof_samples > 0 ? probe_actual : 0.0f;
   const float desired = this->compute_desired_contribution_(
       *consumer_id, support_reports, backup_weights, desired_total - qualified_probe_actual);

@@ -94,6 +94,13 @@ void CT002Component::setup() {
 
   this->start_udp_server_();
 
+  // Consumer eviction — fires every 5 s and evicts anything older than
+  // consumer_ttl_seconds_ (default 120 s). Mirrors Python's
+  // _cleanup_consumers loop (ct002.py:330-341). Without this the
+  // consumers_ map grows unbounded across battery turnover and the
+  // mqtt_insights "offline" availability is never published.
+  this->set_interval("ct002_evict", 5000, [this]() { this->evict_stale_consumers_(); });
+
   ESP_LOGCONFIG(TAG, "CT002 setup: %u phase(s), ct_type=%s, udp_port=%u",
                 this->num_phases_, this->ct_type_.c_str(), this->udp_port_);
 }
@@ -260,6 +267,20 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   for (auto &c : normalized_phase) c = static_cast<char>(std::toupper(c));
   auto &consumer = this->get_consumer_(consumer_id);
   const double now = now_seconds_();
+  // EMA-smoothed poll interval — mirrors Python's _update_consumer_report
+  // (ct002.py:298-307). Seeded on the second poll; round-trip to 0.1s
+  // resolution to match what the Python service publishes to MQTT.
+  if (consumer.timestamp > 0.0) {
+    const float raw_interval = static_cast<float>(now - consumer.timestamp);
+    auto round_tenth = [](float v) { return std::round(v * 10.0f) / 10.0f; };
+    if (!consumer.poll_interval.has_value()) {
+      consumer.poll_interval = round_tenth(raw_interval);
+    } else {
+      consumer.poll_interval = round_tenth(POLL_INTERVAL_EMA_ALPHA * raw_interval +
+                                           (1.0f - POLL_INTERVAL_EMA_ALPHA) *
+                                               *consumer.poll_interval);
+    }
+  }
   consumer.phase = normalized_phase;
   consumer.power = power;
   consumer.timestamp = now;
@@ -502,31 +523,77 @@ std::vector<CT002Component::ReportingConsumerRow> CT002Component::reporting_cons
 }
 
 void CT002Component::set_consumer_active(const std::string &consumer_id, bool active) {
-  auto it = this->consumers_.find(consumer_id);
-  if (it == this->consumers_.end()) return;
-  it->second.active = active;
+  // Auto-create the consumer entry — Python's _get_consumer does the same,
+  // so HA commands that arrive before the first UDP poll still work.
+  auto &consumer = this->get_consumer_(consumer_id);
+  if (active && !consumer.active) {
+    // Returning to active: drop stale saturation/last_target so the
+    // balancer doesn't act on pre-pause readings (Python: ct002.py:263-269).
+    if (this->balancer_) this->balancer_->reset_consumer(consumer_id);
+  }
+  consumer.active = active;
 }
 
 void CT002Component::set_consumer_manual_target(const std::string &consumer_id, float target) {
-  auto it = this->consumers_.find(consumer_id);
-  if (it == this->consumers_.end()) return;
-  it->second.manual_enabled = true;
-  it->second.manual_target = target;
+  auto &consumer = this->get_consumer_(consumer_id);
+  consumer.manual_enabled = true;
+  consumer.manual_target = target;
 }
 
 void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bool auto_target) {
-  auto it = this->consumers_.find(consumer_id);
-  if (it == this->consumers_.end()) return;
-  it->second.manual_enabled = !auto_target;
+  auto &consumer = this->get_consumer_(consumer_id);
+  const bool was_manual = consumer.manual_enabled;
+  if (auto_target) {
+    consumer.manual_enabled = false;
+    // Returning to auto control: same reset_consumer semantics as
+    // re-activating, so the balancer rebuilds priority/efficiency state
+    // from a clean slate (Python: ct002.py:246-250).
+    if (was_manual && this->balancer_) this->balancer_->reset_consumer(consumer_id);
+  } else {
+    consumer.manual_enabled = true;
+    // Entering manual mode: pull this consumer out of the efficiency
+    // rotation immediately, otherwise it stays in the cached pool with
+    // a stale weight until the next sample_id change
+    // (Python: ct002.py:251-253).
+    if (this->balancer_) this->balancer_->detach_from_auto_pool(consumer_id);
+  }
+}
+
+void CT002Component::evict_stale_consumers_() {
+  const double now = now_seconds_();
+  const double ttl = static_cast<double>(this->consumer_ttl_seconds_);
+  std::vector<std::string> stale;
+  for (const auto &kv : this->consumers_) {
+    if (kv.second.timestamp > 0.0 && now - kv.second.timestamp > ttl) {
+      stale.push_back(kv.first);
+    }
+  }
+  for (const auto &id : stale) {
+    // Fire listeners FIRST so they can read the consumer's last snapshot
+    // before the entry disappears (matches Python's _call_event_listener
+    // with {"_removed": True} payload before the dict pop).
+    for (auto &cb : this->consumer_removed_listeners_) cb(id);
+    this->consumers_.erase(id);
+    if (this->balancer_) this->balancer_->remove_consumer(id);
+  }
+  if (!stale.empty()) {
+    ESP_LOGD(TAG, "Evicted %u stale consumer(s) (ttl=%us)",
+             static_cast<unsigned>(stale.size()), this->consumer_ttl_seconds_);
+  }
 }
 
 void CT002Component::force_balancer_rotation() {
   if (!this->balancer_) return;
-  // Mirror the Python rotation handler: pass the current active consumer
-  // pool (all reporting consumer ids) so the balancer can rebuild from it.
+  // Mirror Python's force_efficiency_rotation pool filtering: only include
+  // consumers that are reporting AND active AND not under manual override.
+  // The earlier "all reporting consumers" pool let inactive/manual
+  // batteries into the rotation, which the balancer then had to filter
+  // out internally — easier to get the pool right at the source.
   std::unordered_set<std::string> pool;
   for (const auto &kv : this->consumers_) {
-    if (kv.second.timestamp > 0.0) pool.insert(kv.first);
+    if (kv.second.timestamp > 0.0 && kv.second.active && !kv.second.manual_enabled) {
+      pool.insert(kv.first);
+    }
   }
   this->balancer_->force_rotation(pool);
 }
