@@ -61,7 +61,7 @@ target_link_libraries(host_balancer_test PRIVATE GTest::gtest_main)
 # clean against host-gcc and validates wire-format parity with Python.
 add_executable(host_marstek_responder_test
   host_marstek_responder_test.cpp
-  ${REPO_ROOT}/esphome/components/astrameter_mqtt_insights/marstek_responder.cpp
+  ${REPO_ROOT}/esphome/components/ct002/marstek_responder.cpp
 )
 target_include_directories(host_marstek_responder_test PRIVATE
   ${REPO_ROOT}

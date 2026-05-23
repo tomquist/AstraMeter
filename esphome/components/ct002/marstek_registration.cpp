@@ -1,9 +1,15 @@
 #include "marstek_registration.h"
 
+#ifdef USE_CT002_MARSTEK_REGISTRATION
+// Body only compiles when the marstek_registration sub-block is present in
+// YAML. The header forward-declares HttpRequestComponent in that case so
+// the class signature still parses on builds that omit http_request.h.
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
+#include "esphome/components/http_request/http_request.h"
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/md5/md5.h"
 #include "esphome/components/network/util.h"
@@ -13,6 +19,7 @@
 #include "esphome/core/log.h"
 
 namespace esphome {
+namespace ct002 {
 namespace marstek_registration {
 
 static const char *const TAG = "marstek_registration";
@@ -517,4 +524,7 @@ void MarstekRegistrationComponent::dump_config() {
 }
 
 }  // namespace marstek_registration
+}  // namespace ct002
 }  // namespace esphome
+
+#endif  // USE_CT002_MARSTEK_REGISTRATION

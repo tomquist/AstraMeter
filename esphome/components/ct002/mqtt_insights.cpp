@@ -1,5 +1,11 @@
 #include "mqtt_insights.h"
 
+#ifdef USE_MQTT
+// Body only compiles when the mqtt component is configured. Forward-
+// declarations in the header keep the class signature parseable on
+// other platforms; the methods themselves only exist on builds that
+// link the mqtt client.
+
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -8,7 +14,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
-#include "discovery.h"
+#include "ha_discovery.h"
 
 // Floor we treat as "real wall-clock time available" — anything before
 // 2020-01-01 means SNTP hasn't synced yet and time(nullptr) is just
@@ -17,7 +23,8 @@
 static constexpr time_t WALL_CLOCK_SANE_THRESHOLD = 1577836800;  // 2020-01-01 UTC
 
 namespace esphome {
-namespace astrameter_mqtt_insights {
+namespace ct002 {
+namespace mqtt_insights {
 
 static const char *const TAG = "astrameter.mqtt_insights";
 
@@ -370,5 +377,8 @@ void MqttInsightsComponent::dump_config() {
                                            : this->marstek_mac_.c_str());
 }
 
-}  // namespace astrameter_mqtt_insights
+}  // namespace mqtt_insights
+}  // namespace ct002
 }  // namespace esphome
+
+#endif  // USE_MQTT

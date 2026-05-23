@@ -29,13 +29,29 @@
 #include <string>
 #include <vector>
 
-#include "esphome/components/http_request/http_request.h"
 #include "esphome/core/component.h"
+#include "esphome/core/defines.h"
 #include "esphome/core/preferences.h"
 
-#include "../ct002/ct002.h"
+// http_request.h isn't on the include path when the user hasn't added a
+// `http_request:` block to their YAML. Gate the include — the .cpp is
+// already wrapped in the same USE_CT002_MARSTEK_REGISTRATION guard, so
+// when this define is unset the class declaration below still parses
+// (members just reference a forward-declared HttpRequestComponent
+// pointer) but no method bodies exist.
+#ifdef USE_CT002_MARSTEK_REGISTRATION
+#include "esphome/components/http_request/http_request.h"
+#endif
+
+#include "ct002.h"
 
 namespace esphome {
+#ifndef USE_CT002_MARSTEK_REGISTRATION
+namespace http_request {
+class HttpRequestComponent;
+}
+#endif
+namespace ct002 {
 namespace marstek_registration {
 
 // MAC prefix used by all our managed devices. Mirrors MANAGED_MAC_PREFIX
@@ -175,4 +191,5 @@ class MarstekRegistrationComponent : public Component {
 };
 
 }  // namespace marstek_registration
+}  // namespace ct002
 }  // namespace esphome

@@ -187,53 +187,48 @@ ct002:
 
 See `esphome.example.yaml` at the repo root for an annotated template covering every knob.
 
-**Optional MQTT-insights sub-block.** Add the companion `astrameter_mqtt_insights:` component to publish Home Assistant Device Discovery and (optionally) answer Marstek-app polls on the same broker — no hame-relay round-tripping:
+**Optional `mqtt_insights:` sub-block** (under the same `ct002:` key). Publishes Home Assistant Device Discovery for every reporting battery + the CT002 device itself, and (optionally) answers Marstek-app polls on the same broker — no hame-relay round-tripping:
 
 ```yaml
-external_components:
-  - source: github://tomquist/astrameter@main
-    components: [ct002, astrameter_mqtt_insights]
-
 mqtt:
   broker: 192.168.1.10
   port: 1883
 
-astrameter_mqtt_insights:
-  ct002_id: ct002_main
-  base_topic: astrameter             # per-installation namespace
-  ha_discovery: true                 # HA Device Discovery (per-consumer + device-level)
-  ha_discovery_prefix: homeassistant
-  marstek_mqtt_enabled: true         # answer Marstek-app polls on this broker
-  marstek_mqtt_interval: 300s        # periodic broadcast cadence; 0s = reply-only
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  ct_type: HME-4
+  ct_mac: "aabbccddeeff"
+  mqtt_insights:
+    base_topic: astrameter             # per-installation namespace
+    ha_discovery: true                 # HA Device Discovery (per-consumer + device-level)
+    ha_discovery_prefix: homeassistant
+    marstek_mqtt_enabled: true         # answer Marstek-app polls on this broker
+    marstek_mqtt_interval: 300s        # periodic broadcast cadence; 0s = reply-only
 ```
 
 HA discovery publishes one device per battery (grid_power L1/L2/L3 + total sensors, target L1/L2/L3, reported/last target, saturation, phase, device type, manual-target number, auto-target/active switches) plus a parent CT002 device (smooth_target, active_control binary_sensor, consumer_count, force_rotation button). The Marstek responder subscribes to both `hame_energy/<ct_type>/App/<mac>/ctrl` and `marstek_energy/<ct_type>/App/<mac>/ctrl`, answers `cd=1` aggregate polls and `cd=4` slave-list polls, and broadcasts the current state on the configured interval.
 
-**Optional Marstek cloud registration.** Adding the `marstek_registration:` sub-block has the ESP32 register a "managed" CT002/CT003 with your Marstek cloud account on first boot — same flow as the Python emulator's `[MARSTEK]` section. The resulting MAC (always prefixed `02b250`) flows back into `ct002.ct_mac` so the UDP responses and Marstek MQTT topics use the cloud-side identity, and is persisted via ESPPreferences so the second boot skips the cloud round-trip entirely:
+**Optional `marstek_registration:` sub-block** (under the same `ct002:` key). Registers a "managed" CT002/CT003 with your Marstek cloud account on first boot — same flow as the Python emulator's `[MARSTEK]` section. The resulting MAC (always prefixed `02b250`) flows back into `ct002.ct_mac` so the UDP responses and Marstek MQTT topics use the cloud-side identity, and is persisted via ESPPreferences so the second boot skips the cloud round-trip entirely:
 
 ```yaml
-external_components:
-  - source: github://tomquist/astrameter@main
-    components: [ct002, marstek_registration]
-
 http_request:
   timeout: 20s
 
 ct002:
   id: ct002_main
-
-marstek_registration:
-  ct002_id: ct002_main
-  base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
-  mailbox: you@example.com
-  password: !secret marstek_password
-  device_type: ct002                    # or ct003
-  timezone: Europe/Berlin
-  retry_interval: 60s                   # backoff between transient retries
-  force_reregister: false               # set true to redo the cloud flow
+  power_sensor_l1: grid_l1
+  marstek_registration:
+    base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
+    mailbox: you@example.com
+    password: !secret marstek_password
+    device_type: ct002                    # or ct003
+    timezone: Europe/Berlin
+    retry_interval: 60s                   # backoff between transient retries
+    force_reregister: false               # set true to redo the cloud flow
 ```
 
-If you're using `marstek_registration` together with `astrameter_mqtt_insights`, reboot once after the first successful registration so the MQTT-insights component picks up the freshly-assigned MAC for its App-topic subscription.
+If you combine both sub-blocks under one `ct002:`, reboot once after the first successful registration so the `mqtt_insights:` sub-block picks up the freshly-assigned MAC for its App-topic subscription.
 
 **Status:** experimental — UDP emulator, balancer, filter pipeline, MQTT-insights, and Marstek cloud registration are all functional. Wider field testing welcome.
 

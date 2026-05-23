@@ -1,11 +1,12 @@
-#include "discovery.h"
+#include "ha_discovery.h"
 
 #include <cctype>
 
 #include "esphome/components/json/json_util.h"
 
 namespace esphome {
-namespace astrameter_mqtt_insights {
+namespace ct002 {
+namespace mqtt_insights {
 
 std::string sanitize_id(const std::string &value) {
   std::string out;
@@ -347,5 +348,6 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
   return {ha_prefix + "/device/" + node_id + "/config", std::string(buf)};
 }
 
-}  // namespace astrameter_mqtt_insights
+}  // namespace mqtt_insights
+}  // namespace ct002
 }  // namespace esphome

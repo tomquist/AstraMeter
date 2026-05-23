@@ -1,5 +1,5 @@
 // Host-gcc tests for the Marstek MQTT responder helpers in
-// esphome/components/astrameter_mqtt_insights/marstek_responder.{h,cpp}.
+// esphome/components/ct002/marstek_responder.{h,cpp}.
 // These mirror src/astrameter/mqtt_insights/marstek_mqtt_test.py — the same
 // inputs must produce the same wire bytes so the Marstek app (and
 // hm2mqtt-style parsers) see identical frames whether the Python or
@@ -10,17 +10,17 @@
 
 #include <gtest/gtest.h>
 
-#include "esphome/components/astrameter_mqtt_insights/marstek_responder.h"
+#include "esphome/components/ct002/marstek_responder.h"
 
-using esphome::astrameter_mqtt_insights::app_topics_for;
-using esphome::astrameter_mqtt_insights::build_aggregate_response;
-using esphome::astrameter_mqtt_insights::device_topics_for;
-using esphome::astrameter_mqtt_insights::format_cd4_slave_csv;
-using esphome::astrameter_mqtt_insights::is_poll_payload;
-using esphome::astrameter_mqtt_insights::normalize_mac;
-using esphome::astrameter_mqtt_insights::parse_app_topic;
-using esphome::astrameter_mqtt_insights::parse_poll_payload;
-using esphome::astrameter_mqtt_insights::ResponderRow;
+using esphome::ct002::mqtt_insights::app_topics_for;
+using esphome::ct002::mqtt_insights::build_aggregate_response;
+using esphome::ct002::mqtt_insights::device_topics_for;
+using esphome::ct002::mqtt_insights::format_cd4_slave_csv;
+using esphome::ct002::mqtt_insights::is_poll_payload;
+using esphome::ct002::mqtt_insights::normalize_mac;
+using esphome::ct002::mqtt_insights::parse_app_topic;
+using esphome::ct002::mqtt_insights::parse_poll_payload;
+using esphome::ct002::mqtt_insights::ResponderRow;
 
 TEST(MarstekResponder, NormalizeMac) {
   EXPECT_EQ("aabbccddeeff", normalize_mac("AA:BB:CC:DD:EE:FF"));

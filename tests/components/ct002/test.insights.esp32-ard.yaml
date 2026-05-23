@@ -17,7 +17,7 @@ external_components:
   - source:
       type: local
       path: ../../../esphome/components
-    components: [ct002, astrameter_mqtt_insights]
+    components: [ct002]
 
 mqtt:
   broker: 192.168.1.10
@@ -46,10 +46,8 @@ ct002:
   ct_type: HME-4
   ct_mac: "aabbccddeeff"
   udp_port: 12345
-
-astrameter_mqtt_insights:
-  ct002_id: ct002_main
-  base_topic: astrameter
-  ha_discovery: true
-  marstek_mqtt_enabled: true
-  marstek_mqtt_interval: 60s
+  mqtt_insights:
+    base_topic: astrameter
+    ha_discovery: true
+    marstek_mqtt_enabled: true
+    marstek_mqtt_interval: 60s

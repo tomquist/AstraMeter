@@ -7,7 +7,8 @@
 #include <cstring>
 
 namespace esphome {
-namespace astrameter_mqtt_insights {
+namespace ct002 {
+namespace mqtt_insights {
 
 namespace {
 
@@ -207,5 +208,6 @@ std::string build_aggregate_response(const std::vector<float> &watts, int wifi_r
   return std::string(buf);
 }
 
-}  // namespace astrameter_mqtt_insights
+}  // namespace mqtt_insights
+}  // namespace ct002
 }  // namespace esphome

@@ -14,7 +14,8 @@
 #include <vector>
 
 namespace esphome {
-namespace astrameter_mqtt_insights {
+namespace ct002 {
+namespace mqtt_insights {
 
 // Standalone mirror of CT002Component::ReportingConsumerRow. Same field
 // names so a brace-init list works from either side.
@@ -85,5 +86,6 @@ std::string build_aggregate_response(const std::vector<float> &watts, int wifi_r
                                      bool echo_cd1, int ble_s = 0,
                                      const std::string &fc4_v = DEFAULT_FC4_V);
 
-}  // namespace astrameter_mqtt_insights
+}  // namespace mqtt_insights
+}  // namespace ct002
 }  // namespace esphome

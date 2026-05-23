@@ -19,13 +19,31 @@
 #include <unordered_set>
 
 #include "esphome/core/component.h"
-#include "esphome/components/mqtt/mqtt_client.h"
+#include "esphome/core/defines.h"
 
-#include "../ct002/ct002.h"
+#include "ct002.h"
 #include "marstek_responder.h"
 
+// `mqtt:` is only supported on esp32 / esp8266 / bk72xx / rtl87xx — on
+// the host platform there is no mqtt_client.h and the class declaration
+// here would fail to parse. Forward-declare the mqtt client pointer and
+// gate the include + class body on USE_MQTT so this header compiles
+// cleanly on every target (including host, where the sub-block is never
+// instantiated anyway).
+#ifdef USE_MQTT
+#include "esphome/components/mqtt/mqtt_client.h"
+#endif
+
 namespace esphome {
-namespace astrameter_mqtt_insights {
+#ifndef USE_MQTT
+// Minimal stub so the pointer member type below resolves on platforms
+// without MQTT. The real declaration lives in mqtt/mqtt_client.h.
+namespace mqtt {
+class MQTTClientComponent;
+}
+#endif
+namespace ct002 {
+namespace mqtt_insights {
 
 class MqttInsightsComponent : public Component {
  public:
@@ -103,5 +121,6 @@ class MqttInsightsComponent : public Component {
   std::string marstek_ct_type_;
 };
 
-}  // namespace astrameter_mqtt_insights
+}  // namespace mqtt_insights
+}  // namespace ct002
 }  // namespace esphome

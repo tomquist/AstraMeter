@@ -2,20 +2,40 @@
 
 Ports `src/astrameter/ct002/` (Python) to a native ESPHome component. Parent
 schema accepts grid-power sensor IDs and the cross-phase filter pipeline
-(Hampel/smoothing/deadband/PID). Sub-blocks `mqtt_insights:` and
-`marstek_registration:` will land in subsequent commits.
+(Hampel/smoothing/deadband/PID). Optional sub-blocks under the same
+`ct002:` key:
+
+* `mqtt_insights:` — publish Home Assistant Device Discovery + answer
+  Marstek-app polls on the local broker. Requires an upstream `mqtt:`
+  block in YAML.
+* `marstek_registration:` — register a managed CT002/CT003 with the
+  Marstek cloud on first boot; persist the MAC via ESPPreferences;
+  apply it to this `ct002:` so UDP responses + MQTT topics use the
+  cloud-side identity. Requires an upstream `http_request:` block.
 """
 
 from __future__ import annotations
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import sensor
-from esphome.const import CONF_ALPHA, CONF_ID, CONF_MODE
+from esphome.components import http_request, sensor
+from esphome.const import (
+    CONF_ALPHA,
+    CONF_ID,
+    CONF_MODE,
+    CONF_PASSWORD,
+    CONF_TIMEZONE,
+)
 
 CODEOWNERS = ["@tomquist"]
 DEPENDENCIES = ["sensor"]
-AUTO_LOAD = ["socket"]
+# json / md5 are auto-loaded so users don't need to add empty `json:` or
+# `md5:` blocks to enable the sub-block infrastructure (they're cheap and
+# only the sub-blocks ever reference them). mqtt / http_request have
+# user-facing config of their own (broker, timeout, etc.) so we enforce
+# user-declared blocks via `cv.requires_component` on the sub-schema
+# instead of auto-loading them.
+AUTO_LOAD = ["socket", "json", "md5"]
 MULTI_CONF = False
 
 ct002_ns = cg.esphome_ns.namespace("ct002")
@@ -23,6 +43,17 @@ CT002Component = ct002_ns.class_("CT002Component", cg.Component)
 BalancerConfig = ct002_ns.struct("BalancerConfig")
 PidMode = ct002_ns.enum("PidMode", is_class=True)
 PID_MODES = {"bias": PidMode.BIAS, "replace": PidMode.REPLACE}
+
+# Sub-component classes. Both are top-level ESPHome Components in the
+# generated app — the YAML nesting under ct002: is the user-visible
+# affordance, but each sub-block produces its own Application-tracked
+# Component so ESPHome's setup_priority / loop scheduling work normally.
+mqtt_insights_ns = ct002_ns.namespace("mqtt_insights")
+MqttInsightsComponent = mqtt_insights_ns.class_("MqttInsightsComponent", cg.Component)
+marstek_registration_ns = ct002_ns.namespace("marstek_registration")
+MarstekRegistrationComponent = marstek_registration_ns.class_(
+    "MarstekRegistrationComponent", cg.Component
+)
 
 # Parent fields
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
@@ -184,6 +215,85 @@ SATURATION_SCHEMA = cv.Schema(
     }
 )
 
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: mqtt_insights
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_MQTT_INSIGHTS = "mqtt_insights"
+CONF_BASE_TOPIC = "base_topic"
+CONF_HA_DISCOVERY = "ha_discovery"
+CONF_HA_DISCOVERY_PREFIX = "ha_discovery_prefix"
+CONF_ADDON_SLUG = "addon_slug"
+CONF_DEVICE_ID = "device_id"
+CONF_MARSTEK_MQTT_ENABLED = "marstek_mqtt_enabled"
+CONF_MARSTEK_MQTT_INTERVAL = "marstek_mqtt_interval"
+
+MQTT_INSIGHTS_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(MqttInsightsComponent),
+            cv.Optional(CONF_BASE_TOPIC, default="astrameter"): cv.string_strict,
+            # device_id defaults to the parent ct002 id at to_code time when
+            # left blank (see _to_code_mqtt_insights).
+            cv.Optional(CONF_DEVICE_ID, default=""): cv.string,
+            cv.Optional(CONF_HA_DISCOVERY, default=True): cv.boolean,
+            cv.Optional(
+                CONF_HA_DISCOVERY_PREFIX, default="homeassistant"
+            ): cv.string_strict,
+            cv.Optional(CONF_ADDON_SLUG, default=""): cv.string,
+            cv.Optional(CONF_MARSTEK_MQTT_ENABLED, default=True): cv.boolean,
+            cv.Optional(
+                CONF_MARSTEK_MQTT_INTERVAL, default="300s"
+            ): cv.positive_time_period_milliseconds,
+        }
+    ),
+    # Require an mqtt: block in the user's YAML — this sub-block talks to
+    # whatever broker `mqtt:` is configured against and doesn't carry its
+    # own credentials.
+    cv.requires_component("mqtt"),
+)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: marstek_registration
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_MARSTEK_REGISTRATION = "marstek_registration"
+CONF_HTTP_REQUEST_ID = "http_request_id"
+CONF_BASE_URL = "base_url"
+CONF_MAILBOX = "mailbox"
+CONF_DEVICE_TYPE = "device_type"
+CONF_RETRY_INTERVAL = "retry_interval"
+CONF_FORCE_REREGISTER = "force_reregister"
+
+DEVICE_TYPES = ("ct002", "ct003")
+
+MARSTEK_REGISTRATION_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(MarstekRegistrationComponent),
+            cv.GenerateID(CONF_HTTP_REQUEST_ID): cv.use_id(
+                http_request.HttpRequestComponent
+            ),
+            cv.Required(CONF_BASE_URL): cv.url,
+            cv.Required(CONF_MAILBOX): cv.string_strict,
+            cv.Required(CONF_PASSWORD): cv.string_strict,
+            cv.Optional(CONF_TIMEZONE, default="Europe/Berlin"): cv.string_strict,
+            cv.Optional(CONF_DEVICE_TYPE, default="ct002"): cv.one_of(
+                *DEVICE_TYPES, lower=True
+            ),
+            cv.Optional(
+                CONF_RETRY_INTERVAL, default="60s"
+            ): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_FORCE_REREGISTER, default=False): cv.boolean,
+        }
+    ),
+    # Cloud registration is HTTPS-only — http_request must be configured
+    # by the user (it has its own timeout / verify_ssl knobs).
+    cv.requires_component("http_request"),
+)
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
@@ -211,6 +321,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_FILTERS): FILTERS_SCHEMA,
             cv.Optional(CONF_BALANCER): BALANCER_SCHEMA,
             cv.Optional(CONF_SATURATION): SATURATION_SCHEMA,
+            cv.Optional(CONF_MQTT_INSIGHTS): MQTT_INSIGHTS_SCHEMA,
+            cv.Optional(CONF_MARSTEK_REGISTRATION): MARSTEK_REGISTRATION_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_three_phase_sensors,
@@ -301,3 +413,63 @@ async def to_code(config):
             sat.get(CONF_ENABLED, True),
         )
     )
+
+    if CONF_MQTT_INSIGHTS in config:
+        await _to_code_mqtt_insights(config, var)
+    if CONF_MARSTEK_REGISTRATION in config:
+        await _to_code_marstek_registration(config, var)
+
+
+async def _to_code_mqtt_insights(config, ct002_var):
+    """Codegen for the optional `mqtt_insights:` sub-block.
+
+    Each sub-block produces its own Application-tracked Component. The
+    ct002 variable is passed in via set_ct002() so the insights component
+    can register listeners and read snapshots. The MQTT client is
+    resolved at runtime through `mqtt::global_mqtt_client`, so no ID
+    plumbing is needed here.
+    """
+    sub = config[CONF_MQTT_INSIGHTS]
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+    device_id = sub[CONF_DEVICE_ID] or str(config[CONF_ID])
+    cg.add(var.set_device_id(device_id))
+    cg.add(var.set_base_topic(sub[CONF_BASE_TOPIC]))
+    cg.add(var.set_ha_discovery(sub[CONF_HA_DISCOVERY]))
+    cg.add(var.set_ha_discovery_prefix(sub[CONF_HA_DISCOVERY_PREFIX]))
+    cg.add(var.set_addon_slug(sub[CONF_ADDON_SLUG]))
+    cg.add(var.set_marstek_mqtt_enabled(sub[CONF_MARSTEK_MQTT_ENABLED]))
+    cg.add(
+        var.set_marstek_mqtt_interval_ms(
+            int(sub[CONF_MARSTEK_MQTT_INTERVAL].total_milliseconds)
+        )
+    )
+
+
+async def _to_code_marstek_registration(config, ct002_var):
+    """Codegen for the optional `marstek_registration:` sub-block.
+
+    On first boot this drives an HTTPS state machine against the Marstek
+    cloud, persists the resulting MAC via ESPPreferences, and feeds it
+    back into the parent ct002 component via set_ct_mac().
+    """
+    sub = config[CONF_MARSTEK_REGISTRATION]
+    # Gate the marstek_registration .cpp on this define — without it the
+    # file lives in ct002/ but compiles to an empty translation unit on
+    # ct002-only builds that don't pull in http_request.h.
+    cg.add_define("USE_CT002_MARSTEK_REGISTRATION")
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+
+    http_var = await cg.get_variable(sub[CONF_HTTP_REQUEST_ID])
+    cg.add(var.set_http(http_var))
+
+    cg.add(var.set_base_url(sub[CONF_BASE_URL]))
+    cg.add(var.set_mailbox(sub[CONF_MAILBOX]))
+    cg.add(var.set_password(sub[CONF_PASSWORD]))
+    cg.add(var.set_timezone(sub[CONF_TIMEZONE]))
+    cg.add(var.set_device_type(sub[CONF_DEVICE_TYPE]))
+    cg.add(var.set_retry_interval_ms(int(sub[CONF_RETRY_INTERVAL].total_milliseconds)))
+    cg.add(var.set_force_reregister(sub[CONF_FORCE_REREGISTER]))

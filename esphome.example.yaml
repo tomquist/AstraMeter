@@ -107,46 +107,53 @@ ct002:
     min_target: 20
 
 # ─────────────────────────────────────────────────────────────────────────
-# Optional: MQTT Insights sub-block. Publishes per-consumer state to MQTT
-# with full Home Assistant Device Discovery, and answers Marstek-app polls
-# on the same broker so the emulator shows up in the app without round-
-# tripping through hame-relay.
+# Optional: mqtt_insights sub-block under the ct002: key. Publishes
+# per-consumer state to MQTT with full Home Assistant Device Discovery,
+# and answers Marstek-app polls on the same broker so the emulator
+# shows up in the app without round-tripping through hame-relay.
 #
-# Requires the upstream `mqtt:` block above. Mirrors the Python
-# [MQTT_INSIGHTS] section in config.ini.example.
+# Requires an `mqtt:` block elsewhere in the YAML — the sub-block uses
+# whatever broker mqtt: connects to. Mirrors [MQTT_INSIGHTS] in config.ini.example.
 # ─────────────────────────────────────────────────────────────────────────
 #
 # mqtt:
 #   broker: 192.168.1.10
 #   port: 1883
 #
-# astrameter_mqtt_insights:
-#   ct002_id: ct002_main
-#   base_topic: astrameter          # per-installation namespace
-#   ha_discovery: true              # publish HA Device Discovery
-#   ha_discovery_prefix: homeassistant
-#   marstek_mqtt_enabled: true      # answer Marstek-app polls on the broker
-#   marstek_mqtt_interval: 300s     # periodic broadcast cadence (0 = poll-only)
+# ct002:
+#   id: ct002_main
+#   power_sensor_l1: grid_l1
+#   ct_type: HME-4
+#   ct_mac: "aabbccddeeff"
+#   mqtt_insights:
+#     base_topic: astrameter          # per-installation namespace
+#     ha_discovery: true              # publish HA Device Discovery
+#     ha_discovery_prefix: homeassistant
+#     marstek_mqtt_enabled: true      # answer Marstek-app polls on the broker
+#     marstek_mqtt_interval: 300s     # periodic broadcast cadence (0 = poll-only)
 
 # ─────────────────────────────────────────────────────────────────────────
-# Optional: Marstek cloud-registration sub-block. Registers a "managed"
-# CT002/CT003 with your Marstek cloud account on first boot; the resulting
-# MAC is assigned to ct002.ct_mac so the UDP + MQTT topics line up with
-# the cloud-side record. Persisted via ESPPreferences so the second boot
-# skips the cloud flow entirely.
+# Optional: marstek_registration sub-block under the ct002: key. Registers
+# a "managed" CT002/CT003 with your Marstek cloud account on first boot;
+# the resulting MAC is assigned to ct002.ct_mac so the UDP + MQTT topics
+# line up with the cloud-side record. Persisted via ESPPreferences so the
+# second boot skips the cloud flow entirely.
 #
-# Mirrors the Python [MARSTEK] section in config.ini.example.
+# Requires an `http_request:` block elsewhere in the YAML.
+# Mirrors [MARSTEK] in config.ini.example.
 # ─────────────────────────────────────────────────────────────────────────
 #
 # http_request:
 #   timeout: 20s
 #
-# marstek_registration:
-#   ct002_id: ct002_main
-#   base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
-#   mailbox: you@example.com
-#   password: !secret marstek_password
-#   device_type: ct002                   # or ct003
-#   timezone: Europe/Berlin
-#   retry_interval: 60s
-#   force_reregister: false              # set true to redo the cloud flow
+# ct002:
+#   id: ct002_main
+#   power_sensor_l1: grid_l1
+#   marstek_registration:
+#     base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
+#     mailbox: you@example.com
+#     password: !secret marstek_password
+#     device_type: ct002                   # or ct003
+#     timezone: Europe/Berlin
+#     retry_interval: 60s
+#     force_reregister: false              # set true to redo the cloud flow

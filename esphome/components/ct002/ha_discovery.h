@@ -13,7 +13,8 @@
 #include <utility>
 
 namespace esphome {
-namespace astrameter_mqtt_insights {
+namespace ct002 {
+namespace mqtt_insights {
 
 // Replace any character that's not [A-Za-z0-9_-] with "_". Mirrors
 // discovery.py::_sanitize_id (regex r"[^a-zA-Z0-9_-]").
@@ -35,5 +36,6 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &ha_prefix, const std::string &addon_slug = "");
 
-}  // namespace astrameter_mqtt_insights
+}  // namespace mqtt_insights
+}  // namespace ct002
 }  // namespace esphome

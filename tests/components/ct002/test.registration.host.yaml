@@ -10,7 +10,7 @@ external_components:
   - source:
       type: local
       path: ../../../esphome/components
-    components: [ct002, marstek_registration]
+    components: [ct002]
 
 http_request:
   timeout: 20s
@@ -26,9 +26,7 @@ ct002:
   power_sensor_l1: grid_l1
   ct_type: HME-4
   udp_port: 12345
-
-marstek_registration:
-  ct002_id: ct002_main
-  base_url: https://eu.hamedata.com
-  mailbox: test@example.com
-  password: "test-password"
+  marstek_registration:
+    base_url: https://eu.hamedata.com
+    mailbox: test@example.com
+    password: "test-password"
