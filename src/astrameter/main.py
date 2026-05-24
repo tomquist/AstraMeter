@@ -620,10 +620,20 @@ def _resolve_device_config(
             device_ids = [
                 did.strip() for did in cfg_device_ids.split(",") if did.strip()
             ]
+    # The shellypro3em_old/_new variants emulate the same physical Shelly Pro
+    # 3EM model (just on different UDP ports), so they share its id prefix.
+    shelly_id_prefixes = {
+        "shellypro3em": "shellypro3em",
+        "shellypro3em_old": "shellypro3em",
+        "shellypro3em_new": "shellypro3em",
+        "shellyemg3": "shellyemg3",
+        "shellyproem50": "shellyproem50",
+    }
     while len(device_ids) < len(device_types):
         device_type = device_types[len(device_ids)]
-        if device_type in ["shellypro3em", "shellyemg3", "shellyproem50"]:
-            device_ids.append(f"{device_type}-ec4609c439c{len(device_ids) + 1}")
+        prefix = shelly_id_prefixes.get(device_type)
+        if prefix is not None:
+            device_ids.append(f"{prefix}-ec4609c439c{len(device_ids) + 1}")
         else:
             device_ids.append(f"device-{len(device_ids) + 1}")
 

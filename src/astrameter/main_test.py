@@ -1,7 +1,9 @@
+import argparse
+import configparser
 from ipaddress import IPv4Network
 
 from astrameter.config.config_loader import ClientFilter
-from astrameter.main import read_ct_powermeter
+from astrameter.main import _resolve_device_config, read_ct_powermeter
 from astrameter.powermeter import Powermeter
 
 
@@ -82,3 +84,35 @@ async def test_read_ct_powermeter_swallows_timeout_and_serves_cached():
     powermeters = [(pm, _LOCAL, True)]
     result = await read_ct_powermeter(("127.0.0.1", 0), powermeters)
     assert result == [11.0, 22.0, 33.0]
+
+
+def _resolve(device_type: str) -> tuple[list[str], list[str]]:
+    cfg = configparser.ConfigParser()
+    cfg.read_dict({"GENERAL": {"DEVICE_TYPE": device_type}})
+    args = argparse.Namespace(
+        device_types=None, skip_powermeter_test=None, device_ids=None
+    )
+    device_types, device_ids, _ = _resolve_device_config(cfg, args)
+    return device_types, device_ids
+
+
+def test_resolve_device_config_shellypro3em_new_gets_shelly_id():
+    """Issue #389: standalone shellypro3em_new needs a valid Shelly src id."""
+    device_types, device_ids = _resolve("shellypro3em_new")
+    assert device_types == ["shellypro3em_new"]
+    assert device_ids == ["shellypro3em-ec4609c439c1"]
+
+
+def test_resolve_device_config_shellypro3em_old_gets_shelly_id():
+    _, device_ids = _resolve("shellypro3em_old")
+    assert device_ids == ["shellypro3em-ec4609c439c1"]
+
+
+def test_resolve_device_config_shellypro3em_expands_to_old_and_new():
+    device_types, device_ids = _resolve("shellypro3em")
+    assert device_types == ["shellypro3em_old", "shellypro3em_new"]
+    # Both variants share the same Shelly id prefix.
+    assert device_ids == [
+        "shellypro3em-ec4609c439c1",
+        "shellypro3em-ec4609c439c1",
+    ]
