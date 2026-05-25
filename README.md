@@ -245,6 +245,15 @@ efficiency optimization detects this situation and concentrates the load on
 fewer batteries so each one stays above its efficient minimum, idling the
 rest. Batteries rotate periodically so wear is shared evenly.
 
+> **Not recommended for DC batteries.** Efficiency rotation relies on being
+> able to steer a deprioritized battery's output down to 0 W. DC-coupled
+> batteries such as the Marstek B2500 cannot be commanded to 0 W via the
+> CT002 protocol — they keep running at their minimum output power (e.g.
+> ~80 W) — so idling them does not work and the feature provides no benefit.
+> It is intended for AC batteries (e.g. the Marstek Venus) that can be
+> steered all the way to 0 W. For DC batteries, leave the efficiency settings
+> below disabled.
+
 When a timed rotation or forced swap promotes a new battery, the handoff now
 uses a **probe phase** instead of dropping the previous active battery to zero
 immediately. During probe, the promoted battery gets the real CT002
