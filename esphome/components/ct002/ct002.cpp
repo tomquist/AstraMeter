@@ -315,6 +315,11 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   for (auto &c : normalized_phase) c = static_cast<char>(std::toupper(c));
   auto &consumer = this->get_consumer_(consumer_id);
   const double now = now_seconds_();
+  // Capture the prior phase BEFORE the update. Python keys "is there a
+  // previous phase?" off timestamp>0, not the phase string (a fresh
+  // Consumer defaults to "A"), so a never-seen consumer reports None.
+  const bool had_prior = consumer.timestamp > 0.0;
+  const std::string previous_phase = had_prior ? consumer.phase : std::string();
   // EMA-smoothed poll interval — mirrors Python's _update_consumer_report
   // (ct002.py:298-307). Seeded on the second poll; round-trip to 0.1s
   // resolution to match what the Python service publishes to MQTT.
@@ -337,6 +342,25 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   consumer.timestamp = now;
   consumer.device_type = device_type;
   if (!source_ip.empty()) consumer.last_ip = source_ip;
+
+  // Phase detected (new battery) / phase changed (re-detected on a
+  // different leg) — mirrors ct002.py:315-328. Only fires for a real
+  // A/B/C phase that differs from the prior one; inspection-mode polls
+  // (phase "A" forced) don't spuriously trigger because their phase is
+  // normalized to "A" and an actual A reporter wouldn't change.
+  const bool valid_phase =
+      normalized_phase == "A" || normalized_phase == "B" || normalized_phase == "C";
+  if (valid_phase && previous_phase != normalized_phase) {
+    const bool prior_valid =
+        previous_phase == "A" || previous_phase == "B" || previous_phase == "C";
+    if (prior_valid) {
+      ESP_LOGI(TAG, "CT002 consumer %s phase changed: %s -> %s", consumer_id.c_str(),
+               previous_phase.c_str(), normalized_phase.c_str());
+    } else {
+      ESP_LOGI(TAG, "CT002 consumer %s phase detected: %s", consumer_id.c_str(),
+               normalized_phase.c_str());
+    }
+  }
 }
 
 bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) const {
