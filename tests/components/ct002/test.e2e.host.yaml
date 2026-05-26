@@ -1,0 +1,46 @@
+esphome:
+  name: ct002-e2e-test
+
+host:
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+# The grid sensor never publishes on its own (update_interval: never): the
+# e2e harness injects grid power directly via the test control channel
+# (test_control_port below), so nothing clobbers the injected value.
+sensor:
+  - platform: template
+    id: grid_l1
+    update_interval: never
+  - platform: template
+    id: grid_l2
+    update_interval: never
+  - platform: template
+    id: grid_l3
+    update_interval: never
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  ct_type: HME-4
+  udp_port: 12345
+  active_control: true
+  # Very high so the mock-clock sims (which can advance far in virtual time)
+  # never evict a still-polling consumer mid-scenario.
+  consumer_ttl: 100000s
+  # Dedup off by default — the closed-loop sims poll many times per second
+  # of mock time and must not be deduplicated. The dedup scenario turns it
+  # on at runtime via the `dedupe <ms>` control command.
+  dedupe_window: 0s
+  # Enables the test-only UDP control channel (grid injection, mock clock,
+  # force_rotation, runtime dedupe, state dump).
+  test_control_port: 12346

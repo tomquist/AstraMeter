@@ -1,0 +1,43 @@
+esphome:
+  name: ct002-registration-esp32-ard
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+http_request:
+  timeout: 20s
+  verify_ssl: false  # marstek cloud uses a CA chain that some boards struggle with
+
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  ct_type: HME-4
+  udp_port: 12345
+  marstek_registration:
+    base_url: https://eu.hamedata.com
+    mailbox: test@example.com
+    password: "test-password"
+    timezone: Europe/Berlin
+    device_type: ct002
+    retry_interval: 60s

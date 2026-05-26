@@ -13,45 +13,27 @@ probe deadlines) is fully reproducible.
 
 from __future__ import annotations
 
-import socket
-import time
+import _ct002_e2e_backend as be
+import pytest
+from _ct002_e2e_backend import E2E_UDP_PORT, EsphomeSim, HarnessClock, find_free_ports
 
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import Load, LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.esphome_e2e
 
 
-class _FakeClock:
-    """Controllable clock for deterministic time in the balancer."""
-
-    def __init__(self) -> None:
-        self._now = time.time()
-
-    def __call__(self) -> float:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += seconds
-
-
-def _find_free_ports(n: int = 2) -> list[int]:
-    """Return *n* free port numbers (first UDP, rest TCP)."""
-    types = [socket.SOCK_DGRAM] + [socket.SOCK_STREAM] * (n - 1)
-    ports: list[int] = []
-    socks: list[socket.socket] = []
-    for i in range(n):
-        s = socket.socket(socket.AF_INET, types[i])
-        s.bind(("127.0.0.1", 0))
-        ports.append(s.getsockname()[1])
-        socks.append(s)
-    for s in socks:
-        s.close()
-    return ports
+# Every test runs once per emulator backend. The python backend always runs;
+# esphome skips without the CLI. See tests/_ct002_e2e_backend.py.
+@pytest.fixture(params=["python", "esphome"], autouse=True)
+def _emulator_backend(request):
+    if request.param == "esphome" and not be.have_esphome():
+        pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
+    be.ACTIVE_BACKEND = request.param
+    yield
+    be.ACTIVE_BACKEND = "python"
 
 
 # ---------------------------------------------------------------------------
@@ -83,10 +65,17 @@ class _SimHarness:
         min_power_thresholds: list[float] | None = None,
         **ct_kwargs,
     ):
-        ct_port, http_port = _find_free_ports(2)
+        self.backend = be.ACTIVE_BACKEND
+        self._esphome = EsphomeSim() if self.backend == "esphome" else None
+        free_udp, http_port = find_free_ports(2)
+        # ESPHome binary listens on a fixed port (its YAML); the in-process
+        # Python CT002 can take an ephemeral one.
+        ct_port = E2E_UDP_PORT if self.backend == "esphome" else free_udp
         self.ct_port = ct_port
         self.http_port = http_port
-        self.clock = _FakeClock()
+        self.clock = HarnessClock(
+            on_change=(self._esphome.set_clock if self._esphome is not None else None)
+        )
 
         if base_load is None:
             base_load = [200.0, 0.0, 0.0]
@@ -136,42 +125,85 @@ class _SimHarness:
             port=http_port,
         )
 
-        self.ct002 = CT002(
-            udp_port=ct_port,
-            ct_mac=ct_mac,
-            active_control=True,
-            fair_distribution=True,
-            min_efficient_power=min_efficient_power,
-            efficiency_rotation_interval=efficiency_rotation_interval,
-            clock=self.clock,
-            reset_fn=None,
-            **ct_kwargs,
-        )
+        # Balancer/saturation settings for this scenario. For the Python
+        # backend they go to the CT002 constructor; for the ESPHome backend
+        # they're pushed via `cfg` control commands at start() (the binary's
+        # compile-time config is otherwise fixed).
+        self._scenario_cfg: dict[str, float] = {
+            "min_efficient_power": float(min_efficient_power),
+            "efficiency_rotation_interval": float(efficiency_rotation_interval),
+            "fair_distribution": 1.0,
+        }
+        for k, val in ct_kwargs.items():
+            self._scenario_cfg[k] = float(
+                1 if val is True else 0 if val is False else val
+            )
 
-        # Wire CT002 to read grid power from the powermeter sim
-        async def update_readings(_addr, _fields=None, _consumer_id=None):
-            grid = self.powermeter.compute_grid()
-            return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+        if self.backend == "python":
+            self.ct002 = CT002(
+                udp_port=ct_port,
+                ct_mac=ct_mac,
+                active_control=True,
+                fair_distribution=True,
+                min_efficient_power=min_efficient_power,
+                efficiency_rotation_interval=efficiency_rotation_interval,
+                clock=self.clock,
+                reset_fn=None,
+                consumer_ttl=100000,  # avoid eviction during long mock-time sims
+                **ct_kwargs,
+            )
 
-        self.ct002.before_send = update_readings
+            async def update_readings(_addr, _fields=None, _consumer_id=None):
+                grid = self.powermeter.compute_grid()
+                return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+
+            self.ct002.before_send = update_readings
+        else:
+            self.ct002 = None
 
     async def start(self):
         await self.powermeter.start()
-        await self.ct002.start()
+        if self.backend == "python":
+            await self.ct002.start()
+        else:
+            self._esphome.spawn()
+            self._esphome.set_dedupe(0)  # sims poll fast in mock time; no dedup
+            for key, val in self._scenario_cfg.items():
+                self._esphome.set_cfg(key, val)
+            self._esphome.set_clock(self.clock())
 
     async def stop(self):
-        await self.ct002.stop()
+        if self.backend == "python":
+            await self.ct002.stop()
+        else:
+            self._esphome.stop()
         await self.powermeter.stop()
 
     # -- stepping ----------------------------------------------------------
 
+    async def _step_battery(self, b: BatterySimulator) -> None:
+        """One battery iteration. The Python emulator reads grid live via
+        before_send; the ESPHome binary needs the grid injected, so we
+        replicate BatterySimulator.step() and inject the grid AFTER the
+        battery ramps but BEFORE it polls — matching Python's timing."""
+        if self.backend == "python":
+            await b.step(b.poll_interval)
+            return
+        b._step_index += 1
+        b._drain_pending_power_targets()
+        b._update_power(b.poll_interval)
+        b._update_soc(b.poll_interval)
+        grid = self.powermeter.compute_grid()
+        self._esphome.set_grid(grid["phase_a"], grid["phase_b"], grid["phase_c"])
+        await b._send_request()
+
     async def step(self, n: int = 1) -> None:
-        """Step all batteries *n* times.  Advances the fake clock by each
+        """Step all batteries *n* times.  Advances the clock by each
         battery's ``poll_interval`` (max across batteries) per step."""
         for _ in range(n):
             max_dt = max(b.poll_interval for b in self.batteries)
             for b in self.batteries:
-                await b.step(b.poll_interval)
+                await self._step_battery(b)
             self.clock.advance(max_dt)
 
     async def step_until(

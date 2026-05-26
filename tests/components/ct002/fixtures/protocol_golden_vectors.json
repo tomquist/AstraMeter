@@ -1,0 +1,107 @@
+{
+  "comment": "Canonical CT002 wire-protocol vectors shared between the Python implementation (src/astrameter/ct002/protocol.py) and the C++ port (esphome/components/ct002/protocol.{h,cpp}). Each entry covers one of the encoder/decoder behaviors that the two implementations MUST agree on byte-for-byte. The 'wire' bytes are the full encoded payload; the 'fields' array is what parse_request returns. The 'description' field is for humans only.",
+  "vectors": [
+    {
+      "description": "Typical CT002 poll: meter type, MAC, ct_type, ct_mac, phase marker, reported power",
+      "fields": [
+        "HMG-50",
+        "AABBCCDDEEFF",
+        "HME-4",
+        "112233445566",
+        "5",
+        "7"
+      ],
+      "wire_hex": "010235307c484d472d35307c4141424243434444454546467c484d452d347c3131323233333434353536367c357c37033334",
+      "round_trip": true
+    },
+    {
+      "description": "HME-3 (CT003) frame with negative power",
+      "fields": [
+        "HMG-50",
+        "AABBCCDDEEFF",
+        "HME-3",
+        "112233445566",
+        "B",
+        "-100"
+      ],
+      "wire_hex": "010235337c484d472d35307c4141424243434444454546467c484d452d337c3131323233333434353536367c427c2d313030033663",
+      "round_trip": true
+    },
+    {
+      "description": "Inspection-mode marker (phase '0', not in {A,B,C})",
+      "fields": [
+        "HMG-50",
+        "AABBCCDDEEFF",
+        "HME-4",
+        "112233445566",
+        "0",
+        "100"
+      ],
+      "wire_hex": "010235327c484d472d35307c4141424243434444454546467c484d452d347c3131323233333434353536367c307c313030033335",
+      "round_trip": true
+    },
+    {
+      "description": "Empty trailing field \u2014 separator-terminated message",
+      "fields": [
+        "HMG-50",
+        "AABBCCDDEEFF",
+        "HME-4",
+        "112233445566",
+        "A",
+        ""
+      ],
+      "wire_hex": "010234397c484d472d35307c4141424243434444454546467c484d452d347c3131323233333434353536367c417c033766",
+      "round_trip": true
+    },
+    {
+      "description": "Full 24-field CT002 response \u2014 all RESPONSE_LABELS populated",
+      "fields": [
+        "HMG-50",
+        "AABBCCDDEEFF",
+        "HME-4",
+        "112233445566",
+        "100",
+        "200",
+        "300",
+        "600",
+        "1",
+        "1",
+        "1",
+        "3",
+        "-50",
+        "0",
+        "0",
+        "-180",
+        "-240",
+        "-160",
+        "-580",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "wire_hex": "01023130397c484d472d35307c4141424243434444454546467c484d452d347c3131323233333434353536367c3130307c3230307c3330307c3630307c317c317c317c337c2d35307c307c307c2d3138307c2d3234307c2d3136307c2d3538307c307c307c307c307c30033132",
+      "round_trip": true
+    },
+    {
+      "description": "Checksum-space-tolerance regression: encoder emits the standard form, decoder must also accept the space-prefixed variant. The mutated_wire field swaps the checksum's high nibble for ASCII space (0x20).",
+      "fields": [
+        "HMG-50",
+        "AABBCCDDEEFF",
+        "HME-4",
+        "112233445566",
+        "0",
+        "0"
+      ],
+      "wire_hex": "010235307c484d472d35307c4141424243434444454546467c484d452d347c3131323233333434353536367c307c30033336",
+      "round_trip": true,
+      "decode_only_mutations": [
+        {
+          "mutation": "checksum_space_high_nibble",
+          "description": "Replace the high-nibble byte of the trailing checksum with 0x20 (ASCII space). parse_request must still succeed; build_payload must NOT emit this form."
+        }
+      ]
+    }
+  ]
+}

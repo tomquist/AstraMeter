@@ -1,0 +1,46 @@
+esphome:
+  name: ct002-no-filters-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+api:
+logger:
+wifi:
+  ssid: "test"
+  password: "testpassword"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+sensor:
+  - platform: template
+    id: grid_l1
+    name: Grid L1
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+  - platform: template
+    id: grid_l2
+    name: Grid L2
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+  - platform: template
+    id: grid_l3
+    name: Grid L3
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  active_control: false

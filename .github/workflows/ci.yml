@@ -43,6 +43,112 @@ jobs:
       - name: Mypy
         run: uv run mypy src/
 
+  ct002-host-protocol:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tooling
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake g++
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run host-gcc protocol + wrappers + balancer parity tests
+        run: uv run pytest tests/components/ct002/test_host_protocol.py -v
+
+  # Discover the ct002 compile targets dynamically so adding a
+  # tests/components/ct002/test.*.yaml file is automatically compiled in CI
+  # without editing this workflow.
+  ct002-esphome-yaml:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Collect test YAML files
+        id: find
+        run: |
+          matrix=$(ls tests/components/ct002/test.*.yaml | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  ct002-esphome-compile:
+    needs: [ ct002-esphome-yaml ]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        yaml: ${{ fromJSON(needs.ct002-esphome-yaml.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Compile ${{ matrix.yaml }}
+        run: esphome compile ${{ matrix.yaml }}
+
+  ct002-host-e2e:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (astrameter + esphome)
+        run: |
+          uv sync --frozen --extra dev
+          uv tool install esphome
+
+      # Build both host binaries in their own steps so a compile failure
+      # shows up here (with full gcc output) rather than as an opaque pytest
+      # timeout inside the module fixtures. The fixtures find the binaries
+      # already built and skip recompiling.
+      - name: Build ct002 host binary
+        run: esphome compile tests/components/ct002/test.host.yaml
+
+      - name: Build ct002 test-hooks (e2e control) binary
+        run: esphome compile tests/components/ct002/test.e2e.host.yaml
+
+      # All cross-backend suites are tagged `@pytest.mark.esphome_e2e`
+      # (see pyproject.toml). Selecting by marker means new suites are
+      # picked up automatically without editing this workflow. Their
+      # `python` params also run in the `validate` job; the `esphome`
+      # params only run where the esphome CLI + test-hooks binary exist.
+      - name: Run host-platform E2E (cross-backend esphome suites)
+        run: uv run pytest -m esphome_e2e -v
+
   validate:
     needs: [ lint ]
     runs-on: ubuntu-latest

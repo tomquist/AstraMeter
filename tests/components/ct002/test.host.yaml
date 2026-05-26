@@ -1,0 +1,26 @@
+esphome:
+  name: ct002-host-test
+  friendly_name: CT002 Host Test
+
+host:
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+sensor:
+  - platform: template
+    id: grid_l1
+    name: Grid L1
+    lambda: |-
+      return 0.0f;
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1

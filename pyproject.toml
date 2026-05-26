@@ -48,6 +48,9 @@ python_files = ["test_*.py", "*_test.py"]
 addopts = "-ra -q"
 asyncio_mode = "auto"
 timeout = 90
+markers = [
+    "esphome_e2e: cross-backend e2e suite that also drives the compiled ESPHome host binary (run via the ct002-host-e2e CI job; esphome params skip without the CLI)",
+]
 
 [tool.ruff]
 target-version = "py310"
