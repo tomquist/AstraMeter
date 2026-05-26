@@ -598,6 +598,45 @@ async def test_reconnect_cancels_in_flight_fetch():
         await pm._fetch_states_task
 
 
+async def test_reconnect_prevents_stale_bootstrap_reseed():
+    """End-to-end guard on the real ``_fetch_initial_states``: when the
+    REST response only resolves *after* ``_reset_for_reconnect`` has
+    cancelled the task, the post-await write must never land — the stale
+    value cannot reseed the cache that the reset just cleared.
+    """
+    pm = _create_powermeter()
+    gate = asyncio.Event()
+
+    def _get(url, headers=None):
+        resp = MagicMock()
+        resp.status = 200
+
+        async def _json():
+            await gate.wait()  # don't resolve until the test releases it
+            return {"entity_id": "sensor.current_power", "state": "123"}
+
+        resp.json = _json
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+        return resp
+
+    session = MagicMock()
+    session.get = MagicMock(side_effect=_get)
+    pm._session = session
+
+    pm._fetch_states_task = asyncio.create_task(pm._fetch_initial_states())
+    await asyncio.sleep(0)  # let the task reach `await resp.json()`
+
+    pm._reset_for_reconnect()  # cancels the in-flight task and clears cache
+    gate.set()  # the json await would resume here — but cancellation wins
+
+    with pytest.raises(asyncio.CancelledError):
+        await pm._fetch_states_task
+
+    # The stale "123" must never have been written.
+    assert "sensor.current_power" not in pm._entity_values
+
+
 # Lifecycle tests
 
 
