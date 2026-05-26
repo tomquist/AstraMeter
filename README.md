@@ -304,6 +304,15 @@ mid-interval failures still trigger a swap.
   deprioritized so the remaining ones operate above their efficient minimum.
   Example: 2 batteries, 200 W demand, threshold 150 → one battery gets 200 W,
   the other idles. Hysteresis (×1.2) prevents oscillation at the boundary.
+- **MAX_EFFICIENT_POWER** (default 0 = auto) — The most power a single battery
+  can deliver. Without this, `MIN_EFFICIENT_POWER` can concentrate demand onto
+  too few batteries and leave load on the grid once demand exceeds one
+  battery's output limit (e.g. an 800 W-capped unit asked to cover 1100 W).
+  AstraMeter then engages additional batteries so no active one is asked for
+  more than its cap. `0` auto-learns the cap (seeded at 800 W) by detecting a
+  clipped output plateau; a positive value forces that exact cap for every
+  battery; a negative value (e.g. `-1`) disables the capacity floor. Shedding
+  uses the same ×1.2 hysteresis as above to avoid flapping at the boundary.
 - **EFFICIENCY_ROTATION_INTERVAL** (default 900 s, minimum 10) — Seconds between
   rotating which battery has priority. Ensures fair wear across batteries.
 - **EFFICIENCY_FADE_ALPHA** (default 0.15) — EMA factor controlling how quickly

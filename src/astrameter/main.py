@@ -180,6 +180,7 @@ async def run_device(
             ct_section, "SATURATION_STALL_TIMEOUT_SECONDS", fallback=60
         )
         min_efficient_power = cfg.getint(ct_section, "MIN_EFFICIENT_POWER", fallback=0)
+        max_efficient_power = cfg.getint(ct_section, "MAX_EFFICIENT_POWER", fallback=0)
         probe_min_power = cfg.getint(ct_section, "PROBE_MIN_POWER", fallback=80)
         efficiency_rotation_interval = cfg.getint(
             ct_section, "EFFICIENCY_ROTATION_INTERVAL", fallback=900
@@ -243,6 +244,7 @@ async def run_device(
             saturation_grace_seconds=saturation_grace_seconds,
             saturation_stall_timeout_seconds=saturation_stall_timeout_seconds,
             min_efficient_power=min_efficient_power,
+            max_efficient_power=max_efficient_power,
             probe_min_power=probe_min_power,
             efficiency_rotation_interval=efficiency_rotation_interval,
             efficiency_fade_alpha=efficiency_fade_alpha,

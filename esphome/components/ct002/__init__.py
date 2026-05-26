@@ -98,6 +98,7 @@ CONF_ERROR_REDUCE_THRESHOLD = "error_reduce_threshold"
 CONF_MAX_CORRECTION_PER_STEP = "max_correction_per_step"
 CONF_MAX_TARGET_STEP = "max_target_step"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
+CONF_MAX_EFFICIENT_POWER = "max_efficient_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
@@ -194,6 +195,9 @@ BALANCER_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_MAX_TARGET_STEP, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
+        # Capacity floor (issue #388): >0 override, 0 auto-learn, <0 disable —
+        # negatives are meaningful, so no min clamp here.
+        cv.Optional(CONF_MAX_EFFICIENT_POWER, default=0.0): cv.float_,
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
             CONF_EFFICIENCY_ROTATION_INTERVAL, default="15min"
@@ -412,6 +416,7 @@ async def to_code(config):
         ("max_correction_per_step", bal.get(CONF_MAX_CORRECTION_PER_STEP, 80.0)),
         ("max_target_step", bal.get(CONF_MAX_TARGET_STEP, 0.0)),
         ("min_efficient_power", bal.get(CONF_MIN_EFFICIENT_POWER, 0.0)),
+        ("max_efficient_power", bal.get(CONF_MAX_EFFICIENT_POWER, 0.0)),
         ("probe_min_power", bal.get(CONF_PROBE_MIN_POWER, 80.0)),
         (
             "efficiency_rotation_interval",

@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** efficiency mode (`MIN_EFFICIENT_POWER`) leaving load on the grid when demand exceeded a single battery's output limit: only one battery would discharge at its ceiling while the surplus fed from the grid. AstraMeter now engages additional batteries based on each one's output cap (auto-learned, seeded at 800W, or set explicitly via the new `MAX_EFFICIENT_POWER` option) ([#388](https://github.com/tomquist/astrameter/issues/388)).
 - **Added** experimental ESPHome external component `ct002` to run the CT002/CT003 emulator directly on an ESP32. See `esphome.example.yaml`.
 - **Added** Modbus UDP support via a `TRANSPORT = TCP|UDP` option in the `[MODBUS]` section (defaults to `TCP`).
 - **Fixed** Home Assistant powermeter timing out on startup with "Timeout waiting for Home Assistant state" when the `subscribe_entities` initial snapshot never arrives (e.g. entity not yet loaded when AstraMeter starts). The Home Assistant powermeter now also issues an explicit `get_states` fetch right after subscribing to seed the cache.

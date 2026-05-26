@@ -20,6 +20,12 @@ namespace esphome {
 namespace ct002 {
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
+// Capacity floor (issue #388): per-battery output cap seed and clip-plateau
+// learning thresholds. See the Python source for the narrative.
+inline constexpr double DEFAULT_OUTPUT_CAP = 800.0;
+inline constexpr int CAP_CONFIRM_SAMPLES = 2;
+inline constexpr double CAP_SHORTFALL_MARGIN = 60.0;
+inline constexpr double CAP_FLAT_DELTA = 25.0;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
 inline constexpr double SATURATION_REFERENCE_DT = 1.0;
@@ -37,6 +43,8 @@ struct BalancerConfig {
   float max_correction_per_step{80.0f};
   float max_target_step{0.0f};
   float min_efficient_power{0.0f};
+  // Capacity floor (issue #388): >0 override, 0 auto (seed + learn), <0 off.
+  float max_efficient_power{0.0f};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
@@ -60,6 +68,11 @@ struct BalancerConsumerState {
   double saturation_grace_until{0.0};
   double saturation_grace_started_at{0.0};
   double last_saturation_update{0.0};
+  // Capacity floor (issue #388): learned output ceiling (W; 0 = use seed),
+  // previous reported power, and consecutive clip-plateau sample count.
+  float output_cap{0.0f};
+  float last_reported{0.0f};
+  int clip_samples{0};
 };
 
 struct ProbeState {
@@ -167,6 +180,9 @@ class LoadBalancer {
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
 
+  void update_output_cap_(BalancerConsumerState &state, std::optional<float> last_target,
+                          float actual);
+  float effective_output_cap_(const std::string &cid, const ReportMap &reports);
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
   bool maybe_force_swap_saturated_(std::vector<std::string> &priority, size_t slots,

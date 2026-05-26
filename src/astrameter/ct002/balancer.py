@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import time
 from collections.abc import Callable
 from typing import Literal, NamedTuple
@@ -12,6 +13,19 @@ from astrameter.config.logger import logger
 from .protocol import parse_int
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
+# Capacity floor (issue #388): in efficiency mode the active-battery count is
+# also bounded below by how much a single battery can physically deliver, so a
+# clipped battery never leaves load on the grid.  The per-battery output cap is
+# seeded at ``DEFAULT_OUTPUT_CAP`` and refined by observing a clip plateau.
+DEFAULT_OUTPUT_CAP = 800.0
+# Consecutive clip samples required before a battery's output cap is learned.
+CAP_CONFIRM_SAMPLES = 2
+# A battery is "short" of its commanded setpoint by more than this (W) to count
+# as a clip candidate rather than normal tracking error.
+CAP_SHORTFALL_MARGIN = 60.0
+# Output rose by less than this (W) since the previous sample → it has plateaued
+# (stopped ramping), so the current value is its ceiling.
+CAP_FLAT_DELTA = 25.0
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
 # inverter; the grace is also cleared early once the battery proves it
@@ -72,6 +86,11 @@ class BalancerConfig:
     max_correction_per_step: float = 80
     max_target_step: float = 0
     min_efficient_power: float = 0
+    # Per-battery output cap for the capacity floor (issue #388):
+    #   > 0  explicit override (skip learning, applies to all batteries)
+    #   = 0  auto: seed at DEFAULT_OUTPUT_CAP and learn from a clip plateau
+    #   < 0  disabled: capacity floor off, efficiency behaves as before
+    max_efficient_power: float = 0
     probe_min_power: float = 80
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
@@ -124,6 +143,13 @@ class BalancerConsumerState:
     saturation_score: float = 0.0
     saturation_grace_until: float = 0.0
     saturation_grace_started_at: float = 0.0
+    # Capacity floor (issue #388): learned per-battery output ceiling (W);
+    # 0.0 means "not yet learned, use the seed".  ``last_reported`` is the
+    # previous reported power and ``clip_samples`` counts consecutive clip
+    # plateau observations toward ``CAP_CONFIRM_SAMPLES``.
+    output_cap: float = 0.0
+    last_reported: float = 0.0
+    clip_samples: int = 0
     # Wall-clock timestamp of the most recent saturation EMA step for this
     # consumer. 0.0 is a sentinel meaning "no prior update"; it also flags
     # the first post-grace sample, so the next update re-seeds instead of
@@ -682,6 +708,7 @@ class LoadBalancer:
         ):
             actual = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
             self._saturation.update(state, last_target, actual)
+            self._update_output_cap(state, last_target, actual)
 
         # --- Manual override ---
         if consumer_mode.mode == "manual" and consumer_id and state:
@@ -1028,6 +1055,49 @@ class LoadBalancer:
     # Efficiency deprioritization
     # ------------------------------------------------------------------
 
+    def _update_output_cap(
+        self, state: BalancerConsumerState, last_target: float | None, actual: float
+    ) -> None:
+        """Learn a battery's output ceiling from a confirmed clip plateau.
+
+        ``last_target`` is the *delta* commanded on the previous cycle, so the
+        battery was steered toward ``state.last_reported + last_target``.  When
+        the reported power flattens well below that setpoint while still being
+        asked for more, that flat value is the physical ceiling.  Only active in
+        auto mode (``max_efficient_power == 0``); an explicit override or the
+        disabled sentinel need no learning.
+        """
+        if self._cfg.max_efficient_power != 0:
+            return
+        prev_reported = state.last_reported
+        state.last_reported = actual
+        if last_target is None:
+            state.clip_samples = 0
+            return
+        commanded = prev_reported + last_target
+        is_clip = (
+            commanded > 0
+            and actual > 0
+            and (commanded - actual) > CAP_SHORTFALL_MARGIN
+            and (actual - prev_reported) < CAP_FLAT_DELTA
+        )
+        if not is_clip:
+            state.clip_samples = 0
+            return
+        state.clip_samples += 1
+        if state.clip_samples >= CAP_CONFIRM_SAMPLES:
+            state.output_cap = actual
+
+    def _effective_output_cap(self, cid: str, reports: dict) -> float:
+        """Per-battery output cap: override → learned plateau → flat seed."""
+        cfg = self._cfg
+        if cfg.max_efficient_power > 0:
+            return cfg.max_efficient_power
+        state = self._consumers.get(cid)
+        if state and state.output_cap > 0:
+            return state.output_cap
+        return DEFAULT_OUTPUT_CAP
+
     def _compute_efficiency_deprioritized(
         self, reports: dict, sample_id: tuple, grid_total: float
     ) -> dict[str, float]:
@@ -1111,6 +1181,24 @@ class LoadBalancer:
             slots = max(1, min(n - 1, int(abs_target / cfg.min_efficient_power)))
         else:
             slots = n
+
+        # Capacity floor (issue #388): raise the active count so no single
+        # battery is asked to exceed its output cap.  Expansion is eager
+        # ("fast in"); shedding is lazy with the same hysteresis factor used by
+        # the efficiency floor ("slow out") so demand jittering around the cap
+        # does not flap the active set.  Skipped when disabled
+        # (``max_efficient_power < 0``).
+        if cfg.max_efficient_power >= 0 and self._priority:
+            cap = min(
+                self._effective_output_cap(cid, reports) for cid in self._priority
+            )
+            if cap > 0:
+                need = math.ceil(abs_target / cap)
+                cur = prev_slots
+                if cur > need:
+                    relaxed = math.ceil(abs_target * EFFICIENCY_HYSTERESIS_FACTOR / cap)
+                    need = min(cur, max(need, relaxed))
+                slots = min(max(slots, need), n)
 
         deprioritized = set(self._priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}

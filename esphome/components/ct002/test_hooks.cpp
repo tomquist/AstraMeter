@@ -89,6 +89,7 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "max_correction_per_step") this->balancer_cfg_.max_correction_per_step = f;
   else if (key == "max_target_step") this->balancer_cfg_.max_target_step = f;
   else if (key == "min_efficient_power") this->balancer_cfg_.min_efficient_power = f;
+  else if (key == "max_efficient_power") this->balancer_cfg_.max_efficient_power = f;
   else if (key == "probe_min_power") this->balancer_cfg_.probe_min_power = f;
   else if (key == "efficiency_rotation_interval") this->balancer_cfg_.efficiency_rotation_interval = f;
   else if (key == "efficiency_fade_alpha") this->balancer_cfg_.efficiency_fade_alpha = f;

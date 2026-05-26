@@ -785,3 +785,133 @@ class TestEfficiencyE2E:
             )
         finally:
             await h.stop()
+
+
+class TestCapacityFloorE2E:
+    """End-to-end tests for the capacity floor (issue #388).
+
+    When demand exceeds what a single battery can physically deliver, the
+    efficiency floor alone keeps too few batteries active and the surplus
+    leaks to the grid.  These tests drive the full stack with batteries that
+    clip at their ``max_discharge_power`` ceiling.
+    """
+
+    async def test_demand_above_single_battery_cap_engages_second(self):
+        """Issue #388: 1105W demand, 800W-capped batteries, threshold 600.
+
+        ``int(1105/600) == 1`` so the efficiency floor wants a single active
+        battery, but one battery tops out at 800W and ~305W leaks to grid.
+        The capacity floor must engage a second battery so the load is shared
+        and the grid settles near zero.
+        """
+        h = _SimHarness(
+            num_batteries=3,
+            base_load=[1105.0, 0.0, 0.0],
+            min_efficient_power=600,
+        )
+        await h.start()
+        try:
+            await h.step_until(lambda: h.active_battery_count(30.0) >= 2, max_steps=300)
+            await h.step(20)
+
+            assert h.active_battery_count(30.0) == 2, (
+                f"Expected exactly 2 active batteries sharing 1105W. "
+                f"Powers: {h.battery_powers()}"
+            )
+            grid = abs(h.grid_total())
+            assert grid < 30, (
+                f"Grid should settle near zero once the load is shared, "
+                f"got {grid:.0f}W. Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    async def test_recovery_returns_to_single_battery(self):
+        """Once demand falls well below one battery's cap, shed back to one."""
+        h = _SimHarness(
+            num_batteries=3,
+            base_load=[1105.0, 0.0, 0.0],
+            min_efficient_power=600,
+        )
+        await h.start()
+        try:
+            await h.step_until(lambda: h.active_battery_count(30.0) >= 2, max_steps=300)
+            # Drop demand below the cap/hysteresis threshold (800/1.2 ≈ 667W).
+            h.load_model.base_load[0] = 450.0
+            await h.step_until(lambda: h.active_battery_count(30.0) == 1, max_steps=300)
+        finally:
+            await h.stop()
+
+    async def test_demand_jitter_around_cap_does_not_flap(self):
+        """Demand oscillating around the 800W cap keeps a stable active set."""
+        h = _SimHarness(
+            num_batteries=3,
+            base_load=[820.0, 0.0, 0.0],
+            min_efficient_power=600,
+        )
+        await h.start()
+        try:
+            await h.step_until(lambda: h.active_battery_count(30.0) == 2, max_steps=300)
+            await h.step(15)
+
+            counts: list[int] = []
+            for i in range(40):
+                h.load_model.base_load[0] = 760.0 if i % 2 == 0 else 820.0
+                await h.step()
+                counts.append(h.active_battery_count(30.0))
+
+            assert all(c == 2 for c in counts), (
+                f"Active count flapped around the cap boundary: {counts}"
+            )
+        finally:
+            await h.stop()
+
+    async def test_learns_cap_below_seed(self):
+        """A battery clipping below the 800W seed is learned, engaging a peer.
+
+        Demand 700W < 800W seed → the efficiency+seed math wants one battery,
+        but the active battery physically tops out at 600W and leaks ~100W.
+        Once the clip plateau is learned the second battery engages.
+        """
+        h = _SimHarness(
+            num_batteries=2,
+            base_load=[700.0, 0.0, 0.0],
+            min_efficient_power=500,
+        )
+        # priority[0] is the lowest MAC (battery 0); cap it below the seed so
+        # the first active battery is the limited one.
+        h.batteries[0].max_discharge_power = 600
+        await h.start()
+        try:
+            await h.step_until(lambda: h.active_battery_count(30.0) == 2, max_steps=400)
+            await h.step(20)
+            grid = abs(h.grid_total())
+            assert grid < 40, (
+                f"Grid should settle near zero after learning the cap, "
+                f"got {grid:.0f}W. Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()
+
+    async def test_opt_out_preserves_legacy_leak(self):
+        """max_efficient_power=-1 disables the floor: the old single-battery
+        behaviour (and grid leak) is preserved."""
+        h = _SimHarness(
+            num_batteries=3,
+            base_load=[1105.0, 0.0, 0.0],
+            min_efficient_power=600,
+            max_efficient_power=-1,
+        )
+        await h.start()
+        try:
+            await h.step_until(lambda: h.active_battery_count(30.0) == 1, max_steps=300)
+            await h.step(30)
+            assert h.active_battery_count(30.0) == 1, (
+                f"Capacity floor should be disabled. Powers: {h.battery_powers()}"
+            )
+            assert abs(h.grid_total()) > 150, (
+                f"Expected the legacy grid leak to persist, "
+                f"got {h.grid_total():.0f}W. Powers: {h.battery_powers()}"
+            )
+        finally:
+            await h.stop()

@@ -536,6 +536,7 @@ std::array<float, 3> LoadBalancer::compute_target(
         this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
       const float actual = active_reports[*consumer_id].power;
       this->saturation_.update(*state, last_target, actual);
+      this->update_output_cap_(*state, last_target, actual);
     }
   }
 
@@ -799,6 +800,43 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
 }
 
 // -------------------------------------------------------------------------
+// Capacity floor (issue #388)
+// -------------------------------------------------------------------------
+
+void LoadBalancer::update_output_cap_(BalancerConsumerState &state,
+                                      std::optional<float> last_target, float actual) {
+  // Learn a battery's output ceiling from a confirmed clip plateau. Only active
+  // in auto mode (max_efficient_power == 0); override/disabled need no learning.
+  if (this->cfg_.max_efficient_power != 0.0f) return;
+  const float prev_reported = state.last_reported;
+  state.last_reported = actual;
+  if (!last_target.has_value()) {
+    state.clip_samples = 0;
+    return;
+  }
+  const float commanded = prev_reported + *last_target;
+  const bool is_clip = commanded > 0.0f && actual > 0.0f &&
+                       (commanded - actual) > CAP_SHORTFALL_MARGIN &&
+                       (actual - prev_reported) < CAP_FLAT_DELTA;
+  if (!is_clip) {
+    state.clip_samples = 0;
+    return;
+  }
+  state.clip_samples += 1;
+  if (state.clip_samples >= CAP_CONFIRM_SAMPLES) state.output_cap = actual;
+}
+
+float LoadBalancer::effective_output_cap_(const std::string &cid, const ReportMap &reports) {
+  (void) reports;
+  const auto &cfg = this->cfg_;
+  if (cfg.max_efficient_power > 0.0f) return cfg.max_efficient_power;
+  auto it = this->consumers_.find(cid);
+  if (it != this->consumers_.end() && it->second.output_cap > 0.0f)
+    return it->second.output_cap;
+  return static_cast<float>(DEFAULT_OUTPUT_CAP);
+}
+
+// -------------------------------------------------------------------------
 // Efficiency deprioritization
 // -------------------------------------------------------------------------
 
@@ -893,6 +931,25 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
         1, std::min<size_t>(n - 1, static_cast<size_t>(abs_target / cfg.min_efficient_power)));
   } else {
     slots = n;
+  }
+
+  // Capacity floor (issue #388): raise the active count so no single battery
+  // is asked to exceed its output cap. Eager add, lazy shed with the same
+  // hysteresis factor. Skipped when disabled (max_efficient_power < 0).
+  if (cfg.max_efficient_power >= 0.0f && !this->priority_.empty()) {
+    float cap = std::numeric_limits<float>::infinity();
+    for (const auto &cid : this->priority_)
+      cap = std::min(cap, this->effective_output_cap_(cid, reports));
+    if (cap > 0.0f) {
+      size_t need = static_cast<size_t>(std::ceil(abs_target / cap));
+      const size_t cur = prev_slots;
+      if (cur > need) {
+        const size_t relaxed =
+            static_cast<size_t>(std::ceil(abs_target * EFFICIENCY_HYSTERESIS_FACTOR / cap));
+        need = std::min(cur, std::max(need, relaxed));
+      }
+      slots = std::min(std::max(slots, need), n);
+    }
   }
 
   std::unordered_set<std::string> deprioritized;
