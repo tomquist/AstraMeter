@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import contextlib
 import socket
-import time
 
+import _ct002_e2e_backend as be
 import pytest
+from _ct002_e2e_backend import E2E_UDP_PORT, EsphomeSim, HarnessClock
 
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
@@ -28,15 +29,16 @@ from astrameter.simulator.load_model import LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
 
-class _FakeClock:
-    def __init__(self) -> None:
-        self._now = time.time()
-
-    def __call__(self) -> float:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += seconds
+# The probe-handoff convergence test runs on both emulator backends; the
+# stale-meter (``before_send``) and harness-lifecycle tests are Python-only
+# and skip on esphome (see the per-test guards).
+@pytest.fixture(params=["python", "esphome"], autouse=True)
+def _emulator_backend(request):
+    if request.param == "esphome" and not be.have_esphome():
+        pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
+    be.ACTIVE_BACKEND = request.param
+    yield
+    be.ACTIVE_BACKEND = "python"
 
 
 def _reserve_free_ports(n: int) -> list[tuple[int, socket.socket]]:
@@ -82,13 +84,35 @@ class _Harness:
         min_efficient_power: int = 50,
         efficiency_rotation_interval: int = 20,
     ) -> None:
-        port_reservations = _reserve_free_ports(2)
-        ct_port, self._ct_port_sock = port_reservations[0]
-        http_port, self._http_port_sock = port_reservations[1]
+        self.backend = be.ACTIVE_BACKEND
+        self._esphome = EsphomeSim() if self.backend == "esphome" else None
+        # The ESPHome binary binds its own fixed UDP port; only reserve the
+        # HTTP (powermeter) port for it. The Python backend reserves both.
+        self._ct_port_sock: socket.socket | None
+        if self.backend == "esphome":
+            # Reserve a TCP port for the HTTP powermeter; drop the unused UDP
+            # reservation (the binary binds the fixed CT002 UDP port itself).
+            reservations = _reserve_free_ports(2)
+            reservations[0][1].close()
+            http_port, self._http_port_sock = reservations[1]
+            ct_port = E2E_UDP_PORT
+            self._ct_port_sock = None
+        else:
+            port_reservations = _reserve_free_ports(2)
+            ct_port, self._ct_port_sock = port_reservations[0]
+            http_port, self._http_port_sock = port_reservations[1]
         # Lifecycle flags so ``stop()`` is safe to call before ``start()``.
         self._started_powermeter = False
         self._started_ct002 = False
-        self.clock = _FakeClock()
+        self.clock = HarnessClock(
+            on_change=(self._esphome.set_clock if self._esphome is not None else None)
+        )
+        self._scenario_cfg: dict[str, float] = {
+            "min_efficient_power": float(min_efficient_power),
+            "efficiency_rotation_interval": float(efficiency_rotation_interval),
+            "fair_distribution": 1.0,
+            "probe_min_power": 20.0,
+        }
         # When non-None, `before_send` returns this frozen snapshot
         # instead of the live grid reading.  Simulates a push-based
         # powermeter (HomeWizard / HA websocket) whose connection has
@@ -144,27 +168,31 @@ class _Harness:
             host="127.0.0.1",
             port=http_port,
         )
-        self.ct002 = CT002(
-            udp_port=ct_port,
-            ct_mac=ct_mac,
-            active_control=True,
-            fair_distribution=True,
-            min_efficient_power=min_efficient_power,
-            efficiency_rotation_interval=efficiency_rotation_interval,
-            probe_min_power=20,  # lower so the test's small loads can probe
-            clock=self.clock,
-            reset_fn=None,
-        )
+        if self.backend == "python":
+            self.ct002 = CT002(
+                udp_port=ct_port,
+                ct_mac=ct_mac,
+                active_control=True,
+                fair_distribution=True,
+                min_efficient_power=min_efficient_power,
+                efficiency_rotation_interval=efficiency_rotation_interval,
+                probe_min_power=20,  # lower so the test's small loads can probe
+                clock=self.clock,
+                reset_fn=None,
+                consumer_ttl=100000,  # avoid eviction during long mock-time sims
+            )
 
-        async def update_readings(_addr, _fields=None, _consumer_id=None):
-            if self.powermeter_raises_stale:
-                raise ValueError("HomeWizard measurement is stale (test)")
-            if self.frozen_grid is not None:
-                return list(self.frozen_grid)
-            grid = self.powermeter.compute_grid()
-            return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+            async def update_readings(_addr, _fields=None, _consumer_id=None):
+                if self.powermeter_raises_stale:
+                    raise ValueError("HomeWizard measurement is stale (test)")
+                if self.frozen_grid is not None:
+                    return list(self.frozen_grid)
+                grid = self.powermeter.compute_grid()
+                return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
 
-        self.ct002.before_send = update_readings
+            self.ct002.before_send = update_readings
+        else:
+            self.ct002 = None
 
     def freeze_meter_at_current_reading(self) -> None:
         """Simulate a push-based powermeter going stale.  From this
@@ -200,8 +228,15 @@ class _Harness:
             self._http_port_sock.close()
             await self.powermeter.start()
             self._started_powermeter = True
-            self._ct_port_sock.close()
-            await self.ct002.start()
+            if self.backend == "python":
+                self._ct_port_sock.close()
+                await self.ct002.start()
+            else:
+                self._esphome.spawn()
+                self._esphome.set_dedupe(0)
+                for key, val in self._scenario_cfg.items():
+                    self._esphome.set_cfg(key, val)
+                self._esphome.set_clock(self.clock())
             self._started_ct002 = True
         except BaseException:
             if self._started_powermeter and not self._started_ct002:
@@ -213,7 +248,10 @@ class _Harness:
     async def stop(self) -> None:
         if self._started_ct002:
             with contextlib.suppress(Exception):
-                await self.ct002.stop()
+                if self.backend == "python":
+                    await self.ct002.stop()
+                else:
+                    self._esphome.stop()
             self._started_ct002 = False
         if self._started_powermeter:
             with contextlib.suppress(Exception):
@@ -225,13 +263,32 @@ class _Harness:
         # ``contextlib.suppress(OSError)`` makes the double-close a
         # no-op.
         for sock in (self._ct_port_sock, self._http_port_sock):
-            with contextlib.suppress(OSError):
-                sock.close()
+            if sock is not None:
+                with contextlib.suppress(OSError):
+                    sock.close()
+
+    def force_efficiency_rotation(self) -> None:
+        if self.backend == "python":
+            self.ct002.force_efficiency_rotation()
+        else:
+            self._esphome.force_rotation()
+
+    async def _step_battery(self, b: BatterySimulator) -> None:
+        if self.backend == "python":
+            await b.step(b.poll_interval)
+            return
+        b._step_index += 1
+        b._drain_pending_power_targets()
+        b._update_power(b.poll_interval)
+        b._update_soc(b.poll_interval)
+        grid = self.powermeter.compute_grid()
+        self._esphome.set_grid(grid["phase_a"], grid["phase_b"], grid["phase_c"])
+        await b._send_request()
 
     async def step(self, n: int = 1) -> None:
         for _ in range(n):
             for b in self.batteries:
-                await b.step(b.poll_interval)
+                await self._step_battery(b)
             self.clock.advance(max(b.poll_interval for b in self.batteries))
 
     def battery_powers(self) -> list[float]:
@@ -281,7 +338,7 @@ class TestProbeLockup:
             # Force a rotation directly — this is the deterministic
             # way to exercise the probe handoff path regardless of the
             # rotation-interval clock arithmetic.
-            h.ct002.force_efficiency_rotation()
+            h.force_efficiency_rotation()
             # Step through the probe and handoff.  Allow enough steps
             # for the probe (~5s) + post-probe fade (~5s) + settling.
             for _ in range(150):
@@ -331,7 +388,14 @@ class TestProbeLockup:
         balancer ever gains the ability to recover *without* help
         from the powermeter layer, this assertion will start to fail
         and this test should be updated or deleted.
+
+        Python-only: the frozen-meter trigger is injected through the
+        in-process ``before_send`` hook, which has no ESPHome analog (the
+        binary reads grid power from injected sensor values, not a
+        callback).
         """
+        if be.ACTIVE_BACKEND != "python":
+            pytest.skip("before_send stale-meter path is Python-only")
         h = _Harness(
             load_a=94.0,
             min_efficient_power=50,
@@ -396,7 +460,12 @@ class TestProbeLockup:
         2. Not spam the log with one warning per battery poll.
         3. Hold its last known state (batteries stay put).
         4. Log a recovery message when the powermeter returns.
+
+        Python-only: exercises the ``before_send`` staleness-error path,
+        which has no ESPHome analog.
         """
+        if be.ACTIVE_BACKEND != "python":
+            pytest.skip("before_send stale-error path is Python-only")
         import logging
 
         h = _Harness(
@@ -473,7 +542,12 @@ class TestProbeLockup:
         (the powermeter) already came up, :meth:`_Harness.start` must
         tear the powermeter back down before re-raising so the test
         run doesn't leak a listening HTTP server.
+
+        Python-only: monkeypatches the in-process ``CT002.start`` to force
+        a partial-start failure; the ESPHome backend has no such object.
         """
+        if be.ACTIVE_BACKEND != "python":
+            pytest.skip("harness partial-start unwind is Python-only")
         h = _Harness(
             load_a=94.0,
             min_efficient_power=50,

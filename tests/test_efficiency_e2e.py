@@ -13,176 +13,25 @@ probe deadlines) is fully reproducible.
 
 from __future__ import annotations
 
-import os
-import shutil
-import signal
-import socket
-import subprocess
-import time
-from pathlib import Path
-
+import _ct002_e2e_backend as be
 import pytest
+from _ct002_e2e_backend import E2E_UDP_PORT, EsphomeSim, HarnessClock, find_free_ports
 
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import Load, LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
-# ── Cross-backend support ──────────────────────────────────────────────────
-# These suites run against two emulator backends: the in-process Python CT002
-# (default) and the compiled ESPHome host binary (test-hooks build), driven
-# over UDP with grid / clock / dedupe / balancer-config supplied through the
-# control channel. An autouse parametrized fixture flips _ACTIVE_BACKEND, so
-# every test in the file runs once per backend without touching the bodies.
 
-_E2E_DIR = Path(__file__).parent / "components" / "ct002"
-_E2E_YAML = _E2E_DIR / "test.e2e.host.yaml"
-_E2E_BINARY = (
-    _E2E_DIR
-    / ".esphome"
-    / "build"
-    / "ct002-e2e-test"
-    / ".pioenvs"
-    / "ct002-e2e-test"
-    / "program"
-)
-_E2E_UDP_PORT = 12345
-_E2E_CONTROL_PORT = 12346
-
-_ACTIVE_BACKEND = "python"
-
-
-def _have_esphome() -> bool:
-    return shutil.which("esphome") is not None
-
-
-def _port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        try:
-            s.bind(("127.0.0.1", port))
-        except OSError:
-            return True
-    return False
-
-
-def _ensure_e2e_binary() -> None:
-    if not _E2E_BINARY.exists():
-        subprocess.run(
-            ["esphome", "compile", str(_E2E_YAML)],
-            check=True,
-            cwd=_E2E_DIR.parent.parent,
-        )
-
-
+# Every test runs once per emulator backend. The python backend always runs;
+# esphome skips without the CLI. See tests/_ct002_e2e_backend.py.
 @pytest.fixture(params=["python", "esphome"], autouse=True)
 def _emulator_backend(request):
-    global _ACTIVE_BACKEND
-    if request.param == "esphome" and not _have_esphome():
+    if request.param == "esphome" and not be.have_esphome():
         pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
-    _ACTIVE_BACKEND = request.param
+    be.ACTIVE_BACKEND = request.param
     yield
-    _ACTIVE_BACKEND = "python"
-
-
-class _HarnessClock:
-    """Controllable clock. For the ESPHome backend an ``on_change`` callback
-    pushes each new value to the binary's mock clock so the two stay in step."""
-
-    def __init__(self, on_change=None) -> None:
-        self._now = time.time()
-        self._on_change = on_change
-
-    def __call__(self) -> float:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += seconds
-        if self._on_change is not None:
-            self._on_change(self._now)
-
-
-class _EsphomeSim:
-    """Spawns the test-hooks host binary and drives it via the control channel."""
-
-    def __init__(self) -> None:
-        self._ctrl = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._ctrl.settimeout(2.0)
-        self._proc: subprocess.Popen | None = None
-
-    def _cmd(self, cmd: str) -> str:
-        self._ctrl.sendto(cmd.encode(), ("127.0.0.1", _E2E_CONTROL_PORT))
-        reply = self._ctrl.recvfrom(256)[0].decode()
-        assert reply.startswith("ok"), f"control command {cmd!r} failed: {reply!r}"
-        return reply
-
-    def spawn(self) -> None:
-        _ensure_e2e_binary()
-        deadline = time.monotonic() + 5.0
-        while _port_in_use(_E2E_UDP_PORT) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if _port_in_use(_E2E_UDP_PORT):
-            raise RuntimeError(f"UDP port {_E2E_UDP_PORT} still in use")
-        self._proc = subprocess.Popen(
-            [str(_E2E_BINARY)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            preexec_fn=os.setsid,
-        )
-        deadline = time.monotonic() + 5.0
-        while not _port_in_use(_E2E_UDP_PORT) and time.monotonic() < deadline:
-            if self._proc.poll() is not None:
-                raise RuntimeError(
-                    f"e2e binary exited with code {self._proc.returncode}"
-                )
-            time.sleep(0.1)
-        if not _port_in_use(_E2E_UDP_PORT):
-            raise RuntimeError("e2e binary did not bind its UDP port")
-        time.sleep(0.3)  # let the control socket finish binding
-
-    def set_grid(self, l1: float, l2: float, l3: float) -> None:
-        self._cmd(f"grid {l1} {l2} {l3}")
-
-    def set_clock(self, seconds: float) -> None:
-        self._cmd(f"clock_set {seconds}")
-
-    def set_dedupe(self, ms: int) -> None:
-        self._cmd(f"dedupe {ms}")
-
-    def set_cfg(self, key: str, value: float) -> None:
-        self._cmd(f"cfg {key} {value}")
-
-    def force_rotation(self) -> None:
-        self._cmd("force_rotation")
-
-    def stop(self) -> None:
-        self._ctrl.close()
-        if self._proc is not None:
-            os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-            try:
-                self._proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-                self._proc.wait()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _find_free_ports(n: int = 2) -> list[int]:
-    """Return *n* free port numbers (first UDP, rest TCP)."""
-    types = [socket.SOCK_DGRAM] + [socket.SOCK_STREAM] * (n - 1)
-    ports: list[int] = []
-    socks: list[socket.socket] = []
-    for i in range(n):
-        s = socket.socket(socket.AF_INET, types[i])
-        s.bind(("127.0.0.1", 0))
-        ports.append(s.getsockname()[1])
-        socks.append(s)
-    for s in socks:
-        s.close()
-    return ports
+    be.ACTIVE_BACKEND = "python"
 
 
 # ---------------------------------------------------------------------------
@@ -214,15 +63,15 @@ class _SimHarness:
         min_power_thresholds: list[float] | None = None,
         **ct_kwargs,
     ):
-        self.backend = _ACTIVE_BACKEND
-        self._esphome = _EsphomeSim() if self.backend == "esphome" else None
-        free_udp, http_port = _find_free_ports(2)
+        self.backend = be.ACTIVE_BACKEND
+        self._esphome = EsphomeSim() if self.backend == "esphome" else None
+        free_udp, http_port = find_free_ports(2)
         # ESPHome binary listens on a fixed port (its YAML); the in-process
         # Python CT002 can take an ephemeral one.
-        ct_port = _E2E_UDP_PORT if self.backend == "esphome" else free_udp
+        ct_port = E2E_UDP_PORT if self.backend == "esphome" else free_udp
         self.ct_port = ct_port
         self.http_port = http_port
-        self.clock = _HarnessClock(
+        self.clock = HarnessClock(
             on_change=(self._esphome.set_clock if self._esphome is not None else None)
         )
 
