@@ -114,6 +114,45 @@ void CT002Component::handle_control_command_(const std::string &cmd,
   } else if (matched >= 1 && std::strcmp(verb, "clock_real") == 0) {
     this->mock_clock_enabled_ = false;
     reply = "ok clock_real";
+  } else if (matched >= 2 && std::strcmp(verb, "dedupe") == 0) {
+    // Set the dedup window (ms) at runtime — sims run with 0 (off), the
+    // dedup scenario sets it to its window. Mirrors the Python harness
+    // setting ct002._dedup._window.
+    this->dedupe_window_ms_ = static_cast<uint32_t>(a);
+    char tmp[48];
+    std::snprintf(tmp, sizeof(tmp), "ok dedupe %u", this->dedupe_window_ms_);
+    reply = tmp;
+  } else if (matched >= 1 && std::strcmp(verb, "force_rotation") == 0) {
+    // Mirror ct002.force_efficiency_rotation() for the rotation tests.
+    this->force_balancer_rotation();
+    reply = "ok force_rotation";
+  } else if (matched >= 1 && std::strcmp(verb, "dump") == 0) {
+    // Serialize the internal state the Python e2e suites read directly, so
+    // the black-box binary can be asserted on the same way. Pipe-delimited:
+    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>|...
+    std::string s = "ok|smooth_target=";
+    char num[48];
+    std::snprintf(num, sizeof(num), "%.3f",
+                  static_cast<double>(this->last_smooth_target_.value_or(0.0f)));
+    s += num;
+    for (const auto &kv : this->consumers_) {
+      const auto &consumer = kv.second;
+      if (consumer.timestamp <= 0.0) continue;
+      const double sat = this->balancer_ ? this->balancer_->get_saturation(kv.first) : 0.0;
+      double last_target = 0.0;
+      if (this->balancer_) {
+        auto lt = this->balancer_->get_last_target(kv.first);
+        if (lt.has_value()) last_target = *lt;
+      }
+      s += "|";
+      s += kv.first;
+      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f", consumer.phase.c_str(),
+                    static_cast<double>(consumer.last_instructed_power), last_target, sat,
+                    consumer.active ? 1 : 0, consumer.manual_enabled ? 1 : 0,
+                    static_cast<double>(consumer.power));
+      s += num;
+    }
+    reply = s;
   } else {
     reply = "err unknown command";
   }

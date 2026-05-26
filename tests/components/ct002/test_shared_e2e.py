@@ -101,7 +101,7 @@ class PythonBackend:
             fair_distribution=True,
             clock=self._clock,
             reset_fn=None,
-            dedupe_time_window=float(DEDUPE_WINDOW_S),
+            dedupe_time_window=0.0,  # off by default; set_dedupe() toggles it
         )
 
         async def _before_send(_addr, _fields=None, _consumer_id=None):
@@ -117,6 +117,10 @@ class PythonBackend:
 
     def advance_clock(self, seconds: float) -> None:
         self._clock.advance(float(seconds))
+
+    def set_dedupe(self, window_s: float) -> None:
+        # Mirrors the binary's runtime `dedupe <ms>` control.
+        self.ct002._dedup._window = float(window_s)
 
     def poll(self, mac: str, phase: str, power: int):
         transport = _FakeTransport()
@@ -157,6 +161,9 @@ class EsphomeBackend:
 
     def advance_clock(self, seconds: float) -> None:
         self._cmd(f"clock_advance {seconds}")
+
+    def set_dedupe(self, window_s: float) -> None:
+        self._cmd(f"dedupe {int(window_s * 1000)}")
 
     def poll(self, mac: str, phase: str, power: int, timeout: float = 1.5):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -291,6 +298,7 @@ def test_clock_gated_dedup(backend) -> None:
     poll inside the window is dropped; advancing the clock past it un-gates
     the poll."""
     backend.set_clock(5000)
+    backend.set_dedupe(DEDUPE_WINDOW_S)  # dedup is off by default; enable it here
     backend.set_grid(100)
     r1 = backend.poll("CCDDEEFF0011", "A", 0)
     assert r1 is not None, f"[{backend.name}] first poll should be answered"

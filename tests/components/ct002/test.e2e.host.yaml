@@ -34,9 +34,10 @@ ct002:
   ct_type: HME-4
   udp_port: 12345
   active_control: true
-  # Drop duplicate polls from the same battery within 10 s — exercised by
-  # the clock-control e2e test (advance the mock clock past the window to
-  # un-gate a repeat poll).
-  dedupe_window: 10s
-  # Enables the test-only UDP control channel (grid injection + mock clock).
+  # Dedup off by default — the closed-loop sims poll many times per second
+  # of mock time and must not be deduplicated. The dedup scenario turns it
+  # on at runtime via the `dedupe <ms>` control command.
+  dedupe_window: 0s
+  # Enables the test-only UDP control channel (grid injection, mock clock,
+  # force_rotation, runtime dedupe, state dump).
   test_control_port: 12346
