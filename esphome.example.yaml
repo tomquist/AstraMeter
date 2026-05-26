@@ -1,13 +1,16 @@
 # AstraMeter CT002 emulator running directly on an ESP32 via ESPHome.
 #
 # Drop this file into an esphome/ directory, edit the wifi/api/board sections
-# to match your hardware, point `power_sensor_l1` (and l2/l3 for three-phase
-# setups) at whatever grid-power sensor your inverter/meter exposes, then
+# to match your hardware, point the grid-power sensor at your meter, then
 # `esphome run esphome.example.yaml`.
 #
 # The component answers Marstek CT002 UDP polls on port 12345, runs the same
 # cross-phase filter pipeline + load balancer as the Python AstraMeter add-on,
 # and reports per-phase charge/discharge cross-talk for multi-battery setups.
+#
+# Optional features are commented out below with notes on when to enable them.
+# Uncomment the relevant blocks (and the top-level component they require)
+# together.
 
 esphome:
   name: astrameter-ct002
@@ -18,6 +21,9 @@ esp32:
   framework:
     type: esp-idf
 
+# The native API connection to Home Assistant. Required for the
+# `homeassistant` grid-power sensor below (the ESP subscribes to a HA entity
+# over this link).
 api:
 logger:
 ota:
@@ -31,58 +37,68 @@ external_components:
   - source: github://tomquist/astrameter@main
     components: [ct002]
 
-# Replace these template sensors with whatever exposes your grid-power
-# measurement. Per-phase offset / multiply / throttle go HERE, on the
-# upstream sensor — not inside `ct002:`. This matches the order Python uses
-# (Transform/Throttle upstream of Hampel).
+# Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
+# Discovery + Marstek-app MQTT responder). The sub-block talks to whatever
+# broker this block connects to — it brings no credentials of its own.
+# mqtt:
+#   broker: 192.168.1.10
+#   port: 1883
+
+# Uncomment to enable the `marstek_registration:` sub-block (Marstek cloud
+# device registration). It performs HTTPS calls to the Marstek API.
+# http_request:
+#   timeout: 20s
+
+# Grid-power source. This example pulls the reading from an existing Home
+# Assistant power sensor over the native API. Replace `entity_id` with your
+# own (any sensor that reports grid import/export in watts works), or swap
+# `platform: homeassistant` for modbus_controller / mqtt / template / etc.
+#
+# Per-phase offset / multiply / throttle go HERE, on the upstream sensor —
+# not inside `ct002:`. This matches the order Python uses (Transform/Throttle
+# upstream of the cross-phase Hampel filter).
 sensor:
-  - platform: template
+  - platform: homeassistant
     id: grid_l1
     name: Grid L1 Power
-    unit_of_measurement: W
-    device_class: power
-    state_class: measurement
-    lambda: |-
-      // Wire up to your inverter/Modbus/MQTT sensor here.
-      return 0.0f;
-    update_interval: 1s
+    entity_id: sensor.grid_power_l1
     filters:
       # - offset: -20      # small negative offset → import safety buffer
       # - multiply: 1.0
       # - throttle: 1s
 
-  # Uncomment l2/l3 for three-phase setups (both required together).
-  # - platform: template
+  # Uncomment l2/l3 for three-phase setups (both required together, and set
+  # power_sensor_l2/l3 under ct002: below).
+  # - platform: homeassistant
   #   id: grid_l2
   #   name: Grid L2 Power
-  #   lambda: 'return 0.0f;'
-  #   update_interval: 1s
-  # - platform: template
+  #   entity_id: sensor.grid_power_l2
+  # - platform: homeassistant
   #   id: grid_l3
   #   name: Grid L3 Power
-  #   lambda: 'return 0.0f;'
-  #   update_interval: 1s
+  #   entity_id: sensor.grid_power_l3
 
 ct002:
   id: ct002_main
   power_sensor_l1: grid_l1
-  # power_sensor_l2: grid_l2     # 3-phase: required together with l3
+  # power_sensor_l2: grid_l2       # 3-phase: required together with l3
   # power_sensor_l3: grid_l3
-  ct_type: HME-4                  # HME-4 = CT002 wire type; HME-3 = CT003
+  ct_type: HME-4                   # HME-4 = CT002 wire type; HME-3 = CT003
   ct_mac: ""                       # blank → mirror requested MAC; set to a
                                    # 12-hex-char MAC to filter inbound polls
   udp_port: 12345
-  wifi_rssi: -50
   active_control: true             # true → balancer steers batteries to zero
                                    # false → emulator forwards raw readings
-  max_sensor_age: 30s              # publish unavailable if no update within
 
-  filters:                         # cross-phase only; all sub-blocks optional
-    hampel:
+  # Cross-phase filter pipeline. All sub-blocks optional; sensible defaults
+  # apply when omitted. These run on the combined L1/L2/L3 vector, after the
+  # per-sensor filters above.
+  filters:
+    hampel:                        # outlier rejection
       window: 7
       n_sigma: 3.0
       min_threshold: 50
-    smoothing:
+    smoothing:                     # EMA + max step
       alpha: 0.3
       max_step: 200
     deadband:
@@ -94,6 +110,7 @@ ct002:
       output_max: 800
       mode: bias                   # bias or replace
 
+  # Multi-battery load balancer. Optional; omit for a single battery.
   balancer:
     fair_distribution: true
     balance_gain: 0.2
@@ -106,54 +123,29 @@ ct002:
     alpha: 0.15
     min_target: 20
 
-# ─────────────────────────────────────────────────────────────────────────
-# Optional: mqtt_insights sub-block under the ct002: key. Publishes
-# per-consumer state to MQTT with full Home Assistant Device Discovery,
-# and answers Marstek-app polls on the same broker so the emulator
-# shows up in the app without round-tripping through hame-relay.
-#
-# Requires an `mqtt:` block elsewhere in the YAML — the sub-block uses
-# whatever broker mqtt: connects to. Mirrors [MQTT_INSIGHTS] in config.ini.example.
-# ─────────────────────────────────────────────────────────────────────────
-#
-# mqtt:
-#   broker: 192.168.1.10
-#   port: 1883
-#
-# ct002:
-#   id: ct002_main
-#   power_sensor_l1: grid_l1
-#   ct_type: HME-4
-#   ct_mac: "aabbccddeeff"
-#   mqtt_insights:
-#     base_topic: astrameter          # per-installation namespace
-#     ha_discovery: true              # publish HA Device Discovery
-#     ha_discovery_prefix: homeassistant
-#     marstek_mqtt_enabled: true      # answer Marstek-app polls on the broker
-#     marstek_mqtt_interval: 300s     # periodic broadcast cadence (0 = poll-only)
+  # ── Optional sub-block: mqtt_insights ────────────────────────────────
+  # Publishes per-consumer + device-level state to MQTT with full Home
+  # Assistant Device Discovery, and answers Marstek-app polls on the same
+  # broker so the emulator shows up in the app without hame-relay.
+  # Uncomment together with the top-level `mqtt:` block above.
+  # mqtt_insights:
+  #   base_topic: astrameter         # per-installation namespace
+  #   ha_discovery: true             # publish HA Device Discovery
+  #   ha_discovery_prefix: homeassistant
+  #   marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
+  #   marstek_mqtt_interval: 300s    # periodic broadcast cadence (0 = poll-only)
 
-# ─────────────────────────────────────────────────────────────────────────
-# Optional: marstek_registration sub-block under the ct002: key. Registers
-# a "managed" CT002/CT003 with your Marstek cloud account on first boot;
-# the resulting MAC is assigned to ct002.ct_mac so the UDP + MQTT topics
-# line up with the cloud-side record. Persisted via ESPPreferences so the
-# second boot skips the cloud flow entirely.
-#
-# Requires an `http_request:` block elsewhere in the YAML.
-# Mirrors [MARSTEK] in config.ini.example.
-# ─────────────────────────────────────────────────────────────────────────
-#
-# http_request:
-#   timeout: 20s
-#
-# ct002:
-#   id: ct002_main
-#   power_sensor_l1: grid_l1
-#   marstek_registration:
-#     base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
-#     mailbox: you@example.com
-#     password: !secret marstek_password
-#     device_type: ct002                   # or ct003
-#     timezone: Europe/Berlin
-#     retry_interval: 60s
-#     force_reregister: false              # set true to redo the cloud flow
+  # ── Optional sub-block: marstek_registration ─────────────────────────
+  # Registers a "managed" CT002/CT003 with your Marstek cloud account on
+  # first boot; the resulting MAC is assigned to ct_mac (above) so the UDP
+  # and MQTT topics line up with the cloud-side record, and is persisted so
+  # later boots skip the cloud flow. Uncomment together with the top-level
+  # `http_request:` block above. Leave ct_mac blank when using this.
+  # marstek_registration:
+  #   base_url: https://eu.hamedata.com   # https://us.hamedata.com for US
+  #   mailbox: you@example.com
+  #   password: !secret marstek_password
+  #   device_type: ct002                  # or ct003
+  #   timezone: Europe/Berlin
+  #   retry_interval: 60s
+  #   force_reregister: false             # set true to redo the cloud flow
