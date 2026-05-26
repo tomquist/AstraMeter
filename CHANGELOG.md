@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** experimental ESPHome external component `ct002`: runs the CT002/CT003 UDP emulator, balancer, and cross-phase filter pipeline (Hampel / smoothing / deadband / PID) directly on an ESP32, reading grid power from any ESPHome sensor. Optional `mqtt_insights:` (Home Assistant discovery + Marstek-app responder) and `marstek_registration:` (cloud device registration) sub-blocks. See `esphome.example.yaml`. Also **fixed** 1-phase active balancing in the Python emulator, which previously forwarded the raw grid reading instead of computing a balanced target.
+- **Added** experimental ESPHome external component `ct002` to run the CT002/CT003 emulator directly on an ESP32. See `esphome.example.yaml`.
 - **Added** Modbus UDP support via a `TRANSPORT = TCP|UDP` option in the `[MODBUS]` section (defaults to `TCP`).
 - **Fixed** Home Assistant powermeter timing out on startup with "Timeout waiting for Home Assistant state" when the `subscribe_entities` initial snapshot never arrives (e.g. entity not yet loaded when AstraMeter starts). The Home Assistant powermeter now also issues an explicit `get_states` fetch right after subscribing to seed the cache.
 - **Fixed** multi-Venus setups where a battery passing PV through to the grid (full SoC with "feed excess to grid" enabled) caused other batteries on different phases to stop charging. AstraMeter now populates the CT002 cross-talk `*_chrg_power` / `*_dchrg_power` fields from the per-battery instruction it sent rather than from the battery's reported AC output, so involuntary PV-passthrough no longer looks like a battery discharge to the rest of the fleet ([#376](https://github.com/tomquist/astrameter/issues/376)).
