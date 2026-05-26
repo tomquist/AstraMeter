@@ -79,16 +79,29 @@ sensor:
   #   entity_id: sensor.grid_power_l3
 
 ct002:
-  id: ct002_main
-  power_sensor_l1: grid_l1
-  # power_sensor_l2: grid_l2       # 3-phase: required together with l3
+  id: ct002_main                   # required (so you can reference it)
+  power_sensor_l1: grid_l1         # required: the grid-power source
+
+  # All keys below are optional; shown at their defaults.
+  # power_sensor_l2: grid_l2       # three-phase only (set together with l3)
   # power_sensor_l3: grid_l3
-  ct_type: HME-4                   # HME-4 = CT002 wire type; HME-3 = CT003
-  ct_mac: ""                       # blank → mirror requested MAC; set to a
-                                   # 12-hex-char MAC to filter inbound polls
-  udp_port: 12345
-  active_control: true             # true → balancer steers batteries to zero
-                                   # false → emulator forwards raw readings
+  # ct_type: HME-4                 # HME-4 emulates a CT002, HME-3 a CT003.
+  #                                # (The Python add-on has no ct_type option —
+  #                                #  it derives this from DEVICE_TYPE=ct002/
+  #                                #  ct003. Here it's the explicit selector.)
+  # ct_mac: ""                     # blank → mirror the MAC each battery polls
+  #                                # with. Set a 12-hex MAC to only answer one
+  #                                # battery, or leave blank and let
+  #                                # marstek_registration assign one.
+  # udp_port: 12345                # standard Marstek CT002 port
+  # wifi_rssi: -50                 # RSSI value reported back in CT002 replies
+  # active_control: true           # true → balancer steers batteries to zero;
+  #                                # false → forward raw grid readings as-is
+  # max_sensor_age: 30s            # treat the input as 0 if no sensor update
+  #                                # arrives within this window
+  # consumer_ttl: 120s             # evict a battery this long after it goes silent
+  # dedupe_window: 0s              # 0 = off; >0 drops duplicate polls from the
+  #                                # same battery within the window
 
   # ── Optional tuning blocks ──────────────────────────────────────────
   # Everything below is optional and shown prepopulated with values that
