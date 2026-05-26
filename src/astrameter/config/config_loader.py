@@ -530,6 +530,7 @@ def create_modbus_powermeter(
         config.get(section, "BYTE_ORDER", fallback="BIG"),
         config.get(section, "WORD_ORDER", fallback="BIG"),
         config.get(section, "REGISTER_TYPE", fallback="HOLDING"),
+        config.get(section, "TRANSPORT", fallback="TCP"),
     )
 
 
