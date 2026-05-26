@@ -139,18 +139,13 @@ jobs:
       - name: Build ct002 test-hooks (e2e control) binary
         run: esphome compile tests/components/ct002/test.e2e.host.yaml
 
-      # The cross-backend suites below run their `python` params everywhere
-      # (the `validate` job), but their `esphome` params only run where the
-      # esphome CLI + test-hooks binary exist — i.e. here.
-      - name: Run host-platform E2E (round-trip + shared + cross-backend scenarios)
-        run: >
-          uv run pytest
-          tests/components/ct002/test_host_e2e.py
-          tests/components/ct002/test_shared_e2e.py
-          tests/test_efficiency_e2e.py
-          tests/test_issue376_pv_passthrough.py
-          tests/test_e2e_probe_lockup.py
-          -v
+      # All cross-backend suites are tagged `@pytest.mark.esphome_e2e`
+      # (see pyproject.toml). Selecting by marker means new suites are
+      # picked up automatically without editing this workflow. Their
+      # `python` params also run in the `validate` job; the `esphome`
+      # params only run where the esphome CLI + test-hooks binary exist.
+      - name: Run host-platform E2E (cross-backend esphome suites)
+        run: uv run pytest -m esphome_e2e -v
 
   validate:
     needs: [ lint ]

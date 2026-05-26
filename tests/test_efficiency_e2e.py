@@ -22,6 +22,8 @@ from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import Load, LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
+pytestmark = pytest.mark.esphome_e2e
+
 
 # Every test runs once per emulator backend. The python backend always runs;
 # esphome skips without the CLI. See tests/_ct002_e2e_backend.py.

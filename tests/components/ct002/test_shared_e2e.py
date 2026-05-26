@@ -34,6 +34,8 @@ import pytest
 from astrameter.ct002.ct002 import CT002
 from astrameter.ct002.protocol import build_payload, parse_request
 
+pytestmark = pytest.mark.esphome_e2e
+
 HERE = Path(__file__).parent
 REPO_ROOT = HERE.parent.parent.parent
 E2E_YAML = HERE / "test.e2e.host.yaml"

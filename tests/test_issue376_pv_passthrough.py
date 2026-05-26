@@ -26,6 +26,8 @@ from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
+pytestmark = pytest.mark.esphome_e2e
+
 
 @pytest.fixture(params=["python", "esphome"], autouse=True)
 def _emulator_backend(request):

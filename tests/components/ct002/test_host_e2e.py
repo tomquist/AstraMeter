@@ -51,10 +51,13 @@ def _have_esphome() -> bool:
     return shutil.which("esphome") is not None
 
 
-pytestmark = pytest.mark.skipif(
-    not _have_esphome(),
-    reason="esphome CLI not on PATH; install with `uv tool install esphome` to run E2E tests",
-)
+pytestmark = [
+    pytest.mark.esphome_e2e,
+    pytest.mark.skipif(
+        not _have_esphome(),
+        reason="esphome CLI not on PATH; install with `uv tool install esphome` to run E2E tests",
+    ),
+]
 
 
 def _port_in_use(port: int) -> bool:

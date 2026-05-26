@@ -28,6 +28,8 @@ from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
+pytestmark = pytest.mark.esphome_e2e
+
 
 # The probe-handoff convergence test runs on both emulator backends; the
 # stale-meter (``before_send``) and harness-lifecycle tests are Python-only
