@@ -178,11 +178,14 @@ ct002:
   ct_type: HME-4                  # HME-4 = CT002 wire type; HME-3 = CT003
   udp_port: 12345
   active_control: true
-  filters:                        # cross-phase, all optional
+  filters:                        # cross-phase signal conditioning, all optional
     hampel:    { window: 7, n_sigma: 3.0, min_threshold: 50 }
     smoothing: { alpha: 0.3, max_step: 200 }
     deadband:  { deadband: 10 }
-    pid:       { kp: 0.5, ki: 0.1, kd: 0.0, output_max: 800, mode: bias }
+    # NOTE: do not add a `pid:` filter together with active_control — the
+    # PID is an alternative controller (for active_control: false setups).
+    # Running both makes the PID's integral wind up and, in bias mode,
+    # invert the sign sent to the battery. See "PID vs active_control" below.
 ```
 
 See `esphome.example.yaml` at the repo root for an annotated template covering every knob.

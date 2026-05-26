@@ -90,9 +90,9 @@ ct002:
   active_control: true             # true → balancer steers batteries to zero
                                    # false → emulator forwards raw readings
 
-  # Cross-phase filter pipeline. All sub-blocks optional; sensible defaults
-  # apply when omitted. These run on the combined L1/L2/L3 vector, after the
-  # per-sensor filters above.
+  # Cross-phase signal conditioning. All sub-blocks optional; sensible
+  # defaults apply when omitted. These run on the combined L1/L2/L3 vector,
+  # after the per-sensor filters above.
   filters:
     hampel:                        # outlier rejection
       window: 7
@@ -103,12 +103,21 @@ ct002:
       max_step: 200
     deadband:
       deadband: 10
-    pid:
-      kp: 0.5
-      ki: 0.1
-      kd: 0.0
-      output_max: 800
-      mode: bias                   # bias or replace
+    # PID is an ALTERNATIVE control strategy — do NOT enable it together
+    # with active_control/balancer. The PID steers grid power to zero on
+    # its own (working with the battery's internal loop), so it's for
+    # passive setups with active_control: false. Running it alongside the
+    # balancer means two controllers fight: the PID's integral winds up
+    # against a sustained reading and, in bias mode, its clamped output
+    # (±output_max) added to the grid value can exceed and INVERT the
+    # sign — the battery then charges when it should discharge. Enable
+    # this block only if you set active_control: false above.
+    # pid:
+    #   kp: 0.5
+    #   ki: 0.1
+    #   kd: 0.0
+    #   output_max: 800
+    #   mode: bias                 # bias or replace
 
   # Multi-battery load balancer. Optional; omit for a single battery.
   balancer:
