@@ -90,47 +90,67 @@ ct002:
   active_control: true             # true → balancer steers batteries to zero
                                    # false → emulator forwards raw readings
 
-  # Cross-phase signal conditioning. All sub-blocks optional; sensible
-  # defaults apply when omitted. These run on the combined L1/L2/L3 vector,
-  # after the per-sensor filters above.
-  filters:
-    hampel:                        # outlier rejection
-      window: 7
-      n_sigma: 3.0
-      min_threshold: 50
-    smoothing:                     # EMA + max step
-      alpha: 0.3
-      max_step: 200
-    deadband:
-      deadband: 10
-    # PID is an ALTERNATIVE control strategy — do NOT enable it together
-    # with active_control/balancer. The PID steers grid power to zero on
-    # its own (working with the battery's internal loop), so it's for
-    # passive setups with active_control: false. Running it alongside the
-    # balancer means two controllers fight: the PID's integral winds up
-    # against a sustained reading and, in bias mode, its clamped output
-    # (±output_max) added to the grid value can exceed and INVERT the
-    # sign — the battery then charges when it should discharge. Enable
-    # this block only if you set active_control: false above.
-    # pid:
-    #   kp: 0.5
-    #   ki: 0.1
-    #   kd: 0.0
-    #   output_max: 800
-    #   mode: bias                 # bias or replace
+  # ── Optional tuning blocks ──────────────────────────────────────────
+  # Everything below is optional and shown prepopulated with values that
+  # reproduce the DEFAULT behaviour, so you can uncomment any block as-is
+  # without changing how the emulator behaves, then tweak from there.
+  # (The balancer + saturation tracker run with these same defaults even
+  # while the blocks are commented out — uncommenting them is a no-op
+  # until you change a value.)
 
-  # Multi-battery load balancer. Optional; omit for a single battery.
-  balancer:
-    fair_distribution: true
-    balance_gain: 0.2
-    balance_deadband: 15
-    min_efficient_power: 0         # >0 enables efficiency rotation
-    probe_min_power: 80
+  # Cross-phase signal conditioning, applied to the combined L1/L2/L3
+  # vector after the per-sensor filters above. Each sub-block is off when
+  # absent; the values shown make each one a pass-through when present.
+  # filters:
+  #   hampel:                      # outlier rejection — only replaces
+  #     window: 7                  # samples deviating > max(min_threshold,
+  #     n_sigma: 3.0               # n_sigma·MAD), so a clean signal passes
+  #     min_threshold: 50          # through untouched
+  #   smoothing:
+  #     alpha: 1.0                 # 1.0 = no smoothing (pass-through);
+  #                                # lower toward ~0.3 to smooth
+  #     max_step: 0                # 0 = no per-step clamp; e.g. 200 to cap
+  #   deadband:
+  #     deadband: 0                # 0 = off; e.g. 10 zeros out |sum| < 10 W
+  #   # PID is an ALTERNATIVE controller — do NOT combine it with
+  #   # active_control/balancer (two controllers fight; the PID integral
+  #   # winds up and, in bias mode, can invert the sign sent to the
+  #   # battery). Use it only with active_control: false. Disabled here
+  #   # (kp/ki/kd = 0 → zero output → pass-through in bias mode).
+  #   pid:
+  #     kp: 0.0                    # >0 enables; 0.5 is a sane start
+  #     ki: 0.0
+  #     kd: 0.0
+  #     output_max: 800
+  #     mode: bias                 # bias or replace
 
-  saturation:
-    enabled: true
-    alpha: 0.15
-    min_target: 20
+  # Multi-battery load balancer tuning. Runs by default with these values
+  # whenever active_control is true; omit/leave commented for a single
+  # battery. Shown at defaults — uncommenting changes nothing.
+  # balancer:
+  #   fair_distribution: true
+  #   balance_gain: 0.2
+  #   balance_deadband: 15
+  #   error_boost_threshold: 150
+  #   error_boost_max: 0.5
+  #   error_reduce_threshold: 20
+  #   max_correction_per_step: 80
+  #   max_target_step: 0           # 0 = no per-step target clamp
+  #   min_efficient_power: 0       # >0 enables efficiency rotation
+  #   probe_min_power: 80
+  #   efficiency_rotation_interval: 15min
+  #   efficiency_fade_alpha: 0.15
+  #   efficiency_saturation_threshold: 0.4
+
+  # Saturation tracker (detects a battery that can't follow its target and
+  # backs off). Runs by default with these values; shown at defaults.
+  # saturation:
+  #   enabled: true
+  #   alpha: 0.15
+  #   min_target: 20
+  #   decay_factor: 0.995
+  #   grace_seconds: 90s
+  #   stall_timeout_seconds: 60s
 
   # ── Optional sub-block: mqtt_insights ────────────────────────────────
   # Publishes per-consumer + device-level state to MQTT with full Home
