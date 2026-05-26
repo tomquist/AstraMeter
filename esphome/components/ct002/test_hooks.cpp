@@ -77,10 +77,58 @@ void CT002Component::pump_control_() {
   }
 }
 
+bool CT002Component::apply_cfg_(const std::string &key, double v) {
+  const auto f = static_cast<float>(v);
+  // Balancer config fields.
+  if (key == "fair_distribution") this->balancer_cfg_.fair_distribution = (v != 0.0);
+  else if (key == "balance_gain") this->balancer_cfg_.balance_gain = f;
+  else if (key == "balance_deadband") this->balancer_cfg_.balance_deadband = f;
+  else if (key == "error_boost_threshold") this->balancer_cfg_.error_boost_threshold = f;
+  else if (key == "error_boost_max") this->balancer_cfg_.error_boost_max = f;
+  else if (key == "error_reduce_threshold") this->balancer_cfg_.error_reduce_threshold = f;
+  else if (key == "max_correction_per_step") this->balancer_cfg_.max_correction_per_step = f;
+  else if (key == "max_target_step") this->balancer_cfg_.max_target_step = f;
+  else if (key == "min_efficient_power") this->balancer_cfg_.min_efficient_power = f;
+  else if (key == "probe_min_power") this->balancer_cfg_.probe_min_power = f;
+  else if (key == "efficiency_rotation_interval") this->balancer_cfg_.efficiency_rotation_interval = f;
+  else if (key == "efficiency_fade_alpha") this->balancer_cfg_.efficiency_fade_alpha = f;
+  else if (key == "efficiency_saturation_threshold")
+    this->balancer_cfg_.efficiency_saturation_threshold = f;
+  // Saturation tracker fields.
+  else if (key == "saturation_enabled") this->saturation_enabled_ = (v != 0.0);
+  else if (key == "saturation_alpha") this->saturation_alpha_ = f;
+  else if (key == "saturation_min_target") this->saturation_min_target_ = f;
+  else if (key == "saturation_decay_factor") this->saturation_decay_factor_ = f;
+  else if (key == "saturation_grace_seconds") this->saturation_grace_seconds_ = f;
+  else if (key == "saturation_stall_timeout_seconds") this->saturation_stall_timeout_seconds_ = f;
+  else return false;
+  // Rebuild so the change takes effect (resets balancer state — fine before
+  // a scenario begins).
+  this->build_balancer_();
+  return true;
+}
+
 void CT002Component::handle_control_command_(const std::string &cmd,
                                              const struct sockaddr_storage &from,
                                              socklen_t from_len) {
   std::string reply;
+
+  // `cfg <key> <value>` carries a string key, so parse it separately from
+  // the numeric commands below.
+  if (cmd.rfind("cfg ", 0) == 0) {
+    char key[48] = {0};
+    double value = 0.0;
+    if (std::sscanf(cmd.c_str() + 4, "%47s %lf", key, &value) == 2 &&
+        this->apply_cfg_(std::string(key), value)) {
+      reply = std::string("ok cfg ") + key;
+    } else {
+      reply = "err cfg (bad key or parse)";
+    }
+    this->control_socket_->sendto(reply.data(), reply.size(), 0,
+                                  reinterpret_cast<const struct sockaddr *>(&from), from_len);
+    return;
+  }
+
   char verb[24] = {0};
   double a = 0.0, b = 0.0, c = 0.0;
   const int matched = std::sscanf(cmd.c_str(), "%23s %lf %lf %lf", verb, &a, &b, &c);

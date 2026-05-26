@@ -13,30 +13,161 @@ probe deadlines) is fully reproducible.
 
 from __future__ import annotations
 
+import os
+import shutil
+import signal
 import socket
+import subprocess
 import time
+from pathlib import Path
+
+import pytest
 
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import Load, LoadModel
 from astrameter.simulator.powermeter_sim import PowermeterSimulator
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ── Cross-backend support ──────────────────────────────────────────────────
+# These suites run against two emulator backends: the in-process Python CT002
+# (default) and the compiled ESPHome host binary (test-hooks build), driven
+# over UDP with grid / clock / dedupe / balancer-config supplied through the
+# control channel. An autouse parametrized fixture flips _ACTIVE_BACKEND, so
+# every test in the file runs once per backend without touching the bodies.
+
+_E2E_DIR = Path(__file__).parent / "components" / "ct002"
+_E2E_YAML = _E2E_DIR / "test.e2e.host.yaml"
+_E2E_BINARY = (
+    _E2E_DIR
+    / ".esphome"
+    / "build"
+    / "ct002-e2e-test"
+    / ".pioenvs"
+    / "ct002-e2e-test"
+    / "program"
+)
+_E2E_UDP_PORT = 12345
+_E2E_CONTROL_PORT = 12346
+
+_ACTIVE_BACKEND = "python"
 
 
-class _FakeClock:
-    """Controllable clock for deterministic time in the balancer."""
+def _have_esphome() -> bool:
+    return shutil.which("esphome") is not None
 
-    def __init__(self) -> None:
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+    return False
+
+
+def _ensure_e2e_binary() -> None:
+    if not _E2E_BINARY.exists():
+        subprocess.run(
+            ["esphome", "compile", str(_E2E_YAML)],
+            check=True,
+            cwd=_E2E_DIR.parent.parent,
+        )
+
+
+@pytest.fixture(params=["python", "esphome"], autouse=True)
+def _emulator_backend(request):
+    global _ACTIVE_BACKEND
+    if request.param == "esphome" and not _have_esphome():
+        pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
+    _ACTIVE_BACKEND = request.param
+    yield
+    _ACTIVE_BACKEND = "python"
+
+
+class _HarnessClock:
+    """Controllable clock. For the ESPHome backend an ``on_change`` callback
+    pushes each new value to the binary's mock clock so the two stay in step."""
+
+    def __init__(self, on_change=None) -> None:
         self._now = time.time()
+        self._on_change = on_change
 
     def __call__(self) -> float:
         return self._now
 
     def advance(self, seconds: float) -> None:
         self._now += seconds
+        if self._on_change is not None:
+            self._on_change(self._now)
+
+
+class _EsphomeSim:
+    """Spawns the test-hooks host binary and drives it via the control channel."""
+
+    def __init__(self) -> None:
+        self._ctrl = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._ctrl.settimeout(2.0)
+        self._proc: subprocess.Popen | None = None
+
+    def _cmd(self, cmd: str) -> str:
+        self._ctrl.sendto(cmd.encode(), ("127.0.0.1", _E2E_CONTROL_PORT))
+        reply = self._ctrl.recvfrom(256)[0].decode()
+        assert reply.startswith("ok"), f"control command {cmd!r} failed: {reply!r}"
+        return reply
+
+    def spawn(self) -> None:
+        _ensure_e2e_binary()
+        deadline = time.monotonic() + 5.0
+        while _port_in_use(_E2E_UDP_PORT) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if _port_in_use(_E2E_UDP_PORT):
+            raise RuntimeError(f"UDP port {_E2E_UDP_PORT} still in use")
+        self._proc = subprocess.Popen(
+            [str(_E2E_BINARY)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+        deadline = time.monotonic() + 5.0
+        while not _port_in_use(_E2E_UDP_PORT) and time.monotonic() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    f"e2e binary exited with code {self._proc.returncode}"
+                )
+            time.sleep(0.1)
+        if not _port_in_use(_E2E_UDP_PORT):
+            raise RuntimeError("e2e binary did not bind its UDP port")
+        time.sleep(0.3)  # let the control socket finish binding
+
+    def set_grid(self, l1: float, l2: float, l3: float) -> None:
+        self._cmd(f"grid {l1} {l2} {l3}")
+
+    def set_clock(self, seconds: float) -> None:
+        self._cmd(f"clock_set {seconds}")
+
+    def set_dedupe(self, ms: int) -> None:
+        self._cmd(f"dedupe {ms}")
+
+    def set_cfg(self, key: str, value: float) -> None:
+        self._cmd(f"cfg {key} {value}")
+
+    def force_rotation(self) -> None:
+        self._cmd("force_rotation")
+
+    def stop(self) -> None:
+        self._ctrl.close()
+        if self._proc is not None:
+            os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+            try:
+                self._proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                self._proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _find_free_ports(n: int = 2) -> list[int]:
@@ -83,10 +214,17 @@ class _SimHarness:
         min_power_thresholds: list[float] | None = None,
         **ct_kwargs,
     ):
-        ct_port, http_port = _find_free_ports(2)
+        self.backend = _ACTIVE_BACKEND
+        self._esphome = _EsphomeSim() if self.backend == "esphome" else None
+        free_udp, http_port = _find_free_ports(2)
+        # ESPHome binary listens on a fixed port (its YAML); the in-process
+        # Python CT002 can take an ephemeral one.
+        ct_port = _E2E_UDP_PORT if self.backend == "esphome" else free_udp
         self.ct_port = ct_port
         self.http_port = http_port
-        self.clock = _FakeClock()
+        self.clock = _HarnessClock(
+            on_change=(self._esphome.set_clock if self._esphome is not None else None)
+        )
 
         if base_load is None:
             base_load = [200.0, 0.0, 0.0]
@@ -136,42 +274,85 @@ class _SimHarness:
             port=http_port,
         )
 
-        self.ct002 = CT002(
-            udp_port=ct_port,
-            ct_mac=ct_mac,
-            active_control=True,
-            fair_distribution=True,
-            min_efficient_power=min_efficient_power,
-            efficiency_rotation_interval=efficiency_rotation_interval,
-            clock=self.clock,
-            reset_fn=None,
-            **ct_kwargs,
-        )
+        # Balancer/saturation settings for this scenario. For the Python
+        # backend they go to the CT002 constructor; for the ESPHome backend
+        # they're pushed via `cfg` control commands at start() (the binary's
+        # compile-time config is otherwise fixed).
+        self._scenario_cfg: dict[str, float] = {
+            "min_efficient_power": float(min_efficient_power),
+            "efficiency_rotation_interval": float(efficiency_rotation_interval),
+            "fair_distribution": 1.0,
+        }
+        for k, val in ct_kwargs.items():
+            self._scenario_cfg[k] = float(
+                1 if val is True else 0 if val is False else val
+            )
 
-        # Wire CT002 to read grid power from the powermeter sim
-        async def update_readings(_addr, _fields=None, _consumer_id=None):
-            grid = self.powermeter.compute_grid()
-            return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+        if self.backend == "python":
+            self.ct002 = CT002(
+                udp_port=ct_port,
+                ct_mac=ct_mac,
+                active_control=True,
+                fair_distribution=True,
+                min_efficient_power=min_efficient_power,
+                efficiency_rotation_interval=efficiency_rotation_interval,
+                clock=self.clock,
+                reset_fn=None,
+                consumer_ttl=100000,  # avoid eviction during long mock-time sims
+                **ct_kwargs,
+            )
 
-        self.ct002.before_send = update_readings
+            async def update_readings(_addr, _fields=None, _consumer_id=None):
+                grid = self.powermeter.compute_grid()
+                return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+
+            self.ct002.before_send = update_readings
+        else:
+            self.ct002 = None
 
     async def start(self):
         await self.powermeter.start()
-        await self.ct002.start()
+        if self.backend == "python":
+            await self.ct002.start()
+        else:
+            self._esphome.spawn()
+            self._esphome.set_dedupe(0)  # sims poll fast in mock time; no dedup
+            for key, val in self._scenario_cfg.items():
+                self._esphome.set_cfg(key, val)
+            self._esphome.set_clock(self.clock())
 
     async def stop(self):
-        await self.ct002.stop()
+        if self.backend == "python":
+            await self.ct002.stop()
+        else:
+            self._esphome.stop()
         await self.powermeter.stop()
 
     # -- stepping ----------------------------------------------------------
 
+    async def _step_battery(self, b: BatterySimulator) -> None:
+        """One battery iteration. The Python emulator reads grid live via
+        before_send; the ESPHome binary needs the grid injected, so we
+        replicate BatterySimulator.step() and inject the grid AFTER the
+        battery ramps but BEFORE it polls — matching Python's timing."""
+        if self.backend == "python":
+            await b.step(b.poll_interval)
+            return
+        b._step_index += 1
+        b._drain_pending_power_targets()
+        b._update_power(b.poll_interval)
+        b._update_soc(b.poll_interval)
+        grid = self.powermeter.compute_grid()
+        self._esphome.set_grid(grid["phase_a"], grid["phase_b"], grid["phase_c"])
+        await b._send_request()
+
     async def step(self, n: int = 1) -> None:
-        """Step all batteries *n* times.  Advances the fake clock by each
+        """Step all batteries *n* times.  Advances the clock by each
         battery's ``poll_interval`` (max across batteries) per step."""
         for _ in range(n):
             max_dt = max(b.poll_interval for b in self.batteries)
             for b in self.batteries:
-                await b.step(b.poll_interval)
+                await self._step_battery(b)
             self.clock.advance(max_dt)
 
     async def step_until(

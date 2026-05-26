@@ -69,6 +69,22 @@ double CT002Component::now_seconds_() {
   return static_cast<double>(::esphome::millis()) / 1000.0;
 }
 
+// (Re)build the load balancer from the current balancer_cfg_ + saturation_*
+// members. Called once from setup(); the test-hooks `cfg` control command
+// calls it again after mutating a config field so an e2e test can run
+// scenarios under different balancer/saturation settings without a reflash.
+// Rebuilding resets balancer state — fine before a scenario starts.
+void CT002Component::build_balancer_() {
+  this->balancer_ = std::make_unique<LoadBalancer>(
+      this->balancer_cfg_, this->saturation_alpha_, this->saturation_min_target_,
+      this->saturation_decay_factor_, this->saturation_grace_seconds_,
+      this->saturation_stall_timeout_seconds_, this->saturation_enabled_,
+      [this]() { return this->now_seconds_(); },
+      [this]() {
+        for (auto &p : this->pipeline_) p->reset();
+      });
+}
+
 void CT002Component::enable_hampel(size_t window, float n_sigma, float min_threshold) {
   this->hampel_cfg_ = HampelCfg{window, n_sigma, min_threshold};
 }
@@ -127,14 +143,7 @@ void CT002Component::setup() {
   }
   this->pipeline_head_ = current;
 
-  this->balancer_ = std::make_unique<LoadBalancer>(
-      this->balancer_cfg_, this->saturation_alpha_, this->saturation_min_target_,
-      this->saturation_decay_factor_, this->saturation_grace_seconds_,
-      this->saturation_stall_timeout_seconds_, this->saturation_enabled_,
-      [this]() { return this->now_seconds_(); },
-      [this]() {
-        for (auto &p : this->pipeline_) p->reset();
-      });
+  this->build_balancer_();
 
   this->start_udp_server_();
 #ifdef USE_CT002_TEST_HOOKS

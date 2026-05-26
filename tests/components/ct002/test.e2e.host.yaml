@@ -34,6 +34,9 @@ ct002:
   ct_type: HME-4
   udp_port: 12345
   active_control: true
+  # Very high so the mock-clock sims (which can advance far in virtual time)
+  # never evict a still-polling consumer mid-scenario.
+  consumer_ttl: 100000s
   # Dedup off by default — the closed-loop sims poll many times per second
   # of mock time and must not be deduplicated. The dedup scenario turns it
   # on at runtime via the `dedupe <ms>` control command.

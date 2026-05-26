@@ -226,6 +226,8 @@ class CT002Component : public Component {
   // test-hook mock clock can override it. Falls back to millis() in
   // production builds and whenever the mock clock is not engaged.
   double now_seconds_();
+  // (Re)constructs balancer_ from balancer_cfg_ + saturation_* members.
+  void build_balancer_();
 
   // Configuration.
   sensor::Sensor *power_sensor_l1_{nullptr};
@@ -308,6 +310,10 @@ class CT002Component : public Component {
   void pump_control_();
   void handle_control_command_(const std::string &cmd, const struct sockaddr_storage &from,
                                socklen_t from_len);
+  // Set one balancer/saturation config field by name and rebuild the
+  // balancer. Returns false for an unknown key. Used by the `cfg` control
+  // command so e2e tests can run scenarios under varied settings.
+  bool apply_cfg_(const std::string &key, double value);
   uint16_t control_port_{0};
   std::unique_ptr<socket::Socket> control_socket_{nullptr};
   bool mock_clock_enabled_{false};
