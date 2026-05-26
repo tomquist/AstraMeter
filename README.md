@@ -153,7 +153,7 @@ All commands above work across Windows, macOS, and Linux. The only difference is
 
 AstraMeter also ships as an **ESPHome external component** that runs the CT002/CT003 emulator, balancer, and cross-phase filter pipeline directly on an ESP32 — no Python add-on, no Home Assistant required. Useful if you'd rather flash a dedicated board than run a server, and if your grid-power source is already addressable by ESPHome (Modbus, M-Bus, Tasmota, MQTT, Shelly, Envoy, etc.).
 
-Minimal YAML:
+Minimal YAML — point `power_sensor_l1` at any ESPHome sensor that reports grid power in watts:
 
 ```yaml
 external_components:
@@ -161,77 +161,21 @@ external_components:
     components: [ct002]
 
 sensor:
-  - platform: modbus_controller   # or any other ESPHome sensor source
+  - platform: homeassistant       # or modbus_controller / mqtt / template / …
     id: grid_l1
-    # per-phase offset / multiply / throttle go here, on the upstream
-    # sensor — not inside ct002: (matches Python's order, where Transform
-    # and Throttle sit upstream of the cross-phase filters)
-    filters:
-      - offset: 0
-      - multiply: 1
-      - throttle: 1s
+    entity_id: sensor.grid_power
 
 ct002:
   id: ct002_main
   power_sensor_l1: grid_l1
-  # power_sensor_l2 / power_sensor_l3: required together for three-phase
-  ct_type: HME-4                  # HME-4 = CT002 wire type; HME-3 = CT003
-  udp_port: 12345
-  active_control: true
-  filters:                        # cross-phase signal conditioning, all optional
-    hampel:    { window: 7, n_sigma: 3.0, min_threshold: 50 }
-    smoothing: { alpha: 0.3, max_step: 200 }
-    deadband:  { deadband: 10 }
-    # NOTE: do not add a `pid:` filter together with active_control — the
-    # PID is an alternative controller (for active_control: false setups).
-    # Running both makes the PID's integral wind up and, in bias mode,
-    # invert the sign sent to the battery. See "PID vs active_control" below.
 ```
 
-See `esphome.example.yaml` at the repo root for an annotated template covering every knob.
+Everything else is optional. See **[`esphome.example.yaml`](esphome.example.yaml)** for the complete, annotated config — three-phase sensors, the cross-phase filter pipeline (Hampel / smoothing / deadband / PID), balancer and saturation tuning, and the two optional sub-blocks below — with every knob shown at its default.
 
-**Optional `mqtt_insights:` sub-block** (under the same `ct002:` key). Publishes Home Assistant Device Discovery for every reporting battery + the CT002 device itself, and (optionally) answers Marstek-app polls on the same broker — no hame-relay round-tripping:
+Two optional sub-blocks nest under the same `ct002:` key:
 
-```yaml
-mqtt:
-  broker: 192.168.1.10
-  port: 1883
-
-ct002:
-  id: ct002_main
-  power_sensor_l1: grid_l1
-  ct_type: HME-4
-  ct_mac: "aabbccddeeff"
-  mqtt_insights:
-    base_topic: astrameter             # per-installation namespace
-    ha_discovery: true                 # HA Device Discovery (per-consumer + device-level)
-    ha_discovery_prefix: homeassistant
-    marstek_mqtt_enabled: true         # answer Marstek-app polls on this broker
-    marstek_mqtt_interval: 300s        # periodic broadcast cadence; 0s = reply-only
-```
-
-HA discovery publishes one device per battery (grid_power L1/L2/L3 + total sensors, target L1/L2/L3, reported/last target, saturation, phase, device type, manual-target number, auto-target/active switches) plus a parent CT002 device (smooth_target, active_control binary_sensor, consumer_count, force_rotation button). The Marstek responder subscribes to both `hame_energy/<ct_type>/App/<mac>/ctrl` and `marstek_energy/<ct_type>/App/<mac>/ctrl`, answers `cd=1` aggregate polls and `cd=4` slave-list polls, and broadcasts the current state on the configured interval.
-
-**Optional `marstek_registration:` sub-block** (under the same `ct002:` key). Registers a "managed" CT002/CT003 with your Marstek cloud account on first boot — same flow as the Python emulator's `[MARSTEK]` section. The resulting MAC (always prefixed `02b250`) flows back into `ct002.ct_mac` so the UDP responses and Marstek MQTT topics use the cloud-side identity, and is persisted via ESPPreferences so the second boot skips the cloud round-trip entirely:
-
-```yaml
-http_request:
-  timeout: 20s
-
-ct002:
-  id: ct002_main
-  power_sensor_l1: grid_l1
-  marstek_registration:
-    base_url: https://eu.hamedata.com    # https://us.hamedata.com for US
-    mailbox: you@example.com
-    password: !secret marstek_password
-    device_type: ct002                    # or ct003
-    timezone: Europe/Berlin
-    retry_interval: 60s                   # backoff between transient retries
-    force_reregister: false               # set true to redo the cloud flow
-```
-
-When both sub-blocks are combined under one `ct002:`, the `mqtt_insights:` sub-block subscribes to the Marstek App topics automatically as soon as `marstek_registration:` resolves the MAC — no reboot required.
+- **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device per battery + a parent CT002 device with manual-target / active / auto-target controls and a force-rotation button) and answers Marstek-app polls on your MQTT broker, so the emulator shows up in the app without hame-relay. Requires an `mqtt:` block.
+- **`marstek_registration:`** — registers a managed CT002/CT003 with your Marstek cloud account on first boot (same flow as the Python `[MARSTEK]` section), persists the assigned MAC, and feeds it back into `ct002.ct_mac`. Requires an `http_request:` block. When combined with `mqtt_insights:`, the App-topic subscription picks up the MAC automatically — no reboot needed.
 
 **Status:** experimental — UDP emulator, balancer, filter pipeline, MQTT-insights, and Marstek cloud registration are all functional. Wider field testing welcome.
 
