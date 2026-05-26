@@ -66,7 +66,12 @@ Fixes to `src/astrameter/powermeter/wrappers/{transform,throttling}.py` have **n
 
 The host-gcc gtest suite (`uv run pytest tests/components/ct002/test_host_protocol.py`) is the C++-side guard against translation drift. It builds via CMake with FetchContent-fetched googletest, so all you need locally is `cmake` and a C++17 compiler. Add a gtest case for any new C++ behavior that doesn't map 1:1 to a Python file.
 
-`tests/components/ct002/test_host_e2e.py` drives the compiled host binary over real UDP. Besides the BatterySimulator round-trip, it builds a second "test-hooks" binary (`test.e2e.host.yaml`) that compiles in a UDP control channel — enabled only by the test-only `test_control_port:` option, which adds the `USE_CT002_TEST_HOOKS` define (see `test_hooks.cpp`). The channel lets the harness inject grid power and drive a mock clock so time-gated behaviour (dedup, saturation, eviction) is deterministic against the black-box binary. `test_control_port:` is **test-only** — never set it in a real config. This is the foundation for an eventual shared Python↔ESPHome e2e suite.
+Two host e2e modules drive the compiled binary over real UDP:
+
+- `test_host_e2e.py` — the `BatterySimulator` round-trip against `test.host.yaml`, validating the real client path.
+- `test_shared_e2e.py` — **differential** scenarios written once and parametrized over two backends with a common `poll / set_grid / set_clock / advance_clock` interface: `python` (the canonical `CT002` driven in-process via `_handle_request` + a fake transport) and `esphome` (the host binary). Asserting the same wire facts on both is the cross-stack parity guard. The `python` parametrizations need no ESPHome toolchain; the `esphome` ones skip without it.
+
+The `esphome` backend uses a "test-hooks" binary (`test.e2e.host.yaml`) that compiles in a UDP control channel — enabled only by the test-only `test_control_port:` option, which adds the `USE_CT002_TEST_HOOKS` define (see `test_hooks.cpp`). The channel injects grid power and drives a mock clock so time-gated behaviour (dedup, saturation, eviction) is deterministic against the black-box binary. `test_control_port:` is **test-only** — never set it in a real config. When you add a shared scenario, write it against the `backend` fixture so it runs on both stacks.
 
 ## Branches and pull requests
 
