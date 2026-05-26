@@ -60,8 +60,12 @@ int parse_int_strict(const std::string &s, int default_value) {
 // Wall-clock seconds for balancer/saturation accounting. Uses ESPHome's
 // monotonic millis() because absolute wall time isn't available on bare
 // metal at boot; the balancer only cares about deltas, so a monotonic
-// reference is fine.
+// reference is fine. Under the test-hooks build the e2e harness can engage
+// a mock clock for deterministic time-gated behaviour.
 double CT002Component::now_seconds_() {
+#ifdef USE_CT002_TEST_HOOKS
+  if (this->mock_clock_enabled_) return this->mock_clock_seconds_;
+#endif
   return static_cast<double>(::esphome::millis()) / 1000.0;
 }
 
@@ -127,12 +131,15 @@ void CT002Component::setup() {
       this->balancer_cfg_, this->saturation_alpha_, this->saturation_min_target_,
       this->saturation_decay_factor_, this->saturation_grace_seconds_,
       this->saturation_stall_timeout_seconds_, this->saturation_enabled_,
-      []() { return CT002Component::now_seconds_(); },
+      [this]() { return this->now_seconds_(); },
       [this]() {
         for (auto &p : this->pipeline_) p->reset();
       });
 
   this->start_udp_server_();
+#ifdef USE_CT002_TEST_HOOKS
+  this->start_control_server_();
+#endif
 
   // Consumer eviction — fires every 5 s and evicts anything older than
   // consumer_ttl_seconds_ (default 120 s). Mirrors Python's
@@ -178,6 +185,9 @@ void CT002Component::start_udp_server_() {
 
 void CT002Component::loop() {
   if (this->socket_ != nullptr) this->pump_udp_();
+#ifdef USE_CT002_TEST_HOOKS
+  if (this->control_socket_ != nullptr) this->pump_control_();
+#endif
 }
 
 void CT002Component::pump_udp_() {

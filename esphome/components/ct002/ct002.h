@@ -64,6 +64,15 @@ class CT002Component : public Component {
   void set_udp_port(uint16_t v) { this->udp_port_ = v; }
   void set_active_control(bool v) { this->active_control_ = v; }
   void set_max_sensor_age_ms(uint32_t v) { this->max_sensor_age_ms_ = v; }
+#ifdef USE_CT002_TEST_HOOKS
+  // Enable the test-control UDP server on this port. Only compiled when the
+  // YAML sets `test_control_port:` (which adds the USE_CT002_TEST_HOOKS
+  // define) — never present in production firmware. The control channel
+  // lets a host-platform e2e test inject grid power and drive a mock clock
+  // so time-gated behaviour (saturation / probe / eviction / dedup) is
+  // deterministic. See test_hooks.cpp.
+  void set_control_port(uint16_t v) { this->control_port_ = v; }
+#endif
 
   // Filter pipeline configuration (each call enables that filter; absence
   // means the wrapper is not in the pipeline, matching Python's
@@ -212,7 +221,11 @@ class CT002Component : public Component {
   PhaseReports collect_reports_by_phase_() const;
   std::vector<float> compute_smooth_target_(const std::vector<float> &values,
                                             const std::string &consumer_id);
-  static double now_seconds_();
+  // Monotonic seconds used for all time-gated logic (saturation, probe,
+  // eviction, dedup, poll_interval). Instance method (not static) so the
+  // test-hook mock clock can override it. Falls back to millis() in
+  // production builds and whenever the mock clock is not engaged.
+  double now_seconds_();
 
   // Configuration.
   sensor::Sensor *power_sensor_l1_{nullptr};
@@ -287,6 +300,19 @@ class CT002Component : public Component {
 
   // UDP socket.
   std::unique_ptr<socket::Socket> socket_;
+
+#ifdef USE_CT002_TEST_HOOKS
+  // Test-only control channel (see test_hooks.cpp). Gated entirely behind
+  // the build flag so production firmware carries none of it.
+  void start_control_server_();
+  void pump_control_();
+  void handle_control_command_(const std::string &cmd, const struct sockaddr_storage &from,
+                               socklen_t from_len);
+  uint16_t control_port_{0};
+  std::unique_ptr<socket::Socket> control_socket_{nullptr};
+  bool mock_clock_enabled_{false};
+  double mock_clock_seconds_{0.0};
+#endif
 };
 
 }  // namespace ct002

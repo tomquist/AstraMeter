@@ -89,6 +89,9 @@ jobs:
           # esp32 target compile is covered by the esp32-ard sibling.
           - tests/components/ct002/test.registration.host.yaml
           - tests/components/ct002/test.registration.esp32-ard.yaml
+          # test-hooks build (grid injection + mock clock control channel)
+          # used by the controllable host e2e scenarios.
+          - tests/components/ct002/test.e2e.host.yaml
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -126,14 +129,17 @@ jobs:
           uv sync --frozen --extra dev
           uv tool install esphome
 
-      # Build the host binary in its own step so a compile failure shows
-      # up here (with full gcc output) rather than as an opaque pytest
-      # timeout inside the module fixture. The fixture finds the binary
-      # already built and skips recompiling.
+      # Build both host binaries in their own steps so a compile failure
+      # shows up here (with full gcc output) rather than as an opaque pytest
+      # timeout inside the module fixtures. The fixtures find the binaries
+      # already built and skip recompiling.
       - name: Build ct002 host binary
         run: esphome compile tests/components/ct002/test.host.yaml
 
-      - name: Run host-platform E2E against BatterySimulator
+      - name: Build ct002 test-hooks (e2e control) binary
+        run: esphome compile tests/components/ct002/test.e2e.host.yaml
+
+      - name: Run host-platform E2E (round-trip + controllable scenarios)
         run: uv run pytest tests/components/ct002/test_host_e2e.py -v
 
   validate:

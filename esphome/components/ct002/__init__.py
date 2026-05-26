@@ -67,6 +67,10 @@ CONF_ACTIVE_CONTROL = "active_control"
 CONF_MAX_SENSOR_AGE = "max_sensor_age"
 CONF_CONSUMER_TTL = "consumer_ttl"
 CONF_DEDUPE_WINDOW = "dedupe_window"
+# Test-only: enabling this compiles in a UDP control channel (grid
+# injection + mock clock) used by the host-platform e2e suite. Absent in
+# any real config; never document it as a user knob.
+CONF_TEST_CONTROL_PORT = "test_control_port"
 
 # Filter sub-blocks
 CONF_FILTERS = "filters"
@@ -326,6 +330,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_DEDUPE_WINDOW, default="0s"
             ): cv.positive_time_period_milliseconds,
+            # Test-only control channel (grid injection + mock clock) for
+            # the host-platform e2e suite. Enabling it adds the
+            # USE_CT002_TEST_HOOKS define; leave unset in real configs.
+            cv.Optional(CONF_TEST_CONTROL_PORT): cv.port,
             cv.Optional(CONF_FILTERS): FILTERS_SCHEMA,
             cv.Optional(CONF_BALANCER): BALANCER_SCHEMA,
             cv.Optional(CONF_SATURATION): SATURATION_SCHEMA,
@@ -357,6 +365,12 @@ async def to_code(config):
     cg.add(var.set_max_sensor_age_ms(config[CONF_MAX_SENSOR_AGE].total_milliseconds))
     cg.add(var.set_consumer_ttl_seconds(int(config[CONF_CONSUMER_TTL].total_seconds)))
     cg.add(var.set_dedupe_window_ms(int(config[CONF_DEDUPE_WINDOW].total_milliseconds)))
+
+    if CONF_TEST_CONTROL_PORT in config:
+        # Compile in the test-only control channel (test_hooks.cpp) and point
+        # it at the requested port. The define gates all the hook code.
+        cg.add_define("USE_CT002_TEST_HOOKS")
+        cg.add(var.set_control_port(config[CONF_TEST_CONTROL_PORT]))
 
     filters = config.get(CONF_FILTERS, {})
     if CONF_HAMPEL in filters:

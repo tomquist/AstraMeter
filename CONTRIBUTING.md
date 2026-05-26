@@ -66,6 +66,8 @@ Fixes to `src/astrameter/powermeter/wrappers/{transform,throttling}.py` have **n
 
 The host-gcc gtest suite (`uv run pytest tests/components/ct002/test_host_protocol.py`) is the C++-side guard against translation drift. It builds via CMake with FetchContent-fetched googletest, so all you need locally is `cmake` and a C++17 compiler. Add a gtest case for any new C++ behavior that doesn't map 1:1 to a Python file.
 
+`tests/components/ct002/test_host_e2e.py` drives the compiled host binary over real UDP. Besides the BatterySimulator round-trip, it builds a second "test-hooks" binary (`test.e2e.host.yaml`) that compiles in a UDP control channel — enabled only by the test-only `test_control_port:` option, which adds the `USE_CT002_TEST_HOOKS` define (see `test_hooks.cpp`). The channel lets the harness inject grid power and drive a mock clock so time-gated behaviour (dedup, saturation, eviction) is deterministic against the black-box binary. `test_control_port:` is **test-only** — never set it in a real config. This is the foundation for an eventual shared Python↔ESPHome e2e suite.
+
 ## Branches and pull requests
 
 - Base feature work on **`develop`** and open PRs against **`develop`**.
