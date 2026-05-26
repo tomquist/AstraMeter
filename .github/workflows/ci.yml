@@ -69,29 +69,31 @@ jobs:
       - name: Run host-gcc protocol + wrappers + balancer parity tests
         run: uv run pytest tests/components/ct002/test_host_protocol.py -v
 
-  ct002-esphome-compile:
+  # Discover the ct002 compile targets dynamically so adding a
+  # tests/components/ct002/test.*.yaml file is automatically compiled in CI
+  # without editing this workflow.
+  ct002-esphome-yaml:
     needs: [ lint ]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Collect test YAML files
+        id: find
+        run: |
+          matrix=$(ls tests/components/ct002/test.*.yaml | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  ct002-esphome-compile:
+    needs: [ ct002-esphome-yaml ]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        yaml:
-          - tests/components/ct002/test.host.yaml
-          - tests/components/ct002/test.esp32-idf.yaml
-          - tests/components/ct002/test.esp32-ard.yaml
-          - tests/components/ct002/test.1phase.yaml
-          - tests/components/ct002/test.no-filters.yaml
-          # mqtt_insights sub-block — depends on the upstream `mqtt:`
-          # component which is only available on esp32/esp8266 targets.
-          - tests/components/ct002/test.insights.esp32-ard.yaml
-          # marstek_registration sub-block — host-platform compile is
-          # enough to validate the state machine + URL/JSON helpers; the
-          # esp32 target compile is covered by the esp32-ard sibling.
-          - tests/components/ct002/test.registration.host.yaml
-          - tests/components/ct002/test.registration.esp32-ard.yaml
-          # test-hooks build (grid injection + mock clock control channel)
-          # used by the controllable host e2e scenarios.
-          - tests/components/ct002/test.e2e.host.yaml
+        yaml: ${{ fromJSON(needs.ct002-esphome-yaml.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
