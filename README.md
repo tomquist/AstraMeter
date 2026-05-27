@@ -1031,6 +1031,14 @@ A:
 - `CURRENT_POWER_ENTITY`: For a single bidirectional sensor (positive/negative values)
   - `POWER_INPUT_ALIAS`/`POWER_OUTPUT_ALIAS`: Entity IDs for separate import/export sensors (with `POWER_CALCULATE = True`)
 
+### How should I feed import and export power — one sensor or two? (Home Assistant App)
+
+A: In the Home Assistant App, if you have a single signed sensor (positive for import, negative for export), put it in `POWER_INPUT_ALIAS` (or `CURRENT_POWER_ENTITY`) only and leave `POWER_OUTPUT_ALIAS` empty. Separate import/export sensors can update at different moments and get read out of sync, causing drift and oscillation; a single signed value avoids that.
+
+### Should I use Shelly emulation or CT002/CT003 for multiple batteries?
+
+A: Prefer CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`) for multi-battery setups. With Shelly emulation each battery reacts independently and they tend to fight each other (one charging while another discharges). The CT emulation coordinates a shared target across the fleet, giving more even and stable distribution.
+
 ## Device and Firmware Specific
 
 ### What firmware do I need for my Marstek device?
@@ -1071,6 +1079,18 @@ A: Common causes:
 ### How can I test without a storage device?
 
 A: You can only verify the initial configuration. Full testing requires a Marstek device in "self-adaptation" mode to request data.
+
+### My output power oscillates or yo-yos between zero and full.
+
+A: This usually means the battery polls the emulator faster than your power source delivers fresh readings, so it keeps over-correcting. Make sure the underlying source pushes new values frequently, then smooth the control loop: set `THROTTLE_INTERVAL` (try `1`) or `DEDUPE_TIME_WINDOW` (try `0.9`) so stale reads aren't reused, and raise `DEADBAND` (start around `10`–`20` W) so small fluctuations around zero don't trigger constant corrections. For finer control, tune `SMOOTH_TARGET_ALPHA` (start around `0.2`–`0.4`) and `MAX_SMOOTH_STEP` (start around `40`–`60` W).
+
+### My second battery never kicks in, or my batteries won't settle near zero.
+
+A: This is governed by `MIN_EFFICIENT_POWER`, which decides how many batteries are engaged for a given demand. It's intended for AC batteries that can hold a precise setpoint; pure DC battery pools can't be steered to exactly zero the same way. If a second unit won't engage, lower `MIN_EFFICIENT_POWER`; for DC-only setups, set it to `0`.
+
+### The Marstek app shows the meter offline or doesn't display my real meter values.
+
+A: This is expected for purely local operation — the emulated meter typically populates only one phase, and the app won't show your raw readings because each battery is only handed its share of the target (so the totals steer toward zero). It does not mean the integration is failing. If you do want live readings in the Marstek app, configure the `[MARSTEK]` section together with [hame-relay](https://github.com/tomquist/hame-relay) (≥ 1.3.5) so AstraMeter can answer the app's polls via MQTT.
 
 ## Advanced
 
