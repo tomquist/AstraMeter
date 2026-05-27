@@ -1072,15 +1072,13 @@ A: Common causes:
 
 A: You can only verify the initial configuration. Full testing requires a Marstek device in "self-adaptation" mode to request data.
 
-### My power output oscillates (e.g. swings between 0 W and ~100 W) while the battery is charging or discharging.
+### My power output oscillates instead of settling.
 
-A: This is a control loop fighting itself, not a load on your house — if it stops the moment you halt the emulator, it originates from the regulation, not a device. It usually happens when the battery requests readings faster than your powermeter can deliver fresh values, so it reacts to stale data and overshoots. Try, in order:
+A: Oscillation usually means the battery is reacting to stale readings — it requests data faster than your powermeter updates, overshoots, and corrects. Fixes, in order:
 
-- **Slow the request rate down to your meter's update rate.** Set `THROTTLE_INTERVAL = 1` (or `DEDUPE_TIME_WINDOW = 1`) so the emulator stops serving the same stale reading several times per second. Raise it further if your meter updates slower than once per second.
-- **Add a deadband around the zero-crossing.** Set `DEADBAND` to `10`–`20` (W) so small fluctuations near your target don't trigger constant corrections.
-- **Smooth a noisy source.** If the meter itself is jittery, enable `SMOOTH_TARGET_ALPHA` (and `HAMPEL_WINDOW` for occasional spikes) — see the per-powermeter options under [Configuration](#general-configuration).
-
-Note also that `POWER_OFFSET` is added to the meter reading, so a positive offset shifts the targeted zero point negative (e.g. `POWER_OFFSET = 13` targets −13 W); use a negative offset if you want to target a positive grid value.
+- **Throttle requests to your meter's update rate:** set `THROTTLE_INTERVAL` (or `DEDUPE_TIME_WINDOW`) to `1` or higher.
+- **Add a deadband around zero:** set `DEADBAND` to `10`–`20` (W) so small fluctuations don't trigger corrections.
+- **Smooth a noisy source:** enable `SMOOTH_TARGET_ALPHA` (and `HAMPEL_WINDOW` for spikes) — see the per-powermeter options under [Configuration](#general-configuration).
 
 ## Advanced
 
