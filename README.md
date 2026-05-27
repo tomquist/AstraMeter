@@ -1082,7 +1082,7 @@ A: You can only verify the initial configuration. Full testing requires a Marste
 
 ### My output power oscillates or yo-yos between zero and full.
 
-A: This usually means the battery polls the emulator faster than your power source delivers fresh readings, so it keeps over-correcting. Make sure the underlying source pushes new values frequently, then smooth the control loop: set `THROTTLE_INTERVAL` (try `1`) or `DEDUPE_TIME_WINDOW` (try `0.9`) so stale reads aren't reused, and raise `DEADBAND` (start around `10`–`20` W) so small fluctuations around zero don't trigger constant corrections. For finer control, tune `SMOOTH_TARGET_ALPHA` (start around `0.2`–`0.4`) and `MAX_SMOOTH_STEP` (start around `40`–`60` W).
+A: This usually means the battery polls the emulator faster than your power source delivers fresh readings, so it keeps over-correcting. Make sure the underlying source pushes new values frequently, then: if the battery polls more often than your source updates, set `THROTTLE_INTERVAL` (try `1`) to limit how often AstraMeter re-reads the source, and `DEDUPE_TIME_WINDOW` (try `0.9`) to drop repeated polls within that window. Then smooth the control loop: raise `DEADBAND` (start around `10`–`20` W) so small fluctuations around zero don't trigger constant corrections, and for finer control tune `SMOOTH_TARGET_ALPHA` (start around `0.2`–`0.4`) and `MAX_SMOOTH_STEP` (start around `40`–`60` W).
 
 ### My second battery never kicks in, or my batteries won't settle near zero.
 
