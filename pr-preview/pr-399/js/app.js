@@ -16,6 +16,7 @@ import {
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   ESP_BOARDS,
+  HARDWARE,
 } from "./schema.js";
 import { generate } from "./generate.js";
 
@@ -46,7 +47,7 @@ function defaultState() {
     esphome: {
       name: "astrameter-ct002",
       friendlyName: "AstraMeter CT002",
-      board: "esp32dev",
+      board: "esp32-s3-devkitc-1",
       framework: "esp-idf",
       ctType: "HME-4",
     },
@@ -149,6 +150,10 @@ function fieldControl(field, obj, { phases = 1, structural = false } = {}) {
   return el("div", { class: "field" }, [el("label", { text: labelText, class: "field-label" }), control, help]);
 }
 
+function linkOut(href, text) {
+  return el("a", { href, target: "_blank", rel: "noopener", class: "btn-link" }, text + " ↗");
+}
+
 function joinPhases(parts) {
   // keep up to the last non-empty entry so "a,,c" round-trips
   let last = -1;
@@ -213,14 +218,28 @@ function targetCard() {
 function deviceCard() {
   if (state.target === "esphome") {
     const e = state.esphome;
-    return card(2, "Your ESP32 device", "Tell us about the board you'll flash. The defaults are fine for most generic ESP32 boards.", [
-      el("div", { class: "field-grid" }, [
-        fieldControl({ key: "name", label: "Device name", help: "Lowercase name used by ESPHome (letters, numbers, hyphens).", type: "text" }, e, {}),
-        fieldControl({ key: "friendlyName", label: "Friendly name", help: "Display name shown in Home Assistant.", type: "text" }, e, {}),
-        fieldControl({ key: "board", label: "ESP32 board", help: "Pick your board. 'Generic ESP32' works for most.", type: "select", options: ESP_BOARDS }, e, {}),
-        fieldControl({ key: "ctType", label: "Emulated CT type", help: "HME-4 emulates a CT002; HME-3 emulates a CT003. Match what your Marstek battery expects.", type: "select", options: [{ value: "HME-4", label: "CT002 (HME-4)" }, { value: "HME-3", label: "CT003 (HME-3)" }] }, e, {}),
+    return card(2, "Your ESP32 device", "AstraMeter will run on a small ESP32 board you buy and plug in. Tell us which board you have so the file matches it.", [
+      el("details", { class: "intro-box", open: true }, [
+        el("summary", { text: "First time with ESPHome? Read this" }),
+        el("p", { html: "<strong>ESPHome</strong> is free software that turns a tiny, cheap WiFi chip (an <strong>ESP32</strong>) into a smart device by flashing a config file onto it. Here, the ESP32 becomes the power meter your Marstek battery talks to — no PC, Docker, or Home Assistant add-on left running." }),
+        el("p", { html: "You'll need to <strong>buy an ESP32 board</strong> (see below), install ESPHome once, paste the file this tool generates, and flash it over USB. Step-by-step instructions appear at the bottom of the page." }),
       ]),
-      el("p", { class: "note", html: "WiFi uses ESPHome <code>!secret</code> values. Add <code>wifi_ssid</code> and <code>wifi_password</code> to your <code>secrets.yaml</code> before flashing." }),
+      el("div", { class: "hw" }, [
+        el("h3", { text: "🛒 Recommended hardware" }),
+        el("p", { class: "help", html: "We recommend the <strong>ESP32-S3 DevKitC-1</strong> — it's cheap, widely available, and is the board this tool defaults to. One board is enough no matter how many batteries you have." }),
+        el("ul", { class: "hw-links" }, [
+          el("li", {}, [linkOut(HARDWARE.single.url, "Buy 1× " + "ESP32-S3 DevKitC-1"), el("span", { class: "help", text: " — for a single setup" })]),
+          el("li", {}, [linkOut(HARDWARE.pack3.url, "Buy 3× ESP32-S3 DevKitC-1"), el("span", { class: "help", text: " — cheaper per board; handy for spares or multiple homes" })]),
+        ]),
+        el("p", { class: "help affiliate", text: "These are affiliate links — they cost you nothing extra and help support AstraMeter." }),
+      ]),
+      el("div", { class: "field-grid" }, [
+        fieldControl({ key: "name", label: "Device name", help: "Lowercase name used by ESPHome (letters, numbers, hyphens). You can leave the default.", type: "text" }, e, {}),
+        fieldControl({ key: "friendlyName", label: "Friendly name", help: "Display name shown in Home Assistant. Optional.", type: "text" }, e, {}),
+        fieldControl({ key: "board", label: "ESP32 board", help: "⚠ This MUST match the board you actually bought, or flashing will fail. If you bought the recommended one, leave it as ESP32-S3 DevKitC-1.", type: "select", options: ESP_BOARDS }, e, { structural: true }),
+        fieldControl({ key: "ctType", label: "Emulated CT type", help: "HME-4 emulates a CT002; HME-3 emulates a CT003. Match what your Marstek battery expects (CT002 is the common choice).", type: "select", options: [{ value: "HME-4", label: "CT002 (HME-4)" }, { value: "HME-3", label: "CT003 (HME-3)" }] }, e, {}),
+      ]),
+      el("p", { class: "note", html: "WiFi credentials aren't stored in the file — ESPHome reads them from a separate <code>secrets.yaml</code>. The flashing steps at the bottom show exactly what to put there." }),
     ]);
   }
 
@@ -407,6 +426,31 @@ function extrasCard() {
   ]);
 }
 
+// Shown only for the ESPHome target: a no-prior-knowledge guide to actually
+// getting the generated YAML onto the chip.
+function esphomeStepsCard() {
+  if (state.target !== "esphome") return null;
+  const e = state.esphome;
+  const li = (html) => el("li", { html });
+  return card(6, "How to flash this onto your ESP32", "Follow these once. After that, the board runs on its own — you can unplug it from your PC and power it from any USB charger near your battery.", [
+    el("ol", { class: "steps" }, [
+      li("<strong>Get the board.</strong> Buy an ESP32-S3 DevKitC-1 (links in step 2 above) and plug it into your computer with a USB cable that supports data."),
+      li("<strong>Install ESPHome.</strong> Easiest: in Home Assistant, go to <em>Settings → Add-ons → Add-on Store</em> and install <strong>ESPHome Device Builder</strong>. No Home Assistant? Use the web installer at <a href='https://web.esphome.io' target='_blank' rel='noopener'>web.esphome.io</a> (Chrome/Edge), or install the CLI with <code>pip install esphome</code>."),
+      li("<strong>Create the device.</strong> In ESPHome click <em>+ New Device</em>, give it a name, and when it generates a starter file, <strong>replace the entire contents</strong> with the file from the preview on this page (use the <em>Download file</em> or <em>Copy</em> button)."),
+      li(
+        "<strong>Add your WiFi.</strong> ESPHome keeps secrets separately. Open <em>Secrets</em> (or <code>secrets.yaml</code>) and add:<br><code>wifi_ssid: \"YourWiFiName\"</code><br><code>wifi_password: \"YourWiFiPassword\"</code>" +
+          (state.marstek && state.marstek.enabled
+            ? "<br><code>marstek_password: \"YourMarstekPassword\"</code> (because you enabled Marstek cloud registration)"
+            : ""),
+      ),
+      li("<strong>Check the board matches.</strong> The file uses <code>board: " + (e.board || "esp32-s3-devkitc-1") + "</code>. This must be the board you actually bought — change it in step 2 above if not."),
+      li("<strong>Install / flash.</strong> Click <em>Install → Plug into this computer</em> for the first flash (USB). After that you can update it wirelessly over WiFi. Flashing takes a few minutes."),
+      li("<strong>Point your battery at it.</strong> In the Marstek app, set the battery to use a CT002/CT003 meter (matching the CT type you chose). The ESP32 answers on your network automatically — power it from any USB charger near the battery."),
+    ]),
+    el("p", { class: "note", html: "Full reference: <a href='https://github.com/tomquist/astrameter/blob/develop/README.md#esphome-external-component-run-on-an-esp32' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
+  ]);
+}
+
 // ── preview + actions ─────────────────────────────────────────────────────────
 function refreshPreview() {
   const pre = document.getElementById("preview-code");
@@ -573,7 +617,10 @@ function rerenderAll() {
   form.append(targetCard(), deviceCard(), meterCard());
   const ct = ctCard();
   if (ct) form.append(ct);
-  form.append(extrasCard(), projectCard());
+  form.append(extrasCard());
+  const steps = esphomeStepsCard();
+  if (steps) form.append(steps);
+  form.append(projectCard());
   refreshPreview();
 }
 

@@ -452,9 +452,18 @@ export function generateEsphome(state) {
 
   const out = [];
   out.push(
-    "# Generated with the AstraMeter config generator — runs the CT002/CT003\n" +
-      "# emulator directly on an ESP32. Adjust wifi/board to match your hardware,\n" +
-      "# then: esphome run this-file.yaml",
+    "# AstraMeter for ESPHome — runs the CT002/CT003 emulator directly on an ESP32.\n" +
+      "#\n" +
+      "# New to ESPHome? Do this once:\n" +
+      "#   1. Install ESPHome (Home Assistant add-on \"ESPHome Device Builder\", or\n" +
+      "#      web.esphome.io in Chrome/Edge, or `pip install esphome`).\n" +
+      "#   2. Create a new device and replace its file with everything below.\n" +
+      "#   3. Add your WiFi to secrets.yaml:\n" +
+      "#        wifi_ssid: \"YourWiFiName\"\n" +
+      "#        wifi_password: \"YourWiFiPassword\"\n" +
+      "#   4. Make sure the board: line below matches the ESP32 you bought.\n" +
+      "#   5. Install/flash over USB the first time (then updates go over WiFi).\n" +
+      "#   6. In the Marstek app, point the battery at a CT002/CT003 meter.",
   );
 
   if (warnings.length) {
