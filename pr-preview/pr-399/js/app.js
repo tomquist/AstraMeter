@@ -135,7 +135,7 @@ function fieldControl(field, obj, { phases = 1, structural = false } = {}) {
     ]);
   } else {
     control = el("input", {
-      type: field.type === "password" ? "text" : field.type,
+      type: field.type,
       value: obj[field.key] ?? "",
       placeholder: field.placeholder || "",
     });
@@ -438,24 +438,39 @@ function previewPanel() {
   ]);
 }
 
+function safeGenerate() {
+  try {
+    return generate(state);
+  } catch (err) {
+    toast("Couldn't generate the config — check the preview for details", true);
+    return null;
+  }
+}
+
 function copyConfig() {
-  navigator.clipboard.writeText(generate(state)).then(
+  const text = safeGenerate();
+  if (text == null) return;
+  navigator.clipboard.writeText(text).then(
     () => toast("Copied to clipboard"),
     () => toast("Copy failed — select the text manually", true),
   );
 }
 
 function downloadConfig() {
+  const text = safeGenerate();
+  if (text == null) return;
   const name = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
-  downloadText(name, generate(state));
+  downloadText(name, text);
 }
 
 function downloadText(filename, text) {
   const blob = new Blob([text], { type: "text/plain" });
-  const a = el("a", { href: URL.createObjectURL(blob), download: filename });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: filename });
   document.body.appendChild(a);
   a.click();
   a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 // ── project save / load ─────────────────────────────────────────────────────
