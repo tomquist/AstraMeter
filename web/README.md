@@ -48,9 +48,20 @@ User progress is saved automatically to `localStorage`. Users can also:
 
 ## Deploying
 
-The site is published by the **Deploy config generator to GitHub Pages**
-workflow. One-time: repository **Settings → Pages → Source → GitHub Actions**.
-After that, any push touching `web/` redeploys it.
+The site is published to the **`gh-pages`** branch and served by GitHub Pages.
+
+One-time setup: repository **Settings → Pages → Build and deployment → Source →
+"Deploy from a branch" → `gh-pages` / `/ (root)`**.
+
+- **Production** — the *Deploy config generator to GitHub Pages* workflow
+  (`.github/workflows/pages.yml`) publishes `web/` to the root of `gh-pages` on
+  every push to `main`/`develop` that touches `web/`.
+- **Per-PR previews** — the *Deploy PR preview* workflow
+  (`.github/workflows/pr-preview.yml`) deploys each pull request to
+  `pr-preview/pr-<number>/` and posts the live URL as a comment on the PR, so
+  reviewers can test the real site before merging. The preview is removed when
+  the PR closes. (Previews only run for same-repo branches; forks can't write
+  to `gh-pages`.)
 
 ## Keeping it in sync
 

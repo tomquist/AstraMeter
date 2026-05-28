@@ -1,10 +1,14 @@
 name: Deploy config generator to GitHub Pages
 
-# Publishes the static web/ config generator to GitHub Pages.
+# Publishes the static web/ config generator to the gh-pages branch, which
+# GitHub Pages serves at the repository's Pages URL.
 #
-# One-time setup: in the repository settings, open Pages and set
-# "Build and deployment" → Source → "GitHub Actions". After that this workflow
-# deploys on every push that touches web/ (and can be run manually).
+# One-time setup: repository Settings → Pages → "Build and deployment" →
+# Source → "Deploy from a branch" → branch "gh-pages" / "/ (root)".
+#
+# The gh-pages branch is also where per-PR previews live (under pr-preview/,
+# managed by .github/workflows/pr-preview.yml), so this job keeps existing
+# files instead of wiping the branch.
 
 on:
   push:
@@ -15,17 +19,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Allow only one concurrent deployment; cancel in-progress runs.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: gh-pages-deploy
+  cancel-in-progress: false
 
 jobs:
-  test:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,20 +35,11 @@ jobs:
           node-version: "20"
       - name: Run config generator tests
         run: node web/js/generate.test.mjs
-
-  deploy:
-    needs: test
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - name: Upload web/ as Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Publish web/ to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: web
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web
+          publish_branch: gh-pages
+          # Preserve pr-preview/* directories created by the preview workflow.
+          keep_files: true
