@@ -191,12 +191,12 @@ For details on the CT002/CT003 UDP protocol used by Marstek storage systems, see
 
 ## Configuration
 
-> **New to AstraMeter?** The easiest way to get a working configuration is the
-> **[config generator](web/)** — a step-by-step website that asks a few questions
-> about your power meter and produces a ready-to-use `config.ini` or ESPHome YAML,
-> explaining each option along the way. You can save, share, and reload your
-> answers. (Once Pages is enabled it's hosted at the repository's GitHub Pages
-> URL; you can also run it locally from `web/`.)
+> **New to AstraMeter?** The [**AstraMeter website**](web/) introduces the
+> project and includes a step-by-step **config generator** that asks a few
+> questions about your power meter and produces a ready-to-use `config.ini` or
+> ESPHome YAML, explaining each option along the way. You can save, share, and
+> reload your answers. (Once Pages is enabled it's hosted at the repository's
+> GitHub Pages URL; you can also run it locally from `web/`.)
 
 Configuration is managed via `config.ini`. Each powermeter type has specific settings — see the per-source reference in **[docs/powermeters.md](docs/powermeters.md)** (and **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)** for the ESPHome external component).
 
