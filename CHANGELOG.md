@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** experimental ESPHome external component `ct002` to run the CT002/CT003 emulator directly on an ESP32. See `esphome.example.yaml`.
+- **Added** experimental ESPHome external component `ct002` to run the CT002/CT003 emulator directly on an ESP32. See `esphome.example.yaml` and the per-meter grid-power sensor reference in `docs/esphome-powermeters.md` (which also lists meters not yet supported on the ESP, e.g. Enphase Envoy and the SMA Energy Meter). Per-source `config.ini` documentation moved out of the README into `docs/powermeters.md`.
 - **Added** Modbus UDP support via a `TRANSPORT = TCP|UDP` option in the `[MODBUS]` section (defaults to `TCP`).
 - **Fixed** Home Assistant powermeter timing out on startup with "Timeout waiting for Home Assistant state" when the configured sensor hasn't changed value since AstraMeter started.
 - **Fixed** `DEVICE_TYPE = shellypro3em_new` (and `shellypro3em_old`) generating an invalid `device-N` source id that the B2500 rejected, so the CT was never detected. These variants now default to a proper `shellypro3em-*` id like the combined `shellypro3em` type ([#389](https://github.com/tomquist/astrameter/issues/389)).
