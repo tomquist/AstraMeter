@@ -7,22 +7,37 @@ the `ct002:` block does **not** talk to your meter directly. Instead it consumes
 powermeter" here means: *give ESPHome a sensor that reads your meter, then point
 `ct002:` at it.*
 
-**Find your meter in the list below and copy the matching `sensor:` block.** Each
-example defines a sensor with `id: grid_l1` and wires it in like this:
+### How a reading reaches the emulator
+
+There is no "powermeter" object in the ESPHome component — the integration is a
+plain **id reference**. Every example below ends up publishing a watts value into
+a sensor whose `id` is `grid_l1` (and `grid_l2` / `grid_l3` for the other
+phases). The `ct002:` block then names those ids in its `power_sensor_l*` keys.
+That id match is the entire wiring:
 
 ```yaml
 external_components:
   - source: github://tomquist/astrameter@develop
     components: [ct002]
 
-# ... a sensor with id: grid_l1 from one of the sections below ...
+sensor:
+  - platform: <your meter>      # one of the sections below — see below
+    id: grid_l1                 # ← the id ct002 reads
+    # ...
 
 ct002:
   id: ct002_main
-  power_sensor_l1: grid_l1
-  # power_sensor_l2: grid_l2   # three-phase only (define grid_l2 / grid_l3 too)
+  power_sensor_l1: grid_l1      # ← must match the sensor id above
+  # power_sensor_l2: grid_l2    # three-phase only (define grid_l2 / grid_l3 too)
   # power_sensor_l3: grid_l3
 ```
+
+Whenever that sensor publishes a new value, the emulator picks it up on its next
+Marstek CT002 poll — you never call `ct002:` directly. So **"configuring a
+powermeter" = producing a `grid_l1` sensor.** Each section below shows exactly how
+to produce that sensor for one meter; the [generic HTTP
+pattern](#a-note-on-the--generic-http-pattern) section shows one complete file
+end-to-end so you can see the whole chain.
 
 Per-phase calibration/throttling (`offset:`, `multiply:`, `throttle:`) goes in
 `filters:` **on the sensor**, not in `ct002:` — see the
@@ -69,25 +84,33 @@ instead? See [powermeters.md](powermeters.md).
 ## A note on the 🔵 Generic HTTP pattern
 
 Several sources below have no dedicated ESPHome component but expose a JSON HTTP
-endpoint. They all follow the same shape: poll the URL on an `interval:`, parse
-the body, and publish into a `template` sensor. The
+endpoint. They all follow the same shape: a `template` sensor named `grid_l1`
+holds the value, an `interval:` polls the URL, and a lambda parses the body and
+publishes into `grid_l1` — which `ct002:` then reads. The
 [`http_request`](https://esphome.io/components/http_request/) and
 [`json`](https://esphome.io/components/json/) components are built in — no
 external component needed.
 
+Here is one **complete** file (a single-phase generic meter wired all the way to
+the emulator). Add your `wifi:` / `api:` / board config as usual:
+
 ```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
 http_request:
   useragent: esphome/astrameter
   timeout: 5s
 
 sensor:
-  - platform: template
-    id: grid_l1
+  - platform: template            # holds the latest reading
+    id: grid_l1                    # ← the id ct002 reads
     unit_of_measurement: W
     device_class: power
 
 interval:
-  - interval: 1s
+  - interval: 1s                   # poll cadence
     then:
       - http_request.get:
           url: http://192.168.1.50/some/endpoint
@@ -99,10 +122,19 @@ interval:
                     id(grid_l1).publish_state(root["power"]);   // adapt the field
                     return true;
                   });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1         # ← consumes the sensor above
 ```
 
-The per-source sections below only show the **URL** and the **lambda body** that
-differ from this template.
+**The per-source sections below show only the `- http_request.get:` action** —
+the part that differs (the **URL** and the **lambda body**). Drop it into the
+`interval: → then:` list above in place of the example action, and keep the rest
+of the file (the `http_request:` component, the `grid_l1` template sensor, and
+the `ct002:` block) unchanged. For three-phase meters, add `grid_l2` / `grid_l3`
+template sensors, publish into them from the lambda, and set `power_sensor_l2` /
+`power_sensor_l3` on `ct002:`.
 
 ## Shelly
 
