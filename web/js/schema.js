@@ -672,9 +672,22 @@ export const MQTT_INSIGHTS_FIELDS = [
 ];
 
 export const ESP_BOARDS = [
+  { value: "esp32-s3-devkitc-1", label: "ESP32-S3 DevKitC-1 (recommended)" },
   { value: "esp32dev", label: "Generic ESP32 (esp32dev)" },
   { value: "esp32-c3-devkitm-1", label: "ESP32-C3 DevKitM-1" },
-  { value: "esp32-s3-devkitc-1", label: "ESP32-S3 DevKitC-1" },
+  { value: "esp32-s3-devkitm-1", label: "ESP32-S3 DevKitM-1" },
   { value: "nodemcu-32s", label: "NodeMCU-32S" },
   { value: "m5stack-atom", label: "M5Stack Atom" },
 ];
+
+// Affiliate links for the hardware we recommend to beginners.
+export const HARDWARE = {
+  single: {
+    label: "ESP32-S3 DevKitC-1 (single board)",
+    url: "https://amzn.to/3POffyU",
+  },
+  pack3: {
+    label: "ESP32-S3 DevKitC-1 (3-pack — spares / multiple setups)",
+    url: "https://amzn.to/4wUAtvN",
+  },
+};
