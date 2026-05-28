@@ -1,33 +1,42 @@
-# AstraMeter Config Generator (web)
+# AstraMeter project website
 
-A static, beginner-friendly website that generates an AstraMeter configuration —
-either a Python `config.ini` (Home Assistant add-on / Docker / direct install)
-or an ESPHome YAML (run the CT002/CT003 emulator on an ESP32).
+The public website for AstraMeter, built as a static site for GitHub Pages. It
+has two parts:
 
-It runs entirely in the browser. Nothing is uploaded; generation happens with
-plain JavaScript. The form is data-driven from `js/schema.js`, so adding or
-changing an option is a one-file edit.
+1. **Landing page** (`index.html`) — what AstraMeter is, features, supported
+   devices and power meters, installation options, and an FAQ.
+2. **Config generator** (`generator.html`) — a beginner-friendly tool that
+   generates an AstraMeter configuration: a Python `config.ini` (Home Assistant
+   add-on / Docker / direct install) or an ESPHome YAML (run on an ESP32).
+
+Everything runs in the browser. Nothing is uploaded; config generation happens
+with plain JavaScript. The generator form is data-driven from `js/schema.js`,
+and the landing page renders its supported-meter grid and feature list from the
+same schema so the marketing copy can't drift from the real capabilities.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Page shell and intro copy. |
-| `css/styles.css` | Styling (dark theme, responsive, sticky live preview). |
+| `index.html` | Landing / marketing page. |
+| `generator.html` | The config generator page (mounts the app). |
+| `css/styles.css` | Styling for both pages (nav, hero, landing sections, footer, generator UI). |
+| `js/site.js` | Shared site behaviour: mobile nav, scroll state, and landing-page feature/power-meter grids (from the schema). |
 | `js/schema.js` | Single source of truth: every powermeter, field, and tuning option with beginner help text. Pure data. |
 | `js/generate.js` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
-| `js/app.js` | Renders the form from the schema, holds state, live preview, save/load. |
+| `js/app.js` | Renders the generator form from the schema, holds state, live preview, save/load. |
 | `js/generate.test.mjs` | Node assertions for the generators. |
 
 ## Develop locally
 
-It's static — open `index.html` through any local server (ES modules need
-`http://`, not `file://`):
+It's static — serve it through any local server (ES modules need `http://`, not
+`file://`):
 
 ```bash
 cd web
 python3 -m http.server 8000
-# open http://localhost:8000
+# landing page:    http://localhost:8000/
+# config generator: http://localhost:8000/generator.html
 ```
 
 ## Test
