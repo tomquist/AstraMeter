@@ -1,0 +1,175 @@
+// Lightweight assertions for the config generators. Run with:
+//   node web/js/generate.test.mjs
+import { generateConfigIni, generateEsphome } from "./generate.js";
+
+let failures = 0;
+function ok(cond, msg) {
+  if (!cond) {
+    failures++;
+    console.error("✗ " + msg);
+  } else {
+    console.log("✓ " + msg);
+  }
+}
+function has(haystack, needle, msg) {
+  ok(haystack.includes(needle), `${msg}\n    expected to find: ${JSON.stringify(needle)}`);
+}
+function lacks(haystack, needle, msg) {
+  ok(!haystack.includes(needle), `${msg}\n    expected NOT to find: ${JSON.stringify(needle)}`);
+}
+
+// ── config.ini: simple Shelly ────────────────────────────────────────────────
+const shelly = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"], skipPowermeterTest: false },
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
+});
+has(shelly, "[GENERAL]", "shelly: has GENERAL");
+has(shelly, "DEVICE_TYPE = shellypro3em", "shelly: device type");
+has(shelly, "[SHELLY]", "shelly: section header");
+has(shelly, "TYPE = 3EMPro", "shelly: model");
+has(shelly, "IP = 192.168.1.50", "shelly: ip");
+lacks(shelly, "USER =", "shelly: omits blank user");
+
+// ── config.ini: HA 3-phase + tuning + transform ──────────────────────────────
+const ha = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"], throttleInterval: "2" },
+  meters: [
+    {
+      type: "homeassistant",
+      phases: 3,
+      fields: {
+        IP: "10.0.0.5",
+        ACCESSTOKEN: "tok",
+        CURRENT_POWER_ENTITY: "sensor.l1, sensor.l2, sensor.l3",
+        HTTPS: true,
+      },
+      tuning: { THROTTLE_INTERVAL: "3", POWER_MULTIPLIER: "-1", PID_KP: "0.5" },
+    },
+  ],
+  ct: { fields: { CT_MAC: "001122334455", BALANCE_GAIN: "0.3", ACTIVE_CONTROL: "True" } },
+});
+has(ha, "[HOMEASSISTANT]", "ha: section");
+has(ha, "HTTPS = True", "ha: https bool");
+has(ha, "CURRENT_POWER_ENTITY = sensor.l1, sensor.l2, sensor.l3", "ha: 3-phase entity list");
+has(ha, "THROTTLE_INTERVAL = 3", "ha: per-meter throttle override");
+has(ha, "POWER_MULTIPLIER = -1", "ha: transform");
+has(ha, "PID_KP = 0.5", "ha: pid");
+has(ha, "[CT002]", "ha: CT002 section emitted");
+has(ha, "CT_MAC = 001122334455", "ha: ct mac");
+has(ha, "BALANCE_GAIN = 0.3", "ha: balancer option");
+
+// ── config.ini: EmLog calculate defaults to True (schema default) ────────────
+const emlog = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "emlog", phases: 1, fields: { IP: "10.0.0.7" }, tuning: {} }],
+});
+has(emlog, "JSON_POWER_CALCULATE = True", "emlog: calculate defaults to True");
+const tasmotaCalc = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "tasmota", phases: 1, fields: { IP: "10.0.0.8" }, tuning: {} }],
+});
+lacks(tasmotaCalc, "JSON_POWER_CALCULATE", "tasmota: calculate omitted by default (Python default False)");
+
+// ── config.ini: MQTT 3-phase topics ──────────────────────────────────────────
+const mqtt = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "mqtt", phases: 3, fields: { BROKER: "b.example", TOPIC: "p/l1, p/l2, p/l3" }, tuning: {} }],
+});
+has(mqtt, "TOPICS = p/l1, p/l2, p/l3", "mqtt: TOPIC promoted to TOPICS in 3-phase");
+lacks(mqtt, "\nTOPIC =", "mqtt: no singular TOPIC");
+
+// ── config.ini: multi-meter NETMASK ──────────────────────────────────────────
+const multi = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [
+    { type: "shelly", suffix: "1", phases: 1, fields: { TYPE: "1PM", IP: "1.1.1.1" }, tuning: {}, netmask: "192.168.1.0/24" },
+    { type: "shelly", suffix: "2", phases: 1, fields: { TYPE: "1PM", IP: "2.2.2.2" }, tuning: {}, netmask: "192.168.2.0/24" },
+  ],
+});
+has(multi, "[SHELLY_1]", "multi: suffixed section 1");
+has(multi, "[SHELLY_2]", "multi: suffixed section 2");
+has(multi, "NETMASK = 192.168.1.0/24", "multi: netmask emitted");
+
+// ── config.ini: Marstek + MQTT insights ──────────────────────────────────────
+const extras = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "1PM", IP: "1.1.1.1" }, tuning: {} }],
+  marstek: { enabled: true, fields: { MAILBOX: "a@b.c", PASSWORD: "pw" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.9" } },
+});
+has(extras, "[MARSTEK]\nENABLE = True", "extras: marstek enabled");
+has(extras, "MAILBOX = a@b.c", "extras: marstek mailbox");
+has(extras, "[MQTT_INSIGHTS]", "extras: insights section");
+has(extras, "BROKER = 192.168.1.9", "extras: insights broker");
+
+// ── ESPHome: Home Assistant native, 3-phase ──────────────────────────────────
+const eyHa = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  meters: [
+    {
+      type: "homeassistant",
+      phases: 3,
+      fields: { CURRENT_POWER_ENTITY: "sensor.l1, sensor.l2, sensor.l3" },
+      tuning: { POWER_OFFSET: "-20" },
+    },
+  ],
+  ct: { fields: { BALANCE_GAIN: "0.3" } },
+});
+has(eyHa, "name: my-ct002", "esp/ha: name");
+has(eyHa, "external_components:", "esp/ha: external component");
+has(eyHa, "platform: homeassistant", "esp/ha: native sensor");
+has(eyHa, "entity_id: sensor.l1", "esp/ha: l1 entity");
+has(eyHa, "entity_id: sensor.l3", "esp/ha: l3 entity");
+has(eyHa, "power_sensor_l3: grid_l3", "esp/ha: 3-phase wiring");
+has(eyHa, "- offset: -20", "esp/ha: offset filter on sensor");
+has(eyHa, "ct_type: HME-4", "esp/ha: ct_type");
+has(eyHa, "balance_gain: 0.3", "esp/ha: balancer sub-block");
+
+// ── ESPHome: MQTT + insights + marstek ────────────────────────────────────────
+const eyMqtt = generateEsphome({
+  target: "esphome",
+  esphome: { ctType: "HME-3" },
+  meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "192.168.1.10", TOPIC: "home/p" }, tuning: { DEADBAND: "20" } }],
+  ct: { fields: { ACTIVE_CONTROL: "False" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.10", BASE_TOPIC: "astrameter", HA_DISCOVERY: "true" } },
+  marstek: { enabled: true, fields: { MAILBOX: "a@b.c", TIMEZONE: "Europe/Berlin" } },
+});
+has(eyMqtt, "platform: mqtt_subscribe", "esp/mqtt: subscribe sensor");
+has(eyMqtt, "topic: home/p", "esp/mqtt: topic");
+has(eyMqtt, "active_control: false", "esp/mqtt: active control off");
+has(eyMqtt, "deadband: 20", "esp/mqtt: deadband filter");
+has(eyMqtt, "mqtt_insights:", "esp/mqtt: insights sub-block");
+has(eyMqtt, "marstek_registration:", "esp/mqtt: marstek sub-block");
+has(eyMqtt, "device_type: ct003", "esp/mqtt: ct003 from HME-3");
+has(eyMqtt, "ct_type: HME-3", "esp/mqtt: ct_type HME-3");
+
+// ── ESPHome: SML ──────────────────────────────────────────────────────────────
+const eySml = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "sml", phases: 1, fields: { SERIAL: "/dev/ttyUSB0" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eySml, "platform: sml", "esp/sml: sml sensor");
+has(eySml, 'obis_code: "1-0:16.7.0"', "esp/sml: default obis");
+
+// ── ESPHome: unsupported meter warns ──────────────────────────────────────────
+const eyEnvoy = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "envoy", phases: 1, fields: { HOST: "1.2.3.4" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyEnvoy, "no ESPHome component yet", "esp/envoy: warning emitted");
+has(eyEnvoy, "TODO: publish your grid power", "esp/envoy: placeholder sensor");
+
+console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));
+process.exit(failures ? 1 : 0);

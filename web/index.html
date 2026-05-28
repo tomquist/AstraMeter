@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AstraMeter Config Generator</title>
+    <meta
+      name="description"
+      content="A friendly, step-by-step generator for AstraMeter — build a Python config.ini or an ESPHome YAML for your Marstek battery's fake power meter, no prior knowledge needed."
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <h1>AstraMeter Config Generator</h1>
+        <p>
+          Answer a few questions and get a ready-to-use configuration for
+          <a href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">AstraMeter</a>.
+          No experience required — every option is explained as you go, and a live preview
+          updates while you type.
+        </p>
+        <details class="intro">
+          <summary>New here? What is AstraMeter?</summary>
+          <p>
+            Marstek balcony batteries decide when to charge or discharge by listening to a
+            power meter on your home's grid connection. AstraMeter pretends to be that meter:
+            it reads your <em>real</em> grid power from a source you already have (a Shelly,
+            Home Assistant, an MQTT topic, a smart-meter reader, …) and reports it to the
+            battery in the exact format it expects.
+          </p>
+          <p>
+            This tool writes the configuration file that tells AstraMeter which meter to
+            impersonate and where to read your real power from. Pick how you'll run it, point
+            it at your meter, and copy the result.
+          </p>
+        </details>
+      </div>
+    </header>
+
+    <main id="app" class="container">
+      <noscript>
+        <p class="note">This generator needs JavaScript enabled.</p>
+      </noscript>
+    </main>
+
+    <footer class="footer">
+      <div class="container">
+        <p>
+          Generated files are produced entirely in your browser — nothing is uploaded.
+          Need the manual reference?
+          <a href="https://github.com/tomquist/astrameter/blob/develop/README.md" target="_blank" rel="noopener">README</a> ·
+          <a href="https://github.com/tomquist/astrameter/blob/develop/docs/powermeters.md" target="_blank" rel="noopener">Powermeters (Python)</a> ·
+          <a href="https://github.com/tomquist/astrameter/blob/develop/docs/esphome-powermeters.md" target="_blank" rel="noopener">Powermeters (ESPHome)</a>
+        </p>
+      </div>
+    </footer>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
