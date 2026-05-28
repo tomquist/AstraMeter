@@ -10,41 +10,22 @@ powermeter" here means: *give ESPHome a sensor that reads your meter, then point
 ### How a reading reaches the emulator
 
 There is no "powermeter" object in the ESPHome component — the integration is a
-plain **id reference**. Every example below ends up publishing a watts value into
-a sensor whose `id` is `grid_l1` (and `grid_l2` / `grid_l3` for the other
-phases). The `ct002:` block then names those ids in its `power_sensor_l*` keys.
-That id match is the entire wiring:
+plain **id reference**. Every example below publishes a watts value into a sensor
+whose `id` is `grid_l1` (and `grid_l2` / `grid_l3` for the other phases). The
+`ct002:` block names those ids in its `power_sensor_l*` keys. That id match is
+the entire wiring; whenever the sensor publishes a new value, the emulator picks
+it up on its next Marstek CT002 poll — you never call `ct002:` directly.
 
-```yaml
-external_components:
-  - source: github://tomquist/astrameter@develop
-    components: [ct002]
-
-sensor:
-  - platform: <your meter>      # one of the sections below — see below
-    id: grid_l1                 # ← the id ct002 reads
-    # ...
-
-ct002:
-  id: ct002_main
-  power_sensor_l1: grid_l1      # ← must match the sensor id above
-  # power_sensor_l2: grid_l2    # three-phase only (define grid_l2 / grid_l3 too)
-  # power_sensor_l3: grid_l3
-```
-
-Whenever that sensor publishes a new value, the emulator picks it up on its next
-Marstek CT002 poll — you never call `ct002:` directly. So **"configuring a
-powermeter" = producing a `grid_l1` sensor.** Each section below shows exactly how
-to produce that sensor for one meter; the [generic HTTP
-pattern](#a-note-on-the--generic-http-pattern) section shows one complete file
-end-to-end so you can see the whole chain.
+**Each section below is a complete, copy-pasteable config** for one meter — from
+`external_components:` through `ct002:`. To keep them focused, every example
+**omits the `wifi:`, `api:`, `ota:`, and board (`esp32:`) blocks** — add those
+for your hardware (see [`esphome.example.yaml`](../esphome.example.yaml) for a
+full board config). What's shown is complete for the meter → emulator wiring.
 
 Per-phase calibration/throttling (`offset:`, `multiply:`, `throttle:`) goes in
 `filters:` **on the sensor**, not in `ct002:` — see the
-[main README note](../README.md#esphome-external-component-run-on-an-esp32). For
-the full annotated emulator config see
-[`esphome.example.yaml`](../esphome.example.yaml). Running the Python add-on
-instead? See [powermeters.md](powermeters.md).
+[main README note](../README.md#esphome-external-component-run-on-an-esp32).
+Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 > The polling/lambda examples are **illustrative**. ESPHome's `http_request`,
 > `json`, and lambda APIs differ slightly between releases — check the linked
@@ -73,6 +54,7 @@ instead? See [powermeters.md](powermeters.md).
 - [Modbus](#modbus) — 🟢 Native (RS485 serial; see TCP caveat)
 - [MQTT](#mqtt) — 🟢 Native
 - [JSON HTTP](#json-http) — 🟢 Native (generic `http_request`)
+- [SML](#sml) — 🟢 Native
 - [TQ Energy Manager](#tq-energy-manager) — 🟠 Alternate (Modbus/MQTT)
 - [HomeWizard](#homewizard) — 🟠 Alternate (local v1 HTTP, or native P1)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway) — 🔴 Not yet available
@@ -81,18 +63,23 @@ instead? See [powermeters.md](powermeters.md).
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
 > an ESP32 can't run a host shell command — so it is intentionally omitted here.
 
-## A note on the 🔵 Generic HTTP pattern
+> **The 🔵 generic HTTP sections** all share the same shape: a `template` sensor
+> named `grid_l1` holds the value, an `interval:` polls the URL, and a lambda
+> parses the JSON body with the built-in
+> [`json::parse_json`](https://esphome.io/components/json/) helper and publishes
+> into `grid_l1`. Only the URL and the lambda field differ between them. The
+> [`http_request`](https://esphome.io/components/http_request/) and
+> [`json`](https://esphome.io/components/json/) components are built in — no
+> extra external component needed.
 
-Several sources below have no dedicated ESPHome component but expose a JSON HTTP
-endpoint. They all follow the same shape: a `template` sensor named `grid_l1`
-holds the value, an `interval:` polls the URL, and a lambda parses the body and
-publishes into `grid_l1` — which `ct002:` then reads. The
-[`http_request`](https://esphome.io/components/http_request/) and
-[`json`](https://esphome.io/components/json/) components are built in — no
-external component needed.
+## Shelly
 
-Here is one **complete** file (a single-phase generic meter wired all the way to
-the emulator). Add your `wifi:` / `api:` / board config as usual:
+**Tier: 🔵 Generic** (poll over the network) — or **🟢 Native** if the Shelly is
+ESP32-based and you flash ESPHome onto it.
+
+Most Shelly devices are reachable over HTTP from the ct002 ESP32. Gen2/Gen3/Pro
+expose an RPC API; Gen1 a REST `/status`. Single-phase (Shelly Plus 1PM / Pro
+family, RPC `apower`):
 
 ```yaml
 external_components:
@@ -104,76 +91,77 @@ http_request:
   timeout: 5s
 
 sensor:
-  - platform: template            # holds the latest reading
-    id: grid_l1                    # ← the id ct002 reads
+  - platform: template
+    id: grid_l1
     unit_of_measurement: W
     device_class: power
 
 interval:
-  - interval: 1s                   # poll cadence
+  - interval: 1s
     then:
       - http_request.get:
-          url: http://192.168.1.50/some/endpoint
+          url: http://192.168.1.100/rpc/Switch.GetStatus?id=0
           capture_response: true
           on_response:
             then:
               - lambda: |-
                   json::parse_json(body, [](JsonObject root) -> bool {
-                    id(grid_l1).publish_state(root["power"]);   // adapt the field
+                    id(grid_l1).publish_state(root["apower"]);
                     return true;
                   });
 
 ct002:
   id: ct002_main
-  power_sensor_l1: grid_l1         # ← consumes the sensor above
+  power_sensor_l1: grid_l1
 ```
 
-**The per-source sections below show only the `- http_request.get:` action** —
-the part that differs (the **URL** and the **lambda body**). Drop it into the
-`interval: → then:` list above in place of the example action, and keep the rest
-of the file (the `http_request:` component, the `grid_l1` template sensor, and
-the `ct002:` block) unchanged. For three-phase meters, add `grid_l2` / `grid_l3`
-template sensors, publish into them from the lambda, and set `power_sensor_l2` /
-`power_sensor_l3` on `ct002:`.
-
-## Shelly
-
-**Tier: 🔵 Generic** (poll over the network) — or **🟢 Native** if the Shelly is
-ESP32-based and you flash ESPHome onto it.
-
-Most Shelly devices are reachable over HTTP from the ct002 ESP32. Gen2/Gen3/Pro
-expose an RPC API; Gen1 a REST `/status`.
-
-Single-phase (Shelly Plus 1PM / Pro family, RPC `apower`):
+Three-phase (Shelly 3EM Pro, RPC `EM.GetStatus`) — three template sensors, one
+poll, all three phases on `ct002:`:
 
 ```yaml
-- http_request.get:
-    url: http://192.168.1.100/rpc/Switch.GetStatus?id=0
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              id(grid_l1).publish_state(root["apower"]);
-              return true;
-            });
-```
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
 
-Three-phase (Shelly 3EM Pro, RPC `EM.GetStatus`) — define `grid_l1/2/3` and:
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
 
-```yaml
-- http_request.get:
-    url: http://192.168.1.100/rpc/EM.GetStatus?id=0
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              id(grid_l1).publish_state(root["a_act_power"]);
-              id(grid_l2).publish_state(root["b_act_power"]);
-              id(grid_l3).publish_state(root["c_act_power"]);
-              return true;
-            });
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+  - platform: template
+    id: grid_l2
+    unit_of_measurement: W
+    device_class: power
+  - platform: template
+    id: grid_l3
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.100/rpc/EM.GetStatus?id=0
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["a_act_power"]);
+                    id(grid_l2).publish_state(root["b_act_power"]);
+                    id(grid_l3).publish_state(root["c_act_power"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
 ```
 
 Gen1 (Shelly 1PM/EM/3EM) expose `http://<ip>/status` with a `meters[]` /
@@ -193,16 +181,37 @@ Tasmota answers `GET /cm?cmnd=status%2010` with sensor JSON nested under
 `StatusSNS`. Adapt the prefix/label to your meter (here `SML`/`Power`):
 
 ```yaml
-- http_request.get:
-    url: http://192.168.1.101/cm?cmnd=status%2010
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              id(grid_l1).publish_state(root["StatusSNS"]["SML"]["Power"]);
-              return true;
-            });
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.101/cm?cmnd=status%2010
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["StatusSNS"]["SML"]["Power"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 **Native alternative:** the device is ESP-based — flashing ESPHome lets you read
@@ -215,18 +224,39 @@ directly as a native sensor.
 returning OBIS keys; grid power is `1.7.0` (import) minus `2.7.0` (export):
 
 ```yaml
-- http_request.get:
-    url: http://192.168.1.102/getLastData?user=USER&password=PASS
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              float in = root["1.7.0"];
-              float out = root["2.7.0"];
-              id(grid_l1).publish_state(in - out);
-              return true;
-            });
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.102/getLastData?user=USER&password=PASS
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    float in = root["1.7.0"];
+                    float out = root["2.7.0"];
+                    id(grid_l1).publish_state(in - out);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 ## Emlog
@@ -236,62 +266,113 @@ returning OBIS keys; grid power is `1.7.0` (import) minus `2.7.0` (export):
 (import) and `Leistung270` (export):
 
 ```yaml
-- http_request.get:
-    url: http://192.168.1.103/pages/getinformation.php?heute&meterindex=0
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              float in = root["Leistung170"];
-              float out = root["Leistung270"];
-              id(grid_l1).publish_state(in - out);
-              return true;
-            });
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.103/pages/getinformation.php?heute&meterindex=0
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    float in = root["Leistung170"];
+                    float out = root["Leistung270"];
+                    id(grid_l1).publish_state(in - out);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 ## IoBroker
 
-**Tier: 🔵 Generic.** Two options:
+**Tier: 🔵 Generic.** With ioBroker's simpleAPI adapter, `GET /getBulk/<id>`
+returns a JSON array (`GET /getPlainValue/<id>` returns a bare number):
 
-1. **HTTP (simpleAPI adapter)** — `GET /getPlainValue/<id>` returns a bare
-   number you can publish directly, or `GET /getBulk/<id>` returns a JSON array:
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
 
-   ```yaml
-   - http_request.get:
-       url: http://192.168.1.104:8087/getBulk/Alias.0.power
-       capture_response: true
-       on_response:
-         then:
-           - lambda: |-
-               json::parse_json(body, [](JsonArray arr) -> bool {
-                 id(grid_l1).publish_state(arr[0]["val"]);
-                 return true;
-               });
-   ```
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
 
-2. **MQTT** — if you run ioBroker's MQTT adapter, publish the state to a topic
-   and read it with the native [`mqtt_subscribe`](#mqtt) sensor below (simpler
-   and push-based).
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.104:8087/getBulk/Alias.0.power
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonArray arr) -> bool {
+                    id(grid_l1).publish_state(arr[0]["val"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+**Alternative:** if you run ioBroker's MQTT adapter, publish the state to a topic
+and read it with the native [`mqtt_subscribe`](#mqtt) sensor instead (simpler and
+push-based).
 
 ## HomeAssistant
 
 **Tier: 🟢 Native.** Use the built-in
 [`homeassistant`](https://esphome.io/components/sensor/homeassistant/) sensor
-platform — the ESP subscribes to a HA entity over the native API:
+platform — the ESP subscribes to a HA entity over the native API (so the `api:`
+block, normally part of the omitted boilerplate, is shown here because it's
+required for this source):
 
 ```yaml
-api:        # native API link to Home Assistant is required
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+api:        # native API link to Home Assistant is required for this source
 
 sensor:
   - platform: homeassistant
     id: grid_l1
     entity_id: sensor.grid_power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
-For three-phase, add `grid_l2` / `grid_l3` pointing at the per-phase entities.
-This is the same data path the Python `[HOMEASSISTANT]` source uses, but pushed
-to the ESP instead of polled from a server.
+For three-phase, add `grid_l2` / `grid_l3` sensors pointing at the per-phase
+entities and set `power_sensor_l2` / `power_sensor_l3`. This is the same data
+path the Python `[HOMEASSISTANT]` source uses, but pushed to the ESP instead of
+polled from a server.
 
 ## VZLogger
 
@@ -301,16 +382,37 @@ vzlogger's HTTP interface serves `GET /<uuid>` with the latest tuple at
 `data[0].tuples[0][1]`:
 
 ```yaml
-- http_request.get:
-    url: http://192.168.1.106:8080/your-uuid
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              id(grid_l1).publish_state(root["data"][0]["tuples"][0][1]);
-              return true;
-            });
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.106:8080/your-uuid
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["data"][0]["tuples"][0][1]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 **Native alternative:** vzlogger itself just reads a physical meter (usually
@@ -323,19 +425,29 @@ middleware.
 
 **Tier: 🟢 Native.** The Python `[ESPHOME]` source polls another ESPHome
 device's web-server REST API. On the ESP32 there's no bridge to build — if your
-grid-power source is already an ESPHome device, either:
-
-- define that meter's sensor in the **same** YAML as `ct002:` (e.g. a native
-  chip / Modbus / pulse-counter sensor with `id: grid_l1`), or
-- import it from another ESPHome node via Home Assistant using the
-  [`homeassistant`](#homeassistant) platform, or over [MQTT](#mqtt).
+grid-power source is already an ESPHome device, either define that meter's sensor
+in the **same** YAML as `ct002:` (any native chip / Modbus / pulse-counter sensor
+with `id: grid_l1`), or import another ESPHome node's entity via Home Assistant.
+The latter, complete:
 
 ```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+api:        # required to import the other node's entity from Home Assistant
+
 sensor:
   - platform: homeassistant     # the other ESPHome node's entity, via HA
     id: grid_l1
     entity_id: sensor.other_esphome_grid_power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
+
+You can also subscribe over [MQTT](#mqtt) if both nodes share a broker.
 
 ## AMIS Reader
 
@@ -343,25 +455,50 @@ sensor:
 (signed grid power):
 
 ```yaml
-- http_request.get:
-    url: http://192.168.1.108/rest
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              id(grid_l1).publish_state(root["saldo"]);
-              return true;
-            });
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.108/rest
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["saldo"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 ## Modbus
 
 **Tier: 🟢 Native** — with one important caveat (see below). Use the built-in
 [`modbus_controller`](https://esphome.io/components/sensor/modbus_controller/)
-sensor:
+sensor over an RS485 transceiver wired to the ESP:
 
 ```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
 uart:
   id: mod_uart
   tx_pin: GPIO17
@@ -387,6 +524,10 @@ sensor:
     address: 0
     value_type: U_WORD       # S_DWORD / U_DWORD / FP32 / … to match your meter
     unit_of_measurement: W
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 > **Modbus-TCP caveat.** ESPHome's `modbus_controller` is a **serial (RS485)**
@@ -402,6 +543,10 @@ sensor:
 [`mqtt_subscribe`](https://esphome.io/components/sensor/mqtt_subscribe/):
 
 ```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
 mqtt:
   broker: 192.168.1.10
   port: 1883
@@ -411,6 +556,10 @@ sensor:
     id: grid_l1
     topic: home/powermeter
     unit_of_measurement: W
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 For a **JSON** payload (the Python `JSON_PATH` case), `mqtt_subscribe` only
@@ -418,8 +567,13 @@ handles bare floats, so extract the field with `on_json_message` into a template
 sensor:
 
 ```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
 mqtt:
   broker: 192.168.1.10
+  port: 1883
   on_json_message:
     topic: home/powermeter
     then:
@@ -432,80 +586,201 @@ sensor:
     id: grid_l1
     unit_of_measurement: W
     device_class: power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
 
 For three-phase, subscribe to three topics (or read three fields) into
-`grid_l1/2/3`.
+`grid_l1/2/3` and set `power_sensor_l2` / `power_sensor_l3`.
 
 ## JSON HTTP
 
-**Tier: 🟢 Native** (generic). This is exactly the
-[generic HTTP pattern](#a-note-on-the--generic-http-pattern) above — point the
-URL at your endpoint and set the lambda to your JSON field. Headers and basic
-auth are supported on the `http_request.get` action:
+**Tier: 🟢 Native** (generic `http_request`). Point the URL at your endpoint and
+set the lambda to your JSON field. Headers and basic auth are supported on the
+`http_request.get` action:
 
 ```yaml
-- http_request.get:
-    url: http://example.com/api
-    headers:
-      Authorization: Bearer token
-    capture_response: true
-    on_response:
-      then:
-        - lambda: |-
-            json::parse_json(body, [](JsonObject root) -> bool {
-              id(grid_l1).publish_state(root["power"]);
-              return true;
-            });
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://example.com/api
+          headers:
+            Authorization: Bearer token
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["power"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
 ```
+
+## SML
+
+**Tier: 🟢 Native.** Smart meters that emit SML over an IR head map directly to
+ESPHome's built-in [`sml`](https://esphome.io/components/sml/) component (the
+ESP-side equivalent of the Python `[SML]` source). Wire a photo-transistor to a
+UART RX pin, then select the OBIS register:
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+uart:
+  id: uart_bus
+  rx_pin: GPIO16
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+sml:
+  id: mysml
+  uart_id: uart_bus
+
+sensor:
+  - platform: sml
+    id: grid_l1
+    sml_id: mysml
+    obis_code: "1-0:16.7.0"     # aggregate active power (Python OBIS_POWER_CURRENT)
+    unit_of_measurement: W
+    # per-phase instead: 1-0:36.7.0 (L1), 1-0:56.7.0 (L2), 1-0:76.7.0 (L3)
+    #   → add grid_l2 / grid_l3 sensors and set power_sensor_l2 / l3 below
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+The default `obis_code` here matches the Python source's default
+`OBIS_POWER_CURRENT` (`0100100700ff` → `1-0:16.7.0`); the per-phase codes match
+its `OBIS_POWER_L1/L2/L3` defaults.
 
 ## TQ Energy Manager
 
 **Tier: 🟠 Alternate.** The Python `[TQ_EM]` source talks to the device's
 proprietary session/login JSON API (`/start.php` + `/mum-webservice/data.php`),
 which has no ESPHome port. However, the TQ Energy Manager (EM420 and similar)
-also exposes **Modbus TCP/RTU and MQTT** interfaces — read it through one of
-those instead:
+also exposes **Modbus RTU/TCP and MQTT** — read it through one of those instead.
 
-- **Modbus** — wire the EM's RS485 port to the ESP and use the
-  [`modbus_controller`](#modbus) sensor with the active-power register from the
-  TQ Modbus register map.
-- **MQTT** — enable the EM's MQTT export and use the [`mqtt_subscribe`](#mqtt)
-  sensor.
+Via Modbus (RS485 to the EM; use the active-power register from the TQ Modbus
+register map — `address` / `value_type` below are placeholders):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+uart:
+  id: mod_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 9600
+  stop_bits: 1
+
+modbus:
+  id: modbus1
+  uart_id: mod_uart
+
+modbus_controller:
+  - id: tq_em
+    address: 1
+    modbus_id: modbus1
+    update_interval: 1s
+
+sensor:
+  - platform: modbus_controller
+    modbus_controller_id: tq_em
+    id: grid_l1
+    register_type: holding
+    address: 0               # ← set to the TQ active-power register
+    value_type: S_DWORD      # ← match the register's type
+    unit_of_measurement: W
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+Alternatively enable the EM's MQTT export and use the [`mqtt_subscribe`](#mqtt)
+config above with the EM's power topic.
 
 ## HomeWizard
 
 **Tier: 🟠 Alternate.** The Python `[HOMEWIZARD]` source uses the v2 WebSocket
-API (TLS + token), which has no ESPHome component. Two ESP-friendly paths:
+API (TLS + token), which has no ESPHome component. Easiest ESP path: enable
+*Local API* in the HomeWizard app and poll the **v1 HTTP API** at
+`GET /api/v1/data`; grid power is `active_power_w` (and `active_power_l1_w` …
+`_l3_w` for three-phase):
 
-1. **Local v1 HTTP API** (🔵 generic) — enable *Local API* in the HomeWizard
-   app, then poll `GET /api/v1/data`; grid power is `active_power_w` (and
-   `active_power_l1_w` … `_l3_w` for three-phase):
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
 
-   ```yaml
-   - http_request.get:
-       url: http://192.168.1.110/api/v1/data
-       capture_response: true
-       on_response:
-         then:
-           - lambda: |-
-               json::parse_json(body, [](JsonObject root) -> bool {
-                 id(grid_l1).publish_state(root["active_power_w"]);
-                 return true;
-               });
-   ```
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
 
-2. **Read the P1 port directly** (🟢 native) — the HomeWizard dongle just reads
-   your smart meter's P1 telegram. With your own P1-reader hardware you can skip
-   the dongle and use ESPHome's native
-   [`dsmr`](https://esphome.io/components/sensor/dsmr/) component (or
-   [`sml`](#sml) for SML meters) on the ESP.
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.110/api/v1/data
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["active_power_w"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+**Native alternative:** the HomeWizard dongle just reads your smart meter's P1
+telegram. With your own P1-reader hardware you can skip the dongle and use
+ESPHome's native [`dsmr`](https://esphome.io/components/sensor/dsmr/) component
+(or [`sml`](#sml) for SML meters) on the ESP.
 
 ## Enphase Envoy (IQ Gateway)
 
 **Tier: 🔴 Not yet available.** There is currently **no ESPHome component** for
-the Enphase Envoy / IQ Gateway. The Python `[ENVOY]` source reads the local
-`/production.json?details=1` endpoint, which requires:
+the Enphase Envoy / IQ Gateway, so there is no config to copy yet. The Python
+`[ENVOY]` source reads the local `/production.json?details=1` endpoint, which
+requires:
 
 - **HTTPS to a self-signed certificate** on the gateway, and
 - a **JWT bearer token** — either a long-lived static token or one fetched and
@@ -527,10 +802,11 @@ net-consumption` entry (per-phase `lines[].wNow`, else aggregate `wNow`), and
 ## SMA Energy Meter
 
 **Tier: 🔴 Not yet available.** There is currently **no ESPHome component** for
-the SMA **Speedwire** protocol. The Python `[SMA_ENERGY_METER]` source joins the
-`239.12.255.254:9522` UDP multicast group and decodes SMA's binary OBIS channel
-stream (validating the `SMA\0` magic, protocol id `0x6069`, SUSY/serial, then
-reading the active-power channels and dividing the raw value by 10).
+the SMA **Speedwire** protocol, so there is no config to copy yet. The Python
+`[SMA_ENERGY_METER]` source joins the `239.12.255.254:9522` UDP multicast group
+and decodes SMA's binary OBIS channel stream (validating the `SMA\0` magic,
+protocol id `0x6069`, SUSY/serial, then reading the active-power channels and
+dividing the raw value by 10).
 
 *To implement:* an external component that joins the multicast group on the ESP's
 network interface and parses the Speedwire datagram (per-phase
