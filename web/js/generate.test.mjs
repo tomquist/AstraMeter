@@ -132,6 +132,25 @@ has(eyHa, "power_sensor_l3: grid_l3", "esp/ha: 3-phase wiring");
 has(eyHa, "- offset: -20", "esp/ha: offset filter on sensor");
 has(eyHa, "ct_type: HME-4", "esp/ha: ct_type");
 has(eyHa, "balance_gain: 0.3", "esp/ha: balancer sub-block");
+// a single offset must apply to all three phase sensors, not just L1
+ok((eyHa.match(/- offset: -20/g) || []).length === 3, "esp/ha: single offset applied to all 3 phases");
+
+// per-phase offsets map to the matching phase sensor
+const eyPerPhase = generateEsphome({
+  target: "esphome",
+  esphome: { ctType: "HME-4" },
+  meters: [
+    {
+      type: "homeassistant",
+      phases: 3,
+      fields: { CURRENT_POWER_ENTITY: "sensor.l1, sensor.l2, sensor.l3" },
+      tuning: { POWER_MULTIPLIER: "1,0,1" },
+    },
+  ],
+  ct: { fields: {} },
+});
+has(eyPerPhase, "- multiply: 1", "esp/ha: per-phase multiplier L1");
+has(eyPerPhase, "- multiply: 0", "esp/ha: per-phase multiplier L2 (null phase)");
 
 // ── ESPHome: MQTT + insights + marstek ────────────────────────────────────────
 const eyMqtt = generateEsphome({

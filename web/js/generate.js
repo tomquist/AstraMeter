@@ -189,15 +189,26 @@ function esphomeSensor(state) {
   const topBlocks = [];
   const ids = phases === 3 ? ["grid_l1", "grid_l2", "grid_l3"] : ["grid_l1"];
 
-  // Per-sensor filters from value-transform / throttle tuning.
-  const filterLines = [];
-  if (!isBlank(tuning.POWER_OFFSET)) filterLines.push(`- offset: ${String(tuning.POWER_OFFSET).split(",")[0].trim()}`);
-  if (!isBlank(tuning.POWER_MULTIPLIER)) filterLines.push(`- multiply: ${String(tuning.POWER_MULTIPLIER).split(",")[0].trim()}`);
-  if (!isBlank(tuning.THROTTLE_INTERVAL) && Number(tuning.THROTTLE_INTERVAL) > 0)
-    filterLines.push(`- throttle: ${tuning.THROTTLE_INTERVAL}s`);
-  const filterBlock = filterLines.length
-    ? `\n${IND}${IND}filters:\n` + filterLines.map((l) => `${IND}${IND}${IND}${l}`).join("\n")
-    : "";
+  // Per-sensor filters from value-transform / throttle tuning. Applied to
+  // every phase sensor — a single offset/multiplier value applies to all
+  // phases (matching the Python add-on), while a comma list maps per phase.
+  function phaseValue(raw, idx) {
+    if (isBlank(raw)) return "";
+    const parts = String(raw).split(",").map((s) => s.trim());
+    return parts.length === 1 ? parts[0] : (parts[idx] ?? "");
+  }
+  function phaseFilterBlock(idx) {
+    const lines = [];
+    const off = phaseValue(tuning.POWER_OFFSET, idx);
+    const mul = phaseValue(tuning.POWER_MULTIPLIER, idx);
+    if (!isBlank(off)) lines.push(`- offset: ${off}`);
+    if (!isBlank(mul)) lines.push(`- multiply: ${mul}`);
+    if (!isBlank(tuning.THROTTLE_INTERVAL) && Number(tuning.THROTTLE_INTERVAL) > 0)
+      lines.push(`- throttle: ${tuning.THROTTLE_INTERVAL}s`);
+    return lines.length
+      ? `\n${IND}${IND}filters:\n` + lines.map((l) => `${IND}${IND}${IND}${l}`).join("\n")
+      : "";
+  }
 
   function templateSensor(id) {
     return `${IND}- platform: template\n${IND}${IND}id: ${id}\n${IND}${IND}unit_of_measurement: W\n${IND}${IND}device_class: power`;
@@ -210,7 +221,7 @@ function esphomeSensor(state) {
         ? [`sensor.${f.ID || "grid_power"}`]
         : splitPhases(f.CURRENT_POWER_ENTITY || "sensor.grid_power", phases);
     const sensors = ids.map((id, i) => {
-      return `${IND}- platform: homeassistant\n${IND}${IND}id: ${id}\n${IND}${IND}entity_id: ${entities[i] || "sensor.grid_power"}${i === 0 ? filterBlock : ""}`;
+      return `${IND}- platform: homeassistant\n${IND}${IND}id: ${id}\n${IND}${IND}entity_id: ${entities[i] || "sensor.grid_power"}${phaseFilterBlock(i)}`;
     });
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
   }
@@ -224,7 +235,7 @@ function esphomeSensor(state) {
       warnings.push("JSON payloads need an on_json_message handler; see docs/esphome-powermeters.md for the template-sensor pattern.");
     }
     const sensors = ids.map((id, i) => {
-      return `${IND}- platform: mqtt_subscribe\n${IND}${IND}id: ${id}\n${IND}${IND}topic: ${topics[i] || "home/powermeter"}\n${IND}${IND}unit_of_measurement: W${i === 0 ? filterBlock : ""}`;
+      return `${IND}- platform: mqtt_subscribe\n${IND}${IND}id: ${id}\n${IND}${IND}topic: ${topics[i] || "home/powermeter"}\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(i)}`;
     });
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
   }
@@ -236,7 +247,7 @@ function esphomeSensor(state) {
     topBlocks.push(`sml:\n${IND}id: mysml\n${IND}uart_id: uart_bus`);
     const obis = phases === 3 ? ["1-0:36.7.0", "1-0:56.7.0", "1-0:76.7.0"] : ["1-0:16.7.0"];
     const sensors = ids.map((id, i) => {
-      return `${IND}- platform: sml\n${IND}${IND}id: ${id}\n${IND}${IND}sml_id: mysml\n${IND}${IND}obis_code: "${obis[i]}"\n${IND}${IND}unit_of_measurement: W${i === 0 ? filterBlock : ""}`;
+      return `${IND}- platform: sml\n${IND}${IND}id: ${id}\n${IND}${IND}sml_id: mysml\n${IND}${IND}obis_code: "${obis[i]}"\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(i)}`;
     });
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
   }
@@ -254,16 +265,14 @@ function esphomeSensor(state) {
     );
     const valueType = modbusValueType(f.DATA_TYPE);
     const regType = (f.REGISTER_TYPE || "HOLDING").toLowerCase() === "input" ? "read" : "holding";
-    const sensor = `${IND}- platform: modbus_controller\n${IND}${IND}modbus_controller_id: meter\n${IND}${IND}id: grid_l1\n${IND}${IND}register_type: ${regType}\n${IND}${IND}address: ${f.ADDRESS || "0"}\n${IND}${IND}value_type: ${valueType}\n${IND}${IND}unit_of_measurement: W${filterBlock}`;
+    const sensor = `${IND}- platform: modbus_controller\n${IND}${IND}modbus_controller_id: meter\n${IND}${IND}id: grid_l1\n${IND}${IND}register_type: ${regType}\n${IND}${IND}address: ${f.ADDRESS || "0"}\n${IND}${IND}value_type: ${valueType}\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(0)}`;
     return { topBlocks, sensorBlock: "sensor:\n" + sensor, phases: 1, warnings };
   }
 
   if (esp.kind === "http") {
     topBlocks.push(`http_request:\n${IND}useragent: esphome/astrameter\n${IND}timeout: 5s`);
     const use3 = phases === 3 && esp.url3;
-    const sensors = (use3 ? ids : ["grid_l1"]).map((id, i) =>
-      i === 0 ? templateSensor(id) + filterBlock : templateSensor(id),
-    );
+    const sensors = (use3 ? ids : ["grid_l1"]).map((id, i) => templateSensor(id) + phaseFilterBlock(i));
     const url = use3 ? esp.url3(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
     const lambdaBody = use3
       ? esp.lambda3
@@ -423,6 +432,24 @@ export function generateEsphome(state) {
   const meter = (state.meters && state.meters[0]) || {};
   const { topBlocks, sensorBlock, phases, warnings } = esphomeSensor(state);
 
+  // ESPHome allows only one top-level `mqtt:` block, so an MQTT meter and
+  // MQTT Insights must share the same broker. Warn if they were set differently
+  // — Insights reuses whatever broker this YAML connects to.
+  const wantInsights = state.mqttInsights && state.mqttInsights.enabled;
+  const wantMarstek = state.marstek && state.marstek.enabled;
+  const pm0 = getPowermeter(meter.type);
+  if (wantInsights && pm0 && pm0.esphome && pm0.esphome.kind === "mqtt") {
+    const mf0 = state.mqttInsights.fields || {};
+    const mFields = meter.fields || {};
+    const sameBroker = (mf0.BROKER || "") === (mFields.BROKER || "");
+    const samePort = (String(mf0.PORT || "1883")) === (String(mFields.PORT || "1883"));
+    if (!sameBroker || !samePort) {
+      warnings.push(
+        "MQTT Insights and the MQTT meter must use the same broker (ESPHome has one mqtt: block). The meter's broker/port below is used for both.",
+      );
+    }
+  }
+
   const out = [];
   out.push(
     "# Generated with the AstraMeter config generator — runs the CT002/CT003\n" +
@@ -443,12 +470,16 @@ export function generateEsphome(state) {
   out.push(`wifi:\n${IND}ssid: !secret wifi_ssid\n${IND}password: !secret wifi_password`);
   out.push(`external_components:\n${IND}- source: github://tomquist/astrameter@develop\n${IND}${IND}components: [ct002]`);
 
-  // mqtt_insights needs a top-level mqtt: block
-  const wantInsights = state.mqttInsights && state.mqttInsights.enabled;
-  const wantMarstek = state.marstek && state.marstek.enabled;
+  // mqtt_insights needs a top-level mqtt: block. If the meter itself is MQTT,
+  // its broker wins (the data source is what matters) and Insights reuses it;
+  // otherwise fall back to the Insights broker.
   if (wantInsights) {
-    const mf = (state.mqttInsights.fields) || {};
-    out.push(`mqtt:\n${IND}broker: ${mf.BROKER || "192.168.1.10"}\n${IND}port: ${mf.PORT || "1883"}`);
+    const mf = state.mqttInsights.fields || {};
+    const useMeter = pm0 && pm0.esphome && pm0.esphome.kind === "mqtt";
+    const mFields = (meter.fields || {});
+    const broker = (useMeter && mFields.BROKER) || mf.BROKER || "192.168.1.10";
+    const port = (useMeter && mFields.PORT) || mf.PORT || "1883";
+    out.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
   }
   if (wantMarstek) {
     out.push(`http_request:\n${IND}timeout: 20s`);
