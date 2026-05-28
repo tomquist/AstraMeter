@@ -164,6 +164,10 @@ ct002:
   power_sensor_l3: grid_l3
 ```
 
+(This splits `EM.GetStatus` into per-phase readings; the Python `[SHELLY]`
+`3EMPro` source instead reads the aggregate `total_act_power` from the same
+response. Both are valid — use whichever your setup needs.)
+
 Gen1 (Shelly 1PM/EM/3EM) expose `http://<ip>/status` with a `meters[]` /
 `emeters[]` array — point the lambda at `root["emeters"][0]["power"]` etc.
 
