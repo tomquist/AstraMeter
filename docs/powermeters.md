@@ -306,7 +306,7 @@ TOPIC = home/powermeter
 The `JSON_PATH` option is used to extract the power value from a JSON payload. The path must be a [valid JSONPath expression](https://goessner.net/articles/JsonPath/).
 If the payload is a simple integer value, you can omit this option.
 
-Both `JSON_PATH` and `JSON_PATHS` are parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage a payload value before it's converted to a float — for instance `$.state.`split( , 0, -1)`` or `$.state.`sub(/[^0-9.\-]+$/, )`` to strip a unit suffix like `"331.74 W"`. See the [JSON HTTP](#json-http) section below for more examples.
+Both `JSON_PATH` and `JSON_PATHS` are parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage a payload value before it's converted to a float — for instance `` `$.state.`split( , 0, -1)` `` or `` `$.state.`sub(/[^0-9.\-]+$/, )` `` to strip a unit suffix like `"331.74 W"`. See the [JSON HTTP](#json-http) section below for more examples.
 
 ### Multi-phase MQTT
 

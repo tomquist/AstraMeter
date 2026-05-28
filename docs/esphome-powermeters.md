@@ -7,7 +7,7 @@ the `ct002:` block does **not** talk to your meter directly. Instead it consumes
 powermeter" here means: *give ESPHome a sensor that reads your meter, then point
 `ct002:` at it.*
 
-### How a reading reaches the emulator
+## How a reading reaches the emulator
 
 There is no "powermeter" object in the ESPHome component — the integration is a
 plain **id reference**. Every example below publishes a watts value into a sensor
@@ -62,7 +62,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
 > an ESP32 can't run a host shell command — so it is intentionally omitted here.
-
+>
 > **The 🔵 generic HTTP sections** all share the same shape: a `template` sensor
 > named `grid_l1` holds the value, an `interval:` polls the URL, and a lambda
 > parses the JSON body with the built-in
