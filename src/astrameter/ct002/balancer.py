@@ -1069,6 +1069,12 @@ class LoadBalancer:
         """
         if self._cfg.max_efficient_power != 0:
             return
+        # ``last_reported`` is only refreshed here, i.e. while the consumer is
+        # active, so after a deprioritized/manual gap ``prev_reported`` is stale.
+        # That cannot confirm a bogus cap: re-promotion clears ``last_target``
+        # (grace start sets it to ``None``), so the first post-promotion sample
+        # hits the branch below and resets ``clip_samples`` to 0 — and
+        # CAP_CONFIRM_SAMPLES requires two *consecutive* clean clips.
         prev_reported = state.last_reported
         state.last_reported = actual
         if last_target is None:

@@ -808,6 +808,11 @@ void LoadBalancer::update_output_cap_(BalancerConsumerState &state,
   // Learn a battery's output ceiling from a confirmed clip plateau. Only active
   // in auto mode (max_efficient_power == 0); override/disabled need no learning.
   if (this->cfg_.max_efficient_power != 0.0f) return;
+  // last_reported is only refreshed here, i.e. while the consumer is active, so
+  // after a deprioritized/manual gap prev_reported is stale. That cannot confirm
+  // a bogus cap: re-promotion clears last_target (grace start sets it empty), so
+  // the first post-promotion sample resets clip_samples to 0 — and
+  // CAP_CONFIRM_SAMPLES requires two consecutive clean clips.
   const float prev_reported = state.last_reported;
   state.last_reported = actual;
   if (!last_target.has_value()) {
