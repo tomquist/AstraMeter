@@ -34,9 +34,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Run config generator tests
+      - name: Validate schema and run generator tests
         if: github.event.action != 'closed'
-        run: node web/js/generate.test.mjs
+        run: |
+          node web/js/schema.test.mjs
+          node web/js/generate.test.mjs
       - name: Deploy preview
         uses: rossjrw/pr-preview-action@v1
         with:

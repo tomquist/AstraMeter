@@ -42,10 +42,12 @@ python3 -m http.server 8000
 ## Test
 
 ```bash
-node web/js/generate.test.mjs
+node web/js/schema.test.mjs     # validates the schema structure (typo guard)
+node web/js/generate.test.mjs   # asserts the generated config.ini / YAML
 ```
 
-CI runs the same test before deploying (see `.github/workflows/pages.yml`).
+CI runs both before deploying (see `.github/workflows/pages.yml` and
+`pr-preview.yml`).
 
 ## Save / load
 
@@ -72,11 +74,60 @@ One-time setup: repository **Settings → Pages → Build and deployment → Sou
   the PR closes. (Previews only run for same-repo branches; forks can't write
   to `gh-pages`.)
 
+## Adding or editing a powermeter
+
+Almost everything lives in **`js/schema.js`** — it's designed so common changes
+are a one-file edit, and `js/schema.test.mjs` guards the structure.
+
+**Edit an existing field** (label, help text, default, placeholder, dropdown
+options): find the meter in `POWERMETERS` and change the field object. Done.
+
+**Add a field to a meter**: add a `{ key, label, help, type, … }` object to that
+meter's `fields` array. `key` is the `config.ini` key. Use `phase: true` if it
+takes per-phase values; `advanced: true` to tuck it behind the disclosure.
+
+**Add a whole new powermeter**: append an entry to `POWERMETERS`:
+
+```js
+{
+  id: "mymeter",                 // unique
+  label: "My Meter",
+  section: "MYMETER",            // config.ini section (UPPER_SNAKE, unique)
+  blurb: "One-line description shown under the dropdown.",
+  docPython: "docs/powermeters.md#mymeter",
+  fields: [
+    { key: "IP", label: "IP address", type: "text", required: true, help: "…" },
+  ],
+  esphome: {                     // how it's read on an ESP32
+    kind: "http",                // homeassistant | mqtt | sml | modbus | http | unsupported
+    tier: "generic",             // native | generic | alternate | unsupported (badge)
+    note: "What this does on the ESP.",
+    url1: (f) => `http://${f.IP}/status`,
+    lambda1: 'id(grid_l1).publish_state(root["power"]);',
+  },
+},
+```
+
+Then, if the meter can report three phases, add its `id` to `PHASE_CAPABLE`.
+
+**The `esphome.kind` handlers are generic** — meter-specific behaviour is
+declarative, so you rarely touch `js/generate.js`:
+
+- per-meter ESP warning → `esphome.warn` (string, or `(f) => string|null`)
+- HTTP request headers → `esphome.headersField: "FIELD_KEY"`
+- a `homeassistant`-kind source that names its own entity → `esphome.haEntity: (f) => "sensor.x"`
+- MQTT 3-phase key renames → top-level `phaseListKeys: { topic, jsonPath }`
+
+You only edit `js/generate.js` when introducing a brand-new `esphome.kind`
+(a new way of producing a sensor block) — then add a handler and extend
+`ESP_KINDS` in `schema.test.mjs`.
+
+After any change, run the tests and add an assertion to
+`js/generate.test.mjs` for the new output.
+
 ## Keeping it in sync
 
-The schema mirrors the options documented in the repo. When a powermeter or
-option is added or changed, update `js/schema.js` (and `js/generate.js` if the
-output format changes) and extend `js/generate.test.mjs`. The sources of truth
-are `config.ini.example`, `esphome.example.yaml`, `docs/powermeters.md`,
+The schema mirrors the options documented in the repo. The sources of truth are
+`config.ini.example`, `esphome.example.yaml`, `docs/powermeters.md`,
 `docs/esphome-powermeters.md`, and the **Configuration** section of the main
 `README.md`.

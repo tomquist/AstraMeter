@@ -33,8 +33,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Run config generator tests
-        run: node web/js/generate.test.mjs
+      - name: Validate schema and run generator tests
+        run: |
+          node web/js/schema.test.mjs
+          node web/js/generate.test.mjs
       - name: Publish web/ to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:

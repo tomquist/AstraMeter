@@ -3,18 +3,53 @@
 // and reused by both the form renderer (app.js) and the config generators
 // (generate.js).
 //
-// Field shape:
-//   key         INI key / logical name (UPPER_CASE for config.ini keys)
-//   label       human label shown in the form
-//   help        beginner-friendly explanation (rendered under the field)
-//   type        'text' | 'number' | 'password' | 'select' | 'checkbox'
-//   default     default value (used to decide whether to emit the key)
-//   placeholder example value
-//   options     for 'select': [{value, label}]
-//   required    if true, the field is highlighted as required
-//   phase       if true, when the meter is in 3-phase mode this becomes three
-//               L1/L2/L3 inputs that are joined with commas on output
-//   advanced    if true, hidden behind the "advanced" disclosure for the meter
+// Editing guide: to tweak a meter, change its entry below — nothing else.
+// `schema.test.mjs` validates the structure (run it, or let CI run it) and the
+// types below give editor autocomplete. The allowed property names are enforced
+// by the validator, so a typo fails fast instead of silently doing nothing.
+// See web/README.md → "Adding or editing a powermeter" for a worked example.
+
+/**
+ * @typedef {Object} Option  A choice in a `select` field.
+ * @property {string} value
+ * @property {string} label
+ *
+ * @typedef {Object} Field  One form control, mapped to a config.ini key.
+ * @property {string}  key          INI key / logical name (UPPER_CASE for config.ini keys).
+ * @property {string}  label        Human label shown in the form.
+ * @property {string} [help]        Beginner-friendly explanation rendered under the field.
+ * @property {'text'|'number'|'password'|'select'|'checkbox'} type
+ * @property {string|boolean} [default]  Default value (decides whether the key is emitted).
+ * @property {string} [placeholder]
+ * @property {Option[]} [options]   Required for `type: 'select'`.
+ * @property {boolean} [required]   Highlight as required in the form.
+ * @property {boolean} [phase]      In 3-phase mode, render L1/L2/L3 inputs joined with commas.
+ * @property {boolean} [advanced]   Hide behind the "advanced" disclosure.
+ * @property {string} [ey]          ESPHome key (for CT/insights/marstek option groups only).
+ *
+ * @typedef {Object} EsphomeSpec  How this source is read on an ESP32 (see docs/esphome-powermeters.md).
+ * @property {'homeassistant'|'mqtt'|'sml'|'modbus'|'http'|'unsupported'} kind  Drives the YAML generator.
+ * @property {'native'|'generic'|'alternate'|'unsupported'} tier  Support badge shown in the UI.
+ * @property {string}  note         One-line explanation / caveat.
+ * @property {(f:Object)=>string} [url1]   HTTP poll URL (single-phase) given the field values.
+ * @property {(f:Object)=>string} [url3]   HTTP poll URL (three-phase).
+ * @property {string|((f:Object)=>string)} [lambda1]  Lambda body publishing into grid_l1.
+ * @property {string} [lambda3]     Lambda body publishing into grid_l1/2/3.
+ * @property {string} [jsonRoot]    Override the lambda root type (e.g. "JsonArray arr").
+ * @property {(f:Object)=>string} [haEntity]  For kind:'homeassistant', the entity_id to subscribe to.
+ * @property {string} [headersField]  Field key whose value becomes HTTP headers (kind:'http').
+ * @property {string|((f:Object)=>string|null)} [warn]  Per-meter ⚠ banner (string or predicate on fields).
+ *
+ * @typedef {Object} Powermeter
+ * @property {string} id            Stable unique id.
+ * @property {string} label         Human name in the dropdown.
+ * @property {string} section       config.ini section name (UPPER_SNAKE, unique).
+ * @property {string} [blurb]       Short description under the dropdown.
+ * @property {string} [docPython]   Repo-relative link to the per-source reference.
+ * @property {Field[]} fields       The source-specific fields.
+ * @property {EsphomeSpec} esphome  ESP32 mapping.
+ * @property {{topic:string,jsonPath:string}} [phaseListKeys]  MQTT only: 3-phase key renames (TOPIC→TOPICS …).
+ */
 
 export const SHELLY_TYPES = [
   { value: "1PM", label: "Shelly 1PM" },
@@ -392,6 +427,8 @@ export const POWERMETERS = [
       kind: "homeassistant",
       tier: "native",
       note: "On the ESP there is no bridge — import the other node's entity via Home Assistant (shown), or define the sensor in the same YAML.",
+      // This source names its entity explicitly rather than via CURRENT_POWER_ENTITY.
+      haEntity: (f) => `sensor.${f.ID || "grid_power"}`,
     },
   },
   {
@@ -446,6 +483,10 @@ export const POWERMETERS = [
       kind: "modbus",
       tier: "native",
       note: "ESPHome's modbus_controller is RS485 serial only — wire RS485 to the ESP or use a TCP↔RTU gateway. Map your data type onto value_type.",
+      warn: (f) =>
+        (f.TRANSPORT || "TCP") === "TCP"
+          ? "ESPHome's modbus_controller is RS485 serial only — wire RS485 to the ESP or use a Modbus-TCP↔RTU gateway."
+          : null,
     },
   },
   {
@@ -491,6 +532,7 @@ export const POWERMETERS = [
       note: "Generic http_request poll. Headers and basic auth are supported on the get action.",
       url1: (f) => f.URL || "http://example.com/api",
       lambda1: 'id(grid_l1).publish_state(root["power"]);',
+      headersField: "HEADERS",
     },
   },
   {
@@ -508,6 +550,7 @@ export const POWERMETERS = [
       kind: "modbus",
       tier: "alternate",
       note: "The proprietary HTTP API has no ESP port — read the EM over its Modbus or MQTT export instead. Set address/value_type from the TQ register map.",
+      warn: () => "The TQ proprietary API has no ESP port — this reads the device's Modbus export instead. Set address/value_type from the TQ register map.",
     },
   },
   {

@@ -170,6 +170,40 @@ has(eyMqtt, "marstek_registration:", "esp/mqtt: marstek sub-block");
 has(eyMqtt, "device_type: ct003", "esp/mqtt: ct003 from HME-3");
 has(eyMqtt, "ct_type: HME-3", "esp/mqtt: ct_type HME-3");
 
+// ── ESPHome: declarative per-meter behaviour (esphome.haEntity / headersField / warn) ──
+const eyEsphomeSrc = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "esphome", phases: 1, fields: { IP: "10.0.0.7", ID: "my_grid" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyEsphomeSrc, "entity_id: sensor.my_grid", "esp/esphome-source: haEntity uses the ID field");
+
+const eyJsonHeaders = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", HEADERS: "Authorization: Bearer t; X-Env: prod" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyJsonHeaders, "headers:", "esp/json_http: headersField emits a headers block");
+has(eyJsonHeaders, "Authorization: Bearer t", "esp/json_http: first header");
+has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
+
+const eyModbusTcp = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "modbus", phases: 1, fields: { HOST: "10.0.0.9", TRANSPORT: "TCP" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyModbusTcp, "RS485 serial only", "esp/modbus: TCP transport warns (declarative warn)");
+const eyModbusUdp = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "modbus", phases: 1, fields: { HOST: "10.0.0.9", TRANSPORT: "UDP" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyModbusUdp, "RS485 serial only", "esp/modbus: UDP transport does not warn");
+
 // ── ESPHome: SML ──────────────────────────────────────────────────────────────
 const eySml = generateEsphome({
   target: "esphome",
