@@ -36,7 +36,7 @@ const FEATURES = [
   ["🧰", "Runs anywhere", "Home Assistant add-on, Docker, direct install, or standalone on an ESP32 via ESPHome."],
   ["🎛️", "Advanced signal conditioning", "EMA smoothing, deadband, Hampel outlier rejection and an optional PID controller for rock-steady control."],
   ["🔱", "Three-phase ready", "Per-phase readings and calibration (offset / multiplier) across L1 / L2 / L3."],
-  ["🆓", "Free & open source", "MIT-licensed. The config generator runs entirely in your browser — nothing is uploaded."],
+  ["🆓", "Free & open source", "GPL-3.0 licensed. The config generator runs entirely in your browser — nothing is uploaded."],
   ["🪄", "Beginner-friendly setup", "A guided config generator writes the file for you, with every option explained."],
 ];
 const featuresGrid = document.getElementById("features-grid");
