@@ -1,0 +1,19 @@
+{
+  "name": "astrameter-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AstraMeter project website + config generator (static, TypeScript).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx ts/schema.test.ts && tsx ts/state.test.ts && tsx ts/generate.test.ts",
+    "build": "node build.mjs",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

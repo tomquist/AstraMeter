@@ -12,24 +12,29 @@ import {
   CT_SATURATION,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
+  type Field,
+  type Fields,
+  type FieldValue,
 } from "./schema.js";
+import type { State, Meter } from "./state.js";
+import { esphomeSource } from "./links.js";
 
 const APP_VERSION_NOTE =
   "# Generated with the AstraMeter config generator.\n# Re-import this file there any time to keep editing.";
 
 // ── small helpers ──────────────────────────────────────────────────────────
 
-function isBlank(v) {
+function isBlank(v: unknown): boolean {
   return v === undefined || v === null || String(v).trim() === "";
 }
 
-function boolToIni(v) {
+function boolToIni(v: unknown): string {
   return v ? "True" : "False";
 }
 
 // Emit a single `KEY = value` line for a schema field given the raw form value,
 // honouring checkbox defaults (only write when it differs from the default).
-function iniLine(field, value) {
+function iniLine(field: Field, value: unknown): string | null {
   if (field.type === "checkbox") {
     // Honour the schema default when the user never touched the box. The Python
     // loaders default every boolean to False, so we only ever need to *emit*
@@ -44,7 +49,7 @@ function iniLine(field, value) {
 
 // ── config.ini ───────────────────────────────────────────────────────────────
 
-function generalSection(state) {
+function generalSection(state: State): string {
   const g = state.general || {};
   const lines = ["[GENERAL]"];
   const types = (g.deviceTypes && g.deviceTypes.length ? g.deviceTypes : ["shellypro3em"]).join(",");
@@ -61,7 +66,7 @@ function generalSection(state) {
   return lines.join("\n");
 }
 
-function meterSection(meter, opts) {
+function meterSection(meter: Meter, opts: { multi: boolean }): string {
   const pm = getPowermeter(meter.type);
   if (!pm) return "";
   const suffix = (meter.suffix || "").trim();
@@ -101,7 +106,7 @@ function meterSection(meter, opts) {
   return lines.join("\n");
 }
 
-function ctSection(state, sectionName) {
+function ctSection(state: State, sectionName: string): string {
   const ct = state.ct || {};
   const f = ct.fields || {};
   const lines = [`[${sectionName}]`];
@@ -116,7 +121,7 @@ function ctSection(state, sectionName) {
   return lines.length > 1 ? lines.join("\n") : "";
 }
 
-function marstekSection(state) {
+function marstekSection(state: State): string {
   const m = state.marstek || {};
   if (!m.enabled) return "";
   const f = m.fields || {};
@@ -128,7 +133,7 @@ function marstekSection(state) {
   return lines.join("\n");
 }
 
-function mqttInsightsSection(state) {
+function mqttInsightsSection(state: State): string {
   const mi = state.mqttInsights || {};
   if (!mi.enabled) return "";
   const f = mi.fields || {};
@@ -140,7 +145,7 @@ function mqttInsightsSection(state) {
   return lines.join("\n");
 }
 
-export function generateConfigIni(state) {
+export function generateConfigIni(state: State): string {
   const meters = state.meters && state.meters.length ? state.meters : [];
   const multi = meters.length > 1;
   const blocks = [APP_VERSION_NOTE, generalSection(state)];
@@ -172,33 +177,30 @@ export function generateConfigIni(state) {
 
 const IND = "  ";
 
-function yamlBool(v) {
-  return v ? "true" : "false";
-}
 
 // Render the upstream grid sensor(s) for the chosen meter. Returns
 // { topBlocks: [...], sensorBlock: string, phases: number, warnings: [...] }
-function esphomeSensor(state) {
+function esphomeSensor(state: State) {
   const meter = (state.meters && state.meters[0]) || { type: "homeassistant", fields: {}, phases: 1, tuning: {} };
-  const pm = getPowermeter(meter.type) || getPowermeter("homeassistant");
+  const pm = getPowermeter(meter.type) || getPowermeter("homeassistant")!;
   const phases = meter.phases === 3 ? 3 : 1;
   const f = meter.fields || {};
   const tuning = meter.tuning || {};
-  const esp = pm.esphome || { kind: "unsupported", note: "" };
-  const warnings = [];
-  const topBlocks = [];
+  const esp = pm.esphome;
+  const warnings: string[] = [];
+  const topBlocks: string[] = [];
   const ids = phases === 3 ? ["grid_l1", "grid_l2", "grid_l3"] : ["grid_l1"];
 
   // Per-sensor filters from value-transform / throttle tuning. Applied to
   // every phase sensor — a single offset/multiplier value applies to all
   // phases (matching the Python add-on), while a comma list maps per phase.
-  function phaseValue(raw, idx) {
+  function phaseValue(raw: FieldValue, idx: number): string {
     if (isBlank(raw)) return "";
     const parts = String(raw).split(",").map((s) => s.trim());
     return parts.length === 1 ? parts[0] : (parts[idx] ?? "");
   }
-  function phaseFilterBlock(idx) {
-    const lines = [];
+  function phaseFilterBlock(idx: number): string {
+    const lines: string[] = [];
     const off = phaseValue(tuning.POWER_OFFSET, idx);
     const mul = phaseValue(tuning.POWER_MULTIPLIER, idx);
     if (!isBlank(off)) lines.push(`- offset: ${off}`);
@@ -210,7 +212,7 @@ function esphomeSensor(state) {
       : "";
   }
 
-  function templateSensor(id) {
+  function templateSensor(id: string): string {
     return `${IND}- platform: template\n${IND}${IND}id: ${id}\n${IND}${IND}unit_of_measurement: W\n${IND}${IND}device_class: power`;
   }
 
@@ -264,7 +266,7 @@ function esphomeSensor(state) {
       `modbus_controller:\n${IND}- id: meter\n${IND}${IND}address: ${f.UNIT_ID || "1"}\n${IND}${IND}modbus_id: modbus1\n${IND}${IND}update_interval: 1s`,
     );
     const valueType = modbusValueType(f.DATA_TYPE);
-    const regType = (f.REGISTER_TYPE || "HOLDING").toLowerCase() === "input" ? "read" : "holding";
+    const regType = String(f.REGISTER_TYPE || "HOLDING").toLowerCase() === "input" ? "read" : "holding";
     const sensor = `${IND}- platform: modbus_controller\n${IND}${IND}modbus_controller_id: meter\n${IND}${IND}id: grid_l1\n${IND}${IND}register_type: ${regType}\n${IND}${IND}address: ${f.ADDRESS || "0"}\n${IND}${IND}value_type: ${valueType}\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(0)}`;
     return { topBlocks, sensorBlock: "sensor:\n" + sensor, phases: 1, warnings };
   }
@@ -273,7 +275,7 @@ function esphomeSensor(state) {
     topBlocks.push(`http_request:\n${IND}useragent: esphome/astrameter\n${IND}timeout: 5s`);
     const use3 = phases === 3 && esp.url3;
     const sensors = (use3 ? ids : ["grid_l1"]).map((id, i) => templateSensor(id) + phaseFilterBlock(i));
-    const url = use3 ? esp.url3(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
+    const url = use3 ? esp.url3!(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
     const lambdaBody = use3
       ? esp.lambda3
       : typeof esp.lambda1 === "function"
@@ -317,14 +319,14 @@ function esphomeSensor(state) {
   return { topBlocks, sensorBlock: "sensor:\n" + sensor, phases: 1, warnings };
 }
 
-function splitPhases(value, phases) {
+function splitPhases(value: unknown, phases: number): string[] {
   const parts = String(value).split(",").map((s) => s.trim());
-  if (phases === 1) return [parts[0] || value];
+  if (phases === 1) return [parts[0] || String(value)];
   return [parts[0] || "", parts[1] || "", parts[2] || ""];
 }
 
-function modbusValueType(dataType) {
-  switch ((dataType || "UINT16").toUpperCase()) {
+function modbusValueType(dataType: unknown): string {
+  switch (String(dataType || "UINT16").toUpperCase()) {
     case "INT16":
       return "S_WORD";
     case "UINT32":
@@ -339,14 +341,14 @@ function modbusValueType(dataType) {
 }
 
 // Build the optional ct002: tuning sub-blocks from CT field values.
-function ct002OptionalBlocks(ct) {
+function ct002OptionalBlocks(ct: { fields: Fields } | undefined): string[] {
   const f = (ct && ct.fields) || {};
-  const lines = [];
+  const lines: string[] = [];
 
-  function ctVal(key) {
+  function ctVal(key: string): FieldValue {
     return f[key];
   }
-  function pushBool(arr, key, eyKey) {
+  function pushBool(arr: string[], key: string, eyKey: string): void {
     const v = ctVal(key);
     if (v === "True" || v === "true") arr.push(`${eyKey}: true`);
     else if (v === "False" || v === "false") arr.push(`${eyKey}: false`);
@@ -357,7 +359,7 @@ function ct002OptionalBlocks(ct) {
   // filters: (cross-phase) come from the meter tuning, not CT — handled in caller.
 
   // balancer
-  const bal = [];
+  const bal: string[] = [];
   pushBool(bal, "FAIR_DISTRIBUTION", "fair_distribution");
   for (const fld of CT_BALANCER) {
     if (fld.key === "FAIR_DISTRIBUTION") continue;
@@ -374,7 +376,7 @@ function ct002OptionalBlocks(ct) {
   }
 
   // saturation
-  const sat = [];
+  const sat: string[] = [];
   pushBool(sat, "SATURATION_DETECTION", "enabled");
   for (const fld of CT_SATURATION) {
     if (fld.key === "SATURATION_DETECTION") continue;
@@ -391,11 +393,11 @@ function ct002OptionalBlocks(ct) {
   return lines;
 }
 
-function ct002FilterBlock(meter) {
+function ct002FilterBlock(meter: Meter | undefined): string | null {
   const tuning = (meter && meter.tuning) || {};
-  const sub = [];
+  const sub: string[] = [];
 
-  const hampel = [];
+  const hampel: string[] = [];
   if (!isBlank(tuning.HAMPEL_WINDOW) && Number(tuning.HAMPEL_WINDOW) > 0) {
     hampel.push(`window: ${tuning.HAMPEL_WINDOW}`);
     if (!isBlank(tuning.HAMPEL_N_SIGMA)) hampel.push(`n_sigma: ${tuning.HAMPEL_N_SIGMA}`);
@@ -403,7 +405,7 @@ function ct002FilterBlock(meter) {
   }
   if (hampel.length) sub.push(`${IND}${IND}hampel:\n` + hampel.map((l) => `${IND}${IND}${IND}${l}`).join("\n"));
 
-  const smoothing = [];
+  const smoothing: string[] = [];
   if (!isBlank(tuning.SMOOTH_TARGET_ALPHA)) smoothing.push(`alpha: ${tuning.SMOOTH_TARGET_ALPHA}`);
   if (!isBlank(tuning.MAX_SMOOTH_STEP) && Number(tuning.MAX_SMOOTH_STEP) > 0)
     smoothing.push(`max_step: ${tuning.MAX_SMOOTH_STEP}`);
@@ -413,7 +415,7 @@ function ct002FilterBlock(meter) {
     sub.push(`${IND}${IND}deadband:\n${IND}${IND}${IND}deadband: ${tuning.DEADBAND}`);
   }
 
-  const pid = [];
+  const pid: string[] = [];
   if (!isBlank(tuning.PID_KP) && Number(tuning.PID_KP) > 0) {
     pid.push(`kp: ${tuning.PID_KP}`);
     if (!isBlank(tuning.PID_KI)) pid.push(`ki: ${tuning.PID_KI}`);
@@ -427,7 +429,7 @@ function ct002FilterBlock(meter) {
   return `${IND}filters:\n` + sub.join("\n");
 }
 
-export function generateEsphome(state) {
+export function generateEsphome(state: State): string {
   const esp = state.esphome || {};
   const meter = (state.meters && state.meters[0]) || {};
   const { topBlocks, sensorBlock, phases, warnings } = esphomeSensor(state);
@@ -450,7 +452,7 @@ export function generateEsphome(state) {
     }
   }
 
-  const out = [];
+  const out: string[] = [];
   out.push(
     "# AstraMeter for ESPHome — runs the CT002/CT003 emulator directly on an ESP32.\n" +
       "#\n" +
@@ -477,7 +479,7 @@ export function generateEsphome(state) {
   out.push("logger:");
   out.push(`ota:\n${IND}- platform: esphome`);
   out.push(`wifi:\n${IND}ssid: !secret wifi_ssid\n${IND}password: !secret wifi_password`);
-  out.push(`external_components:\n${IND}- source: github://tomquist/astrameter@develop\n${IND}${IND}components: [ct002]`);
+  out.push(`external_components:\n${IND}- source: ${esphomeSource()}\n${IND}${IND}components: [ct002]`);
 
   // mqtt_insights needs a top-level mqtt: block. If the meter itself is MQTT,
   // its broker wins (the data source is what matters) and Insights reuses it;
@@ -511,7 +513,7 @@ export function generateEsphome(state) {
 
   const ctf = (state.ct && state.ct.fields) || {};
   // base CT options
-  if (!isBlank(ctf.CT_MAC)) ctLines.push(`${IND}ct_mac: "${ctf.CT_MAC.trim()}"`);
+  if (!isBlank(ctf.CT_MAC)) ctLines.push(`${IND}ct_mac: "${String(ctf.CT_MAC).trim()}"`);
   if (!isBlank(ctf.UDP_PORT)) ctLines.push(`${IND}udp_port: ${ctf.UDP_PORT}`);
   if (!isBlank(ctf.WIFI_RSSI)) ctLines.push(`${IND}wifi_rssi: ${ctf.WIFI_RSSI}`);
   if (ctf.ACTIVE_CONTROL === "True") ctLines.push(`${IND}active_control: true`);
@@ -550,6 +552,6 @@ export function generateEsphome(state) {
   return out.join("\n\n") + "\n";
 }
 
-export function generate(state) {
+export function generate(state: State): string {
   return state.target === "esphome" ? generateEsphome(state) : generateConfigIni(state);
 }

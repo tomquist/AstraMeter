@@ -1,20 +1,22 @@
 name: Deploy config generator to GitHub Pages
 
-# Publishes the static web/ site to the gh-pages branch, which GitHub Pages
-# serves at the repository's Pages URL.
+# Builds the TypeScript site (web/) and publishes it to the gh-pages branch,
+# which GitHub Pages serves at the repository's Pages URL.
 #
 #   push to main    -> published to the site ROOT (production)
 #                      https://<user>.github.io/<repo>/
 #   push to develop -> published under /develop/ (staging)
 #                      https://<user>.github.io/<repo>/develop/
 #
-# One-time setup: repository Settings → Pages → "Build and deployment" →
-# Source → "Deploy from a branch" → branch "gh-pages" / "/ (root)".
+# The GitHub ref the site links to is baked into the bundle at build time via
+# GH_REF (see web/ts/links.ts), so a main build links to @main, develop to
+# @develop, and PR previews to the PR's branch — no post-build rewriting.
 #
-# The gh-pages branch also holds per-PR previews (under pr-preview/, managed by
-# .github/workflows/pr-preview.yml). keep_files: true ensures each push only
-# overlays its own destination dir and never wipes the others (root / develop /
-# pr-preview all coexist on the branch).
+# One-time setup: repository Settings → Pages → "Build and deployment" →
+# Source → "Deploy from a branch" → branch "gh-pages" / "/ (root)", and
+# Settings → Actions → General → Workflow permissions → "Read and write".
+#
+# keep_files: true so root / develop / pr-preview all coexist on gh-pages.
 
 on:
   push:
@@ -28,8 +30,6 @@ permissions:
   contents: write
 
 concurrency:
-  # Single group (no cancel) so main/develop pushes serialise instead of racing
-  # each other's push to the gh-pages branch.
   group: gh-pages-deploy
   cancel-in-progress: false
 
@@ -41,22 +41,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Validate schema and run generator tests
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install, type-check, test and build
+        working-directory: web
+        env:
+          GH_REF: ${{ github.ref_name }}
         run: |
-          node web/js/schema.test.mjs
-          node web/js/state.test.mjs
-          node web/js/generate.test.mjs
-      - name: Point GitHub links at this branch's ref
-        # The committed source links to @develop; rewrite the published copy so
-        # links (docs, ESPHome external_components) track the deployed ref.
-        run: bash .github/scripts/stamp-ref.sh "${{ github.ref_name }}"
-      - name: Publish web/ to gh-pages
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Publish dist/ to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./web
+          publish_dir: ./web/dist
           publish_branch: gh-pages
           # main -> root, develop -> /develop/
           destination_dir: ${{ github.ref_name == 'develop' && 'develop' || '' }}
-          # Preserve the other published dirs (root / develop / pr-preview).
           keep_files: true

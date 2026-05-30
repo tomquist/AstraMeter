@@ -1,7 +1,7 @@
 # AstraMeter project website
 
-The public website for AstraMeter, built as a static site for GitHub Pages. It
-has two parts:
+The public website for AstraMeter, a static site (TypeScript + esbuild) for
+GitHub Pages. It has two parts:
 
 1. **Landing page** (`index.html`) — what AstraMeter is, features, supported
    devices and power meters, installation options, and an FAQ.
@@ -9,49 +9,58 @@ has two parts:
    generates an AstraMeter configuration: a Python `config.ini` (Home Assistant
    add-on / Docker / direct install) or an ESPHome YAML (run on an ESP32).
 
-Everything runs in the browser. Nothing is uploaded; config generation happens
-with plain JavaScript. The generator form is data-driven from `js/schema.js`,
-and the landing page renders its supported-meter grid and feature list from the
-same schema so the marketing copy can't drift from the real capabilities.
+Everything runs in the browser — nothing is uploaded. The generator form is
+data-driven from `ts/schema.ts`, and the landing page renders its supported-meter
+grid and feature list from the same schema, so the marketing copy can't drift
+from the real capabilities.
+
+## Stack
+
+TypeScript sources in `ts/` are bundled with **esbuild** into `dist/` (the
+publishable site), type-checked with **tsc**, and tested with **tsx**. The
+GitHub ref the site links to is injected at build time (see *Deploying*).
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Landing / marketing page. |
-| `generator.html` | The config generator page (mounts the app). |
-| `css/styles.css` | Styling for both pages (nav, hero, landing sections, footer, generator UI). |
-| `js/site.js` | Shared site behaviour: mobile nav, scroll state, and landing-page feature/power-meter grids (from the schema). |
-| `js/schema.js` | Single source of truth: every powermeter, field, and tuning option with beginner help text. Pure data. |
-| `js/state.js` | State model + persistence helpers (defaults, `migrate`, sanitisation of untrusted restored input). Pure, no DOM. |
-| `js/generate.js` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
-| `js/app.js` | Renders the generator form from the schema, holds state, live preview, save/load. |
-| `js/schema.test.mjs` | Structural validation of the schema (typo guard). |
-| `js/state.test.mjs` | Tests for the state model + untrusted-input sanitisation. |
-| `js/generate.test.mjs` | Node assertions for the generators. |
+| `index.html`, `generator.html` | Landing page and generator page (static shells). |
+| `css/styles.css` | Styling for both pages. |
+| `assets/` | Logo (SVG + PNG), favicon, og:image. |
+| `ts/schema.ts` | Single source of truth: every powermeter, field, and tuning option, fully typed. Pure data. |
+| `ts/links.ts` | Builds every GitHub URL from the build-injected ref (`__GH_REF__`). |
+| `ts/state.ts` | State model + persistence helpers (defaults, `migrate`, sanitisation of untrusted restored input). Pure, no DOM. |
+| `ts/generate.ts` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
+| `ts/app.ts` | Renders the generator form from the schema; state, live preview, save/load. Entry point → `dist/js/app.js`. |
+| `ts/site.ts` | Shared site behaviour: mobile nav, scroll state, `data-gh` link resolution, landing-page grids. Entry point → `dist/js/site.js`. |
+| `ts/schema.test.ts` | Structural validation of the schema (typo guard). |
+| `ts/state.test.ts` | Tests for the state model + untrusted-input sanitisation. |
+| `ts/generate.test.ts` | Assertions for the generators. |
+| `build.mjs` | esbuild build: copies static files + bundles the entry points into `dist/`. |
 
 ## Develop locally
 
-It's static — serve it through any local server (ES modules need `http://`, not
-`file://`):
-
 ```bash
 cd web
-python3 -m http.server 8000
-# landing page:    http://localhost:8000/
+npm install          # once
+npm run check        # tsc --noEmit + the test suites
+npm run build        # -> dist/  (GH_REF defaults to "develop")
+python3 -m http.server 8000 --directory dist
+# landing page:     http://localhost:8000/
 # config generator: http://localhost:8000/generator.html
 ```
 
-## Test
+To preview the links for another ref: `GH_REF=main npm run build`.
+
+## Test & type-check
 
 ```bash
-node web/js/schema.test.mjs     # validates the schema structure (typo guard)
-node web/js/state.test.mjs      # state model + untrusted-input sanitisation
-node web/js/generate.test.mjs   # asserts the generated config.ini / YAML
+npm run typecheck    # tsc --noEmit
+npm test             # schema, state, and generate suites via tsx
 ```
 
-CI runs all three before deploying (see `.github/workflows/pages.yml` and
-`pr-preview.yml`).
+CI runs `typecheck` + `test` + `build` before every deploy (see
+`.github/workflows/pages.yml` and `pr-preview.yml`).
 
 ## Save / load
 
@@ -63,54 +72,56 @@ User progress is saved automatically to `localStorage`. Users can also:
 
 ## Deploying
 
-The site is published to the **`gh-pages`** branch and served by GitHub Pages.
+The build (`dist/`) is published to the **`gh-pages`** branch and served by
+GitHub Pages.
 
 One-time setup: repository **Settings → Pages → Build and deployment → Source →
 "Deploy from a branch" → `gh-pages` / `/ (root)`**, and **Settings → Actions →
 General → Workflow permissions → "Read and write permissions"** (so the workflow
 can push to `gh-pages`).
 
-The *Deploy config generator to GitHub Pages* workflow (`.github/workflows/pages.yml`)
-publishes `web/` on every push that touches it:
+The *Deploy config generator to GitHub Pages* workflow builds and publishes on
+every push that touches `web/`:
 
 - **Production** — pushes to **`main`** publish to the site **root**:
   `https://<user>.github.io/<repo>/`
 - **Staging** — pushes to **`develop`** publish under **`/develop/`**:
   `https://<user>.github.io/<repo>/develop/`
-- **Per-PR previews** — the *Deploy PR preview* workflow
-  (`.github/workflows/pr-preview.yml`) deploys each pull request to
-  `pr-preview/pr-<number>/` and posts the live URL as a comment on the PR, so
-  reviewers can test the real site before merging. The preview is removed when
-  the PR closes. (Previews only run for same-repo branches; forks can't write
-  to `gh-pages`.)
+- **Per-PR previews** — the *Deploy PR preview* workflow deploys each pull
+  request to `pr-preview/pr-<number>/` and comments the live URL on the PR; it's
+  removed when the PR closes. (Same-repo branches only; forks can't write
+  `gh-pages`.)
 
-Root, `/develop/`, and `/pr-preview/` all coexist on the `gh-pages` branch
-(`keep_files: true`), so a deploy to one never wipes the others. The site uses
-only relative URLs, so it works correctly under any of these subpaths.
+Root, `/develop/`, and `/pr-preview/` all coexist on `gh-pages` (`keep_files:
+true`). The site uses only relative URLs, so it works under any subpath.
 
-Every ref-bearing GitHub link in the site — bare repo links, README section
-anchors (install cards, etc.), the doc-file links, the per-meter reference link,
-and the ESPHome `external_components` source in generated configs — is committed
-pointing at `develop`. At deploy time `.github/scripts/stamp-ref.sh` rewrites
-them to the ref being deployed: a `main` build links to `main`, a PR preview to
-the PR's branch, and develop stays on `develop`. (Only `/issues` is left
-ref-agnostic.)
+### GitHub links track the deployed ref
+
+Every GitHub URL — bare repo links, README section anchors (install cards), the
+doc-file links, the per-meter reference link, and the ESPHome
+`external_components` source in generated configs — is produced by `ts/links.ts`
+from a single ref. The deploy workflow passes that ref to the build via the
+`GH_REF` env var (`main` / `develop` / the PR's `head_ref`), which esbuild bakes
+in as `__GH_REF__`. So a `main` build links to `@main`, a PR preview to the PR's
+branch, and develop to `@develop` — no post-build rewriting. (Only `/issues` is
+ref-agnostic.) Static HTML links carry a `data-gh` attribute that `site.ts`
+resolves at load; their hardcoded `href` is a no-JS fallback.
 
 ## Adding or editing a powermeter
 
-Almost everything lives in **`js/schema.js`** — it's designed so common changes
-are a one-file edit, and `js/schema.test.mjs` guards the structure.
+Almost everything lives in **`ts/schema.ts`** — common changes are a one-file
+edit, `tsc` catches type slips, and `schema.test.ts` guards the structure.
 
-**Edit an existing field** (label, help text, default, placeholder, dropdown
-options): find the meter in `POWERMETERS` and change the field object. Done.
+**Edit an existing field** (label, help, default, placeholder, options): find the
+meter in `POWERMETERS` and change the field object. Done.
 
 **Add a field to a meter**: add a `{ key, label, help, type, … }` object to that
-meter's `fields` array. `key` is the `config.ini` key. Use `phase: true` if it
-takes per-phase values; `advanced: true` to tuck it behind the disclosure.
+meter's `fields` array. `key` is the `config.ini` key. Use `phase: true` for
+per-phase values; `advanced: true` to tuck it behind the disclosure.
 
-**Add a whole new powermeter**: append an entry to `POWERMETERS`:
+**Add a whole new powermeter**: append a typed entry to `POWERMETERS`:
 
-```js
+```ts
 {
   id: "mymeter",                 // unique
   label: "My Meter",
@@ -133,19 +144,18 @@ takes per-phase values; `advanced: true` to tuck it behind the disclosure.
 Then, if the meter can report three phases, add its `id` to `PHASE_CAPABLE`.
 
 **The `esphome.kind` handlers are generic** — meter-specific behaviour is
-declarative, so you rarely touch `js/generate.js`:
+declarative, so you rarely touch `ts/generate.ts`:
 
 - per-meter ESP warning → `esphome.warn` (string, or `(f) => string|null`)
 - HTTP request headers → `esphome.headersField: "FIELD_KEY"`
 - a `homeassistant`-kind source that names its own entity → `esphome.haEntity: (f) => "sensor.x"`
 - MQTT 3-phase key renames → top-level `phaseListKeys: { topic, jsonPath }`
 
-You only edit `js/generate.js` when introducing a brand-new `esphome.kind`
-(a new way of producing a sensor block) — then add a handler and extend
-`ESP_KINDS` in `schema.test.mjs`.
+You only edit `ts/generate.ts` to introduce a brand-new `esphome.kind` — then add
+a handler and extend `ESP_KINDS` in `schema.test.ts`.
 
-After any change, run the tests and add an assertion to
-`js/generate.test.mjs` for the new output.
+After any change, run `npm run check` and add an assertion to
+`ts/generate.test.ts` for the new output.
 
 ## Keeping it in sync
 

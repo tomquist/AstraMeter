@@ -1,12 +1,11 @@
 name: Deploy PR preview
 
-# Deploys a live, per-PR preview of the web/ config generator so reviewers can
-# test the actual site straight from the pull request. The preview is published
-# to gh-pages under pr-preview/pr-<number>/ and a sticky comment with the URL is
-# posted on the PR. The preview is torn down automatically when the PR closes.
-#
-# Requires the same one-time Pages setup as pages.yml (Source → gh-pages branch).
-# Only runs for same-repo branches (forks can't write to gh-pages).
+# Builds the TypeScript site and deploys a live, per-PR preview so reviewers can
+# test the actual site straight from the pull request. Published to gh-pages
+# under pr-preview/pr-<number>/ with a sticky comment linking to it; torn down
+# when the PR closes. GitHub links in the build point at the PR's branch
+# (GH_REF=head_ref). Only runs for same-repo branches (forks can't write
+# gh-pages). Requires the same one-time Pages setup as pages.yml.
 
 on:
   pull_request:
@@ -26,26 +25,29 @@ concurrency:
 
 jobs:
   preview:
-    # Skip PRs from forks: they lack write access to push the preview.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
+        if: github.event.action != 'closed'
         with:
           node-version: "20"
-      - name: Validate schema and run generator tests
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install, type-check, test and build
         if: github.event.action != 'closed'
+        working-directory: web
+        env:
+          GH_REF: ${{ github.head_ref }}
         run: |
-          node web/js/schema.test.mjs
-          node web/js/state.test.mjs
-          node web/js/generate.test.mjs
-      - name: Point GitHub links at this PR's branch
-        if: github.event.action != 'closed'
-        run: bash .github/scripts/stamp-ref.sh "${{ github.head_ref }}"
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
       - name: Deploy preview
         uses: rossjrw/pr-preview-action@v1
         with:
-          source-dir: ./web
+          source-dir: ./web/dist
           preview-branch: gh-pages
           umbrella-dir: pr-preview

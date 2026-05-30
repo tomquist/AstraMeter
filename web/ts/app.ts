@@ -17,24 +17,35 @@ import {
   MQTT_INSIGHTS_FIELDS,
   ESP_BOARDS,
   HARDWARE,
+  type Field,
+  type Powermeter,
 } from "./schema.js";
 import { generate } from "./generate.js";
-import { STORAGE_KEY, newMeter, defaultState, safeParse, migrate } from "./state.js";
+import { ghDoc } from "./links.js";
+import { STORAGE_KEY, newMeter, defaultState, safeParse, migrate, type State, type Meter } from "./state.js";
 
-let state = loadState() || defaultState();
+let state: State = loadState() || defaultState();
 
 // ── tiny DOM helper ─────────────────────────────────────────────────────────
-function el(tag, props = {}, children = []) {
+type ElProps = Record<string, any>;
+type ElChild = Node | string | null | undefined;
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props?: ElProps,
+  children?: ElChild | ElChild[],
+): HTMLElementTagNameMap[K];
+function el(tag: string, props: ElProps = {}, children: ElChild | ElChild[] = []): HTMLElement {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (k === "class") node.className = v;
     else if (k === "html") node.innerHTML = v;
     else if (k === "text") node.textContent = v;
-    else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v as EventListener);
     else if (v === true) node.setAttribute(k, "");
-    else if (v !== false && v != null) node.setAttribute(k, v);
+    else if (v !== false && v != null) node.setAttribute(k, String(v));
   }
-  for (const c of [].concat(children)) {
+  const kids = Array.isArray(children) ? children : [children];
+  for (const c of kids) {
     if (c == null) continue;
     node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
   }
@@ -45,7 +56,11 @@ function el(tag, props = {}, children = []) {
 // Renders one schema field bound to obj[field.key]. `phases` controls phase
 // expansion. Calls refreshPreview() on change; if field.structural, also calls
 // rerenderAll() so dependent sections appear/disappear.
-function fieldControl(field, obj, { phases = 1, structural = false } = {}) {
+function fieldControl(
+  field: Field,
+  obj: Record<string, any>,
+  { phases = 1, structural = false }: { phases?: number; structural?: boolean } = {},
+): HTMLElement {
   const help = field.help ? el("p", { class: "help", text: field.help }) : null;
   const labelText = field.label + (field.required ? " *" : "");
 
@@ -74,12 +89,12 @@ function fieldControl(field, obj, { phases = 1, structural = false } = {}) {
     ]);
   }
 
-  let control;
+  let control: HTMLInputElement | HTMLSelectElement;
   if (field.type === "select") {
     control = el(
       "select",
       {},
-      field.options.map((o) =>
+      (field.options ?? []).map((o) =>
         el("option", { value: o.value, ...(String(obj[field.key] ?? field.default ?? "") === o.value ? { selected: true } : {}) }, o.label),
       ),
     );
@@ -91,14 +106,14 @@ function fieldControl(field, obj, { phases = 1, structural = false } = {}) {
     });
   } else if (field.type === "checkbox") {
     if (obj[field.key] === undefined) obj[field.key] = !!field.default;
-    control = el("input", { type: "checkbox", ...(obj[field.key] ? { checked: true } : {}) });
-    control.addEventListener("change", () => {
-      obj[field.key] = control.checked;
+    const cb = el("input", { type: "checkbox", ...(obj[field.key] ? { checked: true } : {}) });
+    cb.addEventListener("change", () => {
+      obj[field.key] = cb.checked;
       if (structural) rerenderAll();
       else refreshPreview();
     });
     return el("div", { class: "field field-check" }, [
-      el("label", { class: "check-label" }, [control, el("span", { text: labelText })]),
+      el("label", { class: "check-label" }, [cb, el("span", { text: labelText })]),
       help,
     ]);
   } else {
@@ -117,11 +132,11 @@ function fieldControl(field, obj, { phases = 1, structural = false } = {}) {
   return el("div", { class: "field" }, [el("label", { text: labelText, class: "field-label" }), control, help]);
 }
 
-function linkOut(href, text) {
+function linkOut(href: string, text: string): HTMLElement {
   return el("a", { href, target: "_blank", rel: "noopener", class: "btn-link" }, text + " ↗");
 }
 
-function joinPhases(parts) {
+function joinPhases(parts: string[]): string {
   // keep up to the last non-empty entry so "a,,c" round-trips
   let last = -1;
   parts.forEach((p, i) => {
@@ -132,7 +147,7 @@ function joinPhases(parts) {
 }
 
 // group a list of fields, splitting advanced ones into a <details>
-function fieldGroup(fields, obj, ctx = {}) {
+function fieldGroup(fields: Field[], obj: Record<string, any>, ctx: { phases?: number; structural?: boolean } = {}): HTMLElement[] {
   const basic = fields.filter((f) => !f.advanced);
   const advanced = fields.filter((f) => f.advanced);
   const nodes = basic.map((f) => fieldControl(f, obj, ctx));
@@ -148,7 +163,7 @@ function fieldGroup(fields, obj, ctx = {}) {
 }
 
 // ── card builders ────────────────────────────────────────────────────────────
-function card(n, title, subtitle, body) {
+function card(n: number | null, title: string, subtitle: string | null, body: ElChild[]): HTMLElement {
   return el("section", { class: "card" }, [
     el("div", { class: "card-head" }, [
       n ? el("span", { class: "step", text: String(n) }) : null,
@@ -158,8 +173,8 @@ function card(n, title, subtitle, body) {
   ]);
 }
 
-function targetCard() {
-  function choice(value, title, desc) {
+function targetCard(): HTMLElement {
+  function choice(value: "python" | "esphome", title: string, desc: string): HTMLElement {
     const active = state.target === value;
     return el(
       "button",
@@ -182,7 +197,7 @@ function targetCard() {
   ]);
 }
 
-function deviceCard() {
+function deviceCard(): HTMLElement {
   if (state.target === "esphome") {
     const e = state.esphome;
     return card(2, "Your ESP32 device", "AstraMeter will run on a small ESP32 board you buy and plug in. Tell us which board you have so the file matches it.", [
@@ -253,15 +268,15 @@ function deviceCard() {
   ]);
 }
 
-function meterEditor(meter, index) {
+function meterEditor(meter: Meter, index: number): HTMLElement {
   const pm = getPowermeter(meter.type) || POWERMETERS[0];
   const canPhase = PHASE_CAPABLE.has(meter.type);
 
   const sourceSelect = el(
     "select",
     {
-      onchange: (e) => {
-        meter.type = e.target.value;
+      onchange: (e: Event) => {
+        meter.type = (e.target as HTMLInputElement).value;
         meter.fields = {};
         meter.phases = 1;
         rerenderAll();
@@ -281,8 +296,8 @@ function meterEditor(meter, index) {
         el(
           "select",
           {
-            onchange: (e) => {
-              meter.phases = Number(e.target.value);
+            onchange: (e: Event) => {
+              meter.phases = Number((e.target as HTMLInputElement).value);
               rerenderAll();
             },
           },
@@ -315,7 +330,7 @@ function meterEditor(meter, index) {
       badge,
     ]),
     el("p", { class: "blurb", text: pm.blurb }),
-    pm.docPython ? el("a", { class: "doclink", href: "https://github.com/tomquist/astrameter/blob/develop/" + pm.docPython, target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
+    pm.docPython ? el("a", { class: "doclink", href: ghDoc(pm.docPython!), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
     suffixField,
     phaseToggle,
     el("div", { class: "field-grid" }, fieldGroup(pm.fields, meter.fields, { phases: meter.phases })),
@@ -329,7 +344,7 @@ function meterEditor(meter, index) {
   ]);
 }
 
-function esphomeBadge(pm) {
+function esphomeBadge(pm: Powermeter): HTMLElement {
   const tier = (pm.esphome && pm.esphome.tier) || "unsupported";
   const map = {
     native: ["Native on ESP32", "ok"],
@@ -342,7 +357,7 @@ function esphomeBadge(pm) {
   return el("span", { class: "badge badge-" + cls, title: note, text });
 }
 
-function meterCard() {
+function meterCard(): HTMLElement {
   const meters = state.meters.map((m, i) => meterEditor(m, i));
   const addBtn =
     state.target === "python"
@@ -355,12 +370,12 @@ function meterCard() {
   return card(3, "Your power meter", intro, [...meters, addBtn]);
 }
 
-function ctCard() {
+function ctCard(): HTMLElement | null {
   const showPython = state.target === "python" && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
   const show = state.target === "esphome" || showPython;
   if (!show) return null;
   const f = state.ct.fields;
-  const group = (title, fields, openByDefault = false) =>
+  const group = (title: string, fields: Field[], openByDefault = false): HTMLElement =>
     el("details", { class: "adv", ...(openByDefault ? { open: true } : {}) }, [
       el("summary", { text: title }),
       el("div", { class: "field-grid" }, fields.map((fl) => fieldControl(fl, f, {}))),
@@ -374,7 +389,7 @@ function ctCard() {
   ]);
 }
 
-function extrasCard() {
+function extrasCard(): HTMLElement {
   const m = state.marstek;
   const mi = state.mqttInsights;
   const marstekBody = [
@@ -398,10 +413,10 @@ function extrasCard() {
 
 // Shown only for the ESPHome target: a no-prior-knowledge guide to actually
 // getting the generated YAML onto the chip.
-function esphomeStepsCard() {
+function esphomeStepsCard(): HTMLElement | null {
   if (state.target !== "esphome") return null;
   const e = state.esphome;
-  const li = (html) => el("li", { html });
+  const li = (html: string) => el("li", { html });
   return card(6, "How to flash this onto your ESP32", "Follow these once. After that, the board runs on its own — you can unplug it from your PC and power it from any USB charger near your battery.", [
     el("ol", { class: "steps" }, [
       li("<strong>Get the board.</strong> Buy an ESP32-S3 DevKitC-1 (links in step 2 above) and plug it into your computer with a USB cable that supports data."),
@@ -417,19 +432,19 @@ function esphomeStepsCard() {
       li("<strong>Install / flash.</strong> Click <em>Install → Plug into this computer</em> for the first flash (USB). After that you can update it wirelessly over WiFi. Flashing takes a few minutes."),
       li("<strong>Point your battery at it.</strong> In the Marstek app, set the battery to use a CT002/CT003 meter (matching the CT type you chose). The ESP32 answers on your network automatically — power it from any USB charger near the battery."),
     ]),
-    el("p", { class: "note", html: "Full reference: <a href='https://github.com/tomquist/astrameter/blob/develop/README.md#esphome-external-component-run-on-an-esp32' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
+    el("p", { class: "note", html: "Full reference: <a href='" + ghDoc("README.md#esphome-external-component-run-on-an-esp32") + "' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
   ]);
 }
 
 // ── preview + actions ─────────────────────────────────────────────────────────
-function refreshPreview() {
+function refreshPreview(): void {
   const pre = document.getElementById("preview-code");
   if (!pre) return;
   let text = "";
   try {
     text = generate(state);
   } catch (err) {
-    text = "# Error generating config: " + err.message;
+    text = "# Error generating config: " + (err as Error).message;
   }
   pre.textContent = text;
   const fn = document.getElementById("preview-filename");
@@ -437,7 +452,7 @@ function refreshPreview() {
   saveState();
 }
 
-function previewPanel() {
+function previewPanel(): HTMLElement {
   const filename = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
   return el("aside", { class: "preview", id: "preview" }, [
     el("div", { class: "preview-head" }, [
@@ -452,16 +467,16 @@ function previewPanel() {
   ]);
 }
 
-function safeGenerate() {
+function safeGenerate(): string | null {
   try {
     return generate(state);
-  } catch (err) {
+  } catch {
     toast("Couldn't generate the config — check the preview for details", true);
     return null;
   }
 }
 
-function copyConfig() {
+function copyConfig(): void {
   const text = safeGenerate();
   if (text == null) return;
   navigator.clipboard.writeText(text).then(
@@ -470,14 +485,14 @@ function copyConfig() {
   );
 }
 
-function downloadConfig() {
+function downloadConfig(): void {
   const text = safeGenerate();
   if (text == null) return;
   const name = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
   downloadText(name, text);
 }
 
-function downloadText(filename, text) {
+function downloadText(filename: string, text: string): void {
   const blob = new Blob([text], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
   const a = el("a", { href: url, download: filename });
@@ -488,15 +503,15 @@ function downloadText(filename, text) {
 }
 
 // ── project save / load ─────────────────────────────────────────────────────
-function saveState() {
+function saveState(): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (_) {
+  } catch {
     /* storage may be unavailable (private mode) */
   }
 }
 
-function loadState() {
+function loadState(): State | null {
   // 1) shared link wins
   try {
     const hash = location.hash.replace(/^#state=/, "");
@@ -505,38 +520,38 @@ function loadState() {
       history.replaceState(null, "", location.pathname + location.search);
       return migrate(decoded);
     }
-  } catch (_) {
+  } catch {
     /* ignore bad hash */
   }
   // 2) localStorage
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return migrate(safeParse(raw));
-  } catch (_) {
+  } catch {
     /* ignore */
   }
   return null;
 }
 
-function saveProject() {
+function saveProject(): void {
   downloadText("astrameter-project.json", JSON.stringify(state, null, 2));
 }
 
-function loadProject(file) {
+function loadProject(file: File): void {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      state = migrate(safeParse(reader.result));
+      state = migrate(safeParse(reader.result as string));
       rerenderAll();
       toast("Project loaded");
-    } catch (err) {
+    } catch {
       toast("Could not read that file", true);
     }
   };
   reader.readAsText(file);
 }
 
-function shareLink() {
+function shareLink(): void {
   try {
     const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
     const url = location.origin + location.pathname + "#state=" + encoded;
@@ -544,18 +559,18 @@ function shareLink() {
       () => toast("Share link copied to clipboard"),
       () => prompt("Copy this link:", url),
     );
-  } catch (_) {
+  } catch {
     toast("Could not build share link", true);
   }
 }
 
-function resetProject() {
+function resetProject(): void {
   if (!confirm("Start over? This clears everything you've entered.")) return;
   state = defaultState();
   rerenderAll();
 }
 
-function toast(msg, isError = false) {
+function toast(msg: string, isError = false): void {
   const t = el("div", { class: "toast" + (isError ? " toast-error" : ""), text: msg });
   document.body.appendChild(t);
   requestAnimationFrame(() => t.classList.add("show"));
@@ -566,8 +581,8 @@ function toast(msg, isError = false) {
 }
 
 // ── render ───────────────────────────────────────────────────────────────────
-function rerenderAll() {
-  const form = document.getElementById("form-col");
+function rerenderAll(): void {
+  const form = document.getElementById("form-col")!;
   form.innerHTML = "";
   form.append(targetCard(), deviceCard(), meterCard());
   const ct = ctCard();
@@ -579,8 +594,8 @@ function rerenderAll() {
   refreshPreview();
 }
 
-function projectCard() {
-  const fileInput = el("input", { type: "file", accept: "application/json", class: "hidden", onchange: (e) => e.target.files[0] && loadProject(e.target.files[0]) });
+function projectCard(): HTMLElement {
+  const fileInput = el("input", { type: "file", accept: "application/json", class: "hidden", onchange: (e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) loadProject(f); } });
   return card(null, "Save your work", "Your answers are saved in this browser automatically. You can also export a project file to back up or continue on another device.", [
     el("div", { class: "btn-row" }, [
       el("button", { type: "button", class: "secondary", onclick: saveProject }, "💾 Save project file"),
@@ -592,8 +607,8 @@ function projectCard() {
   ]);
 }
 
-function boot() {
-  const root = document.getElementById("app");
+function boot(): void {
+  const root = document.getElementById("app")!;
   root.append(el("div", { class: "layout" }, [el("div", { id: "form-col", class: "form-col" }), previewPanel()]));
   rerenderAll();
 }

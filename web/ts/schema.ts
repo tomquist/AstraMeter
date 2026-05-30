@@ -9,49 +9,65 @@
 // by the validator, so a typo fails fast instead of silently doing nothing.
 // See web/README.md → "Adding or editing a powermeter" for a worked example.
 
-/**
- * @typedef {Object} Option  A choice in a `select` field.
- * @property {string} value
- * @property {string} label
- *
- * @typedef {Object} Field  One form control, mapped to a config.ini key.
- * @property {string}  key          INI key / logical name (UPPER_CASE for config.ini keys).
- * @property {string}  label        Human label shown in the form.
- * @property {string} [help]        Beginner-friendly explanation rendered under the field.
- * @property {'text'|'number'|'password'|'select'|'checkbox'} type
- * @property {string|boolean} [default]  Default value (decides whether the key is emitted).
- * @property {string} [placeholder]
- * @property {Option[]} [options]   Required for `type: 'select'`.
- * @property {boolean} [required]   Highlight as required in the form.
- * @property {boolean} [phase]      In 3-phase mode, render L1/L2/L3 inputs joined with commas.
- * @property {boolean} [advanced]   Hide behind the "advanced" disclosure.
- * @property {string} [ey]          ESPHome key (for CT/insights/marstek option groups only).
- *
- * @typedef {Object} EsphomeSpec  How this source is read on an ESP32 (see docs/esphome-powermeters.md).
- * @property {'homeassistant'|'mqtt'|'sml'|'modbus'|'http'|'unsupported'} kind  Drives the YAML generator.
- * @property {'native'|'generic'|'alternate'|'unsupported'} tier  Support badge shown in the UI.
- * @property {string}  note         One-line explanation / caveat.
- * @property {(f:Object)=>string} [url1]   HTTP poll URL (single-phase) given the field values.
- * @property {(f:Object)=>string} [url3]   HTTP poll URL (three-phase).
- * @property {string|((f:Object)=>string)} [lambda1]  Lambda body publishing into grid_l1.
- * @property {string} [lambda3]     Lambda body publishing into grid_l1/2/3.
- * @property {string} [jsonRoot]    Override the lambda root type (e.g. "JsonArray arr").
- * @property {(f:Object)=>string} [haEntity]  For kind:'homeassistant', the entity_id to subscribe to.
- * @property {string} [headersField]  Field key whose value becomes HTTP headers (kind:'http').
- * @property {string|((f:Object)=>string|null)} [warn]  Per-meter ⚠ banner (string or predicate on fields).
- *
- * @typedef {Object} Powermeter
- * @property {string} id            Stable unique id.
- * @property {string} label         Human name in the dropdown.
- * @property {string} section       config.ini section name (UPPER_SNAKE, unique).
- * @property {string} [blurb]       Short description under the dropdown.
- * @property {string} [docPython]   Repo-relative link to the per-source reference.
- * @property {Field[]} fields       The source-specific fields.
- * @property {EsphomeSpec} esphome  ESP32 mapping.
- * @property {{topic:string,jsonPath:string}} [phaseListKeys]  MQTT only: 3-phase key renames (TOPIC→TOPICS …).
- */
+/** A field value as stored in app state (text/select/number → string, checkbox → boolean). */
+export type FieldValue = string | boolean | undefined;
+/** The flat key→value map for one meter's fields (or a tuning/option group). */
+export type Fields = Record<string, FieldValue>;
 
-export const SHELLY_TYPES = [
+/** A choice in a `select` field. */
+export interface Option {
+  value: string;
+  label: string;
+}
+
+/** One form control, mapped to a config.ini key. */
+export interface Field {
+  key: string;
+  label: string;
+  help?: string;
+  type: "text" | "number" | "password" | "select" | "checkbox";
+  default?: string | boolean;
+  placeholder?: string;
+  options?: Option[];
+  required?: boolean;
+  phase?: boolean;
+  advanced?: boolean;
+  ey?: string;
+}
+
+/** How a source is read on an ESP32 (see docs/esphome-powermeters.md). */
+export interface EsphomeSpec {
+  kind: "homeassistant" | "mqtt" | "sml" | "modbus" | "http" | "unsupported";
+  tier: "native" | "generic" | "alternate" | "unsupported";
+  note: string;
+  url1?: (f: Fields) => string;
+  url3?: (f: Fields) => string;
+  lambda1?: string | ((f: Fields) => string);
+  lambda3?: string;
+  jsonRoot?: string;
+  haEntity?: (f: Fields) => string;
+  headersField?: string;
+  warn?: string | ((f: Fields) => string | null);
+}
+
+export interface Powermeter {
+  id: string;
+  label: string;
+  section: string;
+  blurb?: string;
+  docPython?: string;
+  fields: Field[];
+  esphome: EsphomeSpec;
+  phaseListKeys?: { topic: string; jsonPath: string };
+}
+
+export interface DeviceType {
+  value: string;
+  label: string;
+  help: string;
+}
+
+export const SHELLY_TYPES: Option[] = [
   { value: "1PM", label: "Shelly 1PM" },
   { value: "PLUS1PM", label: "Shelly Plus 1PM" },
   { value: "EM", label: "Shelly EM" },
@@ -62,7 +78,7 @@ export const SHELLY_TYPES = [
 // Device types AstraMeter can emulate (Python add-on). The shelly* family
 // emulates a single Shelly meter; ct002/ct003 emulate Marstek CT clamps and
 // are recommended when you run more than one battery.
-export const DEVICE_TYPES = [
+export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "shellypro3em",
     label: "Shelly Pro 3EM",
@@ -102,7 +118,7 @@ export const DEVICE_TYPES = [
 
 // Options that apply to *any* powermeter section (and can also be set in
 // [GENERAL]). Shown under each meter's "Fine-tuning" disclosure.
-export const PER_METER_TUNING = [
+export const PER_METER_TUNING: Field[] = [
   {
     key: "THROTTLE_INTERVAL",
     label: "Throttle interval (seconds)",
@@ -245,7 +261,7 @@ export const PER_METER_TUNING = [
 //   'homeassistant' native HA sensor    'mqtt' native mqtt_subscribe
 //   'sml' native sml component          'modbus' native modbus_controller
 //   'http' generic http_request poll    'unsupported' no ESP path yet
-export const POWERMETERS = [
+export const POWERMETERS: Powermeter[] = [
   {
     id: "shelly",
     label: "Shelly energy meter",
@@ -302,7 +318,7 @@ export const POWERMETERS = [
       note: "Polls /cm?cmnd=status 10. Adjust the prefix/label in the lambda to match your meter.",
       url1: (f) => `http://${f.IP || "192.168.1.101"}/cm?cmnd=status%2010`,
       lambda1: (f) =>
-        `id(grid_l1).publish_state(root["${f.JSON_STATUS || "StatusSNS"}"]["${f.JSON_PAYLOAD_MQTT_PREFIX || "SML"}"]["${(f.JSON_POWER_MQTT_LABEL || "Power").split(",")[0].trim()}"]);`,
+        `id(grid_l1).publish_state(root["${f.JSON_STATUS || "StatusSNS"}"]["${f.JSON_PAYLOAD_MQTT_PREFIX || "SML"}"]["${String(f.JSON_POWER_MQTT_LABEL || "Power").split(",")[0].trim()}"]);`,
     },
   },
   {
@@ -407,7 +423,7 @@ export const POWERMETERS = [
       kind: "http",
       tier: "generic",
       note: "Reads data[0].tuples[0][1]. Or read the meter directly on the ESP with the native sml/dsmr component.",
-      url1: (f) => `http://${f.IP || "192.168.1.106"}:${f.PORT || "8080"}/${(f.UUID || "your-uuid").split(",")[0].trim()}`,
+      url1: (f) => `http://${f.IP || "192.168.1.106"}:${f.PORT || "8080"}/${String(f.UUID || "your-uuid").split(",")[0].trim()}`,
       lambda1: 'id(grid_l1).publish_state(root["data"][0]["tuples"][0][1]);',
     },
   },
@@ -530,7 +546,7 @@ export const POWERMETERS = [
       kind: "http",
       tier: "native",
       note: "Generic http_request poll. Headers and basic auth are supported on the get action.",
-      url1: (f) => f.URL || "http://example.com/api",
+      url1: (f) => String(f.URL || "http://example.com/api"),
       lambda1: 'id(grid_l1).publish_state(root["power"]);',
       headersField: "HEADERS",
     },
@@ -635,12 +651,12 @@ export const POWERMETERS = [
   },
 ];
 
-export function getPowermeter(id) {
+export function getPowermeter(id: string): Powermeter | undefined {
   return POWERMETERS.find((p) => p.id === id);
 }
 
 // Meters that can read three phases. Others are single-phase only.
-export const PHASE_CAPABLE = new Set([
+export const PHASE_CAPABLE: Set<string> = new Set([
   "shelly",
   "tasmota",
   "homeassistant",
@@ -654,7 +670,7 @@ export const PHASE_CAPABLE = new Set([
 // CT002/CT003 active-steering options. Grouped for the form. These live in the
 // [CT002]/[CT003] section (Python) or the ct002: block (ESPHome). `eyKey` is
 // the ESPHome key when it differs / lives in a sub-block.
-export const CT_BASIC = [
+export const CT_BASIC: Field[] = [
   { key: "CT_MAC", ey: "ct_mac", label: "CT MAC", help: "12 hex digits from the Marstek app. Leave blank to answer any battery and mirror its MAC.", type: "text", placeholder: "(blank = any)" },
   { key: "UDP_PORT", ey: "udp_port", label: "UDP port", help: "Port the emulator listens on. Default 12345.", type: "number", placeholder: "12345" },
   { key: "WIFI_RSSI", ey: "wifi_rssi", label: "Reported WiFi RSSI", help: "Signal strength reported back to the battery. Default -50.", type: "number", placeholder: "-50" },
@@ -662,11 +678,11 @@ export const CT_BASIC = [
   { key: "DEDUPE_TIME_WINDOW", ey: "dedupe_window", label: "Dedupe window (seconds)", help: "Drop duplicate polls from the same battery within this window. 0 = off.", type: "number", placeholder: "0" },
 ];
 
-export const CT_ACTIVE = [
+export const CT_ACTIVE: Field[] = [
   { key: "ACTIVE_CONTROL", ey: "active_control", label: "Active control", help: "On (default): the emulator smooths the reading, splits the target across batteries and balances them. Off: relay raw readings and let batteries decide.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
 ];
 
-export const CT_BALANCER = [
+export const CT_BALANCER: Field[] = [
   { key: "FAIR_DISTRIBUTION", ey: "fair_distribution", label: "Fair distribution", help: "Share load evenly across batteries. Only matters with 2+ batteries.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "BALANCE_GAIN", ey: "balance_gain", label: "Balance gain", help: "How aggressively to correct imbalance. 0 = equal split only; 0.3–0.5 = faster. Default 0.2.", type: "number", placeholder: "0.2" },
   { key: "BALANCE_DEADBAND", ey: "balance_deadband", label: "Balance deadband (W)", help: "Ignore imbalance smaller than this. Default 15.", type: "number", placeholder: "15" },
@@ -677,7 +693,7 @@ export const CT_BALANCER = [
   { key: "MAX_TARGET_STEP", ey: "max_target_step", label: "Max target step (W)", help: "Hard clamp on per-cycle target change. 0 = off.", type: "number", placeholder: "0" },
 ];
 
-export const CT_EFFICIENCY = [
+export const CT_EFFICIENCY: Field[] = [
   { key: "MIN_EFFICIENT_POWER", ey: "min_efficient_power", label: "Min efficient power (W)", help: "Concentrate small loads on fewer batteries so each stays efficient. 0 = off. Not recommended for DC batteries.", type: "number", placeholder: "0" },
   { key: "EFFICIENCY_ROTATION_INTERVAL", ey: "efficiency_rotation_interval", label: "Rotation interval (seconds)", help: "How often priority rotates between batteries. Default 900 (min 10).", type: "number", placeholder: "900" },
   { key: "PROBE_MIN_POWER", ey: "probe_min_power", label: "Probe min power (W)", help: "Floor sent when probing a newly promoted battery. Default 80.", type: "number", placeholder: "80" },
@@ -685,7 +701,7 @@ export const CT_EFFICIENCY = [
   { key: "EFFICIENCY_SATURATION_THRESHOLD", ey: "efficiency_saturation_threshold", label: "Saturation swap threshold", help: "Swap out a battery that can't follow its target. Default 0.4; raise for slow meters.", type: "number", placeholder: "0.4" },
 ];
 
-export const CT_SATURATION = [
+export const CT_SATURATION: Field[] = [
   { key: "SATURATION_DETECTION", ey: "enabled", label: "Saturation detection", help: "Detect a full/empty battery and back off. On by default.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "SATURATION_ALPHA", ey: "alpha", label: "Saturation alpha", help: "How fast saturation is declared/recovered. Default 0.15.", type: "number", placeholder: "0.15" },
   { key: "MIN_TARGET_FOR_SATURATION", ey: "min_target", label: "Min target for saturation (W)", help: "Ignore saturation below this target. Default 20.", type: "number", placeholder: "20" },
@@ -694,14 +710,14 @@ export const CT_SATURATION = [
   { key: "SATURATION_DECAY_FACTOR", ey: "decay_factor", label: "Saturation decay factor", help: "How fast a swapped-out battery becomes eligible again. Default 0.995.", type: "number", placeholder: "0.995" },
 ];
 
-export const MARSTEK_FIELDS = [
+export const MARSTEK_FIELDS: Field[] = [
   { key: "MAILBOX", ey: "mailbox", label: "Marstek account email", help: "Used once to register a managed CT device in the Marstek cloud.", type: "text", placeholder: "you@example.com" },
   { key: "PASSWORD", ey: "password", label: "Marstek account password", help: "Only needed for the one-time registration; you can remove it after.", type: "password", placeholder: "your_password" },
   { key: "BASE_URL", ey: "base_url", label: "API base URL", help: "https://eu.hamedata.com (EU) or https://us.hamedata.com (US).", type: "select", default: "https://eu.hamedata.com", options: [{ value: "https://eu.hamedata.com", label: "EU (eu.hamedata.com)" }, { value: "https://us.hamedata.com", label: "US (us.hamedata.com)" }] },
   { key: "TIMEZONE", ey: "timezone", label: "Timezone", help: "Your IANA timezone, e.g. Europe/Berlin.", type: "text", placeholder: "Europe/Berlin" },
 ];
 
-export const MQTT_INSIGHTS_FIELDS = [
+export const MQTT_INSIGHTS_FIELDS: Field[] = [
   { key: "BROKER", ey: "__uri", label: "Broker host", help: "MQTT broker for publishing internal state to Home Assistant.", type: "text", placeholder: "192.168.1.100" },
   { key: "PORT", label: "Port", help: "Broker port. Default 1883.", type: "number", placeholder: "1883" },
   { key: "USERNAME", label: "Username", help: "Broker username, if required.", type: "text", placeholder: "(optional)" },
@@ -714,7 +730,7 @@ export const MQTT_INSIGHTS_FIELDS = [
   { key: "MARSTEK_MQTT_INTERVAL", ey: "marstek_mqtt_interval", label: "Marstek broadcast interval (s)", help: "Seconds between aggregate broadcasts when the app is quiet. 0 = polls only.", type: "number", placeholder: "300", advanced: true },
 ];
 
-export const ESP_BOARDS = [
+export const ESP_BOARDS: Option[] = [
   { value: "esp32-s3-devkitc-1", label: "ESP32-S3 DevKitC-1 (recommended)" },
   { value: "esp32dev", label: "Generic ESP32 (esp32dev)" },
   { value: "esp32-c3-devkitm-1", label: "ESP32-C3 DevKitM-1" },

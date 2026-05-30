@@ -3,15 +3,49 @@
 // added since a saved state was written AND constrains untrusted restored input
 // (share link / project file) to known-good shapes. Kept separate from app.js
 // so it can be unit-tested in Node without a DOM (see state.test.mjs).
-import { getPowermeter } from "./schema.js";
+import { getPowermeter, type Fields } from "./schema.js";
 
 export const STORAGE_KEY = "astrameter-generator-state-v1";
 
-export function newMeter(type = "homeassistant") {
+export interface Meter {
+  type: string;
+  suffix: string;
+  phases: number;
+  fields: Fields;
+  tuning: Fields;
+  netmask: string;
+}
+
+export interface State {
+  target: "python" | "esphome";
+  general: {
+    deviceTypes: string[];
+    deviceIds: string;
+    skipPowermeterTest: boolean;
+    webConfigEnabled: boolean;
+    webServerPort: string;
+    throttleInterval: string;
+    waitForNextMessage: string;
+    dedupeTimeWindow: string;
+  };
+  meters: Meter[];
+  ct: { fields: Fields };
+  marstek: { enabled: boolean; fields: Fields };
+  mqttInsights: { enabled: boolean; fields: Fields };
+  esphome: {
+    name: string;
+    friendlyName: string;
+    board: string;
+    framework: string;
+    ctType: string;
+  };
+}
+
+export function newMeter(type: string = "homeassistant"): Meter {
   return { type, suffix: "", phases: 1, fields: {}, tuning: {}, netmask: "" };
 }
 
-export function defaultState() {
+export function defaultState(): State {
   return {
     target: "python",
     general: {
@@ -43,20 +77,20 @@ export function defaultState() {
 // prototype pollution. Not currently exploitable (migrate uses spreads, not a
 // recursive merge), but cheap insurance as the merge logic evolves.
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-export function safeParse(text) {
+export function safeParse(text: string): unknown {
   return JSON.parse(text, (key, value) => (UNSAFE_KEYS.has(key) ? undefined : value));
 }
 
 // A plain-object guard. Note `typeof [] === "object"`, so arrays must be
 // rejected explicitly — otherwise a restored array would pass as a fields map.
-function asObject(v) {
-  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+function asObject(v: unknown): Fields {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : {};
 }
 
 // Coerce one restored meter into a known-good shape. Constrains `type` to a real
 // powermeter id and forces the value-bearing fields to strings/objects, so
 // restored state can never carry an unexpected type into the renderer.
-export function cleanMeter(m) {
+export function cleanMeter(m: any): Meter {
   const base = newMeter();
   const src = m && typeof m === "object" ? m : {};
   const type = getPowermeter(src.type) ? src.type : base.type;
@@ -72,7 +106,7 @@ export function cleanMeter(m) {
 
 // Fill in any keys added since the saved state was written, and constrain
 // restored values to known-good shapes (untrusted: share link / project file).
-export function migrate(s) {
+export function migrate(s: any): State {
   const d = defaultState();
   s = s && typeof s === "object" ? s : {};
   const meters = Array.isArray(s.meters) && s.meters.length ? s.meters : d.meters;
