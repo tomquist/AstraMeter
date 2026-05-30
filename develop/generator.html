@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Config Generator — AstraMeter</title>
+    <meta
+      name="description"
+      content="A friendly, step-by-step generator for AstraMeter — build a Python config.ini or an ESPHome YAML for your Marstek battery's emulated power meter, no prior knowledge needed."
+    />
+    <meta name="theme-color" content="#020617" />
+    <link rel="icon" type="image/svg+xml" href="assets/astrameter-icon.svg" />
+    <link rel="apple-touch-icon" href="assets/astrameter-icon.png" />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <!-- nav -->
+    <header class="site-nav" id="nav">
+      <div class="nav-inner">
+        <a class="brand" href="index.html"><img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter</a>
+        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
+        <nav class="nav-links" id="nav-links">
+          <a href="index.html#features">Features</a>
+          <a href="index.html#devices">Devices</a>
+          <a href="index.html#meters">Power meters</a>
+          <a href="index.html#install">Install</a>
+          <a class="nav-cta active" href="generator.html">Config Generator</a>
+          <a class="nav-gh" data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub ★</a>
+        </nav>
+      </div>
+    </header>
+
+    <header class="gen-head">
+      <div class="container">
+        <p class="eyebrow"><a href="index.html">← Back to AstraMeter</a></p>
+        <h1>Config Generator</h1>
+        <p class="lead">
+          Answer a few questions and get a ready-to-use configuration. No experience required — every option is
+          explained as you go, and a live preview updates while you type.
+        </p>
+        <details class="intro">
+          <summary>New here? What is AstraMeter?</summary>
+          <p>
+            Marstek balcony batteries decide when to charge or discharge by listening to a power meter on your
+            home's grid connection. AstraMeter pretends to be that meter: it reads your <em>real</em> grid power
+            from a source you already have (a Shelly, Home Assistant, an MQTT topic, a smart-meter reader, …) and
+            reports it to the battery in the exact format it expects.
+          </p>
+          <p>
+            This tool writes the configuration file that tells AstraMeter which meter to impersonate and where to
+            read your real power from. Pick how you'll run it, point it at your meter, and copy the result.
+          </p>
+        </details>
+      </div>
+    </header>
+
+    <main id="app" class="container">
+      <noscript>
+        <p class="note">This generator needs JavaScript enabled.</p>
+      </noscript>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-grid">
+        <div>
+          <a class="brand" href="index.html"><img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter</a>
+          <p class="help">Generated files are produced entirely in your browser — nothing is uploaded.</p>
+        </div>
+        <div>
+          <h4>Project</h4>
+          <a data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub</a>
+          <a data-gh="readme" href="https://github.com/tomquist/astrameter#readme" target="_blank" rel="noopener">Documentation</a>
+          <a data-gh="doc:CHANGELOG.md" href="https://github.com/tomquist/astrameter/blob/develop/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+        </div>
+        <div>
+          <h4>Reference</h4>
+          <a data-gh="doc:docs/powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/powermeters.md" target="_blank" rel="noopener">Power meters (Python)</a>
+          <a data-gh="doc:docs/esphome-powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/esphome-powermeters.md" target="_blank" rel="noopener">Power meters (ESPHome)</a>
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="js/site.js"></script>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
