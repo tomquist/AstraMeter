@@ -315,3 +315,28 @@ def test_clock_gated_dedup(backend) -> None:
     assert r3 is not None, (
         f"[{backend.name}] poll after the dedup window should be answered"
     )
+
+
+@pytest.mark.timeout(30, func_only=True)
+@pytest.mark.parametrize("phase,idx", [("A", 4), ("B", 5), ("C", 6)])
+def test_phase_routing(backend, phase, idx) -> None:
+    """A single battery's target lands only on the phase it reports.
+
+    ``split_by_phase`` places the whole target on the reporting consumer's
+    phase and exactly zero on the others — a wire fact that must hold
+    identically on both stacks regardless of target magnitude or smoothing.
+    """
+    backend.set_clock(9000)
+    backend.set_grid(300)  # importing → discharge (+)
+    r = backend.poll("DDEEFF001122", phase, 0)
+    assert r is not None, f"[{backend.name}] no response for phase {phase}"
+    targets = {4: int(r[4]), 5: int(r[5]), 6: int(r[6])}
+    assert targets[idx] > 0, (
+        f"[{backend.name}] import should discharge on phase {phase}, got {targets[idx]}"
+    )
+    for other in (4, 5, 6):
+        if other != idx:
+            assert targets[other] == 0, (
+                f"[{backend.name}] phase {'ABC'[other - 4]} should be 0, "
+                f"got {targets[other]}"
+            )
