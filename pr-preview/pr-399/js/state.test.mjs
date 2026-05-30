@@ -64,6 +64,24 @@ ok(fromHostileLink.meters[0].type === "homeassistant", "migrate(hostile): constr
 ok(fromHostileLink.meters[0].fields.TOKEN === "<svg onload=alert(1)>", "migrate(hostile): field value preserved (not executed; rendered via value/textContent)");
 ok(({}).polluted === undefined, "migrate(hostile): no prototype pollution");
 
+// ── migrate coerces ct/marstek/mqttInsights sub-sections ──
+const hostileSubs = migrate({
+  ct: { fields: ["array", "not", "object"] },
+  marstek: { enabled: "yes-string", fields: 42 },
+  mqttInsights: { enabled: 1, fields: null },
+});
+ok(!Array.isArray(hostileSubs.ct.fields) && typeof hostileSubs.ct.fields === "object", "migrate: ct.fields array coerced to {}");
+ok(hostileSubs.marstek.enabled === true, "migrate: non-boolean marstek.enabled coerced to true");
+ok(!Array.isArray(hostileSubs.marstek.fields) && typeof hostileSubs.marstek.fields === "object" && Object.keys(hostileSubs.marstek.fields).length === 0, "migrate: numeric marstek.fields coerced to {}");
+ok(hostileSubs.mqttInsights.enabled === true, "migrate: truthy mqttInsights.enabled coerced to bool true");
+ok(typeof hostileSubs.mqttInsights.fields === "object" && hostileSubs.mqttInsights.fields !== null, "migrate: null mqttInsights.fields coerced to {}");
+ok(migrate({}).marstek.enabled === false && migrate({}).mqttInsights.enabled === false, "migrate: missing enabled defaults to false");
+
+// cleanMeter rejects array fields/tuning (typeof [] === 'object')
+const arrFields = cleanMeter({ type: "shelly", fields: ["x"], tuning: ["y"] });
+ok(!Array.isArray(arrFields.fields) && Object.keys(arrFields.fields).length === 0, "cleanMeter: array fields coerced to {}");
+ok(!Array.isArray(arrFields.tuning) && Object.keys(arrFields.tuning).length === 0, "cleanMeter: array tuning coerced to {}");
+
 // migrate fills in newly-added keys for an old saved state
 const old = migrate({ target: "python", meters: [{ type: "shelly", fields: { IP: "1.1.1.1" } }] });
 ok(old.esphome && old.esphome.board, "migrate: backfills missing esphome defaults");
