@@ -47,6 +47,12 @@ export function safeParse(text) {
   return JSON.parse(text, (key, value) => (UNSAFE_KEYS.has(key) ? undefined : value));
 }
 
+// A plain-object guard. Note `typeof [] === "object"`, so arrays must be
+// rejected explicitly — otherwise a restored array would pass as a fields map.
+function asObject(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+
 // Coerce one restored meter into a known-good shape. Constrains `type` to a real
 // powermeter id and forces the value-bearing fields to strings/objects, so
 // restored state can never carry an unexpected type into the renderer.
@@ -59,8 +65,8 @@ export function cleanMeter(m) {
     suffix: typeof src.suffix === "string" ? src.suffix : "",
     phases: src.phases === 3 ? 3 : 1,
     netmask: typeof src.netmask === "string" ? src.netmask : "",
-    fields: src.fields && typeof src.fields === "object" ? src.fields : {},
-    tuning: src.tuning && typeof src.tuning === "object" ? src.tuning : {},
+    fields: asObject(src.fields),
+    tuning: asObject(src.tuning),
   };
 }
 
@@ -76,9 +82,9 @@ export function migrate(s) {
     target: s.target === "esphome" ? "esphome" : "python",
     general: { ...d.general, ...(s.general || {}) },
     esphome: { ...d.esphome, ...(s.esphome || {}) },
-    ct: { fields: {}, ...(s.ct || {}) },
-    marstek: { enabled: false, fields: {}, ...(s.marstek || {}) },
-    mqttInsights: { enabled: false, fields: {}, ...(s.mqttInsights || {}) },
+    ct: { fields: asObject(s.ct && s.ct.fields) },
+    marstek: { enabled: !!(s.marstek && s.marstek.enabled), fields: asObject(s.marstek && s.marstek.fields) },
+    mqttInsights: { enabled: !!(s.mqttInsights && s.mqttInsights.enabled), fields: asObject(s.mqttInsights && s.mqttInsights.fields) },
     meters: meters.map(cleanMeter),
   };
 }
