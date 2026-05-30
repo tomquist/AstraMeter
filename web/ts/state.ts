@@ -83,6 +83,12 @@ export function safeParse(text: string): unknown {
 
 // A plain-object guard. Note `typeof [] === "object"`, so arrays must be
 // rejected explicitly — otherwise a restored array would pass as a fields map.
+function asStr(v: unknown, fallback: string): string {
+  return typeof v === "string" ? v : fallback;
+}
+function asBool(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
 function asObject(v: unknown): Fields {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : {};
 }
@@ -114,7 +120,20 @@ export function migrate(s: any): State {
     ...d,
     ...s,
     target: s.target === "esphome" ? "esphome" : "python",
-    general: { ...d.general, ...(s.general || {}) },
+    general: ((): State["general"] => {
+      const sg = s.general && typeof s.general === "object" ? s.general : {};
+      const dg = d.general;
+      return {
+        deviceTypes: Array.isArray(sg.deviceTypes) ? sg.deviceTypes.map((t: unknown) => String(t)) : dg.deviceTypes,
+        deviceIds: asStr(sg.deviceIds, dg.deviceIds),
+        skipPowermeterTest: asBool(sg.skipPowermeterTest, dg.skipPowermeterTest),
+        webConfigEnabled: asBool(sg.webConfigEnabled, dg.webConfigEnabled),
+        webServerPort: asStr(sg.webServerPort, dg.webServerPort),
+        throttleInterval: asStr(sg.throttleInterval, dg.throttleInterval),
+        waitForNextMessage: asStr(sg.waitForNextMessage, dg.waitForNextMessage),
+        dedupeTimeWindow: asStr(sg.dedupeTimeWindow, dg.dedupeTimeWindow),
+      };
+    })(),
     esphome: { ...d.esphome, ...(s.esphome || {}) },
     ct: { fields: asObject(s.ct && s.ct.fields) },
     marstek: { enabled: !!(s.marstek && s.marstek.enabled), fields: asObject(s.marstek && s.marstek.fields) },

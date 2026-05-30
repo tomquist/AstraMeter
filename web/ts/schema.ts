@@ -664,7 +664,6 @@ export const PHASE_CAPABLE: Set<string> = new Set([
   "mqtt",
   "json_http",
   "sml",
-  "modbus",
 ]);
 
 // CT002/CT003 active-steering options. Grouped for the form. These live in the

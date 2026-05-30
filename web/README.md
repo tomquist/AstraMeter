@@ -60,7 +60,7 @@ npm test             # schema, state, and generate suites via tsx
 ```
 
 CI runs `typecheck` + `test` + `build` before every deploy (see
-`.github/workflows/pages.yml` and `pr-preview.yml`).
+`.github/workflows/pages.yml` and `.github/workflows/pr-preview.yml`).
 
 ## Save / load
 

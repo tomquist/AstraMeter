@@ -30,7 +30,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: gh-pages-deploy
+  # Shared with pr-preview.yml so every writer to the gh-pages branch (root,
+  # /develop/, and pr-preview/*) serialises — no concurrent, conflicting pushes.
+  group: gh-pages
   cancel-in-progress: false
 
 jobs:

@@ -82,6 +82,15 @@ const arrFields = cleanMeter({ type: "shelly", fields: ["x"], tuning: ["y"] });
 ok(!Array.isArray(arrFields.fields) && Object.keys(arrFields.fields).length === 0, "cleanMeter: array fields coerced to {}");
 ok(!Array.isArray(arrFields.tuning) && Object.keys(arrFields.tuning).length === 0, "cleanMeter: array tuning coerced to {}");
 
+// migrate coerces untrusted general sub-fields (no crash in generalSection)
+const hg = migrate({ general: { deviceTypes: "shellypro3em", deviceIds: 123, skipPowermeterTest: "yes", webServerPort: 555 } });
+ok(Array.isArray(hg.general.deviceTypes), "migrate: non-array deviceTypes coerced to an array");
+ok(typeof hg.general.deviceIds === "string", "migrate: numeric deviceIds coerced to string");
+ok(typeof hg.general.skipPowermeterTest === "boolean", "migrate: non-boolean skipPowermeterTest coerced to boolean");
+ok(typeof hg.general.webServerPort === "string", "migrate: numeric webServerPort coerced to string");
+const okg = migrate({ general: { deviceTypes: ["ct002", "ct003"], deviceIds: "x-1" } });
+ok(okg.general.deviceTypes.length === 2 && okg.general.deviceIds === "x-1", "migrate: valid general preserved");
+
 // migrate fills in newly-added keys for an old saved state
 const old = migrate({ target: "python", meters: [{ type: "shelly", fields: { IP: "1.1.1.1" } }] });
 ok(old.esphome && old.esphome.board, "migrate: backfills missing esphome defaults");

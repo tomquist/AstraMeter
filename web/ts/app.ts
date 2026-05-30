@@ -132,6 +132,17 @@ function fieldControl(
   return el("div", { class: "field" }, [el("label", { text: labelText, class: "field-label" }), control, help]);
 }
 
+// HTML-escape a (possibly untrusted, restored) value before it goes into an
+// innerHTML string. Used for state values interpolated into `html:` props.
+function escapeHtml(v: unknown): string {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function linkOut(href: string, text: string): HTMLElement {
   return el("a", { href, target: "_blank", rel: "noopener", class: "btn-link" }, text + " ↗");
 }
@@ -428,7 +439,7 @@ function esphomeStepsCard(): HTMLElement | null {
             ? "<br><code>marstek_password: \"YourMarstekPassword\"</code> (because you enabled Marstek cloud registration)"
             : ""),
       ),
-      li("<strong>Check the board matches.</strong> The file uses <code>board: " + (e.board || "esp32-s3-devkitc-1") + "</code>. This must be the board you actually bought — change it in step 2 above if not."),
+      li("<strong>Check the board matches.</strong> The file uses <code>board: " + escapeHtml(e.board || "esp32-s3-devkitc-1") + "</code>. This must be the board you actually bought — change it in step 2 above if not."),
       li("<strong>Install / flash.</strong> Click <em>Install → Plug into this computer</em> for the first flash (USB). After that you can update it wirelessly over WiFi. Flashing takes a few minutes."),
       li("<strong>Point your battery at it.</strong> In the Marstek app, set the battery to use a CT002/CT003 meter (matching the CT type you chose). The ESP32 answers on your network automatically — power it from any USB charger near the battery."),
     ]),

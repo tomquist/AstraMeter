@@ -20,8 +20,10 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-preview-${{ github.event.number }}
-  cancel-in-progress: true
+  # Shared with pages.yml so all gh-pages pushes (root / develop / pr-preview)
+  # serialise instead of racing. No cancel: never abort an in-flight deploy.
+  group: gh-pages
+  cancel-in-progress: false
 
 jobs:
   preview:
