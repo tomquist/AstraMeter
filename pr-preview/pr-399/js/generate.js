@@ -477,7 +477,7 @@ export function generateEsphome(state) {
   out.push("logger:");
   out.push(`ota:\n${IND}- platform: esphome`);
   out.push(`wifi:\n${IND}ssid: !secret wifi_ssid\n${IND}password: !secret wifi_password`);
-  out.push(`external_components:\n${IND}- source: github://tomquist/astrameter@develop\n${IND}${IND}components: [ct002]`);
+  out.push(`external_components:\n${IND}- source: github://tomquist/astrameter@claude/peaceful-cori-9cx7P\n${IND}${IND}components: [ct002]`);
 
   // mqtt_insights needs a top-level mqtt: block. If the meter itself is MQTT,
   // its broker wins (the data source is what matters) and Insights reuses it;

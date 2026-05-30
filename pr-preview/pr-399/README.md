@@ -88,6 +88,12 @@ Root, `/develop/`, and `/pr-preview/` all coexist on the `gh-pages` branch
 (`keep_files: true`), so a deploy to one never wipes the others. The site uses
 only relative URLs, so it works correctly under any of these subpaths.
 
+GitHub links in the site (footer docs, the per-meter reference link, and the
+ESPHome `external_components` source in generated configs) are committed pointing
+at `@develop`. At deploy time `.github/scripts/stamp-ref.sh` rewrites them to the
+ref being deployed — so a `main` build links to `@main`, a PR preview links to
+the PR's branch, and develop stays on `@develop`.
+
 ## Adding or editing a powermeter
 
 Almost everything lives in **`js/schema.js`** — it's designed so common changes

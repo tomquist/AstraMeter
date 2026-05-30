@@ -315,7 +315,7 @@ function meterEditor(meter, index) {
       badge,
     ]),
     el("p", { class: "blurb", text: pm.blurb }),
-    pm.docPython ? el("a", { class: "doclink", href: "https://github.com/tomquist/astrameter/blob/develop/" + pm.docPython, target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
+    pm.docPython ? el("a", { class: "doclink", href: "https://github.com/tomquist/astrameter/blob/claude/peaceful-cori-9cx7P/" + pm.docPython, target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
     suffixField,
     phaseToggle,
     el("div", { class: "field-grid" }, fieldGroup(pm.fields, meter.fields, { phases: meter.phases })),
@@ -417,7 +417,7 @@ function esphomeStepsCard() {
       li("<strong>Install / flash.</strong> Click <em>Install → Plug into this computer</em> for the first flash (USB). After that you can update it wirelessly over WiFi. Flashing takes a few minutes."),
       li("<strong>Point your battery at it.</strong> In the Marstek app, set the battery to use a CT002/CT003 meter (matching the CT type you chose). The ESP32 answers on your network automatically — power it from any USB charger near the battery."),
     ]),
-    el("p", { class: "note", html: "Full reference: <a href='https://github.com/tomquist/astrameter/blob/develop/README.md#esphome-external-component-run-on-an-esp32' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
+    el("p", { class: "note", html: "Full reference: <a href='https://github.com/tomquist/astrameter/blob/claude/peaceful-cori-9cx7P/README.md#esphome-external-component-run-on-an-esp32' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
   ]);
 }
 
