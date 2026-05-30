@@ -46,6 +46,10 @@ jobs:
           node web/js/schema.test.mjs
           node web/js/state.test.mjs
           node web/js/generate.test.mjs
+      - name: Point GitHub links at this branch's ref
+        # The committed source links to @develop; rewrite the published copy so
+        # links (docs, ESPHome external_components) track the deployed ref.
+        run: bash .github/scripts/stamp-ref.sh "${{ github.ref_name }}"
       - name: Publish web/ to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:

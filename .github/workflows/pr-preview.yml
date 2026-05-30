@@ -40,6 +40,9 @@ jobs:
           node web/js/schema.test.mjs
           node web/js/state.test.mjs
           node web/js/generate.test.mjs
+      - name: Point GitHub links at this PR's branch
+        if: github.event.action != 'closed'
+        run: bash .github/scripts/stamp-ref.sh "${{ github.head_ref }}"
       - name: Deploy preview
         uses: rossjrw/pr-preview-action@v1
         with:
