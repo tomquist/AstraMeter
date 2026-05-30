@@ -19,40 +19,7 @@ import {
   HARDWARE,
 } from "./schema.js";
 import { generate } from "./generate.js";
-
-const STORAGE_KEY = "astrameter-generator-state-v1";
-
-// ── default state ─────────────────────────────────────────────────────────
-function newMeter(type = "homeassistant") {
-  return { type, suffix: "", phases: 1, fields: {}, tuning: {}, netmask: "" };
-}
-
-function defaultState() {
-  return {
-    target: "python",
-    general: {
-      deviceTypes: ["shellypro3em"],
-      deviceIds: "",
-      skipPowermeterTest: false,
-      webConfigEnabled: false,
-      webServerPort: "",
-      throttleInterval: "",
-      waitForNextMessage: "",
-      dedupeTimeWindow: "",
-    },
-    meters: [newMeter("shelly")],
-    ct: { fields: {} },
-    marstek: { enabled: false, fields: {} },
-    mqttInsights: { enabled: false, fields: {} },
-    esphome: {
-      name: "astrameter-ct002",
-      friendlyName: "AstraMeter CT002",
-      board: "esp32-s3-devkitc-1",
-      framework: "esp-idf",
-      ctType: "HME-4",
-    },
-  };
-}
+import { STORAGE_KEY, newMeter, defaultState, safeParse, migrate } from "./state.js";
 
 let state = loadState() || defaultState();
 
@@ -263,6 +230,9 @@ function deviceCard() {
       d.label,
     );
   });
+  // NOTE: `html:` renders as innerHTML. Only interpolate trusted static schema
+  // constants here (d.label/d.help) — never user/restored state. g.deviceTypes
+  // (user-controlled) is used only as a membership filter, not rendered.
   const selectedHelp = DEVICE_TYPES.filter((d) => g.deviceTypes.includes(d.value)).map((d) => el("li", { html: `<strong>${d.label}:</strong> ${d.help}` }));
 
   return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. One battery → keep Shelly Pro 3EM. Two or more batteries that should share load → choose CT002.", [
@@ -531,7 +501,7 @@ function loadState() {
   try {
     const hash = location.hash.replace(/^#state=/, "");
     if (hash) {
-      const decoded = JSON.parse(decodeURIComponent(escape(atob(hash))));
+      const decoded = safeParse(decodeURIComponent(escape(atob(hash))));
       history.replaceState(null, "", location.pathname + location.search);
       return migrate(decoded);
     }
@@ -541,26 +511,11 @@ function loadState() {
   // 2) localStorage
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return migrate(JSON.parse(raw));
+    if (raw) return migrate(safeParse(raw));
   } catch (_) {
     /* ignore */
   }
   return null;
-}
-
-// Fill in any keys added since the saved state was written.
-function migrate(s) {
-  const d = defaultState();
-  return {
-    ...d,
-    ...s,
-    general: { ...d.general, ...(s.general || {}) },
-    esphome: { ...d.esphome, ...(s.esphome || {}) },
-    ct: { fields: {}, ...(s.ct || {}) },
-    marstek: { enabled: false, fields: {}, ...(s.marstek || {}) },
-    mqttInsights: { enabled: false, fields: {}, ...(s.mqttInsights || {}) },
-    meters: (s.meters && s.meters.length ? s.meters : d.meters).map((m) => ({ ...newMeter(), ...m })),
-  };
 }
 
 function saveProject() {
@@ -571,7 +526,7 @@ function loadProject(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      state = migrate(JSON.parse(reader.result));
+      state = migrate(safeParse(reader.result));
       rerenderAll();
       toast("Project loaded");
     } catch (err) {
