@@ -1,18 +1,40 @@
 :root {
-  --bg: #0f1419;
-  --bg-card: #1a212b;
-  --bg-input: #0f1620;
-  --border: #2b3543;
-  --border-strong: #3a4757;
-  --text: #e6edf3;
-  --muted: #9aa7b4;
-  --accent: #4f9cf9;
-  --accent-strong: #2f7de1;
-  --ok: #3fb950;
-  --warn: #d29922;
-  --bad: #f85149;
+  /* ── Dashboard neutrals (dark instrument panel) ── */
+  --void: #020617; /* deepest center of the background radial glow */
+  --bg: #020617; /* page background */
+  --bg-card: #0f172a; /* card / plate base (pivot metal, slate-900) */
+  --bg-raised: #131f38; /* lifted inner panels (meter blocks) */
+  --bg-input: #020617; /* input fields */
+  --slate-navy: #1e293b; /* background plate / inactive meter track */
+  --border: #1e293b; /* slate navy */
+  --border-strong: #334155;
+  --tick: #475569; /* tech gray — precision tick marks */
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+
+  /* ── Energy flow (grid → digital): the active measurement arc ── */
+  --green: #10b981; /* emerald — grid power / solar / active connection */
+  --cyan: #06b6d4; /* electric cyan — digital data / smart-home */
+  --purple: #8b5cf6; /* astra purple — the emulator / bridge */
+  --energy: linear-gradient(100deg, #10b981 0%, #06b6d4 50%, #8b5cf6 100%);
+  /* Interactive accents */
+  --accent: #22d3ee; /* bright cyan — links, focus, highlights */
+  --accent-strong: #7c3aed; /* violet — solid accent backgrounds (white-legible) */
+  --btn: linear-gradient(135deg, #0891b2 0%, #7c3aed 100%); /* primary buttons */
+
+  /* ── Astra spark (the star needle / key highlights) ── */
+  --spark: #fde047; /* lemon yellow — glowing core */
+  --amber: #f59e0b; /* solar amber — metallic mid-tone */
+  --bronze: #b45309; /* deep bronze — grounding shadow */
+  --spark-grad: linear-gradient(135deg, #fde047 0%, #f59e0b 55%, #b45309 100%);
+
+  /* ── Status ── */
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --bad: #f43f5e;
+
   --radius: 12px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 * {
@@ -21,7 +43,10 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(1200px 600px at 50% -200px, #0b1733 0%, rgba(2, 6, 23, 0) 60%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -38,7 +63,7 @@ a {
 
 /* ── masthead ── */
 .masthead {
-  background: linear-gradient(160deg, #1c2733, #131922);
+  background: linear-gradient(160deg, #0b1733, #060c1c);
   border-bottom: 1px solid var(--border);
   padding: 36px 0 28px;
 }
@@ -112,12 +137,13 @@ a {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: var(--accent-strong);
+  background: var(--btn);
   color: #fff;
   display: grid;
   place-items: center;
   font-weight: 700;
   font-size: 15px;
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.25);
 }
 .card-body {
   padding: 16px 20px 20px;
@@ -159,7 +185,8 @@ hr {
 }
 .choice.active {
   border-color: var(--accent);
-  background: #16314f;
+  background: linear-gradient(135deg, rgba(8, 145, 178, 0.18), rgba(124, 58, 237, 0.18));
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25), 0 0 24px rgba(34, 211, 238, 0.1);
 }
 .choice strong {
   font-size: 15px;
@@ -291,7 +318,7 @@ details.adv > summary {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: #161d27;
+  background: var(--bg-raised);
 }
 .meter + .meter {
   margin-top: 2px;
@@ -322,19 +349,19 @@ details.adv > summary {
   cursor: help;
 }
 .badge-ok {
-  background: rgba(63, 185, 80, 0.15);
+  background: rgba(16, 185, 129, 0.14);
   color: var(--ok);
-  border: 1px solid rgba(63, 185, 80, 0.4);
+  border: 1px solid rgba(16, 185, 129, 0.4);
 }
 .badge-warn {
-  background: rgba(210, 153, 34, 0.15);
+  background: rgba(245, 158, 11, 0.14);
   color: var(--warn);
-  border: 1px solid rgba(210, 153, 34, 0.4);
+  border: 1px solid rgba(245, 158, 11, 0.4);
 }
 .badge-bad {
-  background: rgba(248, 81, 73, 0.15);
+  background: rgba(244, 63, 94, 0.14);
   color: var(--bad);
-  border: 1px solid rgba(248, 81, 73, 0.4);
+  border: 1px solid rgba(244, 63, 94, 0.4);
 }
 
 /* ── buttons ── */
@@ -351,11 +378,11 @@ button {
   border: 1px solid transparent;
 }
 .primary {
-  background: var(--accent-strong);
+  background: var(--btn);
   color: #fff;
 }
 .primary:hover {
-  background: var(--accent);
+  filter: brightness(1.12);
 }
 .secondary {
   background: var(--bg-input);
@@ -381,8 +408,8 @@ button {
   align-items: center;
 }
 .note {
-  background: rgba(79, 156, 249, 0.08);
-  border: 1px solid rgba(79, 156, 249, 0.25);
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.28);
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 13px;
@@ -401,8 +428,8 @@ code {
 
 /* ── ESPHome intro / hardware / steps ── */
 .intro-box {
-  background: rgba(79, 156, 249, 0.08);
-  border: 1px solid rgba(79, 156, 249, 0.25);
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.28);
   border-radius: 10px;
   padding: 4px 14px;
 }
@@ -420,7 +447,7 @@ code {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 4px 14px 12px;
-  background: #161d27;
+  background: var(--bg-raised);
 }
 .hw h3 {
   margin: 12px 0 6px;
@@ -505,7 +532,7 @@ code {
   padding: 0;
   font-family: "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   white-space: pre;
-  color: #cfe3ff;
+  color: #cbe9f2;
 }
 .preview-actions {
   display: flex;
@@ -534,7 +561,7 @@ code {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%) translateY(20px);
-  background: #2d3a4a;
+  background: #1e293b;
   color: #fff;
   padding: 11px 18px;
   border-radius: 8px;
@@ -549,7 +576,7 @@ code {
   transform: translateX(-50%) translateY(0);
 }
 .toast-error {
-  background: #5b2526;
+  background: #4c1d24;
 }
 
 /* ── responsive ── */
@@ -592,14 +619,14 @@ code {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(15, 20, 25, 0.85);
+  background: rgba(2, 6, 23, 0.78);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid transparent;
   transition: border-color 0.2s, background 0.2s;
 }
 .site-nav.scrolled {
   border-bottom-color: var(--border);
-  background: rgba(15, 20, 25, 0.95);
+  background: rgba(2, 6, 23, 0.92);
 }
 .nav-inner {
   max-width: 1180px;
@@ -620,7 +647,14 @@ code {
   gap: 8px;
 }
 .brand-mark {
-  color: var(--accent);
+  /* the Astra spark — glowing four-pointed star (placeholder until the SVG mark) */
+  background: var(--spark-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: 1.05em;
+  line-height: 1;
+  text-shadow: 0 0 12px rgba(253, 224, 71, 0.35);
 }
 .nav-links {
   display: flex;
@@ -640,13 +674,13 @@ code {
   color: var(--text);
 }
 .nav-cta {
-  background: var(--accent-strong);
+  background: var(--btn);
   color: #fff !important;
   padding: 8px 14px;
   border-radius: 8px;
 }
 .nav-cta:hover {
-  background: var(--accent);
+  filter: brightness(1.12);
 }
 .nav-gh {
   border: 1px solid var(--border-strong);
@@ -680,11 +714,12 @@ code {
   font-size: 15px;
 }
 .btn-primary {
-  background: var(--accent-strong);
+  background: var(--btn);
   color: #fff;
+  box-shadow: 0 6px 22px rgba(124, 58, 237, 0.28), 0 0 0 1px rgba(34, 211, 238, 0.15) inset;
 }
 .btn-primary:hover {
-  background: var(--accent);
+  filter: brightness(1.12);
 }
 .btn-ghost {
   background: transparent;
@@ -697,12 +732,26 @@ code {
 
 /* ── hero ── */
 .hero {
+  position: relative;
   background:
-    radial-gradient(1100px 480px at 50% -120px, rgba(79, 156, 249, 0.18), transparent 60%),
-    linear-gradient(180deg, #131922, var(--bg));
+    radial-gradient(620px 320px at 28% -40px, rgba(16, 185, 129, 0.16), transparent 60%),
+    radial-gradient(620px 340px at 72% -40px, rgba(139, 92, 246, 0.18), transparent 60%),
+    radial-gradient(900px 460px at 50% -120px, rgba(6, 182, 212, 0.16), transparent 62%),
+    linear-gradient(180deg, #0a1326, var(--bg));
   border-bottom: 1px solid var(--border);
   padding: 72px 20px 64px;
   text-align: center;
+}
+/* the active energy arc, echoing the logo's measurement band */
+.hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--energy);
+  opacity: 0.85;
 }
 .hero-inner {
   max-width: 820px;
@@ -754,7 +803,7 @@ code {
   border-bottom: 1px solid var(--border);
 }
 .band.alt {
-  background: #131a23;
+  background: #0b1426;
 }
 .section-head {
   max-width: 720px;
@@ -817,10 +866,11 @@ code {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: var(--accent-strong);
+  background: var(--btn);
   color: #fff;
   font-weight: 800;
   margin-bottom: 12px;
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.22);
 }
 .how-steps h3 {
   margin: 0 0 8px;
@@ -918,9 +968,9 @@ code {
 }
 .pill-best {
   align-self: flex-start;
-  background: rgba(63, 185, 80, 0.15);
+  background: rgba(16, 185, 129, 0.15);
   color: var(--ok);
-  border: 1px solid rgba(63, 185, 80, 0.4);
+  border: 1px solid rgba(16, 185, 129, 0.4);
   border-radius: 999px;
   padding: 3px 10px;
   font-size: 12px;
@@ -929,7 +979,10 @@ code {
 
 /* ── CTA box ── */
 .cta-box {
-  background: linear-gradient(135deg, #16314f, #1a212b);
+  background:
+    radial-gradient(700px 300px at 0% 0%, rgba(16, 185, 129, 0.16), transparent 60%),
+    linear-gradient(135deg, rgba(8, 145, 178, 0.22), rgba(124, 58, 237, 0.22)),
+    var(--bg-card);
   border: 1px solid var(--border-strong);
   border-radius: 16px;
   padding: 34px;
@@ -976,7 +1029,7 @@ code {
 
 /* ── generator page header ── */
 .gen-head {
-  background: linear-gradient(180deg, #131922, var(--bg));
+  background: linear-gradient(180deg, #0b1426, var(--bg));
   border-bottom: 1px solid var(--border);
   padding: 32px 0 26px;
 }
@@ -995,7 +1048,7 @@ code {
 
 /* ── footer ── */
 .site-footer {
-  background: #0c1118;
+  background: #020617;
   border-top: 1px solid var(--border);
   padding: 44px 0 22px;
   color: var(--muted);
