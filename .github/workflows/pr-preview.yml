@@ -38,6 +38,7 @@ jobs:
         if: github.event.action != 'closed'
         run: |
           node web/js/schema.test.mjs
+          node web/js/state.test.mjs
           node web/js/generate.test.mjs
       - name: Deploy preview
         uses: rossjrw/pr-preview-action@v1

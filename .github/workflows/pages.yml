@@ -36,6 +36,7 @@ jobs:
       - name: Validate schema and run generator tests
         run: |
           node web/js/schema.test.mjs
+          node web/js/state.test.mjs
           node web/js/generate.test.mjs
       - name: Publish web/ to gh-pages
         uses: peaceiris/actions-gh-pages@v4

@@ -23,8 +23,11 @@ same schema so the marketing copy can't drift from the real capabilities.
 | `css/styles.css` | Styling for both pages (nav, hero, landing sections, footer, generator UI). |
 | `js/site.js` | Shared site behaviour: mobile nav, scroll state, and landing-page feature/power-meter grids (from the schema). |
 | `js/schema.js` | Single source of truth: every powermeter, field, and tuning option with beginner help text. Pure data. |
+| `js/state.js` | State model + persistence helpers (defaults, `migrate`, sanitisation of untrusted restored input). Pure, no DOM. |
 | `js/generate.js` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
 | `js/app.js` | Renders the generator form from the schema, holds state, live preview, save/load. |
+| `js/schema.test.mjs` | Structural validation of the schema (typo guard). |
+| `js/state.test.mjs` | Tests for the state model + untrusted-input sanitisation. |
 | `js/generate.test.mjs` | Node assertions for the generators. |
 
 ## Develop locally
@@ -43,10 +46,11 @@ python3 -m http.server 8000
 
 ```bash
 node web/js/schema.test.mjs     # validates the schema structure (typo guard)
+node web/js/state.test.mjs      # state model + untrusted-input sanitisation
 node web/js/generate.test.mjs   # asserts the generated config.ini / YAML
 ```
 
-CI runs both before deploying (see `.github/workflows/pages.yml` and
+CI runs all three before deploying (see `.github/workflows/pages.yml` and
 `pr-preview.yml`).
 
 ## Save / load
