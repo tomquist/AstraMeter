@@ -647,14 +647,13 @@ code {
   gap: 8px;
 }
 .brand-mark {
-  /* the Astra spark — glowing four-pointed star (placeholder until the SVG mark) */
-  background: var(--spark-grad);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  font-size: 1.05em;
-  line-height: 1;
-  text-shadow: 0 0 12px rgba(253, 224, 71, 0.35);
+  /* the Astra icon (gauge + spark) */
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  vertical-align: middle;
+  margin-right: 2px;
+  flex: 0 0 auto;
 }
 .nav-links {
   display: flex;
@@ -752,6 +751,13 @@ code {
   height: 2px;
   background: var(--energy);
   opacity: 0.85;
+}
+.hero-logo {
+  display: block;
+  width: 132px;
+  height: 132px;
+  margin: 0 auto 18px;
+  filter: drop-shadow(0 8px 30px rgba(34, 211, 238, 0.18));
 }
 .hero-inner {
   max-width: 820px;
