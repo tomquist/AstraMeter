@@ -214,12 +214,17 @@ function esphomeSensor(state) {
     return `${IND}- platform: template\n${IND}${IND}id: ${id}\n${IND}${IND}unit_of_measurement: W\n${IND}${IND}device_class: power`;
   }
 
+  // Per-meter ESPHome warning, declared on the meter (e.g. Modbus-TCP, TQ-EM).
+  if (esp.warn) {
+    const w = typeof esp.warn === "function" ? esp.warn(f) : esp.warn;
+    if (w) warnings.push(w);
+  }
+
   if (esp.kind === "homeassistant") {
     topBlocks.push("api:        # required: the ESP subscribes to the HA entity over the native API");
-    const entities =
-      pm.id === "esphome"
-        ? [`sensor.${f.ID || "grid_power"}`]
-        : splitPhases(f.CURRENT_POWER_ENTITY || "sensor.grid_power", phases);
+    const entities = esp.haEntity
+      ? [esp.haEntity(f)]
+      : splitPhases(f.CURRENT_POWER_ENTITY || "sensor.grid_power", phases);
     const sensors = ids.map((id, i) => {
       return `${IND}- platform: homeassistant\n${IND}${IND}id: ${id}\n${IND}${IND}entity_id: ${entities[i] || "sensor.grid_power"}${phaseFilterBlock(i)}`;
     });
@@ -253,11 +258,6 @@ function esphomeSensor(state) {
   }
 
   if (esp.kind === "modbus") {
-    if (pm.id === "modbus" && (f.TRANSPORT || "TCP") === "TCP") {
-      warnings.push("ESPHome's modbus_controller is RS485 serial only — wire RS485 to the ESP or use a Modbus-TCP↔RTU gateway.");
-    } else if (pm.id === "tq_em") {
-      warnings.push("The TQ proprietary API has no ESP port — this reads the device's Modbus export instead. Set address/value_type from the TQ register map.");
-    }
     topBlocks.push(`uart:\n${IND}id: mod_uart\n${IND}tx_pin: GPIO17\n${IND}rx_pin: GPIO16\n${IND}baud_rate: 9600\n${IND}stop_bits: 1`);
     topBlocks.push(`modbus:\n${IND}id: modbus1\n${IND}uart_id: mod_uart`);
     topBlocks.push(
@@ -281,9 +281,9 @@ function esphomeSensor(state) {
         : esp.lambda1;
     const jsonRoot = esp.jsonRoot || "JsonObject root";
     const headerLines =
-      pm.id === "json_http" && !isBlank(f.HEADERS)
+      esp.headersField && !isBlank(f[esp.headersField])
         ? `\n${IND}${IND}${IND}${IND}headers:\n` +
-          String(f.HEADERS)
+          String(f[esp.headersField])
             .split(";")
             .map((h) => h.trim())
             .filter(Boolean)
