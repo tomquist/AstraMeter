@@ -707,7 +707,7 @@ export const MQTT_INSIGHTS_FIELDS = [
   { key: "USERNAME", label: "Username", help: "Broker username, if required.", type: "text", placeholder: "(optional)" },
   { key: "PASSWORD", label: "Password", help: "Broker password, if required.", type: "password", placeholder: "(optional)" },
   { key: "TLS", label: "Use TLS", help: "Connect to the broker over TLS.", type: "checkbox", default: false, advanced: true },
-  { key: "BASE_TOPIC", ey: "base_topic", label: "Base topic", help: "Namespace for all messages. Default astrameter.", type: "text", placeholder: "astrameter", advanced: true },
+  { key: "BASE_TOPIC", ey: "base_topic", label: "Base topic", help: "Namespace for all messages. Default astrameter.", type: "text", placeholder: "astrameter/tree/claude/peaceful-cori-9cx7P", advanced: true },
   { key: "HA_DISCOVERY", ey: "ha_discovery", label: "Home Assistant discovery", help: "Auto-create HA entities via MQTT discovery. On by default.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }], advanced: true },
   { key: "HA_DISCOVERY_PREFIX", ey: "ha_discovery_prefix", label: "Discovery prefix", help: "HA discovery prefix. Default homeassistant.", type: "text", placeholder: "homeassistant", advanced: true },
   { key: "MARSTEK_MQTT_ENABLED", ey: "marstek_mqtt_enabled", label: "Answer Marstek app polls", help: "Reply to Marstek-app MQTT polls on this broker (needs hame-relay ≥ 1.3.5 for live readings).", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }], advanced: true },
