@@ -1,14 +1,20 @@
 name: Deploy config generator to GitHub Pages
 
-# Publishes the static web/ config generator to the gh-pages branch, which
-# GitHub Pages serves at the repository's Pages URL.
+# Publishes the static web/ site to the gh-pages branch, which GitHub Pages
+# serves at the repository's Pages URL.
+#
+#   push to main    -> published to the site ROOT (production)
+#                      https://<user>.github.io/<repo>/
+#   push to develop -> published under /develop/ (staging)
+#                      https://<user>.github.io/<repo>/develop/
 #
 # One-time setup: repository Settings → Pages → "Build and deployment" →
 # Source → "Deploy from a branch" → branch "gh-pages" / "/ (root)".
 #
-# The gh-pages branch is also where per-PR previews live (under pr-preview/,
-# managed by .github/workflows/pr-preview.yml), so this job keeps existing
-# files instead of wiping the branch.
+# The gh-pages branch also holds per-PR previews (under pr-preview/, managed by
+# .github/workflows/pr-preview.yml). keep_files: true ensures each push only
+# overlays its own destination dir and never wipes the others (root / develop /
+# pr-preview all coexist on the branch).
 
 on:
   push:
@@ -22,6 +28,8 @@ permissions:
   contents: write
 
 concurrency:
+  # Single group (no cancel) so main/develop pushes serialise instead of racing
+  # each other's push to the gh-pages branch.
   group: gh-pages-deploy
   cancel-in-progress: false
 
@@ -44,5 +52,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./web
           publish_branch: gh-pages
-          # Preserve pr-preview/* directories created by the preview workflow.
+          # main -> root, develop -> /develop/
+          destination_dir: ${{ github.ref_name == 'develop' && 'develop' || '' }}
+          # Preserve the other published dirs (root / develop / pr-preview).
           keep_files: true

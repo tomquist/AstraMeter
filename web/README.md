@@ -66,17 +66,27 @@ User progress is saved automatically to `localStorage`. Users can also:
 The site is published to the **`gh-pages`** branch and served by GitHub Pages.
 
 One-time setup: repository **Settings → Pages → Build and deployment → Source →
-"Deploy from a branch" → `gh-pages` / `/ (root)`**.
+"Deploy from a branch" → `gh-pages` / `/ (root)`**, and **Settings → Actions →
+General → Workflow permissions → "Read and write permissions"** (so the workflow
+can push to `gh-pages`).
 
-- **Production** — the *Deploy config generator to GitHub Pages* workflow
-  (`.github/workflows/pages.yml`) publishes `web/` to the root of `gh-pages` on
-  every push to `main`/`develop` that touches `web/`.
+The *Deploy config generator to GitHub Pages* workflow (`.github/workflows/pages.yml`)
+publishes `web/` on every push that touches it:
+
+- **Production** — pushes to **`main`** publish to the site **root**:
+  `https://<user>.github.io/<repo>/`
+- **Staging** — pushes to **`develop`** publish under **`/develop/`**:
+  `https://<user>.github.io/<repo>/develop/`
 - **Per-PR previews** — the *Deploy PR preview* workflow
   (`.github/workflows/pr-preview.yml`) deploys each pull request to
   `pr-preview/pr-<number>/` and posts the live URL as a comment on the PR, so
   reviewers can test the real site before merging. The preview is removed when
   the PR closes. (Previews only run for same-repo branches; forks can't write
   to `gh-pages`.)
+
+Root, `/develop/`, and `/pr-preview/` all coexist on the `gh-pages` branch
+(`keep_files: true`), so a deploy to one never wipes the others. The site uses
+only relative URLs, so it works correctly under any of these subpaths.
 
 ## Adding or editing a powermeter
 
