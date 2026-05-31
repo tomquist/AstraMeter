@@ -32,6 +32,24 @@ class _ShellyProtocol(asyncio.DatagramProtocol):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def error_received(self, exc):
+        # ICMP "port unreachable" and similar transient UDP errors are
+        # delivered here (e.g. when a battery that we just answered has gone
+        # away). They are non-fatal: log at debug and keep the endpoint open so
+        # we keep answering the other batteries.
+        logger.debug("Shelly UDP error_received (ignored): %s", exc)
+
+    def connection_lost(self, exc):
+        # asyncio closed the datagram endpoint. When *exc* is set this was an
+        # unexpected loss (not our own stop()), so schedule a rebind to keep
+        # the emulator answering after a transient network/socket failure
+        # instead of going permanently deaf and stalling the battery.
+        if exc is not None:
+            logger.warning("Shelly UDP connection lost: %s; scheduling rebind", exc)
+            self.shelly._schedule_rebind()
+        else:
+            logger.debug("Shelly UDP connection closed cleanly")
+
 
 class Shelly:
     def __init__(
@@ -51,6 +69,8 @@ class Shelly:
         self._inactive_batteries: set[str] = set()
         self._stopped = asyncio.Event()
         self._inactive_check_task = None
+        self._closing = False
+        self._rebind_task: asyncio.Task | None = None
         self._dedupe_time_window = max(0.0, dedupe_time_window)
         self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
             self._dedupe_time_window
@@ -289,19 +309,54 @@ class Shelly:
         except asyncio.CancelledError:
             pass
 
-    async def start(self):
-        loop = asyncio.get_running_loop()
+    async def _bind(self, loop):
         transport, protocol = await loop.create_datagram_endpoint(
             lambda: _ShellyProtocol(self),
             local_addr=("0.0.0.0", self._udp_port),
         )
         self._transport = transport
         self._protocol = protocol
-        self._stopped.clear()
-        self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
         bound = self._transport.get_extra_info("sockname")
         if bound:
+            # Capture the concrete port so a later rebind re-binds to the same
+            # one even when the caller passed port 0 (ephemeral).
             self._udp_port = bound[1]
+
+    def _schedule_rebind(self):
+        if self._closing:
+            return
+        if self._rebind_task is not None and not self._rebind_task.done():
+            return
+        self._rebind_task = asyncio.create_task(self._rebind_loop())
+
+    async def _rebind_loop(self):
+        loop = asyncio.get_running_loop()
+        delay = 1.0
+        while not self._closing:
+            try:
+                await asyncio.sleep(delay)
+                # Close any stale transport before rebinding.
+                if self._transport is not None:
+                    with contextlib.suppress(Exception):
+                        self._transport.close()
+                await self._bind(loop)
+                logger.info(
+                    "Shelly emulator rebound to UDP port %s after connection loss",
+                    self._udp_port,
+                )
+                return
+            except Exception as exc:
+                delay = min(delay * 2, 30.0)
+                logger.warning(
+                    "Shelly rebind attempt failed: %s; retrying in %.0fs", exc, delay
+                )
+
+    async def start(self):
+        loop = asyncio.get_running_loop()
+        self._closing = False
+        await self._bind(loop)
+        self._stopped.clear()
+        self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
         logger.info(f"Shelly emulator listening on UDP port {self._udp_port}...")
 
     @property
@@ -312,6 +367,14 @@ class Shelly:
         await self._stopped.wait()
 
     async def stop(self):
+        # Flag closing first so an in-flight connection_lost() won't schedule a
+        # new rebind while we're tearing down.
+        self._closing = True
+        if self._rebind_task is not None:
+            self._rebind_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._rebind_task
+            self._rebind_task = None
         if self._inactive_check_task:
             self._inactive_check_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -328,3 +391,4 @@ class Shelly:
             await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
         self._protocol = None
         self._stopped.set()
+        self._closing = False

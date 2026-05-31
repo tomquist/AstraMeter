@@ -6,7 +6,7 @@ from ipaddress import IPv4Network
 from astrameter.config import ClientFilter
 from astrameter.powermeter import Powermeter, ThrottledPowermeter
 from astrameter.request_dedupe import RequestDeduplicator
-from astrameter.shelly.shelly import Shelly
+from astrameter.shelly.shelly import Shelly, _ShellyProtocol
 
 
 class DummyPowermeter(Powermeter):
@@ -149,3 +149,69 @@ class _ClientProtocol(asyncio.DatagramProtocol):
     def error_received(self, exc):
         if not self.received.done():
             self.received.set_exception(exc)
+
+
+def _make_shelly(netmask="127.0.0.1/32"):
+    dummy = DummyPowermeter()
+    cf = ClientFilter([IPv4Network(netmask)])
+    return Shelly([(dummy, cf, False)], udp_port=0, device_id="test")
+
+
+async def test_error_received_is_ignored():
+    # Transient UDP errors (e.g. ICMP port unreachable) must be swallowed,
+    # not raised, so the endpoint stays open for the other batteries.
+    shelly = _make_shelly()
+    proto = _ShellyProtocol(shelly)
+    proto.connection_made(_FakeTransport())
+    assert proto.error_received(OSError("port unreachable")) is None
+
+
+async def test_connection_lost_with_error_rebinds_and_keeps_serving():
+    # An unexpected transport loss should trigger a rebind so the emulator
+    # keeps answering instead of going permanently deaf (issue #404).
+    shelly = _make_shelly()
+    await shelly.start()
+    try:
+        bound_port = shelly.udp_port
+        protocol = shelly._protocol
+        assert protocol is not None
+
+        # Simulate asyncio closing the endpoint after a socket error.
+        protocol.connection_lost(OSError("boom"))
+        assert shelly._rebind_task is not None
+        await shelly._rebind_task
+
+        # Rebound to the same port with a fresh protocol object.
+        assert shelly.udp_port == bound_port
+        assert shelly._transport is not None
+        assert shelly._protocol is not None
+        assert shelly._protocol is not protocol
+
+        # The fresh endpoint still answers requests over real UDP.
+        assert await _send_req(bound_port, 7) == 7
+    finally:
+        await shelly.stop()
+
+
+async def test_connection_lost_clean_does_not_rebind():
+    # A clean close (exc is None, e.g. our own stop()) must not rebind.
+    shelly = _make_shelly()
+    await shelly.start()
+    protocol = shelly._protocol
+    assert protocol is not None
+    protocol.connection_lost(None)
+    assert shelly._rebind_task is None
+    await shelly.stop()
+
+
+async def test_stop_cancels_pending_rebind():
+    # stop() must flag closing and cancel any in-flight rebind task.
+    shelly = _make_shelly()
+    await shelly.start()
+    protocol = shelly._protocol
+    assert protocol is not None
+    protocol.connection_lost(OSError("boom"))
+    assert shelly._rebind_task is not None
+    await shelly.stop()
+    assert shelly._rebind_task is None
+    assert shelly._closing is False
