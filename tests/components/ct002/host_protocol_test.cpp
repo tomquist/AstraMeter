@@ -89,4 +89,22 @@ TEST(ProtocolParseRequest, RejectsMissingSOH) {
   EXPECT_EQ(error, "Missing SOH/STX");
 }
 
+// Build-only parity: Python's `SEPARATOR + SEPARATOR.join(fields)` always
+// prepends a leading separator, so build_payload([]) and build_payload([""])
+// emit IDENTICAL bytes (a bare "|" body). This isn't a round-trippable vector
+// (parse of "|" always yields one field, never zero) so it can't live in the
+// golden-vector fixture; assert it directly here. Guards the C++ port against
+// regressing to a "join without leading separator" that would drop the "|" for
+// an empty list and diverge from the canonical Python encoder.
+TEST(ProtocolBuildPayload, EmptyListMatchesSingleEmptyField) {
+  const auto empty_list = build_payload({});
+  const auto single_empty = build_payload(std::vector<std::string>{""});
+  EXPECT_EQ(empty_list, single_empty);
+  ASSERT_GE(empty_list.size(), 2u);
+  // Body is a single separator between the length digits and ETX.
+  // Frame: SOH STX '7' '|' ETX <csum-hi> <csum-lo>.
+  ASSERT_EQ(empty_list.size(), 7u);
+  EXPECT_EQ(empty_list[3], static_cast<uint8_t>('|'));
+}
+
 }  // namespace

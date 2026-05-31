@@ -42,10 +42,16 @@ size_t compute_length(size_t payload_without_length_size) {
 }
 
 std::vector<uint8_t> build_payload(const std::vector<std::string> &fields) {
-  std::string message_str;
-  for (const auto &f : fields) {
-    message_str.push_back(SEPARATOR);
-    message_str.append(f);
+  // Mirrors Python `SEPARATOR + SEPARATOR.join(fields)`: there is always a
+  // leading separator, even for an empty field list (where Python yields a
+  // bare "|"). Building the prefix unconditionally keeps the empty-list and
+  // single-empty-field cases byte-identical with the canonical Python.
+  std::string message_str(1, SEPARATOR);
+  for (size_t i = 0; i < fields.size(); ++i) {
+    if (i > 0) {
+      message_str.push_back(SEPARATOR);
+    }
+    message_str.append(fields[i]);
   }
   const size_t total = compute_length(message_str.size());
   if (total == 0) {
