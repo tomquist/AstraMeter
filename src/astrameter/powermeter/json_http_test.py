@@ -48,7 +48,7 @@ async def test_headers_and_auth(mock_aiohttp_session):
         mock_cls.assert_called_once_with(
             auth=BasicAuth("user", "pass"),
             headers={"X-Test": "1"},
-            timeout=ClientTimeout(total=10),
+            timeout=ClientTimeout(total=2, connect=1),
         )
         result = await meter.get_powermeter_watts()
         assert result == [50.0]

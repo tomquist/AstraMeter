@@ -14,7 +14,11 @@ class ESPHome(Powermeter):
     async def start(self) -> None:
         if self.session:
             return
-        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        # Fail fast: the battery polls ~1/s, so a slow source should error
+        # quickly and let the next poll retry rather than pin a handler.
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=2, connect=1)
+        )
 
     async def stop(self) -> None:
         if self.session:
