@@ -21,7 +21,9 @@ when the ``esphome`` CLI isn't installed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import random
 import shutil
 import signal
 import socket
@@ -200,19 +202,13 @@ def _ensure_e2e_binary() -> Path:
     return E2E_BINARY
 
 
-@pytest.fixture(params=["python", "esphome"])
-def backend(request):
-    """Yield each CT002 backend implementing the shared control interface.
+@contextlib.contextmanager
+def _running_esphome_backend():
+    """Launch the e2e host binary and yield an EsphomeBackend talking to it.
 
-    The ``python`` backend always runs; ``esphome`` skips without the CLI.
+    Skips (via pytest.skip) when the esphome CLI is unavailable or the UDP
+    port can't be acquired. Always tears the process group down on exit.
     """
-    if request.param == "python":
-        be = PythonBackend()
-        yield be
-        be.close()
-        return
-
-    # esphome backend
     if not _have_esphome():
         pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
     binary = _ensure_e2e_binary()
@@ -240,14 +236,32 @@ def backend(request):
     time.sleep(0.3)  # let the control socket finish binding too
 
     be = EsphomeBackend()
-    yield be
-    be.close()
-    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     try:
-        proc.wait(timeout=2.0)
-    except subprocess.TimeoutExpired:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        proc.wait()
+        yield be
+    finally:
+        be.close()
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
+
+
+@pytest.fixture(params=["python", "esphome"])
+def backend(request):
+    """Yield each CT002 backend implementing the shared control interface.
+
+    The ``python`` backend always runs; ``esphome`` skips without the CLI.
+    """
+    if request.param == "python":
+        be = PythonBackend()
+        yield be
+        be.close()
+        return
+
+    with _running_esphome_backend() as be:
+        yield be
 
 
 # ── Shared scenarios (run against both backends) ───────────────────────────
@@ -340,3 +354,144 @@ def test_phase_routing(backend, phase, idx) -> None:
                 f"[{backend.name}] phase {'ABC'[other - 4]} should be 0, "
                 f"got {targets[other]}"
             )
+
+
+# Response field indices for the per-phase cross-talk power fields. These
+# mirror RESPONSE_LABELS: A/B/C_chrg_power at 15..17, A/B/C_dchrg_power at
+# 20..22 (see protocol.py / protocol.cpp).
+_A_CHRG, _A_DCHRG = 15, 20
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_crosstalk_discharge_signals_other_battery(backend) -> None:
+    """A discharging battery shows up as *discharge* in another's cross-talk.
+
+    When battery X on phase A is instructed to discharge (grid import), a poll
+    from a second battery Y on phase B must carry X's net instructed power in
+    the phase-A discharge field and leave the phase-A charge field at zero.
+    This exercises ``last_instructed_power`` + ``collect_reports_by_phase`` —
+    the multi-battery cross-talk path — identically on both stacks.
+    """
+    backend.set_clock(11000)
+    backend.set_grid(300)  # import → X should be told to discharge (+)
+    rx = backend.poll("A1A1A1A1A1A1", "A", 0)
+    assert rx is not None, f"[{backend.name}] no response to battery X"
+    x_phase_a = int(rx[4])
+    assert x_phase_a > 0, f"[{backend.name}] X should discharge on A, got {x_phase_a}"
+
+    # Second battery on phase B polls; X's stored instruction feeds cross-talk.
+    ry = backend.poll("B2B2B2B2B2B2", "B", 0)
+    assert ry is not None, f"[{backend.name}] no response to battery Y"
+    assert int(ry[_A_DCHRG]) > 0, (
+        f"[{backend.name}] X's discharge should appear in A_dchrg_power, "
+        f"got {ry[_A_DCHRG]}"
+    )
+    assert int(ry[_A_CHRG]) == 0, (
+        f"[{backend.name}] A_chrg_power should be zero while X discharges, "
+        f"got {ry[_A_CHRG]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_crosstalk_charge_signals_other_battery(backend) -> None:
+    """A charging battery shows up as *charge* (negative) in cross-talk.
+
+    Mirror of the discharge case under grid export: X on phase A is instructed
+    to charge, so a poll from Y on phase B must carry a negative phase-A charge
+    value and a zero phase-A discharge value on both stacks.
+    """
+    backend.set_clock(13000)
+    backend.set_grid(-300)  # export → X should be told to charge (-)
+    rx = backend.poll("C3C3C3C3C3C3", "A", 0)
+    assert rx is not None, f"[{backend.name}] no response to battery X"
+    x_phase_a = int(rx[4])
+    assert x_phase_a < 0, f"[{backend.name}] X should charge on A, got {x_phase_a}"
+
+    ry = backend.poll("D4D4D4D4D4D4", "B", 0)
+    assert ry is not None, f"[{backend.name}] no response to battery Y"
+    assert int(ry[_A_CHRG]) < 0, (
+        f"[{backend.name}] X's charge should appear in A_chrg_power, got {ry[_A_CHRG]}"
+    )
+    assert int(ry[_A_DCHRG]) == 0, (
+        f"[{backend.name}] A_dchrg_power should be zero while X charges, "
+        f"got {ry[_A_DCHRG]}"
+    )
+
+
+# ── Direct dual-backend wire comparison ────────────────────────────────────
+#
+# The strongest parity guard: drive the *same* randomized poll sequence
+# through the in-process Python emulator AND the live ESPHome binary, and
+# assert the response fields agree field-by-field. Where the parametrized
+# `backend` scenarios above check that each stack independently satisfies a
+# property, this catches any wire-level divergence between the two stacks.
+
+# Wire fields that legitimately differ run-to-run and are excluded from the
+# byte-for-byte comparison: info_idx is a free-running per-stack counter (13)
+# and wifi_rssi is a per-build constant (12).
+_VOLATILE_FIELDS = frozenset({12, 13})
+
+
+def _diff_fields(py_fields, esp_fields) -> list[str]:
+    diffs: list[str] = []
+    n = max(len(py_fields), len(esp_fields))
+    for i in range(n):
+        if i in _VOLATILE_FIELDS:
+            continue
+        pv = py_fields[i] if i < len(py_fields) else "<missing>"
+        ev = esp_fields[i] if i < len(esp_fields) else "<missing>"
+        # Numeric-aware compare so "-0" vs "0" and "007" vs "7" don't trip it.
+        try:
+            if int(pv) == int(ev):
+                continue
+        except (TypeError, ValueError):
+            if pv == ev:
+                continue
+        diffs.append(f"field[{i}]: python={pv!r} esphome={ev!r}")
+    return diffs
+
+
+@pytest.mark.timeout(60, func_only=True)
+def test_python_esphome_wire_identical() -> None:
+    """Python emulator and ESPHome binary emit identical response wire fields.
+
+    A shared, seeded sequence of multi-battery polls (varying phase, reported
+    power and grid direction, with the clock advancing past the dedup window)
+    is replayed against both stacks; every non-volatile response field must
+    match. This is the end-to-end imparity detector across the whole request
+    handler: parsing, balancer target, phase split, cross-talk fields and
+    response framing.
+    """
+    py = PythonBackend()
+    try:
+        with _running_esphome_backend() as esp:
+            rng = random.Random(20260531)
+            macs = ["AAAA00000001", "BBBB00000002", "CCCC00000003"]
+            phases = ["A", "B", "C"]
+            clock = 20000
+            for step in range(60):
+                clock += DEDUPE_WINDOW_S + 5  # always clear the dedup window
+                py.set_clock(clock)
+                esp.set_clock(clock)
+                grid = rng.choice([-901, -300, -50, 0, 100, 300, 450, 901, 1500])
+                py.set_grid(grid)
+                esp.set_grid(grid)
+                mac = rng.choice(macs)
+                phase = rng.choice(phases)
+                reported = rng.choice([-200, -50, 0, 50, 200])
+
+                r_py = py.poll(mac, phase, reported)
+                r_esp = esp.poll(mac, phase, reported)
+                assert (r_py is None) == (r_esp is None), (
+                    f"step {step}: one stack answered and the other didn't "
+                    f"(python={r_py is not None}, esphome={r_esp is not None})"
+                )
+                if r_py is None:
+                    continue
+                diffs = _diff_fields(r_py, r_esp)
+                assert not diffs, (
+                    f"step {step} (mac={mac} phase={phase} power={reported} "
+                    f"grid={grid}): wire mismatch:\n" + "\n".join(diffs)
+                )
+    finally:
+        py.close()

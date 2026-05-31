@@ -973,6 +973,11 @@ class LoadBalancer:
         # weighted ``share_part`` only drives the proportional distribution.  At
         # the neutral default (every weight 1.0) ``share_part == eff_part`` and
         # the math is identical to the unweighted behaviour.
+        #
+        # The ``total_effective > 0`` guard also covers the degenerate case
+        # where every participant's share rounds to zero (charge-blind / faded
+        # / zero-weight): fall back to an even split rather than dividing by
+        # zero. Mirrors the C++ port (balancer.cpp ``compute_auto_target_``).
         share_part = {
             cid: eff_part[cid] * _report_weight(reports.get(cid, {}))
             for cid in eff_part
