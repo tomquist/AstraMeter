@@ -21,6 +21,32 @@ def test_parse_request_roundtrip():
     assert parsed == fields
 
 
+def test_build_payload_empty_list_matches_single_empty_field():
+    # Python's ``SEPARATOR + SEPARATOR.join(fields)`` always prepends a leading
+    # separator, so an empty field list and a single empty field encode to
+    # IDENTICAL bytes (a bare "|" body). The ESPHome C++ port must agree
+    # byte-for-byte; the host gtest ProtocolBuildPayload guards the C++ side.
+    assert build_payload([]) == build_payload([""])
+    payload = build_payload([])
+    # Frame: SOH STX '7' '|' ETX <csum-hi> <csum-lo>.
+    assert len(payload) == 7
+    assert payload[0] == SOH
+    assert payload[1] == STX
+    assert payload[3] == ord("|")
+    assert payload[-3] == ETX
+
+
+def test_parse_request_rejects_short_empty_field_frames():
+    # The bare-"|" frames are only 7-8 bytes, below the 10-byte minimum, so
+    # both parsers reject them as "Too short" — they are build-only parity
+    # cases and deliberately NOT round-trip golden vectors.
+    for fields in ([], [""], ["", ""], ["A", ""]):
+        payload = build_payload(fields)
+        parsed, error = parse_request(payload)
+        assert parsed is None
+        assert error == "Too short"
+
+
 def test_parse_request_checksum_error():
     fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
     payload = bytearray(build_payload(fields))

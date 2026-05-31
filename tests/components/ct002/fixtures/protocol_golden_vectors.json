@@ -102,6 +102,36 @@
           "description": "Replace the high-nibble byte of the trailing checksum with 0x20 (ASCII space). parse_request must still succeed; build_payload must NOT emit this form."
         }
       ]
+    },
+    {
+      "description": "Printable-ASCII special characters \u2014 spaces, punctuation and plus-sign survive verbatim on the wire",
+      "fields": [
+        "a b",
+        "~!@#$%^&*()",
+        "+7",
+        "1.5"
+      ],
+      "round_trip": true,
+      "wire_hex": "010233307c6120627c7e21402324255e262a28297c2b377c312e35033738"
+    },
+    {
+      "description": "All-negative power fields \u2014 sign handling across many fields",
+      "fields": [
+        "-100",
+        "-200",
+        "-300",
+        "-600"
+      ],
+      "round_trip": true,
+      "wire_hex": "010232377c2d3130307c2d3230307c2d3330307c2d363030033033"
+    },
+    {
+      "description": "Three-digit length boundary \u2014 a 90-char field forces the length field to 3 digits",
+      "fields": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "round_trip": true,
+      "wire_hex": "010239387c787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878033764"
     }
   ]
 }

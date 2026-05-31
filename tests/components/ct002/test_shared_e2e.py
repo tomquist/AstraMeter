@@ -315,3 +315,57 @@ def test_clock_gated_dedup(backend) -> None:
     assert r3 is not None, (
         f"[{backend.name}] poll after the dedup window should be answered"
     )
+
+
+# ── Additional cross-stack parity scenarios ────────────────────────────────
+# These widen coverage of the response field shape, meter-identity echo,
+# round-half-to-even on the wire, sign handling, and inspection-mode framing.
+# Each asserts a wire-observable fact identical on both stacks.
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_response_has_full_24_fields(backend) -> None:
+    """Every response carries exactly the 24 RESPONSE_LABELS fields."""
+    backend.set_clock(7000)
+    backend.set_grid(0)
+    r = backend.poll("AABBCCDDEEFF", "A", 0)
+    assert r is not None, f"[{backend.name}] no response"
+    assert len(r) == 24, f"[{backend.name}] expected 24 fields, got {len(r)}"
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_meter_identity_echoed_verbatim(backend) -> None:
+    """meter_dev_type (field 2) and meter_mac (field 3) are echoed verbatim,
+    preserving the request's exact casing, on both stacks."""
+    backend.set_clock(7100)
+    backend.set_grid(0)
+    r = backend.poll("AaBbCcDdEeFf", "A", 0)
+    assert r is not None, f"[{backend.name}] no response"
+    assert r[2] == "HMG-50", f"[{backend.name}] meter_dev_type = {r[2]}"
+    assert r[3] == "AaBbCcDdEeFf", f"[{backend.name}] meter_mac = {r[3]}"
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_inspection_mode_returns_full_response(backend) -> None:
+    """Non-A/B/C phase markers are inspection mode and still produce a
+    well-formed 24-field response carrying ct identity on both stacks."""
+    for clock, marker in ((7200, "0"), (7300, ""), (7400, "D")):
+        backend.set_clock(clock)
+        backend.set_grid(0)
+        r = backend.poll("AABBCCDDEEFF", marker, 0)
+        assert r is not None, f"[{backend.name}] no response for marker {marker!r}"
+        assert len(r) == 24, f"[{backend.name}] marker {marker!r} -> {len(r)} fields"
+        assert r[0] == "HME-4", f"[{backend.name}] ct_type = {r[0]}"
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_inspection_mode_mirrors_raw_grid_sign(backend) -> None:
+    """In inspection mode the emulator forwards the raw meter reading as
+    information (no balancer), so a negative grid keeps its sign in A_phase
+    and total_power on both stacks."""
+    backend.set_clock(7500)
+    backend.set_grid(-150)
+    r = backend.poll("AABBCCDDEEFF", "0", 0)  # "0" = inspection marker
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == -150, f"[{backend.name}] A_phase_power = {r[4]}"
+    assert int(r[7]) == -150, f"[{backend.name}] total_power = {r[7]}"
