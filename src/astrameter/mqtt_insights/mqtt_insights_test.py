@@ -740,7 +740,7 @@ async def test_shelly_event_flow(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_manual_target_command_via_mqtt(mqtt_broker):
+async def test_manual_target_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -768,7 +768,7 @@ async def test_manual_target_command_via_mqtt(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_auto_target_command_via_mqtt(mqtt_broker):
+async def test_auto_target_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -796,7 +796,7 @@ async def test_auto_target_command_via_mqtt(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_force_rotation_command_via_mqtt(mqtt_broker):
+async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1179,7 +1179,7 @@ async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_periodic_broadcast(mqtt_broker):
+async def test_marstek_periodic_broadcast(mqtt_broker) -> None:
     """When marstek_mqtt_interval > 0, responses are published periodically
     without requiring a poll request from the app."""
     port = mqtt_broker
@@ -1222,7 +1222,7 @@ async def test_marstek_periodic_broadcast(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker):
+async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker) -> None:
     """marstek_mqtt_interval=0 disables the periodic broadcast loop; only
     explicit poll requests trigger a response."""
     port = mqtt_broker

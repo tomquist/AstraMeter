@@ -149,7 +149,7 @@ class CT002:
         device_id="",
         clock=None,
         reset_fn=None,
-    ):
+    ) -> None:
         self.udp_port = udp_port
         self.ct_mac = ct_mac
         self.ct_type = ct_type
