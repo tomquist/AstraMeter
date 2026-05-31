@@ -82,7 +82,7 @@ class SmaEnergyMeter(Powermeter):
         port=DEFAULT_PORT,
         serial_number=0,
         interface="",
-    ):
+    ) -> None:
         self.multicast_group = multicast_group
         self.port = port
         self.serial_number = serial_number

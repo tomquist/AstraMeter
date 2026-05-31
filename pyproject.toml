@@ -76,6 +76,4 @@ mypy_path = ["src"]
 # Typed surfaces only; full strictness would require annotating the whole codebase
 check_untyped_defs = false
 disallow_incomplete_defs = false
-# `annotation-unchecked` only fires because check_untyped_defs is off (by
-# design); silence the advisory notes so mypy output stays clean.
-disable_error_code = ["import-untyped", "annotation-unchecked"]
+disable_error_code = ["import-untyped"]

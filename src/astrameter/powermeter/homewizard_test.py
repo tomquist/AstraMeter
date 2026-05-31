@@ -434,7 +434,7 @@ async def test_ws_loop_reconnects_after_disconnect():
     assert call_count == 2
 
 
-async def test_ws_loop_passes_heartbeat_to_ws_connect():
+async def test_ws_loop_passes_heartbeat_to_ws_connect() -> None:
     """The WebSocket must be opened with a heartbeat so aiohttp will
     detect half-open connections via ping/pong timeouts."""
     pm = _create_powermeter()
