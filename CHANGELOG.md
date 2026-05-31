@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** intermittent CT stalls when the upstream Shelly EM/3EM was slow to respond: the HTTP read timeout is now 2s (was 10s) so an unresponsive Shelly fails fast and the next battery poll can recover, instead of pinning a request handler ([#404](https://github.com/tomquist/astrameter/issues/404)).
 - **Added** a project website (`web/`, deployable to GitHub Pages): a landing page introducing AstraMeter (features, supported devices and power meters, installation options, FAQ) plus a beginner-friendly config generator that walks you through a few questions and produces a ready-to-use Python `config.ini` or ESPHome YAML, with a live preview, save/load/share, and step-by-step ESPHome flashing guidance.
 - **Added** experimental ESPHome external component `ct002` to run the CT002/CT003 emulator directly on an ESP32. See `esphome.example.yaml` and the per-meter grid-power sensor reference in `docs/esphome-powermeters.md` (which also lists meters not yet supported on the ESP, e.g. Enphase Envoy and the SMA Energy Meter). Per-source `config.ini` documentation moved out of the README into `docs/powermeters.md`.
 - **Added** Modbus UDP support via a `TRANSPORT = TCP|UDP` option in the `[MODBUS]` section (defaults to `TCP`).
