@@ -103,6 +103,25 @@ external_components:
     components: [ct002]
 """
 
+# Per-meter ESPHome reference doc: carries *several* copy-paste snippets, each
+# with its own @develop ref. All of them must be pinned/reset alongside README,
+# so the fixture deliberately has more than one.
+_DOCS_ESPHOME = """\
+# ESPHome power meters
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+```
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+```
+"""
+
 _CHANGELOG = """\
 # Changelog
 
@@ -151,6 +170,8 @@ def _init_sandbox(tmp_path: Path) -> Path:
 
     (work / "README.md").write_text(_README)
     (work / "esphome.example.yaml").write_text(_EXAMPLE)
+    (work / "docs").mkdir()
+    (work / "docs" / "esphome-powermeters.md").write_text(_DOCS_ESPHOME)
     (work / "CHANGELOG.md").write_text(_CHANGELOG)
     (work / "pyproject.toml").write_text(_PYPROJECT)
     (work / "uv.lock").write_text(_UVLOCK)
@@ -187,6 +208,10 @@ def test_release_happy_path(tmp_path: Path) -> None:
     assert "## Next" not in main_changelog
     assert "astrameter@9.9.9" in _show(work, "main", "README.md")
     assert "astrameter@9.9.9" in _show(work, "main", "esphome.example.yaml")
+    # Every snippet in the per-meter doc must be pinned — no stray @develop left.
+    main_docs = _show(work, "main", "docs/esphome-powermeters.md")
+    assert "astrameter@9.9.9" in main_docs
+    assert "astrameter@develop" not in main_docs
 
     # --- tag points at the released commit -----------------------------
     assert "9.9.9" in _git(work, "tag", "--list").split()
@@ -197,6 +222,9 @@ def test_release_happy_path(tmp_path: Path) -> None:
     assert "## Next" in _show(work, "develop", "CHANGELOG.md")
     assert "astrameter@develop" in _show(work, "develop", "README.md")
     assert "astrameter@develop" in _show(work, "develop", "esphome.example.yaml")
+    develop_docs = _show(work, "develop", "docs/esphome-powermeters.md")
+    assert "astrameter@develop" in develop_docs
+    assert "astrameter@9.9.9" not in develop_docs
     # The release version carried over via the merge (script doesn't reset it).
     assert 'version = "9.9.9"' in _show(work, "develop", "pyproject.toml")
 

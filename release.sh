@@ -16,13 +16,17 @@ print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Point the ESPHome external_components ref in README.md and esphome.example.yaml
-# at the given git ref (a tag at release time, "develop" between releases).
+# Files carrying a copy-paste `github://tomquist/astrameter@<ref>` external_components
+# snippet that must track the release (tag at release time, "develop" in between).
+COMPONENT_REF_FILES=(README.md esphome.example.yaml docs/esphome-powermeters.md)
+
+# Point the ESPHome external_components ref in the docs/examples above at the
+# given git ref (a tag at release time, "develop" between releases).
 set_component_ref() {
   local ref="$1"
   sed -i.bak -E "s#(github://tomquist/astrameter@)[^[:space:]]+#\1${ref}#g" \
-    README.md esphome.example.yaml
-  rm -f README.md.bak esphome.example.yaml.bak
+    "${COMPONENT_REF_FILES[@]}"
+  rm -f "${COMPONENT_REF_FILES[@]/%/.bak}"
 }
 
 if [ -z "${1:-}" ]; then
@@ -143,7 +147,7 @@ LINE=$(grep -n '^## Next$' CHANGELOG.md | head -1 | cut -d: -f1)
 sed -i.bak "${LINE}s/^## Next$/## $VERSION/" CHANGELOG.md
 rm -f CHANGELOG.md.bak
 
-git add pyproject.toml uv.lock ha_addon/config.yaml README.md esphome.example.yaml CHANGELOG.md
+git add pyproject.toml uv.lock ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}" CHANGELOG.md
 git commit -m "Release v${VERSION}
 
 - Set version in pyproject.toml, uv.lock and ha_addon/config.yaml
@@ -194,8 +198,8 @@ print_info "Resetting ESPHome external_components ref to develop"
 set_component_ref "develop"
 
 needs_commit=false
-if ! git diff --quiet ha_addon/config.yaml README.md esphome.example.yaml; then
-  git add ha_addon/config.yaml README.md esphome.example.yaml
+if ! git diff --quiet ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}"; then
+  git add ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}"
   needs_commit=true
 fi
 
