@@ -34,7 +34,7 @@ wifi:
   password: !secret wifi_password
 
 external_components:
-  - source: github://tomquist/astrameter@develop
+  - source: github://tomquist/astrameter@2.1.0
     components: [ct002]
 
 # Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device

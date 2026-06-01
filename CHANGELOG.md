@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 2.1.0
 
 - **Added** a per-battery **Distribution Weight** Home Assistant entity (default `1.0`) that biases how the balancer splits load across multiple batteries — e.g. set `1.5` and `1.0` for a ~60:40 split so a smaller battery no longer saturates first ([#412](https://github.com/tomquist/astrameter/discussions/412)). The per-battery controls (manual target, auto/active toggles, distribution weight) now each use a dedicated retained MQTT command topic, so Home Assistant restores their values across an AstraMeter restart.
 - **Fixed** intermittent CT stalls when an upstream HTTP power meter was slow to respond: the read timeout for the polling HTTP sources (Shelly, AMIS Reader, emlog, ESPHome, ioBroker, generic JSON-HTTP, SHRDZM, Tasmota, VZLogger) is now 2s with a 1s connect timeout (was 10s), so an unresponsive meter fails fast and the next battery poll can recover instead of pinning a request handler ([#404](https://github.com/tomquist/astrameter/issues/404)).

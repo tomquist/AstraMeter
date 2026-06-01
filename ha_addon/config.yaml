@@ -1,5 +1,5 @@
 name: "AstraMeter"
-version: "next"
+version: "2.1.0"
 slug: b2500_meter
 description: >-
   "Replicates a Smart Meter device for Marstek energy storage systems (formerly B2500 Meter) while allowing integration with various smart meters."
