@@ -338,7 +338,9 @@ static bool parse_bool_payload(const std::string &payload, bool &out) {
   return false;
 }
 
-// Parse a scalar float payload. Returns false on empty/garbage input.
+// Parse a scalar float payload. Returns false on empty/garbage input. Rejects
+// trailing non-whitespace (e.g. "1.5abc") to match Python's float(), keeping
+// the two command paths behaviourally identical.
 static bool parse_float_payload(const std::string &payload, float &out) {
   const char *begin = payload.c_str();
   char *end = nullptr;
@@ -346,6 +348,11 @@ static bool parse_float_payload(const std::string &payload, float &out) {
   const float v = std::strtof(begin, &end);
   if (end == begin || errno != 0)
     return false;
+  while (*end != '\0') {
+    if (!std::isspace(static_cast<unsigned char>(*end)))
+      return false;
+    ++end;
+  }
   out = v;
   return true;
 }

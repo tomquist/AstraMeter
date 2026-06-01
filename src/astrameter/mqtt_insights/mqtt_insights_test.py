@@ -531,6 +531,7 @@ SAMPLE_CT002_DATA = {
     "last_seen": "2026-01-01T00:00:00+00:00",
     "manual_target": None,
     "auto_target": True,
+    "distribution_weight": 1.5,
     "smooth_target": 500.0,
     "active_control": True,
     "consumer_count": 2,
@@ -570,6 +571,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["ct_mac"] == "AA:BB:CC:DD:EE:FF"
         assert payload["active"] is True
         assert payload["poll_interval"] == 5.0
+        assert payload["distribution_weight"] == 1.5
         assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
         await service.stop()
@@ -944,11 +946,9 @@ def test_consumer_state_includes_manual_target_fields():
     consumer_state = {
         "manual_target": data.get("manual_target"),
         "auto_target": data.get("auto_target", True),
-        "distribution_weight": data.get("distribution_weight", 1.0),
     }
     assert consumer_state["manual_target"] is None
     assert consumer_state["auto_target"] is True
-    assert consumer_state["distribution_weight"] == 1.0
 
 
 # ── Marstek MQTT responder tests ─────────────────────────────────────────
