@@ -149,6 +149,20 @@ jobs:
       - name: Run host-platform E2E (cross-backend esphome suites)
         run: uv run pytest -m esphome_e2e -v
 
+      # The codegen unit tests (test_codegen.py) `importorskip("esphome")` —
+      # they import the esphome Python module to exercise the ct002 schema
+      # validators directly, so they need esphome importable in the venv that
+      # runs pytest (the `uv tool install` above only puts the CLI on PATH).
+      # They're not `esphome_e2e`-marked, so without this they skip in every
+      # job and never actually run. Install esphome into the project venv
+      # last (so it can't perturb the e2e run above) and run them with
+      # --no-sync so `uv run` doesn't drop esphome (it isn't in uv.lock).
+      - name: Install esphome into venv for codegen tests
+        run: uv pip install esphome
+
+      - name: Run ct002 codegen unit tests (esphome schema validators)
+        run: uv run --no-sync pytest tests/components/ct002/test_codegen.py -v
+
   validate:
     needs: [ lint ]
     runs-on: ubuntu-latest
