@@ -565,8 +565,9 @@ live from Home Assistant:
   battery (or lower it on a smaller one) to bias the split. For example, a
   5.12 kWh and a 2.08 kWh battery that you'd like to run roughly **60:40** can
   be set to weights `1.5` and `1.0`. The split is ratio-based, so only the
-  proportion between batteries matters. Tune it while watching the batteries —
-  the change takes effect on the next control cycle.
+  proportion between batteries matters; `0` parks a battery at 0 W while
+  leaving it in the pool. Tune it while watching the batteries — the change
+  takes effect on the next control cycle.
 
 Each of these controls publishes its set-command **retained**, so Home
 Assistant restores your values across an AstraMeter restart without any extra

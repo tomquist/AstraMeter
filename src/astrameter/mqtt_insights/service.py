@@ -732,7 +732,7 @@ class MqttInsightsService:
                     payload,
                 )
                 return
-            if not math.isfinite(weight) or not 0.0 < weight <= 10.0:
+            if not math.isfinite(weight) or not 0.0 <= weight <= 10.0:
                 logger.warning(
                     "Out-of-range distribution_weight for %s/%s: %s",
                     device_id,

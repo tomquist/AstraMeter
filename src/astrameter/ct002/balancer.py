@@ -15,10 +15,12 @@ from .protocol import parse_int
 def _report_weight(report: dict) -> float:
     """Per-battery fair-share weight from a report dict (defaults to 1.0).
 
-    The ``or 1.0`` guards against a missing key or a falsy value slipping in;
-    the setter keeps real weights in ``(0, 10]``.
+    A missing key (or an explicit ``None``) means "neutral" and maps to 1.0;
+    an explicit ``0.0`` is preserved (the battery takes no share). The setter
+    keeps real weights in ``[0, 10]``.
     """
-    return float(report.get("weight", 1.0) or 1.0)
+    weight = report.get("weight", 1.0)
+    return 1.0 if weight is None else float(weight)
 
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2

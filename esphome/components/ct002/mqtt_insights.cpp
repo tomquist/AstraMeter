@@ -388,7 +388,7 @@ void MqttInsightsComponent::handle_consumer_field_command_(const std::string &co
     float w;
     if (!parse_float_payload(payload, w)) {
       ESP_LOGW(TAG, "Invalid distribution_weight for %s: %s", consumer_id.c_str(), payload.c_str());
-    } else if (std::isfinite(w) && w > 0.0f && w <= 10.0f) {
+    } else if (std::isfinite(w) && w >= 0.0f && w <= 10.0f) {
       this->ct002_->set_consumer_distribution_weight(consumer_id, w);
     } else {
       ESP_LOGW(TAG, "Out-of-range distribution_weight for %s: %.2f", consumer_id.c_str(), w);

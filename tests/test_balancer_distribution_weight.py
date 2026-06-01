@@ -50,6 +50,20 @@ def test_fair_share_honours_weight():
     assert b_out[0] == 200.0
 
 
+def test_zero_weight_takes_no_share():
+    """Weight 0.0 means the battery is parked at 0 W; the rest absorb the load."""
+    lb = _make_balancer(fair_distribution=False)
+    reports = {"a": _report(0.0, weight=0.0), "b": _report(0.0, weight=1.0)}
+    a_out = lb.compute_target(
+        "a", ConsumerMode("auto"), reports, 400.0, frozenset(), frozenset()
+    )
+    b_out = lb.compute_target(
+        "b", ConsumerMode("auto"), reports, 400.0, frozenset(), frozenset()
+    )
+    assert a_out[0] == 0.0
+    assert b_out[0] == 400.0
+
+
 def test_neutral_weight_matches_equal_split():
     """Default weight 1.0 (and an absent weight key) split demand evenly."""
     weighted = {"a": _report(0.0), "b": _report(0.0)}

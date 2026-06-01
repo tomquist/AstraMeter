@@ -246,11 +246,13 @@ class CT002:
     def set_consumer_distribution_weight(self, consumer_id: str, weight: float) -> None:
         """Set the relative fair-share weight for a battery.
 
-        Must be finite and within ``0 < weight <= 10``.  1.0 is neutral.
+        Must be finite and within ``0 <= weight <= 10``.  1.0 is neutral; 0.0
+        means the battery takes no share (parked at 0 W while staying in the
+        pool).
         """
         value = float(weight)
-        if not math.isfinite(value) or not (0.0 < value <= 10.0):
-            msg = f"distribution weight must be in (0, 10], got {weight!r}"
+        if not math.isfinite(value) or not (0.0 <= value <= 10.0):
+            msg = f"distribution weight must be in [0, 10], got {weight!r}"
             raise ValueError(msg)
         self._get_consumer(consumer_id).distribution_weight = value
 

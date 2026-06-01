@@ -644,9 +644,9 @@ void CT002Component::set_consumer_manual_target(const std::string &consumer_id, 
 
 void CT002Component::set_consumer_distribution_weight(const std::string &consumer_id,
                                                       float weight) {
-  // Clamp to the same (0, 10] range the Python setter enforces; ignore
+  // Same [0, 10] range the Python setter enforces (0 = take no share); ignore
   // non-finite or out-of-range values rather than corrupting the split.
-  if (!std::isfinite(weight) || weight <= 0.0f || weight > 10.0f) return;
+  if (!std::isfinite(weight) || weight < 0.0f || weight > 10.0f) return;
   this->get_consumer_(consumer_id).distribution_weight = weight;
 }
 

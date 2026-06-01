@@ -127,7 +127,7 @@ def test_ct002_consumer_discovery_structure():
     assert weight["platform"] == "number"
     assert weight["command_topic"].endswith("/distribution_weight/set")
     assert weight["retain"] is True
-    assert weight["min"] == 0.1
+    assert weight["min"] == 0
     assert weight["max"] == 10
     assert weight["entity_category"] == "config"
 
@@ -867,9 +867,13 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "2.5")
     assert calls == {"active": False, "auto": True, "manual": 250.0, "weight": 2.5}
 
-    # Out-of-range and unparseable values are dropped, not dispatched.
+    # 0.0 is a valid weight (battery takes no share).
     calls.clear()
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "0")
+    assert calls == {"weight": 0.0}
+
+    # Out-of-range and unparseable values are dropped, not dispatched.
+    calls.clear()
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "11")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
     service._handle_consumer_field_command("dev1", "c1", "active", "maybe")

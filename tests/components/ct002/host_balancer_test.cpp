@@ -94,6 +94,20 @@ TEST(LoadBalancer, AutoSplitHonoursDistributionWeight) {
   EXPECT_FLOAT_EQ(b_out[0], 200.0f);
 }
 
+TEST(LoadBalancer, ZeroWeightTakesNoShare) {
+  BalancerConfig cfg;
+  cfg.fair_distribution = false;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  // Weight 0 → battery parked at 0 W; the other absorbs the full demand.
+  reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f, 0.0f};
+  reports["b"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f};
+  const auto a_out = b.compute_target("a", ConsumerMode{}, reports, 400.0f, {}, {}, {});
+  const auto b_out = b.compute_target("b", ConsumerMode{}, reports, 400.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(a_out[0], 0.0f);
+  EXPECT_FLOAT_EQ(b_out[0], 400.0f);
+}
+
 TEST(LoadBalancer, AutoSplitAcrossPhases) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;

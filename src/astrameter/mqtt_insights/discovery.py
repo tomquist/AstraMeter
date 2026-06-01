@@ -202,7 +202,7 @@ def build_ct002_consumer_discovery(
         "platform": "number",
         "unique_id": f"{uid_prefix}_distribution_weight",
         "name": "Distribution Weight",
-        "min": 0.1,
+        "min": 0,
         "max": 10,
         "step": 0.1,
         "mode": "slider",

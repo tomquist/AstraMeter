@@ -255,7 +255,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     dw["platform"] = "number";
     dw["unique_id"] = uid_prefix + "_distribution_weight";
     dw["name"] = "Distribution Weight";
-    dw["min"] = 0.1;
+    dw["min"] = 0;
     dw["max"] = 10;
     dw["step"] = 0.1;
     dw["mode"] = "slider";
