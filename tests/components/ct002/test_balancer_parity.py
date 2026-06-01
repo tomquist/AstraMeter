@@ -65,6 +65,7 @@ def harness(tmp_path_factory) -> Path:
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        timeout=120,
     )
     if result.returncode != 0:
         pytest.fail(f"failed to build balancer parity harness:\n{result.stderr}")
@@ -161,7 +162,12 @@ class PyDriver:
 def _run_cpp(harness: Path, lines: list[str]) -> list[str]:
     stdin = "\n".join(lines) + "\n"
     result = subprocess.run(
-        [str(harness)], input=stdin, capture_output=True, text=True, check=True
+        [str(harness)],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
     )
     return [ln for ln in result.stdout.splitlines() if ln.strip()]
 
@@ -191,7 +197,13 @@ def _compare(label: str, lines: list[str], cpp: list[str], py: list[str]) -> Non
                 break
     if mismatches:
         joined = "\n".join(mismatches[:20])
-        raise AssertionError(f"[{label}] LoadBalancer parity mismatches:\n{joined}")
+        # Dump the command stream so a failing (randomized) scenario is
+        # reproducible straight from the assertion output.
+        stream = "\n".join(lines)
+        raise AssertionError(
+            f"[{label}] LoadBalancer parity mismatches:\n{joined}\n"
+            f"--- command stream ---\n{stream}"
+        )
 
 
 # ---------------------------------------------------------------------------
