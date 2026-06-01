@@ -157,7 +157,7 @@ Minimal YAML — point `power_sensor_l1` at any ESPHome sensor that reports grid
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.0
+  - source: github://tomquist/astrameter@develop
     components: [ct002]
 
 sensor:

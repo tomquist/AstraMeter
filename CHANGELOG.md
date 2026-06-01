@@ -1,5 +1,8 @@
 # Changelog
 
+## Next
+
+
 ## 2.1.0
 
 - **Added** a per-battery **Distribution Weight** Home Assistant entity (default `1.0`) that biases how the balancer splits load across multiple batteries — e.g. set `1.5` and `1.0` for a ~60:40 split so a smaller battery no longer saturates first ([#412](https://github.com/tomquist/astrameter/discussions/412)). The per-battery controls (manual target, auto/active toggles, distribution weight) now each use a dedicated retained MQTT command topic, so Home Assistant restores their values across an AstraMeter restart.
