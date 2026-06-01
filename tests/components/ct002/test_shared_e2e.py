@@ -94,7 +94,7 @@ class _FakeTransport:
 class PythonBackend:
     name = "python"
 
-    def __init__(self) -> None:
+    def __init__(self, saturation_detection: bool = True) -> None:
         self._loop = asyncio.new_event_loop()
         self._clock = _FakeClock()
         self._grid = [0.0, 0.0, 0.0]
@@ -106,6 +106,7 @@ class PythonBackend:
             clock=self._clock,
             reset_fn=None,
             dedupe_time_window=0.0,  # off by default; set_dedupe() toggles it
+            saturation_detection=saturation_detection,
         )
 
         async def _before_send(_addr, _fields=None, _consumer_id=None):
@@ -461,10 +462,22 @@ def test_python_esphome_wire_identical() -> None:
     match. This is the end-to-end imparity detector across the whole request
     handler: parsing, balancer target, phase split, cross-talk fields and
     response framing.
+
+    Saturation detection is disabled on both stacks for this byte-for-byte
+    comparison. The saturation score is a long-running EMA accumulated across
+    every poll; Python carries it in float64 while the ESPHome port uses
+    float32, so over a long sequence the two scores drift by sub-ULP amounts
+    that can eventually straddle a participation threshold and amplify into a
+    whole-watt target difference — a documented float-vs-double artifact, not
+    a wire-format divergence. The EMA path itself is covered (at integer-watt
+    tolerance) by the differential fuzzer in test_balancer_parity.py.
     """
-    py = PythonBackend()
+    py = PythonBackend(saturation_detection=False)
     try:
         with _running_esphome_backend() as esp:
+            # Match the Python backend: rebuild the binary's balancer with
+            # saturation off (the cfg control command is test-hooks only).
+            esp._cmd("cfg saturation_enabled 0")
             rng = random.Random(20260531)
             macs = ["AAAA00000001", "BBBB00000002", "CCCC00000003"]
             phases = ["A", "B", "C"]

@@ -29,9 +29,13 @@ REPO_ROOT = HERE.parent.parent.parent
 HARNESS_SRC = HERE / "fixtures" / "balancer_parity_harness.cpp"
 BALANCER_SRC = REPO_ROOT / "esphome" / "components" / "ct002" / "balancer.cpp"
 
-# Float (C++) vs double (Python) means sub-watt rounding noise is expected;
-# compare at the integer-watt granularity that actually reaches the wire.
-WATT_TOL = 0
+# Float (C++) vs double (Python) means sub-watt rounding noise is expected.
+# Compare raw magnitudes against a half-watt-plus-slack tolerance rather than
+# rounding each side and checking integer equality: a value sitting near an
+# X.5 boundary can round to X on one stack and X+1 on the other despite a
+# <0.001 W true difference, which would flake. 0.5 keeps the integer-watt
+# intent; the small extra slack absorbs the rounding noise at the boundary.
+WATT_TOL = 0.5 + 1e-3
 
 
 def _find_compiler() -> str | None:
@@ -182,7 +186,7 @@ def _compare(label: str, lines: list[str], cpp: list[str], py: list[str]) -> Non
                 mismatches.append(f"#{idx}: cpp={c!r} py={p!r}")
             continue
         for cval, pval in zip(cv, pv, strict=True):
-            if abs(round(float(cval)) - round(float(pval))) > WATT_TOL:
+            if abs(float(cval) - float(pval)) > WATT_TOL:
                 mismatches.append(f"#{idx}: cpp={c!r} py={p!r}")
                 break
     if mismatches:
