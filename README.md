@@ -174,7 +174,7 @@ Everything else is optional. See **[`esphome.example.yaml`](esphome.example.yaml
 
 Two optional sub-blocks nest under the same `ct002:` key:
 
-- **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device per battery + a parent CT002 device with manual-target / active / auto-target controls and a force-rotation button) and answers Marstek-app polls on your MQTT broker, so the emulator shows up in the app without hame-relay. Requires an `mqtt:` block.
+- **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device per battery + a parent CT002 device with manual-target / active / auto-target / distribution-weight controls and a force-rotation button) and answers Marstek-app polls on your MQTT broker, so the emulator shows up in the app without hame-relay. Requires an `mqtt:` block.
 - **`marstek_registration:`** — registers a managed CT002/CT003 with your Marstek cloud account on first boot (same flow as the Python `[MARSTEK]` section), persists the assigned MAC, and feeds it back into `ct002.ct_mac`. Requires an `http_request:` block. When combined with `mqtt_insights:`, the App-topic subscription picks up the MAC automatically — no reboot needed.
 
 **Status:** experimental — UDP emulator, balancer, filter pipeline, MQTT-insights, and Marstek cloud registration are all functional. Wider field testing welcome.
@@ -260,7 +260,9 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 
 *Fair distribution — balancing load across multiple batteries:*
 - **FAIR_DISTRIBUTION** (default true) — Adjust each battery's target so they share the
-  load evenly. Only matters with two or more batteries.
+  load evenly. Only matters with two or more batteries. To split *unevenly* (e.g. give a
+  larger battery a bigger share), set a per-battery **Distribution Weight** from Home
+  Assistant — see [Per-battery controls](#per-battery-controls-home-assistant-entities).
 - **BALANCE_GAIN** (default 0.2) — How aggressively to correct imbalance between batteries.
   0.0 = no correction (equal split only); 0.3–0.5 = faster rebalancing but may overshoot.
 - **BALANCE_DEADBAND** (default 15 W) — Ignore imbalance smaller than this.
@@ -549,6 +551,26 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
 | `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
+
+#### Per-battery controls (Home Assistant entities)
+
+When HA discovery is on, each battery gets a few **config** entities you can set
+live from Home Assistant:
+
+- **Manual Target** / **Auto Target** — override a battery's power, or hand it
+  back to automatic control.
+- **Active** — pause/resume a battery (paused batteries are steered to 0 W).
+- **Distribution Weight** — its relative share of the load when the balancer
+  splits demand across batteries. `1.0` is neutral; raise it on a larger
+  battery (or lower it on a smaller one) to bias the split. For example, a
+  5.12 kWh and a 2.08 kWh battery that you'd like to run roughly **60:40** can
+  be set to weights `1.5` and `1.0`. The split is ratio-based, so only the
+  proportion between batteries matters. Tune it while watching the batteries —
+  the change takes effect on the next control cycle.
+
+Each of these controls publishes its set-command **retained**, so Home
+Assistant restores your values across an AstraMeter restart without any extra
+configuration.
 
 #### Optional: Marstek mobile app (live MQTT)
 

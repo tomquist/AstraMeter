@@ -197,6 +197,12 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     pi["value_template"] = "{{ value_json.poll_interval }}";
     pi["entity_category"] = "diagnostic";
 
+    // Per-consumer controllable entities each use their own command topic with
+    // retain=true, so Home Assistant persists the value across restarts (the
+    // broker redelivers the retained command on re-subscribe). A dedicated
+    // topic per setting is required — a broker keeps only one retained message
+    // per topic. Mirrors discovery.py.
+
     // Manual target number
     JsonObject mt = components["manual_target"].to<JsonObject>();
     mt["platform"] = "number";
@@ -209,8 +215,8 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     mt["mode"] = "box";
     mt["state_topic"] = state_topic;
     mt["value_template"] = "{{ value_json.manual_target | default(0) }}";
-    mt["command_topic"] = state_topic + "/set";
-    mt["command_template"] = "{\"manual_target\": {{ value }}}";
+    mt["command_topic"] = state_topic + "/manual_target/set";
+    mt["retain"] = true;
     mt["entity_category"] = "config";
 
     // Auto target switch
@@ -219,12 +225,13 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     at["unique_id"] = uid_prefix + "_auto_target";
     at["name"] = "Auto Target";
     at["state_topic"] = state_topic;
-    at["command_topic"] = state_topic + "/set";
+    at["command_topic"] = state_topic + "/auto_target/set";
     at["value_template"] = "{{ value_json.auto_target }}";
-    at["payload_on"] = "{\"auto_target\": true}";
-    at["payload_off"] = "{\"auto_target\": false}";
+    at["payload_on"] = "true";
+    at["payload_off"] = "false";
     at["state_on"] = "True";
     at["state_off"] = "False";
+    at["retain"] = true;
     at["entity_category"] = "config";
 
     // Active switch
@@ -233,13 +240,30 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     act["unique_id"] = uid_prefix + "_active";
     act["name"] = "Active";
     act["state_topic"] = state_topic;
-    act["command_topic"] = state_topic + "/set";
+    act["command_topic"] = state_topic + "/active/set";
     act["value_template"] = "{{ value_json.active }}";
-    act["payload_on"] = "{\"active\": true}";
-    act["payload_off"] = "{\"active\": false}";
+    act["payload_on"] = "true";
+    act["payload_off"] = "false";
     act["state_on"] = "True";
     act["state_off"] = "False";
-    act["optimistic"] = true;
+    act["retain"] = true;
+
+    // Distribution weight number — relative fair-share weight across batteries
+    // (1.0 neutral). Raise on a larger battery / lower on a smaller one to bias
+    // the split, e.g. 1.5 vs 1.0 for a ~60:40 distribution.
+    JsonObject dw = components["distribution_weight"].to<JsonObject>();
+    dw["platform"] = "number";
+    dw["unique_id"] = uid_prefix + "_distribution_weight";
+    dw["name"] = "Distribution Weight";
+    dw["min"] = 0.1;
+    dw["max"] = 10;
+    dw["step"] = 0.1;
+    dw["mode"] = "slider";
+    dw["state_topic"] = state_topic;
+    dw["value_template"] = "{{ value_json.distribution_weight | default(1.0) }}";
+    dw["command_topic"] = state_topic + "/distribution_weight/set";
+    dw["retain"] = true;
+    dw["entity_category"] = "config";
 
     // Device info
     JsonObject device = root["device"].to<JsonObject>();

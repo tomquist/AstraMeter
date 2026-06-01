@@ -400,6 +400,7 @@ ReportMap CT002Component::collect_reports_for_balancer_() const {
       r.device_type = kv.second.device_type;
       r.phase = kv.second.phase;
       r.power = kv.second.power;
+      r.weight = kv.second.distribution_weight;
       out[kv.first] = std::move(r);
     }
   }
@@ -563,6 +564,7 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.active = c.active;
   snap.auto_target = !c.manual_enabled;
   if (c.manual_enabled) snap.manual_target = c.manual_target;
+  snap.distribution_weight = c.distribution_weight;
   snap.poll_interval = c.poll_interval;
   snap.timestamp = c.timestamp;
   snap.grid_power = this->last_grid_power_;
@@ -638,6 +640,14 @@ void CT002Component::set_consumer_manual_target(const std::string &consumer_id, 
   auto &consumer = this->get_consumer_(consumer_id);
   consumer.manual_enabled = true;
   consumer.manual_target = target;
+}
+
+void CT002Component::set_consumer_distribution_weight(const std::string &consumer_id,
+                                                      float weight) {
+  // Clamp to the same (0, 10] range the Python setter enforces; ignore
+  // non-finite or out-of-range values rather than corrupting the split.
+  if (!std::isfinite(weight) || weight <= 0.0f || weight > 10.0f) return;
+  this->get_consumer_(consumer_id).distribution_weight = weight;
 }
 
 void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bool auto_target) {

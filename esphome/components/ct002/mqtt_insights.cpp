@@ -6,8 +6,11 @@
 // other platforms; the methods themselves only exist on builds that
 // link the mqtt client.
 
+#include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 
 #include "esphome/components/json/json_util.h"
@@ -130,13 +133,12 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
 }
 
 void MqttInsightsComponent::subscribe_commands_() {
-  // Consumer command topic — single wildcard subscription, dispatch on
-  // received message. ESPHome's mqtt client doesn't support arbitrary
-  // wildcards in its subscribe_json convenience method (well, it does,
-  // but we want to handle both consumer and device topics with one
-  // handler), so we use the raw subscribe.
+  // Consumer command topics — each per-consumer setting has its own retained
+  // sub-topic ({base}/ct002/{dev}/consumer/{cid}/{field}/set), so we match the
+  // extra wildcard level and dispatch on the trailing field. The device-level
+  // button keeps the plain {base}/ct002/{dev}/set topic.
   const std::string consumer_wild =
-      this->base_topic_ + "/ct002/" + this->device_id_ + "/consumer/+/set";
+      this->base_topic_ + "/ct002/" + this->device_id_ + "/consumer/+/+/set";
   const std::string device_topic =
       this->base_topic_ + "/ct002/" + this->device_id_ + "/set";
   this->mqtt_->subscribe(
@@ -238,6 +240,7 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
       root["manual_target"] = nullptr;
     }
     root["auto_target"] = snap.auto_target;
+    root["distribution_weight"] = snap.distribution_weight;
   });
   this->mqtt_->publish(state_topic, state_buf, 0, true);
   this->mqtt_->publish(state_topic + "/availability", "online", 6, 0, true);
@@ -305,33 +308,85 @@ void MqttInsightsComponent::handle_command_message_(const std::string &topic,
 
   const std::string consumer_marker = "consumer/";
   if (middle.compare(0, consumer_marker.size(), consumer_marker) == 0) {
-    const std::string consumer_id = middle.substr(consumer_marker.size());
-    this->handle_consumer_command_(consumer_id, payload);
+    // rest = "{consumer_id}/{field}" — field is the trailing segment.
+    const std::string rest = middle.substr(consumer_marker.size());
+    const std::string::size_type pos = rest.rfind('/');
+    if (pos == std::string::npos) return;  // malformed
+    const std::string consumer_id = rest.substr(0, pos);
+    const std::string field = rest.substr(pos + 1);
+    this->handle_consumer_field_command_(consumer_id, field, payload);
   } else if (middle.empty()) {
     this->handle_device_command_(payload);
   }
 }
 
-void MqttInsightsComponent::handle_consumer_command_(const std::string &consumer_id,
-                                                     const std::string &payload) {
-  bool parsed = json::parse_json(payload, [&](JsonObject root) -> bool {
-    if (root["active"].is<bool>()) {
-      this->ct002_->set_consumer_active(consumer_id, root["active"].as<bool>());
-    }
-    if (root["auto_target"].is<bool>()) {
-      this->ct002_->set_consumer_auto_target(consumer_id, root["auto_target"].as<bool>());
-    }
-    if (root["manual_target"].is<float>() || root["manual_target"].is<int>()) {
-      float t = root["manual_target"].as<float>();
-      if (std::isfinite(t) && t >= -10000.0f && t <= 10000.0f) {
-        this->ct002_->set_consumer_manual_target(consumer_id, t);
-      } else {
-        ESP_LOGW(TAG, "Out-of-range manual_target for %s: %.1f", consumer_id.c_str(), t);
-      }
-    }
+// Parse a scalar boolean payload ("true"/"on"/"1" vs "false"/"off"/"0").
+static bool parse_bool_payload(const std::string &payload, bool &out) {
+  std::string s;
+  for (char c : payload) {
+    if (!std::isspace(static_cast<unsigned char>(c)))
+      s.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  }
+  if (s == "true" || s == "on" || s == "1") {
+    out = true;
     return true;
-  });
-  if (!parsed) ESP_LOGW(TAG, "Invalid consumer command payload for %s", consumer_id.c_str());
+  }
+  if (s == "false" || s == "off" || s == "0") {
+    out = false;
+    return true;
+  }
+  return false;
+}
+
+// Parse a scalar float payload. Returns false on empty/garbage input.
+static bool parse_float_payload(const std::string &payload, float &out) {
+  const char *begin = payload.c_str();
+  char *end = nullptr;
+  errno = 0;
+  const float v = std::strtof(begin, &end);
+  if (end == begin || errno != 0)
+    return false;
+  out = v;
+  return true;
+}
+
+void MqttInsightsComponent::handle_consumer_field_command_(const std::string &consumer_id,
+                                                           const std::string &field,
+                                                           const std::string &payload) {
+  // An empty payload clears a retained command — ignore it silently.
+  if (payload.find_first_not_of(" \t\r\n") == std::string::npos) return;
+
+  if (field == "active") {
+    bool v;
+    if (parse_bool_payload(payload, v))
+      this->ct002_->set_consumer_active(consumer_id, v);
+    else
+      ESP_LOGW(TAG, "Invalid active value for %s: %s", consumer_id.c_str(), payload.c_str());
+  } else if (field == "auto_target") {
+    bool v;
+    if (parse_bool_payload(payload, v))
+      this->ct002_->set_consumer_auto_target(consumer_id, v);
+    else
+      ESP_LOGW(TAG, "Invalid auto_target value for %s: %s", consumer_id.c_str(), payload.c_str());
+  } else if (field == "manual_target") {
+    float t;
+    if (!parse_float_payload(payload, t)) {
+      ESP_LOGW(TAG, "Invalid manual_target value for %s: %s", consumer_id.c_str(), payload.c_str());
+    } else if (std::isfinite(t) && t >= -10000.0f && t <= 10000.0f) {
+      this->ct002_->set_consumer_manual_target(consumer_id, t);
+    } else {
+      ESP_LOGW(TAG, "Out-of-range manual_target for %s: %.1f", consumer_id.c_str(), t);
+    }
+  } else if (field == "distribution_weight") {
+    float w;
+    if (!parse_float_payload(payload, w)) {
+      ESP_LOGW(TAG, "Invalid distribution_weight for %s: %s", consumer_id.c_str(), payload.c_str());
+    } else if (std::isfinite(w) && w > 0.0f && w <= 10.0f) {
+      this->ct002_->set_consumer_distribution_weight(consumer_id, w);
+    } else {
+      ESP_LOGW(TAG, "Out-of-range distribution_weight for %s: %.2f", consumer_id.c_str(), w);
+    }
+  }
 }
 
 void MqttInsightsComponent::handle_device_command_(const std::string &payload) {

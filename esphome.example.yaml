@@ -169,6 +169,9 @@ ct002:
   # Publishes per-consumer + device-level state to MQTT with full Home
   # Assistant Device Discovery, and answers Marstek-app polls on the same
   # broker so the emulator shows up in the app without hame-relay.
+  # Each battery also exposes config entities (Manual Target, Auto Target,
+  # Active, and a Distribution Weight that biases the load split, default 1.0)
+  # which persist across reboots via retained MQTT.
   # Uncomment together with the top-level `mqtt:` block above.
   # mqtt_insights:
   #   base_topic: astrameter         # per-installation namespace

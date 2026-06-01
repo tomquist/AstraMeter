@@ -406,6 +406,11 @@ THROTTLE_INTERVAL = 0
 ## Mainly for Home Assistant: publishes internal state (grid power, targets,
 ## saturation, consumer topology) to MQTT with HA Device Discovery.
 ## When running as a Home Assistant app with Mosquitto, this is auto-configured.
+## With HA Discovery on, each battery also exposes config entities you set live
+## from Home Assistant — Manual Target, Auto Target, Active, and a per-battery
+## Distribution Weight (default 1.0) that biases the load split across batteries
+## (e.g. 1.5 vs 1.0 for ~60:40). No extra keys needed; these persist across
+## restarts via retained MQTT.
 ## Optional add-on: Marstek app poll replies use the same broker (see MARSTEK_* below).
 #[MQTT_INSIGHTS]
 #BROKER = 192.168.1.100

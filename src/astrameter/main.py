@@ -346,6 +346,9 @@ async def run_device(
         insights.register_auto_target_handler(
             device_id or "", device.set_consumer_auto_target
         )
+        insights.register_distribution_weight_handler(
+            device_id or "", device.set_consumer_distribution_weight
+        )
         insights.register_rotation_handler(
             device_id or "", device.force_efficiency_rotation
         )

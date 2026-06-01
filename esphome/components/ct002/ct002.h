@@ -40,6 +40,9 @@ struct Consumer {
   bool active{true};
   bool manual_enabled{false};
   float manual_target{0.0f};
+  // Relative fair-share weight (1.0 = neutral). Tuned live via the MQTT
+  // "Distribution Weight" entity; mirrors Python's Consumer.distribution_weight.
+  float distribution_weight{1.0f};
   // Net AC power the balancer last instructed this consumer to be at —
   // distinct from `power` (what the consumer reports). The cross-talk
   // *_chrg_power / *_dchrg_power fields aggregate THIS, not `power`,
@@ -112,6 +115,7 @@ class CT002Component : public Component {
     bool active{true};
     bool auto_target{true};
     std::optional<float> manual_target;
+    float distribution_weight{1.0f};
     std::optional<float> poll_interval;
     double timestamp{0.0};
     // Cross-phase grid power last observed at the pipeline head (post-
@@ -170,6 +174,7 @@ class CT002Component : public Component {
   void set_consumer_active(const std::string &consumer_id, bool active);
   void set_consumer_manual_target(const std::string &consumer_id, float target);
   void set_consumer_auto_target(const std::string &consumer_id, bool auto_target);
+  void set_consumer_distribution_weight(const std::string &consumer_id, float weight);
   void force_balancer_rotation();
 
   // Listener registration — mqtt_insights subscribes once at setup() to

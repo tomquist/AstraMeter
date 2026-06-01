@@ -83,6 +83,10 @@ class Consumer:
     manual_target: float = 0.0
     manual_enabled: bool = False
     active: bool = True
+    # Relative weight for fair-share distribution across batteries.  1.0 is
+    # neutral; a battery with weight 2.0 takes roughly twice the share of a
+    # weight-1.0 battery.  Tuned live via the MQTT "Distribution Weight" entity.
+    distribution_weight: float = 1.0
     # Last UDP source address seen for this consumer, if the protocol provides it.
     last_ip: str = ""
 
@@ -239,6 +243,17 @@ class CT002:
             raise ValueError(msg)
         self._get_consumer(consumer_id).manual_target = value
 
+    def set_consumer_distribution_weight(self, consumer_id: str, weight: float) -> None:
+        """Set the relative fair-share weight for a battery.
+
+        Must be finite and within ``0 < weight <= 10``.  1.0 is neutral.
+        """
+        value = float(weight)
+        if not math.isfinite(value) or not (0.0 < value <= 10.0):
+            msg = f"distribution weight must be in (0, 10], got {weight!r}"
+            raise ValueError(msg)
+        self._get_consumer(consumer_id).distribution_weight = value
+
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
         auto=False means use manual target override."""
@@ -364,7 +379,12 @@ class CT002:
         mode = self._consumer_mode(consumer_id)
 
         reports = {
-            cid: {"phase": c.phase, "power": c.power, "device_type": c.device_type}
+            cid: {
+                "phase": c.phase,
+                "power": c.power,
+                "device_type": c.device_type,
+                "weight": c.distribution_weight,
+            }
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }
@@ -742,6 +762,9 @@ class CT002:
                     "smooth_target": self._last_smooth_target,
                     "manual_target": consumer.manual_target if consumer else None,
                     "auto_target": not consumer.manual_enabled if consumer else True,
+                    "distribution_weight": (
+                        consumer.distribution_weight if consumer else 1.0
+                    ),
                     "active_control": self.active_control,
                     "consumer_count": sum(
                         1 for c in self._consumers.values() if c.timestamp > 0

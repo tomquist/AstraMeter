@@ -78,6 +78,22 @@ TEST(LoadBalancer, AutoSplitsGridAcrossConsumersOnSamePhase) {
   EXPECT_FLOAT_EQ(out[2], 0.0f);
 }
 
+TEST(LoadBalancer, AutoSplitHonoursDistributionWeight) {
+  BalancerConfig cfg;
+  cfg.fair_distribution = false;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  // Weights 1.5 vs 1.0 → a ~60:40 split of the 500 W demand.
+  reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.5f};
+  reports["b"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f};
+  const auto a_out = b.compute_target("a", ConsumerMode{}, reports, 500.0f, {}, {}, {});
+  const auto b_out = b.compute_target("b", ConsumerMode{}, reports, 500.0f, {}, {}, {});
+  // share = eff_part(1.0) * weight; total share = 2.5.
+  // a: 500 * 1.5/2.5 = 300; b: 500 * 1.0/2.5 = 200.
+  EXPECT_FLOAT_EQ(a_out[0], 300.0f);
+  EXPECT_FLOAT_EQ(b_out[0], 200.0f);
+}
+
 TEST(LoadBalancer, AutoSplitAcrossPhases) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;

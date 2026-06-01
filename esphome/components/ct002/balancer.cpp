@@ -451,7 +451,7 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
   for (const auto &r : support_reports) {
     auto it = eff_part.find(r.first);
     const float w = (it != eff_part.end()) ? it->second : 1.0f;
-    backup_weights[r.first] = std::max(0.01f, w);
+    backup_weights[r.first] = std::max(0.01f, w) * r.second.weight;
   }
   const float qualified_probe_actual = probe.proof_samples > 0 ? probe_actual : 0.0f;
   const float desired = this->compute_desired_contribution_(
@@ -726,11 +726,23 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     }
   }
 
+  // Fold the per-battery user weight into the effectiveness map so the
+  // fair-share split honours the configured ratio. `eff_part` stays the pure
+  // health/saturation map (used for participation/probing); the weighted
+  // `share_part` only drives the proportional distribution. With neutral
+  // weights (all 1.0) share_part == eff_part and the math is unchanged.
+  std::unordered_map<std::string, float> share_part;
+  for (const auto &kv : eff_part) {
+    float w = 1.0f;
+    auto rit = reports.find(kv.first);
+    if (rit != reports.end()) w = rit->second.weight;
+    share_part[kv.first] = kv.second * w;
+  }
   float total_effective = 0.0f;
-  for (const auto &kv : eff_part) total_effective += kv.second;
+  for (const auto &kv : share_part) total_effective += kv.second;
   float fair_share;
   if (consumer_id && reports.count(*consumer_id)) {
-    const float w = eff_part.count(*consumer_id) ? eff_part[*consumer_id] : 1.0f;
+    const float w = share_part.count(*consumer_id) ? share_part[*consumer_id] : 1.0f;
     fair_share = (total_effective > 0.0f) ? (grid_total / total_effective) * w
                                           : grid_total / num_consumers;
   } else {
@@ -772,8 +784,27 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
     auto it = reports.find(cid);
     if (it != reports.end()) actual_total += it->second.power;
   }
-  const float actual_avg = actual_total / participating.size();
-  const float error = actual_avg - actual_self;
+  // Pull each battery toward its weight-proportional share of the pool's total
+  // output rather than the plain average, so the configured ratio is the steady
+  // state. Participation is decided by eff_part above, so a healthy battery with
+  // a small weight is not dropped. Neutral weights reduce to the plain average.
+  float total_weight = 0.0f;
+  std::unordered_map<std::string, float> weights;
+  for (const auto &cid : participating) {
+    float w = 1.0f;
+    auto it = reports.find(cid);
+    if (it != reports.end()) w = it->second.weight;
+    weights[cid] = w;
+    total_weight += w;
+  }
+  float target_share;
+  if (total_weight > 0.0f) {
+    const float wself = weights.count(consumer_id) ? weights[consumer_id] : 0.0f;
+    target_share = actual_total * wself / total_weight;
+  } else {
+    target_share = actual_total / participating.size();
+  }
+  const float error = target_share - actual_self;
   const float err_abs = std::fabs(error);
   if (cfg.balance_deadband > 0.0f && err_abs < cfg.balance_deadband) return fair_share;
   float gain = cfg.balance_gain;

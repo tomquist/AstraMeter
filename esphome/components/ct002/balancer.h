@@ -79,6 +79,9 @@ struct ConsumerReport {
   std::string device_type;
   std::string phase{"A"};
   float power{0.0f};
+  // Relative fair-share weight (1.0 = neutral). Mirrors the Python reports
+  // dict's "weight" key, set live via the MQTT "Distribution Weight" entity.
+  float weight{1.0f};
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;

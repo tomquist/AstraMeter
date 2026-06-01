@@ -76,7 +76,8 @@ class MqttInsightsComponent : public Component {
   // Command path — invoked from the mqtt subscribe callback.
   void handle_command_message_(const std::string &topic, const std::string &payload);
   void handle_marstek_message_(const std::string &topic, const std::string &payload);
-  void handle_consumer_command_(const std::string &consumer_id, const std::string &payload);
+  void handle_consumer_field_command_(const std::string &consumer_id, const std::string &field,
+                                      const std::string &payload);
   void handle_device_command_(const std::string &payload);
 
   // Marstek periodic broadcast (runs on a set_interval timer).
