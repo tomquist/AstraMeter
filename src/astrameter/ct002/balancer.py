@@ -11,6 +11,16 @@ from astrameter.config.logger import logger
 
 from .protocol import parse_int
 
+
+def _report_weight(report: dict) -> float:
+    """Per-battery fair-share weight from a report dict (defaults to 1.0).
+
+    The ``or 1.0`` guards against a missing key or a falsy value slipping in;
+    the setter keeps real weights in ``(0, 10]``.
+    """
+    return float(report.get("weight", 1.0) or 1.0)
+
+
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
@@ -611,7 +621,7 @@ class LoadBalancer:
 
         backup_weights = {
             cid: max(0.01, eff_part.get(cid, 1.0))
-            * float(reports.get(cid, {}).get("weight", 1.0) or 1.0)
+            * _report_weight(reports.get(cid, {}))
             for cid in support_reports
         }
         qualified_probe_actual = probe_actual if probe.proof_samples > 0 else 0
@@ -962,7 +972,7 @@ class LoadBalancer:
         # the neutral default (every weight 1.0) ``share_part == eff_part`` and
         # the math is identical to the unweighted behaviour.
         share_part = {
-            cid: eff_part[cid] * float(reports.get(cid, {}).get("weight", 1.0) or 1.0)
+            cid: eff_part[cid] * _report_weight(reports.get(cid, {}))
             for cid in eff_part
         }
         total_effective = sum(share_part.values())
@@ -1019,10 +1029,7 @@ class LoadBalancer:
         # health map) above, so a healthy battery with a small weight is not
         # dropped from the pool.  With neutral weights this reduces to the plain
         # average (``actual_total / len(participating)``).
-        weights = {
-            cid: float(reports.get(cid, {}).get("weight", 1.0) or 1.0)
-            for cid in participating
-        }
+        weights = {cid: _report_weight(reports.get(cid, {})) for cid in participating}
         total_weight = sum(weights.values())
         if total_weight > 0:
             target_share = actual_total * weights.get(consumer_id, 0.0) / total_weight
