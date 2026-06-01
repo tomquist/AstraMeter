@@ -38,6 +38,9 @@ class BatterySimulator:
         inspection_count: int = 1,
         time_scale: float = 1.0,
         power_update_delay_ticks: int = 0,
+        max_dc_input: int = 0,
+        dc_input_power: float = 0.0,
+        idle_on_cross_phase_discharge: bool = False,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
@@ -62,6 +65,8 @@ class BatterySimulator:
         self.inspection_count = inspection_count
         self.time_scale = max(0.1, time_scale)
         self.power_update_delay_ticks = max(0, int(power_update_delay_ticks))
+        self.max_dc_input = max(0, int(max_dc_input))
+        self.idle_on_cross_phase_discharge = idle_on_cross_phase_discharge
 
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
@@ -72,6 +77,8 @@ class BatterySimulator:
         self._startup_elapsed: float = 0.0
         self._step_index: int = 0
         self._pending_power_targets: list[tuple[int, float]] = []
+        self._dc_input_power: float = 0.0
+        self.dc_input_power = dc_input_power  # reuse setter clamp
 
     # -- public read-only properties ---------------------------------------
 
@@ -94,6 +101,14 @@ class BatterySimulator:
     @property
     def target_power(self) -> float:
         return self._target_power
+
+    @property
+    def dc_input_power(self) -> float:
+        return self._dc_input_power
+
+    @dc_input_power.setter
+    def dc_input_power(self, value: float) -> None:
+        self._dc_input_power = max(0.0, min(float(self.max_dc_input), float(value)))
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
@@ -139,6 +154,7 @@ class BatterySimulator:
             if idle and want_power:
                 self._startup_elapsed += dt
                 if self._startup_elapsed < self.startup_delay:
+                    self._apply_dc_passthrough()
                     return  # stay at current (near-zero) power
             else:
                 self._startup_elapsed = 0.0
@@ -156,11 +172,27 @@ class BatterySimulator:
             min(self.max_discharge_power, self._current_power),
         )
 
+        # When SoC is saturated and DC input is present, the inverter
+        # passes the unabsorbed PV through to AC even if the AC target
+        # asks for charging.  Mirrors Marstek Venus D behaviour.
+        self._apply_dc_passthrough()
+
+    def _apply_dc_passthrough(self) -> None:
+        if self._soc < 1.0 or self._dc_input_power <= 0:
+            return
+        # Push at least the DC input through to AC as positive output.
+        self._current_power = max(self._current_power, self._dc_input_power)
+
     def _update_soc(self, dt: float) -> None:
         if self.capacity_wh <= 0:
             return
+        # AC energy first (positive current_power drains, negative charges)
         energy_wh = self._current_power * (dt / 3600.0)
         self._soc -= energy_wh / self.capacity_wh
+        # DC input charges the cells in parallel (when not already full).
+        if self._dc_input_power > 0:
+            dc_energy_wh = self._dc_input_power * (dt / 3600.0)
+            self._soc += dc_energy_wh / self.capacity_wh
         self._soc = max(0.0, min(1.0, self._soc))
 
     # -- protocol ----------------------------------------------------------
@@ -204,22 +236,50 @@ class BatterySimulator:
             logger.debug("Battery %s: bad response: %s", self.mac, err)
             return None
 
-        # Extract grid reading: sum of all three phase power fields (4, 5, 6).
-        # Real Marstek batteries treat this as the current grid consumption and
-        # adjust their output to compensate: if the grid is importing 70W, the
-        # battery increases its output by 70W.  This integral behavior drives
-        # the grid reading toward zero over successive cycles.
+        # Hand parsed response off to the deterministic helper so it can
+        # also be unit-tested without UDP I/O.
         if response_fields and phase_field != "0":
-            try:
-                phase_a = int(response_fields[4]) if len(response_fields) > 4 else 0
-                phase_b = int(response_fields[5]) if len(response_fields) > 5 else 0
-                phase_c = int(response_fields[6]) if len(response_fields) > 6 else 0
-                grid_reading = phase_a + phase_b + phase_c
-                self._apply_ct_derived_target(self._current_power + grid_reading)
-            except (ValueError, TypeError):
-                pass
+            self._handle_ct_response(response_fields)
 
         return response_fields
+
+    def _handle_ct_response(self, response_fields: list[str]) -> None:
+        """Apply integral-control target update and dchrg-driven idle rule.
+
+        Real Marstek batteries derive their new AC target by adding the
+        reported grid reading (sum of fields 4-6) to their current output.
+        If the opt-in firmware-mimic flag is on, a charging battery also
+        idles when it sees another phase being instructed to discharge.
+        """
+
+        def field(idx: int) -> int:
+            try:
+                return int(response_fields[idx])
+            except (IndexError, ValueError, TypeError):
+                return 0
+
+        grid_reading = field(4) + field(5) + field(6)
+        dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
+        new_target: float = self._current_power + grid_reading
+
+        # Real Marstek firmware idles a charging battery when it sees
+        # another battery (on a different phase) being instructed to
+        # discharge — to avoid one battery feeding the other through
+        # the grid.  Opt-in; default off keeps existing simulator
+        # tests stable.
+        if (
+            self.idle_on_cross_phase_discharge
+            and new_target < 0
+            and self._other_phase_discharging(dchrg)
+        ):
+            new_target = 0.0
+
+        self._apply_ct_derived_target(new_target)
+
+    def _other_phase_discharging(self, dchrg: tuple[int, int, int]) -> bool:
+        """True if a phase other than this battery's reports a positive dchrg."""
+        own_idx = "ABC".index(self.phase)
+        return any(v > 0 for i, v in enumerate(dchrg) if i != own_idx)
 
     # -- main loop ---------------------------------------------------------
 
@@ -272,6 +332,8 @@ class BatterySimulator:
             "soc": round(self._soc, 4),
             "max_charge": self.max_charge_power,
             "max_discharge": self.max_discharge_power,
+            "max_dc_input": self.max_dc_input,
+            "dc_input": round(self._dc_input_power),
         }
 
 

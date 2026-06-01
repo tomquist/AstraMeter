@@ -14,7 +14,11 @@ class Shelly(Powermeter):
         self._rpc_session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
-        timeout = ClientTimeout(total=10)
+        # The battery polls roughly once per second and gives up on the CT long
+        # before a 10s read would return, so fail fast: a slow/unresponsive
+        # Shelly should error quickly and let the next poll retry rather than
+        # pinning a request handler for seconds.
+        timeout = ClientTimeout(total=2, connect=1)
         auth = BasicAuth(self.user, self.password) if self.user else None
         self._session = aiohttp.ClientSession(auth=auth, timeout=timeout)
         self._rpc_session = aiohttp.ClientSession(

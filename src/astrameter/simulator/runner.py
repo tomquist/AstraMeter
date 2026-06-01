@@ -27,6 +27,9 @@ class BatteryConfig:
     ramp_rate: float = 200.0
     poll_interval: float = 1.0
     power_update_delay_ticks: int = 0
+    max_dc_input: int = 0
+    dc_input_power: float = 0.0
+    idle_on_cross_phase_discharge: bool = False
 
 
 @dataclass
@@ -94,6 +97,9 @@ class SimulationRunner:
                 poll_interval=bc.poll_interval,
                 time_scale=cfg.time_scale,
                 power_update_delay_ticks=bc.power_update_delay_ticks,
+                max_dc_input=bc.max_dc_input,
+                dc_input_power=bc.dc_input_power,
+                idle_on_cross_phase_discharge=bc.idle_on_cross_phase_discharge,
             )
             for bc in cfg.batteries
         ]
@@ -174,6 +180,11 @@ def parse_config(data: dict) -> SimulationConfig:
             ramp_rate=bd.get("ramp_rate", 200.0),
             poll_interval=bd.get("poll_interval", 1.0),
             power_update_delay_ticks=int(delay),
+            max_dc_input=int(bd.get("max_dc_input", 0)),
+            dc_input_power=float(bd.get("dc_input_power", 0.0)),
+            idle_on_cross_phase_discharge=bool(
+                bd.get("idle_on_cross_phase_discharge", False)
+            ),
         )
         batteries.append(bc)
 
@@ -215,6 +226,15 @@ def validate_config(cfg: SimulationConfig) -> None:
             raise ValueError(
                 f"Battery {bc.mac}: power_update_delay_ticks must be >= 0, "
                 f"got {bc.power_update_delay_ticks}"
+            )
+        if bc.max_dc_input < 0:
+            raise ValueError(
+                f"Battery {bc.mac}: max_dc_input must be >= 0, got {bc.max_dc_input}"
+            )
+        if not 0.0 <= bc.dc_input_power <= bc.max_dc_input:
+            raise ValueError(
+                f"Battery {bc.mac}: dc_input_power must be within "
+                f"[0, max_dc_input={bc.max_dc_input}], got {bc.dc_input_power}"
             )
         mac = bc.mac.upper()
         if len(mac) != 12 or not all(c in "0123456789ABCDEF" for c in mac):

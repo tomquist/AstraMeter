@@ -92,10 +92,14 @@ def test_ct002_consumer_discovery_structure():
     # Primary entity has name: null
     assert comps["grid_power_total"]["name"] is None
 
-    # Switch has correct topics
+    # Switch has correct topics — each control uses its own retained command
+    # sub-topic so Home Assistant persists the value across restarts.
     switch = comps["active"]
     assert switch["platform"] == "switch"
-    assert "command_topic" in switch
+    assert switch["command_topic"].endswith("/active/set")
+    assert switch["retain"] is True
+    assert switch["payload_on"] == "true"
+    assert switch["payload_off"] == "false"
     assert switch["state_on"] == "True"
     assert switch["state_off"] == "False"
 
@@ -104,16 +108,28 @@ def test_ct002_consumer_discovery_structure():
     assert manual["platform"] == "number"
     assert manual["device_class"] == "power"
     assert manual["mode"] == "box"
-    assert "command_topic" in manual
-    assert "command_template" in manual
+    assert manual["command_topic"].endswith("/manual_target/set")
+    assert manual["retain"] is True
+    assert "command_template" not in manual
     assert manual["entity_category"] == "config"
 
     # Auto target switch entity
     auto = comps["auto_target"]
     assert auto["platform"] == "switch"
+    assert auto["command_topic"].endswith("/auto_target/set")
+    assert auto["retain"] is True
     assert auto["state_on"] == "True"
     assert auto["state_off"] == "False"
     assert auto["entity_category"] == "config"
+
+    # Distribution weight number entity
+    weight = comps["distribution_weight"]
+    assert weight["platform"] == "number"
+    assert weight["command_topic"].endswith("/distribution_weight/set")
+    assert weight["retain"] is True
+    assert weight["min"] == 0
+    assert weight["max"] == 10
+    assert weight["entity_category"] == "config"
 
 
 def test_ct002_consumer_discovery_no_device_type():
@@ -515,6 +531,7 @@ SAMPLE_CT002_DATA = {
     "last_seen": "2026-01-01T00:00:00+00:00",
     "manual_target": None,
     "auto_target": True,
+    "distribution_weight": 1.5,
     "smooth_target": 500.0,
     "active_control": True,
     "consumer_count": 2,
@@ -554,6 +571,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["ct_mac"] == "AA:BB:CC:DD:EE:FF"
         assert payload["active"] is True
         assert payload["poll_interval"] == 5.0
+        assert payload["distribution_weight"] == 1.5
         assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
         await service.stop()
@@ -643,13 +661,13 @@ async def test_active_toggle_via_mqtt(mqtt_broker):
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
-                f"{base}/ct002/dev1/consumer/consumer1/set",
-                payload=json.dumps({"active": False}).encode(),
+                f"{base}/ct002/dev1/consumer/consumer1/active/set",
+                payload=b"false",
             )
             await _poll(lambda: len(handler_calls) >= 1)
             await pub.publish(
-                f"{base}/ct002/dev1/consumer/consumer1/set",
-                payload=json.dumps({"active": True}).encode(),
+                f"{base}/ct002/dev1/consumer/consumer1/active/set",
+                payload=b"true",
             )
             await _poll(lambda: len(handler_calls) >= 2)
 
@@ -740,7 +758,7 @@ async def test_shelly_event_flow(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_manual_target_command_via_mqtt(mqtt_broker):
+async def test_manual_target_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -757,8 +775,8 @@ async def test_manual_target_command_via_mqtt(mqtt_broker):
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
-                f"{base}/ct002/dev1/consumer/consumer1/set",
-                payload=json.dumps({"manual_target": 150}).encode(),
+                f"{base}/ct002/dev1/consumer/consumer1/manual_target/set",
+                payload=b"150",
             )
 
         await _poll(lambda: len(handler_calls) >= 1)
@@ -768,7 +786,7 @@ async def test_manual_target_command_via_mqtt(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_auto_target_command_via_mqtt(mqtt_broker):
+async def test_auto_target_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -785,8 +803,8 @@ async def test_auto_target_command_via_mqtt(mqtt_broker):
 
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
             await pub.publish(
-                f"{base}/ct002/dev1/consumer/consumer1/set",
-                payload=json.dumps({"auto_target": False}).encode(),
+                f"{base}/ct002/dev1/consumer/consumer1/auto_target/set",
+                payload=b"false",
             )
 
         await _poll(lambda: len(handler_calls) >= 1)
@@ -796,7 +814,76 @@ async def test_auto_target_command_via_mqtt(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_force_rotation_command_via_mqtt(mqtt_broker):
+async def test_distribution_weight_command_via_mqtt(mqtt_broker) -> None:
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    handler_calls: list[tuple[str, float]] = []
+
+    def mock_handler(consumer_id, weight):
+        handler_calls.append((consumer_id, weight))
+
+    service.register_distribution_weight_handler("dev1", mock_handler)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(
+                f"{base}/ct002/dev1/consumer/consumer1/distribution_weight/set",
+                payload=b"1.5",
+            )
+
+        await _poll(lambda: len(handler_calls) >= 1)
+        assert handler_calls[0] == ("consumer1", 1.5)
+    finally:
+        await service.stop()
+
+
+def test_handle_consumer_field_command_dispatch() -> None:
+    """Per-field command parsing routes scalar payloads to the right handler.
+
+    Broker-free: exercises ``_handle_consumer_field_command`` directly.
+    """
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    calls: dict[str, object] = {}
+    service.register_active_handler(
+        "dev1", lambda cid, v: calls.__setitem__("active", v)
+    )
+    service.register_auto_target_handler(
+        "dev1", lambda cid, v: calls.__setitem__("auto", v)
+    )
+    service.register_manual_target_handler(
+        "dev1", lambda cid, v: calls.__setitem__("manual", v)
+    )
+    service.register_distribution_weight_handler(
+        "dev1", lambda cid, v: calls.__setitem__("weight", v)
+    )
+
+    service._handle_consumer_field_command("dev1", "c1", "active", "false")
+    service._handle_consumer_field_command("dev1", "c1", "auto_target", "true")
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "250")
+    service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "2.5")
+    assert calls == {"active": False, "auto": True, "manual": 250.0, "weight": 2.5}
+
+    # 0.0 is a valid weight (battery takes no share).
+    calls.clear()
+    service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "0")
+    assert calls == {"weight": 0.0}
+
+    # Out-of-range and unparseable values are dropped, not dispatched.
+    calls.clear()
+    service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "11")
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
+    service._handle_consumer_field_command("dev1", "c1", "active", "maybe")
+    # An empty (cleared) retained payload is ignored silently.
+    service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "")
+    assert calls == {}
+
+
+@needs_mosquitto
+async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1179,7 +1266,7 @@ async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_periodic_broadcast(mqtt_broker):
+async def test_marstek_periodic_broadcast(mqtt_broker) -> None:
     """When marstek_mqtt_interval > 0, responses are published periodically
     without requiring a poll request from the app."""
     port = mqtt_broker
@@ -1222,7 +1309,7 @@ async def test_marstek_periodic_broadcast(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker):
+async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker) -> None:
     """marstek_mqtt_interval=0 disables the periodic broadcast loop; only
     explicit poll requests trigger a response."""
     port = mqtt_broker

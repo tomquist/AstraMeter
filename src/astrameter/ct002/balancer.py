@@ -11,6 +11,18 @@ from astrameter.config.logger import logger
 
 from .protocol import parse_int
 
+
+def _report_weight(report: dict) -> float:
+    """Per-battery fair-share weight from a report dict (defaults to 1.0).
+
+    A missing key (or an explicit ``None``) means "neutral" and maps to 1.0;
+    an explicit ``0.0`` is preserved (the battery takes no share). The setter
+    keeps real weights in ``[0, 10]``.
+    """
+    weight = report.get("weight", 1.0)
+    return 1.0 if weight is None else float(weight)
+
+
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
@@ -610,7 +622,9 @@ class LoadBalancer:
             return self._split_by_phase(target, {candidate_id: reports[candidate_id]})
 
         backup_weights = {
-            cid: max(0.01, eff_part.get(cid, 1.0)) for cid in support_reports
+            cid: max(0.01, eff_part.get(cid, 1.0))
+            * _report_weight(reports.get(cid, {}))
+            for cid in support_reports
         }
         qualified_probe_actual = probe_actual if probe.proof_samples > 0 else 0
         desired = self._compute_desired_contribution(
@@ -953,10 +967,25 @@ class LoadBalancer:
         ):
             return self._steer_to_zero(consumer_id, reports)
 
-        total_effective = sum(eff_part.values())
+        # Fold the per-battery user weight into the effectiveness map so the
+        # fair-share split honours the configured ratio.  ``eff_part`` stays the
+        # pure health/saturation map (used for participation and probing); the
+        # weighted ``share_part`` only drives the proportional distribution.  At
+        # the neutral default (every weight 1.0) ``share_part == eff_part`` and
+        # the math is identical to the unweighted behaviour.
+        #
+        # The ``total_effective > 0`` guard also covers the degenerate case
+        # where every participant's share rounds to zero (charge-blind / faded
+        # / zero-weight): fall back to an even split rather than dividing by
+        # zero. Mirrors the C++ port (balancer.cpp ``compute_auto_target_``).
+        share_part = {
+            cid: eff_part[cid] * _report_weight(reports.get(cid, {}))
+            for cid in eff_part
+        }
+        total_effective = sum(share_part.values())
         fair_share = (
-            (grid_total / total_effective) * eff_part.get(consumer_id, 1.0)
-            if consumer_id and consumer_id in reports
+            (grid_total / total_effective) * share_part.get(consumer_id, 1.0)
+            if consumer_id and consumer_id in reports and total_effective > 0
             else grid_total / num_consumers
         )
 
@@ -1001,8 +1030,19 @@ class LoadBalancer:
         actual_total = sum(
             parse_int(reports.get(cid, {}).get("power", 0)) for cid in participating
         )
-        actual_avg = actual_total / len(participating)
-        error = actual_avg - actual_self
+        # Pull each battery toward its weight-proportional share of the pool's
+        # total output rather than the plain average, so the configured ratio is
+        # the steady state.  Participation is still decided by ``eff_part`` (the
+        # health map) above, so a healthy battery with a small weight is not
+        # dropped from the pool.  With neutral weights this reduces to the plain
+        # average (``actual_total / len(participating)``).
+        weights = {cid: _report_weight(reports.get(cid, {})) for cid in participating}
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            target_share = actual_total * weights.get(consumer_id, 0.0) / total_weight
+        else:
+            target_share = actual_total / len(participating)
+        error = target_share - actual_self
         err_abs = abs(error)
         if cfg.balance_deadband > 0 and err_abs < cfg.balance_deadband:
             return fair_share

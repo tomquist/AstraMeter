@@ -1,0 +1,65 @@
+name: Deploy config generator to GitHub Pages
+
+# Builds the TypeScript site (web/) and publishes it to the gh-pages branch,
+# which GitHub Pages serves at the repository's Pages URL.
+#
+#   push to main    -> published to the site ROOT (production)
+#                      https://<user>.github.io/<repo>/
+#   push to develop -> published under /develop/ (staging)
+#                      https://<user>.github.io/<repo>/develop/
+#
+# The GitHub ref the site links to is baked into the bundle at build time via
+# GH_REF (see web/ts/links.ts), so a main build links to @main, develop to
+# @develop, and PR previews to the PR's branch — no post-build rewriting.
+#
+# One-time setup: repository Settings → Pages → "Build and deployment" →
+# Source → "Deploy from a branch" → branch "gh-pages" / "/ (root)", and
+# Settings → Actions → General → Workflow permissions → "Read and write".
+#
+# keep_files: true so root / develop / pr-preview all coexist on gh-pages.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Shared with pr-preview.yml so every writer to the gh-pages branch (root,
+  # /develop/, and pr-preview/*) serialises — no concurrent, conflicting pushes.
+  group: gh-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install, type-check, test and build
+        working-directory: web
+        env:
+          GH_REF: ${{ github.ref_name }}
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Publish dist/ to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web/dist
+          publish_branch: gh-pages
+          # main -> root, develop -> /develop/
+          destination_dir: ${{ github.ref_name == 'develop' && 'develop' || '' }}
+          keep_files: true

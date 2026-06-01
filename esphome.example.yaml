@@ -1,0 +1,196 @@
+# AstraMeter CT002 emulator running directly on an ESP32 via ESPHome.
+#
+# Drop this file into an esphome/ directory, edit the wifi/api/board sections
+# to match your hardware, point the grid-power sensor at your meter, then
+# `esphome run esphome.example.yaml`.
+#
+# The component answers Marstek CT002 UDP polls on port 12345, runs the same
+# cross-phase filter pipeline + load balancer as the Python AstraMeter add-on,
+# and reports per-phase charge/discharge cross-talk for multi-battery setups.
+#
+# Optional features are commented out below with notes on when to enable them.
+# Uncomment the relevant blocks (and the top-level component they require)
+# together.
+
+esphome:
+  name: astrameter-ct002
+  friendly_name: AstraMeter CT002
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# The native API connection to Home Assistant. Required for the
+# `homeassistant` grid-power sensor below (the ESP subscribes to a HA entity
+# over this link).
+api:
+logger:
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source: github://tomquist/astrameter@2.1.0
+    components: [ct002]
+
+# Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
+# Discovery + Marstek-app MQTT responder). The sub-block talks to whatever
+# broker this block connects to — it brings no credentials of its own.
+# mqtt:
+#   broker: 192.168.1.10
+#   port: 1883
+
+# Uncomment to enable the `marstek_registration:` sub-block (Marstek cloud
+# device registration). It performs HTTPS calls to the Marstek API.
+# http_request:
+#   timeout: 20s
+
+# Grid-power source. This example pulls the reading from an existing Home
+# Assistant power sensor over the native API. Replace `entity_id` with your
+# own (any sensor that reports grid import/export in watts works), or swap
+# `platform: homeassistant` for modbus_controller / mqtt / template / etc.
+#
+# Per-phase offset / multiply / throttle go HERE, on the upstream sensor —
+# not inside `ct002:`. This matches the order Python uses (Transform/Throttle
+# upstream of the cross-phase Hampel filter).
+sensor:
+  - platform: homeassistant
+    id: grid_l1
+    name: Grid L1 Power
+    entity_id: sensor.grid_power_l1
+    filters:
+      # - offset: -20      # small negative offset → import safety buffer
+      # - multiply: 1.0
+      # - throttle: 1s
+
+  # Uncomment l2/l3 for three-phase setups (both required together, and set
+  # power_sensor_l2/l3 under ct002: below).
+  # - platform: homeassistant
+  #   id: grid_l2
+  #   name: Grid L2 Power
+  #   entity_id: sensor.grid_power_l2
+  # - platform: homeassistant
+  #   id: grid_l3
+  #   name: Grid L3 Power
+  #   entity_id: sensor.grid_power_l3
+
+ct002:
+  id: ct002_main                   # required (so you can reference it)
+  power_sensor_l1: grid_l1         # required: the grid-power source
+
+  # All keys below are optional; shown at their defaults.
+  # power_sensor_l2: grid_l2       # three-phase only (set together with l3)
+  # power_sensor_l3: grid_l3
+  # ct_type: HME-4                 # HME-4 emulates a CT002, HME-3 a CT003.
+  #                                # (The Python add-on has no ct_type option —
+  #                                #  it derives this from DEVICE_TYPE=ct002/
+  #                                #  ct003. Here it's the explicit selector.)
+  # ct_mac: ""                     # blank → mirror the MAC each battery polls
+  #                                # with. Set a 12-hex MAC to only answer one
+  #                                # battery, or leave blank and let
+  #                                # marstek_registration assign one.
+  # udp_port: 12345                # standard Marstek CT002 port
+  # wifi_rssi: -50                 # RSSI value reported back in CT002 replies
+  # active_control: true           # true → balancer steers batteries to zero;
+  #                                # false → forward raw grid readings as-is
+  # max_sensor_age: 30s            # treat the input as 0 if no sensor update
+  #                                # arrives within this window
+  # consumer_ttl: 120s             # evict a battery this long after it goes silent
+  # dedupe_window: 0s              # 0 = off; >0 drops duplicate polls from the
+  #                                # same battery within the window
+
+  # ── Optional tuning blocks ──────────────────────────────────────────
+  # Everything below is optional and shown prepopulated with values that
+  # reproduce the DEFAULT behaviour, so you can uncomment any block as-is
+  # without changing how the emulator behaves, then tweak from there.
+  # (The balancer + saturation tracker run with these same defaults even
+  # while the blocks are commented out — uncommenting them is a no-op
+  # until you change a value.)
+
+  # Cross-phase signal conditioning, applied to the combined L1/L2/L3
+  # vector after the per-sensor filters above. Each sub-block is off when
+  # absent; the values shown make each one a pass-through when present.
+  # filters:
+  #   hampel:                      # outlier rejection — only replaces
+  #     window: 7                  # samples deviating > max(min_threshold,
+  #     n_sigma: 3.0               # n_sigma·MAD), so a clean signal passes
+  #     min_threshold: 50          # through untouched
+  #   smoothing:
+  #     alpha: 1.0                 # 1.0 = no smoothing (pass-through);
+  #                                # lower toward ~0.3 to smooth
+  #     max_step: 0                # 0 = no per-step clamp; e.g. 200 to cap
+  #   deadband:
+  #     deadband: 0                # 0 = off; e.g. 10 zeros out |sum| < 10 W
+  #   # PID is an ALTERNATIVE controller — do NOT combine it with
+  #   # active_control/balancer (two controllers fight; the PID integral
+  #   # winds up and, in bias mode, can invert the sign sent to the
+  #   # battery). Use it only with active_control: false. Disabled here
+  #   # (kp/ki/kd = 0 → zero output → pass-through in bias mode).
+  #   pid:
+  #     kp: 0.0                    # >0 enables; 0.5 is a sane start
+  #     ki: 0.0
+  #     kd: 0.0
+  #     output_max: 800
+  #     mode: bias                 # bias or replace
+
+  # Multi-battery load balancer tuning. Runs by default with these values
+  # whenever active_control is true; omit/leave commented for a single
+  # battery. Shown at defaults — uncommenting changes nothing.
+  # balancer:
+  #   fair_distribution: true
+  #   balance_gain: 0.2
+  #   balance_deadband: 15
+  #   error_boost_threshold: 150
+  #   error_boost_max: 0.5
+  #   error_reduce_threshold: 20
+  #   max_correction_per_step: 80
+  #   max_target_step: 0           # 0 = no per-step target clamp
+  #   min_efficient_power: 0       # >0 enables efficiency rotation
+  #   probe_min_power: 80
+  #   efficiency_rotation_interval: 15min
+  #   efficiency_fade_alpha: 0.15
+  #   efficiency_saturation_threshold: 0.4
+
+  # Saturation tracker (detects a battery that can't follow its target and
+  # backs off). Runs by default with these values; shown at defaults.
+  # saturation:
+  #   enabled: true
+  #   alpha: 0.15
+  #   min_target: 20
+  #   decay_factor: 0.995
+  #   grace_seconds: 90s
+  #   stall_timeout_seconds: 60s
+
+  # ── Optional sub-block: mqtt_insights ────────────────────────────────
+  # Publishes per-consumer + device-level state to MQTT with full Home
+  # Assistant Device Discovery, and answers Marstek-app polls on the same
+  # broker so the emulator shows up in the app without hame-relay.
+  # Each battery also exposes config entities (Manual Target, Auto Target,
+  # Active, and a Distribution Weight that biases the load split, default 1.0)
+  # which persist across reboots via retained MQTT.
+  # Uncomment together with the top-level `mqtt:` block above.
+  # mqtt_insights:
+  #   base_topic: astrameter         # per-installation namespace
+  #   ha_discovery: true             # publish HA Device Discovery
+  #   ha_discovery_prefix: homeassistant
+  #   marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
+  #   marstek_mqtt_interval: 300s    # periodic broadcast cadence (0 = poll-only)
+
+  # ── Optional sub-block: marstek_registration ─────────────────────────
+  # Registers a "managed" CT002/CT003 with your Marstek cloud account on
+  # first boot; the resulting MAC is assigned to ct_mac (above) so the UDP
+  # and MQTT topics line up with the cloud-side record, and is persisted so
+  # later boots skip the cloud flow. Uncomment together with the top-level
+  # `http_request:` block above. Leave ct_mac blank when using this.
+  # marstek_registration:
+  #   base_url: https://eu.hamedata.com   # https://us.hamedata.com for US
+  #   mailbox: you@example.com
+  #   password: !secret marstek_password
+  #   device_type: ct002                  # or ct003
+  #   timezone: Europe/Berlin
+  #   retry_interval: 60s
+  #   force_reregister: false             # set true to redo the cloud flow

@@ -17,6 +17,10 @@ uv run pytest
 
 CI runs the same steps (see `.github/workflows/ci.yml`).
 
+## Python ↔ ESPHome parity (REQUIRED)
+
+`esphome/components/ct002/` is a C++ mirror of the Python CT002 stack. Any change to shared behavior must land on **both** sides in the same change. See `CONTRIBUTING.md` for the file mapping and what has no C++ counterpart. Verify with `uv run pytest tests/components/ct002/`.
+
 ## Changelog
 
 For user-facing work on a branch, keep **one bullet under `## Next`** that summarizes the **overall** outcome of that branch. **Add** it when you first document the change; on **later iterations** on the same branch, **edit that same bullet** if the scope or wording shifts—do **not** append extra bullets for each follow-up. Skip `CHANGELOG.md` entirely when nothing users would notice changes (refactors, tests-only, etc.).
@@ -24,6 +28,10 @@ For user-facing work on a branch, keep **one bullet under `## Next`** that summa
 Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. If the branch bullet already states the high-level theme, leave it unless the **user-visible** story changes.
 
 ## Adding a powermeter
+
+Powermeters are Python-only and have **no** ESPHome counterpart (the ESPHome
+component reads grid power from any native ESPHome sensor instead), so the
+parity rule above does not apply here.
 
 1. **Implementation** — Add `src/astrameter/powermeter/<module>.py` with a class subclassing `Powermeter`; implement `get_powermeter_watts()` (and `wait_for_message()` only if the base default is wrong for your source).
 2. **Exports** — Import and re-export the class from `src/astrameter/powermeter/__init__.py`.

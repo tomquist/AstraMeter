@@ -14,3 +14,7 @@ docs
 config.ini
 .DS_Store
 .env
+
+# web build tooling (not needed in the image)
+web/node_modules
+web/dist

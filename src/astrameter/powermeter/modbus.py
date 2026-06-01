@@ -1,8 +1,13 @@
-from pymodbus.client import AsyncModbusTcpClient
+from pymodbus.client import AsyncModbusTcpClient, AsyncModbusUdpClient
 from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadDecoder
 
 from .base import Powermeter
+
+TRANSPORTS = {
+    "TCP": AsyncModbusTcpClient,
+    "UDP": AsyncModbusUdpClient,
+}
 
 DATA_TYPE_DECODERS = {
     "FLOAT32": "decode_32bit_float",
@@ -36,7 +41,8 @@ class ModbusPowermeter(Powermeter):
         byte_order="BIG",
         word_order="BIG",
         register_type="HOLDING",
-    ):
+        transport="TCP",
+    ) -> None:
         self.host = host
         self.port = port
         self.unit_id = unit_id
@@ -48,21 +54,30 @@ class ModbusPowermeter(Powermeter):
 
         self._byte_order = BYTE_ORDERS.get(self.byte_order, Endian.BIG)
         self._word_order = BYTE_ORDERS.get(self.word_order, Endian.BIG)
-        self._decode_method = DATA_TYPE_DECODERS.get(self.data_type)
-        if not self._decode_method:
+        decode_method = DATA_TYPE_DECODERS.get(self.data_type)
+        if not decode_method:
             raise ValueError(f"Unsupported data type: {data_type}")
+        self._decode_method: str = decode_method
 
         self.register_type = register_type.upper()
-        self._read_method = REGISTER_TYPES.get(self.register_type)
-        if not self._read_method:
+        read_method = REGISTER_TYPES.get(self.register_type)
+        if not read_method:
             raise ValueError(f"Unsupported register type: {register_type}")
+        self._read_method: str = read_method
 
-        self.client: AsyncModbusTcpClient | None = None
+        self.transport = transport.upper()
+        if self.transport not in TRANSPORTS:
+            raise ValueError(f"Unsupported transport: {transport}")
+
+        self.client: AsyncModbusTcpClient | AsyncModbusUdpClient | None = None
 
     async def start(self) -> None:
         if self.client:
             return
-        self.client = AsyncModbusTcpClient(self.host, port=self.port)
+        client_cls = (
+            AsyncModbusUdpClient if self.transport == "UDP" else AsyncModbusTcpClient
+        )
+        self.client = client_cls(self.host, port=self.port)
         if not await self.client.connect():
             self.client = None
             raise ConnectionError(f"Failed to connect to {self.host}:{self.port}")

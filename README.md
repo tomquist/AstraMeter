@@ -149,6 +149,40 @@ image: ghcr.io/tomquist/astrameter:next
 
 All commands above work across Windows, macOS, and Linux. The only difference is how you open your terminal.
 
+### ESPHome External Component (run on an ESP32)
+
+AstraMeter also ships as an **ESPHome external component** that runs the CT002/CT003 emulator, balancer, and cross-phase filter pipeline directly on an ESP32 — no Python add-on, no Home Assistant required. Useful if you'd rather flash a dedicated board than run a server, and if your grid-power source is already addressable by ESPHome (Modbus, M-Bus, Tasmota, MQTT, Shelly, Envoy, etc.).
+
+Minimal YAML — point `power_sensor_l1` at any ESPHome sensor that reports grid power in watts:
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@2.1.0
+    components: [ct002]
+
+sensor:
+  - platform: homeassistant       # or modbus_controller / mqtt / template / …
+    id: grid_l1
+    entity_id: sensor.grid_power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+Everything else is optional. See **[`esphome.example.yaml`](esphome.example.yaml)** for the complete, annotated config — three-phase sensors, the cross-phase filter pipeline (Hampel / smoothing / deadband / PID), balancer and saturation tuning, and the two optional sub-blocks below — with every knob shown at its default. For the grid-power `sensor:` configuration per meter type (and which meters aren't supported on the ESP yet), see **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)**.
+
+Two optional sub-blocks nest under the same `ct002:` key:
+
+- **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device per battery + a parent CT002 device with manual-target / active / auto-target / distribution-weight controls and a force-rotation button) and answers Marstek-app polls on your MQTT broker, so the emulator shows up in the app without hame-relay. Requires an `mqtt:` block.
+- **`marstek_registration:`** — registers a managed CT002/CT003 with your Marstek cloud account on first boot (same flow as the Python `[MARSTEK]` section), persists the assigned MAC, and feeds it back into `ct002.ct_mac`. Requires an `http_request:` block. When combined with `mqtt_insights:`, the App-topic subscription picks up the MAC automatically — no reboot needed.
+
+**Status:** experimental — UDP emulator, balancer, filter pipeline, MQTT-insights, and Marstek cloud registration are all functional. Wider field testing welcome.
+
+**Requirements:** ESP32 with ≥4 MB flash (default for `esp32dev`, `esp32-s3-devkitc-1`, etc.). ESP8266 is not supported in v1 — RAM and flash budgets are too tight once HTTPS+TLS, MQTT, and the balancer are linked together. Pick a board with `flash_size: 4MB` or larger; for ESP-IDF builds you may need a custom partition table when you also add HTTPS+MQTT — there is no top-level `flash_size:` YAML key, set it via your `board:` choice and (for ESP-IDF) `esp32: framework: type: esp-idf` with appropriate `sdkconfig_options:` or a partition CSV.
+
+**One important divergence from the Python emulator:** per-phase transforms and throttling are *not* part of `ct002:` — they're delegated to ESPHome's standard `sensor: filters:` (`offset:`, `multiply:`, `throttle:`) on the upstream sensor. This matches the canonical order in Python (`Transform → Throttle → Hampel → Smoothed → Deadband → PID`). Put per-phase filters on the sensor itself, not after `ct002:` — they need to apply to the raw input, not the balancer's output.
+
 ## Additional Notes
 
 When the script is running, switch your Marstek battery to "Self-Adaptation" mode to enable the powermeter functionality.
@@ -157,7 +191,14 @@ For details on the CT002/CT003 UDP protocol used by Marstek storage systems, see
 
 ## Configuration
 
-Configuration is managed via `config.ini`. Each powermeter type has specific settings.
+> **New to AstraMeter?** The [**AstraMeter website**](web/) introduces the
+> project and includes a step-by-step **config generator** that asks a few
+> questions about your power meter and produces a ready-to-use `config.ini` or
+> ESPHome YAML, explaining each option along the way. You can save, share, and
+> reload your answers. (Once Pages is enabled it's hosted at the repository's
+> GitHub Pages URL; you can also run it locally from `web/`.)
+
+Configuration is managed via `config.ini`. Each powermeter type has specific settings — see the per-source reference in **[docs/powermeters.md](docs/powermeters.md)** (and **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)** for the ESPHome external component).
 
 ### General Configuration
 
@@ -219,7 +260,9 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 
 *Fair distribution — balancing load across multiple batteries:*
 - **FAIR_DISTRIBUTION** (default true) — Adjust each battery's target so they share the
-  load evenly. Only matters with two or more batteries.
+  load evenly. Only matters with two or more batteries. To split *unevenly* (e.g. give a
+  larger battery a bigger share), set a per-battery **Distribution Weight** from Home
+  Assistant — see [Per-battery controls](#per-battery-controls-home-assistant-entities).
 - **BALANCE_GAIN** (default 0.2) — How aggressively to correct imbalance between batteries.
   0.0 = no correction (equal split only); 0.3–0.5 = faster rebalancing but may overshoot.
 - **BALANCE_DEADBAND** (default 15 W) — Ignore imbalance smaller than this.
@@ -244,6 +287,15 @@ one may operate in this inefficient range, wasting energy as heat. The
 efficiency optimization detects this situation and concentrates the load on
 fewer batteries so each one stays above its efficient minimum, idling the
 rest. Batteries rotate periodically so wear is shared evenly.
+
+> **Not recommended for DC batteries.** Efficiency rotation relies on being
+> able to steer a deprioritized battery's output down to 0 W. DC-coupled
+> batteries such as the Marstek B2500 cannot be commanded to 0 W via the
+> CT002 protocol — they keep running at their minimum output power (e.g.
+> ~80 W) — so idling them does not work and the feature provides no benefit.
+> It is intended for AC batteries (e.g. the Marstek Venus) that can be
+> steered all the way to 0 W. For DC batteries, leave the efficiency settings
+> below disabled.
 
 When a timed rotation or forced swap promotes a new battery, the handoff now
 uses a **probe phase** instead of dropping the previous active battery to zero
@@ -416,418 +468,23 @@ PID_OUTPUT_MAX = 800
 PID_MODE = bias
 ```
 
-### Shelly
-
-#### Shelly 1PM
-```ini
-[SHELLY]
-TYPE = 1PM
-IP = 192.168.1.100
-USER = username
-PASS = password
-METER_INDEX = meter1
-```
-
-#### Shelly Plus 1PM
-```ini
-[SHELLY]
-TYPE = PLUS1PM
-IP = 192.168.1.100
-USER = username
-PASS = password
-METER_INDEX = meter1
-```
-
-#### Shelly EM
-```ini
-[SHELLY]
-TYPE = EM
-IP = 192.168.1.100
-USER = username
-PASS = password
-METER_INDEX = meter1
-```
-
-#### Shelly 3EM
-```ini
-[SHELLY]
-TYPE = 3EM
-IP = 192.168.1.100
-USER = username
-PASS = password
-METER_INDEX = meter1
-```
-
-#### Shelly 3EM Pro
-```ini
-[SHELLY]
-TYPE = 3EMPro
-IP = 192.168.1.100
-USER = username
-PASS = password
-METER_INDEX = meter1
-```
-
-### Tasmota
-
-```ini
-[TASMOTA]
-IP = 192.168.1.101
-USER = tasmota_user
-PASS = tasmota_pass
-JSON_STATUS = StatusSNS
-JSON_PAYLOAD_MQTT_PREFIX = SML
-JSON_POWER_MQTT_LABEL = Power
-JSON_POWER_INPUT_MQTT_LABEL = Power1
-JSON_POWER_OUTPUT_MQTT_LABEL = Power2
-JSON_POWER_CALCULATE = True
-```
-
-For 3-phase meters, use comma-separated labels:
-
-```ini
-[TASMOTA]
-IP = 192.168.1.101
-JSON_STATUS = StatusSNS
-JSON_PAYLOAD_MQTT_PREFIX = eBZ
-JSON_POWER_MQTT_LABEL = Power_L1,Power_L2,Power_L3
-```
-
-For 3-phase with `JSON_POWER_CALCULATE`, provide matching comma-separated
-input and output labels (counts must be equal):
-
-```ini
-[TASMOTA]
-IP = 192.168.1.101
-JSON_STATUS = StatusSNS
-JSON_PAYLOAD_MQTT_PREFIX = SML
-JSON_POWER_INPUT_MQTT_LABEL = Power_In_L1,Power_In_L2,Power_In_L3
-JSON_POWER_OUTPUT_MQTT_LABEL = Power_Out_L1,Power_Out_L2,Power_Out_L3
-JSON_POWER_CALCULATE = True
-```
-
-### Shrdzm
-
-```ini
-[SHRDZM]
-IP = 192.168.1.102
-USER = shrdzm_user
-PASS = shrdzm_pass
-```
-
-### Emlog
-
-```ini
-[EMLOG]
-IP = 192.168.1.103
-METER_INDEX = 0
-JSON_POWER_CALCULATE = True
-```
-
-### IoBroker
-
-```ini
-[IOBROKER]
-IP = 192.168.1.104
-PORT = 8087
-CURRENT_POWER_ALIAS = Alias.0.power
-POWER_CALCULATE = True
-POWER_INPUT_ALIAS = Alias.0.power_in
-POWER_OUTPUT_ALIAS = Alias.0.power_out
-```
-
-### HomeAssistant
-```ini
-[HOMEASSISTANT]
-IP = 192.168.1.105
-PORT = 8123
-# Use HTTPS - if empty False is Fallback
-HTTPS = ""|True|False
-ACCESSTOKEN = YOUR_ACCESS_TOKEN
-# The entity or entities (comma-separated for 3-phase) that provide current power
-CURRENT_POWER_ENTITY = ""|sensor.current_power|sensor.phase1,sensor.phase2,sensor.phase3
-# If False or Empty the power is not calculated - if empty False is Fallback
-POWER_CALCULATE = ""|True|False 
-# The entity ID or IDs (comma-separated for 3-phase) that provide power input
-POWER_INPUT_ALIAS = ""|sensor.power_input|sensor.power_in_1,sensor.power_in_2,sensor.power_in_3
-# The entity ID or IDs (comma-separated for 3-phase) that provide power output
-POWER_OUTPUT_ALIAS = ""|sensor.power_output|sensor.power_out_1,sensor.power_out_2,sensor.power_out_3
-# Is a Path Prefix needed?
-API_PATH_PREFIX = ""|/core
-# Per-powermeter throttling override (recommended: 2-3 seconds for HomeAssistant)
-THROTTLE_INTERVAL = 2
-```
-
-Example: Variant 1 with a single combined input & output sensor
-```ini
-[HOMEASSISTANT]
-IP = 192.168.1.105
-PORT = 8123
-HTTPS = True
-ACCESSTOKEN = YOUR_ACCESS_TOKEN
-CURRENT_POWER_ENTITY = sensor.current_power 
-```
-
-Example: Variant 2 with separate input & output sensors
-```ini
-[HOMEASSISTANT]
-IP = 192.168.1.105
-PORT = 8123
-HTTPS = True
-ACCESSTOKEN = YOUR_ACCESS_TOKEN
-POWER_CALCULATE = True
-POWER_INPUT_ALIAS = sensor.power_input
-POWER_OUTPUT_ALIAS = sensor.power_output
-```
-
-Example: Variant 3 with three-phase power monitoring
-```ini
-[HOMEASSISTANT]
-IP = 192.168.1.105
-PORT = 8123
-HTTPS = True
-ACCESSTOKEN = YOUR_ACCESS_TOKEN
-CURRENT_POWER_ENTITY = sensor.phase1,sensor.phase2,sensor.phase3
-```
-
-Example: Variant 4 with three-phase power calculation
-```ini
-[HOMEASSISTANT]
-IP = 192.168.1.105
-PORT = 8123
-HTTPS = True
-ACCESSTOKEN = YOUR_ACCESS_TOKEN
-POWER_CALCULATE = True
-POWER_INPUT_ALIAS = sensor.power_in_1,sensor.power_in_2,sensor.power_in_3
-POWER_OUTPUT_ALIAS = sensor.power_out_1,sensor.power_out_2,sensor.power_out_3
-# Per-powermeter throttling override (recommended: 2-3 seconds for HomeAssistant)
-# THROTTLE_INTERVAL = 2
-```
-
-### VZLogger
-
-```ini
-[VZLOGGER]
-IP = 192.168.1.106
-PORT = 8080
-UUID = your-uuid
-```
-
-For 3-phase meters, provide comma-separated UUIDs (one per phase); phases are
-fetched in parallel:
-
-```ini
-[VZLOGGER]
-IP = 192.168.1.106
-PORT = 8080
-UUID = uuid-l1, uuid-l2, uuid-l3
-```
-
-### ESPHome
-
-```ini
-[ESPHOME]
-IP = 192.168.1.107
-PORT = 6052
-DOMAIN = your_domain
-ID = your_id
-```
-
-### AMIS Reader
-
-```ini
-[AMIS_READER]
-IP = 192.168.1.108
-```
-
-### Modbus TCP
-
-```ini
-[MODBUS]
-HOST = 192.168.1.100
-PORT = 502
-UNIT_ID = 1
-ADDRESS = 0
-COUNT = 1
-DATA_TYPE = UINT16
-BYTE_ORDER = BIG
-WORD_ORDER = BIG
-REGISTER_TYPE = HOLDING  # or INPUT
-```
-
-### MQTT
-
-```ini
-[MQTT]
-BROKER = broker.example.com
-PORT = 1883
-TOPIC = home/powermeter
-JSON_PATH = $.path.to.value (Optional for JSON payloads)
-USERNAME = mqtt_user (Optional)
-PASSWORD = mqtt_pass (Optional)
-# Optional: connect over TLS (mqtts://) — default false
-# TLS = false
-# Per-powermeter throttling override
-# THROTTLE_INTERVAL = 2
-```
-
-Instead of `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS`, you can provide a single `URI` of the form `mqtt[s]://[user[:pass]@]host[:port]` (use `mqtts://` for TLS; credentials and port are optional). When `URI` is set, the individual `BROKER`/`PORT`/`USERNAME`/`PASSWORD`/`TLS` fields are ignored.
-
-```ini
-[MQTT]
-URI = mqtts://user:pass@broker.example.com:8883
-TOPIC = home/powermeter
-```
-
-The `JSON_PATH` option is used to extract the power value from a JSON payload. The path must be a [valid JSONPath expression](https://goessner.net/articles/JsonPath/).
-If the payload is a simple integer value, you can omit this option.
-
-Both `JSON_PATH` and `JSON_PATHS` are parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage a payload value before it's converted to a float — for instance `$.state.`split( , 0, -1)`` or `$.state.`sub(/[^0-9.\-]+$/, )`` to strip a unit suffix like `"331.74 W"`. See the [JSON HTTP](#json-http) section below for more examples.
-
-#### Multi-phase MQTT
-
-For three-phase setups, there are two options:
-
-**Option 1: Multiple topics** — one topic per phase, each publishing a plain numeric value (or JSON with the same path):
-
-```ini
-[MQTT]
-BROKER = broker.example.com
-TOPICS = home/power/l1, home/power/l2, home/power/l3
-```
-
-**Option 2: Single topic with multiple JSON paths** — one topic publishing a JSON message containing all phases:
-
-```ini
-[MQTT]
-BROKER = broker.example.com
-TOPIC = home/powermeter
-JSON_PATHS = $.phases[0].power, $.phases[1].power, $.phases[2].power
-```
-
-`TOPICS` takes precedence over `TOPIC`, and `JSON_PATHS` takes precedence over `JSON_PATH`. You can combine `TOPICS` with `JSON_PATH` (same path applied to each topic) or with `JSON_PATHS` (one path per topic, counts must match).
-
-### JSON HTTP
-
-```ini
-[JSON_HTTP]
-URL = http://example.com/api
-# Comma separated JSON paths - single path for 1-phase or three for 3-phase
-JSON_PATHS = $.power
-USERNAME = user (Optional)
-PASSWORD = pass (Optional)
-# Additional headers separated by ';' using 'Key: Value'
-HEADERS = Authorization: Bearer token
-```
-
-`JSON_PATHS` is parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage the value before it's converted to a float. For example, an openHAB `Number:Power` item returns `"331.74 W"` — strip the unit with either of:
-
-```ini
-JSON_PATHS = $.state.`split( , 0, -1)`
-JSON_PATHS = $.state.`sub(/[^0-9.\-]+$/, )`
-```
-
-### TQ Energy Manager
-
-```ini
-[TQ_EM]
-IP = 192.168.1.100
-#PASSWORD = pass
-#TIMEOUT = 5.0 (Optional)
-```
-
-### HomeWizard
-
-Reads a [HomeWizard](https://www.homewizard.com/) P1 dongle (or compatible device) over the local **WebSocket** API (`wss://`). Obtain a token once via `POST /api/user` while confirming on the device; see the [HomeWizard API docs](https://api-documentation.homewizard.com/docs/v2/).
-
-```ini
-[HOMEWIZARD]
-IP = 192.168.1.110
-TOKEN = YOUR_32_CHAR_HEX_TOKEN
-SERIAL = your_device_serial
-# Optional: disable TLS certificate verification on a trusted LAN if verification fails (default True)
-# VERIFY_SSL = True
-# THROTTLE_INTERVAL = 0
-```
-
-### Enphase Envoy (IQ Gateway)
-
-Reads grid power from an [Enphase IQ Gateway / Envoy](https://enphase.com/installers/microinverters/iq-gateway) over the local HTTPS API (`/production.json?details=1`). The reading comes from the `net-consumption` measurement (positive = grid import, negative = export). Per-phase readings are reported automatically when the gateway exposes them; otherwise the aggregate single-phase value is used. Requires consumption CTs installed on the Envoy.
-
-```ini
-[ENVOY]
-HOST = 192.168.1.120
-# Option A: pre-obtained long-lived JWT (recommended)
-TOKEN = eyJ...
-# Option B: let AstraMeter fetch and refresh tokens via the Enphase Enlighten cloud
-# USERNAME = you@example.com
-# PASSWORD = your-enphase-password
-# SERIAL = 123456789012
-# Envoy ships a self-signed certificate; verification is disabled by default.
-# VERIFY_SSL = False
-```
-
-**Token acquisition.** Generate a long-lived (~1 year) static token at <https://entrez.enphaseenergy.com/>. Alternatively, configure `USERNAME`/`PASSWORD`/`SERIAL` and AstraMeter will fetch a token on first use and refresh it automatically when the Envoy returns 401.
-
-**TLS.** `VERIFY_SSL` defaults to `False` because Enphase does not publish a CA bundle for the IQ Gateway's self-signed certificate. This option **only affects the local Envoy connection** — Enphase Enlighten cloud requests (login and token endpoints) always verify TLS using the system trust store, regardless of this setting.
-
-**MFA.** The auto-fetch flow does not support Enlighten accounts with multi-factor authentication enabled. Those users must supply a static `TOKEN`.
-
-**CT direction.** If your readings have the wrong sign (export shows as import or vice versa), one or more CTs are mounted backwards. Flip them in software with the global `POWER_MULTIPLIER = -1` (or per-phase, e.g. `POWER_MULTIPLIER = 1, -1, 1`).
-
-### SMA Energy Meter
-
-Reads an [SMA Energy Meter](https://www.sma.de/) (EM 1.0/2.0) or Sunny Home Manager via the **Speedwire** multicast protocol (UDP). The listener joins the default multicast group and reports per-phase active power (L1, L2, L3). Use `SERIAL_NUMBER = 0` to auto-detect the first meter seen on the network, or set the device serial to pin a specific unit. Like other UDP-based features, this requires the host to receive multicast traffic (use Docker host networking or equivalent).
-
-```ini
-[SMA_ENERGY_METER]
-MULTICAST_GROUP = 239.12.255.254
-PORT = 9522
-SERIAL_NUMBER = 0
-# INTERFACE = 192.168.1.10
-# THROTTLE_INTERVAL = 0
-```
-
-### Modbus
-
-```ini
-[MODBUS]
-HOST =
-PORT =
-UNIT_ID =
-ADDRESS =
-COUNT =
-DATA_TYPE = UINT16
-BYTE_ORDER = BIG
-WORD_ORDER = BIG
-REGISTER_TYPE = HOLDING
-```
-
-### Script
-
-You can also use a custom script to get the power values. The script should output at most 3 integer values, separated by a line break.
-```ini
-[SCRIPT]
-COMMAND = /path/to/your/script.sh
-```
-
-### SML
-
-```ini
-[SML]
-SERIAL = /dev/ttyUSB0
-# Optional: override default OBIS hex registers (12 hex digits each; defaults match common German eHZ meters)
-#OBIS_POWER_CURRENT = 0100100700ff
-#OBIS_POWER_L1 = 0100240700ff
-#OBIS_POWER_L2 = 0100380700ff
-#OBIS_POWER_L3 = 01004c0700ff
-```
-
-Read from a powermeter that is connected via USB and that transmits SML (Smart Message Language) data via an IR head. **`SERIAL` is required**: local device path to the serial interface (e.g. `/dev/ttyUSB0` on Linux).
-
-**Multi-phase:** If the meter exposes per-phase instantaneous active power for L1–L3 (`Summenwirkleistung` / default OBIS above), those three values are used automatically. Otherwise the aggregate instantaneous power register (`aktuelle Wirkleistung` / `OBIS_POWER_CURRENT`) is used as a single reading. When both are present in the same SML list, per-phase values take precedence.
-
-**OBIS overrides:** Only needed if your meter uses different register addresses; values must be exactly 12 hexadecimal characters (lowercase or uppercase).
+### Powermeter sources
+
+The per-source configuration for every supported meter lives in dedicated
+reference docs — find your meter and copy the matching section:
+
+- **[docs/powermeters.md](docs/powermeters.md)** — `config.ini` sections for the
+  Python add-on / Docker / direct install (Shelly, Tasmota, Shrdzm, Emlog,
+  IoBroker, HomeAssistant, VZLogger, ESPHome, AMIS Reader, Modbus, MQTT, JSON
+  HTTP, TQ Energy Manager, HomeWizard, Enphase Envoy, SMA Energy Meter, Script,
+  SML).
+- **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)** — the equivalent
+  grid-power `sensor:` configuration when running the
+  [ESPHome external component](#esphome-external-component-run-on-an-esp32) on an
+  ESP32, including which meters aren't supported on the ESP yet.
+
+The value transformation, PID controller, and per-powermeter options
+(throttling, smoothing, deadband, Hampel) documented above apply to every source.
 
 ### Multiple Powermeters
 
@@ -894,6 +551,27 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
 | `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
+
+#### Per-battery controls (Home Assistant entities)
+
+When HA discovery is on, each battery gets a few **config** entities you can set
+live from Home Assistant:
+
+- **Manual Target** / **Auto Target** — override a battery's power, or hand it
+  back to automatic control.
+- **Active** — pause/resume a battery (paused batteries are steered to 0 W).
+- **Distribution Weight** — its relative share of the load when the balancer
+  splits demand across batteries. `1.0` is neutral; raise it on a larger
+  battery (or lower it on a smaller one) to bias the split. For example, a
+  5.12 kWh and a 2.08 kWh battery that you'd like to run roughly **60:40** can
+  be set to weights `1.5` and `1.0`. The split is ratio-based, so only the
+  proportion between batteries matters; `0` parks a battery at 0 W while
+  leaving it in the pool. Tune it while watching the batteries — the change
+  takes effect on the next control cycle.
+
+Each of these controls publishes its set-command **retained**, so Home
+Assistant restores your values across an AstraMeter restart without any extra
+configuration.
 
 #### Optional: Marstek mobile app (live MQTT)
 
@@ -984,6 +662,14 @@ A:
 - `CURRENT_POWER_ENTITY`: For a single bidirectional sensor (positive/negative values)
   - `POWER_INPUT_ALIAS`/`POWER_OUTPUT_ALIAS`: Entity IDs for separate import/export sensors (with `POWER_CALCULATE = True`)
 
+### How should I feed import and export power — one sensor or two? (Home Assistant App)
+
+A: In the Home Assistant App, if you have a single signed sensor (positive for import, negative for export), put it in `POWER_INPUT_ALIAS` (or `CURRENT_POWER_ENTITY`) only and leave `POWER_OUTPUT_ALIAS` empty. Separate import/export sensors can update at different moments and get read out of sync, causing drift and oscillation; a single signed value avoids that.
+
+### Should I use Shelly emulation or CT002/CT003 for multiple batteries?
+
+A: Prefer CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`) for multi-battery setups. With Shelly emulation each battery reacts independently and they tend to fight each other (one charging while another discharges). The CT emulation coordinates a shared target across the fleet, giving more even and stable distribution.
+
 ## Device and Firmware Specific
 
 ### What firmware do I need for my Marstek device?
@@ -1024,6 +710,18 @@ A: Common causes:
 ### How can I test without a storage device?
 
 A: You can only verify the initial configuration. Full testing requires a Marstek device in "self-adaptation" mode to request data.
+
+### My output power oscillates or yo-yos between zero and full.
+
+A: This usually means the battery polls the emulator faster than your power source delivers fresh readings, so it keeps over-correcting. Make sure the underlying source pushes new values frequently, then: if the battery polls more often than your source updates, set `THROTTLE_INTERVAL` (try `1`) to limit how often AstraMeter re-reads the source, and `DEDUPE_TIME_WINDOW` (try `0.9`) to drop repeated polls within that window. Then smooth the control loop: raise `DEADBAND` (start around `10`–`20` W) so small fluctuations around zero don't trigger constant corrections, and for finer control tune `SMOOTH_TARGET_ALPHA` (start around `0.2`–`0.4`) and `MAX_SMOOTH_STEP` (start around `40`–`60` W). Tune systematically: change one parameter at a time and observe how the system reacts before adjusting the next.
+
+### My second battery never kicks in, or my batteries won't settle near zero.
+
+A: This is governed by `MIN_EFFICIENT_POWER`, which decides how many batteries are engaged for a given demand. It's intended for AC batteries that can hold a precise setpoint; pure DC battery pools can't be steered to exactly zero the same way. If a second unit won't engage, lower `MIN_EFFICIENT_POWER`; for DC-only setups, set it to `0`.
+
+### The Marstek app shows the meter offline or doesn't display my real meter values.
+
+A: This is expected for purely local operation — the emulated meter typically populates only one phase, and the app won't show your raw readings because each battery is only handed its share of the target (so the totals steer toward zero). It does not mean the integration is failing. If you do want live readings in the Marstek app, configure the `[MARSTEK]` section together with [hame-relay](https://github.com/tomquist/hame-relay) (≥ 1.3.5) so AstraMeter can answer the app's polls via MQTT.
 
 ## Advanced
 

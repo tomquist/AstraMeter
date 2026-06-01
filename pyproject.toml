@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astrameter"
-version = "2.0.2"
+version = "2.1.0"
 description = "Power-meter monitoring for Marstek battery inverters (formerly b2500-meter)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -48,6 +48,9 @@ python_files = ["test_*.py", "*_test.py"]
 addopts = "-ra -q"
 asyncio_mode = "auto"
 timeout = 90
+markers = [
+    "esphome_e2e: cross-backend e2e suite that also drives the compiled ESPHome host binary (run via the ct002-host-e2e CI job; esphome params skip without the CLI)",
+]
 
 [tool.ruff]
 target-version = "py310"

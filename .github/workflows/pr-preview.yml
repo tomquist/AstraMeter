@@ -1,0 +1,77 @@
+name: Deploy PR preview
+
+# Builds the TypeScript site and deploys a live, per-PR preview so reviewers can
+# test the actual site straight from the pull request. Published to gh-pages
+# under pr-preview/pr-<number>/ with a sticky comment linking to it; torn down
+# when the PR closes. GitHub links in the build point at the PR's branch
+# (GH_REF=head_ref). Only runs for same-repo branches (forks can't write
+# gh-pages). Requires the same one-time Pages setup as pages.yml.
+#
+# Two jobs: `build` has no concurrency, so previews for different PRs build in
+# parallel; only `deploy` (the gh-pages writer) joins the shared `gh-pages`
+# concurrency group so the actual pushes serialise with each other and pages.yml.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    branches: [main, develop]
+    paths:
+      - "web/**"
+      - ".github/workflows/pr-preview.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    # Build the preview site. Skipped on close (nothing to build). No
+    # concurrency: builds for different PRs run in parallel.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install, type-check, test and build
+        working-directory: web
+        env:
+          GH_REF: ${{ github.head_ref }}
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Upload built site
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-preview-dist
+          path: web/dist
+
+  deploy:
+    # Publish (open/sync) or tear down (close) the gh-pages preview. Only this
+    # job serialises on the shared gh-pages group so it never races other
+    # gh-pages writers; never cancels an in-flight deploy.
+    needs: build
+    if: ${{ always() && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action == 'closed' || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download built site
+        if: github.event.action != 'closed'
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-preview-dist
+          path: web/dist
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: ./web/dist
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview

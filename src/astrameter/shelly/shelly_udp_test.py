@@ -139,7 +139,7 @@ async def _send_req(port, request_id, timeout=2.0):
 
 
 class _ClientProtocol(asyncio.DatagramProtocol):
-    def __init__(self):
+    def __init__(self) -> None:
         self.received: asyncio.Future = asyncio.get_running_loop().create_future()
 
     def datagram_received(self, data, addr):

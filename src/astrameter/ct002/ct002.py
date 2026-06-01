@@ -70,6 +70,12 @@ class Consumer:
     # Report data (updated each UDP request)
     phase: str = "A"
     power: int = 0
+    # Net AC power we expect this consumer to be at after applying the
+    # last instruction (its reported output plus the per-phase delta we
+    # delivered).  Negative = charging, positive = discharging.  Used to
+    # populate cross-talk *_dchrg / *_chrg fields in responses to other
+    # batteries — see _collect_reports_by_phase.
+    last_instructed_power: float = 0.0
     timestamp: float = 0.0
     device_type: str = ""
     poll_interval: float | None = None
@@ -77,6 +83,10 @@ class Consumer:
     manual_target: float = 0.0
     manual_enabled: bool = False
     active: bool = True
+    # Relative weight for fair-share distribution across batteries.  1.0 is
+    # neutral; a battery with weight 2.0 takes roughly twice the share of a
+    # weight-1.0 battery.  Tuned live via the MQTT "Distribution Weight" entity.
+    distribution_weight: float = 1.0
     # Last UDP source address seen for this consumer, if the protocol provides it.
     last_ip: str = ""
 
@@ -143,7 +153,7 @@ class CT002:
         device_id="",
         clock=None,
         reset_fn=None,
-    ):
+    ) -> None:
         self.udp_port = udp_port
         self.ct_mac = ct_mac
         self.ct_type = ct_type
@@ -232,6 +242,19 @@ class CT002:
             msg = f"manual target must be finite, got {target!r}"
             raise ValueError(msg)
         self._get_consumer(consumer_id).manual_target = value
+
+    def set_consumer_distribution_weight(self, consumer_id: str, weight: float) -> None:
+        """Set the relative fair-share weight for a battery.
+
+        Must be finite and within ``0 <= weight <= 10``.  1.0 is neutral; 0.0
+        means the battery takes no share (parked at 0 W while staying in the
+        pool).
+        """
+        value = float(weight)
+        if not math.isfinite(value) or not (0.0 <= value <= 10.0):
+            msg = f"distribution weight must be in [0, 10], got {weight!r}"
+            raise ValueError(msg)
+        self._get_consumer(consumer_id).distribution_weight = value
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
@@ -349,7 +372,7 @@ class CT002:
     def _compute_smooth_target(self, values, consumer_id=None):
         """Active control: smooth the raw grid reading and delegate
         target allocation to the load balancer."""
-        if not self.active_control or not values or len(values) != 3:
+        if not self.active_control or not values:
             return values
 
         total = sum(parse_int(v, 0) for v in values)
@@ -358,7 +381,12 @@ class CT002:
         mode = self._consumer_mode(consumer_id)
 
         reports = {
-            cid: {"phase": c.phase, "power": c.power, "device_type": c.device_type}
+            cid: {
+                "phase": c.phase,
+                "power": c.power,
+                "device_type": c.device_type,
+                "weight": c.distribution_weight,
+            }
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }
@@ -390,7 +418,14 @@ class CT002:
             phase = consumer.phase.upper()
             if phase not in by_phase:
                 phase = "A"
-            power = consumer.power
+            # Use the net AC power we *instructed* this consumer to be at
+            # (its reported output plus the delta in the last response),
+            # not what it physically reported.  A battery passing PV
+            # through to AC at 100% SoC reports positive power even
+            # though we told it to charge; reporting the instructed net
+            # power keeps the cross-talk dchrg signal free of those
+            # involuntary outputs (issue #376).
+            power = round(consumer.last_instructed_power)
             if power == 0:
                 continue
             by_phase[phase]["active"] = True
@@ -653,6 +688,25 @@ class CT002:
             values = self._compute_smooth_target(values, consumer_id)
         values = ([*list(values), 0, 0, 0])[:3]
 
+        # Record the *net* power we expect this battery to be at after
+        # applying the instruction (its reported output plus the delta we
+        # deliver — the battery's firmware computes
+        # ``new_target = current_power + grid_reading_field``).  The
+        # cross-talk *_chrg_power / *_dchrg_power fields convey net power
+        # per phase so other batteries can see who is actively
+        # charging/discharging cells; storing only the delta would lose
+        # the steady-state signal and flip signs on small corrections.
+        # Skip during inspection mode: there is no instruction to record
+        # (we send raw meter readings as information, not a target; the
+        # battery is running its phase-discovery routine, not our
+        # integral controller), and we don't even know which phase to
+        # credit since ``consumer.phase`` defaults to "A" until the
+        # battery declares its real phase.  See issue #376.
+        if not in_inspection_mode:
+            consumer = self._get_consumer(consumer_id)
+            phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
+            consumer.last_instructed_power = float(reported_power + values[phase_idx])
+
         try:
             response_fields = self._build_response_fields(fields, values)
             response = build_payload(response_fields)
@@ -710,6 +764,9 @@ class CT002:
                     "smooth_target": self._last_smooth_target,
                     "manual_target": consumer.manual_target if consumer else None,
                     "auto_target": not consumer.manual_enabled if consumer else True,
+                    "distribution_weight": (
+                        consumer.distribution_weight if consumer else 1.0
+                    ),
                     "active_control": self.active_control,
                     "consumer_count": sum(
                         1 for c in self._consumers.values() if c.timestamp > 0

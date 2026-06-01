@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -54,6 +55,7 @@ class PowermeterSimulator:
         self._app.router.add_post(
             "/batteries/{mac}/max_power", self._handle_set_battery_max_power
         )
+        self._app.router.add_post("/batteries/{mac}/dc", self._handle_set_battery_dc)
         self._app.router.add_post("/auto", self._handle_set_auto)
         self._app.router.add_post("/shutdown", self._handle_shutdown)
 
@@ -156,6 +158,39 @@ class PowermeterSimulator:
             battery.max_charge_power = charge
         if discharge is not None:
             battery.max_discharge_power = discharge
+        return web.json_response(self._build_status())
+
+    async def _handle_set_battery_dc(self, request: web.Request) -> web.Response:
+        mac = request.match_info["mac"].upper()
+        battery = self._find_battery(mac)
+        if battery is None:
+            return web.json_response({"error": "battery not found"}, status=404)
+        if battery.max_dc_input <= 0:
+            return web.json_response(
+                {"error": "battery has no DC input capability"}, status=400
+            )
+        body = await self._parse_json(request)
+        if isinstance(body, web.Response):
+            return body
+        raw = body.get("watts")
+        if raw is None:
+            return web.json_response({"error": "missing 'watts'"}, status=400)
+        try:
+            watts = float(raw)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "invalid 'watts'"}, status=400)
+        if not math.isfinite(watts):
+            return web.json_response({"error": "invalid 'watts'"}, status=400)
+        if watts < 0 or watts > battery.max_dc_input:
+            return web.json_response(
+                {
+                    "error": (
+                        f"watts must be within [0, {battery.max_dc_input}], got {watts}"
+                    )
+                },
+                status=400,
+            )
+        battery.dc_input_power = watts
         return web.json_response(self._build_status())
 
     async def _handle_set_auto(self, request: web.Request) -> web.Response:

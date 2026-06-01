@@ -101,6 +101,7 @@ class MqttInsightsService:
         self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
+        self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
@@ -161,6 +162,11 @@ class MqttInsightsService:
     ) -> None:
         self._auto_target_handlers[device_id] = handler
 
+    def register_distribution_weight_handler(
+        self, device_id: str, handler: Callable[[str, float], None]
+    ) -> None:
+        self._distribution_weight_handlers[device_id] = handler
+
     def register_rotation_handler(
         self, device_id: str, handler: Callable[[], None]
     ) -> None:
@@ -171,6 +177,7 @@ class MqttInsightsService:
         self._active_handlers.pop(device_id, None)
         self._manual_target_handlers.pop(device_id, None)
         self._auto_target_handlers.pop(device_id, None)
+        self._distribution_weight_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
 
     # ── Marstek MQTT responder ────────────────────────────────────────
@@ -287,8 +294,11 @@ class MqttInsightsService:
                         retain=True,
                     )
 
-                    # Subscribe to command topics
-                    await client.subscribe(f"{cfg.base_topic}/ct002/+/consumer/+/set")
+                    # Subscribe to command topics.  Each per-consumer setting
+                    # has its own retained command sub-topic
+                    # ({base}/ct002/<dev>/consumer/<cid>/<field>/set); the
+                    # device-level button keeps the plain {base}/ct002/<dev>/set.
+                    await client.subscribe(f"{cfg.base_topic}/ct002/+/consumer/+/+/set")
                     await client.subscribe(f"{cfg.base_topic}/ct002/+/set")
 
                     # Subscribe to Marstek App topics for every registered
@@ -412,6 +422,7 @@ class MqttInsightsService:
             "last_seen": data.get("last_seen", ""),
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),
+            "distribution_weight": data.get("distribution_weight", 1.0),
         }
 
         await client.publish(
@@ -582,118 +593,167 @@ class MqttInsightsService:
             raw = message.payload
             try:
                 payload_str = raw.decode() if isinstance(raw, bytes) else str(raw)
-                cmd = json.loads(payload_str)
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except UnicodeDecodeError:
                 logger.warning("Invalid command payload on %s", topic_str)
                 continue
 
-            if not isinstance(cmd, dict):
-                logger.warning("Command payload is not a JSON object on %s", topic_str)
-                continue
-
             # Distinguish device-level vs consumer-level topics.
+            #   consumer: {base}/ct002/<dev>/consumer/<cid>/<field>/set (scalar)
+            #   device:   {base}/ct002/<dev>/set                        (JSON)
             parts = middle.split("/consumer/", 1)
             if len(parts) == 2:
-                device_id, consumer_id = parts
-                self._handle_consumer_command(device_id, consumer_id, cmd)
-            else:
-                # Device-level: {base}/ct002/{device_id}/set
-                device_id = middle
-                self._handle_device_command(device_id, cmd)
-
-    def _handle_consumer_command(
-        self, device_id: str, consumer_id: str, cmd: dict
-    ) -> None:
-        if "active" in cmd:
-            raw = cmd["active"]
-            if raw is True or raw is False:
-                handler = self._active_handlers.get(device_id)
-                if handler:
-                    try:
-                        handler(consumer_id, raw)
-                    except Exception:
-                        logger.exception(
-                            "Active handler error for %s/%s", device_id, consumer_id
-                        )
-                else:
-                    logger.debug(
-                        "No active handler for device %s (consumer %s)",
-                        device_id,
-                        consumer_id,
-                    )
-            else:
-                logger.warning("Invalid active value for %s/%s", device_id, consumer_id)
-
-        if "manual_target" in cmd:
-            raw_target = cmd["manual_target"]
-            if isinstance(raw_target, bool):
-                logger.warning(
-                    "Invalid manual_target value for %s/%s", device_id, consumer_id
+                device_id, rest = parts
+                consumer_id, sep, field = rest.rpartition("/")
+                if not sep:
+                    logger.warning("Malformed consumer command topic %s", topic_str)
+                    continue
+                self._handle_consumer_field_command(
+                    device_id, consumer_id, field, payload_str
                 )
             else:
+                # Device-level: {base}/ct002/{device_id}/set — JSON body.
                 try:
-                    target = float(raw_target)
-                except (TypeError, ValueError):
+                    cmd = json.loads(payload_str)
+                except json.JSONDecodeError:
+                    logger.warning("Invalid command payload on %s", topic_str)
+                    continue
+                if not isinstance(cmd, dict):
                     logger.warning(
-                        "Invalid manual_target value for %s/%s",
-                        device_id,
-                        consumer_id,
+                        "Command payload is not a JSON object on %s", topic_str
                     )
-                else:
-                    if not math.isfinite(target):
-                        logger.warning(
-                            "Non-finite manual_target for %s/%s",
-                            device_id,
-                            consumer_id,
-                        )
-                    elif not -10000 <= target <= 10000:
-                        logger.warning(
-                            "Out-of-range manual_target for %s/%s: %s",
-                            device_id,
-                            consumer_id,
-                            target,
-                        )
-                    else:
-                        handler = self._manual_target_handlers.get(device_id)
-                        if handler:
-                            try:
-                                handler(consumer_id, target)
-                            except Exception:
-                                logger.exception(
-                                    "Manual target handler error for %s/%s",
-                                    device_id,
-                                    consumer_id,
-                                )
-                        else:
-                            logger.debug(
-                                "No manual_target handler for device %s (consumer %s)",
-                                device_id,
-                                consumer_id,
-                            )
+                    continue
+                self._handle_device_command(middle, cmd)
 
-        if "auto_target" in cmd:
-            raw = cmd["auto_target"]
-            if raw is True or raw is False:
-                handler = self._auto_target_handlers.get(device_id)
-                if handler:
-                    try:
-                        handler(consumer_id, raw)
-                    except Exception:
-                        logger.exception(
-                            "Auto target handler error for %s/%s",
-                            device_id,
-                            consumer_id,
-                        )
-                else:
-                    logger.debug(
-                        "No auto_target handler for device %s (consumer %s)",
-                        device_id,
-                        consumer_id,
-                    )
-            else:
+    @staticmethod
+    def _parse_bool(payload: str) -> bool | None:
+        token = payload.strip().lower()
+        if token in ("true", "on", "1"):
+            return True
+        if token in ("false", "off", "0"):
+            return False
+        return None
+
+    def _dispatch(
+        self,
+        handlers: dict,
+        label: str,
+        device_id: str,
+        consumer_id: str,
+        *args: Any,
+    ) -> None:
+        handler = handlers.get(device_id)
+        if not handler:
+            logger.debug(
+                "No %s handler for device %s (consumer %s)",
+                label,
+                device_id,
+                consumer_id,
+            )
+            return
+        try:
+            handler(consumer_id, *args)
+        except Exception:
+            logger.exception(
+                "%s handler error for %s/%s", label, device_id, consumer_id
+            )
+
+    def _handle_consumer_field_command(
+        self, device_id: str, consumer_id: str, field: str, payload: str
+    ) -> None:
+        # An empty payload is how a retained command gets cleared — ignore it
+        # rather than logging a spurious "invalid value" warning.
+        if not payload.strip():
+            return
+
+        if field == "active":
+            value = self._parse_bool(payload)
+            if value is None:
                 logger.warning(
-                    "Invalid auto_target value for %s/%s", device_id, consumer_id
+                    "Invalid active value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
                 )
+                return
+            self._dispatch(
+                self._active_handlers, "active", device_id, consumer_id, value
+            )
+        elif field == "auto_target":
+            value = self._parse_bool(payload)
+            if value is None:
+                logger.warning(
+                    "Invalid auto_target value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            self._dispatch(
+                self._auto_target_handlers,
+                "auto_target",
+                device_id,
+                consumer_id,
+                value,
+            )
+        elif field == "manual_target":
+            try:
+                target = float(payload)
+            except ValueError:
+                logger.warning(
+                    "Invalid manual_target value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            if not math.isfinite(target) or not -10000 <= target <= 10000:
+                logger.warning(
+                    "Out-of-range manual_target for %s/%s: %s",
+                    device_id,
+                    consumer_id,
+                    target,
+                )
+                return
+            self._dispatch(
+                self._manual_target_handlers,
+                "manual_target",
+                device_id,
+                consumer_id,
+                target,
+            )
+        elif field == "distribution_weight":
+            try:
+                weight = float(payload)
+            except ValueError:
+                logger.warning(
+                    "Invalid distribution_weight value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            if not math.isfinite(weight) or not 0.0 <= weight <= 10.0:
+                logger.warning(
+                    "Out-of-range distribution_weight for %s/%s: %s",
+                    device_id,
+                    consumer_id,
+                    weight,
+                )
+                return
+            self._dispatch(
+                self._distribution_weight_handlers,
+                "distribution_weight",
+                device_id,
+                consumer_id,
+                weight,
+            )
+        else:
+            logger.debug(
+                "Unknown consumer command field %r for %s/%s",
+                field,
+                device_id,
+                consumer_id,
+            )
 
     def _handle_device_command(self, device_id: str, cmd: dict) -> None:
         if cmd.get("force_rotation") is True:

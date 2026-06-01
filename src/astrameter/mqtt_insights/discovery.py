@@ -140,6 +140,13 @@ def build_ct002_consumer_discovery(
         "entity_category": "diagnostic",
     }
 
+    # Per-consumer controllable entities each use their own command topic with
+    # ``retain: true``.  Home Assistant then publishes the set-command retained,
+    # so on an AstraMeter restart the broker redelivers it as soon as we
+    # re-subscribe and the value restores itself — no local state store needed.
+    # A dedicated topic per setting is required because a broker keeps only the
+    # last retained message per topic.
+
     # Manual target number
     components["manual_target"] = {
         "platform": "number",
@@ -152,8 +159,8 @@ def build_ct002_consumer_discovery(
         "mode": "box",
         "state_topic": state_topic,
         "value_template": "{{ value_json.manual_target | default(0) }}",
-        "command_topic": f"{state_topic}/set",
-        "command_template": '{"manual_target": {{ value }}}',
+        "command_topic": f"{state_topic}/manual_target/set",
+        "retain": True,
         "entity_category": "config",
     }
 
@@ -163,12 +170,13 @@ def build_ct002_consumer_discovery(
         "unique_id": f"{uid_prefix}_auto_target",
         "name": "Auto Target",
         "state_topic": state_topic,
-        "command_topic": f"{state_topic}/set",
+        "command_topic": f"{state_topic}/auto_target/set",
         "value_template": "{{ value_json.auto_target }}",
-        "payload_on": '{"auto_target": true}',
-        "payload_off": '{"auto_target": false}',
+        "payload_on": "true",
+        "payload_off": "false",
         "state_on": "True",
         "state_off": "False",
+        "retain": True,
         "entity_category": "config",
     }
 
@@ -178,13 +186,31 @@ def build_ct002_consumer_discovery(
         "unique_id": f"{uid_prefix}_active",
         "name": "Active",
         "state_topic": state_topic,
-        "command_topic": f"{state_topic}/set",
+        "command_topic": f"{state_topic}/active/set",
         "value_template": "{{ value_json.active }}",
-        "payload_on": '{"active": true}',
-        "payload_off": '{"active": false}',
+        "payload_on": "true",
+        "payload_off": "false",
         "state_on": "True",
         "state_off": "False",
-        "optimistic": True,
+        "retain": True,
+    }
+
+    # Distribution weight number — relative fair-share weight across batteries.
+    # 1.0 is neutral; raise it on a larger battery (or lower it on a smaller
+    # one) to bias the split, e.g. 1.5 vs 1.0 for a ~60:40 distribution.
+    components["distribution_weight"] = {
+        "platform": "number",
+        "unique_id": f"{uid_prefix}_distribution_weight",
+        "name": "Distribution Weight",
+        "min": 0,
+        "max": 10,
+        "step": 0.1,
+        "mode": "slider",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
+        "command_topic": f"{state_topic}/distribution_weight/set",
+        "retain": True,
+        "entity_category": "config",
     }
 
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")

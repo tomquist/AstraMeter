@@ -1,0 +1,32 @@
+esphome:
+  name: ct002-registration-host-test
+
+host:
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+http_request:
+  timeout: 20s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  ct_type: HME-4
+  udp_port: 12345
+  marstek_registration:
+    base_url: https://eu.hamedata.com
+    mailbox: test@example.com
+    password: "test-password"

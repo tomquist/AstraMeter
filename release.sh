@@ -16,6 +16,19 @@ print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Files carrying a copy-paste `github://tomquist/astrameter@<ref>` external_components
+# snippet that must track the release (tag at release time, "develop" in between).
+COMPONENT_REF_FILES=(README.md esphome.example.yaml docs/esphome-powermeters.md)
+
+# Point the ESPHome external_components ref in the docs/examples above at the
+# given git ref (a tag at release time, "develop" between releases).
+set_component_ref() {
+  local ref="$1"
+  sed -i.bak -E "s#(github://tomquist/astrameter@)[^[:space:]]+#\1${ref}#g" \
+    "${COMPONENT_REF_FILES[@]}"
+  rm -f "${COMPONENT_REF_FILES[@]/%/.bak}"
+}
+
 if [ -z "${1:-}" ]; then
   print_error "Usage: $0 <version>"
   print_info "Example: $0 1.2.0"
@@ -28,6 +41,11 @@ RELEASE_BRANCH="release/v${VERSION}"
 
 if ! command -v yq >/dev/null 2>&1; then
   print_error "yq is required. Install: https://github.com/mikefarah/yq"
+  exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  print_error "uv is required (to refresh uv.lock). Install: https://docs.astral.sh/uv/"
   exit 1
 fi
 
@@ -115,18 +133,25 @@ print_info "Setting version in pyproject.toml"
 sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
 rm -f pyproject.toml.bak
 
+print_info "Refreshing uv.lock for $VERSION"
+uv lock
+
 print_info "Setting ha_addon/config.yaml version"
 yq eval --inplace ".version = \"$VERSION\"" ha_addon/config.yaml
+
+print_info "Pinning ESPHome external_components ref to $VERSION"
+set_component_ref "$VERSION"
 
 print_info "Renaming ## Next to ## $VERSION in CHANGELOG.md"
 LINE=$(grep -n '^## Next$' CHANGELOG.md | head -1 | cut -d: -f1)
 sed -i.bak "${LINE}s/^## Next$/## $VERSION/" CHANGELOG.md
 rm -f CHANGELOG.md.bak
 
-git add pyproject.toml ha_addon/config.yaml CHANGELOG.md
+git add pyproject.toml uv.lock ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}" CHANGELOG.md
 git commit -m "Release v${VERSION}
 
-- Set version in pyproject.toml and ha_addon/config.yaml
+- Set version in pyproject.toml, uv.lock and ha_addon/config.yaml
+- Pin ESPHome external_components ref to v${VERSION}
 - Finalize CHANGELOG for v${VERSION}"
 
 print_success "Release commit created on $RELEASE_BRANCH"
@@ -169,9 +194,12 @@ fi
 print_info "Setting ha_addon/config.yaml version to next on develop"
 yq eval --inplace '.version = "next"' ha_addon/config.yaml
 
+print_info "Resetting ESPHome external_components ref to develop"
+set_component_ref "develop"
+
 needs_commit=false
-if ! git diff --quiet ha_addon/config.yaml; then
-  git add ha_addon/config.yaml
+if ! git diff --quiet ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}"; then
+  git add ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}"
   needs_commit=true
 fi
 
