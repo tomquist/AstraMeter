@@ -59,3 +59,27 @@ configuration:
   deadband:
     name: Deadband (W)
     description: "Optional. Readings with absolute value below this threshold are reported as 0 W to stop battery micro-cycling near zero demand (e.g. 5). Leave empty or 0 to disable."
+  hampel_window:
+    name: Hampel Window
+    description: "Optional. Rejects sudden outlier spikes (e.g. WiFi/MQTT glitches) by comparing each reading to a rolling median. This sets the window size; try 5-7. Leave empty or 0 to disable."
+  hampel_n_sigma:
+    name: Hampel Sensitivity (sigma)
+    description: "Optional. How far from the median a reading must be to count as an outlier. Lower = more aggressive filtering. Default 3.0. Only used when Hampel Window is set."
+  hampel_min_threshold:
+    name: Hampel Minimum Threshold (W)
+    description: "Optional. Smallest spike (in watts) that may be rejected, so tiny fluctuations on a steady signal are never filtered. Try 50. Leave empty or 0 for no floor. Only used when Hampel Window is set."
+  pid_kp:
+    name: PID Proportional Gain (Kp)
+    description: "Optional. Enables a PID controller that steers grid power toward zero. Start at 0.5 (stable between 0 and 1). Leave empty or 0 to disable PID."
+  pid_ki:
+    name: PID Integral Gain (Ki)
+    description: "Optional. Integral gain for the PID controller. Usually leave empty (0) to avoid wind-up. Only used when PID Proportional Gain is set."
+  pid_kd:
+    name: PID Derivative Gain (Kd)
+    description: "Optional. Derivative gain for the PID controller. Usually leave empty (0) - it tends to be noisy on real meters. Only used when PID Proportional Gain is set."
+  pid_output_max:
+    name: PID Output Limit (W)
+    description: "Optional. Caps the PID adjustment to plus/minus this many watts. Default 800. Only used when PID Proportional Gain is set."
+  pid_mode:
+    name: PID Mode
+    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."

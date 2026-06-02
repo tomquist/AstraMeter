@@ -17,7 +17,7 @@ export interface Meter {
 }
 
 export interface State {
-  target: "python" | "esphome";
+  target: "python" | "esphome" | "homeassistant";
   general: {
     deviceTypes: string[];
     deviceIds: string;
@@ -119,7 +119,7 @@ export function migrate(s: any): State {
   return {
     ...d,
     ...s,
-    target: s.target === "esphome" ? "esphome" : "python",
+    target: s.target === "esphome" || s.target === "homeassistant" ? s.target : "python",
     general: ((): State["general"] => {
       const sg = s.general && typeof s.general === "object" ? s.general : {};
       const dg = d.general;

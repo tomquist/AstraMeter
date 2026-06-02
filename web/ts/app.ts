@@ -184,8 +184,16 @@ function card(n: number | null, title: string, subtitle: string | null, body: El
   ]);
 }
 
+// The Home Assistant add-on only reads grid power from a Home Assistant sensor
+// and runs a single meter, so collapse to one homeassistant meter when that
+// target is chosen (keeping the existing one if it already matches).
+function coerceHaMeter(): void {
+  const first = state.meters[0];
+  state.meters = first && first.type === "homeassistant" ? [first] : [newMeter("homeassistant")];
+}
+
 function targetCard(): HTMLElement {
-  function choice(value: "python" | "esphome", title: string, desc: string): HTMLElement {
+  function choice(value: State["target"], title: string, desc: string): HTMLElement {
     const active = state.target === value;
     return el(
       "button",
@@ -194,15 +202,17 @@ function targetCard(): HTMLElement {
         type: "button",
         onclick: () => {
           state.target = value;
+          if (value === "homeassistant") coerceHaMeter();
           rerenderAll();
         },
       },
       [el("strong", { text: title }), el("span", { text: desc })],
     );
   }
-  return card(1, "How will you run AstraMeter?", "Pick where the emulator runs. Not sure? Choose the Home Assistant / Docker option — it's the most common.", [
+  return card(1, "How will you run AstraMeter?", "Pick where the emulator runs. Not sure? Choose the Home Assistant add-on option — it's the most common.", [
     el("div", { class: "choice-row" }, [
-      choice("python", "Home Assistant add-on, Docker, or a PC", "Generates a config.ini file. AstraMeter runs as software and talks to your power meter over the network."),
+      choice("homeassistant", "Home Assistant add-on (UI options)", "Generates the add-on Configuration options (YAML) you paste into the add-on's Configuration tab. Reads grid power from a Home Assistant sensor."),
+      choice("python", "config.ini (Docker, a PC, or advanced add-on)", "Generates a config.ini file. AstraMeter runs as software and talks to your power meter over the network."),
       choice("esphome", "On an ESP32 chip (ESPHome)", "Generates an ESPHome YAML file. The emulator runs on a tiny ESP32 board that reads a grid-power sensor."),
     ]),
   ]);
@@ -301,6 +311,16 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
       ? esphomeBadge(pm)
       : null;
 
+  // The HA add-on target is locked to a single Home Assistant sensor, so show a
+  // static label instead of the power-meter type picker.
+  const typeField =
+    state.target === "homeassistant"
+      ? el("div", { class: "field grow" }, [
+          el("label", { class: "field-label", text: "Power source" }),
+          el("p", { class: "blurb", text: "Home Assistant sensor — the add-on reads grid power from an HA entity." }),
+        ])
+      : el("div", { class: "field grow" }, [el("label", { class: "field-label", text: "Power meter type" }), sourceSelect]);
+
   const phaseToggle = canPhase
     ? el("div", { class: "field" }, [
         el("label", { class: "field-label", text: "How many phases?" }),
@@ -337,7 +357,7 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
 
   return el("div", { class: "meter" }, [
     el("div", { class: "meter-head" }, [
-      el("div", { class: "field grow" }, [el("label", { class: "field-label", text: "Power meter type" }), sourceSelect]),
+      typeField,
       badge,
     ]),
     el("p", { class: "blurb", text: pm.blurb }),
@@ -377,13 +397,19 @@ function meterCard(): HTMLElement {
   const intro =
     state.target === "esphome"
       ? "On an ESP32 the emulator reads one grid-power sensor. Pick the source below — the badge shows how well each works on ESP32."
-      : "Tell us where AstraMeter should read your real grid power. Add more than one only for advanced multi-network setups.";
-  return card(3, "Your power meter", intro, [...meters, addBtn]);
+      : state.target === "homeassistant"
+        ? "The add-on reads your grid power from one Home Assistant sensor. Enter the entity below."
+        : "Tell us where AstraMeter should read your real grid power. Add more than one only for advanced multi-network setups.";
+  const customConfigNote =
+    state.target === "homeassistant"
+      ? el("p", { class: "note", html: "The add-on supports a single Home Assistant power source. For other meter types, multiple meters, or options the add-on UI doesn't expose, switch to the <strong>config.ini</strong> target above, save the file to <code>/addon_configs/a0ef98c5_b2500_meter/</code>, and set the add-on's <em>Custom Config</em> option to its filename. See the <a href='" + ghDoc("README.md#home-assistant-app-installation") + "' target='_blank' rel='noopener'>custom configuration docs ↗</a>." })
+      : null;
+  return card(3, "Your power meter", intro, [...meters, addBtn, customConfigNote]);
 }
 
 function ctCard(): HTMLElement | null {
-  const showPython = state.target === "python" && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
-  const show = state.target === "esphome" || showPython;
+  const showFlat = (state.target === "python" || state.target === "homeassistant") && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
+  const show = state.target === "esphome" || showFlat;
   if (!show) return null;
   const f = state.ct.fields;
   const group = (title: string, fields: Field[], openByDefault = false): HTMLElement =>
@@ -448,6 +474,12 @@ function esphomeStepsCard(): HTMLElement | null {
 }
 
 // ── preview + actions ─────────────────────────────────────────────────────────
+function outputFilename(): string {
+  if (state.target === "esphome") return "astrameter.yaml";
+  if (state.target === "homeassistant") return "astrameter-options.yaml";
+  return "config.ini";
+}
+
 function refreshPreview(): void {
   const pre = document.getElementById("preview-code");
   if (!pre) return;
@@ -459,12 +491,12 @@ function refreshPreview(): void {
   }
   pre.textContent = text;
   const fn = document.getElementById("preview-filename");
-  if (fn) fn.textContent = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
+  if (fn) fn.textContent = outputFilename();
   saveState();
 }
 
 function previewPanel(): HTMLElement {
-  const filename = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
+  const filename = outputFilename();
   return el("aside", { class: "preview", id: "preview" }, [
     el("div", { class: "preview-head" }, [
       el("span", { text: "Live preview — " }),
@@ -499,8 +531,7 @@ function copyConfig(): void {
 function downloadConfig(): void {
   const text = safeGenerate();
   if (text == null) return;
-  const name = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
-  downloadText(name, text);
+  downloadText(outputFilename(), text);
 }
 
 function downloadText(filename: string, text: string): void {

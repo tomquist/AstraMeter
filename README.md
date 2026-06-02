@@ -65,7 +65,10 @@ The AstraMeter project can be installed and run in several ways depending on you
      - `shellyproem50`: Shelly Pro EM50 emulator
      
      **Tip:** Use `ct002`/`ct003` for multiple devices; use a Shelly type (e.g. `shellypro3em` or `_old`/`_new`) otherwise.
+   - Optional signal-conditioning filters are also available as Configuration fields (all optional, off by default): power offset/multiplier, smoothing (EMA), deadband, the Hampel outlier filter (see [General Configuration](#general-configuration)), and the [PID Controller](#pid-controller). Leave them empty to keep them disabled.
    - Click "Save" to apply the configuration
+
+   Prefer a guided setup? The [config generator](https://tomquist.github.io/astrameter/generator.html) can produce a ready-to-paste Home Assistant add-on options block (including the filters above) — pick the "Home Assistant add-on" target.
 
    B) Using a Custom Configuration File for Advanced Configuration:
    - Create a `config.ini` file based on the examples in the [Configuration](#configuration) section

@@ -1,6 +1,6 @@
 // Lightweight assertions for the config generators. Run with:
 //   node web/js/generate.test.mjs
-import { generateConfigIni, generateEsphome } from "./generate.js";
+import { generateConfigIni, generateEsphome, generateHomeAssistant } from "./generate.js";
 
 let failures = 0;
 function ok(cond, msg) {
@@ -223,6 +223,74 @@ const eyEnvoy = generateEsphome({
 });
 has(eyEnvoy, "no ESPHome component yet", "esp/envoy: warning emitted");
 has(eyEnvoy, "TODO: publish your grid power", "esp/envoy: placeholder sensor");
+
+// ── Home Assistant add-on options: full filter set ───────────────────────────
+const haOpts = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["ct002"], throttleInterval: "2", waitForNextMessage: "false" },
+  meters: [
+    {
+      type: "homeassistant",
+      phases: 1,
+      fields: { CURRENT_POWER_ENTITY: "sensor.grid_power" },
+      tuning: {
+        POWER_OFFSET: "-20",
+        SMOOTH_TARGET_ALPHA: "0.3",
+        DEADBAND: "5",
+        HAMPEL_WINDOW: "5",
+        HAMPEL_N_SIGMA: "3.0",
+        HAMPEL_MIN_THRESHOLD: "50",
+        PID_KP: "0.5",
+        PID_OUTPUT_MAX: "800",
+        PID_MODE: "bias",
+      },
+    },
+  ],
+  ct: { fields: { CT_MAC: "abc123" } },
+});
+has(haOpts, "power_input_alias: \"sensor.grid_power\"", "ha-opts: power input alias");
+has(haOpts, "device_types: \"ct002\"", "ha-opts: device types");
+has(haOpts, "throttle_interval: 2", "ha-opts: throttle interval");
+has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");
+has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
+has(haOpts, "power_offset: -20", "ha-opts: power offset");
+has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
+has(haOpts, "deadband: 5", "ha-opts: deadband");
+has(haOpts, "hampel_window: 5", "ha-opts: hampel window");
+has(haOpts, "hampel_n_sigma: 3.0", "ha-opts: hampel sigma");
+has(haOpts, "hampel_min_threshold: 50", "ha-opts: hampel min threshold");
+has(haOpts, "pid_kp: 0.5", "ha-opts: pid kp");
+has(haOpts, "pid_output_max: 800", "ha-opts: pid output max");
+has(haOpts, "pid_mode: \"bias\"", "ha-opts: pid mode");
+has(haOpts, "Custom Config", "ha-opts: mentions custom config fallback");
+
+// ── Home Assistant add-on options: empty filters omitted ─────────────────────
+const haMin = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(haMin, "hampel_window", "ha-opts: omits unset hampel");
+lacks(haMin, "pid_kp", "ha-opts: omits unset pid");
+lacks(haMin, "deadband", "ha-opts: omits unset deadband");
+
+// ── Home Assistant add-on options: calculate from in/out ─────────────────────
+const haCalc = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [
+    {
+      type: "homeassistant",
+      phases: 1,
+      fields: { POWER_CALCULATE: "True", POWER_INPUT_ALIAS: "sensor.in", POWER_OUTPUT_ALIAS: "sensor.out" },
+      tuning: {},
+    },
+  ],
+  ct: { fields: {} },
+});
+has(haCalc, "power_input_alias: \"sensor.in\"", "ha-opts: calc input alias");
+has(haCalc, "power_output_alias: \"sensor.out\"", "ha-opts: calc output alias");
 
 console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));
 process.exit(failures ? 1 : 0);
