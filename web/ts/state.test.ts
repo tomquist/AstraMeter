@@ -97,6 +97,14 @@ ok(old.esphome && old.esphome.board, "migrate: backfills missing esphome default
 ok(old.ct && old.ct.fields, "migrate: backfills missing ct.fields");
 ok(old.meters[0].phases === 1 && old.meters[0].tuning, "migrate: backfills missing meter keys");
 
+// HA target restores to exactly one Home Assistant meter, dropping extras and
+// coercing a non-HA first meter (matches the UI's coerceHaMeter contract).
+const haRestore = migrate({ target: "homeassistant", meters: [{ type: "shelly", fields: { IP: "1.1.1.1" } }, { type: "mqtt", fields: {} }] });
+ok(haRestore.meters.length === 1, "migrate(ha): collapses to a single meter");
+ok(haRestore.meters[0].type === "homeassistant", "migrate(ha): coerces the meter to homeassistant");
+const haKeep = migrate({ target: "homeassistant", meters: [{ type: "homeassistant", fields: { CURRENT_POWER_ENTITY: "sensor.p" } }] });
+ok(haKeep.meters.length === 1 && haKeep.meters[0].fields.CURRENT_POWER_ENTITY === "sensor.p", "migrate(ha): keeps an existing HA meter and its fields");
+
 if (failures) {
   console.error(`\n${failures} FAILED`);
   process.exit(1);

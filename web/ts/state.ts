@@ -118,11 +118,20 @@ export function cleanMeter(m: any): Meter {
 export function migrate(s: any): State {
   const d = defaultState();
   s = s && typeof s === "object" ? s : {};
-  const meters = Array.isArray(s.meters) && s.meters.length ? s.meters : d.meters;
+  const target = s.target === "esphome" || s.target === "homeassistant" ? s.target : "python";
+  const rawMeters = Array.isArray(s.meters) && s.meters.length ? s.meters : d.meters;
+  let meters = rawMeters.map(cleanMeter);
+  // The Home Assistant target is locked to a single Home Assistant meter (see the
+  // UI's coerceHaMeter). Enforce that on restore too so generateHomeAssistant()
+  // always reads a correct first meter, regardless of what was saved/shared.
+  if (target === "homeassistant") {
+    const first = meters[0];
+    meters = [first && first.type === "homeassistant" ? first : cleanMeter(newMeter("homeassistant"))];
+  }
   return {
     ...d,
     ...s,
-    target: s.target === "esphome" || s.target === "homeassistant" ? s.target : "python",
+    target,
     general: ((): State["general"] => {
       const sg = s.general && typeof s.general === "object" ? s.general : {};
       const dg = d.general;
@@ -141,6 +150,6 @@ export function migrate(s: any): State {
     ct: { fields: asObject(s.ct && s.ct.fields) },
     marstek: { enabled: !!(s.marstek && s.marstek.enabled), fields: asObject(s.marstek && s.marstek.fields) },
     mqttInsights: { enabled: !!(s.mqttInsights && s.mqttInsights.enabled), fields: asObject(s.mqttInsights && s.mqttInsights.fields) },
-    meters: meters.map(cleanMeter),
+    meters,
   };
 }

@@ -264,7 +264,7 @@ has(haOpts, "device_types: \"ct002\"", "ha-opts: device types");
 has(haOpts, "throttle_interval: 2", "ha-opts: throttle interval");
 has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");
 has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
-has(haOpts, "power_offset: -20", "ha-opts: power offset");
+has(haOpts, 'power_offset: "-20"', "ha-opts: power offset (quoted str)");
 has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
 has(haOpts, "deadband: 5", "ha-opts: deadband");
 has(haOpts, "hampel_window: 5", "ha-opts: hampel window");
@@ -302,6 +302,26 @@ const haCalc = generateHomeAssistant({
 });
 has(haCalc, "power_input_alias: \"sensor.in\"", "ha-opts: calc input alias");
 has(haCalc, "power_output_alias: \"sensor.out\"", "ha-opts: calc output alias");
+
+// ── Home Assistant add-on options: all-digit MAC stays a quoted string ───────
+const haMac = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: { CT_MAC: "001122334455" } },
+});
+has(haMac, 'ct_mac: "001122334455"', "ha-opts: all-digit ct_mac is quoted (keeps leading zeros)");
+
+// ── Home Assistant add-on options: mqtt_uri TLS + credential encoding ────────
+const haUri = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "broker.local", PORT: "1883", USERNAME: "a@b", PASSWORD: "p:w/d", TLS: "false" } },
+});
+has(haUri, "mqtt://a%40b:p%3Aw%2Fd@broker.local:1883", "ha-opts: mqtt_uri encodes creds and TLS string 'false' stays mqtt");
+lacks(haUri, "mqtts://", "ha-opts: string 'false' TLS is not treated as enabled");
 
 console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));
 process.exit(failures ? 1 : 0);

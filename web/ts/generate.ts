@@ -565,20 +565,42 @@ export function generateEsphome(state: State): string {
 // the add-on's Configuration → "Edit in YAML". Anything the UI can't express
 // (other powermeter sources, multiple meters) needs a custom config.ini instead.
 
-// Render a YAML scalar: numbers and booleans bare, everything else quoted so
-// comma lists, MACs, entity ids and passwords survive parsing intact.
-function yamlScalar(value: unknown): string {
+// Add-on options that are string-typed in the schema (entity ids, MACs, comma
+// lists, credentials, URIs). These must always be quoted so an all-digit value
+// like a MAC ("001122334455") keeps its leading zeros and isn't read as a
+// number, and so float-ish transform values aren't coerced for a `str?` field.
+const QUOTED_OPTION_KEYS = new Set([
+  "power_input_alias",
+  "power_output_alias",
+  "device_types",
+  "ct_mac",
+  "power_offset",
+  "power_multiplier",
+  "pid_mode",
+  "marstek_mailbox",
+  "marstek_password",
+  "mqtt_uri",
+]);
+
+function quoteYaml(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+// Render a YAML scalar. String-typed option keys are always quoted; for other
+// keys, bare booleans and numbers pass through and everything else is quoted.
+function yamlScalar(value: unknown, key?: string): string {
   const s = String(value).trim();
+  if (key && QUOTED_OPTION_KEYS.has(key)) return quoteYaml(s);
   if (s === "true" || s === "false") return s;
   if (/^-?\d+(\.\d+)?$/.test(s)) return s;
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return quoteYaml(s);
 }
 
 export function generateHomeAssistant(state: State): string {
   const opts: string[] = [];
   const add = (key: string, value: unknown): void => {
     if (isBlank(value)) return;
-    opts.push(`${key}: ${yamlScalar(value)}`);
+    opts.push(`${key}: ${yamlScalar(value, key)}`);
   };
 
   const g = state.general || {};
@@ -632,9 +654,14 @@ export function generateHomeAssistant(state: State): string {
   if (state.mqttInsights && state.mqttInsights.enabled) {
     const mi = state.mqttInsights.fields || {};
     if (!isBlank(mi.BROKER)) {
-      const scheme = mi.TLS ? "mqtts" : "mqtt";
-      const user = !isBlank(mi.USERNAME) ? String(mi.USERNAME).trim() : "";
-      const pass = !isBlank(mi.PASSWORD) ? String(mi.PASSWORD).trim() : "";
+      // TLS is a boolean from the UI, but restored state may carry a string;
+      // treat only an explicit true / "true" / "1" as on.
+      const tlsOn = mi.TLS === true || mi.TLS === "true" || mi.TLS === "1";
+      const scheme = tlsOn ? "mqtts" : "mqtt";
+      // Percent-encode credentials so special characters (@, :, /, …) don't
+      // break the URI and survive parse_mqtt_uri's unquoting.
+      const user = !isBlank(mi.USERNAME) ? encodeURIComponent(String(mi.USERNAME).trim()) : "";
+      const pass = !isBlank(mi.PASSWORD) ? encodeURIComponent(String(mi.PASSWORD).trim()) : "";
       const cred = user ? `${user}${pass ? ":" + pass : ""}@` : "";
       const port = !isBlank(mi.PORT) ? `:${String(mi.PORT).trim()}` : "";
       add("mqtt_uri", `${scheme}://${cred}${String(mi.BROKER).trim()}${port}`);
