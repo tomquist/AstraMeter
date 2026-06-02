@@ -49,7 +49,7 @@ export function defaultState(): State {
   return {
     target: "python",
     general: {
-      deviceTypes: ["shellypro3em"],
+      deviceTypes: ["ct002"],
       deviceIds: "",
       skipPowermeterTest: false,
       webConfigEnabled: false,
