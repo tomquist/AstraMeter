@@ -184,8 +184,38 @@ function card(n: number | null, title: string, subtitle: string | null, body: El
   ]);
 }
 
+// Fields of the `homeassistant` meter that the add-on does NOT configure for
+// you (the host/port/token/API-path are set automatically by the add-on). Only
+// these grid-power entity fields are surfaced for the Home Assistant target.
+const HA_ADDON_METER_FIELDS = new Set([
+  "CURRENT_POWER_ENTITY",
+  "POWER_CALCULATE",
+  "POWER_INPUT_ALIAS",
+  "POWER_OUTPUT_ALIAS",
+]);
+
+// CT / Marstek fields the add-on actually accepts as options. Everything else
+// (active control, balancer, saturation, Marstek base URL / timezone, …) is set
+// automatically or only reachable via a custom config.ini, so it's hidden for
+// the Home Assistant target.
+const HA_ADDON_CT_FIELDS = new Set(["CT_MAC", "MIN_EFFICIENT_POWER", "EFFICIENCY_ROTATION_INTERVAL"]);
+
+function hasCtType(types: string[]): boolean {
+  return types.includes("ct002") || types.includes("ct003");
+}
+const HA_ADDON_MARSTEK_FIELDS = new Set(["MAILBOX", "PASSWORD"]);
+const HA_ADDON_INSIGHTS_FIELDS = new Set(["BROKER", "PORT", "USERNAME", "PASSWORD", "TLS"]);
+
+// The Home Assistant add-on only reads grid power from a Home Assistant sensor
+// and runs a single meter, so collapse to one homeassistant meter when that
+// target is chosen (keeping the existing one if it already matches).
+function coerceHaMeter(): void {
+  const first = state.meters[0];
+  state.meters = first && first.type === "homeassistant" ? [first] : [newMeter("homeassistant")];
+}
+
 function targetCard(): HTMLElement {
-  function choice(value: "python" | "esphome", title: string, desc: string): HTMLElement {
+  function choice(value: State["target"], title: string, desc: string): HTMLElement {
     const active = state.target === value;
     return el(
       "button",
@@ -194,15 +224,17 @@ function targetCard(): HTMLElement {
         type: "button",
         onclick: () => {
           state.target = value;
+          if (value === "homeassistant") coerceHaMeter();
           rerenderAll();
         },
       },
       [el("strong", { text: title }), el("span", { text: desc })],
     );
   }
-  return card(1, "How will you run AstraMeter?", "Pick where the emulator runs. Not sure? Choose the Home Assistant / Docker option — it's the most common.", [
+  return card(1, "How will you run AstraMeter?", "Pick where the emulator runs. Not sure? Choose the Home Assistant add-on option — it's the most common.", [
     el("div", { class: "choice-row" }, [
-      choice("python", "Home Assistant add-on, Docker, or a PC", "Generates a config.ini file. AstraMeter runs as software and talks to your power meter over the network."),
+      choice("homeassistant", "Home Assistant add-on (UI options)", "Generates the add-on Configuration options (YAML) you paste into the add-on's Configuration tab. Reads grid power from a Home Assistant sensor."),
+      choice("python", "config.ini (Docker, a PC, or advanced add-on)", "Generates a config.ini file. AstraMeter runs as software and talks to your power meter over the network."),
       choice("esphome", "On an ESP32 chip (ESPHome)", "Generates an ESPHome YAML file. The emulator runs on a tiny ESP32 board that reads a grid-power sensor."),
     ]),
   ]);
@@ -247,9 +279,19 @@ function deviceCard(): HTMLElement {
         class: "pill" + (active ? " active" : ""),
         title: d.help,
         onclick: () => {
+          const hadCt = hasCtType(g.deviceTypes);
           if (active) g.deviceTypes = g.deviceTypes.filter((t) => t !== d.value);
           else g.deviceTypes = [...g.deviceTypes, d.value];
           if (g.deviceTypes.length === 0) g.deviceTypes = [d.value];
+          // Marstek registration + MQTT Insights are CT002/CT003 features, so
+          // flip their defaults when CT emulation is switched on or off. This is
+          // edge-triggered (only on a CT-membership change), so a user can still
+          // uncheck them afterwards without the next pill click snapping them back.
+          const hasCt = hasCtType(g.deviceTypes);
+          if (hasCt !== hadCt) {
+            state.marstek.enabled = hasCt;
+            state.mqttInsights.enabled = hasCt;
+          }
           rerenderAll();
         },
       },
@@ -261,16 +303,17 @@ function deviceCard(): HTMLElement {
   // (user-controlled) is used only as a membership filter, not rendered.
   const selectedHelp = DEVICE_TYPES.filter((d) => g.deviceTypes.includes(d.value)).map((d) => el("li", { html: `<strong>${d.label}:</strong> ${d.help}` }));
 
-  return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. One battery → keep Shelly Pro 3EM. Two or more batteries that should share load → choose CT002.", [
+  return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. Two or more batteries that should share load → keep CT002. A single battery → Shelly Pro 3EM works too.", [
     el("div", { class: "pill-row" }, typeButtons),
     el("ul", { class: "pill-help" }, selectedHelp),
     el("details", { class: "adv" }, [
       el("summary", { text: "Advanced general options" }),
       el("div", { class: "field-grid" }, [
-        fieldControl({ key: "deviceIds", label: "Device IDs", help: "Optional fixed IDs (comma-separated, same order as the meters above). Leave blank to auto-generate.", type: "text", placeholder: "shellypro3em-c59b15461a21" }, g, {}),
-        fieldControl({ key: "skipPowermeterTest", label: "Skip power meter test on startup", help: "Skip the connection check when AstraMeter starts.", type: "checkbox" }, g, {}),
-        fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }),
-        g.webConfigEnabled ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
+        // Device IDs, skip-test and the built-in web editor aren't add-on options.
+        state.target === "homeassistant" ? null : fieldControl({ key: "deviceIds", label: "Device IDs", help: "Optional fixed IDs (comma-separated, same order as the meters above). Leave blank to auto-generate.", type: "text", placeholder: "shellypro3em-c59b15461a21" }, g, {}),
+        state.target === "homeassistant" ? null : fieldControl({ key: "skipPowermeterTest", label: "Skip power meter test on startup", help: "Skip the connection check when AstraMeter starts.", type: "checkbox" }, g, {}),
+        state.target === "homeassistant" ? null : fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }),
+        state.target !== "homeassistant" && g.webConfigEnabled ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
         fieldControl({ key: "waitForNextMessage", label: "Wait for fresh push (global)", help: "Wait up to 2s for the newest reading from push-based meters.", type: "select", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] }, g, {}),
         fieldControl({ key: "dedupeTimeWindow", label: "Dedupe window (s)", help: "Ignore repeated requests from the same client within this window. 0 = off.", type: "number", placeholder: "0" }, g, {}),
@@ -282,6 +325,19 @@ function deviceCard(): HTMLElement {
 function meterEditor(meter: Meter, index: number): HTMLElement {
   const pm = getPowermeter(meter.type) || POWERMETERS[0];
   const canPhase = PHASE_CAPABLE.has(meter.type);
+  // The HA add-on fills in the connection details automatically (host, port,
+  // token, API path), so for that target only the grid-power entity fields are
+  // shown — the rest would be ignored.
+  const fields =
+    state.target === "homeassistant"
+      ? pm.fields.filter((f) => HA_ADDON_METER_FIELDS.has(f.key))
+      : pm.fields;
+  // Throttle / wait-for-push are set once in the General section for the HA
+  // target, so drop them from this per-meter list to avoid duplication.
+  const tuningFields =
+    state.target === "homeassistant"
+      ? PER_METER_TUNING.filter((f) => f.key !== "THROTTLE_INTERVAL" && f.key !== "WAIT_FOR_NEXT_MESSAGE")
+      : PER_METER_TUNING;
 
   const sourceSelect = el(
     "select",
@@ -300,6 +356,16 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
     state.target === "esphome"
       ? esphomeBadge(pm)
       : null;
+
+  // The HA add-on target is locked to a single Home Assistant sensor, so show a
+  // static label instead of the power-meter type picker.
+  const typeField =
+    state.target === "homeassistant"
+      ? el("div", { class: "field grow" }, [
+          el("label", { class: "field-label", text: "Power source" }),
+          el("p", { class: "blurb", text: "Home Assistant sensor — the add-on reads grid power from an HA entity." }),
+        ])
+      : el("div", { class: "field grow" }, [el("label", { class: "field-label", text: "Power meter type" }), sourceSelect]);
 
   const phaseToggle = canPhase
     ? el("div", { class: "field" }, [
@@ -337,18 +403,18 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
 
   return el("div", { class: "meter" }, [
     el("div", { class: "meter-head" }, [
-      el("div", { class: "field grow" }, [el("label", { class: "field-label", text: "Power meter type" }), sourceSelect]),
+      typeField,
       badge,
     ]),
     el("p", { class: "blurb", text: pm.blurb }),
     pm.docPython ? el("a", { class: "doclink", href: ghDoc(pm.docPython!), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
     suffixField,
     phaseToggle,
-    el("div", { class: "field-grid" }, fieldGroup(pm.fields, meter.fields, { phases: meter.phases })),
+    el("div", { class: "field-grid" }, fieldGroup(fields, meter.fields, { phases: meter.phases })),
     el("details", { class: "adv" }, [
       el("summary", { text: "Fine-tuning (smoothing, calibration, throttling, PID)" }),
       el("p", { class: "help", text: "All optional. These shape the reading before it reaches your battery." }),
-      el("div", { class: "field-grid" }, fieldGroup(PER_METER_TUNING, meter.tuning, { phases: meter.phases })),
+      el("div", { class: "field-grid" }, fieldGroup(tuningFields, meter.tuning, { phases: meter.phases })),
     ]),
     netmaskField,
     removeBtn,
@@ -377,15 +443,30 @@ function meterCard(): HTMLElement {
   const intro =
     state.target === "esphome"
       ? "On an ESP32 the emulator reads one grid-power sensor. Pick the source below — the badge shows how well each works on ESP32."
-      : "Tell us where AstraMeter should read your real grid power. Add more than one only for advanced multi-network setups.";
-  return card(3, "Your power meter", intro, [...meters, addBtn]);
+      : state.target === "homeassistant"
+        ? "The add-on reads your grid power from one Home Assistant sensor. Enter the entity below."
+        : "Tell us where AstraMeter should read your real grid power. Add more than one only for advanced multi-network setups.";
+  const customConfigNote =
+    state.target === "homeassistant"
+      ? el("p", { class: "note", html: "The add-on supports a single Home Assistant power source. For other meter types, multiple meters, or options the add-on UI doesn't expose, switch to the <strong>config.ini</strong> target above, save the file to <code>/addon_configs/a0ef98c5_b2500_meter/</code>, and set the add-on's <em>Custom Config</em> option to its filename. See the <a href='" + ghDoc("README.md#home-assistant-app-installation") + "' target='_blank' rel='noopener'>custom configuration docs ↗</a>." })
+      : null;
+  return card(3, "Your power meter", intro, [...meters, addBtn, customConfigNote]);
 }
 
 function ctCard(): HTMLElement | null {
-  const showPython = state.target === "python" && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
-  const show = state.target === "esphome" || showPython;
+  const isHa = state.target === "homeassistant";
+  const showFlat = (state.target === "python" || isHa) && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
+  const show = state.target === "esphome" || showFlat;
   if (!show) return null;
   const f = state.ct.fields;
+  // The add-on only exposes a handful of CT options; show just those for the HA
+  // target (the rest need a custom config.ini).
+  if (isHa) {
+    const haFields = [...CT_BASIC, ...CT_EFFICIENCY].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
+    return card(4, "Battery steering (CT002 / CT003)", "Optional CT options exposed by the add-on. Leave them blank to use the defaults.", [
+      el("div", { class: "field-grid" }, haFields.map((fl) => fieldControl(fl, f, {}))),
+    ]);
+  }
   const group = (title: string, fields: Field[], openByDefault = false): HTMLElement =>
     el("details", { class: "adv", ...(openByDefault ? { open: true } : {}) }, [
       el("summary", { text: title }),
@@ -403,21 +484,33 @@ function ctCard(): HTMLElement | null {
 function extrasCard(): HTMLElement {
   const m = state.marstek;
   const mi = state.mqttInsights;
+  const isHa = state.target === "homeassistant";
+  // For the HA target the add-on hardcodes the Marstek base URL/timezone and uses
+  // HA's built-in broker, so only the credential / custom-broker fields apply.
+  const marstekFields = isHa ? MARSTEK_FIELDS.filter((fl) => HA_ADDON_MARSTEK_FIELDS.has(fl.key)) : MARSTEK_FIELDS;
+  const insightsFields = isHa ? MQTT_INSIGHTS_FIELDS.filter((fl) => HA_ADDON_INSIGHTS_FIELDS.has(fl.key)) : MQTT_INSIGHTS_FIELDS;
+
   const marstekBody = [
     fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.", type: "checkbox" }, m, { structural: true }),
   ];
-  if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, MARSTEK_FIELDS.map((fl) => fieldControl(fl, m.fields, {}))));
+  if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, marstekFields.map((fl) => fieldControl(fl, m.fields, {}))));
 
+  const insightsLabel = isHa
+    ? "Use a custom MQTT broker"
+    : "Publish internal state to MQTT (Home Assistant discovery)";
+  const insightsHelp = isHa
+    ? "Optional. The add-on uses Home Assistant's built-in MQTT broker automatically. Turn this on only to point MQTT Insights at a different broker."
+    : "Optional. Exposes grid power, targets and per-battery state to Home Assistant via MQTT.";
   const insightsBody = [
-    fieldControl({ key: "enabled", label: "Publish internal state to MQTT (Home Assistant discovery)", help: "Optional. Exposes grid power, targets and per-battery state to Home Assistant via MQTT.", type: "checkbox" }, mi, { structural: true }),
+    fieldControl({ key: "enabled", label: insightsLabel, help: insightsHelp, type: "checkbox" }, mi, { structural: true }),
   ];
-  if (mi.enabled) insightsBody.push(el("div", { class: "field-grid" }, fieldGroup(MQTT_INSIGHTS_FIELDS, mi.fields, {})));
+  if (mi.enabled) insightsBody.push(el("div", { class: "field-grid" }, fieldGroup(insightsFields, mi.fields, {})));
 
-  return card(5, "Optional extras", "Skip this unless you want Marstek-app integration or Home Assistant MQTT insights.", [
+  return card(5, "Optional extras", "Skip this unless you want Marstek-app integration or a custom MQTT broker.", [
     el("h3", { text: "Marstek cloud registration" }),
     ...marstekBody,
     el("hr", {}),
-    el("h3", { text: "MQTT Insights / Home Assistant" }),
+    el("h3", { text: isHa ? "Custom MQTT broker" : "MQTT Insights / Home Assistant" }),
     ...insightsBody,
   ]);
 }
@@ -448,6 +541,12 @@ function esphomeStepsCard(): HTMLElement | null {
 }
 
 // ── preview + actions ─────────────────────────────────────────────────────────
+function outputFilename(): string {
+  if (state.target === "esphome") return "astrameter.yaml";
+  if (state.target === "homeassistant") return "astrameter-options.yaml";
+  return "config.ini";
+}
+
 function refreshPreview(): void {
   const pre = document.getElementById("preview-code");
   if (!pre) return;
@@ -459,12 +558,12 @@ function refreshPreview(): void {
   }
   pre.textContent = text;
   const fn = document.getElementById("preview-filename");
-  if (fn) fn.textContent = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
+  if (fn) fn.textContent = outputFilename();
   saveState();
 }
 
 function previewPanel(): HTMLElement {
-  const filename = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
+  const filename = outputFilename();
   return el("aside", { class: "preview", id: "preview" }, [
     el("div", { class: "preview-head" }, [
       el("span", { text: "Live preview — " }),
@@ -499,8 +598,7 @@ function copyConfig(): void {
 function downloadConfig(): void {
   const text = safeGenerate();
   if (text == null) return;
-  const name = state.target === "esphome" ? "astrameter.yaml" : "config.ini";
-  downloadText(name, text);
+  downloadText(outputFilename(), text);
 }
 
 function downloadText(filename: string, text: string): void {

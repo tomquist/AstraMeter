@@ -155,6 +155,30 @@ else
         if bashio::config.has_value 'deadband'; then
             echo "DEADBAND=$(bashio::config 'deadband')"
         fi
+        if bashio::config.has_value 'hampel_window'; then
+            echo "HAMPEL_WINDOW=$(bashio::config 'hampel_window')"
+        fi
+        if bashio::config.has_value 'hampel_n_sigma'; then
+            echo "HAMPEL_N_SIGMA=$(bashio::config 'hampel_n_sigma')"
+        fi
+        if bashio::config.has_value 'hampel_min_threshold'; then
+            echo "HAMPEL_MIN_THRESHOLD=$(bashio::config 'hampel_min_threshold')"
+        fi
+        if bashio::config.has_value 'pid_kp'; then
+            echo "PID_KP=$(bashio::config 'pid_kp')"
+        fi
+        if bashio::config.has_value 'pid_ki'; then
+            echo "PID_KI=$(bashio::config 'pid_ki')"
+        fi
+        if bashio::config.has_value 'pid_kd'; then
+            echo "PID_KD=$(bashio::config 'pid_kd')"
+        fi
+        if bashio::config.has_value 'pid_output_max'; then
+            echo "PID_OUTPUT_MAX=$(bashio::config 'pid_output_max')"
+        fi
+        if bashio::config.has_value 'pid_mode'; then
+            echo "PID_MODE=$(bashio::config 'pid_mode')"
+        fi
 
         # Fetch this add-on's slug from the supervisor so MQTT discovery can
         # link discovered meter devices to the add-on device via_device.

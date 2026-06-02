@@ -60,5 +60,13 @@ schema:
   smooth_target_alpha: float(0,1)?
   max_smooth_step: float(0,)?
   deadband: float(0,)?
+  hampel_window: int(0,)?
+  hampel_n_sigma: float(0,)?
+  hampel_min_threshold: float(0,)?
+  pid_kp: float(0,)?
+  pid_ki: float?
+  pid_kd: float?
+  pid_output_max: float(0,)?
+  pid_mode: list(bias|replace)?
   custom_config: str?
   mqtt_uri: str?
