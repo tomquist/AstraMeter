@@ -184,6 +184,16 @@ function card(n: number | null, title: string, subtitle: string | null, body: El
   ]);
 }
 
+// Fields of the `homeassistant` meter that the add-on does NOT configure for
+// you (the host/port/token/API-path are set automatically by the add-on). Only
+// these grid-power entity fields are surfaced for the Home Assistant target.
+const HA_ADDON_METER_FIELDS = new Set([
+  "CURRENT_POWER_ENTITY",
+  "POWER_CALCULATE",
+  "POWER_INPUT_ALIAS",
+  "POWER_OUTPUT_ALIAS",
+]);
+
 // The Home Assistant add-on only reads grid power from a Home Assistant sensor
 // and runs a single meter, so collapse to one homeassistant meter when that
 // target is chosen (keeping the existing one if it already matches).
@@ -292,6 +302,13 @@ function deviceCard(): HTMLElement {
 function meterEditor(meter: Meter, index: number): HTMLElement {
   const pm = getPowermeter(meter.type) || POWERMETERS[0];
   const canPhase = PHASE_CAPABLE.has(meter.type);
+  // The HA add-on fills in the connection details automatically (host, port,
+  // token, API path), so for that target only the grid-power entity fields are
+  // shown — the rest would be ignored.
+  const fields =
+    state.target === "homeassistant"
+      ? pm.fields.filter((f) => HA_ADDON_METER_FIELDS.has(f.key))
+      : pm.fields;
 
   const sourceSelect = el(
     "select",
@@ -364,7 +381,7 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
     pm.docPython ? el("a", { class: "doclink", href: ghDoc(pm.docPython!), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
     suffixField,
     phaseToggle,
-    el("div", { class: "field-grid" }, fieldGroup(pm.fields, meter.fields, { phases: meter.phases })),
+    el("div", { class: "field-grid" }, fieldGroup(fields, meter.fields, { phases: meter.phases })),
     el("details", { class: "adv" }, [
       el("summary", { text: "Fine-tuning (smoothing, calibration, throttling, PID)" }),
       el("p", { class: "help", text: "All optional. These shape the reading before it reaches your battery." }),
