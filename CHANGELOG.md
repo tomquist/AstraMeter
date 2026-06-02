@@ -3,6 +3,7 @@
 ## Next
 
 - **Added** the Hampel outlier filter and PID controller as optional fields in the Home Assistant add-on Configuration tab (alongside the existing smoothing/deadband options) — all optional and off unless you set them. The web config generator gained a "Home Assistant add-on" target that produces a ready-to-paste add-on options block including these filters.
+- **Fixed** the power sensors published via MQTT Insights now carry `state_class: measurement`, so the instantly-updated grid/target/reported power entities can be used as power sources in the Home Assistant energy dashboard ([#416](https://github.com/tomquist/astrameter/issues/416)).
 
 
 ## 2.1.0

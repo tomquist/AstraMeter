@@ -92,6 +92,22 @@ def test_ct002_consumer_discovery_structure():
     # Primary entity has name: null
     assert comps["grid_power_total"]["name"] is None
 
+    # Power sensors carry state_class measurement so they are usable as
+    # power source entities in the Home Assistant energy dashboard.
+    for power_key in (
+        "grid_power_total",
+        "grid_power_l1",
+        "grid_power_l2",
+        "grid_power_l3",
+        "target_l1",
+        "target_l2",
+        "target_l3",
+        "reported_power",
+        "last_target",
+    ):
+        assert comps[power_key]["device_class"] == "power"
+        assert comps[power_key]["state_class"] == "measurement"
+
     # Switch has correct topics — each control uses its own retained command
     # sub-topic so Home Assistant persists the value across restarts.
     switch = comps["active"]
@@ -180,6 +196,8 @@ def test_ct002_device_discovery_structure():
     assert "active_control" in comps
     assert "consumer_count" in comps
     assert comps["smooth_target"]["name"] is None  # primary
+    assert comps["smooth_target"]["device_class"] == "power"
+    assert comps["smooth_target"]["state_class"] == "measurement"
 
     # Force rotation button
     btn = comps["force_rotation"]
@@ -201,6 +219,14 @@ def test_shelly_battery_discovery_structure():
     assert "active" in comps
     assert "last_seen" in comps
     assert "poll_interval" in comps
+    for power_key in (
+        "grid_power_total",
+        "grid_power_l1",
+        "grid_power_l2",
+        "grid_power_l3",
+    ):
+        assert comps[power_key]["device_class"] == "power"
+        assert comps[power_key]["state_class"] == "measurement"
     poll = comps["poll_interval"]
     assert poll["device_class"] == "duration"
     assert poll["unit_of_measurement"] == "s"

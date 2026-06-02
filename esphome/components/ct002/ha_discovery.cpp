@@ -70,6 +70,7 @@ void add_power_sensor(JsonObject components, const std::string &key, const std::
   comp["platform"] = "sensor";
   comp["unique_id"] = uid_prefix + "_" + key;
   comp["device_class"] = "power";
+  comp["state_class"] = "measurement";
   comp["unit_of_measurement"] = "W";
   comp["state_topic"] = state_topic;
   comp["value_template"] = tmpl;
@@ -348,6 +349,7 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     st["unique_id"] = uid_prefix + "_smooth_target";
     st["name"] = nullptr;
     st["device_class"] = "power";
+    st["state_class"] = "measurement";
     st["unit_of_measurement"] = "W";
     st["state_topic"] = state_topic;
     st["value_template"] = "{{ value_json.smooth_target }}";
