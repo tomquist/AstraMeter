@@ -194,6 +194,14 @@ const HA_ADDON_METER_FIELDS = new Set([
   "POWER_OUTPUT_ALIAS",
 ]);
 
+// CT / Marstek fields the add-on actually accepts as options. Everything else
+// (active control, balancer, saturation, Marstek base URL / timezone, …) is set
+// automatically or only reachable via a custom config.ini, so it's hidden for
+// the Home Assistant target.
+const HA_ADDON_CT_FIELDS = new Set(["CT_MAC", "MIN_EFFICIENT_POWER", "EFFICIENCY_ROTATION_INTERVAL"]);
+const HA_ADDON_MARSTEK_FIELDS = new Set(["MAILBOX", "PASSWORD"]);
+const HA_ADDON_INSIGHTS_FIELDS = new Set(["BROKER", "PORT", "USERNAME", "PASSWORD", "TLS"]);
+
 // The Home Assistant add-on only reads grid power from a Home Assistant sensor
 // and runs a single meter, so collapse to one homeassistant meter when that
 // target is chosen (keeping the existing one if it already matches).
@@ -287,10 +295,11 @@ function deviceCard(): HTMLElement {
     el("details", { class: "adv" }, [
       el("summary", { text: "Advanced general options" }),
       el("div", { class: "field-grid" }, [
-        fieldControl({ key: "deviceIds", label: "Device IDs", help: "Optional fixed IDs (comma-separated, same order as the meters above). Leave blank to auto-generate.", type: "text", placeholder: "shellypro3em-c59b15461a21" }, g, {}),
-        fieldControl({ key: "skipPowermeterTest", label: "Skip power meter test on startup", help: "Skip the connection check when AstraMeter starts.", type: "checkbox" }, g, {}),
-        fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }),
-        g.webConfigEnabled ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
+        // Device IDs, skip-test and the built-in web editor aren't add-on options.
+        state.target === "homeassistant" ? null : fieldControl({ key: "deviceIds", label: "Device IDs", help: "Optional fixed IDs (comma-separated, same order as the meters above). Leave blank to auto-generate.", type: "text", placeholder: "shellypro3em-c59b15461a21" }, g, {}),
+        state.target === "homeassistant" ? null : fieldControl({ key: "skipPowermeterTest", label: "Skip power meter test on startup", help: "Skip the connection check when AstraMeter starts.", type: "checkbox" }, g, {}),
+        state.target === "homeassistant" ? null : fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }),
+        state.target !== "homeassistant" && g.webConfigEnabled ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
         fieldControl({ key: "waitForNextMessage", label: "Wait for fresh push (global)", help: "Wait up to 2s for the newest reading from push-based meters.", type: "select", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] }, g, {}),
         fieldControl({ key: "dedupeTimeWindow", label: "Dedupe window (s)", help: "Ignore repeated requests from the same client within this window. 0 = off.", type: "number", placeholder: "0" }, g, {}),
@@ -309,6 +318,12 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
     state.target === "homeassistant"
       ? pm.fields.filter((f) => HA_ADDON_METER_FIELDS.has(f.key))
       : pm.fields;
+  // Throttle / wait-for-push are set once in the General section for the HA
+  // target, so drop them from this per-meter list to avoid duplication.
+  const tuningFields =
+    state.target === "homeassistant"
+      ? PER_METER_TUNING.filter((f) => f.key !== "THROTTLE_INTERVAL" && f.key !== "WAIT_FOR_NEXT_MESSAGE")
+      : PER_METER_TUNING;
 
   const sourceSelect = el(
     "select",
@@ -385,7 +400,7 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
     el("details", { class: "adv" }, [
       el("summary", { text: "Fine-tuning (smoothing, calibration, throttling, PID)" }),
       el("p", { class: "help", text: "All optional. These shape the reading before it reaches your battery." }),
-      el("div", { class: "field-grid" }, fieldGroup(PER_METER_TUNING, meter.tuning, { phases: meter.phases })),
+      el("div", { class: "field-grid" }, fieldGroup(tuningFields, meter.tuning, { phases: meter.phases })),
     ]),
     netmaskField,
     removeBtn,
@@ -425,10 +440,19 @@ function meterCard(): HTMLElement {
 }
 
 function ctCard(): HTMLElement | null {
-  const showFlat = (state.target === "python" || state.target === "homeassistant") && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
+  const isHa = state.target === "homeassistant";
+  const showFlat = (state.target === "python" || isHa) && (state.general.deviceTypes.includes("ct002") || state.general.deviceTypes.includes("ct003"));
   const show = state.target === "esphome" || showFlat;
   if (!show) return null;
   const f = state.ct.fields;
+  // The add-on only exposes a handful of CT options; show just those for the HA
+  // target (the rest need a custom config.ini).
+  if (isHa) {
+    const haFields = [...CT_BASIC, ...CT_EFFICIENCY].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
+    return card(4, "Battery steering (CT002 / CT003)", "Optional CT options exposed by the add-on. Leave them blank to use the defaults.", [
+      el("div", { class: "field-grid" }, haFields.map((fl) => fieldControl(fl, f, {}))),
+    ]);
+  }
   const group = (title: string, fields: Field[], openByDefault = false): HTMLElement =>
     el("details", { class: "adv", ...(openByDefault ? { open: true } : {}) }, [
       el("summary", { text: title }),
@@ -446,21 +470,33 @@ function ctCard(): HTMLElement | null {
 function extrasCard(): HTMLElement {
   const m = state.marstek;
   const mi = state.mqttInsights;
+  const isHa = state.target === "homeassistant";
+  // For the HA target the add-on hardcodes the Marstek base URL/timezone and uses
+  // HA's built-in broker, so only the credential / custom-broker fields apply.
+  const marstekFields = isHa ? MARSTEK_FIELDS.filter((fl) => HA_ADDON_MARSTEK_FIELDS.has(fl.key)) : MARSTEK_FIELDS;
+  const insightsFields = isHa ? MQTT_INSIGHTS_FIELDS.filter((fl) => HA_ADDON_INSIGHTS_FIELDS.has(fl.key)) : MQTT_INSIGHTS_FIELDS;
+
   const marstekBody = [
     fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.", type: "checkbox" }, m, { structural: true }),
   ];
-  if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, MARSTEK_FIELDS.map((fl) => fieldControl(fl, m.fields, {}))));
+  if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, marstekFields.map((fl) => fieldControl(fl, m.fields, {}))));
 
+  const insightsLabel = isHa
+    ? "Use a custom MQTT broker"
+    : "Publish internal state to MQTT (Home Assistant discovery)";
+  const insightsHelp = isHa
+    ? "Optional. The add-on uses Home Assistant's built-in MQTT broker automatically. Turn this on only to point MQTT Insights at a different broker."
+    : "Optional. Exposes grid power, targets and per-battery state to Home Assistant via MQTT.";
   const insightsBody = [
-    fieldControl({ key: "enabled", label: "Publish internal state to MQTT (Home Assistant discovery)", help: "Optional. Exposes grid power, targets and per-battery state to Home Assistant via MQTT.", type: "checkbox" }, mi, { structural: true }),
+    fieldControl({ key: "enabled", label: insightsLabel, help: insightsHelp, type: "checkbox" }, mi, { structural: true }),
   ];
-  if (mi.enabled) insightsBody.push(el("div", { class: "field-grid" }, fieldGroup(MQTT_INSIGHTS_FIELDS, mi.fields, {})));
+  if (mi.enabled) insightsBody.push(el("div", { class: "field-grid" }, fieldGroup(insightsFields, mi.fields, {})));
 
-  return card(5, "Optional extras", "Skip this unless you want Marstek-app integration or Home Assistant MQTT insights.", [
+  return card(5, "Optional extras", "Skip this unless you want Marstek-app integration or a custom MQTT broker.", [
     el("h3", { text: "Marstek cloud registration" }),
     ...marstekBody,
     el("hr", {}),
-    el("h3", { text: "MQTT Insights / Home Assistant" }),
+    el("h3", { text: isHa ? "Custom MQTT broker" : "MQTT Insights / Home Assistant" }),
     ...insightsBody,
   ]);
 }
