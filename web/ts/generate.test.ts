@@ -109,6 +109,17 @@ has(extras, "MAILBOX = a@b.c", "extras: marstek mailbox");
 has(extras, "[MQTT_INSIGHTS]", "extras: insights section");
 has(extras, "BROKER = 192.168.1.9", "extras: insights broker");
 
+// ── config.ini: enabled-but-empty extras are omitted (default-on safety) ──────
+const extrasEmpty = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "1PM", IP: "1.1.1.1" }, tuning: {} }],
+  marstek: { enabled: true, fields: {} },
+  mqttInsights: { enabled: true, fields: {} },
+});
+lacks(extrasEmpty, "[MARSTEK]", "extras-empty: omits marstek without credentials");
+lacks(extrasEmpty, "[MQTT_INSIGHTS]", "extras-empty: omits insights without a broker");
+
 // ── ESPHome: Home Assistant native, 3-phase ──────────────────────────────────
 const eyHa = generateEsphome({
   target: "esphome",

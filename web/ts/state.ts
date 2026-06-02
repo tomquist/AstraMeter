@@ -60,8 +60,11 @@ export function defaultState(): State {
     },
     meters: [newMeter("shelly")],
     ct: { fields: {} },
-    marstek: { enabled: false, fields: {} },
-    mqttInsights: { enabled: false, fields: {} },
+    // Marstek registration + MQTT Insights default on because the default device
+    // type is CT002 (they're most useful for CT002/CT003). The device-type card
+    // keeps these in sync when CT emulation is toggled.
+    marstek: { enabled: true, fields: {} },
+    mqttInsights: { enabled: true, fields: {} },
     esphome: {
       name: "astrameter-ct002",
       friendlyName: "AstraMeter CT002",

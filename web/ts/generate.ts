@@ -125,6 +125,9 @@ function marstekSection(state: State): string {
   const m = state.marstek || {};
   if (!m.enabled) return "";
   const f = m.fields || {};
+  // Registration needs credentials; skip the section while it's enabled but
+  // unconfigured so the default-on toggle never emits a broken [MARSTEK].
+  if (isBlank(f.MAILBOX) || isBlank(f.PASSWORD)) return "";
   const lines = ["[MARSTEK]", "ENABLE = True"];
   for (const field of MARSTEK_FIELDS) {
     const line = iniLine(field, f[field.key]);
@@ -137,6 +140,9 @@ function mqttInsightsSection(state: State): string {
   const mi = state.mqttInsights || {};
   if (!mi.enabled) return "";
   const f = mi.fields || {};
+  // Insights needs a broker to connect to; skip while enabled but unconfigured
+  // so the default-on toggle never emits an empty [MQTT_INSIGHTS] section.
+  if (isBlank(f.BROKER)) return "";
   const lines = ["[MQTT_INSIGHTS]"];
   for (const field of MQTT_INSIGHTS_FIELDS) {
     const line = iniLine(field, f[field.key]);

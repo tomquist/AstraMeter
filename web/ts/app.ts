@@ -199,6 +199,10 @@ const HA_ADDON_METER_FIELDS = new Set([
 // automatically or only reachable via a custom config.ini, so it's hidden for
 // the Home Assistant target.
 const HA_ADDON_CT_FIELDS = new Set(["CT_MAC", "MIN_EFFICIENT_POWER", "EFFICIENCY_ROTATION_INTERVAL"]);
+
+function hasCtType(types: string[]): boolean {
+  return types.includes("ct002") || types.includes("ct003");
+}
 const HA_ADDON_MARSTEK_FIELDS = new Set(["MAILBOX", "PASSWORD"]);
 const HA_ADDON_INSIGHTS_FIELDS = new Set(["BROKER", "PORT", "USERNAME", "PASSWORD", "TLS"]);
 
@@ -275,9 +279,19 @@ function deviceCard(): HTMLElement {
         class: "pill" + (active ? " active" : ""),
         title: d.help,
         onclick: () => {
+          const hadCt = hasCtType(g.deviceTypes);
           if (active) g.deviceTypes = g.deviceTypes.filter((t) => t !== d.value);
           else g.deviceTypes = [...g.deviceTypes, d.value];
           if (g.deviceTypes.length === 0) g.deviceTypes = [d.value];
+          // Marstek registration + MQTT Insights are CT002/CT003 features, so
+          // flip their defaults when CT emulation is switched on or off. This is
+          // edge-triggered (only on a CT-membership change), so a user can still
+          // uncheck them afterwards without the next pill click snapping them back.
+          const hasCt = hasCtType(g.deviceTypes);
+          if (hasCt !== hadCt) {
+            state.marstek.enabled = hasCt;
+            state.mqttInsights.enabled = hasCt;
+          }
           rerenderAll();
         },
       },
