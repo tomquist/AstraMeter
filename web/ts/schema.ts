@@ -97,12 +97,12 @@ export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "ct002",
     label: "Marstek CT002 (HME-4)",
-    help: "Marstek's own CT clamp. Recommended when you have two or more batteries that should share the load.",
+    help: "Marstek's CT with clamps around the phases. Recommended when you have two or more batteries that should share the load.",
   },
   {
     value: "ct003",
     label: "Marstek CT003 (HME-3)",
-    help: "Like CT002 but the older HME-3 variant.",
+    help: "Marstek's CT that reads via the electricity meter's interface instead of clamps around the phases. Same protocol as CT002 — pick whichever matches your hardware.",
   },
   {
     value: "shellypro3em_old",
