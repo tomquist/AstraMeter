@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from astrameter.config import ClientFilter
-from astrameter.config.logger import logger
+from astrameter.config.logger import debug_traceback, logger
 from astrameter.powermeter import Powermeter
 from astrameter.request_dedupe import RequestDeduplicator
 
@@ -230,7 +230,21 @@ class Shelly:
                             "serving last known value",
                             type(powermeter).__name__,
                         )
-                powers = await powermeter.get_powermeter_watts()
+                try:
+                    powers = await powermeter.get_powermeter_watts()
+                except Exception as exc:
+                    # Reading the meter can fail transiently (e.g. an HTTP
+                    # source timing out). Log a one-liner at the normal level
+                    # and reserve the full traceback for DEBUG so an outage
+                    # doesn't flood the log with stack traces on every poll.
+                    logger.warning(
+                        "Could not read meter values from %s (%s): %s",
+                        type(powermeter).__name__,
+                        addr[0],
+                        exc,
+                        exc_info=debug_traceback(),
+                    )
+                    return
 
                 if request.get("method") == "EM.GetStatus":
                     response = self._create_em_response(request["id"], powers)

@@ -19,6 +19,17 @@ class _AutoExcInfoFilter(logging.Filter):
         return True
 
 
+def debug_traceback() -> bool:
+    """Return ``True`` only when the logger is at DEBUG level.
+
+    Use as ``exc_info=debug_traceback()`` on an ``except``-block log call to
+    emit a one-line message at the normal level while still including the full
+    traceback when the user runs with ``LOG_LEVEL = DEBUG``. Passing ``False``
+    also opts the record out of the auto-exc-info filter above.
+    """
+    return logger.isEnabledFor(logging.DEBUG)
+
+
 def setLogLevel(inLevel: str):
     level = levels.get(inLevel.lower())
     if level is None:
