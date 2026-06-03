@@ -230,7 +230,11 @@ class Shelly:
                             "serving last known value",
                             type(powermeter).__name__,
                         )
-                powers = await powermeter.get_powermeter_watts()
+                try:
+                    powers = await powermeter.get_powermeter_watts()
+                except Exception as e:
+                    logger.info("Could not get CT values:"+str(e))
+                    return
 
                 if request.get("method") == "EM.GetStatus":
                     response = self._create_em_response(request["id"], powers)
