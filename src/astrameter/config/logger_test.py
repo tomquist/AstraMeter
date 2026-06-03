@@ -50,6 +50,15 @@ def test_set_log_level_configures_timestamped_log_output():
     assert kwargs["force"] is True
 
 
+@pytest.mark.parametrize(
+    ("level_name", "expected"),
+    [("debug", True), ("info", False), ("warning", False)],
+)
+def test_debug_traceback_reflects_log_level(level_name, expected):
+    setLogLevel(level_name)
+    assert logger_module.debug_traceback() is expected
+
+
 def test_warning_inside_except_block_includes_traceback():
     setLogLevel("warning")
     root = logging.getLogger()

@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-from astrameter.config.logger import logger
+from astrameter.config.logger import debug_traceback, logger
 from astrameter.request_dedupe import RequestDeduplicator
 
 from .balancer import (
@@ -579,7 +579,7 @@ class CT002:
                     self._before_send_failure_count,
                     addr,
                     exc,
-                    exc_info=True,
+                    exc_info=debug_traceback(),
                 )
                 self._before_send_last_warn = now
             return None
