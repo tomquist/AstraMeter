@@ -335,7 +335,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix, const std::string &addon_slug) {
+    const std::string &ha_prefix) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev;
   const std::string state_topic = base_topic + "/ct002/" + device_id + "/status";
@@ -384,66 +384,11 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     device["identifiers"] = node_id;
     device["name"] = "AstraMeter CT002 " + device_id;
     device["manufacturer"] = "astrameter";
-    if (!addon_slug.empty()) device["via_device"] = addon_slug;
 
     add_origin(root);
     JsonArray avail = root["availability"].to<JsonArray>();
     add_system_availability(avail.add<JsonObject>(), base_topic);
     root["state_topic"] = state_topic;
-  });
-
-  return {ha_prefix + "/device/" + node_id + "/config", std::string(buf)};
-}
-
-std::pair<std::string, std::string> build_addon_device_discovery(
-    const std::string &base_topic, const std::string &addon_slug,
-    const std::string &ha_prefix) {
-  const std::string safe_slug = sanitize_id(addon_slug);
-  const std::string node_id = "astrameter_addon_" + safe_slug;
-  const std::string uid_prefix = "astrameter_addon_" + safe_slug;
-  const std::string bridge_topic = base_topic + "/bridge";
-
-  auto buf = serialize_unbounded([&](JsonObject root) {
-    JsonObject components = root["components"].to<JsonObject>();
-
-    // No availability block on purpose: this sensor IS the offline indicator,
-    // so it must flip to "off" rather than going unavailable when AstraMeter
-    // drops the LWT.
-    JsonObject status = components["status"].to<JsonObject>();
-    status["platform"] = "binary_sensor";
-    status["unique_id"] = uid_prefix + "_status";
-    status["name"] = "Status";
-    status["device_class"] = "connectivity";
-    status["state_topic"] = base_topic + "/status";
-    status["payload_on"] = "online";
-    status["payload_off"] = "offline";
-    status["entity_category"] = "diagnostic";
-
-    JsonObject ver = components["version"].to<JsonObject>();
-    ver["platform"] = "sensor";
-    ver["unique_id"] = uid_prefix + "_version";
-    ver["name"] = "Version";
-    ver["state_topic"] = bridge_topic;
-    ver["value_template"] = "{{ value_json.version }}";
-    ver["entity_category"] = "diagnostic";
-    add_system_availability(ver["availability"].to<JsonArray>().add<JsonObject>(), base_topic);
-
-    JsonObject cc = components["consumer_count"].to<JsonObject>();
-    cc["platform"] = "sensor";
-    cc["unique_id"] = uid_prefix + "_consumer_count";
-    cc["name"] = "Consumer Count";
-    cc["state_topic"] = bridge_topic;
-    cc["value_template"] = "{{ value_json.consumer_count }}";
-    cc["entity_category"] = "diagnostic";
-    add_system_availability(cc["availability"].to<JsonArray>().add<JsonObject>(), base_topic);
-
-    JsonObject device = root["device"].to<JsonObject>();
-    device["identifiers"] = addon_slug;
-    device["name"] = "AstraMeter";
-    device["manufacturer"] = "astrameter";
-
-    add_origin(root);
-    root["state_topic"] = bridge_topic;
   });
 
   return {ha_prefix + "/device/" + node_id + "/config", std::string(buf)};

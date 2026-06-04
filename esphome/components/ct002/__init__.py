@@ -228,7 +228,6 @@ CONF_MQTT_INSIGHTS = "mqtt_insights"
 CONF_BASE_TOPIC = "base_topic"
 CONF_HA_DISCOVERY = "ha_discovery"
 CONF_HA_DISCOVERY_PREFIX = "ha_discovery_prefix"
-CONF_ADDON_SLUG = "addon_slug"
 CONF_DEVICE_ID = "device_id"
 CONF_MARSTEK_MQTT_ENABLED = "marstek_mqtt_enabled"
 CONF_MARSTEK_MQTT_INTERVAL = "marstek_mqtt_interval"
@@ -262,7 +261,6 @@ MQTT_INSIGHTS_SCHEMA = cv.All(
             cv.Optional(
                 CONF_HA_DISCOVERY_PREFIX, default="homeassistant"
             ): cv.string_strict,
-            cv.Optional(CONF_ADDON_SLUG, default=""): cv.string,
             cv.Optional(CONF_MARSTEK_MQTT_ENABLED, default=True): cv.boolean,
             cv.Optional(
                 CONF_MARSTEK_MQTT_INTERVAL, default="300s"
@@ -478,7 +476,6 @@ async def _to_code_mqtt_insights(config, ct002_var):
     cg.add(var.set_base_topic(sub[CONF_BASE_TOPIC]))
     cg.add(var.set_ha_discovery(sub[CONF_HA_DISCOVERY]))
     cg.add(var.set_ha_discovery_prefix(sub[CONF_HA_DISCOVERY_PREFIX]))
-    cg.add(var.set_addon_slug(sub[CONF_ADDON_SLUG]))
     cg.add(var.set_marstek_mqtt_enabled(sub[CONF_MARSTEK_MQTT_ENABLED]))
     cg.add(
         var.set_marstek_mqtt_interval_ms(

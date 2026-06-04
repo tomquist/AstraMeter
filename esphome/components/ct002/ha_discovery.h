@@ -31,19 +31,9 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
 // CT002 device-level HA Discovery payload (parent device, smooth_target
 // sensor, active_control binary_sensor, consumer_count diagnostic,
-// force_rotation button). addon_slug → via_device when non-empty.
+// force_rotation button).
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix, const std::string &addon_slug = "");
-
-// Top-level "AstraMeter" hub device. identifiers == addon_slug so the
-// per-meter devices' via_device references resolve to a real named device
-// instead of an empty HA placeholder. Exposes a connectivity status sensor
-// (driven by the {base}/status LWT) plus diagnostic version / consumer_count
-// sensors fed from the retained {base}/bridge topic. Mirrors
-// discovery.py::build_addon_device_discovery.
-std::pair<std::string, std::string> build_addon_device_discovery(
-    const std::string &base_topic, const std::string &addon_slug,
     const std::string &ha_prefix);
 
 }  // namespace mqtt_insights

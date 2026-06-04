@@ -110,20 +110,10 @@ void MqttInsightsComponent::on_mqtt_connected_() {
   this->discovered_consumers_.clear();
 
   if (this->ha_discovery_) {
-    auto [topic, payload] =
-        build_ct002_device_discovery(this->base_topic_, this->device_id_,
-                                     this->ha_discovery_prefix_, this->addon_slug_);
+    auto [topic, payload] = build_ct002_device_discovery(
+        this->base_topic_, this->device_id_, this->ha_discovery_prefix_);
     this->mqtt_->publish(topic, payload, 0, true);
     this->device_discovered_ = true;
-
-    // Top-level "AstraMeter" hub device — only when running as the HA add-on
-    // (the per-meter device links up to it via via_device=addon_slug).
-    if (!this->addon_slug_.empty()) {
-      auto [hub_topic, hub_payload] = build_addon_device_discovery(
-          this->base_topic_, this->addon_slug_, this->ha_discovery_prefix_);
-      this->mqtt_->publish(hub_topic, hub_payload, 0, true);
-      this->publish_bridge_state_();
-    }
   }
 
   this->subscribe_commands_();
@@ -139,17 +129,6 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
   this->marstek_ct_type_.clear();
-}
-
-void MqttInsightsComponent::publish_bridge_state_() {
-  if (!this->ha_discovery_ || this->addon_slug_.empty()) return;
-  // sw_version is a build-time constant on the ESP (no package metadata at
-  // runtime), so report the same "esphome" token the origin block uses.
-  auto buf = json::build_json([&](JsonObject root) {
-    root["version"] = "esphome";
-    root["consumer_count"] = this->ct002_->reporting_consumer_count();
-  });
-  this->mqtt_->publish(this->base_topic_ + "/bridge", buf, 0, true);
 }
 
 void MqttInsightsComponent::subscribe_commands_() {
@@ -280,9 +259,6 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
   });
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);
-
-  // Keep the hub device's consumer_count fresh alongside the device status.
-  this->publish_bridge_state_();
 
   // Consumer-level discovery on first sight — re-published when
   // battery_ip first becomes known so HA's device.connections array
