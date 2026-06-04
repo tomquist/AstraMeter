@@ -18,6 +18,7 @@ from astrameter.conftest import needs_mosquitto
 
 from .discovery import (
     _sanitize_id,
+    build_addon_device_discovery,
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
     build_shelly_battery_discovery,
@@ -247,6 +248,59 @@ def test_shelly_device_discovery_structure():
 def test_meter_device_discovery_omits_via_device_without_addon_slug():
     _, ct002 = build_ct002_device_discovery("astrameter", "dev1", "homeassistant")
     assert "via_device" not in ct002["device"]
+
+
+def test_addon_device_discovery_structure():
+    topic, payload = build_addon_device_discovery(
+        "astrameter", "34dea19a_astrameter", "homeassistant"
+    )
+    _assert_discovery_structure(topic, payload)
+    assert "homeassistant/device/" in topic
+    assert topic.endswith("/config")
+    # identifiers == addon_slug so the meter devices' via_device resolves here.
+    assert payload["device"]["identifiers"] == "34dea19a_astrameter"
+    assert payload["device"]["name"] == "AstraMeter"
+
+    comps = payload["components"]
+    assert set(comps) == {"status", "version", "consumer_count"}
+
+    # Connectivity status sensor reads the system LWT and must NOT carry an
+    # availability block, or it would go unavailable instead of showing "off".
+    status = comps["status"]
+    assert status["platform"] == "binary_sensor"
+    assert status["device_class"] == "connectivity"
+    assert status["state_topic"] == "astrameter/status"
+    assert status["payload_on"] == "online"
+    assert status["payload_off"] == "offline"
+    assert "availability" not in status
+
+    # Diagnostics are fed from the retained bridge topic and grey out offline.
+    for key, tmpl in (
+        ("version", "{{ value_json.version }}"),
+        ("consumer_count", "{{ value_json.consumer_count }}"),
+    ):
+        comp = comps[key]
+        assert comp["state_topic"] == "astrameter/bridge"
+        assert comp["value_template"] == tmpl
+        assert comp["entity_category"] == "diagnostic"
+        assert comp["availability"] == [
+            {
+                "topic": "astrameter/status",
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            }
+        ]
+
+
+def test_addon_device_discovery_links_meter_via_device():
+    """The hub's identifiers must equal the slug used as meter via_device."""
+    _, hub = build_addon_device_discovery(
+        "astrameter", "abc123_astrameter", "homeassistant"
+    )
+    _, ct002 = build_ct002_device_discovery(
+        "astrameter", "dev1", "homeassistant", addon_slug="abc123_astrameter"
+    )
+    assert ct002["device"]["via_device"] == hub["device"]["identifiers"]
     _, shelly = build_shelly_device_discovery("astrameter", "shelly1", "homeassistant")
     assert "via_device" not in shelly["device"]
 
@@ -522,7 +576,9 @@ async def _poll(predicate, *, timeout=5, interval=0.05):
 _test_counter = 0
 
 
-def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsService:
+def _make_service(
+    port: int, base_topic: str | None = None, addon_slug: str | None = None
+) -> MqttInsightsService:
     global _test_counter
     _test_counter += 1
     if base_topic is None:
@@ -534,6 +590,7 @@ def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsServi
             base_topic=base_topic,
             ha_discovery=True,
             ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            addon_slug=addon_slug,
             # Broader E2E tests assert poll-only Marstek behaviour; periodic traffic
             # is covered by test_marstek_periodic_broadcast.
             marstek_mqtt_interval=0.0,
@@ -665,6 +722,62 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
         # Consumer-level discoveries
         assert any("consumer1" in t for t in topics)
         assert any("consumer2" in t for t in topics)
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_publishes_addon_hub_device_and_bridge(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port, addon_slug="abc123_astrameter")
+    cfg = service._config
+    ha_prefix = cfg.ha_discovery_prefix
+    base = cfg.base_topic
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        # Hub discovery + bridge are published (retained) on connect, so a
+        # late subscriber still receives them.
+        hub_topic = f"{ha_prefix}/device/astrameter_addon_abc123_astrameter/config"
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(hub_topic)
+            await sub.subscribe(f"{base}/bridge")
+
+            hub_payload: dict = {}
+            bridge_payloads: list[dict] = []
+
+            async def _collect() -> None:
+                async for m in sub.messages:
+                    if str(m.topic) == hub_topic:
+                        hub_payload.update(json.loads(m.payload))
+                    else:
+                        bridge_payloads.append(json.loads(m.payload))
+                    # Fire a consumer event once we've seen the initial state,
+                    # then wait for the updated bridge count.
+                    if (
+                        len(bridge_payloads) == 1
+                        and not service._discovered_ct002_consumers
+                    ):
+                        service.on_ct002_response(
+                            "dev1", "consumer1", SAMPLE_CT002_DATA
+                        )
+                    if hub_payload and any(
+                        p.get("consumer_count") == 1 for p in bridge_payloads
+                    ):
+                        return
+
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(_collect(), timeout=5)
+
+        # Hub device: identifiers == slug (so meter via_device resolves here).
+        assert hub_payload["device"]["identifiers"] == "abc123_astrameter"
+        assert hub_payload["device"]["name"] == "AstraMeter"
+        # Bridge state: initial count 0, then 1 after the consumer event.
+        assert bridge_payloads[0]["consumer_count"] == 0
+        assert bridge_payloads[-1]["consumer_count"] == 1
+        assert all("version" in p for p in bridge_payloads)
     finally:
         await service.stop()
 

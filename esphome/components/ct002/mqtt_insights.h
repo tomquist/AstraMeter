@@ -59,7 +59,6 @@ class MqttInsightsComponent : public Component {
   void set_base_topic(const std::string &v) { this->base_topic_ = v; }
   void set_ha_discovery(bool v) { this->ha_discovery_ = v; }
   void set_ha_discovery_prefix(const std::string &v) { this->ha_discovery_prefix_ = v; }
-  void set_addon_slug(const std::string &v) { this->addon_slug_ = v; }
   void set_marstek_mqtt_enabled(bool v) { this->marstek_mqtt_enabled_ = v; }
   void set_marstek_mqtt_interval_ms(uint32_t v) { this->marstek_mqtt_interval_ms_ = v; }
 
@@ -100,7 +99,6 @@ class MqttInsightsComponent : public Component {
   std::string base_topic_{"astrameter"};
   bool ha_discovery_{true};
   std::string ha_discovery_prefix_{"homeassistant"};
-  std::string addon_slug_;
   bool marstek_mqtt_enabled_{true};
   uint32_t marstek_mqtt_interval_ms_{300000};
 

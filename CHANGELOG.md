@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a phantom empty "Unnamed Device" that kept reappearing under the MQTT integration in Home Assistant, even after deleting it. AstraMeter now publishes a proper top-level **AstraMeter** device — with **Status**, **Version**, and **Consumer Count** entities — that the meter devices are grouped under ([#421](https://github.com/tomquist/astrameter/issues/421)).
+
 
 ## 2.1.1
 

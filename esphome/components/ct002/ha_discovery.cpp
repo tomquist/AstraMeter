@@ -335,7 +335,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix, const std::string &addon_slug) {
+    const std::string &ha_prefix) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev;
   const std::string state_topic = base_topic + "/ct002/" + device_id + "/status";
@@ -384,7 +384,6 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     device["identifiers"] = node_id;
     device["name"] = "AstraMeter CT002 " + device_id;
     device["manufacturer"] = "astrameter";
-    if (!addon_slug.empty()) device["via_device"] = addon_slug;
 
     add_origin(root);
     JsonArray avail = root["availability"].to<JsonArray>();
