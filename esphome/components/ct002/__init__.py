@@ -233,15 +233,30 @@ CONF_DEVICE_ID = "device_id"
 CONF_MARSTEK_MQTT_ENABLED = "marstek_mqtt_enabled"
 CONF_MARSTEK_MQTT_INTERVAL = "marstek_mqtt_interval"
 
+# Fallback `device_id:` when the sub-block leaves it blank. Matches the Python
+# add-on's default (see main.py) so both stacks publish the same HA discovery
+# node (`astrameter_ct002_device-1`). Keep in sync with the C++ member default
+# in mqtt_insights.h.
+DEFAULT_MQTT_INSIGHTS_DEVICE_ID = "device-1"
+
+
+def _resolve_mqtt_insights_device_id(device_id_opt: str) -> str:
+    """Resolve the configured `device_id:` to the value handed to firmware.
+
+    A blank/omitted value falls back to ``DEFAULT_MQTT_INSIGHTS_DEVICE_ID``.
+    """
+    return device_id_opt or DEFAULT_MQTT_INSIGHTS_DEVICE_ID
+
+
 MQTT_INSIGHTS_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(MqttInsightsComponent),
             cv.Optional(CONF_BASE_TOPIC, default="astrameter"): cv.string_strict,
-            # device_id defaults to "device-1" at to_code time when left
-            # blank, matching the Python add-on's default (see main.py) so
-            # both stacks publish the same HA discovery node_id. See
-            # _to_code_mqtt_insights.
+            # device_id defaults to DEFAULT_MQTT_INSIGHTS_DEVICE_ID at
+            # to_code time when left blank (see _resolve_mqtt_insights_device_id),
+            # matching the Python add-on so both stacks publish the same HA
+            # discovery node_id.
             cv.Optional(CONF_DEVICE_ID, default=""): cv.string,
             cv.Optional(CONF_HA_DISCOVERY, default=True): cv.boolean,
             cv.Optional(
@@ -458,7 +473,7 @@ async def _to_code_mqtt_insights(config, ct002_var):
     var = cg.new_Pvariable(sub[CONF_ID])
     await cg.register_component(var, sub)
     cg.add(var.set_ct002(ct002_var))
-    device_id = sub[CONF_DEVICE_ID] or "device-1"
+    device_id = _resolve_mqtt_insights_device_id(sub[CONF_DEVICE_ID])
     cg.add(var.set_device_id(device_id))
     cg.add(var.set_base_topic(sub[CONF_BASE_TOPIC]))
     cg.add(var.set_ha_discovery(sub[CONF_HA_DISCOVERY]))
