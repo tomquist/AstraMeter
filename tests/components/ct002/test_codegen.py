@@ -84,3 +84,39 @@ def test_three_phase_validator_rejects_only_l3():
     }
     with pytest.raises(cv.Invalid):
         ct002_component._validate_three_phase_sensors(config)
+
+
+def test_mqtt_insights_device_id_defaults_to_python_default():
+    # A blank device_id must fall back to the same default the Python add-on
+    # uses, so both stacks publish HA discovery under astrameter_ct002_device-1
+    # (regression: ESPHome used to derive it from the ct002: component id,
+    # yielding astrameter_ct002_ct002_main).
+    assert ct002_component.DEFAULT_MQTT_INSIGHTS_DEVICE_ID == "device-1"
+    assert ct002_component._resolve_mqtt_insights_device_id("") == "device-1"
+
+
+def test_mqtt_insights_device_id_uses_explicit_value():
+    assert ct002_component._resolve_mqtt_insights_device_id("garage") == "garage"
+
+
+def test_mqtt_insights_schema_device_id_blank_by_default():
+    # The schema default must stay blank so _resolve_mqtt_insights_device_id
+    # (not the schema) owns the fallback at to_code time. The sub-block schema
+    # gates on an `mqtt:` component via cv.requires_component, so mark it loaded.
+    from esphome.core import CORE
+
+    added = "mqtt" not in CORE.loaded_integrations
+    if added:
+        CORE.loaded_integrations.add("mqtt")
+    try:
+        config = ct002_component.MQTT_INSIGHTS_SCHEMA({})
+    finally:
+        if added:
+            CORE.loaded_integrations.discard("mqtt")
+    assert config[ct002_component.CONF_DEVICE_ID] == ""
+    assert (
+        ct002_component._resolve_mqtt_insights_device_id(
+            config[ct002_component.CONF_DEVICE_ID]
+        )
+        == "device-1"
+    )

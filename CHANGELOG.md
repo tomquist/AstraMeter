@@ -5,6 +5,7 @@
 - **Changed** transient meter-read failures (in the Shelly emulator and the CT002/CT003 emulator, e.g. when an HTTP source times out) now log a single-line warning instead of a full stack trace; the traceback is included only when running at `LOG_LEVEL = DEBUG` ([#404](https://github.com/tomquist/astrameter/issues/404)).
 - **Added** the Hampel outlier filter and PID controller as optional fields in the Home Assistant add-on Configuration tab (alongside the existing smoothing/deadband options) — all optional and off unless you set them. The web config generator gained a "Home Assistant add-on" target that produces a ready-to-paste add-on options block including these filters.
 - **Fixed** the power sensors published via MQTT Insights now carry `state_class: measurement`, so the instantly-updated grid/target/reported power entities can be used as power sources in the Home Assistant energy dashboard ([#416](https://github.com/tomquist/astrameter/issues/416)).
+- **Fixed** the ESPHome MQTT Insights `device_id` now defaults to `device-1` (matching the Python add-on) instead of the ESPHome `ct002:` component id, so both stacks publish the same Home Assistant discovery node (e.g. `astrameter_ct002_device-1`). Existing ESPHome users who want to keep their previous device can set `device_id:` explicitly under `mqtt_insights:`.
 
 
 ## 2.1.0
