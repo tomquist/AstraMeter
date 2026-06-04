@@ -238,8 +238,10 @@ MQTT_INSIGHTS_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(MqttInsightsComponent),
             cv.Optional(CONF_BASE_TOPIC, default="astrameter"): cv.string_strict,
-            # device_id defaults to the parent ct002 id at to_code time when
-            # left blank (see _to_code_mqtt_insights).
+            # device_id defaults to "device-1" at to_code time when left
+            # blank, matching the Python add-on's default (see main.py) so
+            # both stacks publish the same HA discovery node_id. See
+            # _to_code_mqtt_insights.
             cv.Optional(CONF_DEVICE_ID, default=""): cv.string,
             cv.Optional(CONF_HA_DISCOVERY, default=True): cv.boolean,
             cv.Optional(
@@ -456,7 +458,7 @@ async def _to_code_mqtt_insights(config, ct002_var):
     var = cg.new_Pvariable(sub[CONF_ID])
     await cg.register_component(var, sub)
     cg.add(var.set_ct002(ct002_var))
-    device_id = sub[CONF_DEVICE_ID] or str(config[CONF_ID])
+    device_id = sub[CONF_DEVICE_ID] or "device-1"
     cg.add(var.set_device_id(device_id))
     cg.add(var.set_base_topic(sub[CONF_BASE_TOPIC]))
     cg.add(var.set_ha_discovery(sub[CONF_HA_DISCOVERY]))
