@@ -716,7 +716,13 @@ A: You can only verify the initial configuration. Full testing requires a Marste
 
 ### My output power oscillates or yo-yos between zero and full.
 
-A: This usually means the battery polls the emulator faster than your power source delivers fresh readings, so it keeps over-correcting. Make sure the underlying source pushes new values frequently, then: if the battery polls more often than your source updates, set `THROTTLE_INTERVAL` (try `1`) to limit how often AstraMeter re-reads the source, and `DEDUPE_TIME_WINDOW` (try `0.9`) to drop repeated polls within that window. Then smooth the control loop: raise `DEADBAND` (start around `10`–`20` W) so small fluctuations around zero don't trigger constant corrections, and for finer control tune `SMOOTH_TARGET_ALPHA` (start around `0.2`–`0.4`) and `MAX_SMOOTH_STEP` (start around `40`–`60` W). Tune systematically: change one parameter at a time and observe how the system reacts before adjusting the next.
+A: This usually happens when your battery asks AstraMeter for a new power reading more often than your meter actually has a fresh one. The battery keeps reacting to stale numbers, overshoots, and ends up swinging back and forth. The fix is to slow things down and smooth out the readings. Try these one at a time, and watch how the battery behaves for a few minutes after each change before moving on:
+
+1. **Don't re-read the meter too often.** Set `THROTTLE_INTERVAL = 1` so AstraMeter waits at least one second between readings, and `DEDUPE_TIME_WINDOW = 0.9` so it ignores duplicate readings that arrive in that window.
+2. **Ignore tiny wobbles.** Raise `DEADBAND` to around `10`–`20` (watts) so small fluctuations near zero are treated as "close enough" and don't trigger a correction.
+3. **Smooth the changes.** Set `SMOOTH_TARGET_ALPHA` to around `0.2`–`0.4` and `MAX_SMOOTH_STEP` to around `40`–`60` so the reported power moves in gentle steps instead of jumping.
+
+If it's still swinging after that, the most effective option is to turn on the **[PID Controller](#pid-controller)** — a smart helper that gently nudges the reading toward zero and calms down a battery that tends to over- or under-react. To get started, just set `PID_KP = 0.5` and `PID_MODE = bias`, and leave the other `PID_*` settings alone. There are a few more optional filters (including one that throws out occasional bad spikes) described under [General Configuration](#general-configuration) if you want to fine-tune further.
 
 ### My second battery never kicks in, or my batteries won't settle near zero.
 
