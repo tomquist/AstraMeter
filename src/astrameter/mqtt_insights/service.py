@@ -14,9 +14,11 @@ from typing import Any
 import aiomqtt
 
 from astrameter.config.logger import logger
+from astrameter.version_info import get_version
 
 from .discovery import (
     _sanitize_id,
+    build_addon_device_discovery,
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
     build_shelly_battery_discovery,
@@ -294,6 +296,18 @@ class MqttInsightsService:
                         retain=True,
                     )
 
+                    # Top-level "AstraMeter" hub device — only when running as
+                    # the HA add-on (the per-meter devices link up to it via
+                    # via_device=addon_slug). Republished on every reconnect.
+                    if cfg.ha_discovery and cfg.addon_slug:
+                        topic, payload = build_addon_device_discovery(
+                            cfg.base_topic, cfg.addon_slug, cfg.ha_discovery_prefix
+                        )
+                        await client.publish(
+                            topic, payload=json.dumps(payload).encode(), retain=True
+                        )
+                        await self._publish_bridge(client, cfg)
+
                     # Subscribe to command topics.  Each per-consumer setting
                     # has its own retained command sub-topic
                     # ({base}/ct002/<dev>/consumer/<cid>/<field>/set); the
@@ -351,6 +365,31 @@ class MqttInsightsService:
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
 
+    def _consumer_count(self) -> int:
+        """Total downstream consumers/batteries currently known to AstraMeter."""
+        return len(self._discovered_ct002_consumers) + len(
+            self._discovered_shelly_batteries
+        )
+
+    async def _publish_bridge(
+        self, client: aiomqtt.Client, cfg: MqttInsightsConfig
+    ) -> None:
+        """Publish the retained hub-device state ({base}/bridge).
+
+        No-op unless the hub device exists (HA discovery + add-on slug).
+        """
+        if not (cfg.ha_discovery and cfg.addon_slug):
+            return
+        payload = {
+            "version": get_version(),
+            "consumer_count": self._consumer_count(),
+        }
+        await client.publish(
+            f"{cfg.base_topic}/bridge",
+            payload=json.dumps(payload).encode(),
+            retain=True,
+        )
+
     async def _publish_offline(
         self, cfg: MqttInsightsConfig, tls_context: ssl.SSLContext | None
     ) -> None:
@@ -383,7 +422,7 @@ class MqttInsightsService:
                 elif evt.kind == "shelly":
                     await self._handle_shelly_event(client, base, cfg, evt)
                 elif evt.kind == "shelly_remove":
-                    await self._handle_shelly_remove(client, base, evt)
+                    await self._handle_shelly_remove(client, base, cfg, evt)
             except aiomqtt.MqttError:
                 raise
             except Exception:
@@ -468,6 +507,7 @@ class MqttInsightsService:
                     self._discovered_ct002_consumers.add(consumer_key)
                     if battery_ip and not network_mac:
                         self._pending_arp.add(consumer_key)
+                    await self._publish_bridge(client, cfg)
 
                 if network_mac:
                     self._pending_arp.discard(consumer_key)
@@ -500,6 +540,7 @@ class MqttInsightsService:
         await client.publish(avail_topic, payload=b"offline", retain=True)
         self._discovered_ct002_consumers.discard(consumer_key)
         self._pending_arp.discard(consumer_key)
+        await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_event(
         self,
@@ -559,11 +600,13 @@ class MqttInsightsService:
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
                 )
+                await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_remove(
         self,
         client: aiomqtt.Client,
         base: str,
+        cfg: MqttInsightsConfig,
         evt: _Event,
     ) -> None:
         did = evt.device_id
@@ -572,6 +615,7 @@ class MqttInsightsService:
         avail_topic = f"{base}/shelly/{did}/battery/{ip_slug}/availability"
         await client.publish(avail_topic, payload=b"offline", retain=True)
         self._discovered_shelly_batteries.discard(battery_key)
+        await self._publish_bridge(client, cfg)
 
     async def _listen_commands(self, client: aiomqtt.Client) -> None:
         base = self._config.base_topic

@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a phantom empty "Unnamed Device" appearing under the MQTT integration in Home Assistant (it kept coming back after deletion). AstraMeter's per-meter devices linked up to the add-on via `via_device`, but MQTT `via_device` can only resolve to another MQTT device — never the Supervisor's hassio add-on device — so HA created an empty placeholder. AstraMeter now publishes a proper top-level **AstraMeter** hub device (with **Status**, **Version**, and **Consumer Count** entities) that the meter devices nest under ([#421](https://github.com/tomquist/astrameter/issues/421)).
+
 
 ## 2.1.1
 

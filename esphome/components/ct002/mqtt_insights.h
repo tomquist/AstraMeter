@@ -73,6 +73,11 @@ class MqttInsightsComponent : public Component {
   void on_mqtt_connected_();
   void on_mqtt_disconnected_();
 
+  // Publish the retained hub-device state ({base}/bridge: version +
+  // consumer_count). No-op unless ha_discovery and a non-empty addon_slug.
+  // Mirrors service.py::_publish_bridge.
+  void publish_bridge_state_();
+
   // Command path — invoked from the mqtt subscribe callback.
   void handle_command_message_(const std::string &topic, const std::string &payload);
   void handle_marstek_message_(const std::string &topic, const std::string &payload);

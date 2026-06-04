@@ -259,6 +259,80 @@ def build_ct002_consumer_discovery(
     return topic, payload
 
 
+# ── Add-on hub device ─────────────────────────────────────────────────────
+
+
+def build_addon_device_discovery(
+    base_topic: str,
+    addon_slug: str,
+    ha_prefix: str,
+) -> tuple[str, dict]:
+    """Discovery for the top-level "AstraMeter" device.
+
+    Its ``identifiers`` is the add-on slug so the ``via_device`` references on
+    the per-meter devices resolve to a real, named MQTT device instead of an
+    empty HA placeholder. (MQTT ``via_device`` only ever resolves within the
+    MQTT identifier namespace, so it can't point at the Supervisor's own
+    hassio add-on device — this is the MQTT-native stand-in for it.)
+
+    Exposes a connectivity ``status`` sensor (driven by the system LWT topic),
+    plus diagnostic ``version`` and ``consumer_count`` sensors fed from the
+    retained ``{base}/bridge`` topic.
+    """
+    safe_slug = _sanitize_id(addon_slug)
+    node_id = f"astrameter_addon_{safe_slug}"
+    uid_prefix = f"astrameter_addon_{safe_slug}"
+    bridge_topic = f"{base_topic}/bridge"
+
+    components: dict[str, dict] = {
+        # No availability block on purpose: this sensor IS the offline
+        # indicator, so it must flip to "off" rather than going unavailable
+        # when AstraMeter drops the LWT.
+        "status": {
+            "platform": "binary_sensor",
+            "unique_id": f"{uid_prefix}_status",
+            "name": "Status",
+            "device_class": "connectivity",
+            "state_topic": f"{base_topic}/status",
+            "payload_on": "online",
+            "payload_off": "offline",
+            "entity_category": "diagnostic",
+        },
+        "version": {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_version",
+            "name": "Version",
+            "state_topic": bridge_topic,
+            "value_template": "{{ value_json.version }}",
+            "entity_category": "diagnostic",
+            "availability": [_system_availability(base_topic)],
+        },
+        "consumer_count": {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_consumer_count",
+            "name": "Consumer Count",
+            "state_topic": bridge_topic,
+            "value_template": "{{ value_json.consumer_count }}",
+            "entity_category": "diagnostic",
+            "availability": [_system_availability(base_topic)],
+        },
+    }
+
+    payload = {
+        "device": {
+            "identifiers": addon_slug,
+            "name": "AstraMeter",
+            "manufacturer": "astrameter",
+        },
+        "origin": _origin(),
+        "components": components,
+        "state_topic": bridge_topic,
+    }
+
+    topic = f"{ha_prefix}/device/{node_id}/config"
+    return topic, payload
+
+
 # ── CT002 device-level ────────────────────────────────────────────────────
 
 
