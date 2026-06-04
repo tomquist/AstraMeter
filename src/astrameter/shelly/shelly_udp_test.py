@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import socket
 from ipaddress import IPv4Network
 
@@ -21,6 +22,11 @@ class DummyPowermeter(Powermeter):
         # Same physical reading as get_powermeter_watts; do not bump call_count so
         # throttling/dedupe tests that only observe get_powermeter_watts stay stable.
         return [1.0]
+
+
+class FailingPowermeter(Powermeter):
+    async def get_powermeter_watts(self):
+        raise TimeoutError("Connection timeout to host http://192.168.2.17/")
 
 
 class _FakeClock:
@@ -115,6 +121,43 @@ async def test_multiple_requests_with_throttling():
         )
     finally:
         await shelly.stop()
+
+
+async def _drive_failing_read(caplog, level):
+    """Send one request to a Shelly backed by a failing meter and return the
+    single captured log record (and the fake transport, to assert no reply)."""
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly([(FailingPowermeter(), cf, False)], udp_port=0, device_id="test")
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+
+    with caplog.at_level(level, logger="astrameter"):
+        await shelly._handle_request(transport, req, ("127.0.0.1", 54321))
+
+    records = [
+        r for r in caplog.records if "Could not read meter values" in r.getMessage()
+    ]
+    assert len(records) == 1
+    return records[0], transport
+
+
+async def test_meter_read_failure_logs_one_liner_without_traceback(caplog):
+    record, transport = await _drive_failing_read(caplog, logging.WARNING)
+    # No response is sent to the battery when the meter read fails.
+    assert transport.sent == []
+    assert record.levelno == logging.WARNING
+    # At the normal level the traceback is suppressed: just the one-liner.
+    assert not record.exc_info
+    assert "Connection timeout" in record.getMessage()
+
+
+async def test_meter_read_failure_includes_traceback_at_debug(caplog):
+    record, _ = await _drive_failing_read(caplog, logging.DEBUG)
+    # At DEBUG the full traceback is attached.
+    assert record.exc_info is not None
+    assert record.exc_info[0] is TimeoutError
 
 
 async def _send_req(port, request_id, timeout=2.0):

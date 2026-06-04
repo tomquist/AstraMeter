@@ -511,6 +511,12 @@ class TestProbeLockup:
                 f"{[r.getMessage() for r in stale_warnings]}"
             )
 
+            # At WARNING level the stale warnings are one-liners: the full
+            # traceback is reserved for DEBUG (see logger.debug_traceback()).
+            assert all(not r.exc_info for r in stale_warnings), (
+                "Stale warnings should not carry a traceback at WARNING level"
+            )
+
             # Batteries held their state — they did NOT get commanded
             # off-axis by the balancer acting on bad data.  Tolerance
             # is generous because the balancer can still emit small

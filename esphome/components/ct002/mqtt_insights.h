@@ -96,7 +96,7 @@ class MqttInsightsComponent : public Component {
   // Configuration.
   ct002::CT002Component *ct002_{nullptr};
   mqtt::MQTTClientComponent *mqtt_{nullptr};
-  std::string device_id_{"ct002_main"};
+  std::string device_id_{"device-1"};
   std::string base_topic_{"astrameter"};
   bool ha_discovery_{true};
   std::string ha_discovery_prefix_{"homeassistant"};

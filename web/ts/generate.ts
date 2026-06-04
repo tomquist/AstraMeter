@@ -125,6 +125,9 @@ function marstekSection(state: State): string {
   const m = state.marstek || {};
   if (!m.enabled) return "";
   const f = m.fields || {};
+  // Registration needs credentials; skip the section while it's enabled but
+  // unconfigured so the default-on toggle never emits a broken [MARSTEK].
+  if (isBlank(f.MAILBOX) || isBlank(f.PASSWORD)) return "";
   const lines = ["[MARSTEK]", "ENABLE = True"];
   for (const field of MARSTEK_FIELDS) {
     const line = iniLine(field, f[field.key]);
@@ -137,6 +140,9 @@ function mqttInsightsSection(state: State): string {
   const mi = state.mqttInsights || {};
   if (!mi.enabled) return "";
   const f = mi.fields || {};
+  // Insights needs a broker to connect to; skip while enabled but unconfigured
+  // so the default-on toggle never emits an empty [MQTT_INSIGHTS] section.
+  if (isBlank(f.BROKER)) return "";
   const lines = ["[MQTT_INSIGHTS]"];
   for (const field of MQTT_INSIGHTS_FIELDS) {
     const line = iniLine(field, f[field.key]);
@@ -552,6 +558,132 @@ export function generateEsphome(state: State): string {
   return out.join("\n\n") + "\n";
 }
 
+// ── Home Assistant add-on options (YAML) ──────────────────────────────────────
+//
+// The add-on can only read grid power from a Home Assistant sensor and runs a
+// single meter, so this emits the flat `key: value` options block you paste into
+// the add-on's Configuration → "Edit in YAML". Anything the UI can't express
+// (other powermeter sources, multiple meters) needs a custom config.ini instead.
+
+// Add-on options that are string-typed in the schema (entity ids, MACs, comma
+// lists, credentials, URIs). These must always be quoted so an all-digit value
+// like a MAC ("001122334455") keeps its leading zeros and isn't read as a
+// number, and so float-ish transform values aren't coerced for a `str?` field.
+const QUOTED_OPTION_KEYS = new Set([
+  "power_input_alias",
+  "power_output_alias",
+  "device_types",
+  "ct_mac",
+  "power_offset",
+  "power_multiplier",
+  "pid_mode",
+  "marstek_mailbox",
+  "marstek_password",
+  "mqtt_uri",
+]);
+
+function quoteYaml(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+// Render a YAML scalar. String-typed option keys are always quoted; for other
+// keys, bare booleans and numbers pass through and everything else is quoted.
+function yamlScalar(value: unknown, key?: string): string {
+  const s = String(value).trim();
+  if (key && QUOTED_OPTION_KEYS.has(key)) return quoteYaml(s);
+  if (s === "true" || s === "false") return s;
+  if (/^-?\d+(\.\d+)?$/.test(s)) return s;
+  return quoteYaml(s);
+}
+
+export function generateHomeAssistant(state: State): string {
+  const opts: string[] = [];
+  const add = (key: string, value: unknown): void => {
+    if (isBlank(value)) return;
+    opts.push(`${key}: ${yamlScalar(value, key)}`);
+  };
+
+  const g = state.general || {};
+  const meter = (state.meters && state.meters[0]) || ({} as Meter);
+  const f = meter.fields || {};
+  const tuning = meter.tuning || {};
+
+  // Grid-power source: a single signed sensor, or separate import/export entities.
+  const calc = f.POWER_CALCULATE === "True" || f.POWER_CALCULATE === true;
+  if (calc && !isBlank(f.POWER_INPUT_ALIAS)) {
+    add("power_input_alias", f.POWER_INPUT_ALIAS);
+    add("power_output_alias", f.POWER_OUTPUT_ALIAS);
+  } else {
+    add("power_input_alias", f.CURRENT_POWER_ENTITY);
+  }
+
+  const types = (g.deviceTypes && g.deviceTypes.length ? g.deviceTypes : ["shellypro3em"]).join(",");
+  add("device_types", types);
+
+  // throttle / wait are top-level add-on options; the add-on has no per-meter
+  // override, so prefer the global value and fall back to the meter tuning.
+  add("throttle_interval", !isBlank(g.throttleInterval) ? g.throttleInterval : tuning.THROTTLE_INTERVAL);
+  add("wait_for_next_message", !isBlank(g.waitForNextMessage) ? g.waitForNextMessage : tuning.WAIT_FOR_NEXT_MESSAGE);
+  add("dedupe_time_window", g.dedupeTimeWindow);
+
+  // CT identity / efficiency options.
+  const ctf = (state.ct && state.ct.fields) || {};
+  add("ct_mac", ctf.CT_MAC);
+  add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
+  add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
+
+  // Signal-conditioning filters (transform, smoothing, deadband, hampel, pid).
+  // Option names are the lower-cased INI keys; throttle/wait handled above.
+  for (const field of PER_METER_TUNING) {
+    if (field.key === "THROTTLE_INTERVAL" || field.key === "WAIT_FOR_NEXT_MESSAGE") continue;
+    add(field.key.toLowerCase(), tuning[field.key]);
+  }
+
+  // Marstek managed CT registration.
+  if (state.marstek && state.marstek.enabled) {
+    const m = state.marstek.fields || {};
+    if (!isBlank(m.MAILBOX) && !isBlank(m.PASSWORD)) {
+      add("marstek_auto_register_ct_device", true);
+      add("marstek_mailbox", m.MAILBOX);
+      add("marstek_password", m.PASSWORD);
+    }
+  }
+
+  // MQTT Insights: only a custom external broker maps to an add-on option; the
+  // add-on uses Home Assistant's internal broker automatically otherwise.
+  if (state.mqttInsights && state.mqttInsights.enabled) {
+    const mi = state.mqttInsights.fields || {};
+    if (!isBlank(mi.BROKER)) {
+      // TLS is a boolean from the UI, but restored state may carry a string;
+      // treat only an explicit true / "true" / "1" as on.
+      const tlsOn = mi.TLS === true || mi.TLS === "true" || mi.TLS === "1";
+      const scheme = tlsOn ? "mqtts" : "mqtt";
+      // Percent-encode credentials so special characters (@, :, /, …) don't
+      // break the URI and survive parse_mqtt_uri's unquoting.
+      const user = !isBlank(mi.USERNAME) ? encodeURIComponent(String(mi.USERNAME).trim()) : "";
+      const pass = !isBlank(mi.PASSWORD) ? encodeURIComponent(String(mi.PASSWORD).trim()) : "";
+      const cred = user ? `${user}${pass ? ":" + pass : ""}@` : "";
+      const port = !isBlank(mi.PORT) ? `:${String(mi.PORT).trim()}` : "";
+      add("mqtt_uri", `${scheme}://${cred}${String(mi.BROKER).trim()}${port}`);
+    }
+  }
+
+  const header = [
+    "# AstraMeter — Home Assistant add-on options.",
+    "# Paste this into the add-on's Configuration tab via the ⋮ menu → \"Edit in YAML\".",
+    "#",
+    "# The add-on reads grid power from a Home Assistant sensor and runs a single",
+    "# meter. For anything this UI can't express (other power-meter sources,",
+    "# multiple meters), generate a config.ini instead (switch the target above),",
+    "# drop it in /addon_configs/a0ef98c5_b2500_meter/, and set the add-on's",
+    "# \"Custom Config\" option to its filename.",
+  ].join("\n");
+
+  return header + "\n" + opts.join("\n") + "\n";
+}
+
 export function generate(state: State): string {
-  return state.target === "esphome" ? generateEsphome(state) : generateConfigIni(state);
+  if (state.target === "esphome") return generateEsphome(state);
+  if (state.target === "homeassistant") return generateHomeAssistant(state);
+  return generateConfigIni(state);
 }

@@ -68,6 +68,7 @@ def build_ct002_consumer_discovery(
             "platform": "sensor",
             "unique_id": f"{uid_prefix}_{key}",
             "device_class": "power",
+            "state_class": "measurement",
             "unit_of_measurement": "W",
             "state_topic": state_topic,
             "value_template": tmpl,
@@ -278,6 +279,7 @@ def build_ct002_device_discovery(
             "unique_id": f"{uid_prefix}_smooth_target",
             "name": None,  # primary
             "device_class": "power",
+            "state_class": "measurement",
             "unit_of_measurement": "W",
             "state_topic": state_topic,
             "value_template": "{{ value_json.smooth_target }}",
@@ -358,6 +360,7 @@ def build_shelly_battery_discovery(
             "platform": "sensor",
             "unique_id": f"{uid_prefix}_{key}",
             "device_class": "power",
+            "state_class": "measurement",
             "unit_of_measurement": "W",
             "state_topic": state_topic,
             "value_template": tmpl,

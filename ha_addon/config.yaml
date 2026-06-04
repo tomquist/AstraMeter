@@ -1,5 +1,5 @@
 name: "AstraMeter"
-version: "2.1.0"
+version: "2.1.1"
 slug: b2500_meter
 description: >-
   "Replicates a Smart Meter device for Marstek energy storage systems (formerly B2500 Meter) while allowing integration with various smart meters."
@@ -60,5 +60,13 @@ schema:
   smooth_target_alpha: float(0,1)?
   max_smooth_step: float(0,)?
   deadband: float(0,)?
+  hampel_window: int(0,)?
+  hampel_n_sigma: float(0,)?
+  hampel_min_threshold: float(0,)?
+  pid_kp: float(0,)?
+  pid_ki: float?
+  pid_kd: float?
+  pid_output_max: float(0,)?
+  pid_mode: list(bias|replace)?
   custom_config: str?
   mqtt_uri: str?
