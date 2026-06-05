@@ -142,6 +142,13 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     // Inject grid power straight into the sensor cache, stamped now so the
     // SensorBackedPowermeter freshness check passes. matched-1 values given;
     // missing phases default to 0.
+    //
+    // Iterate the full size-3 array (not num_phases_): unlike sensor_stale
+    // below — which only needs to invalidate the [0, num_phases_) stamps the
+    // reader inspects — `grid` fully (re)defines every slot of raw_values_ /
+    // raw_stamp_ms_ (both std::array<…, 3>) so the injected snapshot is
+    // completely specified and the reply can echo all three, regardless of how
+    // many phases this binary reads.
     const uint32_t now_ms = ::esphome::millis();
     const double vals[3] = {a, b, c};
     for (uint8_t p = 0; p < 3; ++p) {
