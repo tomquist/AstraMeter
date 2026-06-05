@@ -126,7 +126,7 @@ class BalancerConfig:
         _clamp("efficiency_rotation_interval", 1, float("inf"))
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
-        _clamp("min_dc_output", 0.0, float("inf"))
+        _clamp("min_dc_output", 0.0, 100.0)
 
 
 # ---------------------------------------------------------------------------
@@ -847,9 +847,9 @@ class LoadBalancer:
         a sustained surplus it receives a large negative reading it cannot
         follow while its output stays ~0 — it must still be floored.
         """
-        if not charge_zone or not consumer_id:
+        if not charge_zone or not consumer_id or consumer_id not in reports:
             return result
-        report = reports.get(consumer_id, {})
+        report = reports[consumer_id]
         floor = _report_min_dc_output(report, self._cfg.min_dc_output)
         if (
             floor <= 0

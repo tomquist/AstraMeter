@@ -79,7 +79,7 @@ void BalancerConfig::clamp() {
   if (efficiency_rotation_interval < 1.0f) efficiency_rotation_interval = 1.0f;
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   clamp_v(efficiency_saturation_threshold, 0.0f, 1.0f);
-  if (min_dc_output < 0.0f) min_dc_output = 0.0f;
+  clamp_v(min_dc_output, 0.0f, 100.0f);
 }
 
 // -------------------------------------------------------------------------

@@ -96,10 +96,12 @@ int main() {
       in >> cid >> mode_str >> manual >> grid >> n;
       ReportMap reports;
       for (int i = 0; i < n; ++i) {
-        std::string rc, dev, phase;
+        std::string rc, dev, phase, min_dc;
         float power = 0.0f;
-        in >> rc >> dev >> phase >> power;
-        reports[rc] = ConsumerReport{dev, phase, power};
+        in >> rc >> dev >> phase >> power >> min_dc;
+        ConsumerReport r{dev, phase, power};
+        if (min_dc != "none") r.min_dc_output = std::stof(min_dc);
+        reports[rc] = std::move(r);
       }
       const auto out = balancer->compute_target(cid, parse_mode(mode_str, manual), reports,
                                                 grid, {}, {}, {});

@@ -581,11 +581,12 @@ live from Home Assistant:
   leaving it in the pool. Tune it while watching the batteries — the change
   takes effect on the next control cycle.
 - **Min DC Output** (DC batteries only) — per-battery override of the
-  `MIN_DC_OUTPUT` anti-sleep floor. Keeps a DC
-  battery's inverter awake under PV surplus by holding it at a small
-  charge-direction target instead of 0 W. `0` disables it for that battery;
-  leave it unset to use the device-wide default. This entity is only published
-  for DC-coupled batteries, since AC-chargeable models don't need it.
+  `MIN_DC_OUTPUT` anti-sleep floor. Keeps a DC battery's inverter awake under
+  PV surplus by holding it at a small charge-direction target instead of 0 W.
+  Until you set it, the battery uses the device-wide `MIN_DC_OUTPUT` default;
+  set it to `0` to disable the floor for that specific battery. This entity is
+  only published for DC-coupled batteries, since AC-chargeable models don't
+  need it.
 
 Each of these controls publishes its set-command **retained**, so Home
 Assistant restores your values across an AstraMeter restart without any extra

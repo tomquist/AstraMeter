@@ -131,6 +131,16 @@ def test_no_floor_under_grid_import():
     assert out[0] == 200.0  # positive (discharge) target, untouched
 
 
+def test_absent_consumer_is_not_floored():
+    """A queried consumer that isn't in the report snapshot is never floored —
+    we have no device_type/phase for it. Matches the C++ stack, which
+    early-returns on a missing consumer."""
+    reports = {"a": _report(0.0)}
+    on = _target(_make_balancer(min_dc_output=25), "z", reports, -50.0)
+    off = _target(_make_balancer(min_dc_output=0), "z", reports, -50.0)
+    assert on == off
+
+
 def test_mixed_fleet_dc_floored_ac_unperturbed():
     """In a mixed fleet under surplus, the DC battery is floored while the AC
     battery's reply is byte-identical with the floor enabled vs disabled."""

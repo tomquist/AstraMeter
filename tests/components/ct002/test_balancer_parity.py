@@ -142,9 +142,14 @@ class PyDriver:
             reports = {}
             i = 6
             for _ in range(n):
-                rc, dev, phase, power = parts[i : i + 4]
-                reports[rc] = {"device_type": dev, "phase": phase, "power": int(power)}
-                i += 4
+                rc, dev, phase, power, min_dc = parts[i : i + 5]
+                reports[rc] = {
+                    "device_type": dev,
+                    "phase": phase,
+                    "power": int(power),
+                    "min_dc_output": None if min_dc == "none" else float(min_dc),
+                }
+                i += 5
             res = self.balancer.compute_target(
                 cid,
                 ConsumerMode(mode, float(manual)),
@@ -220,8 +225,12 @@ _CFG_DEFAULT = "cfg 0 0 900 0.4 0.15 20 90 0"
 _CFG_EFFICIENCY = "cfg 1 100 900 0.4 0.15 20 90 1"
 
 
-def _report(cid: str, phase: str, power: int, dev: str = "HMA-2") -> str:
-    return f"{cid} {dev} {phase} {power}"
+def _report(
+    cid: str, phase: str, power: int, dev: str = "HMA-2", min_dc: str = "none"
+) -> str:
+    # Trailing min_dc token carries the per-consumer min_dc_output override:
+    # "none" = unset (fall back to the global floor), else a float.
+    return f"{cid} {dev} {phase} {power} {min_dc}"
 
 
 def _target(
@@ -319,6 +328,15 @@ def _scenario_dc_floor() -> list[str]:
     mixed = [_report("dc", "A", 0), _report("ac", "A", -100, dev="HMG-50")]
     lines.append(_target("dc", mixed, grid=-50))
     lines.append(_target("ac", mixed, grid=-50))
+    # Per-consumer override differentially: "a" overrides to 50, "b" falls back
+    # to the global 25, "c" explicitly disables its own floor with 0.
+    override = [
+        _report("a", "A", 0, min_dc="50"),
+        _report("b", "A", 0),
+        _report("c", "A", 0, min_dc="0"),
+    ]
+    for cid in ("a", "b", "c"):
+        lines.append(_target(cid, override, grid=-30))
     return lines
 
 
