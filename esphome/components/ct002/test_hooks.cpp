@@ -16,6 +16,10 @@
 //                         what the balancer/saturation/eviction/dedup care
 //                         about, so this is the usual driver)
 //   clock_real            disengage the mock clock (back to millis())
+//   sensor_stale          back-date the sensor stamps past max_sensor_age so
+//                         the next read reports the grid sensor unavailable
+//                         (SensorBackedPowermeter returns {}), which the
+//                         handler maps to [0,0,0] — the meter-outage path.
 //
 // Every command replies with "ok ..." (or "err ...") to the sender so the
 // test can synchronise (send command, await ack, then poll the CT002 port).
@@ -171,6 +175,16 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     char tmp[48];
     std::snprintf(tmp, sizeof(tmp), "ok dedupe %u", this->dedupe_window_ms_);
     reply = tmp;
+  } else if (matched >= 1 && std::strcmp(verb, "sensor_stale") == 0) {
+    // Force the SensorBackedPowermeter freshness check to fail: back-date the
+    // per-phase stamps past max_sensor_age_ms_ so the next read reports the
+    // sensor unavailable (returns {}), which handle_request_ maps to [0,0,0].
+    // Deterministic — no real-time sleep needed. A subsequent `grid` command
+    // re-stamps "now" and restores freshness.
+    const uint32_t now = ::esphome::millis();
+    const uint32_t past = now - (this->max_sensor_age_ms_ + 1000);  // unsigned wrap is fine
+    for (uint8_t p = 0; p < 3; ++p) this->raw_stamp_ms_[p] = past;
+    reply = "ok sensor_stale";
   } else if (matched >= 1 && std::strcmp(verb, "force_rotation") == 0) {
     // Mirror ct002.force_efficiency_rotation() for the rotation tests.
     this->force_balancer_rotation();

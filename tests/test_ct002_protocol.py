@@ -303,6 +303,104 @@ async def test_handle_request_skips_instruction_update_in_inspection_mode():
     assert consumer.last_instructed_power == 0.0
 
 
+class _CaptureTransport:
+    """Captures the bytes CT002 sends back so the response can be decoded."""
+
+    def __init__(self) -> None:
+        self.sent: bytes | None = None
+
+    def sendto(self, data: bytes, _addr) -> None:
+        self.sent = data
+
+
+async def _drive_and_capture(
+    device: CT002,
+    battery_mac: str,
+    phase: str,
+    reported_power: int,
+    *,
+    before_send,
+) -> list[str]:
+    """Drive one request with *before_send* pinned and return the decoded
+    response fields (so per-phase deltas can be asserted)."""
+    transport = _CaptureTransport()
+    device.before_send = before_send
+    request = build_payload(
+        ["HMG-50", battery_mac, "HME-4", "112233445566", phase, str(reported_power)]
+    )
+    await device._handle_request(request, ("1.1.1.1", 12345), transport)
+    assert transport.sent is not None, "CT002 sent no response"
+    fields, error = parse_request(transport.sent)
+    assert error is None, error
+    return fields
+
+
+async def _seed_good_reading(device: CT002, battery_mac: str) -> None:
+    """Establish a non-zero cached grid reading via a successful poll."""
+
+    async def good(_addr, _fields, _consumer_id):
+        return [500, 0, 0]
+
+    await _drive_and_capture(device, battery_mac, "A", 0, before_send=good)
+
+
+async def _raise_stale(_addr, _fields, _consumer_id):
+    raise ValueError("powermeter unavailable (test)")
+
+
+async def test_handle_request_holds_with_zero_delta_when_before_send_fails():
+    """Issue #403: when the powermeter is unavailable (before_send raises),
+    the response must be a zero adjustment so the battery holds — not a delta
+    re-derived from the stale cached reading (which would wind it up)."""
+    device = CT002(ct_mac="112233445566", active_control=True, fair_distribution=True)
+    await _seed_good_reading(device, "AABBCCDDEEFF")
+    assert device._consumers["aabbccddeeff"].values == [500, 0, 0]
+
+    fields = await _drive_and_capture(
+        device, "AABBCCDDEEFF", "A", 250, before_send=_raise_stale
+    )
+
+    # Per-phase deltas + total are all zero (hold).
+    assert fields[4:8] == ["0", "0", "0", "0"], fields[4:8]
+    # The cached reading is preserved, not overwritten by the failure.
+    assert device._consumers["aabbccddeeff"].values == [500, 0, 0]
+    # The battery is instructed to hold at its reported output (delta 0).
+    assert device._consumers["aabbccddeeff"].last_instructed_power == 250.0
+
+
+async def test_handle_request_inspection_mode_holds_when_before_send_fails():
+    """A phase self-diagnosis poll (inspection marker) while the meter is down
+    must not be fed the frozen per-phase reading — feeding stale data is what
+    corrupts the Venus phase detection in #403."""
+    device = CT002(ct_mac="112233445566", active_control=True)
+    await _seed_good_reading(device, "AABBCCDDEEFF")
+
+    fields = await _drive_and_capture(
+        device, "AABBCCDDEEFF", "0", 0, before_send=_raise_stale
+    )
+
+    assert fields[4:7] == ["0", "0", "0"], fields[4:7]
+
+
+async def test_handle_request_uses_cache_when_before_send_returns_none():
+    """A before_send returning None (e.g. no powermeter matches this client)
+    is NOT a failure: the cached reading is still served. Guards that the hold
+    path keys on the raised exception, not on a None return."""
+    device = CT002(ct_mac="112233445566", active_control=True)
+    await _seed_good_reading(device, "AABBCCDDEEFF")
+
+    async def returns_none(_addr, _fields, _consumer_id):
+        return None
+
+    # Inspection mode skips the balancer, so the served value is the cached
+    # reading verbatim — proving None is treated as "use cache", not "hold".
+    fields = await _drive_and_capture(
+        device, "AABBCCDDEEFF", "0", 0, before_send=returns_none
+    )
+
+    assert fields[4] == "500", fields[4]
+
+
 def test_ct002_info_idx_increments_and_wraps():
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
