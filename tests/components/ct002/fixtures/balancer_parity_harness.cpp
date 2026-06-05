@@ -70,11 +70,16 @@ int main() {
             sat_min_target = 20.0f, sat_grace = 90.0f;
       in >> fair >> min_eff >> rot >> sat_threshold >> sat_alpha >> sat_min_target >>
           sat_grace >> sat_enabled;
+      // Trailing-optional so legacy 8-field cfg lines still parse (operator>>
+      // failure leaves the target 0 under C++11+).
+      float min_dc = 0.0f;
+      in >> min_dc;
       BalancerConfig cfg;
       cfg.fair_distribution = (fair != 0);
       cfg.min_efficient_power = min_eff;
       cfg.efficiency_rotation_interval = rot;
       cfg.efficiency_saturation_threshold = sat_threshold;
+      cfg.min_dc_output = min_dc;
       balancer = std::make_unique<LoadBalancer>(
           cfg, sat_alpha, sat_min_target, /*sat_decay=*/0.995f, sat_grace,
           /*sat_stall=*/60.0f, sat_enabled != 0, []() { return g_clock; }, nullptr);

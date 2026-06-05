@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Added** a `MIN_DC_OUTPUT` anti-sleep floor for DC-coupled batteries (e.g. Marstek B2500): when such a battery would be commanded to 0 W under PV surplus — which makes some DC inverters shut their output off and get stuck asleep — AstraMeter now holds it at a small charge-direction target instead, keeping the inverter awake. It only ever affects DC batteries (AC-chargeable Venus models are untouched), defaults to off, and can be overridden per battery via a new **Min DC Output** Home Assistant entity ([#425](https://github.com/tomquist/astrameter/issues/425)).
 - **Fixed** a phantom empty "Unnamed Device" that kept reappearing under the MQTT integration in Home Assistant, even after deleting it. AstraMeter now publishes a proper top-level **AstraMeter** device — with **Status**, **Version**, and **Consumer Count** entities — that the meter devices are grouped under ([#421](https://github.com/tomquist/astrameter/issues/421)).
 
 

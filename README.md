@@ -355,6 +355,15 @@ mid-interval failures still trigger a swap.
   battery's saturation score decays while it has no target. Applied each cycle.
   Lower values allow faster recovery; 1.0 means the battery never becomes
   eligible again.
+- **MIN_DC_OUTPUT** (default 0 = disabled) — Anti-sleep floor (W) for DC-coupled
+  batteries (e.g. Marstek B2500). Some DC inverters shut off and get stuck
+  asleep when commanded to 0 W under PV surplus. With a floor set, whenever such
+  a battery would be steered to 0 W in charge territory AstraMeter instead holds
+  it at a small charge-direction target (e.g. `-25`) so the inverter stays awake;
+  a DC battery can't actually AC-charge, so no energy is moved. Only ever affects
+  DC batteries — AC-chargeable models (Venus `HMG-*`/`VNS*`) absorb surplus by
+  charging and are never touched. Can be overridden per battery via the
+  **Min DC Output** Home Assistant entity (published for DC batteries only).
 
 ### CT002 / CT003
 
@@ -571,6 +580,12 @@ live from Home Assistant:
   proportion between batteries matters; `0` parks a battery at 0 W while
   leaving it in the pool. Tune it while watching the batteries — the change
   takes effect on the next control cycle.
+- **Min DC Output** (DC batteries only) — per-battery override of the
+  `MIN_DC_OUTPUT` anti-sleep floor. Keeps a DC
+  battery's inverter awake under PV surplus by holding it at a small
+  charge-direction target instead of 0 W. `0` disables it for that battery;
+  leave it unset to use the device-wide default. This entity is only published
+  for DC-coupled batteries, since AC-chargeable models don't need it.
 
 Each of these controls publishes its set-command **retained**, so Home
 Assistant restores your values across an AstraMeter restart without any extra

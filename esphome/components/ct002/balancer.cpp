@@ -79,6 +79,7 @@ void BalancerConfig::clamp() {
   if (efficiency_rotation_interval < 1.0f) efficiency_rotation_interval = 1.0f;
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   clamp_v(efficiency_saturation_threshold, 0.0f, 1.0f);
+  if (min_dc_output < 0.0f) min_dc_output = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -486,6 +487,35 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
   return result;
 }
 
+std::array<float, 3> LoadBalancer::apply_dc_floor_(
+    const std::optional<std::string> &consumer_id, const ReportMap &reports,
+    bool charge_zone, std::array<float, 3> result) {
+  // Hold a DC-coupled battery at a small charge-direction output (-floor) under
+  // surplus so its inverter stays awake. Skipped for AC-chargeable batteries
+  // and weight-0 parking. Gates on actual reported output, not the implied
+  // command (a DC battery can't AC-charge, so a big negative command is
+  // un-actionable and must still be floored). last_target is intentionally NOT
+  // updated here — see the Python source for the saturation rationale. #425.
+  if (!charge_zone || !consumer_id) return result;
+  auto it = reports.find(*consumer_id);
+  if (it == reports.end()) return result;
+  const ConsumerReport &report = it->second;
+  const float floor = report.min_dc_output.value_or(this->cfg_.min_dc_output);
+  if (floor <= 0.0f || is_ac_chargeable(report.device_type) || report.weight == 0.0f) {
+    return result;
+  }
+  const float reported = report.power;
+  if (reported <= -floor) return result;
+  std::string phase = report.phase.empty() ? "A" : report.phase;
+  for (auto &c : phase) c = static_cast<char>(std::toupper(c));
+  size_t idx = 0;
+  if (phase == "B") idx = 1;
+  else if (phase == "C") idx = 2;
+  std::array<float, 3> out{0.0f, 0.0f, 0.0f};
+  out[idx] = -floor - reported;
+  return out;
+}
+
 std::array<float, 3> LoadBalancer::split_by_phase_(
     float target, const ReportMap &reports,
     const std::unordered_map<std::string, float> *weights) {
@@ -664,6 +694,10 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   }
   const bool in_charge_territory =
       any_ac_chargeable && (grid_total < 0.0f || (grid_total == 0.0f && ac_charging));
+  // DC anti-sleep floor gate: drops the any_ac_chargeable precondition so it
+  // also covers the all-DC surplus case; excludes the pure discharge
+  // equilibrium. See apply_dc_floor_ and issue #425.
+  const bool charge_zone = grid_total < 0.0f || (grid_total == 0.0f && ac_charging);
   std::unordered_set<std::string> charge_blind;
   if (in_charge_territory) {
     for (const auto &r : reports) {
@@ -696,7 +730,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   }
 
   if (consumer_id && charge_blind.count(*consumer_id)) {
-    return this->steer_to_zero_(consumer_id, reports);
+    return this->apply_dc_floor_(consumer_id, reports, charge_zone,
+                                 this->steer_to_zero_(consumer_id, reports));
   }
 
   if (any_fading && consumer_id) {
@@ -762,7 +797,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     target = 0.0f;
   }
   if (consumer_id) this->get_consumer_(*consumer_id).last_target = target;
-  return split_by_phase_(target, reports, &eff_part);
+  return this->apply_dc_floor_(consumer_id, reports, charge_zone,
+                               split_by_phase_(target, reports, &eff_part));
 }
 
 float LoadBalancer::balance_correction_(const std::string &consumer_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from astrameter.ct002.balancer import _is_ac_chargeable
 from astrameter.version_info import get_git_commit_sha
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -213,6 +214,29 @@ def build_ct002_consumer_discovery(
         "retain": True,
         "entity_category": "config",
     }
+
+    # DC anti-sleep floor — a minimum charge-direction output that keeps a
+    # DC-coupled battery's inverter awake under PV surplus instead of letting
+    # it sleep at 0 W.  Published for DC batteries only: the balancer skips
+    # AC-chargeable units, so the control would be an inert no-op there.  An
+    # unknown device_type is treated as DC, matching the balancer.
+    if not _is_ac_chargeable(device_type):
+        components["min_dc_output"] = {
+            "platform": "number",
+            "unique_id": f"{uid_prefix}_min_dc_output",
+            "name": "Min DC Output",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "mode": "box",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.min_dc_output | default(0) }}",
+            "command_topic": f"{state_topic}/min_dc_output/set",
+            "retain": True,
+            "entity_category": "config",
+        }
 
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
 

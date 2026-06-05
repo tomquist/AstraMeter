@@ -3,6 +3,7 @@
 #include <cctype>
 #include <functional>
 
+#include "balancer.h"
 #include "esphome/components/json/json_util.h"
 
 namespace esphome {
@@ -265,6 +266,28 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     dw["command_topic"] = state_topic + "/distribution_weight/set";
     dw["retain"] = true;
     dw["entity_category"] = "config";
+
+    // Min DC Output number — DC anti-sleep floor. Published for DC batteries
+    // only (the balancer skips AC-chargeable units, so the control would be a
+    // no-op there); an unknown device_type is treated as DC, matching the
+    // balancer. Mirrors the Python discovery gate. #425.
+    if (!is_ac_chargeable(device_type)) {
+      JsonObject md = components["min_dc_output"].to<JsonObject>();
+      md["platform"] = "number";
+      md["unique_id"] = uid_prefix + "_min_dc_output";
+      md["name"] = "Min DC Output";
+      md["unit_of_measurement"] = "W";
+      md["device_class"] = "power";
+      md["min"] = 0;
+      md["max"] = 100;
+      md["step"] = 5;
+      md["mode"] = "box";
+      md["state_topic"] = state_topic;
+      md["value_template"] = "{{ value_json.min_dc_output | default(0) }}";
+      md["command_topic"] = state_topic + "/min_dc_output/set";
+      md["retain"] = true;
+      md["entity_category"] = "config";
+    }
 
     // Device info
     JsonObject device = root["device"].to<JsonObject>();

@@ -690,6 +690,7 @@ export const CT_BALANCER: Field[] = [
   { key: "ERROR_BOOST_MAX", ey: "error_boost_max", label: "Error boost max", help: "Maximum extra gain multiplier. Default 0.5.", type: "number", placeholder: "0.5" },
   { key: "ERROR_REDUCE_THRESHOLD", ey: "error_reduce_threshold", label: "Error reduce threshold (W)", help: "Below this imbalance, gain is scaled down. Default 20.", type: "number", placeholder: "20" },
   { key: "MAX_TARGET_STEP", ey: "max_target_step", label: "Max target step (W)", help: "Hard clamp on per-cycle target change. 0 = off.", type: "number", placeholder: "0" },
+  { key: "MIN_DC_OUTPUT", ey: "min_dc_output", label: "Min DC output (W)", help: "Keep DC batteries (e.g. B2500) awake under PV surplus by commanding a small charge target instead of 0 W. 0 = off. Try 25. Ignored for AC-chargeable Venus models.", type: "number", placeholder: "0" },
 ];
 
 export const CT_EFFICIENCY: Field[] = [

@@ -135,6 +135,75 @@ TEST(LoadBalancer, DcOnlyBatteryClampedToZeroUnderSurplus) {
   EXPECT_FLOAT_EQ(out[2], 0.0f);
 }
 
+// --- DC anti-sleep floor (min_dc_output), issue #425 ---------------------
+
+TEST(LoadBalancer, AutoFloorKeepsDcBatteryAwakeMixedFleet) {
+  BalancerConfig cfg;
+  cfg.min_dc_output = 25.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["hma"] = ConsumerReport{"HMA-2", "A", 0.0f};       // DC-only
+  reports["hmg"] = ConsumerReport{"HMG-50", "A", -100.0f};   // AC, charging
+  const auto out = b.compute_target("hma", ConsumerMode{}, reports, -50.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], -25.0f);  // held at -floor instead of 0
+}
+
+TEST(LoadBalancer, AutoFloorLoneDcLargeSurplus) {
+  BalancerConfig cfg;
+  cfg.min_dc_output = 25.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f};
+  // A B2500 can't AC-charge (reported≈0), so even a big negative target is
+  // replaced by the small -floor nudge.
+  const auto out = b.compute_target("a", ConsumerMode{}, reports, -800.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], -25.0f);
+}
+
+TEST(LoadBalancer, AutoFloorDisabledWhenZero) {
+  auto b = make_balancer();  // min_dc_output default 0
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f};
+  const auto out = b.compute_target("a", ConsumerMode{}, reports, -5.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], -5.0f);
+}
+
+TEST(LoadBalancer, AutoFloorSkipsAcBattery) {
+  BalancerConfig cfg;
+  cfg.min_dc_output = 25.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  const auto out = b.compute_target("a", ConsumerMode{}, reports, -5.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], -5.0f);  // AC charges; never floored
+}
+
+TEST(LoadBalancer, AutoFloorRespectsPerConsumerOverride) {
+  BalancerConfig cfg;
+  cfg.min_dc_output = 25.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f, std::optional<float>(50.0f)};
+  reports["b"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f};  // falls back to global 25
+  const auto a_out = b.compute_target("a", ConsumerMode{}, reports, -10.0f, {}, {}, {});
+  const auto b_out = b.compute_target("b", ConsumerMode{}, reports, -10.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(a_out[0], -50.0f);
+  EXPECT_FLOAT_EQ(b_out[0], -25.0f);
+}
+
+TEST(LoadBalancer, AutoFloorSkipsZeroWeightParking) {
+  BalancerConfig cfg;
+  cfg.min_dc_output = 25.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f, 0.0f};  // parked
+  reports["b"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f};
+  const auto a_out = b.compute_target("a", ConsumerMode{}, reports, -10.0f, {}, {}, {});
+  const auto b_out = b.compute_target("b", ConsumerMode{}, reports, -10.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(a_out[0], 0.0f);    // weight 0 stays parked
+  EXPECT_FLOAT_EQ(b_out[0], -25.0f);  // the other DC battery is floored
+}
+
 TEST(LoadBalancer, RemoveConsumerClearsState) {
   auto b = make_balancer();
   ReportMap reports;

@@ -23,6 +23,17 @@ def _report_weight(report: dict) -> float:
     return 1.0 if weight is None else float(weight)
 
 
+def _report_min_dc_output(report: dict, default: float) -> float:
+    """Per-battery DC anti-sleep floor (watts) from a report dict.
+
+    A missing key (or an explicit ``None``) means "no per-battery override" and
+    falls back to *default* (the device-wide ``min_dc_output``); an explicit
+    ``0.0`` disables the floor for that battery only.
+    """
+    value = report.get("min_dc_output")
+    return default if value is None else float(value)
+
+
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
@@ -88,6 +99,13 @@ class BalancerConfig:
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
+    # Anti-sleep floor (watts) for DC-coupled batteries.  When a DC battery
+    # would otherwise be commanded toward 0 W in charge territory (PV
+    # surplus), the balancer instead holds it at a small charge-direction
+    # output so its inverter doesn't shut off and get stuck asleep.  0 =
+    # disabled.  Only ever affects non-AC-chargeable batteries; see
+    # ``LoadBalancer._apply_dc_floor`` and issue #425.
+    min_dc_output: float = 0.0
 
     def __post_init__(self) -> None:
         def _clamp(name: str, lo: float, hi: float) -> None:
@@ -108,6 +126,7 @@ class BalancerConfig:
         _clamp("efficiency_rotation_interval", 1, float("inf"))
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
+        _clamp("min_dc_output", 0.0, float("inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +825,53 @@ class LoadBalancer:
         result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
         return result
 
+    def _apply_dc_floor(
+        self,
+        consumer_id: str | None,
+        reports: dict,
+        charge_zone: bool,
+        result: list[float],
+    ) -> list[float]:
+        """Hold a DC battery at a small charge-direction output under surplus.
+
+        *result* is the per-phase reply the consumer would otherwise receive.
+        When the grid is in charge territory (*charge_zone*) and this is a
+        DC-coupled battery that would be commanded toward 0 W, re-issue a
+        reading that lands its net output at ``-floor`` so the inverter stays
+        awake instead of sleeping at 0 W.  See issue #425.
+
+        Skipped for AC-chargeable batteries (they absorb surplus by charging
+        and don't get stuck asleep) and for ``weight == 0`` parked batteries.
+        The early-return gates on the battery's *actual* reported output, not
+        the implied command: a DC battery physically can't AC-charge, so under
+        a sustained surplus it receives a large negative reading it cannot
+        follow while its output stays ~0 — it must still be floored.
+        """
+        if not charge_zone or not consumer_id:
+            return result
+        report = reports.get(consumer_id, {})
+        floor = _report_min_dc_output(report, self._cfg.min_dc_output)
+        if (
+            floor <= 0
+            or _is_ac_chargeable(report.get("device_type", ""))
+            or _report_weight(report) == 0.0
+        ):
+            return result
+        reported = parse_int(report.get("power", 0))
+        if reported <= -floor:
+            # Already genuinely charging at least the floor — leave it.
+            return result
+        phase = (report.get("phase") or "A").upper()
+        idx = {"A": 0, "B": 1, "C": 2}.get(phase, 0)
+        new = [0.0, 0.0, 0.0]
+        new[idx] = float(-floor - reported)
+        # Deliberately do NOT touch ``last_target`` here: the caller already
+        # set it (0 via _steer_to_zero, or the fair-share value), and the
+        # saturation tracker reads it next tick.  Recording the anti-sleep
+        # charge nudge would make a DC battery (which can't AC-charge) look
+        # "unable to follow" and accrue false saturation.
+        return new
+
     @staticmethod
     def _split_by_phase(
         target: float,
@@ -880,6 +946,12 @@ class LoadBalancer:
         in_charge_territory = any_ac_chargeable and (
             grid_total < 0 or (grid_total == 0 and ac_charging)
         )
+        # The DC anti-sleep floor fires whenever we are commanding toward
+        # charge.  This intentionally drops the ``any_ac_chargeable``
+        # precondition of ``in_charge_territory`` so it also covers the
+        # all-DC surplus case (where no AC battery is present); the pure
+        # discharge equilibrium (grid 0, nobody charging) is excluded.
+        charge_zone = grid_total < 0 or (grid_total == 0 and ac_charging)
         charge_blind = (
             {
                 cid
@@ -934,7 +1006,12 @@ class LoadBalancer:
         # at 0 — don't fall through to the fair-share math where a residual
         # correction could leak a nonzero target.
         if consumer_id and consumer_id in charge_blind:
-            return self._steer_to_zero(consumer_id, reports)
+            return self._apply_dc_floor(
+                consumer_id,
+                reports,
+                charge_zone,
+                self._steer_to_zero(consumer_id, reports),
+            )
 
         # --- Fading path ---
         if any_fading and consumer_id:
@@ -1011,7 +1088,12 @@ class LoadBalancer:
         if consumer_id:
             self._get_consumer(consumer_id).last_target = target
 
-        return self._split_by_phase(target, reports, eff_part)
+        return self._apply_dc_floor(
+            consumer_id,
+            reports,
+            charge_zone,
+            self._split_by_phase(target, reports, eff_part),
+        )
 
     def _balance_correction(
         self,

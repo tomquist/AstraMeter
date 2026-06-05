@@ -107,11 +107,14 @@ class PyDriver:
                 sat_grace,
                 sat_enabled,
             ) = parts[1:9]
+            # Trailing-optional 9th field mirrors the C++ harness.
+            min_dc = parts[9] if len(parts) > 9 else "0"
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
+                min_dc_output=float(min_dc),
             )
             self.balancer = LoadBalancer(
                 cfg,
@@ -299,6 +302,29 @@ def test_parity_steer_and_split(harness: Path) -> None:
 def test_parity_efficiency_lifecycle(harness: Path) -> None:
     lines = _scenario_efficiency_lifecycle()
     _compare("efficiency", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def _scenario_dc_floor() -> list[str]:
+    """DC anti-sleep floor (min_dc_output=25) across surplus magnitudes and a
+    mixed fleet, so the floor's interaction with the balancer pipeline is
+    compared poll-by-poll between the two stacks."""
+    cfg = "cfg 1 0 900 0.4 0.15 20 90 0 25"  # 9th field = min_dc_output
+    lines = [cfg, "clock 2000"]
+    # Lone DC battery: near-balanced and large surplus both clamp to -25.
+    for grid in (-5, -50, -800, 0):
+        lines.append(_target("a", [_report("a", "A", 0)], grid=grid))
+    # Under import the floor never fires (positive discharge target).
+    lines.append(_target("a", [_report("a", "A", 0)], grid=300))
+    # Mixed fleet under surplus: DC floored, AC (HMG) absorbs surplus.
+    mixed = [_report("dc", "A", 0), _report("ac", "A", -100, dev="HMG-50")]
+    lines.append(_target("dc", mixed, grid=-50))
+    lines.append(_target("ac", mixed, grid=-50))
+    return lines
+
+
+def test_parity_dc_floor(harness: Path) -> None:
+    lines = _scenario_dc_floor()
+    _compare("dc_floor", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
 # ---------------------------------------------------------------------------

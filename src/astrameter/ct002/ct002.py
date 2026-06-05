@@ -87,6 +87,11 @@ class Consumer:
     # neutral; a battery with weight 2.0 takes roughly twice the share of a
     # weight-1.0 battery.  Tuned live via the MQTT "Distribution Weight" entity.
     distribution_weight: float = 1.0
+    # Per-battery DC anti-sleep floor (watts) override.  ``None`` falls back to
+    # the device-wide ``min_dc_output``; ``0.0`` disables the floor for this
+    # battery only.  Tuned live via the MQTT "Min DC Output" entity (DC
+    # batteries only).  See issue #425.
+    min_dc_output_override: float | None = None
     # Last UDP source address seen for this consumer, if the protocol provides it.
     last_ip: str = ""
 
@@ -147,6 +152,7 @@ class CT002:
         efficiency_rotation_interval=900,
         efficiency_fade_alpha=0.15,
         efficiency_saturation_threshold=0.4,
+        min_dc_output=0.0,
         saturation_decay_factor=0.995,
         saturation_grace_seconds=SATURATION_GRACE_SECONDS,
         saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
@@ -205,6 +211,7 @@ class CT002:
                 efficiency_rotation_interval=efficiency_rotation_interval,
                 efficiency_fade_alpha=efficiency_fade_alpha,
                 efficiency_saturation_threshold=efficiency_saturation_threshold,
+                min_dc_output=min_dc_output,
             ),
             saturation_alpha=saturation_alpha,
             saturation_min_target=min_target_for_saturation,
@@ -255,6 +262,23 @@ class CT002:
             msg = f"distribution weight must be in [0, 10], got {weight!r}"
             raise ValueError(msg)
         self._get_consumer(consumer_id).distribution_weight = value
+
+    def set_consumer_min_dc_output(self, consumer_id: str, value: float | None) -> None:
+        """Set the per-battery DC anti-sleep floor (watts).
+
+        ``None`` clears the override (fall back to the device-wide
+        ``min_dc_output``); a finite value in ``0 <= v <= 100`` overrides it,
+        with ``0`` disabling the floor for this battery only.  Only ever
+        affects DC-coupled batteries (the balancer skips AC-chargeable ones).
+        """
+        if value is None:
+            self._get_consumer(consumer_id).min_dc_output_override = None
+            return
+        floor = float(value)
+        if not math.isfinite(floor) or not (0.0 <= floor <= 100.0):
+            msg = f"min DC output must be in [0, 100], got {value!r}"
+            raise ValueError(msg)
+        self._get_consumer(consumer_id).min_dc_output_override = floor
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
@@ -386,6 +410,7 @@ class CT002:
                 "power": c.power,
                 "device_type": c.device_type,
                 "weight": c.distribution_weight,
+                "min_dc_output": c.min_dc_output_override,
             }
             for cid, c in self._consumers.items()
             if c.timestamp > 0
@@ -766,6 +791,9 @@ class CT002:
                     "auto_target": not consumer.manual_enabled if consumer else True,
                     "distribution_weight": (
                         consumer.distribution_weight if consumer else 1.0
+                    ),
+                    "min_dc_output": (
+                        consumer.min_dc_output_override if consumer else None
                     ),
                     "active_control": self.active_control,
                     "consumer_count": sum(

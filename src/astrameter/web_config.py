@@ -303,6 +303,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "SATURATION_DECAY_FACTOR": {"type": "float", "min": 0, "max": 1},
         "SATURATION_GRACE_SECONDS": {"type": "float"},
         "SATURATION_STALL_TIMEOUT_SECONDS": {"type": "float"},
+        "MIN_DC_OUTPUT": {"type": "float", "min": 0, "max": 100},
     },
     "MARSTEK": {
         "ENABLE": {"type": "boolean"},

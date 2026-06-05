@@ -41,6 +41,9 @@ struct BalancerConfig {
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
   float efficiency_saturation_threshold{0.4f};
+  // DC anti-sleep floor (watts); 0 = disabled. See LoadBalancer::apply_dc_floor_
+  // and issue #425.
+  float min_dc_output{0.0f};
 
   void clamp();
 };
@@ -82,6 +85,11 @@ struct ConsumerReport {
   // Relative fair-share weight (1.0 = neutral). Mirrors the Python reports
   // dict's "weight" key, set live via the MQTT "Distribution Weight" entity.
   float weight{1.0f};
+  // Per-battery DC anti-sleep floor override (watts). Empty = fall back to the
+  // device-wide BalancerConfig::min_dc_output. Mirrors the Python reports
+  // dict's "min_dc_output" key. The default member initializer keeps existing
+  // brace-init of the earlier fields free of -Wmissing-field-initializers.
+  std::optional<float> min_dc_output{};
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
@@ -159,6 +167,9 @@ class LoadBalancer {
 
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
                                       const ReportMap &reports);
+  std::array<float, 3> apply_dc_floor_(const std::optional<std::string> &consumer_id,
+                                       const ReportMap &reports, bool charge_zone,
+                                       std::array<float, 3> result);
   static std::array<float, 3> split_by_phase_(
       float target, const ReportMap &reports,
       const std::unordered_map<std::string, float> *weights = nullptr);

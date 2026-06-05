@@ -63,8 +63,8 @@ def _have_esphome() -> bool:
     return shutil.which("esphome") is not None
 
 
-def _build_poll(mac: str, phase: str, power: int) -> bytes:
-    return build_payload(["HMG-50", mac, "HME-4", _REQUEST_CT_MAC, phase, str(power)])
+def _build_poll(mac: str, phase: str, power: int, dev: str = "HMG-50") -> bytes:
+    return build_payload([dev, mac, "HME-4", _REQUEST_CT_MAC, phase, str(power)])
 
 
 # ── Backend: in-process Python CT002 ───────────────────────────────────────
@@ -94,7 +94,9 @@ class _FakeTransport:
 class PythonBackend:
     name = "python"
 
-    def __init__(self, saturation_detection: bool = True) -> None:
+    def __init__(
+        self, saturation_detection: bool = True, min_dc_output: float = 0.0
+    ) -> None:
         self._loop = asyncio.new_event_loop()
         self._clock = _FakeClock()
         self._grid = [0.0, 0.0, 0.0]
@@ -107,6 +109,7 @@ class PythonBackend:
             reset_fn=None,
             dedupe_time_window=0.0,  # off by default; set_dedupe() toggles it
             saturation_detection=saturation_detection,
+            min_dc_output=min_dc_output,
         )
 
         async def _before_send(_addr, _fields=None, _consumer_id=None):
@@ -127,11 +130,13 @@ class PythonBackend:
         # Mirrors the binary's runtime `dedupe <ms>` control.
         self.ct002._dedup._window = float(window_s)
 
-    def poll(self, mac: str, phase: str, power: int):
+    def poll(self, mac: str, phase: str, power: int, dev: str = "HMG-50"):
         transport = _FakeTransport()
         addr = ("127.0.0.1", 50000)  # synthetic; consumer_id keys off meter_mac
         self._loop.run_until_complete(
-            self.ct002._handle_request(_build_poll(mac, phase, power), addr, transport)
+            self.ct002._handle_request(
+                _build_poll(mac, phase, power, dev), addr, transport
+            )
         )
         if transport.sent is None:
             return None  # deduped / dropped — mirrors a UDP timeout
@@ -170,11 +175,18 @@ class EsphomeBackend:
     def set_dedupe(self, window_s: float) -> None:
         self._cmd(f"dedupe {int(window_s * 1000)}")
 
-    def poll(self, mac: str, phase: str, power: int, timeout: float = 1.5):
+    def poll(
+        self,
+        mac: str,
+        phase: str,
+        power: int,
+        dev: str = "HMG-50",
+        timeout: float = 1.5,
+    ):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(timeout)
         try:
-            s.sendto(_build_poll(mac, phase, power), ("127.0.0.1", UDP_PORT))
+            s.sendto(_build_poll(mac, phase, power, dev), ("127.0.0.1", UDP_PORT))
             data = s.recvfrom(512)[0]
         except TimeoutError:
             return None
@@ -506,5 +518,34 @@ def test_python_esphome_wire_identical() -> None:
                     f"step {step} (mac={mac} phase={phase} power={reported} "
                     f"grid={grid}): wire mismatch:\n" + "\n".join(diffs)
                 )
+    finally:
+        py.close()
+
+
+def test_python_esphome_min_dc_output_wire_identical() -> None:
+    """The DC anti-sleep floor produces byte-identical wire output on both
+    stacks, including the cross-talk chrg/dchrg fields a floored DC battery
+    broadcasts. A lone DC battery (device_type ``HMA-2``) is driven across a
+    range of surplus magnitudes with ``min_dc_output=25``."""
+    py = PythonBackend(saturation_detection=False, min_dc_output=25.0)
+    try:
+        with _running_esphome_backend() as esp:
+            esp._cmd("cfg saturation_enabled 0")
+            esp._cmd("cfg min_dc_output 25")
+            mac = "AAAA00000001"
+            clock = 30000
+            for grid in (-5, -50, -800, 0, 200, -50, -5):
+                clock += DEDUPE_WINDOW_S + 5
+                py.set_clock(clock)
+                esp.set_clock(clock)
+                py.set_grid(grid)
+                esp.set_grid(grid)
+                r_py = py.poll(mac, "A", 0, dev="HMA-2")
+                r_esp = esp.poll(mac, "A", 0, dev="HMA-2")
+                assert (r_py is None) == (r_esp is None)
+                if r_py is None:
+                    continue
+                diffs = _diff_fields(r_py, r_esp)
+                assert not diffs, f"grid={grid}: wire mismatch:\n" + "\n".join(diffs)
     finally:
         py.close()

@@ -104,6 +104,7 @@ class MqttInsightsService:
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
+        self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
@@ -169,6 +170,11 @@ class MqttInsightsService:
     ) -> None:
         self._distribution_weight_handlers[device_id] = handler
 
+    def register_min_dc_output_handler(
+        self, device_id: str, handler: Callable[[str, float], None]
+    ) -> None:
+        self._min_dc_output_handlers[device_id] = handler
+
     def register_rotation_handler(
         self, device_id: str, handler: Callable[[], None]
     ) -> None:
@@ -180,6 +186,7 @@ class MqttInsightsService:
         self._manual_target_handlers.pop(device_id, None)
         self._auto_target_handlers.pop(device_id, None)
         self._distribution_weight_handlers.pop(device_id, None)
+        self._min_dc_output_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
 
     # ── Marstek MQTT responder ────────────────────────────────────────
@@ -462,6 +469,7 @@ class MqttInsightsService:
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),
             "distribution_weight": data.get("distribution_weight", 1.0),
+            "min_dc_output": data.get("min_dc_output"),
         }
 
         await client.publish(
@@ -790,6 +798,32 @@ class MqttInsightsService:
                 device_id,
                 consumer_id,
                 weight,
+            )
+        elif field == "min_dc_output":
+            try:
+                floor = float(payload)
+            except ValueError:
+                logger.warning(
+                    "Invalid min_dc_output value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            if not math.isfinite(floor) or not 0.0 <= floor <= 100.0:
+                logger.warning(
+                    "Out-of-range min_dc_output for %s/%s: %s",
+                    device_id,
+                    consumer_id,
+                    floor,
+                )
+                return
+            self._dispatch(
+                self._min_dc_output_handlers,
+                "min_dc_output",
+                device_id,
+                consumer_id,
+                floor,
             )
         else:
             logger.debug(
