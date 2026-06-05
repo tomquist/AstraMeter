@@ -183,7 +183,9 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     // re-stamps "now" and restores freshness.
     const uint32_t now = ::esphome::millis();
     const uint32_t past = now - (this->max_sensor_age_ms_ + 1000);  // unsigned wrap is fine
-    for (uint8_t p = 0; p < 3; ++p) this->raw_stamp_ms_[p] = past;
+    // Iterate over the active phases the freshness check reads (mirrors
+    // SensorBackedPowermeter::get_powermeter_watts in sensor_backed.cpp).
+    for (uint8_t p = 0; p < this->num_phases_; ++p) this->raw_stamp_ms_[p] = past;
     reply = "ok sensor_stale";
   } else if (matched >= 1 && std::strcmp(verb, "force_rotation") == 0) {
     // Mirror ct002.force_efficiency_rotation() for the rotation tests.
