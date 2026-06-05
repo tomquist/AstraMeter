@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <unordered_set>
+#include <utility>
 
 #include "esphome/components/ct002/balancer.h"
 
@@ -19,7 +20,9 @@ using esphome::ct002::ConsumerModeKind;
 using esphome::ct002::ConsumerReport;
 using esphome::ct002::is_ac_chargeable;
 using esphome::ct002::LoadBalancer;
+using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
+using esphome::ct002::to_grid_reading;
 
 LoadBalancer make_balancer(BalancerConfig cfg = {}, double *clock = nullptr) {
   static double dummy = 0.0;
@@ -28,6 +31,23 @@ LoadBalancer make_balancer(BalancerConfig cfg = {}, double *clock = nullptr) {
                       /*sat_decay=*/0.995f, /*sat_grace=*/90.0f,
                       /*sat_stall=*/60.0f, /*sat_enabled=*/false,
                       [clock]() { return *clock; }, nullptr);
+}
+
+TEST(ToGridReading, ConvertsAbsoluteTargetToMeterReading) {
+  // Mirrors tests/test_balancer.py TestToGridReading: the single audited
+  // boundary that turns an absolute net-output target into the grid reading a
+  // battery adds to its own output (positive = grid import).
+  EXPECT_FLOAT_EQ(to_grid_reading(NetOutputW(25.0f), 10.0f), 15.0f);
+  EXPECT_FLOAT_EQ(to_grid_reading(NetOutputW(0.0f), 200.0f), -200.0f);
+}
+
+TEST(ToGridReading, ReportedPlusReadingLandsOnTarget) {
+  for (const auto &tc : {std::pair<float, float>{25.0f, 10.0f},
+                         std::pair<float, float>{0.0f, 200.0f},
+                         std::pair<float, float>{-100.0f, 50.0f}}) {
+    const float reading = to_grid_reading(NetOutputW(tc.first), tc.second);
+    EXPECT_FLOAT_EQ(tc.second + reading, tc.first);
+  }
 }
 
 TEST(IsAcChargeable, IdentifiesVenusPrefixes) {

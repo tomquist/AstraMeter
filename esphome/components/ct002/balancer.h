@@ -27,6 +27,26 @@ inline constexpr double SATURATION_LONG_GAP_SECONDS = 30.0;
 
 bool is_ac_chargeable(const std::string &device_type);
 
+// Absolute net-output target in watts: the single currency of all control
+// logic (mirrors balancer.py NetOutputW). Sign convention, defined once:
+//   +  =  net discharge (export to grid / serve load)
+//   -  =  net charge     (import from grid)
+// A distinct type so a net-output target can never be silently mixed with a
+// grid-meter reading (the relative delta a battery adds to its own output).
+struct NetOutputW {
+  float value{0.0f};
+  explicit NetOutputW(float v = 0.0f) : value(v) {}
+};
+
+// Single boundary between the control currency (NetOutputW, an absolute net
+// output) and the grid-meter reading a battery integrates via
+// new_output = reported + reading. Returns target - reported so the battery
+// lands on the absolute target; positive = grid import (raise net output).
+// Callers phase-split the scalar result (see LoadBalancer::split_by_phase_).
+inline float to_grid_reading(NetOutputW target, float reported) {
+  return target.value - reported;
+}
+
 struct BalancerConfig {
   bool fair_distribution{true};
   float balance_gain{0.2f};

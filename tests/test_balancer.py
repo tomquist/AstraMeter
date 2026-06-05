@@ -6,8 +6,31 @@ from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
     LoadBalancer,
+    NetOutputW,
     SaturationTracker,
+    to_grid_reading,
 )
+
+
+class TestToGridReading:
+    """The single audited boundary: absolute net-output target -> meter reading.
+
+    A grid reading is what the battery adds to its own output
+    (``new_output = reported + reading``); positive = grid import.
+    """
+
+    def test_raise_output_toward_target(self):
+        # Want 25 W net out, already at 10 W -> reading of +15 lands on target.
+        assert to_grid_reading(NetOutputW(25), reported=10) == 15
+
+    def test_steer_to_zero_from_discharge(self):
+        # Want 0 W net out while reporting 200 W -> reading of -200 (charge).
+        assert to_grid_reading(NetOutputW(0), reported=200) == -200
+
+    def test_reported_plus_reading_lands_on_target(self):
+        for target, reported in ((25.0, 10.0), (0.0, 200.0), (-100.0, 50.0)):
+            reading = to_grid_reading(NetOutputW(target), reported)
+            assert reported + reading == target
 
 
 class _FakeClock:

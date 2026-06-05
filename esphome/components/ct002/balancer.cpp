@@ -433,11 +433,11 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
     }
     if (desired_total < 0.0f && desired_probe > 0.0f) desired_probe = -desired_probe;
     probe.requested_power_abs = std::fabs(desired_probe);
-    const float target = desired_probe - probe_actual;
-    state.last_target = target;
+    const float reading = to_grid_reading(NetOutputW(desired_probe), probe_actual);
+    state.last_target = reading;
     ReportMap cand_only;
     cand_only[candidate_id] = cand_it->second;
-    return split_by_phase_(target, cand_only);
+    return split_by_phase_(reading, cand_only);
   }
 
   // Seed backup_weights from the per-consumer efficiency partition the
@@ -458,9 +458,9 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
       *consumer_id, support_reports, backup_weights, desired_total - qualified_probe_actual);
   auto sup_it = support_reports.find(*consumer_id);
   const float reported = (sup_it != support_reports.end()) ? sup_it->second.power : 0.0f;
-  const float target = desired - reported;
-  state.last_target = target;
-  return split_by_phase_(target, support_reports, &backup_weights);
+  const float reading = to_grid_reading(NetOutputW(desired), reported);
+  state.last_target = reading;
+  return split_by_phase_(reading, support_reports, &backup_weights);
 }
 
 std::array<float, 3> LoadBalancer::steer_to_zero_(
@@ -475,14 +475,15 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
       phase = it->second.phase.empty() ? "A" : it->second.phase;
     }
   }
-  if (reported == 0.0f) return {0.0f, 0.0f, 0.0f};
+  const float reading = to_grid_reading(NetOutputW(0.0f), reported);
+  if (reading == 0.0f) return {0.0f, 0.0f, 0.0f};
   for (auto &c : phase) c = static_cast<char>(std::toupper(c));
   std::array<float, 3> result{0.0f, 0.0f, 0.0f};
   size_t idx = 0;
   if (phase == "A") idx = 0;
   else if (phase == "B") idx = 1;
   else if (phase == "C") idx = 2;
-  result[idx] = -reported;
+  result[idx] = reading;
   return result;
 }
 
@@ -543,9 +544,9 @@ std::array<float, 3> LoadBalancer::compute_target(
     const float reported = active_reports.count(*consumer_id)
                                ? active_reports[*consumer_id].power
                                : 0.0f;
-    const float target = mode.manual_value - reported;
-    state->last_target = target;
-    return split_by_phase_(target, active_reports);
+    const float reading = to_grid_reading(NetOutputW(mode.manual_value), reported);
+    state->last_target = reading;
+    return split_by_phase_(reading, active_reports);
   }
 
   ReportMap auto_reports;
@@ -711,9 +712,9 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     float total_fade = 0.0f;
     for (const auto &r : reports) total_fade += this->get_consumer_(r.first).fade_weight;
     const float desired = (total_fade > 0.0f) ? demand * fade_w / total_fade : 0.0f;
-    const float target = desired - reported;
-    state.last_target = target;
-    return split_by_phase_(target, reports, &eff_part);
+    const float reading = to_grid_reading(NetOutputW(desired), reported);
+    state.last_target = reading;
+    return split_by_phase_(reading, reports, &eff_part);
   }
 
   for (const auto &kv : faded_adjustments) {
@@ -749,20 +750,30 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     fair_share = grid_total / num_consumers;
   }
 
-  float target;
+  // fair_share / balance_correction_ produce the residual: this consumer's
+  // slice of the grid imbalance to fold into its current output. The absolute
+  // net-output target is "what I report now plus my residual" (NetOutputW wrap
+  // below).
+  float residual;
   if (!this->cfg_.fair_distribution || !consumer_id ||
       reports.find(*consumer_id) == reports.end()) {
-    target = fair_share;
+    residual = fair_share;
   } else if (eff_part.count(*consumer_id)) {
-    target = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
+    residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
   } else {
-    target = fair_share;
+    residual = fair_share;
   }
-  if ((grid_total < 0.0f && target > 0.0f) || (grid_total > 0.0f && target < 0.0f)) {
-    target = 0.0f;
+  if ((grid_total < 0.0f && residual > 0.0f) || (grid_total > 0.0f && residual < 0.0f)) {
+    residual = 0.0f;
   }
-  if (consumer_id) this->get_consumer_(*consumer_id).last_target = target;
-  return split_by_phase_(target, reports, &eff_part);
+  float reported = 0.0f;
+  if (consumer_id) {
+    auto it = reports.find(*consumer_id);
+    if (it != reports.end()) reported = it->second.power;
+  }
+  const float reading = to_grid_reading(NetOutputW(reported + residual), reported);
+  if (consumer_id) this->get_consumer_(*consumer_id).last_target = reading;
+  return split_by_phase_(reading, reports, &eff_part);
 }
 
 float LoadBalancer::balance_correction_(const std::string &consumer_id,

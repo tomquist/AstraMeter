@@ -5,11 +5,59 @@ from __future__ import annotations
 import dataclasses
 import time
 from collections.abc import Callable
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, NewType
 
 from astrameter.config.logger import logger
 
 from .protocol import parse_int
+
+# ---------------------------------------------------------------------------
+# Net-output target: the single currency of all control logic
+# ---------------------------------------------------------------------------
+
+# An absolute net-output target in watts.  This is the ONE value every control
+# policy (steer-to-zero, manual, fair-share, probing) is allowed to declare:
+# "this is the net power I want the battery to deliver at the grid coupling
+# point", independent of whatever the battery currently reports.
+#
+# Sign convention, defined here exactly once:
+#     +  =  net discharge  (export to grid / serve house load)
+#     -  =  net charge      (import from grid)
+#
+# It is a distinct type (``NewType``) so a net-output *target* can never be
+# silently mixed with a grid-meter *reading* -- the relative, sign-loaded delta
+# a battery integrates into its own output.  Control authors produce a
+# ``NetOutputW``; the conversion to a reading happens in exactly one audited
+# place, :func:`to_grid_reading`.
+NetOutputW = NewType("NetOutputW", float)
+
+
+def to_grid_reading(target: NetOutputW, reported: float) -> float:
+    """Convert an absolute net-output *target* into the grid-meter reading.
+
+    This is the single boundary between the balancer's control currency
+    (:class:`NetOutputW`, an absolute net output) and what each battery
+    actually consumes: a *grid-meter reading* it adds to its own output via
+    ``new_output = reported + reading``.  Concretely::
+
+        reading = target - reported
+
+    so that ``reported + reading == target`` — the battery lands on the
+    absolute target we asked for, regardless of where it started.
+
+    The returned value is a meter reading by convention: **positive = grid
+    import** (the battery should raise net output by this much, i.e. discharge
+    more or charge less), **negative = grid export** (lower net output).  It is
+    the relative/integral/sign-loaded quantity that used to be hand-computed at
+    every call site; keeping it in one place means "increase discharge vs
+    reduce charge" is no longer something any control author has to reason
+    about.
+
+    The caller is responsible for the phase split (see
+    :meth:`LoadBalancer._split_by_phase`), which distributes this scalar
+    reading across phases A/B/C.
+    """
+    return float(target) - reported
 
 
 def _report_weight(report: dict) -> float:
@@ -617,9 +665,9 @@ class LoadBalancer:
             if desired_total < 0 and desired_probe > 0:
                 desired_probe = -desired_probe
             probe.requested_power_abs = abs(desired_probe)
-            target = desired_probe - probe_actual
-            state.last_target = target
-            return self._split_by_phase(target, {candidate_id: reports[candidate_id]})
+            reading = to_grid_reading(NetOutputW(desired_probe), probe_actual)
+            state.last_target = reading
+            return self._split_by_phase(reading, {candidate_id: reports[candidate_id]})
 
         backup_weights = {
             cid: max(0.01, eff_part.get(cid, 1.0))
@@ -634,9 +682,9 @@ class LoadBalancer:
             desired_total - qualified_probe_actual,
         )
         reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
-        target = desired - reported
-        state.last_target = target
-        return self._split_by_phase(target, support_reports, backup_weights)
+        reading = to_grid_reading(NetOutputW(desired), reported)
+        state.last_target = reading
+        return self._split_by_phase(reading, support_reports, backup_weights)
 
     # ------------------------------------------------------------------
     # Primary interface
@@ -700,9 +748,9 @@ class LoadBalancer:
         # --- Manual override ---
         if consumer_mode.mode == "manual" and consumer_id and state:
             reported = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
-            target = consumer_mode.manual_value - reported
-            state.last_target = target
-            return self._split_by_phase(target, active_reports)
+            reading = to_grid_reading(NetOutputW(consumer_mode.manual_value), reported)
+            state.last_target = reading
+            return self._split_by_phase(reading, active_reports)
 
         # Auto-pool reports (exclude manual consumers)
         reports = {cid: r for cid, r in active_reports.items() if cid not in manual}
@@ -791,19 +839,20 @@ class LoadBalancer:
     # ------------------------------------------------------------------
 
     def _steer_to_zero(self, consumer_id: str | None, reports: dict) -> list[float]:
-        """Drive a consumer's output to zero."""
+        """Drive a consumer's output to zero (``NetOutputW(0)``)."""
         if consumer_id:
             self._get_consumer(consumer_id).last_target = 0
         reported = parse_int(
             reports.get(consumer_id, {}).get("power", 0) if consumer_id else 0
         )
-        if reported == 0:
+        reading = to_grid_reading(NetOutputW(0), reported)
+        if reading == 0:
             return [0, 0, 0]
         phase = (
             reports.get(consumer_id, {}).get("phase") or "A" if consumer_id else "A"
         ).upper()
         result = [0.0, 0.0, 0.0]
-        result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = float(-reported)
+        result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = reading
         return result
 
     @staticmethod
@@ -950,11 +999,11 @@ class LoadBalancer:
             demand = total_battery + grid_total
             total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
-            target = desired - reported
+            reading = to_grid_reading(NetOutputW(desired), reported)
 
-            state.last_target = target
+            state.last_target = reading
 
-            return self._split_by_phase(target, reports, eff_part)
+            return self._split_by_phase(reading, reports, eff_part)
 
         # --- Non-fading path ---
         for cid, fade_w in faded_adjustments.items():
@@ -990,28 +1039,39 @@ class LoadBalancer:
         )
 
         cfg = self._cfg
+        # ``fair_share`` / ``_balance_correction`` produce the residual: this
+        # consumer's slice of the grid imbalance to fold into its current
+        # output.  The absolute net-output target is therefore "what I report
+        # now plus my residual share" — see the NetOutputW wrap below.
         if (
             not cfg.fair_distribution
             or consumer_id is None
             or consumer_id not in reports
         ):
-            target = fair_share
+            residual = fair_share
         elif consumer_id in eff_part:
-            target = self._balance_correction(
+            residual = self._balance_correction(
                 consumer_id, reports, eff_part, fair_share
             )
         else:
-            target = fair_share
+            residual = fair_share
 
         # Clamp sign disagreement: prevent the inverter from acting
         # against the current grid direction.
-        if (grid_total < 0 and target > 0) or (grid_total > 0 and target < 0):
-            target = 0
+        if (grid_total < 0 and residual > 0) or (grid_total > 0 and residual < 0):
+            residual = 0
+
+        reported = (
+            parse_int(reports.get(consumer_id, {}).get("power", 0))
+            if consumer_id
+            else 0
+        )
+        reading = to_grid_reading(NetOutputW(reported + residual), reported)
 
         if consumer_id:
-            self._get_consumer(consumer_id).last_target = target
+            self._get_consumer(consumer_id).last_target = reading
 
-        return self._split_by_phase(target, reports, eff_part)
+        return self._split_by_phase(reading, reports, eff_part)
 
     def _balance_correction(
         self,
