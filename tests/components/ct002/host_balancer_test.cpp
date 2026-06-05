@@ -145,7 +145,7 @@ TEST(LoadBalancer, AutoFloorKeepsDcBatteryAwakeMixedFleet) {
   reports["hma"] = ConsumerReport{"HMA-2", "A", 0.0f};       // DC-only
   reports["hmg"] = ConsumerReport{"HMG-50", "A", -100.0f};   // AC, charging
   const auto out = b.compute_target("hma", ConsumerMode{}, reports, -50.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], -25.0f);  // held at -floor instead of 0
+  EXPECT_FLOAT_EQ(out[0], 25.0f);  // held at +floor (small discharge) instead of 0
 }
 
 TEST(LoadBalancer, AutoFloorLoneDcLargeSurplus) {
@@ -154,10 +154,10 @@ TEST(LoadBalancer, AutoFloorLoneDcLargeSurplus) {
   auto b = make_balancer(cfg);
   ReportMap reports;
   reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f};
-  // A B2500 can't AC-charge (reported≈0), so even a big negative target is
-  // replaced by the small -floor nudge.
+  // Even under a big surplus the battery is steered to the small +floor
+  // discharge, not 0 W.
   const auto out = b.compute_target("a", ConsumerMode{}, reports, -800.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], -25.0f);
+  EXPECT_FLOAT_EQ(out[0], 25.0f);
 }
 
 TEST(LoadBalancer, AutoFloorDisabledWhenZero) {
@@ -187,8 +187,8 @@ TEST(LoadBalancer, AutoFloorRespectsPerConsumerOverride) {
   reports["b"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f};  // falls back to global 25
   const auto a_out = b.compute_target("a", ConsumerMode{}, reports, -10.0f, {}, {}, {});
   const auto b_out = b.compute_target("b", ConsumerMode{}, reports, -10.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(a_out[0], -50.0f);
-  EXPECT_FLOAT_EQ(b_out[0], -25.0f);
+  EXPECT_FLOAT_EQ(a_out[0], 50.0f);
+  EXPECT_FLOAT_EQ(b_out[0], 25.0f);
 }
 
 TEST(LoadBalancer, AutoFloorSkipsZeroWeightParking) {
@@ -200,8 +200,8 @@ TEST(LoadBalancer, AutoFloorSkipsZeroWeightParking) {
   reports["b"] = ConsumerReport{"HMA-2", "A", 0.0f, 1.0f};
   const auto a_out = b.compute_target("a", ConsumerMode{}, reports, -10.0f, {}, {}, {});
   const auto b_out = b.compute_target("b", ConsumerMode{}, reports, -10.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(a_out[0], 0.0f);    // weight 0 stays parked
-  EXPECT_FLOAT_EQ(b_out[0], -25.0f);  // the other DC battery is floored
+  EXPECT_FLOAT_EQ(a_out[0], 0.0f);   // weight 0 stays parked
+  EXPECT_FLOAT_EQ(b_out[0], 25.0f);  // the other DC battery is floored
 }
 
 TEST(LoadBalancer, RemoveConsumerClearsState) {

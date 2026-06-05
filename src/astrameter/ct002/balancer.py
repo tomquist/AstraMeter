@@ -101,9 +101,9 @@ class BalancerConfig:
     efficiency_saturation_threshold: float = 0.4
     # Anti-sleep floor (watts) for DC-coupled batteries.  When a DC battery
     # would otherwise be commanded toward 0 W in charge territory (PV
-    # surplus), the balancer instead holds it at a small charge-direction
-    # output so its inverter doesn't shut off and get stuck asleep.  0 =
-    # disabled.  Only ever affects non-AC-chargeable batteries; see
+    # surplus), the balancer instead holds it at a small discharge (feed-in)
+    # so its inverter doesn't shut off and get stuck asleep.  0 = disabled.
+    # Only ever affects non-AC-chargeable batteries; see
     # ``LoadBalancer._apply_dc_floor`` and issue #425.
     min_dc_output: float = 0.0
 
@@ -832,20 +832,23 @@ class LoadBalancer:
         charge_zone: bool,
         result: list[float],
     ) -> list[float]:
-        """Hold a DC battery at a small charge-direction output under surplus.
+        """Keep a DC battery's inverter awake under surplus with a small discharge.
 
         *result* is the per-phase reply the consumer would otherwise receive.
-        When the grid is in charge territory (*charge_zone*) and this is a
-        DC-coupled battery that would be commanded toward 0 W, re-issue a
-        reading that lands its net output at ``-floor`` so the inverter stays
-        awake instead of sleeping at 0 W.  See issue #425.
+        When the grid is in charge territory (*charge_zone*) a DC-coupled
+        battery is steered to 0 W — but some DC inverters (e.g. Marstek B2500)
+        then shut their output off and get stuck asleep.  Instead command a
+        small *discharge* (feed-in) of ``floor`` W so the inverter keeps running.
+        This costs a little feed-in/battery drain, which is the accepted
+        trade-off.  See issue #425.
 
         Skipped for AC-chargeable batteries (they absorb surplus by charging
-        and don't get stuck asleep) and for ``weight == 0`` parked batteries.
-        The early-return gates on the battery's *actual* reported output, not
-        the implied command: a DC battery physically can't AC-charge, so under
-        a sustained surplus it receives a large negative reading it cannot
-        follow while its output stays ~0 — it must still be floored.
+        and don't idle) and for ``weight == 0`` parked batteries.  The battery
+        is steered to exactly ``floor`` W discharge: the firmware computes
+        ``new_output = reported + grid_reading``, so ``grid_reading =
+        floor - reported`` lands net output at ``floor`` (positive = discharge).
+        Once the battery reaches ``floor`` the reading naturally goes to 0, so
+        it holds there with no oscillation.
         """
         if not charge_zone or not consumer_id or consumer_id not in reports:
             return result
@@ -858,18 +861,15 @@ class LoadBalancer:
         ):
             return result
         reported = parse_int(report.get("power", 0))
-        if reported <= -floor:
-            # Already genuinely charging at least the floor — leave it.
-            return result
         phase = (report.get("phase") or "A").upper()
         idx = {"A": 0, "B": 1, "C": 2}.get(phase, 0)
         new = [0.0, 0.0, 0.0]
-        new[idx] = float(-floor - reported)
+        new[idx] = float(floor - reported)
         # Deliberately do NOT touch ``last_target`` here: the caller already
         # set it (0 via _steer_to_zero, or the fair-share value), and the
-        # saturation tracker reads it next tick.  Recording the anti-sleep
-        # charge nudge would make a DC battery (which can't AC-charge) look
-        # "unable to follow" and accrue false saturation.
+        # saturation tracker reads it next tick.  Recording this keep-awake
+        # nudge would perturb the saturation EMA for a battery we are
+        # deliberately holding just above idle.
         return new
 
     @staticmethod

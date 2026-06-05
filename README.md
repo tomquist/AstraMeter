@@ -359,9 +359,10 @@ mid-interval failures still trigger a swap.
   batteries (e.g. Marstek B2500). Some DC inverters shut off and get stuck
   asleep when commanded to 0 W under PV surplus. With a floor set, whenever such
   a battery would be steered to 0 W in charge territory AstraMeter instead holds
-  it at a small charge-direction target (e.g. `-25`) so the inverter stays awake;
-  a DC battery can't actually AC-charge, so no energy is moved. Only ever affects
-  DC batteries — AC-chargeable models (Venus `HMG-*`/`VNS*`) absorb surplus by
+  it at a small **discharge** (feed-in) of this many watts (e.g. `25`) so the
+  inverter keeps running. This costs a little feed-in/battery drain while idle —
+  the accepted trade-off for not getting stuck asleep. Only ever affects DC
+  batteries — AC-chargeable models (Venus `HMG-*`/`VNS*`) absorb surplus by
   charging and are never touched. Can be overridden per battery via the
   **Min DC Output** Home Assistant entity (published for DC batteries only).
 
@@ -582,7 +583,7 @@ live from Home Assistant:
   takes effect on the next control cycle.
 - **Min DC Output** (DC batteries only) — per-battery override of the
   `MIN_DC_OUTPUT` anti-sleep floor. Keeps a DC battery's inverter awake under
-  PV surplus by holding it at a small charge-direction target instead of 0 W.
+  PV surplus by holding it at a small discharge (feed-in) instead of 0 W.
   Until you set it, the battery uses the device-wide `MIN_DC_OUTPUT` default;
   set it to `0` to disable the floor for that specific battery. This entity is
   only published for DC-coupled batteries, since AC-chargeable models don't

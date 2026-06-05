@@ -125,8 +125,9 @@ THROTTLE_INTERVAL = 0
 ## Some DC-coupled batteries (e.g. Marstek B2500) shut their inverter off and
 ## get stuck asleep when commanded to 0 W under PV surplus. Set a small floor
 ## (W) and, when such a battery would be steered to 0 W in charge territory,
-## AstraMeter instead holds it at a tiny charge-direction target so it stays
-## awake. 0 = disabled (default). Only ever affects DC batteries — AC-chargeable
+## AstraMeter instead holds it at a small discharge (feed-in) of that many watts
+## so the inverter keeps running (a little feed-in is the trade-off for not
+## sleeping). 0 = disabled (default). Only ever affects DC batteries — AC-chargeable
 ## models (HMG-*/Venus VNS*) absorb surplus by charging and are never touched.
 ## Can also be set per battery via the "Min DC Output" Home Assistant entity.
 #MIN_DC_OUTPUT = 0

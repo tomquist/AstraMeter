@@ -490,12 +490,12 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
 std::array<float, 3> LoadBalancer::apply_dc_floor_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
     bool charge_zone, std::array<float, 3> result) {
-  // Hold a DC-coupled battery at a small charge-direction output (-floor) under
-  // surplus so its inverter stays awake. Skipped for AC-chargeable batteries
-  // and weight-0 parking. Gates on actual reported output, not the implied
-  // command (a DC battery can't AC-charge, so a big negative command is
-  // un-actionable and must still be floored). last_target is intentionally NOT
-  // updated here — see the Python source for the saturation rationale. #425.
+  // Keep a DC-coupled battery's inverter awake under surplus with a small
+  // *discharge* (feed-in) of floor W (positive = discharge), instead of letting
+  // it sleep at 0 W. Steered to exactly floor: grid_reading = floor - reported
+  // lands net output at floor; once there the reading goes to 0 and it holds.
+  // Skipped for AC-chargeable batteries and weight-0 parking. last_target is
+  // intentionally NOT updated — see the Python source for the rationale. #425.
   if (!charge_zone || !consumer_id) return result;
   auto it = reports.find(*consumer_id);
   if (it == reports.end()) return result;
@@ -505,14 +505,13 @@ std::array<float, 3> LoadBalancer::apply_dc_floor_(
     return result;
   }
   const float reported = report.power;
-  if (reported <= -floor) return result;
   std::string phase = report.phase.empty() ? "A" : report.phase;
   for (auto &c : phase) c = static_cast<char>(std::toupper(c));
   size_t idx = 0;
   if (phase == "B") idx = 1;
   else if (phase == "C") idx = 2;
   std::array<float, 3> out{0.0f, 0.0f, 0.0f};
-  out[idx] = -floor - reported;
+  out[idx] = floor - reported;
   return out;
 }
 

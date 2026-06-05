@@ -2,8 +2,9 @@
 
 Mirrors the C++ host test ``LoadBalancer.AutoFloor*``. The floor keeps a
 DC-coupled battery's inverter awake under PV surplus by commanding a small
-charge-direction output (``-min_dc_output``) instead of letting it sit at 0 W.
-It only ever affects non-AC-chargeable batteries and respects weight-0 parking.
+*discharge* (feed-in) of ``min_dc_output`` watts instead of letting it sit at
+0 W. It only ever affects non-AC-chargeable batteries and respects weight-0
+parking.
 """
 
 from astrameter.ct002.balancer import (
@@ -61,20 +62,21 @@ def _target(
 
 
 def test_lone_dc_near_balanced_grid_is_floored():
-    """Grid hovering slightly negative: the DC battery is held at -floor."""
+    """Grid hovering slightly negative: the DC battery is held at +floor
+    (a small discharge / feed-in) so its inverter stays awake."""
     lb = _make_balancer(min_dc_output=25)
     reports = {"a": _report(0.0)}
     out = _target(lb, "a", reports, -5.0)
-    assert out[0] == -25.0
+    assert out[0] == 25.0
 
 
 def test_lone_dc_large_surplus_still_floored():
-    """A B2500 can't AC-charge (reported≈0), so even a big negative target
-    must be replaced by the small -floor nudge, not left un-actionable."""
+    """Even under a big surplus the DC battery is steered to the small +floor
+    discharge rather than 0 W."""
     lb = _make_balancer(min_dc_output=25)
     reports = {"a": _report(0.0)}
     out = _target(lb, "a", reports, -800.0)
-    assert out[0] == -25.0
+    assert out[0] == 25.0
 
 
 def test_disabled_when_zero():
@@ -100,7 +102,7 @@ def test_zero_weight_dc_stays_parked():
     a_out = _target(lb, "a", reports, -10.0)
     b_out = _target(lb, "b", reports, -10.0)
     assert a_out[0] == 0.0  # parked stays parked
-    assert b_out[0] == -25.0  # the other DC battery is floored
+    assert b_out[0] == 25.0  # the other DC battery is floored
 
 
 def test_per_consumer_override_beats_global_and_none_falls_back():
@@ -111,16 +113,18 @@ def test_per_consumer_override_beats_global_and_none_falls_back():
     }
     a_out = _target(lb, "a", reports, -10.0)
     b_out = _target(lb, "b", reports, -10.0)
-    assert a_out[0] == -50.0
-    assert b_out[0] == -25.0
+    assert a_out[0] == 50.0
+    assert b_out[0] == 25.0
 
 
-def test_already_charging_above_floor_is_left_alone():
-    """If the battery is genuinely already charging ≥ floor, don't disturb it."""
+def test_holds_at_floor_without_oscillation():
+    """Once the battery is discharging at the floor, the reading goes to 0 so
+    it holds there (no swing back to 0 W that would re-sleep the inverter)."""
     lb = _make_balancer(min_dc_output=25)
-    reports = {"a": _report(-30.0)}
-    out = _target(lb, "a", reports, -5.0)
-    assert out[0] == -5.0  # normal fair-share reply, not bumped to -25
+    # reported already at the floor → grid reading 0 → output holds at 25.
+    assert _target(lb, "a", {"a": _report(25.0)}, -5.0)[0] == 0.0
+    # reported below the floor → topped up to land output at 25.
+    assert _target(lb, "a", {"a": _report(10.0)}, -5.0)[0] == 15.0
 
 
 def test_no_floor_under_grid_import():
@@ -152,7 +156,7 @@ def test_mixed_fleet_dc_floored_ac_unperturbed():
     lb_off = _make_balancer(min_dc_output=0)
 
     dc_out = _target(lb_on, "dc", reports, -50.0)
-    assert dc_out[0] == -25.0  # DC kept awake
+    assert dc_out[0] == 25.0  # DC kept awake with a small discharge
 
     ac_on = _target(lb_on, "ac", reports, -50.0)
     ac_off = _target(lb_off, "ac", reports, -50.0)

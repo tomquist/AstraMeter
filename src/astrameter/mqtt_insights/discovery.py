@@ -215,7 +215,7 @@ def build_ct002_consumer_discovery(
         "entity_category": "config",
     }
 
-    # DC anti-sleep floor — a minimum charge-direction output that keeps a
+    # DC anti-sleep floor — a minimum discharge (feed-in) that keeps a
     # DC-coupled battery's inverter awake under PV surplus instead of letting
     # it sleep at 0 W.  Published for DC batteries only: the balancer skips
     # AC-chargeable units, so the control would be an inert no-op there.  An
