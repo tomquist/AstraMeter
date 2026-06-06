@@ -563,6 +563,30 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
 | `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
+| `POWERMETER_HEALTH_INTERVAL` | `30` | Seconds between per-powermeter **Online** diagnostic sensor updates; `0` disables it |
+
+#### Powermeter health (Home Assistant entities)
+
+When HA discovery is on, every configured powermeter section gets its own
+**"AstraMeter Powermeter `<Section>`"** device (the section name is Capital-Cased
+for the label, and the device is grouped under the **AstraMeter** hub device —
+keyed on `ADDON_SLUG` on the add-on, with a stable base-topic fallback so the
+grouping also works in standalone/Docker). It carries:
+
+- an **Online** connectivity `binary_sensor` (diagnostic) that flips **off** when
+  the source stops delivering fresh, usable readings — a stalled or disconnected
+  push stream, or a polling source whose reads start failing — so you can alert
+  on a meter that has gone quiet even though AstraMeter keeps running on its last
+  cached value;
+- **Power**, **Power L1**, **Power L2**, **Power L3** sensors carrying the latest
+  per-phase readings and their total (single-phase meters leave L2/L3 empty).
+
+Push sources (HomeWizard, MQTT, SMA, Home Assistant) report their stream state
+directly; polling sources reflect the control loop, or are probed about once per
+`POWERMETER_HEALTH_INTERVAL` when no battery is reading them. For multi-phase
+sources, a phase that simply stops changing (e.g. an idle circuit reporting a
+steady value) stays **online** — only an unavailable/missing reading or a
+disconnect marks it offline.
 
 #### Per-battery controls (Home Assistant entities)
 

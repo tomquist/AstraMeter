@@ -445,3 +445,7 @@ THROTTLE_INTERVAL = 0
 #MARSTEK_MQTT_ENABLED = true
 ## Seconds between optional Marstek aggregate (cd=1) broadcasts when the app is quiet; 0 = polls only.
 #MARSTEK_MQTT_INTERVAL = 300
+## Seconds between per-powermeter "Online" diagnostic sensor updates (default: 30); 0 disables it.
+## Each configured powermeter section gets an "AstraMeter Powermeter <section>" device with an
+## Online binary sensor that flips off when the source stops delivering fresh/usable readings.
+#POWERMETER_HEALTH_INTERVAL = 30

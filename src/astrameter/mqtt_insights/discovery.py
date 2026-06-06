@@ -429,6 +429,88 @@ def build_ct002_device_discovery(
     return topic, payload
 
 
+# ── Powermeter (grid power source) ────────────────────────────────────────
+
+
+def build_powermeter_device_discovery(
+    base_topic: str,
+    pm_id: str,
+    name: str,
+    ha_prefix: str,
+    addon_slug: str | None = None,
+) -> tuple[str, dict]:
+    """Discovery for a per-powermeter diagnostic device with an "Online" sensor.
+
+    ``pm_id`` is the already-sanitized config section name; ``name`` is the raw
+    section used as the device's display label. The sensor flips off when the
+    powermeter stops delivering fresh/usable data (stale stream, disconnect, or
+    — for pull meters — a failing read).
+    """
+    safe_pm = _sanitize_id(pm_id)
+    node_id = f"astrameter_powermeter_{safe_pm}"
+    uid_prefix = node_id
+    state_topic = f"{base_topic}/powermeter/{pm_id}"
+
+    components: dict[str, dict] = {}
+
+    # Latest readings (per phase + total). ``grid_power_total`` is the device's
+    # primary entity. A ``null`` phase (e.g. a single-phase meter has no L2/L3,
+    # or the meter is currently down) renders to an empty string so Home
+    # Assistant leaves the entity untouched rather than logging a parse error.
+    for key, label, field in [
+        ("grid_power_total", None, "total"),
+        ("grid_power_l1", "Power L1", "l1"),
+        ("grid_power_l2", "Power L2", "l2"),
+        ("grid_power_l3", "Power L3", "l3"),
+    ]:
+        components[key] = {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_{key}",
+            "name": label,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": state_topic,
+            "value_template": (
+                f"{{{{ value_json.grid_power.{field} "
+                f"if value_json.grid_power.{field} is not none else '' }}}}"
+            ),
+        }
+
+    components["online"] = {
+        "platform": "binary_sensor",
+        "unique_id": f"{uid_prefix}_online",
+        "name": "Online",
+        "device_class": "connectivity",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.online }}",
+        "payload_on": "True",
+        "payload_off": "False",
+        "entity_category": "diagnostic",
+    }
+
+    device_info: dict = {
+        "identifiers": node_id,
+        # Capital-Case the config section for a readable device label
+        # (e.g. "SMA_ENERGY_METER" -> "Sma Energy Meter").
+        "name": f"AstraMeter Powermeter {name.replace('_', ' ').title()}",
+        "manufacturer": "astrameter",
+    }
+    if addon_slug:
+        device_info["via_device"] = addon_slug
+
+    payload = {
+        "device": device_info,
+        "origin": _origin(),
+        "components": components,
+        "availability": [_system_availability(base_topic)],
+        "state_topic": state_topic,
+    }
+
+    topic = f"{ha_prefix}/device/{node_id}/config"
+    return topic, payload
+
+
 # ── Shelly per-battery ────────────────────────────────────────────────────
 
 

@@ -151,6 +151,15 @@ class MqttPowermeter(Powermeter):
                 await self._run_task
             self._run_task = None
 
+    def stream_online(self) -> bool | None:
+        # Connection + readiness, no timestamp: values are only reset on
+        # start(), so a phase whose publisher stops re-publishing keeps its
+        # cached value and stays online (mirrors Home Assistant). Only a
+        # disconnect or a never-received subscription flips this offline.
+        return self._connected_event.is_set() and all(
+            v is not None for v in self.values
+        )
+
     async def get_powermeter_watts(self) -> list[float]:
         if all(v is not None for v in self.values):
             return list(self.values)  # type: ignore[arg-type]

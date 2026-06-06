@@ -2,14 +2,21 @@ import asyncio
 import contextlib
 import socket
 import struct
+import time
+from collections.abc import Callable
 
 from astrameter.config.logger import logger
 
-from .base import Powermeter
+from .base import Powermeter, stream_fresh
 
 # SMA Speedwire multicast defaults
 DEFAULT_MULTICAST_GROUP = "239.12.255.254"
 DEFAULT_PORT = 9522
+
+# Maximum age of the last-received telegram before stream_online() reports
+# offline. SMA Speedwire broadcasts unconditionally roughly once per second,
+# so 30 s of silence reliably means the multicast stream has stopped.
+DEFAULT_MAX_TELEGRAM_AGE_SECONDS = 30.0
 
 # SMA device SUSY IDs
 SMA_SUSY_IDS = {
@@ -82,12 +89,18 @@ class SmaEnergyMeter(Powermeter):
         port=DEFAULT_PORT,
         serial_number=0,
         interface="",
+        *,
+        max_telegram_age_seconds: float = DEFAULT_MAX_TELEGRAM_AGE_SECONDS,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.multicast_group = multicast_group
         self.port = port
         self.serial_number = serial_number
         self.interface = interface
         self.values: list[float] | None = None
+        self._max_telegram_age_seconds = max(0.0, max_telegram_age_seconds)
+        self._clock = clock or time.monotonic
+        self._last_telegram_monotonic: float | None = None
         self._async_message_event: asyncio.Event | None = None
         self._detected_serial: int | None = None
         self._transport: asyncio.DatagramTransport | None = None
@@ -223,8 +236,16 @@ class SmaEnergyMeter(Powermeter):
             return
 
         self.values = values
+        self._last_telegram_monotonic = self._clock()
         if self._async_message_event is not None:
             self._async_message_event.set()
+
+    def stream_online(self) -> bool | None:
+        # No connection/availability concept (UDP multicast listen), so the
+        # only health signal is freshness of the last telegram.
+        return stream_fresh(
+            self._last_telegram_monotonic, self._max_telegram_age_seconds, self._clock
+        )
 
     async def get_powermeter_watts(self) -> list[float]:
         if self.values is not None:
