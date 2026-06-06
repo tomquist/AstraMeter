@@ -37,7 +37,20 @@ async def test_passes_values_through_and_records_success():
     assert result == [100.0, 200.0]
     assert pm.last_attempt == 5.0
     assert pm.last_outcome_ok is True
+    assert pm.last_values == [100.0, 200.0]
     assert pm.name == "MQTT_1"
+
+
+async def test_last_values_none_until_first_success():
+    inner = Mock(spec=Powermeter)
+    inner.get_powermeter_watts = AsyncMock(side_effect=ValueError("stale"))
+    pm = _make(inner)
+
+    assert pm.last_values is None
+    with pytest.raises(ValueError):
+        await pm.get_powermeter_watts()
+    # A failed read must not populate last_values.
+    assert pm.last_values is None
 
 
 async def test_records_failure_and_reraises():

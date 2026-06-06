@@ -33,6 +33,9 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         self._clock = clock or time.monotonic
         self._last_attempt: float | None = None
         self._last_outcome_ok = False
+        # Last successful processed read, so the health loop can publish the
+        # most recent readings without issuing an extra read.
+        self._last_values: list[float] | None = None
 
     @property
     def last_attempt(self) -> float | None:
@@ -42,8 +45,14 @@ class HealthTrackingPowermeter(PowermeterWrapper):
     def last_outcome_ok(self) -> bool:
         return self._last_outcome_ok
 
+    @property
+    def last_values(self) -> list[float] | None:
+        return self._last_values
+
     async def get_powermeter_watts(self) -> list[float]:
-        return await self._tracked(self.wrapped_powermeter.get_powermeter_watts)
+        result = await self._tracked(self.wrapped_powermeter.get_powermeter_watts)
+        self._last_values = list(result)
+        return result
 
     async def get_powermeter_watts_raw(self) -> list[float]:
         return await self._tracked(self.wrapped_powermeter.get_powermeter_watts_raw)

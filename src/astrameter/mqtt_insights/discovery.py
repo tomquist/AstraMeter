@@ -451,23 +451,49 @@ def build_powermeter_device_discovery(
     uid_prefix = node_id
     state_topic = f"{base_topic}/powermeter/{pm_id}"
 
-    components: dict[str, dict] = {
-        "online": {
-            "platform": "binary_sensor",
-            "unique_id": f"{uid_prefix}_online",
-            "name": "Online",
-            "device_class": "connectivity",
+    components: dict[str, dict] = {}
+
+    # Latest readings (per phase + total). ``grid_power_total`` is the device's
+    # primary entity. A ``null`` phase (e.g. a single-phase meter has no L2/L3,
+    # or the meter is currently down) renders to an empty string so Home
+    # Assistant leaves the entity untouched rather than logging a parse error.
+    for key, label, field in [
+        ("grid_power_total", None, "total"),
+        ("grid_power_l1", "Power L1", "l1"),
+        ("grid_power_l2", "Power L2", "l2"),
+        ("grid_power_l3", "Power L3", "l3"),
+    ]:
+        components[key] = {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_{key}",
+            "name": label,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.online }}",
-            "payload_on": "True",
-            "payload_off": "False",
-            "entity_category": "diagnostic",
-        },
+            "value_template": (
+                f"{{{{ value_json.grid_power.{field} "
+                f"if value_json.grid_power.{field} is not none else '' }}}}"
+            ),
+        }
+
+    components["online"] = {
+        "platform": "binary_sensor",
+        "unique_id": f"{uid_prefix}_online",
+        "name": "Online",
+        "device_class": "connectivity",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.online }}",
+        "payload_on": "True",
+        "payload_off": "False",
+        "entity_category": "diagnostic",
     }
 
     device_info: dict = {
         "identifiers": node_id,
-        "name": f"AstraMeter Powermeter {name}",
+        # Capital-Case the config section for a readable device label
+        # (e.g. "SMA_ENERGY_METER" -> "Sma Energy Meter").
+        "name": f"AstraMeter Powermeter {name.replace('_', ' ').title()}",
         "manufacturer": "astrameter",
     }
     if addon_slug:

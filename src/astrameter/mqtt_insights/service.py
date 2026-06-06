@@ -883,11 +883,21 @@ class MqttInsightsService:
                 name = getattr(pm, "name", "") or ""
                 if not name:
                     continue
-                online = await self._powermeter_online(pm)
-                await self._publish_powermeter_health(client, base, cfg, name, online)
+                online, values = await self._powermeter_status(pm)
+                await self._publish_powermeter_health(
+                    client, base, cfg, name, online, values
+                )
             await asyncio.sleep(interval)
 
-    async def _powermeter_online(self, pm: Powermeter) -> bool:
+    async def _powermeter_status(
+        self, pm: Powermeter
+    ) -> tuple[bool, list[float] | None]:
+        """Return ``(online, latest_values)`` for *pm* with minimal I/O.
+
+        A push meter's ``stream_online()`` answers with no I/O and its readings
+        are cached; a pull meter reuses the control loop's most recent read when
+        fresh, otherwise a single bounded probe serves both online and readings.
+        """
         try:
             stream = pm.stream_online()
         except Exception:
@@ -897,22 +907,39 @@ class MqttInsightsService:
                 "Powermeter health: stream_online() failed for %s",
                 getattr(pm, "name", "") or pm.__class__.__name__,
             )
-            return False
+            return False, None
         if stream is not None:
-            return stream
+            # Push meter: readings are cached (no network I/O).
+            return stream, await self._read_powermeter_values(pm)
         last_attempt = getattr(pm, "last_attempt", None)
         if (
             last_attempt is not None
             and (time.monotonic() - last_attempt) <= POWERMETER_IDLE_THRESHOLD
         ):
-            return bool(getattr(pm, "last_outcome_ok", False))
+            return bool(getattr(pm, "last_outcome_ok", False)), getattr(
+                pm, "last_values", None
+            )
+        # Idle pull meter: one bounded probe serves both online and readings.
+        values = await self._read_powermeter_values(pm)
+        return bool(values), values
+
+    async def _read_powermeter_values(self, pm: Powermeter) -> list[float] | None:
         try:
-            values = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 pm.get_powermeter_watts(), timeout=POWERMETER_PROBE_TIMEOUT
             )
         except Exception:
-            return False
-        return bool(values)
+            return None
+
+    @staticmethod
+    def _grid_power_payload(values: list[float] | None) -> dict[str, float | None]:
+        vals = list(values) if values else []
+        return {
+            "l1": vals[0] if len(vals) > 0 else None,
+            "l2": vals[1] if len(vals) > 1 else None,
+            "l3": vals[2] if len(vals) > 2 else None,
+            "total": sum(vals) if vals else None,
+        }
 
     async def _publish_powermeter_health(
         self,
@@ -921,11 +948,13 @@ class MqttInsightsService:
         cfg: MqttInsightsConfig,
         name: str,
         online: bool,
+        values: list[float] | None,
     ) -> None:
         pm_id = _sanitize_id(name)
+        state = {"online": online, "grid_power": self._grid_power_payload(values)}
         await client.publish(
             f"{base}/powermeter/{pm_id}",
-            payload=json.dumps({"online": online}).encode(),
+            payload=json.dumps(state).encode(),
             retain=True,
         )
         if cfg.ha_discovery and pm_id not in self._discovered_powermeters:

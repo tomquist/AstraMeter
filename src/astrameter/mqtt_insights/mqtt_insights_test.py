@@ -297,18 +297,43 @@ def test_powermeter_device_discovery_structure():
     _assert_discovery_structure(topic, payload)
     assert topic == "homeassistant/device/astrameter_powermeter_MQTT_1/config"
     assert payload["device"]["identifiers"] == "astrameter_powermeter_MQTT_1"
-    assert payload["device"]["name"] == "AstraMeter Powermeter MQTT_1"
+    # Section name is Capital-Cased for the display label.
+    assert payload["device"]["name"] == "AstraMeter Powermeter Mqtt 1"
+    # Links the powermeter device under the AstraMeter hub device.
     assert payload["device"]["via_device"] == "34dea19a_astrameter"
     assert payload["state_topic"] == "astrameter/powermeter/MQTT_1"
     assert len(payload["availability"]) == 1
 
-    online = payload["components"]["online"]
+    comps = payload["components"]
+    online = comps["online"]
     assert online["platform"] == "binary_sensor"
     assert online["device_class"] == "connectivity"
     assert online["payload_on"] == "True"
     assert online["payload_off"] == "False"
     assert online["entity_category"] == "diagnostic"
     assert online["value_template"] == "{{ value_json.online }}"
+
+    # Latest-readings sensors: per phase + total, total is primary (name=None).
+    for power_key in (
+        "grid_power_total",
+        "grid_power_l1",
+        "grid_power_l2",
+        "grid_power_l3",
+    ):
+        assert comps[power_key]["platform"] == "sensor"
+        assert comps[power_key]["device_class"] == "power"
+        assert comps[power_key]["state_class"] == "measurement"
+        assert comps[power_key]["unit_of_measurement"] == "W"
+    assert comps["grid_power_total"]["name"] is None
+    assert comps["grid_power_l1"]["name"] == "Power L1"
+    assert "value_json.grid_power.total" in comps["grid_power_total"]["value_template"]
+
+
+def test_powermeter_device_discovery_capital_cases_multiword_section():
+    _, payload = build_powermeter_device_discovery(
+        "astrameter", "SMA_ENERGY_METER", "SMA_ENERGY_METER", "homeassistant"
+    )
+    assert payload["device"]["name"] == "AstraMeter Powermeter Sma Energy Meter"
 
 
 def test_powermeter_device_discovery_omits_via_device_without_addon_slug():
@@ -641,14 +666,17 @@ def test_queue_overflow_does_not_raise():
 
 
 class _PushMeter(Powermeter):
-    def __init__(self, online: bool | None) -> None:
+    def __init__(self, online: bool | None, values: list[float] | None = None) -> None:
         self._online = online
+        self._values = values if values is not None else [10.0, 20.0, 30.0]
 
     def stream_online(self) -> bool | None:
         return self._online
 
     async def get_powermeter_watts(self) -> list[float]:
-        raise AssertionError("push meter must not be probed")
+        if self._values is None:
+            raise ValueError("no data")
+        return self._values
 
 
 class _PullMeter(Powermeter):
@@ -668,13 +696,16 @@ def _health_service() -> MqttInsightsService:
     return MqttInsightsService(MqttInsightsConfig(broker="localhost"))
 
 
-async def test_powermeter_online_push_reports_stream_state():
+async def test_powermeter_status_push_reports_stream_state_and_readings():
     service = _health_service()
-    assert await service._powermeter_online(_PushMeter(True)) is True
-    assert await service._powermeter_online(_PushMeter(False)) is False
+    online, values = await service._powermeter_status(_PushMeter(True, [1.0, 2.0, 3.0]))
+    assert online is True
+    assert values == [1.0, 2.0, 3.0]
+    online, _ = await service._powermeter_status(_PushMeter(False))
+    assert online is False
 
 
-async def test_powermeter_online_push_exception_reports_offline():
+async def test_powermeter_status_push_exception_reports_offline():
     """A meter whose stream_online() raises must report offline, not crash the
     health loop (which would tear down the gather and force a reconnect)."""
 
@@ -686,10 +717,12 @@ async def test_powermeter_online_push_exception_reports_offline():
             raise AssertionError("must not be probed after stream_online raised")
 
     service = _health_service()
-    assert await service._powermeter_online(_BrokenPushMeter()) is False
+    online, values = await service._powermeter_status(_BrokenPushMeter())
+    assert online is False
+    assert values is None
 
 
-async def test_powermeter_online_pull_reuses_recent_control_read():
+async def test_powermeter_status_pull_reuses_recent_control_read():
     """A pull meter read by the control loop within the idle window is reused
     without issuing a probe."""
     inner = _PullMeter([42.0])
@@ -698,11 +731,13 @@ async def test_powermeter_online_pull_reuses_recent_control_read():
     assert inner.probes == 1
 
     service = _health_service()
-    assert await service._powermeter_online(pm) is True
+    online, values = await service._powermeter_status(pm)
+    assert online is True
+    assert values == [42.0]
     assert inner.probes == 1  # reused, no extra probe
 
 
-async def test_powermeter_online_pull_reuses_recent_failure():
+async def test_powermeter_status_pull_reuses_recent_failure():
     inner = _PullMeter(raises=True)
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     with contextlib.suppress(ValueError):
@@ -710,28 +745,34 @@ async def test_powermeter_online_pull_reuses_recent_failure():
     probes_after_control = inner.probes
 
     service = _health_service()
-    assert await service._powermeter_online(pm) is False
+    online, values = await service._powermeter_status(pm)
+    assert online is False
+    assert values is None  # failed read cached no values
     assert inner.probes == probes_after_control  # reused failure, no probe
 
 
-async def test_powermeter_online_idle_pull_is_probed_once():
+async def test_powermeter_status_idle_pull_is_probed_once():
     inner = _PullMeter([7.0])
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     # No control-loop read recorded -> idle -> probe.
     service = _health_service()
-    assert await service._powermeter_online(pm) is True
+    online, values = await service._powermeter_status(pm)
+    assert online is True
+    assert values == [7.0]
     assert inner.probes == 1
 
 
-async def test_powermeter_online_idle_pull_probe_failure_is_offline():
+async def test_powermeter_status_idle_pull_probe_failure_is_offline():
     inner = _PullMeter(raises=True)
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     service = _health_service()
-    assert await service._powermeter_online(pm) is False
+    online, values = await service._powermeter_status(pm)
+    assert online is False
+    assert values is None
     assert inner.probes == 1
 
 
-async def test_powermeter_online_stale_control_read_falls_back_to_probe():
+async def test_powermeter_status_stale_control_read_falls_back_to_probe():
     inner = _PullMeter([5.0])
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     await pm.get_powermeter_watts()
@@ -739,8 +780,31 @@ async def test_powermeter_online_stale_control_read_falls_back_to_probe():
     pm._last_attempt = time.monotonic() - (POWERMETER_IDLE_THRESHOLD + 10)
 
     service = _health_service()
-    assert await service._powermeter_online(pm) is True
+    online, values = await service._powermeter_status(pm)
+    assert online is True
+    assert values == [5.0]
     assert inner.probes == 2  # one control read + one fallback probe
+
+
+def test_grid_power_payload_phase_counts():
+    assert MqttInsightsService._grid_power_payload([1.0, 2.0, 3.0]) == {
+        "l1": 1.0,
+        "l2": 2.0,
+        "l3": 3.0,
+        "total": 6.0,
+    }
+    assert MqttInsightsService._grid_power_payload([100.0]) == {
+        "l1": 100.0,
+        "l2": None,
+        "l3": None,
+        "total": 100.0,
+    }
+    assert MqttInsightsService._grid_power_payload(None) == {
+        "l1": None,
+        "l2": None,
+        "l3": None,
+        "total": None,
+    }
 
 
 async def test_publish_powermeter_health_state_and_discovery_once():
@@ -752,7 +816,9 @@ async def test_publish_powermeter_health_state_and_discovery_once():
     cfg = service._config
     client = AsyncMock()
 
-    await service._publish_powermeter_health(client, "am", cfg, "MQTT_1", True)
+    await service._publish_powermeter_health(
+        client, "am", cfg, "MQTT_1", True, [1.0, 2.0, 3.0]
+    )
 
     topics = [c.args[0] for c in client.publish.call_args_list]
     assert "am/powermeter/MQTT_1" in topics
@@ -760,12 +826,15 @@ async def test_publish_powermeter_health_state_and_discovery_once():
     state_call = next(
         c for c in client.publish.call_args_list if c.args[0] == "am/powermeter/MQTT_1"
     )
-    assert json.loads(state_call.kwargs["payload"]) == {"online": True}
+    assert json.loads(state_call.kwargs["payload"]) == {
+        "online": True,
+        "grid_power": {"l1": 1.0, "l2": 2.0, "l3": 3.0, "total": 6.0},
+    }
     assert state_call.kwargs["retain"] is True
 
     # Second publish: state only, discovery is not repeated.
     client.publish.reset_mock()
-    await service._publish_powermeter_health(client, "am", cfg, "MQTT_1", False)
+    await service._publish_powermeter_health(client, "am", cfg, "MQTT_1", False, None)
     topics2 = [c.args[0] for c in client.publish.call_args_list]
     assert topics2 == ["am/powermeter/MQTT_1"]
 
