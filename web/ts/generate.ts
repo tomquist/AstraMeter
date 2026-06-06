@@ -8,6 +8,7 @@ import {
   CT_BASIC,
   CT_ACTIVE,
   CT_BALANCER,
+  CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
   MARSTEK_FIELDS,
@@ -110,7 +111,14 @@ function ctSection(state: State, sectionName: string): string {
   const ct = state.ct || {};
   const f = ct.fields || {};
   const lines = [`[${sectionName}]`];
-  const groups = [CT_BASIC, CT_ACTIVE, CT_BALANCER, CT_EFFICIENCY, CT_SATURATION];
+  const groups = [
+    CT_BASIC,
+    CT_ACTIVE,
+    CT_BALANCER,
+    CT_DC_KEEPALIVE,
+    CT_EFFICIENCY,
+    CT_SATURATION,
+  ];
   for (const group of groups) {
     for (const field of group) {
       const line = iniLine(field, f[field.key]);
@@ -369,6 +377,11 @@ function ct002OptionalBlocks(ct: { fields: Fields } | undefined): string[] {
   pushBool(bal, "FAIR_DISTRIBUTION", "fair_distribution");
   for (const fld of CT_BALANCER) {
     if (fld.key === "FAIR_DISTRIBUTION") continue;
+    if (!isBlank(ctVal(fld.key))) bal.push(`${fld.ey}: ${ctVal(fld.key)}`);
+  }
+  // MIN_DC_OUTPUT is a per-battery knob in the UI, but its ESPHome key lives
+  // under the same `balancer:` block.
+  for (const fld of CT_DC_KEEPALIVE) {
     if (!isBlank(ctVal(fld.key))) bal.push(`${fld.ey}: ${ctVal(fld.key)}`);
   }
   for (const fld of CT_EFFICIENCY) {
