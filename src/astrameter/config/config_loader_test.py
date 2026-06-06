@@ -10,6 +10,7 @@ from astrameter.config.config_loader import (
     create_client_filter,
     create_emlog_powermeter,
     create_esphome_powermeter,
+    create_fritz_powermeter,
     create_homeassistant_powermeter,
     create_homewizard_powermeter,
     create_iobroker_powermeter,
@@ -466,6 +467,20 @@ def test_create_homewizard_powermeter():
             raise
 
 
+def test_create_fritz_powermeter():
+    """Test FRITZ!Smart Energy powermeter creation and AIN suffix defaulting."""
+    config = configparser.ConfigParser()
+    config["FRITZ"] = {
+        "HOST": "fritz.box",
+        "USER": "smarthome",
+        "PASSWORD": "secret",
+        "AIN": "12345 0123456",
+    }
+    pm = create_fritz_powermeter("FRITZ", config)
+    assert pm._base_url == "http://fritz.box"
+    assert pm._ain == "123450123456-1"
+
+
 def test_create_sml_powermeter():
     """Test SML powermeter creation: SERIAL required, OBIS overrides applied."""
     config = configparser.ConfigParser()
@@ -520,6 +535,12 @@ def test_create_powermeter():
         "SERIAL": "aabbccddee",
     }
     config["SML_TEST"] = {"SERIAL": "/dev/ttyUSB0"}
+    config["FRITZ_TEST"] = {
+        "HOST": "fritz.box",
+        "USER": "smarthome",
+        "PASSWORD": "secret",
+        "AIN": "12345 0123456",
+    }
     config["UNKNOWN_TEST"] = {"SOME_KEY": "some_value"}
 
     # Test each powermeter type

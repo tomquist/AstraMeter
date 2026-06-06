@@ -492,8 +492,8 @@ reference docs — find your meter and copy the matching section:
 - **[docs/powermeters.md](docs/powermeters.md)** — `config.ini` sections for the
   Python add-on / Docker / direct install (Shelly, Tasmota, Shrdzm, Emlog,
   IoBroker, HomeAssistant, VZLogger, ESPHome, AMIS Reader, Modbus, MQTT, JSON
-  HTTP, TQ Energy Manager, HomeWizard, Enphase Envoy, SMA Energy Meter, Script,
-  SML).
+  HTTP, TQ Energy Manager, HomeWizard, Enphase Envoy, SMA Energy Meter,
+  FRITZ!Smart Energy 250, Script, SML).
 - **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)** — the equivalent
   grid-power `sensor:` configuration when running the
   [ESPHome external component](#esphome-external-component-run-on-an-esp32) on an

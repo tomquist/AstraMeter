@@ -59,6 +59,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [HomeWizard](#homewizard) — 🟠 Alternate (local v1 HTTP, or native P1)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway) — 🔴 Not yet available
 - [SMA Energy Meter](#sma-energy-meter) — 🔴 Not yet available
+- [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
 > an ESP32 can't run a host shell command — so it is intentionally omitted here.
@@ -818,3 +819,54 @@ network interface and parses the Speedwire datagram (per-phase
 Python implementation in `src/astrameter/powermeter/sma_energy_meter.py`, and the
 protocol as implemented by [sma2mqtt](https://github.com/vindolin/sma2mqtt) and
 [SMA-Speedwire](https://github.com/J0B10/SMA-Speedwire).
+
+## FRITZ!Smart Energy 250
+
+**Tier: 🟠 Alternate.** The Python `[FRITZ]` source reads the read head through
+the FRITZ!Box [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf):
+it logs in with the `login_sid.lua` **challenge-response** (PBKDF2-SHA256, or the
+legacy MD5 challenge), then parses the **XML** `getdevicelistinfos` device list.
+Stock ESPHome `http_request` can't comfortably do the PBKDF2 session handshake or
+parse XML (the built-in parser is JSON-only), so there is no direct ESP port.
+
+The read head only speaks DECT to the FRITZ!Box, so there's no local protocol to
+read on the ESP either. The practical path is to let **Home Assistant** read it
+via the built-in [AVM FRITZ!SmartHome](https://www.home-assistant.io/integrations/fritzbox/)
+integration — which surfaces the read head's power as a sensor entity — and then
+subscribe to that entity on the ESP with the native
+[`homeassistant`](https://esphome.io/components/sensor/homeassistant/) sensor
+platform (the same bridge the [HomeAssistant](#homeassistant) source uses):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+api:        # native API link to Home Assistant is required for this source
+
+sensor:
+  - platform: homeassistant
+    id: grid_l1
+    entity_id: sensor.fritz_smart_energy_power   # the FRITZ!SmartHome power entity
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+The FRITZ!Smart Energy 250 is single-phase, so only `grid_l1` is needed. If your
+Home Assistant exposes import and export as separate entities (no signed net
+sensor), use a [template sensor](https://www.home-assistant.io/integrations/template/)
+in HA to subtract them (`import − export`) and point `entity_id` at that.
+
+**Native alternative:** the read head clips onto your existing electricity meter.
+If that meter has an SML/D0 IR output or a P1 port, you can skip the FRITZ
+hardware entirely and read it directly on the ESP with the native [`sml`](#sml)
+or [`dsmr`](https://esphome.io/components/sensor/dsmr/) component.
+
+*To implement (direct):* an external component that performs the `login_sid.lua`
+challenge-response (PBKDF2/MD5) against the FRITZ!Box, GETs
+`getdevicelistinfos`, and extracts the configured AIN's `<powermeter><power>`
+(mW, signed) from the XML — re-authenticating on the 403 the box returns for an
+expired SID. Reference: the AstraMeter Python implementation in
+`src/astrameter/powermeter/fritz.py`.

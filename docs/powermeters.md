@@ -34,6 +34,7 @@ Powermeters](../README.md#multiple-powermeters) are documented in the main
 - [HomeWizard](#homewizard)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway)
 - [SMA Energy Meter](#sma-energy-meter)
+- [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
 - [Script](#script)
 - [SML](#sml)
 
@@ -411,6 +412,33 @@ SERIAL_NUMBER = 0
 # INTERFACE = 192.168.1.10
 # THROTTLE_INTERVAL = 0
 ```
+
+## FRITZ!Smart Energy 250
+
+Reads grid power from an [AVM FRITZ!Smart Energy 250](https://fritz.com/en/products/fritz-smart-energy-250-20003088) smart-meter read head. The read head pairs with a FRITZ!Box over DECT and clips onto a digital electricity meter; AstraMeter polls the FRITZ!Box's [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf) (`getdevicelistinfos`) for the current reading.
+
+> **⚠️ Power the read head over USB.** On battery the read head only refreshes its reading roughly **every 2 minutes** — far too slow for AstraMeter's ~1 s control loop, so battery balancing **will not work** (the batteries would be steered from a reading that's minutes stale). Connect the read head to USB power, which raises the update rate to ~10 s and makes it usable. Even at 10 s it's on the slow side; a meter that updates every second (e.g. SML/P1, Shelly, SMA) gives noticeably tighter control.
+
+```ini
+[FRITZ]
+HOST = fritz.box
+USER = smarthome
+PASSWORD = your-fritzbox-password
+AIN = 12345 0123456
+# Reach the box over HTTPS (default False = http); FRITZ!Box certs are self-signed
+# HTTPS = False
+# VERIFY_SSL = True
+# TIMEOUT = 10.0
+# Power the read head via USB: on battery it only updates ~every 2 min, too slow
+# for control. USB raises that to ~10 s, which this throttle matches.
+THROTTLE_INTERVAL = 10
+```
+
+**Authentication.** Create a FRITZ!Box user with the **Smart Home** permission under *Home Network → FRITZ!Box Users* and put its name/password in `USER`/`PASSWORD`. AstraMeter logs in through `login_sid.lua` (supporting both the PBKDF2 and legacy MD5 challenge) and reuses the session, re-authenticating automatically if the box expires it.
+
+**AIN.** Find the AIN under *Home Network → SmartHome* (open the device's detail/edit view). The read head exposes two sub-units under that base AIN: `-1` (*Strombezug* / grid import) and `-2` (*Einspeisung* / feed-in). Both report the **signed** instantaneous power (positive = import, negative = feed-in), so AstraMeter reads the `-1` branch as net grid power and appends `-1` automatically when no suffix is given. Spaces in the AIN are optional.
+
+**Update rate.** USB power is effectively required (see the warning above): the ~2 min battery cadence is too slow for battery control, while USB raises it to ~10 s. `THROTTLE_INTERVAL = 10` then matches that USB cadence so AstraMeter doesn't hammer the box between fresh readings.
 
 ## Script
 
