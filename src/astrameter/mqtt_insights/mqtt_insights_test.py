@@ -1050,13 +1050,16 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
                 sub,
                 discovery_msgs,
                 timeout=3,
-                stop=lambda _: len(discovery_msgs) >= 3,
+                stop=lambda _: len(discovery_msgs) >= 4,
             )
 
-        # Expect: device discovery + consumer1 discovery + consumer2 discovery = 3
-        # (no duplicate for second consumer1 event)
-        assert len(discovery_msgs) == 3
+        # Expect: AstraMeter hub device (retained, now always published on
+        # connect with a base-topic fallback id) + CT002 device discovery +
+        # consumer1 + consumer2 = 4 (no duplicate for the second consumer1 event)
+        assert len(discovery_msgs) == 4
         topics = [str(m.topic) for m in discovery_msgs]
+        # Hub device discovery (retained, delivered on subscribe)
+        assert any("astrameter_addon_" in t for t in topics)
         # Device-level discovery
         assert any("astrameter_ct002_dev1/config" in t for t in topics)
         # Consumer-level discoveries
