@@ -386,6 +386,53 @@ class TestLifecycle:
         await meter.stop()  # should not raise
 
 
+class _FakeClock:
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class TestStreamOnline(unittest.TestCase):
+    def _total_packet(self):
+        return _build_packet(
+            [
+                _build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000),
+                _build_channel(CHANNEL_TOTAL_POWER_MINUS, 0),
+            ]
+        )
+
+    def test_false_before_any_telegram(self):
+        meter = _create_meter()
+        self.assertIs(meter.stream_online(), False)
+
+    def test_true_when_fresh(self):
+        clock = _FakeClock()
+        meter = _create_meter(max_telegram_age_seconds=30.0, clock=clock)
+        meter._handle_packet(self._total_packet())
+        self.assertIs(meter.stream_online(), True)
+        clock.advance(29.0)
+        self.assertIs(meter.stream_online(), True)
+
+    def test_false_when_stale(self):
+        clock = _FakeClock()
+        meter = _create_meter(max_telegram_age_seconds=30.0, clock=clock)
+        meter._handle_packet(self._total_packet())
+        clock.advance(31.0)
+        self.assertIs(meter.stream_online(), False)
+
+    def test_disabled_when_max_age_zero(self):
+        clock = _FakeClock()
+        meter = _create_meter(max_telegram_age_seconds=0.0, clock=clock)
+        meter._handle_packet(self._total_packet())
+        clock.advance(100000.0)
+        self.assertIs(meter.stream_online(), True)
+
+
 class TestDeviceNames(unittest.TestCase):
     def test_known_susy_ids(self):
         self.assertEqual(SMA_SUSY_IDS[270], "SMA Energy Meter 1.0")

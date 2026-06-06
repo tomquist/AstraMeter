@@ -39,6 +39,7 @@ from astrameter.powermeter import (
     parse_sml_obis_config,
 )
 from astrameter.powermeter.wrappers.hampel import HampelPowermeter
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.powermeter.wrappers.smoothing import (
     DeadbandPowermeter,
     SmoothedPowermeter,
@@ -335,6 +336,9 @@ def read_all_powermeter_configs(
             wait_for_next_message = config.getboolean(
                 section, "WAIT_FOR_NEXT_MESSAGE", fallback=global_wait_for_next_message
             )
+            # Wrap outermost so health tracking sees the final processed read
+            # and labels the powermeter's MQTT Insights device with the section.
+            powermeter = HealthTrackingPowermeter(powermeter, name=section)
             powermeters.append((powermeter, client_filter, wait_for_next_message))
     return powermeters
 
@@ -746,5 +750,12 @@ def read_mqtt_insights_config(
                     ).strip()
                 )
                 else 300,
+                powermeter_health_interval=float(raw_health_interval)
+                if (
+                    raw_health_interval := config.get(
+                        section, "POWERMETER_HEALTH_INTERVAL", fallback=""
+                    ).strip()
+                )
+                else 30.0,
             )
     return None

@@ -78,6 +78,9 @@ class HomeAssistant(Powermeter):
         self._fetch_states_task: asyncio.Task[None] | None = None
         self._entities_ready = asyncio.Event()
         self._message_event = asyncio.Event()
+        # Read-only health flag for stream_online(): set on auth_ok, cleared on
+        # disconnect (via _reset_for_reconnect).
+        self._connected = False
 
     def _collect_entities(self) -> set[str]:
         if self.power_calculate:
@@ -154,6 +157,7 @@ class HomeAssistant(Powermeter):
         until the reconnected ``subscribe_entities`` snapshot repopulates
         them.
         """
+        self._connected = False
         self._msg_id = 0
         self._subscribe_entities_id = None
         if self._fetch_states_task and not self._fetch_states_task.done():
@@ -215,6 +219,7 @@ class HomeAssistant(Powermeter):
             await ws.send_json({"type": "auth", "access_token": self.access_token})
         elif msg_type == "auth_ok":
             logger.info("Home Assistant: authenticated")
+            self._connected = True
             if not self._tracked_entities:
                 logger.error(
                     "Home Assistant: no entity IDs configured for subscription"
@@ -309,6 +314,14 @@ class HomeAssistant(Powermeter):
         if val is None:
             raise ValueError(f"Home Assistant sensor {entity_id} has no state")
         return val
+
+    def stream_online(self) -> bool | None:
+        # Availability-based, never timestamp-based: a steady/constant phase
+        # (e.g. an idle oven phase reporting 0 W) is legitimate and stays
+        # online. _entities_ready mirrors get_powermeter_watts' validity — all
+        # tracked entities have usable values — so a phase the integration
+        # marks unavailable (None) flips this offline.
+        return self._connected and self._entities_ready.is_set()
 
     async def get_powermeter_watts(self) -> list[float]:
         if not self.power_calculate:

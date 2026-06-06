@@ -429,6 +429,62 @@ def build_ct002_device_discovery(
     return topic, payload
 
 
+# ── Powermeter (grid power source) ────────────────────────────────────────
+
+
+def build_powermeter_device_discovery(
+    base_topic: str,
+    pm_id: str,
+    name: str,
+    ha_prefix: str,
+    addon_slug: str | None = None,
+) -> tuple[str, dict]:
+    """Discovery for a per-powermeter diagnostic device with an "Online" sensor.
+
+    ``pm_id`` is the already-sanitized config section name; ``name`` is the raw
+    section used as the device's display label. The sensor flips off when the
+    powermeter stops delivering fresh/usable data (stale stream, disconnect, or
+    — for pull meters — a failing read).
+    """
+    safe_pm = _sanitize_id(pm_id)
+    node_id = f"astrameter_powermeter_{safe_pm}"
+    uid_prefix = node_id
+    state_topic = f"{base_topic}/powermeter/{pm_id}"
+
+    components: dict[str, dict] = {
+        "online": {
+            "platform": "binary_sensor",
+            "unique_id": f"{uid_prefix}_online",
+            "name": "Online",
+            "device_class": "connectivity",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.online }}",
+            "payload_on": "True",
+            "payload_off": "False",
+            "entity_category": "diagnostic",
+        },
+    }
+
+    device_info: dict = {
+        "identifiers": node_id,
+        "name": f"AstraMeter Powermeter {name}",
+        "manufacturer": "astrameter",
+    }
+    if addon_slug:
+        device_info["via_device"] = addon_slug
+
+    payload = {
+        "device": device_info,
+        "origin": _origin(),
+        "components": components,
+        "availability": [_system_availability(base_topic)],
+        "state_topic": state_topic,
+    }
+
+    topic = f"{ha_prefix}/device/{node_id}/config"
+    return topic, payload
+
+
 # ── Shelly per-battery ────────────────────────────────────────────────────
 
 

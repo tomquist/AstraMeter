@@ -7,6 +7,8 @@ import configparser
 import contextlib
 import json
 import re
+import time
+from unittest.mock import AsyncMock
 
 import aiomqtt
 
@@ -15,17 +17,25 @@ from astrameter.config.config_loader import (
     read_mqtt_insights_config,
 )
 from astrameter.conftest import needs_mosquitto
+from astrameter.powermeter.base import Powermeter
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
 from .discovery import (
     _sanitize_id,
     build_addon_device_discovery,
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
+    build_powermeter_device_discovery,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
 from .marstek_mqtt import MarstekMqttBinding
-from .service import MqttInsightsConfig, MqttInsightsService, _arp_lookup
+from .service import (
+    POWERMETER_IDLE_THRESHOLD,
+    MqttInsightsConfig,
+    MqttInsightsService,
+    _arp_lookup,
+)
 
 # ── Discovery payload unit tests ──────────────────────────────────────────
 
@@ -274,6 +284,38 @@ def test_shelly_device_discovery_structure():
     assert "AstraMeter" in payload["device"]["name"]
     assert payload["device"]["via_device"] == "34dea19a_astrameter"
     assert "battery_count" in payload["components"]
+
+
+def test_powermeter_device_discovery_structure():
+    topic, payload = build_powermeter_device_discovery(
+        "astrameter",
+        "MQTT_1",
+        "MQTT_1",
+        "homeassistant",
+        addon_slug="34dea19a_astrameter",
+    )
+    _assert_discovery_structure(topic, payload)
+    assert topic == "homeassistant/device/astrameter_powermeter_MQTT_1/config"
+    assert payload["device"]["identifiers"] == "astrameter_powermeter_MQTT_1"
+    assert payload["device"]["name"] == "AstraMeter Powermeter MQTT_1"
+    assert payload["device"]["via_device"] == "34dea19a_astrameter"
+    assert payload["state_topic"] == "astrameter/powermeter/MQTT_1"
+    assert len(payload["availability"]) == 1
+
+    online = payload["components"]["online"]
+    assert online["platform"] == "binary_sensor"
+    assert online["device_class"] == "connectivity"
+    assert online["payload_on"] == "True"
+    assert online["payload_off"] == "False"
+    assert online["entity_category"] == "diagnostic"
+    assert online["value_template"] == "{{ value_json.online }}"
+
+
+def test_powermeter_device_discovery_omits_via_device_without_addon_slug():
+    _, payload = build_powermeter_device_discovery(
+        "astrameter", "HOMEWIZARD", "HOMEWIZARD", "homeassistant"
+    )
+    assert "via_device" not in payload["device"]
 
 
 def test_meter_device_discovery_omits_via_device_without_addon_slug():
@@ -556,6 +598,34 @@ def test_read_mqtt_insights_config_marstek_mqtt_interval_zero():
     assert result.marstek_mqtt_interval == 0
 
 
+def test_read_mqtt_insights_config_powermeter_health_interval_default():
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.powermeter_health_interval == 30.0
+
+
+def test_read_mqtt_insights_config_powermeter_health_interval_custom():
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        "[MQTT_INSIGHTS]\nBROKER = localhost\nPOWERMETER_HEALTH_INTERVAL = 15\n"
+    )
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.powermeter_health_interval == 15.0
+
+
+def test_read_mqtt_insights_config_powermeter_health_interval_zero():
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        "[MQTT_INSIGHTS]\nBROKER = localhost\nPOWERMETER_HEALTH_INTERVAL = 0\n"
+    )
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.powermeter_health_interval == 0
+
+
 # ── Service unit tests (no broker) ───────────────────────────────────────
 
 
@@ -565,6 +635,124 @@ def test_queue_overflow_does_not_raise():
     for i in range(200):
         service.on_ct002_response("dev1", f"consumer{i}", {"grid_power": {}})
     # No exception raised
+
+
+# ── Powermeter health loop (no broker) ───────────────────────────────────
+
+
+class _PushMeter(Powermeter):
+    def __init__(self, online: bool | None) -> None:
+        self._online = online
+
+    def stream_online(self) -> bool | None:
+        return self._online
+
+    async def get_powermeter_watts(self) -> list[float]:
+        raise AssertionError("push meter must not be probed")
+
+
+class _PullMeter(Powermeter):
+    def __init__(self, values: list[float] | None = None, raises: bool = False) -> None:
+        self._values = values if values is not None else [100.0]
+        self._raises = raises
+        self.probes = 0
+
+    async def get_powermeter_watts(self) -> list[float]:
+        self.probes += 1
+        if self._raises:
+            raise ValueError("boom")
+        return self._values
+
+
+def _health_service() -> MqttInsightsService:
+    return MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+
+
+async def test_powermeter_online_push_reports_stream_state():
+    service = _health_service()
+    assert await service._powermeter_online(_PushMeter(True)) is True
+    assert await service._powermeter_online(_PushMeter(False)) is False
+
+
+async def test_powermeter_online_pull_reuses_recent_control_read():
+    """A pull meter read by the control loop within the idle window is reused
+    without issuing a probe."""
+    inner = _PullMeter([42.0])
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    await pm.get_powermeter_watts()  # control-loop read: ok, recent
+    assert inner.probes == 1
+
+    service = _health_service()
+    assert await service._powermeter_online(pm) is True
+    assert inner.probes == 1  # reused, no extra probe
+
+
+async def test_powermeter_online_pull_reuses_recent_failure():
+    inner = _PullMeter(raises=True)
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    with contextlib.suppress(ValueError):
+        await pm.get_powermeter_watts()
+    probes_after_control = inner.probes
+
+    service = _health_service()
+    assert await service._powermeter_online(pm) is False
+    assert inner.probes == probes_after_control  # reused failure, no probe
+
+
+async def test_powermeter_online_idle_pull_is_probed_once():
+    inner = _PullMeter([7.0])
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    # No control-loop read recorded -> idle -> probe.
+    service = _health_service()
+    assert await service._powermeter_online(pm) is True
+    assert inner.probes == 1
+
+
+async def test_powermeter_online_idle_pull_probe_failure_is_offline():
+    inner = _PullMeter(raises=True)
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    service = _health_service()
+    assert await service._powermeter_online(pm) is False
+    assert inner.probes == 1
+
+
+async def test_powermeter_online_stale_control_read_falls_back_to_probe():
+    inner = _PullMeter([5.0])
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    await pm.get_powermeter_watts()
+    # Age the recorded attempt well past the idle window.
+    pm._last_attempt = time.monotonic() - (POWERMETER_IDLE_THRESHOLD + 10)
+
+    service = _health_service()
+    assert await service._powermeter_online(pm) is True
+    assert inner.probes == 2  # one control read + one fallback probe
+
+
+async def test_publish_powermeter_health_state_and_discovery_once():
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="localhost", base_topic="am", ha_discovery_prefix="ha"
+        )
+    )
+    cfg = service._config
+    client = AsyncMock()
+
+    await service._publish_powermeter_health(client, "am", cfg, "MQTT_1", True)
+
+    topics = [c.args[0] for c in client.publish.call_args_list]
+    assert "am/powermeter/MQTT_1" in topics
+    assert "ha/device/astrameter_powermeter_MQTT_1/config" in topics
+    state_call = next(
+        c for c in client.publish.call_args_list if c.args[0] == "am/powermeter/MQTT_1"
+    )
+    assert json.loads(state_call.kwargs["payload"]) == {"online": True}
+    assert state_call.kwargs["retain"] is True
+
+    # Second publish: state only, discovery is not repeated.
+    client.publish.reset_mock()
+    await service._publish_powermeter_health(client, "am", cfg, "MQTT_1", False)
+    topics2 = [c.args[0] for c in client.publish.call_args_list]
+    assert topics2 == ["am/powermeter/MQTT_1"]
 
 
 # ── E2E helpers ──────────────────────────────────────────────────────────

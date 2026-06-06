@@ -483,7 +483,9 @@ async def async_main(
         # MQTT Insights (optional)
         insights_cfg = read_mqtt_insights_config(cfg)
         if insights_cfg:
-            insights = MqttInsightsService(insights_cfg)
+            insights = MqttInsightsService(
+                insights_cfg, powermeters=[pm for pm, _, _ in powermeters]
+            )
             await insights.start()
             logger.info("MQTT Insights service started")
 

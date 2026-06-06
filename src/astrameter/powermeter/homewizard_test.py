@@ -237,6 +237,42 @@ async def test_fresh_measurement_clears_staleness():
     assert await pm.get_powermeter_watts() == [250]
 
 
+# --- Category D3: stream_online health hook ---------------------------------
+
+
+def test_stream_online_false_before_any_measurement():
+    pm = _create_powermeter()
+    # Not connected and nothing received yet.
+    assert pm.stream_online() is False
+
+
+async def test_stream_online_true_when_connected_and_fresh():
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
+    pm._connected = True
+    pm._handle_measurement({"power_w": 100})
+    assert pm.stream_online() is True
+    clock.advance(29.0)
+    assert pm.stream_online() is True
+
+
+async def test_stream_online_false_when_connected_but_stale():
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
+    pm._connected = True
+    pm._handle_measurement({"power_w": 100})
+    clock.advance(31.0)
+    assert pm.stream_online() is False
+
+
+def test_stream_online_false_when_disconnected_even_if_fresh():
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
+    pm._connected = False
+    pm._handle_measurement({"power_w": 100})
+    assert pm.stream_online() is False
+
+
 # --- Category E: wait_for_message ---
 
 

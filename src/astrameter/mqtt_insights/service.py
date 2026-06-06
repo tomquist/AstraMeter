@@ -7,9 +7,10 @@ import contextlib
 import json
 import math
 import ssl
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiomqtt
 
@@ -21,9 +22,13 @@ from .discovery import (
     build_addon_device_discovery,
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
+    build_powermeter_device_discovery,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
+
+if TYPE_CHECKING:
+    from astrameter.powermeter.base import Powermeter
 from .marstek_mqtt import (
     MarstekMqttBinding,
     MarstekPollContext,
@@ -37,6 +42,11 @@ from .marstek_mqtt import (
 
 RECONNECT_DELAY = 5
 QUEUE_MAX_SIZE = 100
+
+# Health loop: reuse the control loop's most recent read for a pull powermeter
+# if it happened within this many seconds; otherwise issue one bounded probe.
+POWERMETER_IDLE_THRESHOLD = 2.0
+POWERMETER_PROBE_TIMEOUT = 5.0
 
 
 async def _arp_lookup(ip: str) -> str:
@@ -80,6 +90,9 @@ class MqttInsightsConfig:
     # publish power values for every registered binding at this cadence so the
     # Marstek app stays up-to-date without relying solely on its own polls.
     marstek_mqtt_interval: float = 300.0
+    # Per-powermeter "Online" diagnostic sensor publish cadence (seconds).
+    # 0 disables the health loop entirely.
+    powermeter_health_interval: float = 30.0
 
 
 @dataclass
@@ -91,14 +104,20 @@ class _Event:
 
 
 class MqttInsightsService:
-    def __init__(self, config: MqttInsightsConfig) -> None:
+    def __init__(
+        self,
+        config: MqttInsightsConfig,
+        powermeters: list[Powermeter] | None = None,
+    ) -> None:
         self._config = config
+        self._powermeters: list[Powermeter] = list(powermeters or [])
         self._queue: asyncio.Queue[_Event] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
         self._task: asyncio.Task[None] | None = None
         self._discovered_ct002_consumers: set[str] = set()
         self._discovered_ct002_devices: set[str] = set()
         self._discovered_shelly_batteries: set[str] = set()
         self._discovered_shelly_devices: set[str] = set()
+        self._discovered_powermeters: set[str] = set()
         self._pending_arp: set[str] = set()
         self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
@@ -294,6 +313,7 @@ class MqttInsightsService:
                     self._discovered_ct002_devices.clear()
                     self._discovered_shelly_batteries.clear()
                     self._discovered_shelly_devices.clear()
+                    self._discovered_powermeters.clear()
 
                     # Publish online status
                     await client.publish(
@@ -341,6 +361,8 @@ class MqttInsightsService:
                         ]
                         if cfg.marstek_mqtt_enabled and cfg.marstek_mqtt_interval > 0:
                             coros.append(self._marstek_broadcast_loop(client))
+                        if self._powermeters and cfg.powermeter_health_interval > 0:
+                            coros.append(self._powermeter_health_loop(client))
                         await asyncio.gather(*coros)
                     finally:
                         async with self._marstek_lock:
@@ -843,6 +865,68 @@ class MqttInsightsService:
                     logger.exception("Rotation handler error for device %s", device_id)
             else:
                 logger.debug("No rotation handler for device %s", device_id)
+
+    # ── Powermeter health ─────────────────────────────────────────────
+
+    async def _powermeter_health_loop(self, client: aiomqtt.Client) -> None:
+        """Publish a per-powermeter "Online" diagnostic sensor.
+
+        Push powermeters answer ``stream_online()`` with no I/O; pull
+        powermeters reuse the control loop's most recent read, or — when idle
+        (no battery polling them) — get one bounded probe per cycle.
+        """
+        cfg = self._config
+        base = cfg.base_topic
+        interval = cfg.powermeter_health_interval
+        while True:
+            for pm in self._powermeters:
+                name = getattr(pm, "name", "") or ""
+                if not name:
+                    continue
+                online = await self._powermeter_online(pm)
+                await self._publish_powermeter_health(client, base, cfg, name, online)
+            await asyncio.sleep(interval)
+
+    async def _powermeter_online(self, pm: Powermeter) -> bool:
+        stream = pm.stream_online()
+        if stream is not None:
+            return stream
+        last_attempt = getattr(pm, "last_attempt", None)
+        if (
+            last_attempt is not None
+            and (time.monotonic() - last_attempt) <= POWERMETER_IDLE_THRESHOLD
+        ):
+            return bool(getattr(pm, "last_outcome_ok", False))
+        try:
+            values = await asyncio.wait_for(
+                pm.get_powermeter_watts(), timeout=POWERMETER_PROBE_TIMEOUT
+            )
+        except Exception:
+            return False
+        return bool(values)
+
+    async def _publish_powermeter_health(
+        self,
+        client: aiomqtt.Client,
+        base: str,
+        cfg: MqttInsightsConfig,
+        name: str,
+        online: bool,
+    ) -> None:
+        pm_id = _sanitize_id(name)
+        await client.publish(
+            f"{base}/powermeter/{pm_id}",
+            payload=json.dumps({"online": online}).encode(),
+            retain=True,
+        )
+        if cfg.ha_discovery and pm_id not in self._discovered_powermeters:
+            self._discovered_powermeters.add(pm_id)
+            topic, payload = build_powermeter_device_discovery(
+                base, pm_id, name, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+            )
+            await client.publish(
+                topic, payload=json.dumps(payload).encode(), retain=True
+            )
 
     async def _marstek_broadcast_loop(self, client: aiomqtt.Client) -> None:
         """Periodically publish power values for all registered bindings."""
