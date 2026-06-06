@@ -623,7 +623,7 @@ export const POWERMETERS: Powermeter[] = [
     id: "fritz",
     label: "FRITZ!Smart Energy 250",
     section: "FRITZ",
-    blurb: "An AVM FRITZ!Smart Energy 250 meter read head, via the FRITZ!Box AHA-HTTP-Interface.",
+    blurb: "An AVM FRITZ!Smart Energy 250 meter read head, via the FRITZ!Box AHA-HTTP-Interface. Power it over USB — on battery it only updates every ~2 min, too slow for battery control.",
     docPython: "docs/powermeters.md#fritzsmart-energy-250",
     fields: [
       { key: "HOST", label: "FRITZ!Box host", type: "text", default: "fritz.box", placeholder: "fritz.box", required: true, help: "The FRITZ!Box hostname or IP the read head is paired with." },

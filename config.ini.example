@@ -366,9 +366,10 @@ THROTTLE_INTERVAL = 0
 # HTTPS = False
 # VERIFY_SSL = True
 # TIMEOUT = 10.0
-## The read head refreshes every ~2 min on battery (≈10 s when USB-powered), so
-## throttle polling toward its update cadence — e.g. 10 (USB) up to 120
-## (battery-only) — instead of hitting the box every second.
+## IMPORTANT: power the read head over USB. On battery it only refreshes every
+## ~2 min — too slow for AstraMeter's ~1 s control loop, so battery balancing
+## won't work. USB raises the update rate to ~10 s; this throttle matches that
+## so AstraMeter doesn't hammer the box between fresh readings.
 # THROTTLE_INTERVAL = 10
 
 # [SCRIPT]
