@@ -151,6 +151,20 @@ def test_base_url_explicit_scheme_preserved():
     assert meter._base_url == "https://fritz.box:443"
 
 
+def test_https_host_honors_verify_ssl_false():
+    # An explicit https:// HOST (without use_tls) must still disable verification.
+    meter = FritzSmartEnergy(
+        "https://fritz.box", "u", "p", "12345 0123456", verify_ssl=False
+    )
+    assert meter._ssl is False
+
+
+def test_http_host_ignores_verify_ssl():
+    # Plain http: verification flag is irrelevant, leave aiohttp defaults.
+    meter = FritzSmartEnergy("fritz.box", "u", "p", "12345 0123456", verify_ssl=False)
+    assert meter._ssl is None
+
+
 def test_compute_login_response_pbkdf2():
     challenge = "2$10000$5A1711$2000$5A1722"
     password = "1example!"

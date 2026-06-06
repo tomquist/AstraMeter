@@ -535,6 +535,12 @@ def test_create_powermeter():
         "SERIAL": "aabbccddee",
     }
     config["SML_TEST"] = {"SERIAL": "/dev/ttyUSB0"}
+    config["FRITZ_TEST"] = {
+        "HOST": "fritz.box",
+        "USER": "smarthome",
+        "PASSWORD": "secret",
+        "AIN": "12345 0123456",
+    }
     config["UNKNOWN_TEST"] = {"SOME_KEY": "some_value"}
 
     # Test each powermeter type

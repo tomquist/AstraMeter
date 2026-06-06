@@ -94,9 +94,12 @@ class FritzSmartEnergy(Powermeter):
         self._ain = ain
 
         self._timeout = timeout
-        # Only force-disable verification when explicitly using TLS without it;
+        # Only force-disable verification when actually using TLS without it;
         # otherwise let aiohttp use its defaults (and ignore for plain http).
-        self._ssl: bool | None = False if (use_tls and not verify_ssl) else None
+        # Derive TLS from the resolved scheme so an explicit ``https://`` HOST
+        # also honors VERIFY_SSL.
+        effective_tls = self._base_url.startswith("https://")
+        self._ssl: bool | None = False if (effective_tls and not verify_ssl) else None
         self._session: aiohttp.ClientSession | None = None
         self._sid: str | None = None
         self._auth_lock = asyncio.Lock()
