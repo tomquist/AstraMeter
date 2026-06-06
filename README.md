@@ -88,7 +88,11 @@ The AstraMeter project can be installed and run in several ways depending on you
 
 #### Installation Steps
 1. Create a directory for the project
-2. Create your `config.ini` file
+2. Create your `config.ini` file **before** starting the container. The compose
+   file bind-mounts `config.ini` as a single file, and Docker will create an
+   empty **directory** named `config.ini` if the file doesn't exist yet. (If you
+   prefer a directory mount, mount a folder to `/app/config` and point the
+   container at it with `command: ["astrameter", "-c", "config/config.ini"]`.)
 3. Use the provided `docker-compose.yaml` to start the container:
    ```bash
    docker-compose up -d
