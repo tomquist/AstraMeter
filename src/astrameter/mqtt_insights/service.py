@@ -323,12 +323,16 @@ class MqttInsightsService:
                         retain=True,
                     )
 
-                    # Top-level "AstraMeter" hub device — only when running as
-                    # the HA add-on (the per-meter devices link up to it via
-                    # via_device=addon_slug). Republished on every reconnect.
-                    if cfg.ha_discovery and cfg.addon_slug:
+                    # Top-level "AstraMeter" hub device that the per-meter
+                    # devices link up to via via_device. Uses ADDON_SLUG as the
+                    # identifier on the HA add-on, falling back to a stable
+                    # base-topic-derived id so the grouping also works in
+                    # standalone/Docker. Republished on every reconnect.
+                    if cfg.ha_discovery:
                         topic, payload = build_addon_device_discovery(
-                            cfg.base_topic, cfg.addon_slug, cfg.ha_discovery_prefix
+                            cfg.base_topic,
+                            self._hub_identifier(),
+                            cfg.ha_discovery_prefix,
                         )
                         await client.publish(
                             topic, payload=json.dumps(payload).encode(), retain=True
@@ -400,14 +404,26 @@ class MqttInsightsService:
             self._discovered_shelly_batteries
         )
 
+    def _hub_identifier(self) -> str:
+        """Identifier of the top-level AstraMeter hub device the per-meter
+        devices link to via ``via_device``.
+
+        On the HA add-on this is ``ADDON_SLUG`` (unchanged, so existing add-on
+        devices keep grouping). Outside the add-on it falls back to a stable
+        base-topic-derived id so standalone/Docker deployments group too.
+        """
+        cfg = self._config
+        return cfg.addon_slug or f"astrameter_{_sanitize_id(cfg.base_topic)}"
+
     async def _publish_bridge(
         self, client: aiomqtt.Client, cfg: MqttInsightsConfig
     ) -> None:
         """Publish the retained hub-device state ({base}/bridge).
 
-        No-op unless the hub device exists (HA discovery + add-on slug).
+        No-op unless HA discovery is on (the hub device is always published
+        then, with an ADDON_SLUG-or-fallback identifier).
         """
-        if not (cfg.ha_discovery and cfg.addon_slug):
+        if not cfg.ha_discovery:
             return
         payload = {
             "version": get_version(),
@@ -518,7 +534,10 @@ class MqttInsightsService:
             if did not in self._discovered_ct002_devices:
                 self._discovered_ct002_devices.add(did)
                 topic, payload = build_ct002_device_discovery(
-                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+                    base,
+                    did,
+                    cfg.ha_discovery_prefix,
+                    addon_slug=self._hub_identifier(),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
@@ -616,7 +635,10 @@ class MqttInsightsService:
             if did not in self._discovered_shelly_devices:
                 self._discovered_shelly_devices.add(did)
                 topic, payload = build_shelly_device_discovery(
-                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+                    base,
+                    did,
+                    cfg.ha_discovery_prefix,
+                    addon_slug=self._hub_identifier(),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
@@ -960,7 +982,11 @@ class MqttInsightsService:
         if cfg.ha_discovery and pm_id not in self._discovered_powermeters:
             self._discovered_powermeters.add(pm_id)
             topic, payload = build_powermeter_device_discovery(
-                base, pm_id, name, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+                base,
+                pm_id,
+                name,
+                cfg.ha_discovery_prefix,
+                addon_slug=self._hub_identifier(),
             )
             await client.publish(
                 topic, payload=json.dumps(payload).encode(), retain=True

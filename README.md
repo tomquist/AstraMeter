@@ -569,8 +569,9 @@ HA_DISCOVERY_PREFIX = homeassistant
 
 When HA discovery is on, every configured powermeter section gets its own
 **"AstraMeter Powermeter `<Section>`"** device (the section name is Capital-Cased
-for the label, and the device is grouped under the **AstraMeter** hub device when
-running as the add-on). It carries:
+for the label, and the device is grouped under the **AstraMeter** hub device —
+keyed on `ADDON_SLUG` on the add-on, with a stable base-topic fallback so the
+grouping also works in standalone/Docker). It carries:
 
 - an **Online** connectivity `binary_sensor` (diagnostic) that flips **off** when
   the source stops delivering fresh, usable readings — a stalled or disconnected

@@ -839,6 +839,41 @@ async def test_publish_powermeter_health_state_and_discovery_once():
     assert topics2 == ["am/powermeter/MQTT_1"]
 
 
+def test_hub_identifier_uses_addon_slug_when_set():
+    svc = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="localhost", base_topic="am", addon_slug="34dea19a_astrameter"
+        )
+    )
+    assert svc._hub_identifier() == "34dea19a_astrameter"
+
+
+def test_hub_identifier_falls_back_to_base_topic_without_addon_slug():
+    svc = MqttInsightsService(
+        MqttInsightsConfig(broker="localhost", base_topic="astra")
+    )
+    assert svc._hub_identifier() == "astrameter_astra"
+
+
+async def test_publish_powermeter_health_links_hub_via_fallback():
+    """Without ADDON_SLUG the powermeter device still links to the AstraMeter
+    hub via the base-topic fallback identifier (standalone/Docker)."""
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="localhost", base_topic="am", ha_discovery_prefix="ha"
+        )
+    )
+    client = AsyncMock()
+    await service._publish_powermeter_health(
+        client, "am", service._config, "MQTT_1", True, [1.0]
+    )
+    disc = next(
+        c for c in client.publish.call_args_list if c.args[0].endswith("/config")
+    )
+    payload = json.loads(disc.kwargs["payload"])
+    assert payload["device"]["via_device"] == "astrameter_am"
+
+
 # ── E2E helpers ──────────────────────────────────────────────────────────
 
 
