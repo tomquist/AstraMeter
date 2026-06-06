@@ -29,12 +29,18 @@ Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. 
 
 ## Adding a powermeter
 
-Powermeters are Python-only and have **no** ESPHome counterpart (the ESPHome
+Powermeters are Python-only and have **no** C++/ESPHome counterpart (the ESPHome
 component reads grid power from any native ESPHome sensor instead), so the
-parity rule above does not apply here.
+parity rule above does not apply here. A new powermeter still touches several
+places beyond the implementation — work through **every** step below so the
+config loader, web editor, config generator, and both doc sets stay in sync
+(grep an existing meter, e.g. `HomeWizard`/`HOMEWIZARD`, to find all the spots):
 
 1. **Implementation** — Add `src/astrameter/powermeter/<module>.py` with a class subclassing `Powermeter`; implement `get_powermeter_watts()` (and `wait_for_message()` only if the base default is wrong for your source).
-2. **Exports** — Import and re-export the class from `src/astrameter/powermeter/__init__.py`.
-3. **Config** — In `src/astrameter/config/config_loader.py`: import the class, define a `*_SECTION` string, add a `section.startswith(...)` branch in `create_powermeter()`, and a `create_*_powermeter()` factory that reads options from the section. `POWER_OFFSET` / `POWER_MULTIPLIER`, `THROTTLE_INTERVAL`, and `NETMASK` are handled globally for any section that returns a powermeter — no extra wiring unless you need something custom.
-4. **Examples, docs & changelog** — Add a commented example to `config.ini.example` and a subsection under **Configuration** in `README.md`, plus one **`## Next`** bullet for the powermeter (add once, then update that bullet on follow-up iterations if needed—see **Changelog** above).
-5. **Tests** — Add `src/astrameter/powermeter/<module>_test.py` (or extend existing tests) and run the commands above before finishing.
+2. **Exports** — Import and re-export the class from `src/astrameter/powermeter/__init__.py` (both the import and `__all__`).
+3. **Config loader** — In `src/astrameter/config/config_loader.py`: import the class, define a `*_SECTION` string, add a `section.startswith(...)` branch in `create_powermeter()`, and a `create_*_powermeter()` factory that reads options from the section. `POWER_OFFSET` / `POWER_MULTIPLIER`, `THROTTLE_INTERVAL`, and `NETMASK` are handled globally for any section that returns a powermeter — no extra wiring unless you need something custom.
+4. **Web config editor** — Register the section's typed keys in `SECTION_KEY_TYPES` in `src/astrameter/web_config.py` (use the `_pm(...)` helper, adding only the non-default field types, e.g. `password`/`boolean`/`integer`).
+5. **Web config generator** — Add a `POWERMETERS` entry in `web/ts/schema.ts` (fields, `docPython`, and an `esphome` spec describing how the same source is read on an ESP32 — `kind`/`tier` plus any `haEntity`/`url1`/`lambda1`/`warn`). Run `cd web && npm run check`.
+6. **ESPHome docs** — Even though there's no C++ port, document how to read the *same source* on an ESP32 in `docs/esphome-powermeters.md`: a tier section (🟢 native / 🔵 generic HTTP / 🟠 alternate via HA/Modbus/MQTT / 🔴 not yet) **and** its entry in the Contents legend. Keep it consistent with the generator's `esphome` spec from step 5.
+7. **Examples, Python docs & changelog** — Add a commented example to `config.ini.example`, a subsection **and** Contents entry in `docs/powermeters.md`, the meter to the supported-source list in `README.md`, plus one **`## Next`** `CHANGELOG.md` bullet (add once, then update that bullet on follow-up iterations if needed—see **Changelog** above).
+8. **Tests** — Add `src/astrameter/powermeter/<module>_test.py` and a `create_*_powermeter` factory test in `src/astrameter/config/config_loader_test.py`; run the commands above (and `cd web && npm run check`) before finishing.
