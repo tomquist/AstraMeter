@@ -570,11 +570,11 @@ HA_DISCOVERY_PREFIX = homeassistant
 When HA discovery is on, every configured powermeter section gets its own
 **"AstraMeter Powermeter `<section>`"** device with an **Online** connectivity
 sensor (a `binary_sensor`, marked diagnostic). It flips **off** when that source
-stops delivering fresh, usable readings — a stalled/disconnected stream, or a
-failing poll — so you can alert on a meter that has gone quiet even though
-AstraMeter keeps running on its last cached value. Push sources (HomeWizard,
-MQTT, SMA, Home Assistant) report their stream state directly; polling sources
-reflect the control loop, or are probed about once per
+stops delivering fresh, usable readings — a stalled or disconnected push stream,
+or a polling source whose reads start failing — so you can alert on a meter that
+has gone quiet even though AstraMeter keeps running on its last cached value.
+Push sources (HomeWizard, MQTT, SMA, Home Assistant) report their stream state
+directly; polling sources reflect the control loop, or are probed about once per
 `POWERMETER_HEALTH_INTERVAL` when no battery is reading them. For multi-phase
 sources, a phase that simply stops changing (e.g. an idle circuit reporting a
 steady value) stays **online** — only an unavailable/missing reading or a
