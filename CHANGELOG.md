@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** the HomeWizard powermeter's MQTT Insights **Online** sensor flapping on/off while the P1 meter is in a broken state. A stalled dongle keeps accepting the WebSocket and replays a single cached reading on every watchdog reconnect, which briefly reset the freshness window; AstraMeter now treats the source as online only while readings flow as a continuous stream, so the sensor stays off until live data resumes ([#427](https://github.com/tomquist/astrameter/issues/427)).
+
 
 ## 2.1.2
 

@@ -59,6 +59,12 @@ class HomeWizardPowermeter(Powermeter):
         # Read-only health flag for stream_online(): set once the WebSocket is
         # up and subscribed, cleared whenever the connection drops.
         self._connected = False
+        # True only while measurements arrive as a *continuous* stream (each one
+        # before the previous goes stale).  A broken P1 dongle still accepts the
+        # WebSocket and replays a single cached value every time the watchdog
+        # force-reconnects; that lone sample would otherwise reset the freshness
+        # window and flap the "Online" sensor on/off.  See stream_online().
+        self._stream_healthy = False
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._message_event = asyncio.Event()
@@ -89,6 +95,7 @@ class HomeWizardPowermeter(Powermeter):
         self.values = None
         self._last_measurement_time = None
         self._connected = False
+        self._stream_healthy = False
         self._message_event = asyncio.Event()
         self._fresh_measurement_event = asyncio.Event()
         self._session = aiohttp.ClientSession()
@@ -222,14 +229,33 @@ class HomeWizardPowermeter(Powermeter):
         else:
             return
 
+        now = self._clock()
+        max_age = self._max_measurement_age_seconds
+        prev = self._last_measurement_time
+        if max_age <= 0:
+            # Staleness check disabled: treat every sample as a live stream.
+            self._stream_healthy = True
+        else:
+            # Healthy only if this sample arrived before the previous one went
+            # stale.  A lone sample after a longer gap (e.g. the single cached
+            # value a broken dongle replays on each reconnect) is not a live
+            # stream, so it must not flip stream_online() back on.
+            self._stream_healthy = prev is not None and (now - prev) <= max_age
+
         self.values = values
-        self._last_measurement_time = self._clock()
+        self._last_measurement_time = now
         self._message_event.set()
         self._fresh_measurement_event.set()
 
     def stream_online(self) -> bool | None:
-        return self._connected and stream_fresh(
-            self._last_measurement_time, self._max_measurement_age_seconds, self._clock
+        return (
+            self._connected
+            and self._stream_healthy
+            and stream_fresh(
+                self._last_measurement_time,
+                self._max_measurement_age_seconds,
+                self._clock,
+            )
         )
 
     async def get_powermeter_watts(self) -> list[float]:
