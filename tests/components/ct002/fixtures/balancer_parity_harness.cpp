@@ -9,12 +9,15 @@
 //
 // Commands (one per line, whitespace separated):
 //   cfg <fair> <min_eff> <rot_interval> <sat_threshold> <sat_alpha> \
-//       <sat_min_target> <sat_grace> <sat_enabled>
+//       <sat_min_target> <sat_grace> <sat_enabled> [<min_dc_output>]
 //        (Re)create the balancer with the given config. Must be the first
-//        command. Saturation grace defaults are applied per consumer lazily.
+//        command. The trailing global MIN_DC_OUTPUT is optional (absent = 0).
+//        Saturation grace defaults are applied per consumer lazily.
 //   clock <seconds>           Set the mock clock to an absolute value.
 //   advance <seconds>         Advance the mock clock.
-//   target <cid> <mode> <manual> <grid> <n> [<cid> <dev> <phase> <power>]xN
+//   target <cid> <mode> <manual> <grid> <n> [<cid> <dev> <phase> <power> <md>]xN
+//        Each report carries a per-consumer min_dc_output token <md> (always
+//        emitted; < 0 means "unset" / inherit the global).
 //        Call compute_target for <cid> and print the resulting three phase
 //        targets. <mode> is auto|manual|inactive. The N reports describe the
 //        whole pool for this tick (inactive/manual sets are derived from each

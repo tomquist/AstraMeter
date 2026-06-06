@@ -654,9 +654,10 @@ void CT002Component::set_consumer_distribution_weight(const std::string &consume
 
 void CT002Component::set_consumer_min_dc_output(const std::string &consumer_id,
                                                 float value) {
-  // Per-device MIN_DC_OUTPUT override (W); same 0..1000 range the MQTT handler
-  // enforces. Ignore non-finite / out-of-range values.
-  if (!std::isfinite(value) || value < 0.0f || value > 1000.0f) return;
+  // Per-device MIN_DC_OUTPUT override (W); validation aligned with the Python
+  // setter (finite, >= 0, no upper bound). The MQTT command handler still
+  // enforces the 0..1000 entry range on both stacks.
+  if (!std::isfinite(value) || value < 0.0f) return;
   this->get_consumer_(consumer_id).min_dc_output = value;
 }
 

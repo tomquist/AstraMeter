@@ -193,10 +193,10 @@ async def run_device(
         saturation_decay_factor = cfg.getfloat(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
         )
-        min_dc_output = cfg.getint(ct_section, "MIN_DC_OUTPUT", fallback=0)
+        min_dc_output = cfg.getfloat(ct_section, "MIN_DC_OUTPUT", fallback=0.0)
         if 0 < min_dc_output < min_target_for_saturation:
             logger.warning(
-                "MIN_DC_OUTPUT (%dW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
+                "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
                 "floored battery's target never clears the saturation gate, so an "
                 "empty/full unit can't be detected. Consider MIN_DC_OUTPUT >= %d.",
                 min_dc_output,
