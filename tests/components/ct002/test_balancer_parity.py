@@ -107,11 +107,14 @@ class PyDriver:
                 sat_grace,
                 sat_enabled,
             ) = parts[1:9]
+            # Optional trailing global MIN_DC_OUTPUT (absent = disabled).
+            min_dc = float(parts[9]) if len(parts) > 9 else 0.0
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
+                min_dc_output=min_dc,
             )
             self.balancer = LoadBalancer(
                 cfg,
@@ -139,9 +142,14 @@ class PyDriver:
             reports = {}
             i = 6
             for _ in range(n):
-                rc, dev, phase, power = parts[i : i + 4]
-                reports[rc] = {"device_type": dev, "phase": phase, "power": int(power)}
-                i += 4
+                rc, dev, phase, power, md = parts[i : i + 5]
+                reports[rc] = {
+                    "device_type": dev,
+                    "phase": phase,
+                    "power": int(power),
+                    "min_dc_output": None if float(md) < 0 else float(md),
+                }
+                i += 5
             res = self.balancer.compute_target(
                 cid,
                 ConsumerMode(mode, float(manual)),
@@ -217,8 +225,11 @@ _CFG_DEFAULT = "cfg 0 0 900 0.4 0.15 20 90 0"
 _CFG_EFFICIENCY = "cfg 1 100 900 0.4 0.15 20 90 1"
 
 
-def _report(cid: str, phase: str, power: int, dev: str = "HMA-2") -> str:
-    return f"{cid} {dev} {phase} {power}"
+def _report(
+    cid: str, phase: str, power: int, dev: str = "HMA-2", min_dc: float = -1.0
+) -> str:
+    # min_dc < 0 encodes "unset" (inherit global / None).
+    return f"{cid} {dev} {phase} {power} {min_dc}"
 
 
 def _target(
@@ -291,6 +302,31 @@ def _scenario_efficiency_lifecycle() -> list[str]:
     return lines
 
 
+def _scenario_min_dc_output() -> list[str]:
+    """Exercise the MIN_DC_OUTPUT floor: global on a DC battery + Venus, and a
+    per-device override on the Venus, across surplus/discharge."""
+    lines = ["cfg 1 0 900 0.4 0.15 20 90 1 25", "clock 2000"]
+    pool = [_report("a", "A", 0, "HMA-2"), _report("b", "B", 0, "HMG-50")]
+    for grid in (-600, -300, 0, 300, -150):
+        lines.append(_target("a", pool, grid=grid))
+        lines.append(_target("b", pool, grid=grid))
+        lines.append("last a")
+        lines.append("last b")
+        lines.append("advance 1")
+    # Per-device override floors the Venus too.
+    pool2 = [_report("a", "A", 0, "HMA-2"), _report("b", "B", 0, "HMG-50", 40)]
+    for grid in (-600, 200):
+        lines.append(_target("b", pool2, grid=grid))
+        lines.append("last b")
+        lines.append("advance 1")
+    return lines
+
+
+def test_parity_min_dc_output(harness: Path) -> None:
+    lines = _scenario_min_dc_output()
+    _compare("min_dc_output", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
 def test_parity_steer_and_split(harness: Path) -> None:
     lines = _scenario_steer_and_split()
     _compare("steer_split", lines, _run_cpp(harness, lines), _run_py(lines))
@@ -313,18 +349,25 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     rot = rng.choice([20, 120, 900])
     sat_threshold = rng.choice([0.0, 0.3, 0.4])
     sat_enabled = rng.choice([0, 1])
+    min_dc = rng.choice([0, 0, 25, 50])
     lines = [
-        f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled}",
+        f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} {min_dc}",
         f"clock {rng.randint(1000, 9000)}",
     ]
     n_consumers = rng.randint(1, 3)
     cids = ["a", "b", "c"][:n_consumers]
     phases = {cid: rng.choice(["A", "B", "C"]) for cid in cids}
-    devs = {cid: rng.choice(["HMA-2", "HME-4", "HMG-50"]) for cid in cids}
+    devs = {
+        cid: rng.choice(["HMA-2", "HME-4", "HMG-50", "HMN-1", "VNSD"]) for cid in cids
+    }
+    overrides = {cid: rng.choice([-1, -1, -1, 25, 80]) for cid in cids}
     for _ in range(n_polls):
         grid = rng.choice([-901, -300, -150, -1, 0, 1, 100, 300, 450, 901, 1500])
         powers = {cid: rng.choice([-200, -50, 0, 0, 50, 200]) for cid in cids}
-        pool = [_report(cid, phases[cid], powers[cid], devs[cid]) for cid in cids]
+        pool = [
+            _report(cid, phases[cid], powers[cid], devs[cid], overrides[cid])
+            for cid in cids
+        ]
         target_cid = rng.choice(cids)
         mode = rng.choice(["auto", "auto", "auto", "manual", "inactive"])
         manual = rng.choice([-300, 0, 250, 600])

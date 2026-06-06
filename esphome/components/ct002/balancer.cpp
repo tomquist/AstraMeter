@@ -12,7 +12,17 @@ namespace ct002 {
 
 namespace {
 
-constexpr const char *AC_CHARGEABLE_PREFIXES[] = {"HMG", "VNS"};
+std::string to_upper(const std::string &s) {
+  std::string up;
+  up.reserve(s.size());
+  for (char c : s) up.push_back(static_cast<char>(std::toupper(c)));
+  return up;
+}
+
+bool starts_with(const std::string &s, const char *prefix) {
+  const size_t plen = std::strlen(prefix);
+  return s.size() >= plen && s.compare(0, plen, prefix) == 0;
+}
 
 template <typename Set>
 Set set_difference(const Set &a, const Set &b) {
@@ -51,16 +61,30 @@ std::string serialize_cache_key(const std::vector<float> &sample_id,
 
 }  // namespace
 
+DeviceCapabilities device_capabilities(const std::string &device_type) {
+  const std::string dt = to_upper(device_type);
+  // Venus A/D: built-in inverter + AC input + extra DC input. Checked before
+  // the generic VNS branch ("VNSA".startswith("VNS")).
+  if (starts_with(dt, "VNSA") || starts_with(dt, "VNSD")) return {true, true, true};
+  // Other Venus (HMG*, VNSE3, ...): built-in inverter + AC input, no DC input.
+  if (starts_with(dt, "HMG") || starts_with(dt, "VNS")) return {true, true, false};
+  // Jupiter: DC battery with a built-in inverter.
+  if (starts_with(dt, "HMN") || starts_with(dt, "HMM") || starts_with(dt, "JPLS"))
+    return {true, false, true};
+  // B2500 family: DC input feeding a SEPARATE inverter (no built-in inverter).
+  if (starts_with(dt, "HMA") || starts_with(dt, "HMJ") || starts_with(dt, "HMK"))
+    return {false, false, true};
+  // Unknown / future / empty: assume a modern AC-coupled battery.
+  return {true, true, false};
+}
+
 bool is_ac_chargeable(const std::string &device_type) {
-  if (device_type.empty()) return false;
-  std::string up;
-  up.reserve(device_type.size());
-  for (char c : device_type) up.push_back(static_cast<char>(std::toupper(c)));
-  for (const char *prefix : AC_CHARGEABLE_PREFIXES) {
-    const size_t plen = std::strlen(prefix);
-    if (up.size() >= plen && up.compare(0, plen, prefix) == 0) return true;
-  }
-  return false;
+  return device_capabilities(device_type).has_ac_input;
+}
+
+bool needs_dc_output_floor(const std::string &device_type) {
+  const DeviceCapabilities caps = device_capabilities(device_type);
+  return !caps.has_ac_input && !caps.has_builtin_inverter;
 }
 
 void BalancerConfig::clamp() {
@@ -79,6 +103,7 @@ void BalancerConfig::clamp() {
   if (efficiency_rotation_interval < 1.0f) efficiency_rotation_interval = 1.0f;
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   clamp_v(efficiency_saturation_threshold, 0.0f, 1.0f);
+  if (min_dc_output < 0.0f) min_dc_output = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -433,11 +458,11 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
     }
     if (desired_total < 0.0f && desired_probe > 0.0f) desired_probe = -desired_probe;
     probe.requested_power_abs = std::fabs(desired_probe);
-    const float target = desired_probe - probe_actual;
-    state.last_target = target;
+    const float reading = to_grid_reading(NetOutputW(desired_probe), probe_actual);
+    state.last_target = reading;
     ReportMap cand_only;
     cand_only[candidate_id] = cand_it->second;
-    return split_by_phase_(target, cand_only);
+    return split_by_phase_(reading, cand_only);
   }
 
   // Seed backup_weights from the per-consumer efficiency partition the
@@ -458,9 +483,54 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
       *consumer_id, support_reports, backup_weights, desired_total - qualified_probe_actual);
   auto sup_it = support_reports.find(*consumer_id);
   const float reported = (sup_it != support_reports.end()) ? sup_it->second.power : 0.0f;
-  const float target = desired - reported;
-  state.last_target = target;
-  return split_by_phase_(target, support_reports, &backup_weights);
+  const float reading = to_grid_reading(NetOutputW(desired), reported);
+  state.last_target = reading;
+  return split_by_phase_(reading, support_reports, &backup_weights);
+}
+
+float LoadBalancer::effective_min_dc_output_(
+    const std::optional<std::string> &consumer_id, const ReportMap &reports) {
+  if (!consumer_id) return 0.0f;
+  auto it = reports.find(*consumer_id);
+  if (it == reports.end()) return 0.0f;
+  const ConsumerReport &report = it->second;
+  if (report.min_dc_output) return std::max(0.0f, *report.min_dc_output);
+  if (needs_dc_output_floor(report.device_type)) return this->cfg_.min_dc_output;
+  return 0.0f;
+}
+
+std::array<float, 3> LoadBalancer::apply_min_dc_output_(
+    const std::optional<std::string> &consumer_id, const ReportMap &reports,
+    std::array<float, 3> result) {
+  // Hold an external-inverter DC battery at MIN_DC_OUTPUT discharge so its
+  // DC-fed inverter doesn't sleep at 0 W. Mirrors balancer.py _apply_min_dc_output.
+  if (!consumer_id) return result;
+  auto it = reports.find(*consumer_id);
+  if (it == reports.end()) return result;
+  const float eff_min = this->effective_min_dc_output_(consumer_id, reports);
+  if (eff_min <= 0.0f) return result;
+  const ConsumerReport &report = it->second;
+  // Respect an explicit park (weight 0): don't silently wake it.
+  if (report.weight == 0.0f) return result;
+  const float reported = report.power;
+  // Use the consumer's FULL intended reading: split_by_phase preserves the
+  // total, so the sum recovers it regardless of phase distribution.
+  const float reading_self = result[0] + result[1] + result[2];
+  const float net_self = reported + reading_self;
+  // Floor whenever the commanded net output is below the floor — including
+  // negative (charge) commands: a floor-eligible battery can't charge, so the
+  // all-DC-under-surplus case (lone B2500, issue #425) must still be lifted.
+  if (net_self >= eff_min) return result;
+  const float reading = to_grid_reading(NetOutputW(eff_min), reported);
+  std::string phase = report.phase.empty() ? "A" : report.phase;
+  for (auto &c : phase) c = static_cast<char>(std::toupper(c));
+  size_t idx = 0;
+  if (phase == "B") idx = 1;
+  else if (phase == "C") idx = 2;
+  std::array<float, 3> out{0.0f, 0.0f, 0.0f};
+  out[idx] = reading;
+  this->get_consumer_(*consumer_id).last_target = reading;
+  return out;
 }
 
 std::array<float, 3> LoadBalancer::steer_to_zero_(
@@ -475,14 +545,15 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
       phase = it->second.phase.empty() ? "A" : it->second.phase;
     }
   }
-  if (reported == 0.0f) return {0.0f, 0.0f, 0.0f};
+  const float reading = to_grid_reading(NetOutputW(0.0f), reported);
+  if (reading == 0.0f) return {0.0f, 0.0f, 0.0f};
   for (auto &c : phase) c = static_cast<char>(std::toupper(c));
   std::array<float, 3> result{0.0f, 0.0f, 0.0f};
   size_t idx = 0;
   if (phase == "A") idx = 0;
   else if (phase == "B") idx = 1;
   else if (phase == "C") idx = 2;
-  result[idx] = -reported;
+  result[idx] = reading;
   return result;
 }
 
@@ -543,16 +614,18 @@ std::array<float, 3> LoadBalancer::compute_target(
     const float reported = active_reports.count(*consumer_id)
                                ? active_reports[*consumer_id].power
                                : 0.0f;
-    const float target = mode.manual_value - reported;
-    state->last_target = target;
-    return split_by_phase_(target, active_reports);
+    const float reading = to_grid_reading(NetOutputW(mode.manual_value), reported);
+    state->last_target = reading;
+    return split_by_phase_(reading, active_reports);
   }
 
   ReportMap auto_reports;
   for (const auto &r : active_reports) {
     if (manual.find(r.first) == manual.end()) auto_reports[r.first] = r.second;
   }
-  return this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id);
+  auto result =
+      this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id);
+  return this->apply_min_dc_output_(consumer_id, auto_reports, result);
 }
 
 // -------------------------------------------------------------------------
@@ -711,9 +784,9 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     float total_fade = 0.0f;
     for (const auto &r : reports) total_fade += this->get_consumer_(r.first).fade_weight;
     const float desired = (total_fade > 0.0f) ? demand * fade_w / total_fade : 0.0f;
-    const float target = desired - reported;
-    state.last_target = target;
-    return split_by_phase_(target, reports, &eff_part);
+    const float reading = to_grid_reading(NetOutputW(desired), reported);
+    state.last_target = reading;
+    return split_by_phase_(reading, reports, &eff_part);
   }
 
   for (const auto &kv : faded_adjustments) {
@@ -749,20 +822,30 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     fair_share = grid_total / num_consumers;
   }
 
-  float target;
+  // fair_share / balance_correction_ produce the residual: this consumer's
+  // slice of the grid imbalance to fold into its current output. The absolute
+  // net-output target is "what I report now plus my residual" (NetOutputW wrap
+  // below).
+  float residual;
   if (!this->cfg_.fair_distribution || !consumer_id ||
       reports.find(*consumer_id) == reports.end()) {
-    target = fair_share;
+    residual = fair_share;
   } else if (eff_part.count(*consumer_id)) {
-    target = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
+    residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
   } else {
-    target = fair_share;
+    residual = fair_share;
   }
-  if ((grid_total < 0.0f && target > 0.0f) || (grid_total > 0.0f && target < 0.0f)) {
-    target = 0.0f;
+  if ((grid_total < 0.0f && residual > 0.0f) || (grid_total > 0.0f && residual < 0.0f)) {
+    residual = 0.0f;
   }
-  if (consumer_id) this->get_consumer_(*consumer_id).last_target = target;
-  return split_by_phase_(target, reports, &eff_part);
+  float reported = 0.0f;
+  if (consumer_id) {
+    auto it = reports.find(*consumer_id);
+    if (it != reports.end()) reported = it->second.power;
+  }
+  const float reading = to_grid_reading(NetOutputW(reported + residual), reported);
+  if (consumer_id) this->get_consumer_(*consumer_id).last_target = reading;
+  return split_by_phase_(reading, reports, &eff_part);
 }
 
 float LoadBalancer::balance_correction_(const std::string &consumer_id,

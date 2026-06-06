@@ -87,6 +87,9 @@ class Consumer:
     # neutral; a battery with weight 2.0 takes roughly twice the share of a
     # weight-1.0 battery.  Tuned live via the MQTT "Distribution Weight" entity.
     distribution_weight: float = 1.0
+    # Per-device override (W) for the MIN_DC_OUTPUT wake floor; ``None`` inherits
+    # the global setting.  Tuned live via the MQTT "Min DC Output" entity.
+    min_dc_output: float | None = None
     # Last UDP source address seen for this consumer, if the protocol provides it.
     last_ip: str = ""
 
@@ -147,6 +150,7 @@ class CT002:
         efficiency_rotation_interval=900,
         efficiency_fade_alpha=0.15,
         efficiency_saturation_threshold=0.4,
+        min_dc_output=0,
         saturation_decay_factor=0.995,
         saturation_grace_seconds=SATURATION_GRACE_SECONDS,
         saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
@@ -205,6 +209,7 @@ class CT002:
                 efficiency_rotation_interval=efficiency_rotation_interval,
                 efficiency_fade_alpha=efficiency_fade_alpha,
                 efficiency_saturation_threshold=efficiency_saturation_threshold,
+                min_dc_output=min_dc_output,
             ),
             saturation_alpha=saturation_alpha,
             saturation_min_target=min_target_for_saturation,
@@ -255,6 +260,18 @@ class CT002:
             msg = f"distribution weight must be in [0, 10], got {weight!r}"
             raise ValueError(msg)
         self._get_consumer(consumer_id).distribution_weight = value
+
+    def set_consumer_min_dc_output(self, consumer_id: str, value: float) -> None:
+        """Set the per-device MIN_DC_OUTPUT floor (W) for a battery.
+
+        Must be finite and ``>= 0``.  Overrides the global ``MIN_DC_OUTPUT`` for
+        this battery regardless of its type; ``0`` disables the floor for it.
+        """
+        v = float(value)
+        if not math.isfinite(v) or v < 0.0:
+            msg = f"min_dc_output must be finite and >= 0, got {value!r}"
+            raise ValueError(msg)
+        self._get_consumer(consumer_id).min_dc_output = v
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
@@ -386,6 +403,7 @@ class CT002:
                 "power": c.power,
                 "device_type": c.device_type,
                 "weight": c.distribution_weight,
+                "min_dc_output": c.min_dc_output,
             }
             for cid, c in self._consumers.items()
             if c.timestamp > 0
@@ -552,8 +570,16 @@ class CT002:
         return response_fields
 
     async def _call_before_send(self, addr, fields, consumer_id):
+        """Invoke the ``before_send`` powermeter hook.
+
+        Returns ``(result, failed)``.  ``failed`` is ``True`` only when the
+        hook *raised* (the powermeter is unavailable); the caller uses it to
+        send a zero-adjustment "hold" instead of re-driving control from a
+        stale cached reading.  A hook that simply returns ``None`` (e.g. no
+        powermeter matches this client) is *not* a failure.
+        """
         if not self.before_send:
-            return None
+            return None, False
         try:
             result = await self.before_send(addr, fields, consumer_id)
         except Exception as exc:
@@ -573,16 +599,16 @@ class CT002:
             ):
                 logger.warning(
                     "CT002 before_send failed (%d in a row) for %s: %s. "
-                    "The CT002 emulator is serving cached meter values "
-                    "until the powermeter recovers; batteries will hold "
-                    "their current output.",
+                    "The CT002 emulator is sending a zero adjustment so "
+                    "batteries hold their current output until the "
+                    "powermeter recovers.",
                     self._before_send_failure_count,
                     addr,
                     exc,
                     exc_info=debug_traceback(),
                 )
                 self._before_send_last_warn = now
-            return None
+            return None, True
         # Success path: if we were in a failure spell, log the recovery.
         if self._before_send_failure_count > 0:
             logger.info(
@@ -591,7 +617,7 @@ class CT002:
             )
             self._before_send_failure_count = 0
             self._before_send_last_warn = 0.0
-        return result
+        return result, False
 
     def _validate_ct_mac(self, request_fields):
         if not self.ct_mac:
@@ -674,13 +700,25 @@ class CT002:
             source_ip=str(addr[0]),
         )
 
-        updated = await self._call_before_send(addr, fields, consumer_id)
+        updated, meter_failed = await self._call_before_send(addr, fields, consumer_id)
         if updated is not None:
             self.set_consumer_value(consumer_id, updated)
 
-        values = self._get_consumer_value(consumer_id)
-        if values is None:
+        if meter_failed:
+            # Powermeter unavailable: do NOT re-drive control from the stale
+            # cached reading.  The CT002 instruction is a delta
+            # (``new_target = current_power + grid_field``), so re-issuing a
+            # delta derived from a frozen reading winds the battery up in
+            # active control, and feeds frozen per-phase values into a phase
+            # self-diagnosis in inspection mode (issue #403).  Send a zero
+            # adjustment instead so each battery holds its current output —
+            # matching the ESPHome component, which uses ``[0, 0, 0]`` when
+            # its sensor ages out (see esphome/components/ct002/ct002.cpp).
             values = [0, 0, 0]
+        else:
+            values = self._get_consumer_value(consumer_id)
+            if values is None:
+                values = [0, 0, 0]
         raw_values = ([*list(values), 0, 0, 0])[:3]
         meter_value = sum(parse_int(v, 0) for v in raw_values)
         is_active = self.is_consumer_active(consumer_id)
@@ -767,6 +805,7 @@ class CT002:
                     "distribution_weight": (
                         consumer.distribution_weight if consumer else 1.0
                     ),
+                    "min_dc_output": consumer.min_dc_output if consumer else None,
                     "active_control": self.active_control,
                     "consumer_count": sum(
                         1 for c in self._consumers.values() if c.timestamp > 0

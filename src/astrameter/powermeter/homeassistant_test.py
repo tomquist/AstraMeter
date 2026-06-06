@@ -838,3 +838,68 @@ async def test_unavailable_blocks_wait_for_message():
     assert pm._entity_values["sensor.current_power"] is None
     with pytest.raises(TimeoutError):
         await pm.wait_for_message(timeout=0.05)
+
+
+# --- stream_online health hook ---
+
+
+async def test_stream_online_false_before_auth():
+    pm = _create_powermeter()
+    assert pm.stream_online() is False
+
+
+async def test_stream_online_true_when_connected_and_entities_ready():
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "123.0"}]
+    )
+    assert pm.stream_online() is True
+
+
+async def test_stream_online_multi_phase_quiet_phase_stays_online():
+    """A phase that stops changing (e.g. an idle oven phase reporting 0 W)
+    keeps its value and must NOT mark the powermeter offline."""
+    pm = _create_powermeter(
+        current_power_entity=["sensor.l1", "sensor.l2", "sensor.l3"]
+    )
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {"entity_id": "sensor.l1", "state": "100"},
+            {"entity_id": "sensor.l2", "state": "50"},
+            {"entity_id": "sensor.l3", "state": "0"},
+        ],
+    )
+    assert pm.stream_online() is True
+    # L1/L2 keep updating; L3 never re-publishes — still online.
+    pm._update_entity_value("sensor.l1", "110")
+    pm._update_entity_value("sensor.l2", "55")
+    assert pm.stream_online() is True
+
+
+async def test_stream_online_false_when_a_phase_goes_unavailable():
+    pm = _create_powermeter(
+        current_power_entity=["sensor.l1", "sensor.l2", "sensor.l3"]
+    )
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {"entity_id": "sensor.l1", "state": "100"},
+            {"entity_id": "sensor.l2", "state": "50"},
+            {"entity_id": "sensor.l3", "state": "0"},
+        ],
+    )
+    assert pm.stream_online() is True
+    # The integration marks L3 unavailable -> value becomes None -> offline.
+    pm._update_entity_value("sensor.l3", "unavailable")
+    assert pm.stream_online() is False
+
+
+async def test_stream_online_false_after_reconnect_reset():
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm, [{"entity_id": "sensor.current_power", "state": "123.0"}]
+    )
+    assert pm.stream_online() is True
+    pm._reset_for_reconnect()
+    assert pm.stream_online() is False

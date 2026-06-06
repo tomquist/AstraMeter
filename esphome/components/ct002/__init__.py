@@ -102,6 +102,7 @@ CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
 CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
+CONF_MIN_DC_OUTPUT = "min_dc_output"
 
 # Saturation tracker sub-block
 CONF_SATURATION = "saturation"
@@ -204,6 +205,7 @@ BALANCER_SCHEMA = cv.Schema(
         cv.Optional(CONF_EFFICIENCY_SATURATION_THRESHOLD, default=0.4): cv.float_range(
             min=0.0, max=1.0
         ),
+        cv.Optional(CONF_MIN_DC_OUTPUT, default=0.0): cv.float_range(min=0.0),
     }
 )
 
@@ -228,7 +230,6 @@ CONF_MQTT_INSIGHTS = "mqtt_insights"
 CONF_BASE_TOPIC = "base_topic"
 CONF_HA_DISCOVERY = "ha_discovery"
 CONF_HA_DISCOVERY_PREFIX = "ha_discovery_prefix"
-CONF_ADDON_SLUG = "addon_slug"
 CONF_DEVICE_ID = "device_id"
 CONF_MARSTEK_MQTT_ENABLED = "marstek_mqtt_enabled"
 CONF_MARSTEK_MQTT_INTERVAL = "marstek_mqtt_interval"
@@ -262,7 +263,6 @@ MQTT_INSIGHTS_SCHEMA = cv.All(
             cv.Optional(
                 CONF_HA_DISCOVERY_PREFIX, default="homeassistant"
             ): cv.string_strict,
-            cv.Optional(CONF_ADDON_SLUG, default=""): cv.string,
             cv.Optional(CONF_MARSTEK_MQTT_ENABLED, default=True): cv.boolean,
             cv.Optional(
                 CONF_MARSTEK_MQTT_INTERVAL, default="300s"
@@ -439,6 +439,7 @@ async def to_code(config):
             "efficiency_saturation_threshold",
             bal.get(CONF_EFFICIENCY_SATURATION_THRESHOLD, 0.4),
         ),
+        ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
     )
     cg.add(var.set_balancer_config(bcfg))
 
@@ -478,7 +479,6 @@ async def _to_code_mqtt_insights(config, ct002_var):
     cg.add(var.set_base_topic(sub[CONF_BASE_TOPIC]))
     cg.add(var.set_ha_discovery(sub[CONF_HA_DISCOVERY]))
     cg.add(var.set_ha_discovery_prefix(sub[CONF_HA_DISCOVERY_PREFIX]))
-    cg.add(var.set_addon_slug(sub[CONF_ADDON_SLUG]))
     cg.add(var.set_marstek_mqtt_enabled(sub[CONF_MARSTEK_MQTT_ENABLED]))
     cg.add(
         var.set_marstek_mqtt_interval_ms(

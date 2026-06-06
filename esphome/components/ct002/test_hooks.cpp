@@ -16,6 +16,10 @@
 //                         what the balancer/saturation/eviction/dedup care
 //                         about, so this is the usual driver)
 //   clock_real            disengage the mock clock (back to millis())
+//   sensor_stale          back-date the sensor stamps past max_sensor_age so
+//                         the next read reports the grid sensor unavailable
+//                         (SensorBackedPowermeter returns {}), which the
+//                         handler maps to [0,0,0] — the meter-outage path.
 //
 // Every command replies with "ok ..." (or "err ...") to the sender so the
 // test can synchronise (send command, await ack, then poll the CT002 port).
@@ -94,6 +98,7 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "efficiency_fade_alpha") this->balancer_cfg_.efficiency_fade_alpha = f;
   else if (key == "efficiency_saturation_threshold")
     this->balancer_cfg_.efficiency_saturation_threshold = f;
+  else if (key == "min_dc_output") this->balancer_cfg_.min_dc_output = f;
   // Saturation tracker fields.
   else if (key == "saturation_enabled") this->saturation_enabled_ = (v != 0.0);
   else if (key == "saturation_alpha") this->saturation_alpha_ = f;
@@ -137,6 +142,13 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     // Inject grid power straight into the sensor cache, stamped now so the
     // SensorBackedPowermeter freshness check passes. matched-1 values given;
     // missing phases default to 0.
+    //
+    // Iterate the full size-3 array (not num_phases_): unlike sensor_stale
+    // below — which only needs to invalidate the [0, num_phases_) stamps the
+    // reader inspects — `grid` fully (re)defines every slot of raw_values_ /
+    // raw_stamp_ms_ (both std::array<…, 3>) so the injected snapshot is
+    // completely specified and the reply can echo all three, regardless of how
+    // many phases this binary reads.
     const uint32_t now_ms = ::esphome::millis();
     const double vals[3] = {a, b, c};
     for (uint8_t p = 0; p < 3; ++p) {
@@ -170,6 +182,18 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     char tmp[48];
     std::snprintf(tmp, sizeof(tmp), "ok dedupe %u", this->dedupe_window_ms_);
     reply = tmp;
+  } else if (matched >= 1 && std::strcmp(verb, "sensor_stale") == 0) {
+    // Force the SensorBackedPowermeter freshness check to fail: back-date the
+    // per-phase stamps past max_sensor_age_ms_ so the next read reports the
+    // sensor unavailable (returns {}), which handle_request_ maps to [0,0,0].
+    // Deterministic — no real-time sleep needed. A subsequent `grid` command
+    // re-stamps "now" and restores freshness.
+    const uint32_t now = ::esphome::millis();
+    const uint32_t past = now - (this->max_sensor_age_ms_ + 1000);  // unsigned wrap is fine
+    // Iterate over the active phases the freshness check reads (mirrors
+    // SensorBackedPowermeter::get_powermeter_watts in sensor_backed.cpp).
+    for (uint8_t p = 0; p < this->num_phases_; ++p) this->raw_stamp_ms_[p] = past;
+    reply = "ok sensor_stale";
   } else if (matched >= 1 && std::strcmp(verb, "force_rotation") == 0) {
     // Mirror ct002.force_efficiency_rotation() for the rotation tests.
     this->force_balancer_rotation();

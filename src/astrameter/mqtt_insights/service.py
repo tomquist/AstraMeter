@@ -7,21 +7,28 @@ import contextlib
 import json
 import math
 import ssl
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiomqtt
 
 from astrameter.config.logger import logger
+from astrameter.version_info import get_version
 
 from .discovery import (
     _sanitize_id,
+    build_addon_device_discovery,
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
+    build_powermeter_device_discovery,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
+
+if TYPE_CHECKING:
+    from astrameter.powermeter.base import Powermeter
 from .marstek_mqtt import (
     MarstekMqttBinding,
     MarstekPollContext,
@@ -35,6 +42,11 @@ from .marstek_mqtt import (
 
 RECONNECT_DELAY = 5
 QUEUE_MAX_SIZE = 100
+
+# Health loop: reuse the control loop's most recent read for a pull powermeter
+# if it happened within this many seconds; otherwise issue one bounded probe.
+POWERMETER_IDLE_THRESHOLD = 2.0
+POWERMETER_PROBE_TIMEOUT = 5.0
 
 
 async def _arp_lookup(ip: str) -> str:
@@ -78,6 +90,9 @@ class MqttInsightsConfig:
     # publish power values for every registered binding at this cadence so the
     # Marstek app stays up-to-date without relying solely on its own polls.
     marstek_mqtt_interval: float = 300.0
+    # Per-powermeter "Online" diagnostic sensor publish cadence (seconds).
+    # 0 disables the health loop entirely.
+    powermeter_health_interval: float = 30.0
 
 
 @dataclass
@@ -89,19 +104,26 @@ class _Event:
 
 
 class MqttInsightsService:
-    def __init__(self, config: MqttInsightsConfig) -> None:
+    def __init__(
+        self,
+        config: MqttInsightsConfig,
+        powermeters: list[Powermeter] | None = None,
+    ) -> None:
         self._config = config
+        self._powermeters: list[Powermeter] = list(powermeters or [])
         self._queue: asyncio.Queue[_Event] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
         self._task: asyncio.Task[None] | None = None
         self._discovered_ct002_consumers: set[str] = set()
         self._discovered_ct002_devices: set[str] = set()
         self._discovered_shelly_batteries: set[str] = set()
         self._discovered_shelly_devices: set[str] = set()
+        self._discovered_powermeters: set[str] = set()
         self._pending_arp: set[str] = set()
         self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
+        self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
@@ -167,6 +189,11 @@ class MqttInsightsService:
     ) -> None:
         self._distribution_weight_handlers[device_id] = handler
 
+    def register_min_dc_output_handler(
+        self, device_id: str, handler: Callable[[str, float], None]
+    ) -> None:
+        self._min_dc_output_handlers[device_id] = handler
+
     def register_rotation_handler(
         self, device_id: str, handler: Callable[[], None]
     ) -> None:
@@ -178,6 +205,7 @@ class MqttInsightsService:
         self._manual_target_handlers.pop(device_id, None)
         self._auto_target_handlers.pop(device_id, None)
         self._distribution_weight_handlers.pop(device_id, None)
+        self._min_dc_output_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
 
     # ── Marstek MQTT responder ────────────────────────────────────────
@@ -285,6 +313,7 @@ class MqttInsightsService:
                     self._discovered_ct002_devices.clear()
                     self._discovered_shelly_batteries.clear()
                     self._discovered_shelly_devices.clear()
+                    self._discovered_powermeters.clear()
 
                     # Publish online status
                     await client.publish(
@@ -293,6 +322,22 @@ class MqttInsightsService:
                         qos=1,
                         retain=True,
                     )
+
+                    # Top-level "AstraMeter" hub device that the per-meter
+                    # devices link up to via via_device. Uses ADDON_SLUG as the
+                    # identifier on the HA add-on, falling back to a stable
+                    # base-topic-derived id so the grouping also works in
+                    # standalone/Docker. Republished on every reconnect.
+                    if cfg.ha_discovery:
+                        topic, payload = build_addon_device_discovery(
+                            cfg.base_topic,
+                            self._hub_identifier(),
+                            cfg.ha_discovery_prefix,
+                        )
+                        await client.publish(
+                            topic, payload=json.dumps(payload).encode(), retain=True
+                        )
+                        await self._publish_bridge(client, cfg)
 
                     # Subscribe to command topics.  Each per-consumer setting
                     # has its own retained command sub-topic
@@ -320,6 +365,8 @@ class MqttInsightsService:
                         ]
                         if cfg.marstek_mqtt_enabled and cfg.marstek_mqtt_interval > 0:
                             coros.append(self._marstek_broadcast_loop(client))
+                        if self._powermeters and cfg.powermeter_health_interval > 0:
+                            coros.append(self._powermeter_health_loop(client))
                         await asyncio.gather(*coros)
                     finally:
                         async with self._marstek_lock:
@@ -350,6 +397,43 @@ class MqttInsightsService:
                     RECONNECT_DELAY,
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
+
+    def _consumer_count(self) -> int:
+        """Total downstream consumers/batteries currently known to AstraMeter."""
+        return len(self._discovered_ct002_consumers) + len(
+            self._discovered_shelly_batteries
+        )
+
+    def _hub_identifier(self) -> str:
+        """Identifier of the top-level AstraMeter hub device the per-meter
+        devices link to via ``via_device``.
+
+        On the HA add-on this is ``ADDON_SLUG`` (unchanged, so existing add-on
+        devices keep grouping). Outside the add-on it falls back to a stable
+        base-topic-derived id so standalone/Docker deployments group too.
+        """
+        cfg = self._config
+        return cfg.addon_slug or f"astrameter_{_sanitize_id(cfg.base_topic)}"
+
+    async def _publish_bridge(
+        self, client: aiomqtt.Client, cfg: MqttInsightsConfig
+    ) -> None:
+        """Publish the retained hub-device state ({base}/bridge).
+
+        No-op unless HA discovery is on (the hub device is always published
+        then, with an ADDON_SLUG-or-fallback identifier).
+        """
+        if not cfg.ha_discovery:
+            return
+        payload = {
+            "version": get_version(),
+            "consumer_count": self._consumer_count(),
+        }
+        await client.publish(
+            f"{cfg.base_topic}/bridge",
+            payload=json.dumps(payload).encode(),
+            retain=True,
+        )
 
     async def _publish_offline(
         self, cfg: MqttInsightsConfig, tls_context: ssl.SSLContext | None
@@ -383,7 +467,7 @@ class MqttInsightsService:
                 elif evt.kind == "shelly":
                     await self._handle_shelly_event(client, base, cfg, evt)
                 elif evt.kind == "shelly_remove":
-                    await self._handle_shelly_remove(client, base, evt)
+                    await self._handle_shelly_remove(client, base, cfg, evt)
             except aiomqtt.MqttError:
                 raise
             except Exception:
@@ -423,6 +507,7 @@ class MqttInsightsService:
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),
             "distribution_weight": data.get("distribution_weight", 1.0),
+            "min_dc_output": data.get("min_dc_output"),
         }
 
         await client.publish(
@@ -449,7 +534,10 @@ class MqttInsightsService:
             if did not in self._discovered_ct002_devices:
                 self._discovered_ct002_devices.add(did)
                 topic, payload = build_ct002_device_discovery(
-                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+                    base,
+                    did,
+                    cfg.ha_discovery_prefix,
+                    addon_slug=self._hub_identifier(),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
@@ -468,6 +556,7 @@ class MqttInsightsService:
                     self._discovered_ct002_consumers.add(consumer_key)
                     if battery_ip and not network_mac:
                         self._pending_arp.add(consumer_key)
+                    await self._publish_bridge(client, cfg)
 
                 if network_mac:
                     self._pending_arp.discard(consumer_key)
@@ -500,6 +589,7 @@ class MqttInsightsService:
         await client.publish(avail_topic, payload=b"offline", retain=True)
         self._discovered_ct002_consumers.discard(consumer_key)
         self._pending_arp.discard(consumer_key)
+        await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_event(
         self,
@@ -545,7 +635,10 @@ class MqttInsightsService:
             if did not in self._discovered_shelly_devices:
                 self._discovered_shelly_devices.add(did)
                 topic, payload = build_shelly_device_discovery(
-                    base, did, cfg.ha_discovery_prefix, addon_slug=cfg.addon_slug
+                    base,
+                    did,
+                    cfg.ha_discovery_prefix,
+                    addon_slug=self._hub_identifier(),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
@@ -559,11 +652,13 @@ class MqttInsightsService:
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
                 )
+                await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_remove(
         self,
         client: aiomqtt.Client,
         base: str,
+        cfg: MqttInsightsConfig,
         evt: _Event,
     ) -> None:
         did = evt.device_id
@@ -572,6 +667,7 @@ class MqttInsightsService:
         avail_topic = f"{base}/shelly/{did}/battery/{ip_slug}/availability"
         await client.publish(avail_topic, payload=b"offline", retain=True)
         self._discovered_shelly_batteries.discard(battery_key)
+        await self._publish_bridge(client, cfg)
 
     async def _listen_commands(self, client: aiomqtt.Client) -> None:
         base = self._config.base_topic
@@ -747,6 +843,32 @@ class MqttInsightsService:
                 consumer_id,
                 weight,
             )
+        elif field == "min_dc_output":
+            try:
+                min_dc = float(payload)
+            except ValueError:
+                logger.warning(
+                    "Invalid min_dc_output value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            if not math.isfinite(min_dc) or not 0.0 <= min_dc <= 1000.0:
+                logger.warning(
+                    "Out-of-range min_dc_output for %s/%s: %s",
+                    device_id,
+                    consumer_id,
+                    min_dc,
+                )
+                return
+            self._dispatch(
+                self._min_dc_output_handlers,
+                "min_dc_output",
+                device_id,
+                consumer_id,
+                min_dc,
+            )
         else:
             logger.debug(
                 "Unknown consumer command field %r for %s/%s",
@@ -765,6 +887,110 @@ class MqttInsightsService:
                     logger.exception("Rotation handler error for device %s", device_id)
             else:
                 logger.debug("No rotation handler for device %s", device_id)
+
+    # ── Powermeter health ─────────────────────────────────────────────
+
+    async def _powermeter_health_loop(self, client: aiomqtt.Client) -> None:
+        """Publish a per-powermeter "Online" diagnostic sensor.
+
+        Push powermeters answer ``stream_online()`` with no I/O; pull
+        powermeters reuse the control loop's most recent read, or — when idle
+        (no battery polling them) — get one bounded probe per cycle.
+        """
+        cfg = self._config
+        base = cfg.base_topic
+        interval = cfg.powermeter_health_interval
+        while True:
+            for pm in self._powermeters:
+                name = getattr(pm, "name", "") or ""
+                if not name:
+                    continue
+                online, values = await self._powermeter_status(pm)
+                await self._publish_powermeter_health(
+                    client, base, cfg, name, online, values
+                )
+            await asyncio.sleep(interval)
+
+    async def _powermeter_status(
+        self, pm: Powermeter
+    ) -> tuple[bool, list[float] | None]:
+        """Return ``(online, latest_values)`` for *pm* with minimal I/O.
+
+        A push meter's ``stream_online()`` answers with no I/O and its readings
+        are cached; a pull meter reuses the control loop's most recent read when
+        fresh, otherwise a single bounded probe serves both online and readings.
+        """
+        try:
+            stream = pm.stream_online()
+        except Exception:
+            # A single meter's health hook must never tear down the gather
+            # (which would force a full MQTT reconnect for every device).
+            logger.exception(
+                "Powermeter health: stream_online() failed for %s",
+                getattr(pm, "name", "") or pm.__class__.__name__,
+            )
+            return False, None
+        if stream is not None:
+            # Push meter: readings are cached (no network I/O).
+            return stream, await self._read_powermeter_values(pm)
+        last_attempt = getattr(pm, "last_attempt", None)
+        if (
+            last_attempt is not None
+            and (time.monotonic() - last_attempt) <= POWERMETER_IDLE_THRESHOLD
+        ):
+            return bool(getattr(pm, "last_outcome_ok", False)), getattr(
+                pm, "last_values", None
+            )
+        # Idle pull meter: one bounded probe serves both online and readings.
+        values = await self._read_powermeter_values(pm)
+        return bool(values), values
+
+    async def _read_powermeter_values(self, pm: Powermeter) -> list[float] | None:
+        try:
+            return await asyncio.wait_for(
+                pm.get_powermeter_watts(), timeout=POWERMETER_PROBE_TIMEOUT
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _grid_power_payload(values: list[float] | None) -> dict[str, float | None]:
+        vals = list(values) if values else []
+        return {
+            "l1": vals[0] if len(vals) > 0 else None,
+            "l2": vals[1] if len(vals) > 1 else None,
+            "l3": vals[2] if len(vals) > 2 else None,
+            "total": sum(vals) if vals else None,
+        }
+
+    async def _publish_powermeter_health(
+        self,
+        client: aiomqtt.Client,
+        base: str,
+        cfg: MqttInsightsConfig,
+        name: str,
+        online: bool,
+        values: list[float] | None,
+    ) -> None:
+        pm_id = _sanitize_id(name)
+        state = {"online": online, "grid_power": self._grid_power_payload(values)}
+        await client.publish(
+            f"{base}/powermeter/{pm_id}",
+            payload=json.dumps(state).encode(),
+            retain=True,
+        )
+        if cfg.ha_discovery and pm_id not in self._discovered_powermeters:
+            self._discovered_powermeters.add(pm_id)
+            topic, payload = build_powermeter_device_discovery(
+                base,
+                pm_id,
+                name,
+                cfg.ha_discovery_prefix,
+                addon_slug=self._hub_identifier(),
+            )
+            await client.publish(
+                topic, payload=json.dumps(payload).encode(), retain=True
+            )
 
     async def _marstek_broadcast_loop(self, client: aiomqtt.Client) -> None:
         """Periodically publish power values for all registered bindings."""

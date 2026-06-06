@@ -27,11 +27,23 @@ from astrameter.mqtt_insights import (
     ver_v_from_marstek_api_version,
 )
 from astrameter.powermeter import Powermeter
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.shelly import Shelly
 from astrameter.version_info import get_git_commit_sha
 from astrameter.web_server import WebServer
 
 # CT002/CT003 phase assignment is auto-managed by emulator runtime.
+
+
+def _powermeter_log_name(powermeter: Powermeter) -> str:
+    """Label for logs: the underlying meter class, seen through the outermost
+    HealthTrackingPowermeter wrapper that now wraps every configured meter."""
+    inner = (
+        powermeter.wrapped_powermeter
+        if isinstance(powermeter, HealthTrackingPowermeter)
+        else powermeter
+    )
+    return type(inner).__name__
 
 
 def get_ct_section(device_type: str, cfg: configparser.ConfigParser) -> str:
@@ -69,7 +81,7 @@ async def read_ct_powermeter(
             logger.debug(
                 "Powermeter %s produced no fresh message within 2s; "
                 "serving last known value",
-                type(powermeter).__name__,
+                _powermeter_log_name(powermeter),
             )
     values = await powermeter.get_powermeter_watts()
     value1 = values[0] if len(values) > 0 else 0
@@ -91,7 +103,7 @@ async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
             await powermeter.wait_for_message(timeout=30)
             value = await powermeter.get_powermeter_watts()
             value_with_units = " | ".join([f"{v}W" for v in value])
-            powermeter_name = powermeter.__class__.__name__
+            powermeter_name = _powermeter_log_name(powermeter)
             filter_description = ", ".join([str(n) for n in client_filter.netmasks])
             logger.info(
                 f"Successfully fetched {powermeter_name} powermeter value (filter {filter_description}): {value_with_units}"
@@ -193,6 +205,16 @@ async def run_device(
         saturation_decay_factor = cfg.getfloat(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
         )
+        min_dc_output = cfg.getfloat(ct_section, "MIN_DC_OUTPUT", fallback=0.0)
+        if 0 < min_dc_output < min_target_for_saturation:
+            logger.warning(
+                "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
+                "floored battery's target never clears the saturation gate, so an "
+                "empty/full unit can't be detected. Consider MIN_DC_OUTPUT >= %d.",
+                min_dc_output,
+                min_target_for_saturation,
+                min_target_for_saturation,
+            )
 
         logger.debug(f"{device_type.upper()} Settings for {device_id}:")
         logger.debug(f"CT Type: {ct_type}")
@@ -247,6 +269,7 @@ async def run_device(
             efficiency_rotation_interval=efficiency_rotation_interval,
             efficiency_fade_alpha=efficiency_fade_alpha,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
+            min_dc_output=min_dc_output,
             saturation_decay_factor=saturation_decay_factor,
             device_id=device_id or "",
             reset_fn=lambda: _reset_all_powermeters(powermeters),
@@ -348,6 +371,9 @@ async def run_device(
         )
         insights.register_distribution_weight_handler(
             device_id or "", device.set_consumer_distribution_weight
+        )
+        insights.register_min_dc_output_handler(
+            device_id or "", device.set_consumer_min_dc_output
         )
         insights.register_rotation_handler(
             device_id or "", device.force_efficiency_rotation
@@ -469,7 +495,9 @@ async def async_main(
         # MQTT Insights (optional)
         insights_cfg = read_mqtt_insights_config(cfg)
         if insights_cfg:
-            insights = MqttInsightsService(insights_cfg)
+            insights = MqttInsightsService(
+                insights_cfg, powermeters=[pm for pm, _, _ in powermeters]
+            )
             await insights.start()
             logger.info("MQTT Insights service started")
 

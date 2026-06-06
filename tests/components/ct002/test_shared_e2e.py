@@ -98,6 +98,7 @@ class PythonBackend:
         self._loop = asyncio.new_event_loop()
         self._clock = _FakeClock()
         self._grid = [0.0, 0.0, 0.0]
+        self._meter_unavailable = False
         self.ct002 = CT002(
             udp_port=UDP_PORT,  # unused: we never start() a real socket
             ct_mac="",  # mirror mode, like the e2e YAML
@@ -110,12 +111,21 @@ class PythonBackend:
         )
 
         async def _before_send(_addr, _fields=None, _consumer_id=None):
+            if self._meter_unavailable:
+                # Mirror a powermeter that detects its own staleness and
+                # raises (HomeAssistant / HomeWizard). This is the #403 trigger.
+                raise ValueError("powermeter unavailable (test)")
             return list(self._grid)
 
         self.ct002.before_send = _before_send
 
     def set_grid(self, l1: float, l2: float = 0.0, l3: float = 0.0) -> None:
         self._grid = [float(l1), float(l2), float(l3)]
+
+    def set_meter_unavailable(self, unavailable: bool = True) -> None:
+        # The Python counterpart of the ESPHome `sensor_stale` hook: the next
+        # poll's before_send raises instead of returning a grid reading.
+        self._meter_unavailable = unavailable
 
     def set_clock(self, seconds: float) -> None:
         self._clock._now = float(seconds)
@@ -169,6 +179,11 @@ class EsphomeBackend:
 
     def set_dedupe(self, window_s: float) -> None:
         self._cmd(f"dedupe {int(window_s * 1000)}")
+
+    def set_sensor_stale(self) -> None:
+        # Back-date the sensor stamps so the next read reports the grid sensor
+        # unavailable (SensorBackedPowermeter returns {} -> handler uses [0,0,0]).
+        self._cmd("sensor_stale")
 
     def poll(self, mac: str, phase: str, power: int, timeout: float = 1.5):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -505,6 +520,81 @@ def test_python_esphome_wire_identical() -> None:
                 assert not diffs, (
                     f"step {step} (mac={mac} phase={phase} power={reported} "
                     f"grid={grid}): wire mismatch:\n" + "\n".join(diffs)
+                )
+    finally:
+        py.close()
+
+
+@pytest.mark.timeout(60, func_only=True)
+def test_meter_unavailable_zero_delta_parity() -> None:
+    """Both stacks respond with a zero-delta hold when the grid meter is
+    unavailable (issue #403).
+
+    Python's powermeter hook raises (the HomeAssistant/HomeWizard staleness
+    error); ESPHome's sensor is back-dated past its freshness window so
+    ``SensorBackedPowermeter`` returns ``{}``. Both must then answer the
+    battery with a zero per-phase adjustment so it holds its current output —
+    NOT a delta re-derived from the last-known reading.
+
+    This is the cross-stack regression guard for the fix: before it, the Python
+    handler kept the stale ``consumer.values`` (the seeded 300 W) and re-ran the
+    balancer on them, so the response would carry that stale target instead of a
+    hold — diverging from ESPHome's ``[0, 0, 0]`` path.
+
+    A single battery is used so the hold is exactly zero: with one consumer the
+    balancer's inter-battery equalization term is zero, so a zero grid yields a
+    zero target on every phase. (Saturation is disabled on both stacks — the
+    documented float32/float64 byte-parity guard.)
+    """
+    py = PythonBackend(saturation_detection=False)
+    try:
+        with _running_esphome_backend() as esp:
+            esp._cmd("cfg saturation_enabled 0")
+            mac = "AAAA00000001"
+            phases = ["A", "B", "C", "0"]  # "0" = inspection / self-diagnosis
+            clock = 30000
+
+            # Seed both stacks with an identical NON-zero reading and a warm
+            # poll, so prior consumer state is in lockstep and the pre-fix
+            # stale-cache path would visibly diverge from a true hold.
+            clock += DEDUPE_WINDOW_S + 5
+            py.set_clock(clock)
+            esp.set_clock(clock)
+            py.set_grid(300)
+            esp.set_grid(300)
+            assert py.poll(mac, "A", 0) is not None
+            assert esp.poll(mac, "A", 0) is not None
+
+            # Meter goes unavailable on both stacks.
+            py.set_meter_unavailable(True)
+            esp.set_sensor_stale()
+
+            for step, (phase, reported) in enumerate(
+                (p, r) for p in phases for r in (-200, 0, 150)
+            ):
+                clock += DEDUPE_WINDOW_S + 5
+                py.set_clock(clock)
+                esp.set_clock(clock)
+                # ESPHome reads real millis() for freshness, so the clock-driven
+                # dedup advance doesn't refresh the sensor; the back-dated stamp
+                # from set_sensor_stale() persists until a `grid` command.
+
+                r_py = py.poll(mac, phase, reported)
+                r_esp = esp.poll(mac, phase, reported)
+                assert r_py is not None and r_esp is not None, (
+                    f"step {step}: a stack failed to answer "
+                    f"(python={r_py is not None}, esphome={r_esp is not None})"
+                )
+                # Zero-delta hold: per-phase A/B/C targets + total are all 0.
+                assert [r_py[i] for i in (4, 5, 6, 7)] == ["0", "0", "0", "0"], (
+                    f"[python] step {step} (phase={phase} power={reported}): "
+                    f"expected zero hold, got {r_py[4:8]}"
+                )
+                # And the two stacks agree field-by-field.
+                diffs = _diff_fields(r_py, r_esp)
+                assert not diffs, (
+                    f"step {step} (phase={phase} power={reported}): "
+                    "wire mismatch under meter outage:\n" + "\n".join(diffs)
                 )
     finally:
         py.close()

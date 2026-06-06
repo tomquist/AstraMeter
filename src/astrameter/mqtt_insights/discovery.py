@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from astrameter.ct002.balancer import _needs_dc_output_floor
 from astrameter.version_info import get_git_commit_sha
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -214,6 +215,28 @@ def build_ct002_consumer_discovery(
         "entity_category": "config",
     }
 
+    # Min DC Output number — minimum discharge (W) to keep a DC battery's
+    # external inverter from switching off at 0 W.  Only surfaced for batteries
+    # where it has an effect (no built-in inverter, no AC input — the B2500
+    # family); Venus/Jupiter/unknown types don't get this entity.
+    if _needs_dc_output_floor(device_type):
+        components["min_dc_output"] = {
+            "platform": "number",
+            "unique_id": f"{uid_prefix}_min_dc_output",
+            "name": "Min DC Output",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0,
+            "max": 1000,
+            "step": 1,
+            "mode": "box",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.min_dc_output | default(0) }}",
+            "command_topic": f"{state_topic}/min_dc_output/set",
+            "retain": True,
+            "entity_category": "config",
+        }
+
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
 
     device_info: dict = {
@@ -253,6 +276,80 @@ def build_ct002_consumer_discovery(
             },
         ],
         "state_topic": state_topic,
+    }
+
+    topic = f"{ha_prefix}/device/{node_id}/config"
+    return topic, payload
+
+
+# ── Add-on hub device ─────────────────────────────────────────────────────
+
+
+def build_addon_device_discovery(
+    base_topic: str,
+    addon_slug: str,
+    ha_prefix: str,
+) -> tuple[str, dict]:
+    """Discovery for the top-level "AstraMeter" device.
+
+    Its ``identifiers`` is the add-on slug so the ``via_device`` references on
+    the per-meter devices resolve to a real, named MQTT device instead of an
+    empty HA placeholder. (MQTT ``via_device`` only ever resolves within the
+    MQTT identifier namespace, so it can't point at the Supervisor's own
+    hassio add-on device — this is the MQTT-native stand-in for it.)
+
+    Exposes a connectivity ``status`` sensor (driven by the system LWT topic),
+    plus diagnostic ``version`` and ``consumer_count`` sensors fed from the
+    retained ``{base}/bridge`` topic.
+    """
+    safe_slug = _sanitize_id(addon_slug)
+    node_id = f"astrameter_addon_{safe_slug}"
+    uid_prefix = f"astrameter_addon_{safe_slug}"
+    bridge_topic = f"{base_topic}/bridge"
+
+    components: dict[str, dict] = {
+        # No availability block on purpose: this sensor IS the offline
+        # indicator, so it must flip to "off" rather than going unavailable
+        # when AstraMeter drops the LWT.
+        "status": {
+            "platform": "binary_sensor",
+            "unique_id": f"{uid_prefix}_status",
+            "name": "Status",
+            "device_class": "connectivity",
+            "state_topic": f"{base_topic}/status",
+            "payload_on": "online",
+            "payload_off": "offline",
+            "entity_category": "diagnostic",
+        },
+        "version": {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_version",
+            "name": "Version",
+            "state_topic": bridge_topic,
+            "value_template": "{{ value_json.version }}",
+            "entity_category": "diagnostic",
+            "availability": [_system_availability(base_topic)],
+        },
+        "consumer_count": {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_consumer_count",
+            "name": "Consumer Count",
+            "state_topic": bridge_topic,
+            "value_template": "{{ value_json.consumer_count }}",
+            "entity_category": "diagnostic",
+            "availability": [_system_availability(base_topic)],
+        },
+    }
+
+    payload = {
+        "device": {
+            "identifiers": addon_slug,
+            "name": "AstraMeter",
+            "manufacturer": "astrameter",
+        },
+        "origin": _origin(),
+        "components": components,
+        "state_topic": bridge_topic,
     }
 
     topic = f"{ha_prefix}/device/{node_id}/config"
@@ -315,6 +412,88 @@ def build_ct002_device_discovery(
     device_info: dict = {
         "identifiers": node_id,
         "name": f"AstraMeter CT002 {device_id}",
+        "manufacturer": "astrameter",
+    }
+    if addon_slug:
+        device_info["via_device"] = addon_slug
+
+    payload = {
+        "device": device_info,
+        "origin": _origin(),
+        "components": components,
+        "availability": [_system_availability(base_topic)],
+        "state_topic": state_topic,
+    }
+
+    topic = f"{ha_prefix}/device/{node_id}/config"
+    return topic, payload
+
+
+# ── Powermeter (grid power source) ────────────────────────────────────────
+
+
+def build_powermeter_device_discovery(
+    base_topic: str,
+    pm_id: str,
+    name: str,
+    ha_prefix: str,
+    addon_slug: str | None = None,
+) -> tuple[str, dict]:
+    """Discovery for a per-powermeter diagnostic device with an "Online" sensor.
+
+    ``pm_id`` is the already-sanitized config section name; ``name`` is the raw
+    section used as the device's display label. The sensor flips off when the
+    powermeter stops delivering fresh/usable data (stale stream, disconnect, or
+    — for pull meters — a failing read).
+    """
+    safe_pm = _sanitize_id(pm_id)
+    node_id = f"astrameter_powermeter_{safe_pm}"
+    uid_prefix = node_id
+    state_topic = f"{base_topic}/powermeter/{pm_id}"
+
+    components: dict[str, dict] = {}
+
+    # Latest readings (per phase + total). ``grid_power_total`` is the device's
+    # primary entity. A ``null`` phase (e.g. a single-phase meter has no L2/L3,
+    # or the meter is currently down) renders to an empty string so Home
+    # Assistant leaves the entity untouched rather than logging a parse error.
+    for key, label, field in [
+        ("grid_power_total", None, "total"),
+        ("grid_power_l1", "Power L1", "l1"),
+        ("grid_power_l2", "Power L2", "l2"),
+        ("grid_power_l3", "Power L3", "l3"),
+    ]:
+        components[key] = {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_{key}",
+            "name": label,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": state_topic,
+            "value_template": (
+                f"{{{{ value_json.grid_power.{field} "
+                f"if value_json.grid_power.{field} is not none else '' }}}}"
+            ),
+        }
+
+    components["online"] = {
+        "platform": "binary_sensor",
+        "unique_id": f"{uid_prefix}_online",
+        "name": "Online",
+        "device_class": "connectivity",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.online }}",
+        "payload_on": "True",
+        "payload_off": "False",
+        "entity_category": "diagnostic",
+    }
+
+    device_info: dict = {
+        "identifiers": node_id,
+        # Capital-Case the config section for a readable device label
+        # (e.g. "SMA_ENERGY_METER" -> "Sma Energy Meter").
+        "name": f"AstraMeter Powermeter {name.replace('_', ' ').title()}",
         "manufacturer": "astrameter",
     }
     if addon_slug:

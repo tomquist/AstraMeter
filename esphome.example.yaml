@@ -34,7 +34,7 @@ wifi:
   password: !secret wifi_password
 
 external_components:
-  - source: github://tomquist/astrameter@2.1.1
+  - source: github://tomquist/astrameter@2.1.2
     components: [ct002]
 
 # Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
@@ -149,6 +149,7 @@ ct002:
   #   error_reduce_threshold: 20
   #   max_correction_per_step: 80
   #   max_target_step: 0           # 0 = no per-step target clamp
+  #   min_dc_output: 0             # >0 keeps a DC battery (B2500) inverter awake
   #   min_efficient_power: 0       # >0 enables efficiency rotation
   #   probe_min_power: 80
   #   efficiency_rotation_interval: 15min

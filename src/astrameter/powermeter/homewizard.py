@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import aiohttp
 
-from .base import Powermeter
+from .base import Powermeter, stream_fresh
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -56,6 +56,9 @@ class HomeWizardPowermeter(Powermeter):
         self._clock = clock or time.monotonic
         self.values: list[float] | None = None
         self._last_measurement_time: float | None = None
+        # Read-only health flag for stream_online(): set once the WebSocket is
+        # up and subscribed, cleared whenever the connection drops.
+        self._connected = False
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._message_event = asyncio.Event()
@@ -85,12 +88,16 @@ class HomeWizardPowermeter(Powermeter):
             return
         self.values = None
         self._last_measurement_time = None
+        self._connected = False
         self._message_event = asyncio.Event()
         self._fresh_measurement_event = asyncio.Event()
         self._session = aiohttp.ClientSession()
         self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def stop(self) -> None:
+        # Clear before cancelling: the ws_loop re-raises CancelledError before
+        # its own reset runs, so stream_online() would otherwise stay True.
+        self._connected = False
         if self._ws_task:
             self._ws_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -141,6 +148,7 @@ class HomeWizardPowermeter(Powermeter):
                 raise
             except Exception as e:
                 logger.error("HomeWizard WebSocket error: %s", e, exc_info=True)
+            self._connected = False
             await asyncio.sleep(5)
 
     async def _measurement_watchdog(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -191,6 +199,7 @@ class HomeWizardPowermeter(Powermeter):
         elif msg_type == "authorized":
             logger.info("HomeWizard: authorized, subscribing to measurements")
             await ws.send_json({"type": "subscribe", "data": "measurement"})
+            self._connected = True
         elif msg_type == "measurement":
             data = msg.get("data")
             if isinstance(data, dict):
@@ -217,6 +226,11 @@ class HomeWizardPowermeter(Powermeter):
         self._last_measurement_time = self._clock()
         self._message_event.set()
         self._fresh_measurement_event.set()
+
+    def stream_online(self) -> bool | None:
+        return self._connected and stream_fresh(
+            self._last_measurement_time, self._max_measurement_age_seconds, self._clock
+        )
 
     async def get_powermeter_watts(self) -> list[float]:
         if self.values is None:

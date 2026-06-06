@@ -7,6 +7,8 @@ import configparser
 import contextlib
 import json
 import re
+import time
+from unittest.mock import AsyncMock
 
 import aiomqtt
 
@@ -15,16 +17,25 @@ from astrameter.config.config_loader import (
     read_mqtt_insights_config,
 )
 from astrameter.conftest import needs_mosquitto
+from astrameter.powermeter.base import Powermeter
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
 from .discovery import (
     _sanitize_id,
+    build_addon_device_discovery,
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
+    build_powermeter_device_discovery,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
 from .marstek_mqtt import MarstekMqttBinding
-from .service import MqttInsightsConfig, MqttInsightsService, _arp_lookup
+from .service import (
+    POWERMETER_IDLE_THRESHOLD,
+    MqttInsightsConfig,
+    MqttInsightsService,
+    _arp_lookup,
+)
 
 # ── Discovery payload unit tests ──────────────────────────────────────────
 
@@ -147,6 +158,37 @@ def test_ct002_consumer_discovery_structure():
     assert weight["max"] == 10
     assert weight["entity_category"] == "config"
 
+    # Min DC Output number entity — present for the B2500 family (HMJ-2).
+    min_dc = comps["min_dc_output"]
+    assert min_dc["platform"] == "number"
+    assert min_dc["command_topic"].endswith("/min_dc_output/set")
+    assert min_dc["retain"] is True
+    assert min_dc["min"] == 0
+    assert min_dc["max"] == 1000
+    assert min_dc["unit_of_measurement"] == "W"
+    assert min_dc["entity_category"] == "config"
+
+
+def test_min_dc_output_entity_only_for_external_inverter_types():
+    """The Min DC Output number is gated on the device-capabilities classifier."""
+
+    def _components(device_type: str) -> dict:
+        _, payload = build_ct002_consumer_discovery(
+            "astrameter",
+            "dev1",
+            "aabbccddeeff",
+            "homeassistant",
+            device_type=device_type,
+        )
+        return payload["components"]
+
+    # External-inverter DC families get the entity.
+    for dt in ("HMJ-1", "HMA-2", "HMK-1"):
+        assert "min_dc_output" in _components(dt), dt
+    # Venus / Jupiter / unknown do not.
+    for dt in ("HMG-50", "VNSD", "HMN-1", "UNKNOWN", ""):
+        assert "min_dc_output" not in _components(dt), dt
+
 
 def test_ct002_consumer_discovery_no_device_type():
     """Name omits device_type when empty."""
@@ -244,9 +286,119 @@ def test_shelly_device_discovery_structure():
     assert "battery_count" in payload["components"]
 
 
+def test_powermeter_device_discovery_structure():
+    topic, payload = build_powermeter_device_discovery(
+        "astrameter",
+        "MQTT_1",
+        "MQTT_1",
+        "homeassistant",
+        addon_slug="34dea19a_astrameter",
+    )
+    _assert_discovery_structure(topic, payload)
+    assert topic == "homeassistant/device/astrameter_powermeter_MQTT_1/config"
+    assert payload["device"]["identifiers"] == "astrameter_powermeter_MQTT_1"
+    # Section name is Capital-Cased for the display label.
+    assert payload["device"]["name"] == "AstraMeter Powermeter Mqtt 1"
+    # Links the powermeter device under the AstraMeter hub device.
+    assert payload["device"]["via_device"] == "34dea19a_astrameter"
+    assert payload["state_topic"] == "astrameter/powermeter/MQTT_1"
+    assert len(payload["availability"]) == 1
+
+    comps = payload["components"]
+    online = comps["online"]
+    assert online["platform"] == "binary_sensor"
+    assert online["device_class"] == "connectivity"
+    assert online["payload_on"] == "True"
+    assert online["payload_off"] == "False"
+    assert online["entity_category"] == "diagnostic"
+    assert online["value_template"] == "{{ value_json.online }}"
+
+    # Latest-readings sensors: per phase + total, total is primary (name=None).
+    for power_key in (
+        "grid_power_total",
+        "grid_power_l1",
+        "grid_power_l2",
+        "grid_power_l3",
+    ):
+        assert comps[power_key]["platform"] == "sensor"
+        assert comps[power_key]["device_class"] == "power"
+        assert comps[power_key]["state_class"] == "measurement"
+        assert comps[power_key]["unit_of_measurement"] == "W"
+    assert comps["grid_power_total"]["name"] is None
+    assert comps["grid_power_l1"]["name"] == "Power L1"
+    assert "value_json.grid_power.total" in comps["grid_power_total"]["value_template"]
+
+
+def test_powermeter_device_discovery_capital_cases_multiword_section():
+    _, payload = build_powermeter_device_discovery(
+        "astrameter", "SMA_ENERGY_METER", "SMA_ENERGY_METER", "homeassistant"
+    )
+    assert payload["device"]["name"] == "AstraMeter Powermeter Sma Energy Meter"
+
+
+def test_powermeter_device_discovery_omits_via_device_without_addon_slug():
+    _, payload = build_powermeter_device_discovery(
+        "astrameter", "HOMEWIZARD", "HOMEWIZARD", "homeassistant"
+    )
+    assert "via_device" not in payload["device"]
+
+
 def test_meter_device_discovery_omits_via_device_without_addon_slug():
     _, ct002 = build_ct002_device_discovery("astrameter", "dev1", "homeassistant")
     assert "via_device" not in ct002["device"]
+
+
+def test_addon_device_discovery_structure():
+    topic, payload = build_addon_device_discovery(
+        "astrameter", "34dea19a_astrameter", "homeassistant"
+    )
+    _assert_discovery_structure(topic, payload)
+    assert "homeassistant/device/" in topic
+    assert topic.endswith("/config")
+    # identifiers == addon_slug so the meter devices' via_device resolves here.
+    assert payload["device"]["identifiers"] == "34dea19a_astrameter"
+    assert payload["device"]["name"] == "AstraMeter"
+
+    comps = payload["components"]
+    assert set(comps) == {"status", "version", "consumer_count"}
+
+    # Connectivity status sensor reads the system LWT and must NOT carry an
+    # availability block, or it would go unavailable instead of showing "off".
+    status = comps["status"]
+    assert status["platform"] == "binary_sensor"
+    assert status["device_class"] == "connectivity"
+    assert status["state_topic"] == "astrameter/status"
+    assert status["payload_on"] == "online"
+    assert status["payload_off"] == "offline"
+    assert "availability" not in status
+
+    # Diagnostics are fed from the retained bridge topic and grey out offline.
+    for key, tmpl in (
+        ("version", "{{ value_json.version }}"),
+        ("consumer_count", "{{ value_json.consumer_count }}"),
+    ):
+        comp = comps[key]
+        assert comp["state_topic"] == "astrameter/bridge"
+        assert comp["value_template"] == tmpl
+        assert comp["entity_category"] == "diagnostic"
+        assert comp["availability"] == [
+            {
+                "topic": "astrameter/status",
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            }
+        ]
+
+
+def test_addon_device_discovery_links_meter_via_device():
+    """The hub's identifiers must equal the slug used as meter via_device."""
+    _, hub = build_addon_device_discovery(
+        "astrameter", "abc123_astrameter", "homeassistant"
+    )
+    _, ct002 = build_ct002_device_discovery(
+        "astrameter", "dev1", "homeassistant", addon_slug="abc123_astrameter"
+    )
+    assert ct002["device"]["via_device"] == hub["device"]["identifiers"]
     _, shelly = build_shelly_device_discovery("astrameter", "shelly1", "homeassistant")
     assert "via_device" not in shelly["device"]
 
@@ -471,6 +623,34 @@ def test_read_mqtt_insights_config_marstek_mqtt_interval_zero():
     assert result.marstek_mqtt_interval == 0
 
 
+def test_read_mqtt_insights_config_powermeter_health_interval_default():
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.powermeter_health_interval == 30.0
+
+
+def test_read_mqtt_insights_config_powermeter_health_interval_custom():
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        "[MQTT_INSIGHTS]\nBROKER = localhost\nPOWERMETER_HEALTH_INTERVAL = 15\n"
+    )
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.powermeter_health_interval == 15.0
+
+
+def test_read_mqtt_insights_config_powermeter_health_interval_zero():
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        "[MQTT_INSIGHTS]\nBROKER = localhost\nPOWERMETER_HEALTH_INTERVAL = 0\n"
+    )
+    result = read_mqtt_insights_config(cfg)
+    assert result is not None
+    assert result.powermeter_health_interval == 0
+
+
 # ── Service unit tests (no broker) ───────────────────────────────────────
 
 
@@ -480,6 +660,218 @@ def test_queue_overflow_does_not_raise():
     for i in range(200):
         service.on_ct002_response("dev1", f"consumer{i}", {"grid_power": {}})
     # No exception raised
+
+
+# ── Powermeter health loop (no broker) ───────────────────────────────────
+
+
+class _PushMeter(Powermeter):
+    def __init__(self, online: bool | None, values: list[float] | None = None) -> None:
+        self._online = online
+        self._values = values if values is not None else [10.0, 20.0, 30.0]
+
+    def stream_online(self) -> bool | None:
+        return self._online
+
+    async def get_powermeter_watts(self) -> list[float]:
+        if self._values is None:
+            raise ValueError("no data")
+        return self._values
+
+
+class _PullMeter(Powermeter):
+    def __init__(self, values: list[float] | None = None, raises: bool = False) -> None:
+        self._values = values if values is not None else [100.0]
+        self._raises = raises
+        self.probes = 0
+
+    async def get_powermeter_watts(self) -> list[float]:
+        self.probes += 1
+        if self._raises:
+            raise ValueError("boom")
+        return self._values
+
+
+def _health_service() -> MqttInsightsService:
+    return MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+
+
+async def test_powermeter_status_push_reports_stream_state_and_readings():
+    service = _health_service()
+    online, values = await service._powermeter_status(_PushMeter(True, [1.0, 2.0, 3.0]))
+    assert online is True
+    assert values == [1.0, 2.0, 3.0]
+    online, _ = await service._powermeter_status(_PushMeter(False))
+    assert online is False
+
+
+async def test_powermeter_status_push_exception_reports_offline():
+    """A meter whose stream_online() raises must report offline, not crash the
+    health loop (which would tear down the gather and force a reconnect)."""
+
+    class _BrokenPushMeter(Powermeter):
+        def stream_online(self) -> bool | None:
+            raise RuntimeError("boom")
+
+        async def get_powermeter_watts(self) -> list[float]:
+            raise AssertionError("must not be probed after stream_online raised")
+
+    service = _health_service()
+    online, values = await service._powermeter_status(_BrokenPushMeter())
+    assert online is False
+    assert values is None
+
+
+async def test_powermeter_status_pull_reuses_recent_control_read():
+    """A pull meter read by the control loop within the idle window is reused
+    without issuing a probe."""
+    inner = _PullMeter([42.0])
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    await pm.get_powermeter_watts()  # control-loop read: ok, recent
+    assert inner.probes == 1
+
+    service = _health_service()
+    online, values = await service._powermeter_status(pm)
+    assert online is True
+    assert values == [42.0]
+    assert inner.probes == 1  # reused, no extra probe
+
+
+async def test_powermeter_status_pull_reuses_recent_failure():
+    inner = _PullMeter(raises=True)
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    with contextlib.suppress(ValueError):
+        await pm.get_powermeter_watts()
+    probes_after_control = inner.probes
+
+    service = _health_service()
+    online, values = await service._powermeter_status(pm)
+    assert online is False
+    assert values is None  # failed read cached no values
+    assert inner.probes == probes_after_control  # reused failure, no probe
+
+
+async def test_powermeter_status_idle_pull_is_probed_once():
+    inner = _PullMeter([7.0])
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    # No control-loop read recorded -> idle -> probe.
+    service = _health_service()
+    online, values = await service._powermeter_status(pm)
+    assert online is True
+    assert values == [7.0]
+    assert inner.probes == 1
+
+
+async def test_powermeter_status_idle_pull_probe_failure_is_offline():
+    inner = _PullMeter(raises=True)
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    service = _health_service()
+    online, values = await service._powermeter_status(pm)
+    assert online is False
+    assert values is None
+    assert inner.probes == 1
+
+
+async def test_powermeter_status_stale_control_read_falls_back_to_probe():
+    inner = _PullMeter([5.0])
+    pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
+    await pm.get_powermeter_watts()
+    # Age the recorded attempt well past the idle window.
+    pm._last_attempt = time.monotonic() - (POWERMETER_IDLE_THRESHOLD + 10)
+
+    service = _health_service()
+    online, values = await service._powermeter_status(pm)
+    assert online is True
+    assert values == [5.0]
+    assert inner.probes == 2  # one control read + one fallback probe
+
+
+def test_grid_power_payload_phase_counts():
+    assert MqttInsightsService._grid_power_payload([1.0, 2.0, 3.0]) == {
+        "l1": 1.0,
+        "l2": 2.0,
+        "l3": 3.0,
+        "total": 6.0,
+    }
+    assert MqttInsightsService._grid_power_payload([100.0]) == {
+        "l1": 100.0,
+        "l2": None,
+        "l3": None,
+        "total": 100.0,
+    }
+    assert MqttInsightsService._grid_power_payload(None) == {
+        "l1": None,
+        "l2": None,
+        "l3": None,
+        "total": None,
+    }
+
+
+async def test_publish_powermeter_health_state_and_discovery_once():
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="localhost", base_topic="am", ha_discovery_prefix="ha"
+        )
+    )
+    cfg = service._config
+    client = AsyncMock()
+
+    await service._publish_powermeter_health(
+        client, "am", cfg, "MQTT_1", True, [1.0, 2.0, 3.0]
+    )
+
+    topics = [c.args[0] for c in client.publish.call_args_list]
+    assert "am/powermeter/MQTT_1" in topics
+    assert "ha/device/astrameter_powermeter_MQTT_1/config" in topics
+    state_call = next(
+        c for c in client.publish.call_args_list if c.args[0] == "am/powermeter/MQTT_1"
+    )
+    assert json.loads(state_call.kwargs["payload"]) == {
+        "online": True,
+        "grid_power": {"l1": 1.0, "l2": 2.0, "l3": 3.0, "total": 6.0},
+    }
+    assert state_call.kwargs["retain"] is True
+
+    # Second publish: state only, discovery is not repeated.
+    client.publish.reset_mock()
+    await service._publish_powermeter_health(client, "am", cfg, "MQTT_1", False, None)
+    topics2 = [c.args[0] for c in client.publish.call_args_list]
+    assert topics2 == ["am/powermeter/MQTT_1"]
+
+
+def test_hub_identifier_uses_addon_slug_when_set():
+    svc = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="localhost", base_topic="am", addon_slug="34dea19a_astrameter"
+        )
+    )
+    assert svc._hub_identifier() == "34dea19a_astrameter"
+
+
+def test_hub_identifier_falls_back_to_base_topic_without_addon_slug():
+    svc = MqttInsightsService(
+        MqttInsightsConfig(broker="localhost", base_topic="astra")
+    )
+    assert svc._hub_identifier() == "astrameter_astra"
+
+
+async def test_publish_powermeter_health_links_hub_via_fallback():
+    """Without ADDON_SLUG the powermeter device still links to the AstraMeter
+    hub via the base-topic fallback identifier (standalone/Docker)."""
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="localhost", base_topic="am", ha_discovery_prefix="ha"
+        )
+    )
+    client = AsyncMock()
+    await service._publish_powermeter_health(
+        client, "am", service._config, "MQTT_1", True, [1.0]
+    )
+    disc = next(
+        c for c in client.publish.call_args_list if c.args[0].endswith("/config")
+    )
+    payload = json.loads(disc.kwargs["payload"])
+    assert payload["device"]["via_device"] == "astrameter_am"
 
 
 # ── E2E helpers ──────────────────────────────────────────────────────────
@@ -522,7 +914,9 @@ async def _poll(predicate, *, timeout=5, interval=0.05):
 _test_counter = 0
 
 
-def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsService:
+def _make_service(
+    port: int, base_topic: str | None = None, addon_slug: str | None = None
+) -> MqttInsightsService:
     global _test_counter
     _test_counter += 1
     if base_topic is None:
@@ -534,6 +928,7 @@ def _make_service(port: int, base_topic: str | None = None) -> MqttInsightsServi
             base_topic=base_topic,
             ha_discovery=True,
             ha_discovery_prefix=f"ha_disc_{_test_counter}",
+            addon_slug=addon_slug,
             # Broader E2E tests assert poll-only Marstek behaviour; periodic traffic
             # is covered by test_marstek_periodic_broadcast.
             marstek_mqtt_interval=0.0,
@@ -558,6 +953,7 @@ SAMPLE_CT002_DATA = {
     "manual_target": None,
     "auto_target": True,
     "distribution_weight": 1.5,
+    "min_dc_output": 25.0,
     "smooth_target": 500.0,
     "active_control": True,
     "consumer_count": 2,
@@ -598,6 +994,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["active"] is True
         assert payload["poll_interval"] == 5.0
         assert payload["distribution_weight"] == 1.5
+        assert payload["min_dc_output"] == 25.0
         assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
         await service.stop()
@@ -653,18 +1050,77 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
                 sub,
                 discovery_msgs,
                 timeout=3,
-                stop=lambda _: len(discovery_msgs) >= 3,
+                stop=lambda _: len(discovery_msgs) >= 4,
             )
 
-        # Expect: device discovery + consumer1 discovery + consumer2 discovery = 3
-        # (no duplicate for second consumer1 event)
-        assert len(discovery_msgs) == 3
+        # Expect: AstraMeter hub device (retained, now always published on
+        # connect with a base-topic fallback id) + CT002 device discovery +
+        # consumer1 + consumer2 = 4 (no duplicate for the second consumer1 event)
+        assert len(discovery_msgs) == 4
         topics = [str(m.topic) for m in discovery_msgs]
+        # Hub device discovery (retained, delivered on subscribe)
+        assert any("astrameter_addon_" in t for t in topics)
         # Device-level discovery
         assert any("astrameter_ct002_dev1/config" in t for t in topics)
         # Consumer-level discoveries
         assert any("consumer1" in t for t in topics)
         assert any("consumer2" in t for t in topics)
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_publishes_addon_hub_device_and_bridge(mqtt_broker):
+    port = mqtt_broker
+    service = _make_service(port, addon_slug="abc123_astrameter")
+    cfg = service._config
+    ha_prefix = cfg.ha_discovery_prefix
+    base = cfg.base_topic
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        # Hub discovery + bridge are published (retained) on connect, so a
+        # late subscriber still receives them.
+        hub_topic = f"{ha_prefix}/device/astrameter_addon_abc123_astrameter/config"
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(hub_topic)
+            await sub.subscribe(f"{base}/bridge")
+
+            hub_payload: dict = {}
+            bridge_payloads: list[dict] = []
+
+            async def _collect() -> None:
+                async for m in sub.messages:
+                    if str(m.topic) == hub_topic:
+                        hub_payload.update(json.loads(m.payload))
+                    else:
+                        bridge_payloads.append(json.loads(m.payload))
+                    # Fire a consumer event once we've seen the initial state,
+                    # then wait for the updated bridge count.
+                    if (
+                        len(bridge_payloads) == 1
+                        and not service._discovered_ct002_consumers
+                    ):
+                        service.on_ct002_response(
+                            "dev1", "consumer1", SAMPLE_CT002_DATA
+                        )
+                    if hub_payload and any(
+                        p.get("consumer_count") == 1 for p in bridge_payloads
+                    ):
+                        return
+
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(_collect(), timeout=5)
+
+        # Hub device: identifiers == slug (so meter via_device resolves here).
+        assert hub_payload["device"]["identifiers"] == "abc123_astrameter"
+        assert hub_payload["device"]["name"] == "AstraMeter"
+        # Bridge state: initial count 0, then 1 after the consumer event.
+        assert bridge_payloads[0]["consumer_count"] == 0
+        assert bridge_payloads[-1]["consumer_count"] == 1
+        assert all("version" in p for p in bridge_payloads)
     finally:
         await service.stop()
 
@@ -886,12 +1342,22 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service.register_distribution_weight_handler(
         "dev1", lambda cid, v: calls.__setitem__("weight", v)
     )
+    service.register_min_dc_output_handler(
+        "dev1", lambda cid, v: calls.__setitem__("min_dc", v)
+    )
 
     service._handle_consumer_field_command("dev1", "c1", "active", "false")
     service._handle_consumer_field_command("dev1", "c1", "auto_target", "true")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "250")
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "2.5")
-    assert calls == {"active": False, "auto": True, "manual": 250.0, "weight": 2.5}
+    service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "25")
+    assert calls == {
+        "active": False,
+        "auto": True,
+        "manual": 250.0,
+        "weight": 2.5,
+        "min_dc": 25.0,
+    }
 
     # 0.0 is a valid weight (battery takes no share).
     calls.clear()
@@ -903,6 +1369,8 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "11")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
     service._handle_consumer_field_command("dev1", "c1", "active", "maybe")
+    service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "-5")
+    service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "2000")
     # An empty (cleared) retained payload is ignored silently.
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "")
     assert calls == {}

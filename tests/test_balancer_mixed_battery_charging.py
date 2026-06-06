@@ -26,8 +26,9 @@ Positive grid (discharge) behaviour is unchanged.
 
 The tests here cover:
 
- * the legacy deadlock when ``device_type`` is missing (proves the
-   default-to-DC safety policy is in effect),
+ * unknown/empty ``device_type`` is now assumed AC-coupled (issue #425
+   device-capabilities model; the former fail-closed-to-DC default was
+   intentionally dropped),
  * the fix path with recognised Venus / B2500 prefixes,
  * discharge unaffected,
  * the degenerate all-DC-under-surplus case,
@@ -47,6 +48,8 @@ from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
     LoadBalancer,
+    _is_ac_chargeable,
+    _needs_dc_output_floor,
 )
 
 
@@ -320,21 +323,16 @@ def test_all_known_venus_prefixes_are_charge_capable(venus_device_type: str) -> 
     "dc_device_type",
     [
         "HMA-X",
-        "HMB-X",
         "HMJ-X",
         "HMK-X",
         "hma-x",
-        "JUPITER-1",
-        "UNKNOWN",
-        "",
     ],
 )
-def test_non_venus_prefixes_are_treated_as_dc(dc_device_type: str) -> None:
-    """B2500 family, Jupiter, and anything unrecognised default to DC.
+def test_b2500_prefixes_are_treated_as_dc(dc_device_type: str) -> None:
+    """The B2500 family (``HMA``/``HMJ``/``HMK``) is DC-only.
 
     Paired with a recognised Venus, these must be held at 0 W under
-    surplus while the Venus absorbs everything.  Empty / unknown
-    device types share the same DC default (fail-closed policy).
+    surplus while the Venus absorbs everything.
     """
     dc = DCOnlyBattery("dc", device_type=dc_device_type)
     venus = ACBatteryWithStartupThreshold("venus", device_type="HMG-50")
@@ -349,6 +347,39 @@ def test_non_venus_prefixes_are_treated_as_dc(dc_device_type: str) -> None:
         f"Venus should absorb the surplus while the DC sibling is held at 0. "
         f"Venus tail: {power['venus'][-30:]}"
     )
+
+
+@pytest.mark.parametrize(
+    ("device_type", "expect_ac", "expect_floor"),
+    [
+        # B2500 family: DC-only, external inverter -> floor-eligible.
+        ("HMA-X", False, True),
+        ("HMJ-X", False, True),
+        ("HMK-X", False, True),
+        ("hmj-1", False, True),
+        # Venus (built-in inverter + AC input) -> AC-chargeable, no floor.
+        ("HMG-50", True, False),
+        ("VNSE3", True, False),
+        ("VNSA", True, False),
+        ("VNSD", True, False),
+        # Jupiter (built-in inverter, DC battery) -> not AC, no floor.
+        ("HMN-1", False, False),
+        ("HMM-1", False, False),
+        ("JPLS-1", False, False),
+        # Unknown / future / empty: assumed modern AC-coupled batteries.
+        # NOTE: this intentionally drops the old fail-closed-to-DC default
+        # (issue #338) in favour of the device-capabilities model (issue #425).
+        ("UNKNOWN", True, False),
+        ("JUPITER-1", True, False),  # not a real device-type string
+        ("", True, False),
+    ],
+)
+def test_device_classification(
+    device_type: str, expect_ac: bool, expect_floor: bool
+) -> None:
+    """The device-capabilities model drives AC-charge eligibility and the floor."""
+    assert _is_ac_chargeable(device_type) is expect_ac
+    assert _needs_dc_output_floor(device_type) is expect_floor
 
 
 # ---------------------------------------------------------------------------
@@ -467,28 +498,25 @@ def test_all_dc_under_surplus_holds_zero_and_logs(
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_device_type_deadlock_persists() -> None:
-    """Protects the default-to-DC safety policy.
+def test_unknown_device_type_is_now_ac_chargeable() -> None:
+    """Unknown/empty device types are now assumed AC-coupled (issue #425).
 
-    The original bug reproduction used empty ``device_type`` strings:
-    both batteries look like unknown DC batteries to the balancer, so
-    nobody is asked to charge and the grid keeps feeding back the
-    surplus.  This is the expected fail-closed behaviour for consumers
-    we can't identify.  This also exercises the ``all_dc_under_surplus``
-    branch; the one-shot info-log emitted there is asserted separately
-    by ``test_all_dc_under_surplus_holds_zero_and_logs``.
+    This intentionally REPLACES the former fail-closed-to-DC behaviour
+    (issue #338): the device-capabilities model treats an unrecognized or
+    empty ``device_type`` as a modern AC-coupled battery, so it participates
+    in charge distribution and absorbs surplus rather than deadlocking the
+    grid at the full feed-in.  The trade-off (an unrecognized *DC* unit could
+    be told to charge and may not be able to) was accepted deliberately.
     """
-    b2500 = DCOnlyBattery("b2500_legacy", device_type="")
-    venus = ACBatteryWithStartupThreshold("venus_legacy", device_type="")
+    a = ACBatteryWithStartupThreshold("unknown_a", device_type="", startup_min=0.0)
+    b = ACBatteryWithStartupThreshold("unknown_b", device_type="", startup_min=0.0)
 
-    grid, power = _run_scenario([b2500, venus], surplus_watts=600.0, ticks=200)
+    grid, _ = _run_scenario([a, b], surplus_watts=600.0, ticks=200)
 
-    assert max(abs(p) for p in power["venus_legacy"][-30:]) < 1.0
-    assert max(abs(p) for p in power["b2500_legacy"][-30:]) < 1.0
     avg_grid = sum(grid[-30:]) / 30
-    assert avg_grid < -550, (
-        f"With unknown device_types nobody charges; expected grid ~= -600 W, got "
-        f"{avg_grid:.0f} W"
+    assert abs(avg_grid) < 50, (
+        f"Unknown device_types are now AC-chargeable and should absorb the "
+        f"surplus, draining the grid toward 0; got {avg_grid:.0f} W"
     )
 
 
@@ -600,3 +628,174 @@ def test_sustained_surplus_dc_only_balancer_never_asks_to_discharge() -> None:
 
     for m, peak in max_target_seen.items():
         assert peak <= 0, f"{m} peak target under surplus was {peak} (expected <= 0)"
+
+
+# ---------------------------------------------------------------------------
+# Issue #425: MIN_DC_OUTPUT — keep a DC battery's external inverter awake
+# ---------------------------------------------------------------------------
+
+
+def _make_balancer_min_dc(clock: _FakeClock, min_dc_output: float) -> LoadBalancer:
+    return LoadBalancer(
+        config=BalancerConfig(min_efficient_power=0, min_dc_output=min_dc_output),
+        saturation_alpha=0.15,
+        saturation_min_target=20,
+        saturation_decay_factor=0.995,
+        saturation_grace_seconds=90.0,
+        saturation_stall_timeout_seconds=60.0,
+        saturation_enabled=True,
+        clock=clock,
+    )
+
+
+def _run_floor_scenario(
+    batteries,
+    surplus_watts: float,
+    ticks: int,
+    *,
+    global_min_dc: float = 0.0,
+    overrides: dict[str, float] | None = None,
+    inactive: frozenset[str] = frozenset(),
+    manual: frozenset[str] = frozenset(),
+    weights: dict[str, float] | None = None,
+):
+    """Like ``_run_scenario`` but with MIN_DC_OUTPUT (global + per-device)."""
+    overrides = overrides or {}
+    weights = weights or {}
+    clock = _FakeClock()
+    lb = _make_balancer_min_dc(clock, global_min_dc)
+    grid_trace: list[float] = []
+    power_trace: dict[str, list[float]] = {b.mac: [] for b in batteries}
+
+    for tick in range(ticks):
+        reports = {
+            b.mac: {
+                "phase": "A",
+                "power": round(b.power),
+                "device_type": b.device_type,
+                "weight": weights.get(b.mac, 1.0),
+                "min_dc_output": overrides.get(b.mac),
+            }
+            for b in batteries
+        }
+        grid_total = -surplus_watts - sum(b.power for b in batteries)
+        grid_trace.append(grid_total)
+
+        deltas: dict[str, float] = {}
+        for b in batteries:
+            mode = ConsumerMode("auto")
+            if b.mac in inactive:
+                mode = ConsumerMode("inactive")
+            elif b.mac in manual:
+                mode = ConsumerMode("manual", 0.0)
+            phase_targets = lb.compute_target(
+                consumer_id=b.mac,
+                consumer_mode=mode,
+                all_reports=reports,
+                grid_total=grid_total,
+                inactive=inactive,
+                manual=manual,
+                sample_id=(tick,),
+            )
+            deltas[b.mac] = phase_targets[0]
+
+        for b in batteries:
+            b.step(deltas[b.mac], reports[b.mac]["power"])
+            power_trace[b.mac].append(b.power)
+        clock.advance(1.0)
+
+    return grid_trace, power_trace
+
+
+def test_lone_b2500_under_surplus_held_at_floor() -> None:
+    """The reporter's setup: a lone B2500 under surplus is held at the floor.
+
+    With no Venus present the all-DC fair-share would otherwise leave the
+    B2500 commanded toward 0/charge, so its external inverter sleeps. The
+    floor lifts it to a steady ~25 W discharge instead.
+    """
+    b2500 = DCOnlyBattery("b2500", device_type="HMJ-1")
+    _, power = _run_floor_scenario(
+        [b2500], surplus_watts=600.0, ticks=80, global_min_dc=25
+    )
+    tail = power["b2500"][-20:]
+    assert all(abs(p - 25) <= 1 for p in tail), f"expected ~25 W, got {tail}"
+
+
+def test_floor_off_by_default_leaves_b2500_asleep() -> None:
+    """Default (MIN_DC_OUTPUT=0) is a no-op: behaviour unchanged."""
+    b2500 = DCOnlyBattery("b2500", device_type="HMJ-1")
+    _, power = _run_floor_scenario(
+        [b2500], surplus_watts=600.0, ticks=80, global_min_dc=0
+    )
+    assert max(abs(p) for p in power["b2500"][-20:]) < 1.0
+
+
+def test_mixed_floor_holds_b2500_while_venus_absorbs() -> None:
+    """DC + Venus under surplus: B2500 held at floor, Venus absorbs the rest."""
+    b2500 = DCOnlyBattery("b2500", device_type="HMJ-1")
+    venus = ACBatteryWithStartupThreshold("venus", device_type="HMG-50")
+    _, power = _run_floor_scenario(
+        [b2500, venus], surplus_watts=600.0, ticks=200, global_min_dc=25
+    )
+    assert all(abs(p - 25) <= 2 for p in power["b2500"][-20:]), power["b2500"][-20:]
+    assert min(power["venus"][-20:]) < -500
+
+
+def test_global_floor_does_not_touch_venus_or_jupiter() -> None:
+    """Global floor never wakes a Venus or Jupiter (they have a built-in inverter)."""
+    venus = ACBatteryWithStartupThreshold("venus", device_type="HMG-50")
+    jupiter = DCOnlyBattery("jupiter", device_type="HMN-1")
+    _, power = _run_floor_scenario(
+        [venus, jupiter], surplus_watts=600.0, ticks=120, global_min_dc=25
+    )
+    # Jupiter is charge-blind here (not AC-chargeable) and excluded from the
+    # global floor, so it stays at 0 rather than being lifted to 25 W.
+    assert max(abs(p) for p in power["jupiter"][-20:]) < 1.0
+
+
+def test_per_device_override_floors_any_battery() -> None:
+    """An explicit override holds even a Venus at a minimum discharge."""
+    venus = ACBatteryWithStartupThreshold(
+        "venus", device_type="HMG-50", startup_min=0.0
+    )
+    _, power = _run_floor_scenario(
+        [venus], surplus_watts=600.0, ticks=120, overrides={"venus": 30.0}
+    )
+    assert all(abs(p - 30) <= 2 for p in power["venus"][-20:]), power["venus"][-20:]
+
+
+def test_weight_zero_battery_is_not_woken_by_floor() -> None:
+    """A B2500 parked via distribution_weight=0 stays at 0 despite the floor."""
+    b2500 = DCOnlyBattery("b2500", device_type="HMJ-1")
+    _, power = _run_floor_scenario(
+        [b2500],
+        surplus_watts=600.0,
+        ticks=80,
+        global_min_dc=25,
+        weights={"b2500": 0.0},
+    )
+    assert max(abs(p) for p in power["b2500"][-20:]) < 1.0
+
+
+def test_manual_and_inactive_b2500_not_floored() -> None:
+    """Manual (target 0) and inactive modes are deliberate 0 — not floored."""
+    manual_b = DCOnlyBattery("manual_b", device_type="HMJ-1")
+    _, power = _run_floor_scenario(
+        [manual_b],
+        surplus_watts=600.0,
+        ticks=60,
+        global_min_dc=25,
+        manual=frozenset({"manual_b"}),
+    )
+    assert max(abs(p) for p in power["manual_b"][-20:]) < 1.0
+
+    inactive_b = DCOnlyBattery("inactive_b", device_type="HMJ-1")
+    _, power = _run_floor_scenario(
+        [inactive_b],
+        surplus_watts=600.0,
+        ticks=60,
+        global_min_dc=25,
+        inactive=frozenset({"inactive_b"}),
+    )
+    assert max(abs(p) for p in power["inactive_b"][-20:]) < 1.0

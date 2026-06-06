@@ -160,7 +160,7 @@ Minimal YAML — point `power_sensor_l1` at any ESPHome sensor that reports grid
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.1
+  - source: github://tomquist/astrameter@2.1.2
     components: [ct002]
 
 sensor:
@@ -280,6 +280,15 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
   down proportionally, producing gentler corrections as batteries approach equilibrium.
 - **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
   relative to its current output. A hard clamp on per-cycle change.
+
+*DC battery keep-alive — applies to each DC-only battery on its own (also with a
+single battery, independent of balancing):*
+- **MIN_DC_OUTPUT** (default 0 = disabled) — Minimum discharge in watts to keep a DC
+  battery's inverter from switching off at 0 W and falling asleep under high PV
+  surplus (a known behaviour of the Marstek B2500). Applied individually to each
+  DC-only battery that has no inverter of its own; AC batteries (Venus) and Jupiter
+  are unaffected. Can also be set per battery from Home Assistant (see **Min DC
+  Output** below). A value of at least 20 W is recommended.
 
 *Battery efficiency optimization — concentrating power on fewer batteries,
 probing handoffs, and swapping away from ones that cannot follow:*
@@ -554,6 +563,30 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
 | `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
+| `POWERMETER_HEALTH_INTERVAL` | `30` | Seconds between per-powermeter **Online** diagnostic sensor updates; `0` disables it |
+
+#### Powermeter health (Home Assistant entities)
+
+When HA discovery is on, every configured powermeter section gets its own
+**"AstraMeter Powermeter `<Section>`"** device (the section name is Capital-Cased
+for the label, and the device is grouped under the **AstraMeter** hub device —
+keyed on `ADDON_SLUG` on the add-on, with a stable base-topic fallback so the
+grouping also works in standalone/Docker). It carries:
+
+- an **Online** connectivity `binary_sensor` (diagnostic) that flips **off** when
+  the source stops delivering fresh, usable readings — a stalled or disconnected
+  push stream, or a polling source whose reads start failing — so you can alert
+  on a meter that has gone quiet even though AstraMeter keeps running on its last
+  cached value;
+- **Power**, **Power L1**, **Power L2**, **Power L3** sensors carrying the latest
+  per-phase readings and their total (single-phase meters leave L2/L3 empty).
+
+Push sources (HomeWizard, MQTT, SMA, Home Assistant) report their stream state
+directly; polling sources reflect the control loop, or are probed about once per
+`POWERMETER_HEALTH_INTERVAL` when no battery is reading them. For multi-phase
+sources, a phase that simply stops changing (e.g. an idle circuit reporting a
+steady value) stays **online** — only an unavailable/missing reading or a
+disconnect marks it offline.
 
 #### Per-battery controls (Home Assistant entities)
 
@@ -571,6 +604,10 @@ live from Home Assistant:
   proportion between batteries matters; `0` parks a battery at 0 W while
   leaving it in the pool. Tune it while watching the batteries — the change
   takes effect on the next control cycle.
+- **Min DC Output** — minimum discharge in watts to keep this battery's inverter
+  from switching off at 0 W and falling asleep (see **MIN_DC_OUTPUT** above). Only
+  shown for DC batteries where it has an effect (e.g. the Marstek B2500); overrides
+  the global setting for that battery.
 
 Each of these controls publishes its set-command **retained**, so Home
 Assistant restores your values across an AstraMeter restart without any extra

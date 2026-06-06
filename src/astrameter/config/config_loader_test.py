@@ -584,6 +584,7 @@ def test_read_all_configs_with_power_transform():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [-50.0]
     assert pm.multipliers == [1.05]
@@ -601,6 +602,7 @@ def test_read_all_configs_with_per_phase_transform():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [-10.0, -20.0, -30.0]
     assert pm.multipliers == [1.05, 1.02, 1.03]
@@ -617,6 +619,7 @@ def test_read_all_configs_offset_only():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [10.0]
     assert pm.multipliers == [1.0]
@@ -633,8 +636,24 @@ def test_read_all_configs_zero_multiplier_accepted():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.multipliers == [0.0]
+
+
+def test_read_all_configs_wraps_with_health_tracking_named_by_section():
+    """Every powermeter is wrapped outermost in HealthTrackingPowermeter and
+    labelled with its config section for the MQTT Insights Online sensor."""
+    from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
+
+    config = configparser.ConfigParser()
+    config["SCRIPT_1"] = {"COMMAND": 'echo "100"'}
+
+    powermeters = read_all_powermeter_configs(config)
+    assert len(powermeters) == 1
+    pm, _, _ = powermeters[0]
+    assert isinstance(pm, HealthTrackingPowermeter)
+    assert pm.name == "SCRIPT_1"
 
 
 def test_read_all_configs_no_transform_when_not_configured():
@@ -647,6 +666,7 @@ def test_read_all_configs_no_transform_when_not_configured():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert not isinstance(pm, TransformedPowermeter)
 
 

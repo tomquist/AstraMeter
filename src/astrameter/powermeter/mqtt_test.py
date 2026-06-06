@@ -258,6 +258,55 @@ async def test_value_property_backward_compat():
     assert pm.value == 42.0
 
 
+# --- stream_online health hook (no broker needed) ---
+
+
+def test_stream_online_false_before_connect():
+    pm = _make_pm()
+    # Not connected and no value yet.
+    assert pm.stream_online() is False
+
+
+def test_stream_online_false_when_connected_but_no_value():
+    pm = _make_pm()
+    pm._connected_event.set()
+    assert pm.stream_online() is False
+
+
+def test_stream_online_true_when_connected_and_value():
+    pm = _make_pm()
+    pm._connected_event.set()
+    pm.value = 42.0
+    assert pm.stream_online() is True
+
+
+def test_stream_online_false_when_disconnected_even_with_value():
+    pm = _make_pm()
+    pm.value = 42.0
+    # _connected_event left cleared -> offline despite a cached value.
+    assert pm.stream_online() is False
+
+
+def test_stream_online_multi_topic_stays_true_when_value_unchanged():
+    pm = _make_pm(topic=["a", "b", "c"])
+    pm._connected_event.set()
+    pm.values[0] = 100.0
+    pm.values[1] = 50.0
+    pm.values[2] = 0.0  # idle phase
+    assert pm.stream_online() is True
+    # No further publishes on any topic — cached values persist, still online.
+    assert pm.stream_online() is True
+
+
+def test_stream_online_false_when_a_topic_never_received():
+    pm = _make_pm(topic=["a", "b", "c"])
+    pm._connected_event.set()
+    pm.values[0] = 100.0
+    pm.values[1] = 50.0
+    # values[2] is still None.
+    assert pm.stream_online() is False
+
+
 # ---------------------------------------------------------------------------
 # Integration tests (require mosquitto)
 # ---------------------------------------------------------------------------

@@ -25,7 +25,42 @@ inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
 inline constexpr double SATURATION_REFERENCE_DT = 1.0;
 inline constexpr double SATURATION_LONG_GAP_SECONDS = 30.0;
 
+// Device capabilities — the single source of truth for every device-type
+// decision (mirrors balancer.py device_capabilities). All downstream policy
+// (AC-charge eligibility, the MIN_DC_OUTPUT wake floor) is derived from these.
+struct DeviceCapabilities {
+  bool has_builtin_inverter{false};
+  bool has_ac_input{false};
+  bool has_dc_input{false};
+};
+
+DeviceCapabilities device_capabilities(const std::string &device_type);
+
 bool is_ac_chargeable(const std::string &device_type);
+
+// True iff the battery depends on a sleep-prone external inverter (no built-in
+// inverter and no AC input — the B2500 family). Mirrors _needs_dc_output_floor.
+bool needs_dc_output_floor(const std::string &device_type);
+
+// Absolute net-output target in watts: the single currency of all control
+// logic (mirrors balancer.py NetOutputW). Sign convention, defined once:
+//   +  =  net discharge (export to grid / serve load)
+//   -  =  net charge     (import from grid)
+// A distinct type so a net-output target can never be silently mixed with a
+// grid-meter reading (the relative delta a battery adds to its own output).
+struct NetOutputW {
+  float value{0.0f};
+  explicit NetOutputW(float v = 0.0f) : value(v) {}
+};
+
+// Single boundary between the control currency (NetOutputW, an absolute net
+// output) and the grid-meter reading a battery integrates via
+// new_output = reported + reading. Returns target - reported so the battery
+// lands on the absolute target; positive = grid import (raise net output).
+// Callers phase-split the scalar result (see LoadBalancer::split_by_phase_).
+inline float to_grid_reading(NetOutputW target, float reported) {
+  return target.value - reported;
+}
 
 struct BalancerConfig {
   bool fair_distribution{true};
@@ -41,6 +76,9 @@ struct BalancerConfig {
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
   float efficiency_saturation_threshold{0.4f};
+  // Minimum net discharge (W) to keep an external-inverter DC battery awake.
+  // 0 disables. See issue #425 and balancer.py.
+  float min_dc_output{0.0f};
 
   void clamp();
 };
@@ -82,6 +120,10 @@ struct ConsumerReport {
   // Relative fair-share weight (1.0 = neutral). Mirrors the Python reports
   // dict's "weight" key, set live via the MQTT "Distribution Weight" entity.
   float weight{1.0f};
+  // Per-device MIN_DC_OUTPUT override (W); unset = inherit the global setting.
+  // Mirrors the Python reports dict's "min_dc_output" key. Default-initialized
+  // so aggregate ``ConsumerReport{...}`` init stays warning-clean.
+  std::optional<float> min_dc_output{};
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
@@ -156,6 +198,12 @@ class LoadBalancer {
   std::optional<std::array<float, 3>> compute_probe_target_(
       const std::optional<std::string> &consumer_id, const ReportMap &reports,
       float grid_total, const std::unordered_map<std::string, float> &eff_part);
+
+  float effective_min_dc_output_(const std::optional<std::string> &consumer_id,
+                                 const ReportMap &reports);
+  std::array<float, 3> apply_min_dc_output_(const std::optional<std::string> &consumer_id,
+                                            const ReportMap &reports,
+                                            std::array<float, 3> result);
 
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
                                       const ReportMap &reports);

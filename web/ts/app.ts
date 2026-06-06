@@ -11,6 +11,7 @@ import {
   CT_BASIC,
   CT_ACTIVE,
   CT_BALANCER,
+  CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
   MARSTEK_FIELDS,
@@ -476,6 +477,7 @@ function ctCard(): HTMLElement | null {
     el("div", { class: "field-grid" }, CT_BASIC.map((fl) => fieldControl(fl, f, {}))),
     group("Active control", CT_ACTIVE, true),
     group("Multi-battery balancing", CT_BALANCER),
+    group("DC battery keep-alive", CT_DC_KEEPALIVE),
     group("Efficiency optimization (AC batteries only)", CT_EFFICIENCY),
     group("Saturation handling", CT_SATURATION),
   ]);
