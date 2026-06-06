@@ -95,23 +95,81 @@ SATURATION_REFERENCE_DT = 1.0
 # rather than dosing the EMA with a huge rise or decay step.
 SATURATION_LONG_GAP_SECONDS = 30.0
 
-# Device-type prefixes of the only Marstek battery families that can charge
-# via AC (the Venus lineup).  ``HMG`` covers HMG-*; ``VNS`` covers VNSE3,
-# VNSA, VNSD, and any other Venus-family variant.  Every other reporting
-# battery is assumed DC-coupled (B2500 family, Jupiter, etc.) and is
-# excluded from charge distribution under a grid surplus.  See issue #338.
-AC_CHARGEABLE_DEVICE_PREFIXES: tuple[str, ...] = ("HMG", "VNS")
+# ---------------------------------------------------------------------------
+# Device capabilities — the single source of truth for every device-type
+# decision in the balancer.  A battery is classified from its reported
+# device-type string into three independent capabilities; all downstream
+# policy (AC-charge eligibility, the MIN_DC_OUTPUT wake floor) is derived
+# from these rather than from ad-hoc prefix checks.
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class DeviceCapabilities:
+    """What a battery model can physically do.
+
+    - ``has_builtin_inverter``: the battery produces its own AC output, so it
+      never depends on a separate inverter that could sleep at low DC output.
+    - ``has_ac_input``: the battery can be charged from AC (Venus lineup).
+    - ``has_dc_input``: the battery has a DC (solar) input.
+    """
+
+    has_builtin_inverter: bool
+    has_ac_input: bool
+    has_dc_input: bool
+
+
+def device_capabilities(device_type: str) -> DeviceCapabilities:
+    """Classify *device_type* into its :class:`DeviceCapabilities`.
+
+    Known Marstek families:
+
+    - Venus A/D (``VNSA``/``VNSD``): built-in inverter, AC input, *and* an
+      extra DC input.  Checked before the generic ``VNS`` branch because
+      ``"VNSA".startswith("VNS")``.
+    - Other Venus (``HMG*``, ``VNSE3``, ...): built-in inverter + AC input.
+    - Jupiter (``HMN*``/``HMM*``/``JPLS*``): a DC battery, but with its own
+      built-in inverter — so it does *not* depend on an external inverter.
+    - B2500 family (``HMA*``/``HMJ*``/``HMK*``): DC input feeding a *separate*
+      inverter, with no built-in inverter and no AC input.
+
+    Unknown / future / empty device types are assumed to be modern AC-coupled
+    batteries (built-in inverter + AC input, no separate DC inverter), so they
+    are never floored by MIN_DC_OUTPUT and are treated as AC-chargeable.
+    """
+    dt = (device_type or "").upper()
+    if dt.startswith(("VNSA", "VNSD")):
+        return DeviceCapabilities(True, True, True)
+    if dt.startswith(("HMG", "VNS")):
+        return DeviceCapabilities(True, True, False)
+    if dt.startswith(("HMN", "HMM", "JPLS")):
+        return DeviceCapabilities(True, False, True)
+    if dt.startswith(("HMA", "HMJ", "HMK")):
+        return DeviceCapabilities(False, False, True)
+    return DeviceCapabilities(True, True, False)
 
 
 def _is_ac_chargeable(device_type: str) -> bool:
-    """True iff *device_type* identifies an AC-chargeable Marstek battery.
+    """True iff *device_type* can be charged from AC (the Venus lineup).
 
-    Empty / unknown device types are treated as DC-only — an unknown
-    battery cannot be assumed to accept charge commands.
+    Unrecognized/empty device types are assumed AC-chargeable (see
+    :func:`device_capabilities`).  This is used to exclude DC-only batteries
+    (B2500 family) from charge distribution under a grid surplus — see issue
+    #338.
     """
-    if not device_type:
-        return False
-    return device_type.upper().startswith(AC_CHARGEABLE_DEVICE_PREFIXES)
+    return device_capabilities(device_type).has_ac_input
+
+
+def _needs_dc_output_floor(device_type: str) -> bool:
+    """True iff *device_type* depends on a sleep-prone *external* inverter.
+
+    Such a battery has no built-in inverter and no AC input, so its only way
+    to stay awake is to keep discharging through its DC-fed external inverter.
+    This is exactly the B2500 family (``HMA*``/``HMJ*``/``HMK*``); Jupiter and
+    Venus are excluded because they have a built-in inverter.
+    """
+    caps = device_capabilities(device_type)
+    return not caps.has_ac_input and not caps.has_builtin_inverter
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +194,11 @@ class BalancerConfig:
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
+    # Minimum net discharge (W) to hold an external-inverter DC battery at so
+    # its inverter doesn't switch off at 0 W and sleep.  0 disables.  Only
+    # applied to batteries selected by ``_needs_dc_output_floor`` (B2500
+    # family) unless overridden per-device.  See issue #425.
+    min_dc_output: float = 0
 
     def __post_init__(self) -> None:
         def _clamp(name: str, lo: float, hi: float) -> None:
@@ -156,6 +219,7 @@ class BalancerConfig:
         _clamp("efficiency_rotation_interval", 1, float("inf"))
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
+        _clamp("min_dc_output", 0, float("inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +819,8 @@ class LoadBalancer:
         # Auto-pool reports (exclude manual consumers)
         reports = {cid: r for cid, r in active_reports.items() if cid not in manual}
 
-        return self._compute_auto_target(consumer_id, reports, grid_total, sample_id)
+        result = self._compute_auto_target(consumer_id, reports, grid_total, sample_id)
+        return self._apply_min_dc_output(consumer_id, reports, result)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -838,6 +903,70 @@ class LoadBalancer:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _effective_min_dc_output(self, consumer_id: str | None, reports: dict) -> float:
+        """Per-consumer MIN_DC_OUTPUT floor (W); 0 means no floor.
+
+        An explicit per-device override (``min_dc_output`` in the report) wins
+        for any battery; otherwise the global floor applies only to batteries
+        that depend on a sleep-prone external inverter (``_needs_dc_output_floor``).
+        """
+        report = reports.get(consumer_id, {}) if consumer_id else {}
+        override = report.get("min_dc_output")
+        if override is not None:
+            return max(0.0, float(override))
+        if _needs_dc_output_floor(report.get("device_type", "")):
+            return self._cfg.min_dc_output
+        return 0.0
+
+    def _apply_min_dc_output(
+        self, consumer_id: str | None, reports: dict, result: list[float]
+    ) -> list[float]:
+        """Hold an external-inverter DC battery at ``MIN_DC_OUTPUT`` discharge.
+
+        Wraps the auto-path result so a battery that would otherwise be
+        commanded below the floor (e.g. steered to 0 under surplus) keeps a
+        minimum net discharge — enough to stop its DC-fed inverter sleeping.
+        Only the auto path reaches here; manual/inactive return earlier.
+
+        NOTE: combining this with ``MIN_EFFICIENT_POWER`` rotation is in tension
+        — a unit parked at 0 for efficiency is instead held at the floor.  With
+        ``MIN_DC_OUTPUT >= saturation min_target`` they coexist stably (a parked,
+        empty unit still trips saturation and stays deprioritized while awake).
+        A value below the saturation ``min_target`` would mask saturation for a
+        floored unit (its target never clears the gate) — main.py warns on that.
+        """
+        if not consumer_id or consumer_id not in reports:
+            return result
+        eff_min = self._effective_min_dc_output(consumer_id, reports)
+        if eff_min <= 0:
+            return result
+        report = reports[consumer_id]
+        # Respect an explicit park: distribution_weight=0 means "take no share",
+        # i.e. sit at 0 — don't silently wake it (mirrors manual/inactive).
+        if _report_weight(report) == 0:
+            return result
+        reported = parse_int(report.get("power", 0))
+        # Use the consumer's FULL intended reading: ``_split_by_phase`` spreads
+        # the scalar across phases but preserves the total, so sum(result)
+        # recovers it regardless of phase distribution. ``result[idx]`` alone is
+        # only a phase-apportioned fragment.
+        net_self = reported + sum(result)
+        # Floor whenever the commanded net output is below the floor — including
+        # negative (charge) commands.  A floor-eligible battery has no AC input
+        # and cannot charge, so an all-DC-under-surplus fair-share that commands
+        # a (futile) charge must still be lifted to the minimum discharge,
+        # otherwise the lone-B2500 case (issue #425) would never engage.  An
+        # explicit per-device override on a chargeable battery thus also holds a
+        # minimum discharge — the user opted into that by setting it.
+        if net_self >= eff_min:
+            return result
+        reading = to_grid_reading(NetOutputW(eff_min), reported)
+        phase = (report.get("phase") or "A").upper()
+        out = [0.0, 0.0, 0.0]
+        out[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = reading
+        self._get_consumer(consumer_id).last_target = reading
+        return out
+
     def _steer_to_zero(self, consumer_id: str | None, reports: dict) -> list[float]:
         """Drive a consumer's output to zero (``NetOutputW(0)``)."""
         if consumer_id:
@@ -895,11 +1024,12 @@ class LoadBalancer:
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
 
-        # Exclude DC-only batteries (B2500 family, Jupiter, anything not
-        # in AC_CHARGEABLE_DEVICE_PREFIXES) from charge distribution
-        # whenever the grid is in charge territory.  The base gate is
-        # ``grid_total < 0`` (surplus), but we also extend it to the
-        # exact zero-crossing when an AC-chargeable battery is already
+        # Exclude batteries that can't charge from AC (``not
+        # _is_ac_chargeable(...)`` — the B2500 family and Jupiter; unknown /
+        # empty types are treated as AC-chargeable, see ``device_capabilities``)
+        # from charge distribution whenever the grid is in charge territory.
+        # The base gate is ``grid_total < 0`` (surplus), but we also extend it
+        # to the exact zero-crossing when an AC-chargeable battery is already
         # charging (``power < 0``) — that signals pass-through
         # equilibrium, which happens when a full B2500 is passing its DC
         # solar input through as AC output (+P W) while the Venus

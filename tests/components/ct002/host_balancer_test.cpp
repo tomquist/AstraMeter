@@ -20,6 +20,7 @@ using esphome::ct002::ConsumerModeKind;
 using esphome::ct002::ConsumerReport;
 using esphome::ct002::is_ac_chargeable;
 using esphome::ct002::LoadBalancer;
+using esphome::ct002::needs_dc_output_floor;
 using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
 using esphome::ct002::to_grid_reading;
@@ -55,9 +56,29 @@ TEST(IsAcChargeable, IdentifiesVenusPrefixes) {
   EXPECT_TRUE(is_ac_chargeable("hmg-50"));
   EXPECT_TRUE(is_ac_chargeable("VNSE3"));
   EXPECT_TRUE(is_ac_chargeable("VNSA"));
+  // B2500 family (DC-only, external inverter) is not AC-chargeable.
   EXPECT_FALSE(is_ac_chargeable("HMA-2"));
-  EXPECT_FALSE(is_ac_chargeable("HME-4"));
-  EXPECT_FALSE(is_ac_chargeable(""));
+  EXPECT_FALSE(is_ac_chargeable("HMJ-1"));
+  EXPECT_FALSE(is_ac_chargeable("HMK-1"));
+  // Jupiter (built-in inverter, DC battery) is not AC-chargeable either.
+  EXPECT_FALSE(is_ac_chargeable("HMN-1"));
+  // Unknown/empty types are assumed modern AC-coupled batteries (issue #425
+  // device-capabilities model): the former fail-closed-to-DC default was
+  // intentionally dropped.
+  EXPECT_TRUE(is_ac_chargeable("HME-4"));
+  EXPECT_TRUE(is_ac_chargeable(""));
+}
+
+TEST(NeedsDcOutputFloor, OnlyExternalInverterFamilies) {
+  // B2500 family: no built-in inverter, no AC input -> floor applies.
+  EXPECT_TRUE(needs_dc_output_floor("HMA-2"));
+  EXPECT_TRUE(needs_dc_output_floor("HMJ-1"));
+  EXPECT_TRUE(needs_dc_output_floor("HMK-1"));
+  // Built-in inverter or AC input -> excluded.
+  EXPECT_FALSE(needs_dc_output_floor("HMG-50"));   // Venus
+  EXPECT_FALSE(needs_dc_output_floor("VNSD"));      // Venus D (built-in + DC)
+  EXPECT_FALSE(needs_dc_output_floor("HMN-1"));     // Jupiter
+  EXPECT_FALSE(needs_dc_output_floor(""));          // unknown -> assumed AC
 }
 
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {

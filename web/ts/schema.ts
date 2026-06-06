@@ -690,6 +690,7 @@ export const CT_BALANCER: Field[] = [
   { key: "ERROR_BOOST_MAX", ey: "error_boost_max", label: "Error boost max", help: "Maximum extra gain multiplier. Default 0.5.", type: "number", placeholder: "0.5" },
   { key: "ERROR_REDUCE_THRESHOLD", ey: "error_reduce_threshold", label: "Error reduce threshold (W)", help: "Below this imbalance, gain is scaled down. Default 20.", type: "number", placeholder: "20" },
   { key: "MAX_TARGET_STEP", ey: "max_target_step", label: "Max target step (W)", help: "Hard clamp on per-cycle target change. 0 = off.", type: "number", placeholder: "0" },
+  { key: "MIN_DC_OUTPUT", ey: "min_dc_output", label: "Min DC output (W)", help: "Minimum discharge to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and sleeping under high PV surplus. 0 = off. Only affects DC batteries; recommended >= 20.", type: "number", placeholder: "0" },
 ];
 
 export const CT_EFFICIENCY: Field[] = [

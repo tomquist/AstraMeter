@@ -67,14 +67,17 @@ int main() {
     if (cmd == "cfg") {
       int fair = 1, sat_enabled = 0;
       float min_eff = 0.0f, rot = 900.0f, sat_threshold = 0.4f, sat_alpha = 0.15f,
-            sat_min_target = 20.0f, sat_grace = 90.0f;
+            sat_min_target = 20.0f, sat_grace = 90.0f, min_dc = 0.0f;
       in >> fair >> min_eff >> rot >> sat_threshold >> sat_alpha >> sat_min_target >>
           sat_grace >> sat_enabled;
+      // Optional trailing global MIN_DC_OUTPUT (0 / absent = disabled).
+      in >> min_dc;
       BalancerConfig cfg;
       cfg.fair_distribution = (fair != 0);
       cfg.min_efficient_power = min_eff;
       cfg.efficiency_rotation_interval = rot;
       cfg.efficiency_saturation_threshold = sat_threshold;
+      cfg.min_dc_output = min_dc;
       balancer = std::make_unique<LoadBalancer>(
           cfg, sat_alpha, sat_min_target, /*sat_decay=*/0.995f, sat_grace,
           /*sat_stall=*/60.0f, sat_enabled != 0, []() { return g_clock; }, nullptr);
@@ -92,9 +95,11 @@ int main() {
       ReportMap reports;
       for (int i = 0; i < n; ++i) {
         std::string rc, dev, phase;
-        float power = 0.0f;
-        in >> rc >> dev >> phase >> power;
-        reports[rc] = ConsumerReport{dev, phase, power};
+        float power = 0.0f, md = -1.0f;
+        in >> rc >> dev >> phase >> power >> md;
+        ConsumerReport r{dev, phase, power};
+        if (md >= 0.0f) r.min_dc_output = md;
+        reports[rc] = r;
       }
       const auto out = balancer->compute_target(cid, parse_mode(mode_str, manual), reports,
                                                 grid, {}, {}, {});

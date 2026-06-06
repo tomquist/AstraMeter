@@ -543,7 +543,8 @@ class TestEfficiencyOptimization:
         )
         # Use an AC-chargeable device_type so the efficiency-concentration
         # pipeline under test is not short-circuited by the DC-blind guard
-        # (see issue #338; AC_CHARGEABLE_DEVICE_PREFIXES in balancer.py).
+        # (see issue #338; device_capabilities() / _is_ac_chargeable in
+        # balancer.py).
         device._update_consumer_report("a", "A", 0, device_type="HMG-50")
         device._update_consumer_report("b", "A", 0, device_type="HMG-50")
         out_a = device._compute_smooth_target([-200, 0, 0], "a")

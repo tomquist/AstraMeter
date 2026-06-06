@@ -401,6 +401,7 @@ ReportMap CT002Component::collect_reports_for_balancer_() const {
       r.phase = kv.second.phase;
       r.power = kv.second.power;
       r.weight = kv.second.distribution_weight;
+      r.min_dc_output = kv.second.min_dc_output;
       out[kv.first] = std::move(r);
     }
   }
@@ -565,6 +566,7 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.auto_target = !c.manual_enabled;
   if (c.manual_enabled) snap.manual_target = c.manual_target;
   snap.distribution_weight = c.distribution_weight;
+  snap.min_dc_output = c.min_dc_output;
   snap.poll_interval = c.poll_interval;
   snap.timestamp = c.timestamp;
   snap.grid_power = this->last_grid_power_;
@@ -648,6 +650,14 @@ void CT002Component::set_consumer_distribution_weight(const std::string &consume
   // non-finite or out-of-range values rather than corrupting the split.
   if (!std::isfinite(weight) || weight < 0.0f || weight > 10.0f) return;
   this->get_consumer_(consumer_id).distribution_weight = weight;
+}
+
+void CT002Component::set_consumer_min_dc_output(const std::string &consumer_id,
+                                                float value) {
+  // Per-device MIN_DC_OUTPUT override (W); same 0..1000 range the MQTT handler
+  // enforces. Ignore non-finite / out-of-range values.
+  if (!std::isfinite(value) || value < 0.0f || value > 1000.0f) return;
+  this->get_consumer_(consumer_id).min_dc_output = value;
 }
 
 void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bool auto_target) {

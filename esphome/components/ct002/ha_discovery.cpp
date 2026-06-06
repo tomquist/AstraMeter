@@ -3,6 +3,7 @@
 #include <cctype>
 #include <functional>
 
+#include "balancer.h"
 #include "esphome/components/json/json_util.h"
 
 namespace esphome {
@@ -265,6 +266,27 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     dw["command_topic"] = state_topic + "/distribution_weight/set";
     dw["retain"] = true;
     dw["entity_category"] = "config";
+
+    // Min DC Output number — minimum discharge (W) to keep a DC battery's
+    // external inverter from switching off at 0 W. Only surfaced for batteries
+    // where it has an effect (B2500 family); Venus/Jupiter/unknown don't get it.
+    if (needs_dc_output_floor(device_type)) {
+      JsonObject mdo = components["min_dc_output"].to<JsonObject>();
+      mdo["platform"] = "number";
+      mdo["unique_id"] = uid_prefix + "_min_dc_output";
+      mdo["name"] = "Min DC Output";
+      mdo["unit_of_measurement"] = "W";
+      mdo["device_class"] = "power";
+      mdo["min"] = 0;
+      mdo["max"] = 1000;
+      mdo["step"] = 1;
+      mdo["mode"] = "box";
+      mdo["state_topic"] = state_topic;
+      mdo["value_template"] = "{{ value_json.min_dc_output | default(0) }}";
+      mdo["command_topic"] = state_topic + "/min_dc_output/set";
+      mdo["retain"] = true;
+      mdo["entity_category"] = "config";
+    }
 
     // Device info
     JsonObject device = root["device"].to<JsonObject>();

@@ -12,7 +12,17 @@ namespace ct002 {
 
 namespace {
 
-constexpr const char *AC_CHARGEABLE_PREFIXES[] = {"HMG", "VNS"};
+std::string to_upper(const std::string &s) {
+  std::string up;
+  up.reserve(s.size());
+  for (char c : s) up.push_back(static_cast<char>(std::toupper(c)));
+  return up;
+}
+
+bool starts_with(const std::string &s, const char *prefix) {
+  const size_t plen = std::strlen(prefix);
+  return s.size() >= plen && s.compare(0, plen, prefix) == 0;
+}
 
 template <typename Set>
 Set set_difference(const Set &a, const Set &b) {
@@ -51,16 +61,30 @@ std::string serialize_cache_key(const std::vector<float> &sample_id,
 
 }  // namespace
 
+DeviceCapabilities device_capabilities(const std::string &device_type) {
+  const std::string dt = to_upper(device_type);
+  // Venus A/D: built-in inverter + AC input + extra DC input. Checked before
+  // the generic VNS branch ("VNSA".startswith("VNS")).
+  if (starts_with(dt, "VNSA") || starts_with(dt, "VNSD")) return {true, true, true};
+  // Other Venus (HMG*, VNSE3, ...): built-in inverter + AC input, no DC input.
+  if (starts_with(dt, "HMG") || starts_with(dt, "VNS")) return {true, true, false};
+  // Jupiter: DC battery with a built-in inverter.
+  if (starts_with(dt, "HMN") || starts_with(dt, "HMM") || starts_with(dt, "JPLS"))
+    return {true, false, true};
+  // B2500 family: DC input feeding a SEPARATE inverter (no built-in inverter).
+  if (starts_with(dt, "HMA") || starts_with(dt, "HMJ") || starts_with(dt, "HMK"))
+    return {false, false, true};
+  // Unknown / future / empty: assume a modern AC-coupled battery.
+  return {true, true, false};
+}
+
 bool is_ac_chargeable(const std::string &device_type) {
-  if (device_type.empty()) return false;
-  std::string up;
-  up.reserve(device_type.size());
-  for (char c : device_type) up.push_back(static_cast<char>(std::toupper(c)));
-  for (const char *prefix : AC_CHARGEABLE_PREFIXES) {
-    const size_t plen = std::strlen(prefix);
-    if (up.size() >= plen && up.compare(0, plen, prefix) == 0) return true;
-  }
-  return false;
+  return device_capabilities(device_type).has_ac_input;
+}
+
+bool needs_dc_output_floor(const std::string &device_type) {
+  const DeviceCapabilities caps = device_capabilities(device_type);
+  return !caps.has_ac_input && !caps.has_builtin_inverter;
 }
 
 void BalancerConfig::clamp() {
@@ -79,6 +103,7 @@ void BalancerConfig::clamp() {
   if (efficiency_rotation_interval < 1.0f) efficiency_rotation_interval = 1.0f;
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   clamp_v(efficiency_saturation_threshold, 0.0f, 1.0f);
+  if (min_dc_output < 0.0f) min_dc_output = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -463,6 +488,51 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
   return split_by_phase_(reading, support_reports, &backup_weights);
 }
 
+float LoadBalancer::effective_min_dc_output_(
+    const std::optional<std::string> &consumer_id, const ReportMap &reports) {
+  if (!consumer_id) return 0.0f;
+  auto it = reports.find(*consumer_id);
+  if (it == reports.end()) return 0.0f;
+  const ConsumerReport &report = it->second;
+  if (report.min_dc_output) return std::max(0.0f, *report.min_dc_output);
+  if (needs_dc_output_floor(report.device_type)) return this->cfg_.min_dc_output;
+  return 0.0f;
+}
+
+std::array<float, 3> LoadBalancer::apply_min_dc_output_(
+    const std::optional<std::string> &consumer_id, const ReportMap &reports,
+    std::array<float, 3> result) {
+  // Hold an external-inverter DC battery at MIN_DC_OUTPUT discharge so its
+  // DC-fed inverter doesn't sleep at 0 W. Mirrors balancer.py _apply_min_dc_output.
+  if (!consumer_id) return result;
+  auto it = reports.find(*consumer_id);
+  if (it == reports.end()) return result;
+  const float eff_min = this->effective_min_dc_output_(consumer_id, reports);
+  if (eff_min <= 0.0f) return result;
+  const ConsumerReport &report = it->second;
+  // Respect an explicit park (weight 0): don't silently wake it.
+  if (report.weight == 0.0f) return result;
+  const float reported = report.power;
+  // Use the consumer's FULL intended reading: split_by_phase preserves the
+  // total, so the sum recovers it regardless of phase distribution.
+  const float reading_self = result[0] + result[1] + result[2];
+  const float net_self = reported + reading_self;
+  // Floor whenever the commanded net output is below the floor — including
+  // negative (charge) commands: a floor-eligible battery can't charge, so the
+  // all-DC-under-surplus case (lone B2500, issue #425) must still be lifted.
+  if (net_self >= eff_min) return result;
+  const float reading = to_grid_reading(NetOutputW(eff_min), reported);
+  std::string phase = report.phase.empty() ? "A" : report.phase;
+  for (auto &c : phase) c = static_cast<char>(std::toupper(c));
+  size_t idx = 0;
+  if (phase == "B") idx = 1;
+  else if (phase == "C") idx = 2;
+  std::array<float, 3> out{0.0f, 0.0f, 0.0f};
+  out[idx] = reading;
+  this->get_consumer_(*consumer_id).last_target = reading;
+  return out;
+}
+
 std::array<float, 3> LoadBalancer::steer_to_zero_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports) {
   if (consumer_id) this->get_consumer_(*consumer_id).last_target = 0.0f;
@@ -553,7 +623,9 @@ std::array<float, 3> LoadBalancer::compute_target(
   for (const auto &r : active_reports) {
     if (manual.find(r.first) == manual.end()) auto_reports[r.first] = r.second;
   }
-  return this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id);
+  auto result =
+      this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id);
+  return this->apply_min_dc_output_(consumer_id, auto_reports, result);
 }
 
 // -------------------------------------------------------------------------
