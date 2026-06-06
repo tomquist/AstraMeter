@@ -4,6 +4,7 @@
 
 - **Added** a **Min DC Output** option that keeps a DC battery's inverter (e.g. the Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Set it globally (`MIN_DC_OUTPUT`) or per battery from Home Assistant; off by default ([#425](https://github.com/tomquist/astrameter/issues/425)).
 - **Fixed** a phantom empty "Unnamed Device" that kept reappearing under the MQTT integration in Home Assistant, even after deleting it. AstraMeter now publishes a proper top-level **AstraMeter** device — with **Status**, **Version**, and **Consumer Count** entities — that the meter devices are grouped under ([#421](https://github.com/tomquist/astrameter/issues/421)).
+- **Fixed** batteries drifting or losing their phase reference during a brief power-meter dropout (e.g. a Home Assistant sensor going `unavailable`). The CT002/CT003 emulator now sends a zero adjustment so each battery holds its current output while the meter is down, instead of re-driving control from the last-known reading — which could wind a battery up or feed stale per-phase values into a Venus phase self-diagnosis ([#403](https://github.com/tomquist/astrameter/issues/403)).
 
 
 ## 2.1.1

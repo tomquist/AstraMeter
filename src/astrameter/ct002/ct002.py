@@ -570,8 +570,16 @@ class CT002:
         return response_fields
 
     async def _call_before_send(self, addr, fields, consumer_id):
+        """Invoke the ``before_send`` powermeter hook.
+
+        Returns ``(result, failed)``.  ``failed`` is ``True`` only when the
+        hook *raised* (the powermeter is unavailable); the caller uses it to
+        send a zero-adjustment "hold" instead of re-driving control from a
+        stale cached reading.  A hook that simply returns ``None`` (e.g. no
+        powermeter matches this client) is *not* a failure.
+        """
         if not self.before_send:
-            return None
+            return None, False
         try:
             result = await self.before_send(addr, fields, consumer_id)
         except Exception as exc:
@@ -591,16 +599,16 @@ class CT002:
             ):
                 logger.warning(
                     "CT002 before_send failed (%d in a row) for %s: %s. "
-                    "The CT002 emulator is serving cached meter values "
-                    "until the powermeter recovers; batteries will hold "
-                    "their current output.",
+                    "The CT002 emulator is sending a zero adjustment so "
+                    "batteries hold their current output until the "
+                    "powermeter recovers.",
                     self._before_send_failure_count,
                     addr,
                     exc,
                     exc_info=debug_traceback(),
                 )
                 self._before_send_last_warn = now
-            return None
+            return None, True
         # Success path: if we were in a failure spell, log the recovery.
         if self._before_send_failure_count > 0:
             logger.info(
@@ -609,7 +617,7 @@ class CT002:
             )
             self._before_send_failure_count = 0
             self._before_send_last_warn = 0.0
-        return result
+        return result, False
 
     def _validate_ct_mac(self, request_fields):
         if not self.ct_mac:
@@ -692,13 +700,25 @@ class CT002:
             source_ip=str(addr[0]),
         )
 
-        updated = await self._call_before_send(addr, fields, consumer_id)
+        updated, meter_failed = await self._call_before_send(addr, fields, consumer_id)
         if updated is not None:
             self.set_consumer_value(consumer_id, updated)
 
-        values = self._get_consumer_value(consumer_id)
-        if values is None:
+        if meter_failed:
+            # Powermeter unavailable: do NOT re-drive control from the stale
+            # cached reading.  The CT002 instruction is a delta
+            # (``new_target = current_power + grid_field``), so re-issuing a
+            # delta derived from a frozen reading winds the battery up in
+            # active control, and feeds frozen per-phase values into a phase
+            # self-diagnosis in inspection mode (issue #403).  Send a zero
+            # adjustment instead so each battery holds its current output —
+            # matching the ESPHome component, which uses ``[0, 0, 0]`` when
+            # its sensor ages out (see esphome/components/ct002/ct002.cpp).
             values = [0, 0, 0]
+        else:
+            values = self._get_consumer_value(consumer_id)
+            if values is None:
+                values = [0, 0, 0]
         raw_values = ([*list(values), 0, 0, 0])[:3]
         meter_value = sum(parse_int(v, 0) for v in raw_values)
         is_active = self.is_consumer_active(consumer_id)
