@@ -193,6 +193,16 @@ async def run_device(
         saturation_decay_factor = cfg.getfloat(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
         )
+        min_dc_output = cfg.getfloat(ct_section, "MIN_DC_OUTPUT", fallback=0.0)
+        if 0 < min_dc_output < min_target_for_saturation:
+            logger.warning(
+                "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
+                "floored battery's target never clears the saturation gate, so an "
+                "empty/full unit can't be detected. Consider MIN_DC_OUTPUT >= %d.",
+                min_dc_output,
+                min_target_for_saturation,
+                min_target_for_saturation,
+            )
 
         logger.debug(f"{device_type.upper()} Settings for {device_id}:")
         logger.debug(f"CT Type: {ct_type}")
@@ -247,6 +257,7 @@ async def run_device(
             efficiency_rotation_interval=efficiency_rotation_interval,
             efficiency_fade_alpha=efficiency_fade_alpha,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
+            min_dc_output=min_dc_output,
             saturation_decay_factor=saturation_decay_factor,
             device_id=device_id or "",
             reset_fn=lambda: _reset_all_powermeters(powermeters),
@@ -348,6 +359,9 @@ async def run_device(
         )
         insights.register_distribution_weight_handler(
             device_id or "", device.set_consumer_distribution_weight
+        )
+        insights.register_min_dc_output_handler(
+            device_id or "", device.set_consumer_min_dc_output
         )
         insights.register_rotation_handler(
             device_id or "", device.force_efficiency_rotation

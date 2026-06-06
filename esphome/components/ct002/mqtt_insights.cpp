@@ -240,6 +240,11 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     }
     root["auto_target"] = snap.auto_target;
     root["distribution_weight"] = snap.distribution_weight;
+    if (snap.min_dc_output.has_value()) {
+      root["min_dc_output"] = *snap.min_dc_output;
+    } else {
+      root["min_dc_output"] = nullptr;
+    }
   });
   this->mqtt_->publish(state_topic, state_buf, 0, true);
   this->mqtt_->publish(state_topic + "/availability", "online", 6, 0, true);
@@ -391,6 +396,15 @@ void MqttInsightsComponent::handle_consumer_field_command_(const std::string &co
       this->ct002_->set_consumer_distribution_weight(consumer_id, w);
     } else {
       ESP_LOGW(TAG, "Out-of-range distribution_weight for %s: %.2f", consumer_id.c_str(), w);
+    }
+  } else if (field == "min_dc_output") {
+    float v;
+    if (!parse_float_payload(payload, v)) {
+      ESP_LOGW(TAG, "Invalid min_dc_output for %s: %s", consumer_id.c_str(), payload.c_str());
+    } else if (std::isfinite(v) && v >= 0.0f && v <= 1000.0f) {
+      this->ct002_->set_consumer_min_dc_output(consumer_id, v);
+    } else {
+      ESP_LOGW(TAG, "Out-of-range min_dc_output for %s: %.1f", consumer_id.c_str(), v);
     }
   }
 }

@@ -79,6 +79,15 @@ THROTTLE_INTERVAL = 0
 ## Hard clamp on target change relative to current battery output (W). 0 disables.
 #MAX_TARGET_STEP = 0
 
+## --- DC battery keep-alive ---
+## Applies per battery (independent of balancing — also relevant with a single
+## battery). Minimum discharge (W) to keep a DC battery (e.g. Marstek B2500) from
+## switching its inverter off at 0 W and falling asleep under high PV surplus.
+## Only affects DC-only batteries that have no inverter of their own (Venus and
+## Jupiter are unaffected); 0 disables (default). Can also be set per battery from
+## Home Assistant. Recommended >= 20.
+#MIN_DC_OUTPUT = 0
+
 ## --- Saturation detection (full/empty battery handling) ---
 ## Track how well each battery follows its target. When a battery can't deliver
 ## (full or empty), its share is reduced and redistributed to others.

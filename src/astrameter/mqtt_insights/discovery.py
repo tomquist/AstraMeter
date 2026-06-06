@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from astrameter.ct002.balancer import _needs_dc_output_floor
 from astrameter.version_info import get_git_commit_sha
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -213,6 +214,28 @@ def build_ct002_consumer_discovery(
         "retain": True,
         "entity_category": "config",
     }
+
+    # Min DC Output number — minimum discharge (W) to keep a DC battery's
+    # external inverter from switching off at 0 W.  Only surfaced for batteries
+    # where it has an effect (no built-in inverter, no AC input — the B2500
+    # family); Venus/Jupiter/unknown types don't get this entity.
+    if _needs_dc_output_floor(device_type):
+        components["min_dc_output"] = {
+            "platform": "number",
+            "unique_id": f"{uid_prefix}_min_dc_output",
+            "name": "Min DC Output",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0,
+            "max": 1000,
+            "step": 1,
+            "mode": "box",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.min_dc_output | default(0) }}",
+            "command_topic": f"{state_topic}/min_dc_output/set",
+            "retain": True,
+            "entity_category": "config",
+        }
 
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
 

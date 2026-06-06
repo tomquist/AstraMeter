@@ -281,6 +281,15 @@ CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
 - **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
   relative to its current output. A hard clamp on per-cycle change.
 
+*DC battery keep-alive — applies to each DC-only battery on its own (also with a
+single battery, independent of balancing):*
+- **MIN_DC_OUTPUT** (default 0 = disabled) — Minimum discharge in watts to keep a DC
+  battery's inverter from switching off at 0 W and falling asleep under high PV
+  surplus (a known behaviour of the Marstek B2500). Applied individually to each
+  DC-only battery that has no inverter of its own; AC batteries (Venus) and Jupiter
+  are unaffected. Can also be set per battery from Home Assistant (see **Min DC
+  Output** below). A value of at least 20 W is recommended.
+
 *Battery efficiency optimization — concentrating power on fewer batteries,
 probing handoffs, and swapping away from ones that cannot follow:*
 
@@ -571,6 +580,10 @@ live from Home Assistant:
   proportion between batteries matters; `0` parks a battery at 0 W while
   leaving it in the pool. Tune it while watching the batteries — the change
   takes effect on the next control cycle.
+- **Min DC Output** — minimum discharge in watts to keep this battery's inverter
+  from switching off at 0 W and falling asleep (see **MIN_DC_OUTPUT** above). Only
+  shown for DC batteries where it has an effect (e.g. the Marstek B2500); overrides
+  the global setting for that battery.
 
 Each of these controls publishes its set-command **retained**, so Home
 Assistant restores your values across an AstraMeter restart without any extra

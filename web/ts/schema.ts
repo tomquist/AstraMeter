@@ -692,6 +692,12 @@ export const CT_BALANCER: Field[] = [
   { key: "MAX_TARGET_STEP", ey: "max_target_step", label: "Max target step (W)", help: "Hard clamp on per-cycle target change. 0 = off.", type: "number", placeholder: "0" },
 ];
 
+// Applies to each DC-only battery individually (also with a single battery,
+// independent of balancing). The ESPHome key lives under the `balancer:` block.
+export const CT_DC_KEEPALIVE: Field[] = [
+  { key: "MIN_DC_OUTPUT", ey: "min_dc_output", label: "Min DC output (W)", help: "Minimum discharge to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and sleeping under high PV surplus. Applied per DC-only battery; AC batteries (Venus) and Jupiter are unaffected. 0 = off; recommended >= 20.", type: "number", placeholder: "0" },
+];
+
 export const CT_EFFICIENCY: Field[] = [
   { key: "MIN_EFFICIENT_POWER", ey: "min_efficient_power", label: "Min efficient power (W)", help: "Concentrate small loads on fewer batteries so each stays efficient. 0 = off. Not recommended for DC batteries.", type: "number", placeholder: "0" },
   { key: "EFFICIENCY_ROTATION_INTERVAL", ey: "efficiency_rotation_interval", label: "Rotation interval (seconds)", help: "How often priority rotates between batteries. Default 900 (min 10).", type: "number", placeholder: "900" },

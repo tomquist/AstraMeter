@@ -148,6 +148,37 @@ def test_ct002_consumer_discovery_structure():
     assert weight["max"] == 10
     assert weight["entity_category"] == "config"
 
+    # Min DC Output number entity — present for the B2500 family (HMJ-2).
+    min_dc = comps["min_dc_output"]
+    assert min_dc["platform"] == "number"
+    assert min_dc["command_topic"].endswith("/min_dc_output/set")
+    assert min_dc["retain"] is True
+    assert min_dc["min"] == 0
+    assert min_dc["max"] == 1000
+    assert min_dc["unit_of_measurement"] == "W"
+    assert min_dc["entity_category"] == "config"
+
+
+def test_min_dc_output_entity_only_for_external_inverter_types():
+    """The Min DC Output number is gated on the device-capabilities classifier."""
+
+    def _components(device_type: str) -> dict:
+        _, payload = build_ct002_consumer_discovery(
+            "astrameter",
+            "dev1",
+            "aabbccddeeff",
+            "homeassistant",
+            device_type=device_type,
+        )
+        return payload["components"]
+
+    # External-inverter DC families get the entity.
+    for dt in ("HMJ-1", "HMA-2", "HMK-1"):
+        assert "min_dc_output" in _components(dt), dt
+    # Venus / Jupiter / unknown do not.
+    for dt in ("HMG-50", "VNSD", "HMN-1", "UNKNOWN", ""):
+        assert "min_dc_output" not in _components(dt), dt
+
 
 def test_ct002_consumer_discovery_no_device_type():
     """Name omits device_type when empty."""
@@ -615,6 +646,7 @@ SAMPLE_CT002_DATA = {
     "manual_target": None,
     "auto_target": True,
     "distribution_weight": 1.5,
+    "min_dc_output": 25.0,
     "smooth_target": 500.0,
     "active_control": True,
     "consumer_count": 2,
@@ -655,6 +687,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["active"] is True
         assert payload["poll_interval"] == 5.0
         assert payload["distribution_weight"] == 1.5
+        assert payload["min_dc_output"] == 25.0
         assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
         await service.stop()
@@ -999,12 +1032,22 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service.register_distribution_weight_handler(
         "dev1", lambda cid, v: calls.__setitem__("weight", v)
     )
+    service.register_min_dc_output_handler(
+        "dev1", lambda cid, v: calls.__setitem__("min_dc", v)
+    )
 
     service._handle_consumer_field_command("dev1", "c1", "active", "false")
     service._handle_consumer_field_command("dev1", "c1", "auto_target", "true")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "250")
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "2.5")
-    assert calls == {"active": False, "auto": True, "manual": 250.0, "weight": 2.5}
+    service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "25")
+    assert calls == {
+        "active": False,
+        "auto": True,
+        "manual": 250.0,
+        "weight": 2.5,
+        "min_dc": 25.0,
+    }
 
     # 0.0 is a valid weight (battery takes no share).
     calls.clear()
@@ -1016,6 +1059,8 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "11")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
     service._handle_consumer_field_command("dev1", "c1", "active", "maybe")
+    service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "-5")
+    service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "2000")
     # An empty (cleared) retained payload is ignored silently.
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "")
     assert calls == {}
