@@ -34,6 +34,7 @@ Powermeters](../README.md#multiple-powermeters) are documented in the main
 - [HomeWizard](#homewizard)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway)
 - [SMA Energy Meter](#sma-energy-meter)
+- [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
 - [Script](#script)
 - [SML](#sml)
 
@@ -411,6 +412,30 @@ SERIAL_NUMBER = 0
 # INTERFACE = 192.168.1.10
 # THROTTLE_INTERVAL = 0
 ```
+
+## FRITZ!Smart Energy 250
+
+Reads grid power from an [AVM FRITZ!Smart Energy 250](https://fritz.com/en/products/fritz-smart-energy-250-20003088) smart-meter read head. The read head pairs with a FRITZ!Box over DECT and clips onto a digital electricity meter; AstraMeter polls the FRITZ!Box's [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf) (`getdevicelistinfos`) for the current reading.
+
+```ini
+[FRITZ]
+HOST = fritz.box
+USER = smarthome
+PASSWORD = your-fritzbox-password
+AIN = 12345 0123456
+# Reach the box over HTTPS (default False = http); FRITZ!Box certs are self-signed
+# HTTPS = False
+# VERIFY_SSL = True
+# TIMEOUT = 10.0
+# The read head updates every ~2 min on battery, so don't poll faster than that
+THROTTLE_INTERVAL = 2
+```
+
+**Authentication.** Create a FRITZ!Box user with the **Smart Home** permission under *Home Network → FRITZ!Box Users* and put its name/password in `USER`/`PASSWORD`. AstraMeter logs in through `login_sid.lua` (supporting both the PBKDF2 and legacy MD5 challenge) and reuses the session, re-authenticating automatically if the box expires it.
+
+**AIN.** Find the AIN under *Home Network → SmartHome* (open the device's detail/edit view). The read head exposes two sub-units under that base AIN: `-1` (*Strombezug* / grid import) and `-2` (*Einspeisung* / feed-in). Both report the **signed** instantaneous power (positive = import, negative = feed-in), so AstraMeter reads the `-1` branch as net grid power and appends `-1` automatically when no suffix is given. Spaces in the AIN are optional.
+
+**Update rate.** The read head reports about every 2 minutes on battery, speeding up to ~10 s when powered over USB. Set `THROTTLE_INTERVAL` so AstraMeter doesn't poll the box faster than it gets fresh data.
 
 ## Script
 

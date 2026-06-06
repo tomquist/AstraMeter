@@ -365,6 +365,12 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         PORT={"type": "integer"},
         SERIAL_NUMBER={"type": "integer"},
     ),
+    "FRITZ": _pm(
+        PASSWORD={"type": "password"},
+        HTTPS={"type": "boolean"},
+        VERIFY_SSL={"type": "boolean"},
+        TIMEOUT={"type": "float"},
+    ),
     "SCRIPT": _pm(),
     "SML": _pm(),
     "MQTT_INSIGHTS": {

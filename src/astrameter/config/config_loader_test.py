@@ -10,6 +10,7 @@ from astrameter.config.config_loader import (
     create_client_filter,
     create_emlog_powermeter,
     create_esphome_powermeter,
+    create_fritz_powermeter,
     create_homeassistant_powermeter,
     create_homewizard_powermeter,
     create_iobroker_powermeter,
@@ -464,6 +465,20 @@ def test_create_homewizard_powermeter():
     except Exception as e:
         if "Connection" not in str(e) and "timed out" not in str(e):
             raise
+
+
+def test_create_fritz_powermeter():
+    """Test FRITZ!Smart Energy powermeter creation and AIN suffix defaulting."""
+    config = configparser.ConfigParser()
+    config["FRITZ"] = {
+        "HOST": "fritz.box",
+        "USER": "smarthome",
+        "PASSWORD": "secret",
+        "AIN": "12345 0123456",
+    }
+    pm = create_fritz_powermeter("FRITZ", config)
+    assert pm._base_url == "http://fritz.box"
+    assert pm._ain == "123450123456-1"
 
 
 def test_create_sml_powermeter():

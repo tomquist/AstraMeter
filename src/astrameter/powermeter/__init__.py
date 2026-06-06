@@ -3,6 +3,7 @@ from .base import Powermeter
 from .emlog import Emlog
 from .envoy import Envoy
 from .esphome import ESPHome
+from .fritz import FritzSmartEnergy
 from .homeassistant import HomeAssistant
 from .homewizard import HomeWizardPowermeter
 from .iobroker import IoBroker
@@ -33,6 +34,7 @@ __all__ = [
     "ESPHome",
     "Emlog",
     "Envoy",
+    "FritzSmartEnergy",
     "HampelPowermeter",
     "HomeAssistant",
     "HomeWizardPowermeter",

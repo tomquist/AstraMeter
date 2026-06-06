@@ -15,6 +15,7 @@ from astrameter.powermeter import (
     Emlog,
     Envoy,
     ESPHome,
+    FritzSmartEnergy,
     HomeAssistant,
     HomeWizardPowermeter,
     IoBroker,
@@ -62,6 +63,7 @@ TQ_EM_SECTION = "TQ_EM"
 HOMEWIZARD_SECTION = "HOMEWIZARD"
 ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
+FRITZ_SECTION = "FRITZ"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
 
@@ -389,6 +391,8 @@ def create_powermeter(
         return create_envoy_powermeter(section, config)
     elif section.startswith(SMA_ENERGY_METER_SECTION):
         return create_sma_energy_meter_powermeter(section, config)
+    elif section.startswith(FRITZ_SECTION):
+        return create_fritz_powermeter(section, config)
     elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
         return create_mqtt_powermeter(section, config)
     else:
@@ -691,6 +695,20 @@ def create_sma_energy_meter_powermeter(
         config.getint(section, "PORT", fallback=9522),
         config.getint(section, "SERIAL_NUMBER", fallback=0),
         config.get(section, "INTERFACE", fallback=""),
+    )
+
+
+def create_fritz_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    return FritzSmartEnergy(
+        config.get(section, "HOST", fallback="fritz.box"),
+        config.get(section, "USER", fallback=""),
+        config.get(section, "PASSWORD", fallback=""),
+        config.get(section, "AIN", fallback=""),
+        use_tls=config.getboolean(section, "HTTPS", fallback=False),
+        verify_ssl=config.getboolean(section, "VERIFY_SSL", fallback=True),
+        timeout=config.getfloat(section, "TIMEOUT", fallback=10.0),
     )
 
 

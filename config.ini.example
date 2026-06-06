@@ -349,6 +349,27 @@ THROTTLE_INTERVAL = 0
 ## Per-powermeter throttling override (optional)
 #THROTTLE_INTERVAL = 0
 
+#[FRITZ]
+## AVM FRITZ!Smart Energy 250 smart-meter read head, via the FRITZ!Box
+## AHA-HTTP-Interface (getdevicelistinfos). The read head pairs with the
+## FRITZ!Box over DECT; AstraMeter polls the box for its current power.
+#HOST = fritz.box
+## A FRITZ!Box user with Smart Home permission (Home Network > FRITZ!Box Users).
+#USER = smarthome
+#PASSWORD = your-fritzbox-password
+## AIN of the read head as shown under Home Network > SmartHome (with or without
+## the blank). The signed grid-import (-1) branch is read by default; append
+## -1 (Strombezug) or -2 (Einspeisung) explicitly to pick a branch.
+#AIN = 12345 0123456
+## Reach the FRITZ!Box over HTTPS (default False = http). Self-signed certs are
+## common, so set VERIFY_SSL = False if HTTPS fails verification.
+#HTTPS = False
+#VERIFY_SSL = True
+#TIMEOUT = 10.0
+## The read head updates every ~2 min on battery (10 s on USB power), so
+## throttling avoids polling the box faster than it has new data.
+#THROTTLE_INTERVAL = 2
+
 #[SCRIPT]
 #COMMAND = /path/to/your/script.sh
 ## Per-powermeter throttling override (optional)
