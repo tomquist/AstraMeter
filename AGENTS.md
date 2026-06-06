@@ -1,5 +1,7 @@
 # Agent notes
 
+Keep this file current: whenever a change makes anything documented here wrong or incomplete — the dev/test commands, the parity rules, the powermeter checklist, or any other guidance below — update `AGENTS.md` in the same change so the next agent inherits accurate notes.
+
 Resolved versions live in **`uv.lock`**. Install dev dependencies the same way CI does:
 
 ```bash
@@ -44,5 +46,3 @@ config loader, web editor, config generator, and both doc sets stay in sync
 6. **ESPHome docs** — Even though there's no C++ port, document how to read the *same source* on an ESP32 in `docs/esphome-powermeters.md`: a tier section (🟢 native / 🔵 generic HTTP / 🟠 alternate via HA/Modbus/MQTT / 🔴 not yet) **and** its entry in the Contents legend. Keep it consistent with the generator's `esphome` spec from step 5.
 7. **Examples, Python docs & changelog** — Add a commented example to `config.ini.example`, a subsection **and** Contents entry in `docs/powermeters.md`, the meter to the supported-source list in `README.md`, plus one **`## Next`** `CHANGELOG.md` bullet (add once, then update that bullet on follow-up iterations if needed—see **Changelog** above).
 8. **Tests** — Add `src/astrameter/powermeter/<module>_test.py` and a `create_*_powermeter` factory test in `src/astrameter/config/config_loader_test.py`; run the commands above (and `cd web && npm run check`) before finishing.
-
-Keep this checklist itself current: if you add, remove, or relocate a place that powermeters wire into (a new registry, doc set, or generator), update the steps above in the same change so the next person inherits an accurate list.
