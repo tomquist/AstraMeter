@@ -249,6 +249,10 @@ class HomeAssistant(Powermeter):
                 logger.error(
                     f"Home Assistant subscribe_entities failed: {msg.get('error')}"
                 )
+                # No live stream after a failed subscription — clear so a
+                # REST-seeded snapshot can't keep stream_online() reporting
+                # True off stale values.
+                self._connected = False
         elif msg_type == "event":
             ev = msg.get("event")
             if isinstance(ev, dict):

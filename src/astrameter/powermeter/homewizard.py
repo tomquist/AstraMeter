@@ -95,6 +95,9 @@ class HomeWizardPowermeter(Powermeter):
         self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def stop(self) -> None:
+        # Clear before cancelling: the ws_loop re-raises CancelledError before
+        # its own reset runs, so stream_online() would otherwise stay True.
+        self._connected = False
         if self._ws_task:
             self._ws_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

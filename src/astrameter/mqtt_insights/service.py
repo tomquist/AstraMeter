@@ -888,7 +888,16 @@ class MqttInsightsService:
             await asyncio.sleep(interval)
 
     async def _powermeter_online(self, pm: Powermeter) -> bool:
-        stream = pm.stream_online()
+        try:
+            stream = pm.stream_online()
+        except Exception:
+            # A single meter's health hook must never tear down the gather
+            # (which would force a full MQTT reconnect for every device).
+            logger.exception(
+                "Powermeter health: stream_online() failed for %s",
+                getattr(pm, "name", "") or pm.__class__.__name__,
+            )
+            return False
         if stream is not None:
             return stream
         last_attempt = getattr(pm, "last_attempt", None)

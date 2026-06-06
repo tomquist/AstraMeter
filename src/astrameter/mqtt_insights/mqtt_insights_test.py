@@ -674,6 +674,21 @@ async def test_powermeter_online_push_reports_stream_state():
     assert await service._powermeter_online(_PushMeter(False)) is False
 
 
+async def test_powermeter_online_push_exception_reports_offline():
+    """A meter whose stream_online() raises must report offline, not crash the
+    health loop (which would tear down the gather and force a reconnect)."""
+
+    class _BrokenPushMeter(Powermeter):
+        def stream_online(self) -> bool | None:
+            raise RuntimeError("boom")
+
+        async def get_powermeter_watts(self) -> list[float]:
+            raise AssertionError("must not be probed after stream_online raised")
+
+    service = _health_service()
+    assert await service._powermeter_online(_BrokenPushMeter()) is False
+
+
 async def test_powermeter_online_pull_reuses_recent_control_read():
     """A pull meter read by the control loop within the idle window is reused
     without issuing a probe."""
