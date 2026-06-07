@@ -1,6 +1,7 @@
 {
   "domain": "astrameter",
   "name": "AstraMeter",
+  "after_dependencies": ["mqtt"],
   "codeowners": ["@tomquist"],
   "config_flow": true,
   "documentation": "https://github.com/tomquist/astrameter",

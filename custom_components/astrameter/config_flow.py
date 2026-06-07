@@ -50,6 +50,13 @@ class AstraMeterConfigFlow(ConfigFlow, domain=const.DOMAIN):
                 const.CONF_UDP_PORT: port,
                 const.CONF_DEVICE_ID: f"{device_type}_{port}",
             }
+            # Optional Marstek cloud credentials (CT002/CT003 only) for managed-CT
+            # registration + the Hame Relay MQTT responder; ignored for Shelly.
+            mailbox = (user_input.get(const.CONF_MARSTEK_MAILBOX) or "").strip()
+            password = user_input.get(const.CONF_MARSTEK_PASSWORD) or ""
+            if mailbox and password and device_type in const.CT002_DEVICE_TYPES:
+                self._pending[const.CONF_MARSTEK_MAILBOX] = mailbox
+                self._pending[const.CONF_MARSTEK_PASSWORD] = password
             if user_input.get(const.CONF_PAIR_MODE):
                 return await self.async_step_pair()
             entities = user_input.get(const.CONF_GRID_ENTITIES, [])
@@ -83,6 +90,10 @@ class AstraMeterConfigFlow(ConfigFlow, domain=const.DOMAIN):
                 vol.Optional(
                     const.CONF_PAIR_MODE, default=False
                 ): selector.BooleanSelector(),
+                vol.Optional(const.CONF_MARSTEK_MAILBOX): selector.TextSelector(),
+                vol.Optional(const.CONF_MARSTEK_PASSWORD): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
@@ -167,10 +178,12 @@ class AstraMeterOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
         opts = self.config_entry.options
+
+        if user_input is not None:
+            # Merge over existing options so keys not shown in this form
+            # (advanced filter/PID knobs, etc.) are preserved on save.
+            return self.async_create_entry(title="", data={**opts, **user_input})
 
         def _num(**kw: Any) -> Any:
             return selector.NumberSelector(

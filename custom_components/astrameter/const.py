@@ -24,6 +24,16 @@ CONF_UDP_PORT = "udp_port"
 CONF_DEVICE_ID = "device_id"
 CONF_CT_TYPE = "ct_type"
 CONF_CT_MAC = "ct_mac"
+# Marstek cloud account (one-time managed-CT registration, CT002/CT003 only).
+CONF_MARSTEK_MAILBOX = "marstek_mailbox"
+CONF_MARSTEK_PASSWORD = "marstek_password"  # config key name, not a credential
+CONF_MARSTEK_BASE_URL = "marstek_base_url"
+# Populated from the registration result; reused on reload so credentials are
+# only needed once and the MQTT responder can route Marstek-app traffic.
+CONF_MARSTEK_MAC = "marstek_mac"
+CONF_MARSTEK_VER = "marstek_ver"
+
+DEFAULT_MARSTEK_BASE_URL = "https://eu.hamedata.com"
 
 # Device types this integration can emulate.
 DEVICE_TYPE_CT002 = "ct002"

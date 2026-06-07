@@ -95,10 +95,17 @@ through the UI.
    install **AstraMeter** and restart Home Assistant.
 2. Go to **Settings → Devices & Services → Add Integration → AstraMeter**, pick
    the device type to emulate (CT002/CT003 or a Shelly variant) and the Home
-   Assistant sensor(s) that report your grid power (a single sensor, three for a
-   3-phase setup, or an import/export pair to subtract).
+   Assistant power sensor(s) that report your grid power (a single sensor, three
+   for a 3-phase setup, or an import/export pair to subtract).
 3. Point your Marstek battery at Home Assistant's IP on the device's UDP port
    (12345 for CT002/CT003), exactly as with the add-on.
+
+For **CT002/CT003** you can optionally enter your **Marstek account** in the
+config flow. AstraMeter then registers the emulated CT in your Marstek account so
+you can select it in the Marstek app (credentials are only needed once). If an
+**MQTT broker is configured in Home Assistant**, AstraMeter also answers the
+Marstek app's MQTT polls so [Hame Relay](https://github.com/tomquist/hame-relay)
+can forward the data to the cloud — no separate broker setup required.
 
 To follow pre-release builds, enable **"Show beta versions"** for the repository
 in HACS.

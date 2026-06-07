@@ -8,7 +8,12 @@
           "device_type": "Device type",
           "udp_port": "UDP port (CT002/CT003)",
           "grid_entities": "Grid power sensor(s)",
-          "pair_mode": "Subtract an import/export entity pair instead"
+          "pair_mode": "Subtract an import/export entity pair instead",
+          "marstek_mailbox": "Marstek account email (CT002/CT003, optional)",
+          "marstek_password": "Marstek account password (CT002/CT003, optional)"
+        },
+        "data_description": {
+          "marstek_mailbox": "Provide your Marstek app login to register the emulated CT in your account and, if an MQTT broker is configured in Home Assistant, answer Marstek-app polls so Hame Relay can forward data to the cloud. Only needed once; leave blank to skip."
         }
       },
       "pair": {

@@ -47,6 +47,7 @@ class AstraMeterRuntime:
         self._health_pm: Powermeter | None = None
         self._device: Any = None
         self._wait_task: asyncio.Task | None = None
+        self._responder: Any = None  # MarstekResponder when wired
         self._lock = asyncio.Lock()
         # (device_id, consumer_id) -> latest event data (or None if removed)
         self.consumer_state: dict[tuple[str, str], dict[str, Any] | None] = {}
@@ -110,8 +111,15 @@ class AstraMeterRuntime:
         self._wait_task = self.entry.async_create_background_task(
             self.hass, self._device.wait(), name=f"astrameter_{self.entry.entry_id}"
         )
+        await self._async_start_marstek()
 
     async def async_stop(self) -> None:
+        if self._responder is not None:
+            try:
+                await self._responder.async_stop()
+            except Exception:
+                logger.debug("AstraMeter: responder stop failed", exc_info=True)
+            self._responder = None
         if self._wait_task is not None:
             self._wait_task.cancel()
             self._wait_task = None
@@ -125,6 +133,76 @@ class AstraMeterRuntime:
                 await self._pm.stop()
             except Exception:
                 logger.debug("AstraMeter: powermeter stop failed", exc_info=True)
+
+    async def _async_start_marstek(self) -> None:
+        """Register the managed CT in Marstek cloud (once) and run the MQTT
+        responder so Hame Relay can forward data. CT002/CT003 only; no-op when
+        no credentials are configured."""
+        if self.device_type not in const.CT002_DEVICE_TYPES:
+            return
+        data = self.entry.data
+        mailbox = data.get(const.CONF_MARSTEK_MAILBOX, "")
+        password = data.get(const.CONF_MARSTEK_PASSWORD, "")
+        mac = data.get(const.CONF_MARSTEK_MAC, "")
+        ver = data.get(const.CONF_MARSTEK_VER)
+
+        from .marstek import MarstekResponder, async_register_managed_ct
+
+        if mailbox and password:
+            # Re-register on every start (idempotent: the API reuses an existing
+            # managed CT) so the MAC stays valid; persist it so the credentials
+            # are only strictly needed the first time.
+            result = await async_register_managed_ct(
+                self.hass,
+                self.device_type,
+                mailbox,
+                password,
+                data.get(const.CONF_MARSTEK_BASE_URL, const.DEFAULT_MARSTEK_BASE_URL),
+            )
+            if result is not None:
+                mac, ver = result
+                if mac != data.get(const.CONF_MARSTEK_MAC) or ver != data.get(
+                    const.CONF_MARSTEK_VER
+                ):
+                    self.hass.config_entries.async_update_entry(
+                        self.entry,
+                        data={
+                            **data,
+                            const.CONF_MARSTEK_MAC: mac,
+                            const.CONF_MARSTEK_VER: ver,
+                        },
+                    )
+
+        if not mac:
+            return
+
+        from astrameter.mqtt_insights.marstek_mqtt import format_cd4_slave_csv
+
+        device = self._device
+
+        async def _get_values() -> list[float]:
+            pm = self._pm
+            if pm is None:
+                return [0.0, 0.0, 0.0]
+            with contextlib.suppress(TimeoutError):
+                await pm.wait_for_next_message(timeout=2)
+            vs = await pm.get_powermeter_watts_raw()
+            return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
+
+        responder = MarstekResponder(
+            self.hass,
+            ct_type=device.ct_type,
+            mac=mac,
+            ver_v=int(ver) if ver is not None else 0,
+            wifi_rssi=device.wifi_rssi,
+            get_values=_get_values,
+            get_connected_slave_count=device.reporting_consumer_count,
+            get_cd4_slave_csv=lambda: format_cd4_slave_csv(
+                device.reporting_consumer_rows()
+            ),
+        )
+        if await responder.async_start():
+            self._responder = responder
 
     def apply_filter_options(self) -> None:
         """Hot-swap the wrapper chain in place (filter-only option change)."""

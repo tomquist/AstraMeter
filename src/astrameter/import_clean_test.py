@@ -24,6 +24,9 @@ _INTEGRATION_IMPORTS = [
     "astrameter.config.logger",
     "astrameter.ct002.ct002",
     "astrameter.shelly.shelly",
+    # The native integration's Marstek MQTT responder reuses these pure wire-format
+    # helpers; they must stay free of the aiomqtt-backed ``.service`` module.
+    "astrameter.mqtt_insights.marstek_mqtt",
 ]
 
 # Heavy/optional backend deps that must NOT be pulled in.
