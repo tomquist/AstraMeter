@@ -68,9 +68,7 @@ def stage_integration(staging: Path, version: str) -> None:
     manifest_path = staging / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
 def build_zip(staging: Path, output: Path) -> None:
@@ -83,7 +81,9 @@ def build_zip(staging: Path, output: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", default=None, help="Version to stamp (default: pyproject)")
+    parser.add_argument(
+        "--version", default=None, help="Version to stamp (default: pyproject)"
+    )
     parser.add_argument(
         "--output",
         default=str(REPO_ROOT / "dist" / "astrameter.zip"),
