@@ -83,7 +83,7 @@ class ShellyBatterySimulator:
         self._transport.sendto(json.dumps(req).encode(), (self._host, self._port))
         try:
             data = await asyncio.wait_for(self._protocol.pending, timeout=timeout)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             return None
         return json.loads(data.decode()).get("result", {}).get("total_act_power")
 
@@ -142,7 +142,7 @@ async def test_shelly_e2e_entities(hass: HomeAssistant, socket_enabled) -> None:
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.state.recoverable is False or entry.state.name == "LOADED"
+    assert entry.state.name == "LOADED"
 
     # Shelly device types bind a fixed per-model UDP port (real Shelly meters
     # use fixed ports, so CONF_UDP_PORT is ignored for them) — poll the port the

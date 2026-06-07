@@ -90,7 +90,7 @@ async def test_ct002_e2e_entities_and_control(
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.state.recoverable is False or entry.state.name == "LOADED"
+    assert entry.state.name == "LOADED"
 
     battery = BatterySimulator(
         mac="AABBCCDDEEFF",
