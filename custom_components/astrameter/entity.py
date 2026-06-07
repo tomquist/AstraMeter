@@ -60,8 +60,11 @@ def ct002_consumer_device_info(
     if re.fullmatch(r"[0-9a-f]{12}", mac_slug):
         bt = ":".join(mac_slug[i : i + 2] for i in range(0, 12, 2)).upper()
         connections.add(("bluetooth", bt))
-    if data.get("ct_mac"):
-        connections.add(("mac", str(data["ct_mac"])))
+    # NB: ``ct_mac`` is the CT clamp's MAC, shared by *every* battery reporting
+    # through this CT — using it as a device connection makes HA merge all those
+    # batteries into one device. Only the battery's own identifiers (its MAC,
+    # above, and its IP) belong here. The MQTT discovery path uses an ARP-resolved
+    # per-battery ``network_mac`` for the ("mac", …) connection instead.
     if data.get("battery_ip"):
         connections.add(("ip", str(data["battery_ip"])))
     name = (

@@ -25,10 +25,25 @@
         }
       },
       "reconfigure": {
-        "title": "Reconfigure grid source",
-        "description": "Change which Home Assistant sensor(s) report grid power. The device type and UDP port stay the same.",
+        "title": "Reconfigure AstraMeter",
+        "description": "Change the grid source and, for CT002/CT003, the Marstek account credentials. The device type and UDP port stay the same. Enable pairing to subtract an import/export pair instead of using a single grid sensor.",
         "data": {
-          "grid_entities": "Grid power sensor(s)"
+          "grid_entities": "Grid power sensor(s)",
+          "pair_mode": "Subtract an import/export entity pair instead",
+          "marstek_mailbox": "Marstek account email (CT002/CT003, optional)",
+          "marstek_password": "Marstek account password (leave blank to keep current)"
+        },
+        "data_description": {
+          "marstek_mailbox": "Leave blank to remove the stored Marstek credentials. Leave the password blank to keep the existing one unchanged.",
+          "marstek_password": "Only needed when setting or changing the account; leave blank to keep the current password."
+        }
+      },
+      "reconfigure_pair": {
+        "title": "Import / export pair",
+        "description": "Grid power is computed as input minus output, per matching pair.",
+        "data": {
+          "input_entities": "Import (consumption) sensor(s)",
+          "output_entities": "Export (production) sensor(s)"
         }
       }
     },
@@ -38,7 +53,7 @@
     },
     "abort": {
       "already_configured": "A meter on this UDP port is already configured.",
-      "reconfigure_successful": "Grid source updated."
+      "reconfigure_successful": "Configuration updated."
     }
   },
   "options": {

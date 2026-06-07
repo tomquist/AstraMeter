@@ -101,20 +101,30 @@ class AstraMeterConfigFlow(ConfigFlow, domain=const.DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Edit the grid-power entity selection of an existing entry.
+        """Edit an existing entry: grid source, pairing, and credentials.
 
-        Identity (device type + UDP port) is fixed; only the grid source changes.
+        Identity (device type + UDP port + device id) is fixed; everything else
+        — the grid source (single sensor or import/export pair) and, for
+        CT002/CT003, the Marstek cloud credentials — can be changed here.
         """
         entry = self._get_reconfigure_entry()
+        device_type = entry.data[const.CONF_DEVICE_TYPE]
         errors: dict[str, str] = {}
         if user_input is not None:
+            # Start from the existing data so identity and cached Marstek
+            # MAC/version survive the edit.
+            self._pending = dict(entry.data)
+            self._apply_credential_input(device_type, user_input)
+            if user_input.get(const.CONF_PAIR_MODE):
+                return await self.async_step_reconfigure_pair()
             entities = user_input.get(const.CONF_GRID_ENTITIES, [])
             if not entities:
                 errors["base"] = "no_grid_entities"
             else:
                 return self.async_update_reload_and_abort(
                     entry,
-                    data_updates={
+                    data={
+                        **self._pending,
                         const.CONF_PAIR_MODE: False,
                         const.CONF_GRID_ENTITIES: entities,
                         const.CONF_INPUT_ENTITIES: [],
@@ -122,17 +132,93 @@ class AstraMeterConfigFlow(ConfigFlow, domain=const.DOMAIN):
                     },
                 )
 
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self._reconfigure_schema(entry),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure_pair(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect the import/export pair when reconfiguring into pair mode."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            inputs = user_input.get(const.CONF_INPUT_ENTITIES, [])
+            outputs = user_input.get(const.CONF_OUTPUT_ENTITIES, [])
+            if not inputs or len(inputs) != len(outputs):
+                errors["base"] = "pair_mismatch"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={
+                        **self._pending,
+                        const.CONF_PAIR_MODE: True,
+                        const.CONF_GRID_ENTITIES: [],
+                        const.CONF_INPUT_ENTITIES: inputs,
+                        const.CONF_OUTPUT_ENTITIES: outputs,
+                    },
+                )
+
         schema = vol.Schema(
             {
                 vol.Required(
-                    const.CONF_GRID_ENTITIES,
-                    default=entry.data.get(const.CONF_GRID_ENTITIES, []),
+                    const.CONF_INPUT_ENTITIES,
+                    default=entry.data.get(const.CONF_INPUT_ENTITIES, []),
+                ): _ENTITIES_SELECTOR,
+                vol.Required(
+                    const.CONF_OUTPUT_ENTITIES,
+                    default=entry.data.get(const.CONF_OUTPUT_ENTITIES, []),
                 ): _ENTITIES_SELECTOR,
             }
         )
         return self.async_show_form(
-            step_id="reconfigure", data_schema=schema, errors=errors
+            step_id="reconfigure_pair", data_schema=schema, errors=errors
         )
+
+    def _apply_credential_input(
+        self, device_type: str, user_input: dict[str, Any]
+    ) -> None:
+        """Fold Marstek credential edits into ``self._pending`` (CT002/CT003).
+
+        A blank mailbox clears the stored credentials; a blank password keeps the
+        existing one (so users need not retype it just to change the grid source).
+        """
+        if device_type not in const.CT002_DEVICE_TYPES:
+            return
+        mailbox = (user_input.get(const.CONF_MARSTEK_MAILBOX) or "").strip()
+        password = user_input.get(const.CONF_MARSTEK_PASSWORD) or ""
+        if not mailbox:
+            self._pending.pop(const.CONF_MARSTEK_MAILBOX, None)
+            self._pending.pop(const.CONF_MARSTEK_PASSWORD, None)
+            return
+        self._pending[const.CONF_MARSTEK_MAILBOX] = mailbox
+        if password:
+            self._pending[const.CONF_MARSTEK_PASSWORD] = password
+
+    def _reconfigure_schema(self, entry: ConfigEntry) -> vol.Schema:
+        fields: dict[Any, Any] = {
+            vol.Optional(
+                const.CONF_GRID_ENTITIES,
+                default=entry.data.get(const.CONF_GRID_ENTITIES, []),
+            ): _ENTITIES_SELECTOR,
+            vol.Optional(
+                const.CONF_PAIR_MODE,
+                default=bool(entry.data.get(const.CONF_PAIR_MODE, False)),
+            ): selector.BooleanSelector(),
+        }
+        if entry.data[const.CONF_DEVICE_TYPE] in const.CT002_DEVICE_TYPES:
+            fields[
+                vol.Optional(
+                    const.CONF_MARSTEK_MAILBOX,
+                    default=entry.data.get(const.CONF_MARSTEK_MAILBOX, ""),
+                )
+            ] = selector.TextSelector()
+            fields[vol.Optional(const.CONF_MARSTEK_PASSWORD)] = selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            )
+        return vol.Schema(fields)
 
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
