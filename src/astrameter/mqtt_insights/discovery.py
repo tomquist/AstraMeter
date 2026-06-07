@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from astrameter.ct002.balancer import _needs_dc_output_floor
+from astrameter import entity_model as em
 from astrameter.version_info import get_git_commit_sha
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -31,6 +31,80 @@ def _system_availability(base_topic: str) -> dict:
     }
 
 
+# ── Render MQTT components from the shared entity_model table ──────────────
+#
+# The entity inventory and its metadata (platform, device_class, unit,
+# state_class, entity_category, enum options, number bounds, display name) live
+# in ``astrameter.entity_model`` — the single source of truth shared with the
+# native Home Assistant integration. The helpers below add only the MQTT
+# plumbing (state/command topics, value_template, switch/binary payload
+# conventions) so discovery never re-declares that metadata.
+
+
+def _value_template(desc: em.EntityDescriptor, *, null_guard: bool = False) -> str:
+    """Build a component's ``value_template`` from its descriptor field path."""
+    expr = f"value_json.{desc.field}" if desc.field else "value_json"
+    if desc.transform == "saturation_pct":
+        return f"{{{{ ({expr} * 100) | round(1) }}}}"
+    if null_guard:
+        return f"{{{{ {expr} if {expr} is not none else '' }}}}"
+    if desc.platform == em.NUMBER and desc.default is not None:
+        return f"{{{{ {expr} | default({desc.default}) }}}}"
+    return f"{{{{ {expr} }}}}"
+
+
+def _render_component(
+    desc: em.EntityDescriptor,
+    *,
+    uid_prefix: str,
+    state_topic: str,
+    null_guard: bool = False,
+) -> dict:
+    """Render one MQTT discovery component from an :class:`EntityDescriptor`.
+
+    ``button`` entities are command-only (no state topic / template) and are
+    built by their caller instead of here.
+    """
+    comp: dict = {
+        "platform": desc.platform,
+        "unique_id": f"{uid_prefix}_{desc.key}",
+        "name": None if desc.primary else desc.name,
+    }
+    if desc.device_class:
+        comp["device_class"] = desc.device_class
+    if desc.state_class:
+        comp["state_class"] = desc.state_class
+    if desc.unit:
+        comp["unit_of_measurement"] = desc.unit
+    if desc.options is not None:
+        comp["options"] = list(desc.options)
+    if desc.platform == em.NUMBER:
+        comp["min"] = desc.min
+        comp["max"] = desc.max
+        if desc.step is not None:
+            comp["step"] = desc.step
+        if desc.mode is not None:
+            comp["mode"] = desc.mode
+    comp["state_topic"] = state_topic
+    comp["value_template"] = _value_template(desc, null_guard=null_guard)
+    if desc.platform == em.SWITCH:
+        comp["command_topic"] = f"{state_topic}/{desc.key}/set"
+        comp["payload_on"] = "true"
+        comp["payload_off"] = "false"
+        comp["state_on"] = "True"
+        comp["state_off"] = "False"
+        comp["retain"] = True
+    elif desc.platform == em.NUMBER:
+        comp["command_topic"] = f"{state_topic}/{desc.key}/set"
+        comp["retain"] = True
+    elif desc.platform == em.BINARY_SENSOR:
+        comp["payload_on"] = "True"
+        comp["payload_off"] = "False"
+    if desc.entity_category:
+        comp["entity_category"] = desc.entity_category
+    return comp
+
+
 # ── CT002 consumer (per-battery) ──────────────────────────────────────────
 
 
@@ -51,190 +125,38 @@ def build_ct002_consumer_discovery(
     uid_prefix = f"astrameter_ct002_{safe_dev}_{safe_cid}"
     meter_identifier = f"astrameter_ct002_{safe_dev}"
 
+    # Sensors/controls come from the shared entity table. Controllable entities
+    # (number/switch) each get their own command topic with ``retain: true``;
+    # Home Assistant publishes the set-command retained, so on an AstraMeter
+    # restart the broker redelivers it as soon as we re-subscribe and the value
+    # restores itself — no local state store needed (a dedicated topic per
+    # setting is required because a broker keeps only the last retained message
+    # per topic). ``min_dc_output`` is gated by its presence predicate so only
+    # external-inverter battery types (B2500 family) get it.
     components: dict[str, dict] = {}
+    for desc in em.CT002_CONSUMER_ENTITIES:
+        if not desc.present_for(device_type):
+            continue
+        components[desc.key] = _render_component(
+            desc, uid_prefix=uid_prefix, state_topic=state_topic
+        )
 
-    # Power sensors
-    for key, label, tmpl in [
-        ("grid_power_total", "Grid Power", "{{ value_json.grid_power.total }}"),
-        ("grid_power_l1", "Grid Power L1", "{{ value_json.grid_power.l1 }}"),
-        ("grid_power_l2", "Grid Power L2", "{{ value_json.grid_power.l2 }}"),
-        ("grid_power_l3", "Grid Power L3", "{{ value_json.grid_power.l3 }}"),
-        ("target_l1", "Target L1", "{{ value_json.target.l1 }}"),
-        ("target_l2", "Target L2", "{{ value_json.target.l2 }}"),
-        ("target_l3", "Target L3", "{{ value_json.target.l3 }}"),
-        ("reported_power", "Reported Power", "{{ value_json.reported_power }}"),
-        ("last_target", "Last Target", "{{ value_json.last_target }}"),
+    # Identity string-sensors: MQTT publishes these as diagnostic sensors, while
+    # the native integration promotes them to device-registry attributes — so
+    # they live outside the shared entity table.
+    for key, label in [
+        ("device_type", "Device Type"),
+        ("battery_ip", "Battery IP"),
+        ("ct_type", "CT Type"),
+        ("ct_mac", "CT MAC"),
     ]:
-        comp: dict = {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_{key}",
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": tmpl,
-        }
-        if key == "grid_power_total":
-            comp["name"] = None  # primary entity
-        else:
-            comp["name"] = label
-        components[key] = comp
-
-    # Saturation
-    components["saturation"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_saturation",
-        "name": "Saturation",
-        "unit_of_measurement": "%",
-        "state_topic": state_topic,
-        "value_template": "{{ (value_json.saturation * 100) | round(1) }}",
-    }
-
-    # Phase sensor (enum)
-    components["phase"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_phase",
-        "name": "Phase",
-        "device_class": "enum",
-        "options": ["A", "B", "C"],
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.phase }}",
-        "entity_category": "diagnostic",
-    }
-
-    # Diagnostic sensors
-    for key, label, tmpl in [
-        ("device_type", "Device Type", "{{ value_json.device_type }}"),
-        ("battery_ip", "Battery IP", "{{ value_json.battery_ip }}"),
-        ("ct_type", "CT Type", "{{ value_json.ct_type }}"),
-        ("ct_mac", "CT MAC", "{{ value_json.ct_mac }}"),
-    ]:
-        comp = {
+        components[key] = {
             "platform": "sensor",
             "unique_id": f"{uid_prefix}_{key}",
             "name": label,
             "state_topic": state_topic,
-            "value_template": tmpl,
+            "value_template": f"{{{{ value_json.{key} }}}}",
             "entity_category": "diagnostic",
-        }
-        components[key] = comp
-
-    # Last seen (timestamp)
-    components["last_seen"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_last_seen",
-        "name": "Last Seen",
-        "device_class": "timestamp",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.last_seen }}",
-        "entity_category": "diagnostic",
-    }
-
-    # Poll interval (EMA-smoothed seconds between consecutive polls)
-    components["poll_interval"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_poll_interval",
-        "name": "Poll Interval",
-        "device_class": "duration",
-        "unit_of_measurement": "s",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.poll_interval }}",
-        "entity_category": "diagnostic",
-    }
-
-    # Per-consumer controllable entities each use their own command topic with
-    # ``retain: true``.  Home Assistant then publishes the set-command retained,
-    # so on an AstraMeter restart the broker redelivers it as soon as we
-    # re-subscribe and the value restores itself — no local state store needed.
-    # A dedicated topic per setting is required because a broker keeps only the
-    # last retained message per topic.
-
-    # Manual target number
-    components["manual_target"] = {
-        "platform": "number",
-        "unique_id": f"{uid_prefix}_manual_target",
-        "name": "Manual Target",
-        "unit_of_measurement": "W",
-        "device_class": "power",
-        "min": -10000,
-        "max": 10000,
-        "mode": "box",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.manual_target | default(0) }}",
-        "command_topic": f"{state_topic}/manual_target/set",
-        "retain": True,
-        "entity_category": "config",
-    }
-
-    # Auto target switch (on = automatic control, off = manual override)
-    components["auto_target"] = {
-        "platform": "switch",
-        "unique_id": f"{uid_prefix}_auto_target",
-        "name": "Auto Target",
-        "state_topic": state_topic,
-        "command_topic": f"{state_topic}/auto_target/set",
-        "value_template": "{{ value_json.auto_target }}",
-        "payload_on": "true",
-        "payload_off": "false",
-        "state_on": "True",
-        "state_off": "False",
-        "retain": True,
-        "entity_category": "config",
-    }
-
-    # Active switch
-    components["active"] = {
-        "platform": "switch",
-        "unique_id": f"{uid_prefix}_active",
-        "name": "Active",
-        "state_topic": state_topic,
-        "command_topic": f"{state_topic}/active/set",
-        "value_template": "{{ value_json.active }}",
-        "payload_on": "true",
-        "payload_off": "false",
-        "state_on": "True",
-        "state_off": "False",
-        "retain": True,
-    }
-
-    # Distribution weight number — relative fair-share weight across batteries.
-    # 1.0 is neutral; raise it on a larger battery (or lower it on a smaller
-    # one) to bias the split, e.g. 1.5 vs 1.0 for a ~60:40 distribution.
-    components["distribution_weight"] = {
-        "platform": "number",
-        "unique_id": f"{uid_prefix}_distribution_weight",
-        "name": "Distribution Weight",
-        "min": 0,
-        "max": 10,
-        "step": 0.1,
-        "mode": "slider",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
-        "command_topic": f"{state_topic}/distribution_weight/set",
-        "retain": True,
-        "entity_category": "config",
-    }
-
-    # Min DC Output number — minimum discharge (W) to keep a DC battery's
-    # external inverter from switching off at 0 W.  Only surfaced for batteries
-    # where it has an effect (no built-in inverter, no AC input — the B2500
-    # family); Venus/Jupiter/unknown types don't get this entity.
-    if _needs_dc_output_floor(device_type):
-        components["min_dc_output"] = {
-            "platform": "number",
-            "unique_id": f"{uid_prefix}_min_dc_output",
-            "name": "Min DC Output",
-            "unit_of_measurement": "W",
-            "device_class": "power",
-            "min": 0,
-            "max": 1000,
-            "step": 1,
-            "mode": "box",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.min_dc_output | default(0) }}",
-            "command_topic": f"{state_topic}/min_dc_output/set",
-            "retain": True,
-            "entity_category": "config",
         }
 
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
@@ -370,44 +292,23 @@ def build_ct002_device_discovery(
     state_topic = f"{base_topic}/ct002/{device_id}/status"
     uid_prefix = f"astrameter_ct002_{safe_dev}"
 
-    components: dict[str, dict] = {
-        "smooth_target": {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_smooth_target",
-            "name": None,  # primary
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.smooth_target }}",
-        },
-        "active_control": {
-            "platform": "binary_sensor",
-            "unique_id": f"{uid_prefix}_active_control",
-            "name": "Active Control",
-            "device_class": "running",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.active_control }}",
-            "payload_on": "True",
-            "payload_off": "False",
-        },
-        "consumer_count": {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_consumer_count",
-            "name": "Consumer Count",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.consumer_count }}",
-            "entity_category": "diagnostic",
-        },
-        "force_rotation": {
-            "platform": "button",
-            "unique_id": f"{uid_prefix}_force_rotation",
-            "name": "Force Rotation",
-            "command_topic": f"{base_topic}/ct002/{device_id}/set",
-            "payload_press": '{"force_rotation": true}',
-            "entity_category": "config",
-        },
-    }
+    components: dict[str, dict] = {}
+    for desc in em.CT002_DEVICE_ENTITIES:
+        if desc.platform == em.BUTTON:
+            # A button is command-only: it presses a JSON command onto the
+            # device's ``/set`` topic (keyed by its setter), with no state.
+            components[desc.key] = {
+                "platform": "button",
+                "unique_id": f"{uid_prefix}_{desc.key}",
+                "name": desc.name,
+                "command_topic": f"{base_topic}/ct002/{device_id}/set",
+                "payload_press": f'{{"{desc.setter}": true}}',
+                "entity_category": desc.entity_category,
+            }
+        else:
+            components[desc.key] = _render_component(
+                desc, uid_prefix=uid_prefix, state_topic=state_topic
+            )
 
     device_info: dict = {
         "identifiers": node_id,
@@ -451,43 +352,19 @@ def build_powermeter_device_discovery(
     uid_prefix = node_id
     state_topic = f"{base_topic}/powermeter/{pm_id}"
 
+    # Power readings (per phase + total) plus the Online binary_sensor, from the
+    # shared table. The power sensors are null-guarded: a ``null`` phase (e.g. a
+    # single-phase meter has no L2/L3, or the meter is currently down) renders to
+    # an empty string so Home Assistant leaves the entity untouched rather than
+    # logging a parse error.
     components: dict[str, dict] = {}
-
-    # Latest readings (per phase + total). ``grid_power_total`` is the device's
-    # primary entity. A ``null`` phase (e.g. a single-phase meter has no L2/L3,
-    # or the meter is currently down) renders to an empty string so Home
-    # Assistant leaves the entity untouched rather than logging a parse error.
-    for key, label, field in [
-        ("grid_power_total", None, "total"),
-        ("grid_power_l1", "Power L1", "l1"),
-        ("grid_power_l2", "Power L2", "l2"),
-        ("grid_power_l3", "Power L3", "l3"),
-    ]:
-        components[key] = {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_{key}",
-            "name": label,
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": (
-                f"{{{{ value_json.grid_power.{field} "
-                f"if value_json.grid_power.{field} is not none else '' }}}}"
-            ),
-        }
-
-    components["online"] = {
-        "platform": "binary_sensor",
-        "unique_id": f"{uid_prefix}_online",
-        "name": "Online",
-        "device_class": "connectivity",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.online }}",
-        "payload_on": "True",
-        "payload_off": "False",
-        "entity_category": "diagnostic",
-    }
+    for desc in em.POWERMETER_ENTITIES:
+        components[desc.key] = _render_component(
+            desc,
+            uid_prefix=uid_prefix,
+            state_topic=state_topic,
+            null_guard=desc.platform == em.SENSOR,
+        )
 
     device_info: dict = {
         "identifiers": node_id,
@@ -527,61 +404,11 @@ def build_shelly_battery_discovery(
     avail_topic = f"{state_topic}/availability"
     uid_prefix = f"astrameter_shelly_{safe_dev}_{ip_slug}"
 
-    components: dict[str, dict] = {}
-
-    for key, label, tmpl in [
-        ("grid_power_total", "Grid Power", "{{ value_json.grid_power.total }}"),
-        ("grid_power_l1", "Grid Power L1", "{{ value_json.grid_power.l1 }}"),
-        ("grid_power_l2", "Grid Power L2", "{{ value_json.grid_power.l2 }}"),
-        ("grid_power_l3", "Grid Power L3", "{{ value_json.grid_power.l3 }}"),
-    ]:
-        comp: dict = {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_{key}",
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": tmpl,
-        }
-        if key == "grid_power_total":
-            comp["name"] = None
-        else:
-            comp["name"] = label
-        components[key] = comp
-
-    components["active"] = {
-        "platform": "binary_sensor",
-        "unique_id": f"{uid_prefix}_active",
-        "name": "Active",
-        "device_class": "connectivity",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.active }}",
-        "payload_on": "True",
-        "payload_off": "False",
-        "entity_category": "diagnostic",
-    }
-
-    components["last_seen"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_last_seen",
-        "name": "Last Seen",
-        "device_class": "timestamp",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.last_seen }}",
-        "entity_category": "diagnostic",
-    }
-
-    # Poll interval (EMA-smoothed seconds between consecutive polls)
-    components["poll_interval"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_poll_interval",
-        "name": "Poll Interval",
-        "device_class": "duration",
-        "unit_of_measurement": "s",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.poll_interval }}",
-        "entity_category": "diagnostic",
+    components: dict[str, dict] = {
+        desc.key: _render_component(
+            desc, uid_prefix=uid_prefix, state_topic=state_topic
+        )
+        for desc in em.SHELLY_BATTERY_ENTITIES
     }
 
     payload = {
@@ -624,14 +451,10 @@ def build_shelly_device_discovery(
     uid_prefix = f"astrameter_shelly_{safe_dev}"
 
     components: dict[str, dict] = {
-        "battery_count": {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_battery_count",
-            "name": "Battery Count",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.battery_count }}",
-            "entity_category": "diagnostic",
-        },
+        desc.key: _render_component(
+            desc, uid_prefix=uid_prefix, state_topic=state_topic
+        )
+        for desc in em.SHELLY_DEVICE_ENTITIES
     }
 
     device_info: dict = {

@@ -1,9 +1,10 @@
 """Fidelity guard: entity_model must match discovery.py's emitted entities.
 
-The native HA integration builds entities from ``entity_model`` while MQTT
-Insights builds from ``discovery``. These tests assert the two agree on the
-entity set and core metadata per device kind, so they can't silently drift
-(until ``discovery.py`` is refactored to render directly from the table).
+Both the native HA integration and MQTT Insights discovery now build from the
+shared ``entity_model`` table — discovery renders its components directly from
+it. These tests assert the rendered MQTT payloads still carry the table's entity
+set and core metadata per device kind, so the renderer can't silently drift from
+the catalog it's meant to reflect.
 """
 
 from __future__ import annotations
