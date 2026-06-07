@@ -42,6 +42,9 @@ jobs:
   package:
     name: Build installable artifact
     runs-on: ubuntu-latest
+    # Needed to post/update the install-links comment on pull requests.
+    permissions:
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,12 +54,15 @@ jobs:
       # identifiable pre-release version (the patch bump + this run number) so a
       # manually installed PR build is distinguishable from a real release.
       - name: Assemble astrameter.zip
+        id: assemble
         run: |
           VERSION="$(python scripts/assemble_integration.py --print-beta-version "${{ github.run_number }}")"
           python scripts/assemble_integration.py --version "$VERSION" --output dist/astrameter.zip
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Built astrameter $VERSION"
       # The folder artifact extracts straight into config/custom_components/astrameter/.
       - name: Upload custom_components/astrameter (drop into your HA config)
+        id: upload_folder
         uses: actions/upload-artifact@v4
         with:
           name: astrameter-custom-component
@@ -64,8 +70,51 @@ jobs:
           if-no-files-found: error
       # The zip artifact is the exact asset HACS installs (zip-of-zip on download).
       - name: Upload astrameter.zip (HACS-shaped release asset)
+        id: upload_zip
         uses: actions/upload-artifact@v4
         with:
           name: astrameter-zip
           path: dist/astrameter.zip
           if-no-files-found: error
+      # Post a single sticky comment with the download links and refresh it on
+      # every rebuild (found by the hidden marker) instead of spamming the PR.
+      # Skipped for fork PRs, whose GITHUB_TOKEN is read-only.
+      - name: Comment install links on the PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- astrameter-build-artifact -->';
+            const version = ${{ toJSON(steps.assemble.outputs.version) }};
+            const folderUrl = ${{ toJSON(steps.upload_folder.outputs['artifact-url']) }};
+            const zipUrl = ${{ toJSON(steps.upload_zip.outputs['artifact-url']) }};
+            const sha = context.payload.pull_request.head.sha.slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              `### 📦 Installable build for this PR`,
+              ``,
+              `Built **astrameter \`${version}\`** from \`${sha}\` ([run](${runUrl})). ` +
+                `Install this branch manually — no release needed:`,
+              ``,
+              `- **[\`astrameter-custom-component\`](${folderUrl})** — unzip into ` +
+                `\`config/custom_components/astrameter/\` (HA Container/Core), then restart HA.`,
+              `- **[\`astrameter-zip\`](${zipUrl})** — the HACS-shaped release asset ` +
+                `(GitHub wraps it, so it downloads as a zip-of-zip).`,
+              ``,
+              `<sub>Downloading a workflow artifact requires being signed in to GitHub. ` +
+                `Artifacts expire after 90 days. This comment updates on every push.</sub>`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

@@ -107,7 +107,10 @@ channels off it:
   (`astrameter-custom-component`, a folder to extract into
   `config/custom_components/astrameter/`, and `astrameter-zip`, the HACS-shaped
   asset). Download them from the run's **Summary → Artifacts** to test a branch
-  manually without cutting a release.
+  manually without cutting a release. On pull requests the job also posts a
+  single sticky comment with direct links to both artifacts and refreshes that
+  same comment on every rebuild (fork PRs are skipped — their token is
+  read-only).
 
 Never commit or hand-edit `custom_components/astrameter/astrameter/`; run
 `python scripts/assemble_integration.py --vendor-only` to populate it for local
