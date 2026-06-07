@@ -103,16 +103,6 @@ def shelly_battery_device_info(
     )
 
 
-def powermeter_device_info(
-    entry: ConfigEntry, runtime: AstraMeterRuntime
-) -> DeviceInfo:
-    return DeviceInfo(
-        identifiers={(const.DOMAIN, f"powermeter_{entry.entry_id}")},
-        name=f"AstraMeter Powermeter {runtime.device_id}",
-        manufacturer="astrameter",
-    )
-
-
 # ── Base entity ────────────────────────────────────────────────────────────
 
 
@@ -246,20 +236,9 @@ async def async_setup_platform_entities(
         )
         added.add(uid)
 
-    for desc in em.POWERMETER_ENTITIES:
-        if desc.platform != platform:
-            continue
-        uid = f"astrameter_powermeter_{entry.entry_id}_{desc.key}"
-        static.append(
-            factory(
-                runtime,
-                desc,
-                scope=SCOPE_POWERMETER,
-                device_info=powermeter_device_info(entry, runtime),
-                unique_id=uid,
-            )
-        )
-        added.add(uid)
+    # The grid source is a Home Assistant sensor whose own availability is
+    # already visible, so we deliberately do NOT expose a separate "powermeter"
+    # health device natively (em.POWERMETER_ENTITIES stays for MQTT parity only).
     if static:
         async_add_entities(static)
 

@@ -23,8 +23,10 @@ _DEVICE_TYPE_SELECTOR = selector.SelectSelector(
         translation_key="device_type",
     )
 )
+# Only power sensors make sense as a grid source. Filtering by the `power`
+# device class restricts the picker to measurement sensors reported in W.
 _ENTITIES_SELECTOR = selector.EntitySelector(
-    selector.EntitySelectorConfig(domain="sensor", multiple=True)
+    selector.EntitySelectorConfig(domain="sensor", device_class="power", multiple=True)
 )
 
 
@@ -170,7 +172,7 @@ class AstraMeterOptionsFlow(OptionsFlow):
 
         opts = self.config_entry.options
 
-        def _num(key: str, **kw: Any) -> Any:
+        def _num(**kw: Any) -> Any:
             return selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     mode=selector.NumberSelectorMode.BOX, **kw

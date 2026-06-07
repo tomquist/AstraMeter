@@ -110,17 +110,15 @@ async def test_ct002_e2e_entities_and_control(
     assert grid_total is not None, "consumer grid_power_total sensor not created"
     assert float(grid_total) == pytest.approx(250.0, abs=1.5)
 
-    # The powermeter health "online" binary sensor should be on.
+    # No standalone "powermeter" health device is exposed natively: the grid
+    # source is a HA sensor whose availability is already visible.
     registry = er.async_get(hass)
     online_ids = [
         e.entity_id
         for e in er.async_entries_for_config_entry(registry, entry.entry_id)
         if e.unique_id.endswith("_online")
     ]
-    assert online_ids, "powermeter online sensor not created"
-    online_state = hass.states.get(online_ids[0])
-    assert online_state is not None, "powermeter online sensor has no state"
-    assert online_state.state == "on"
+    assert not online_ids, "powermeter device should not be created natively"
 
     # Control: turn the consumer's Active switch off via the service.
     switch_ids = [
