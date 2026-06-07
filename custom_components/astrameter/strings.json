@@ -18,6 +18,13 @@
           "input_entities": "Import (consumption) sensor(s)",
           "output_entities": "Export (production) sensor(s)"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure grid source",
+        "description": "Change which Home Assistant sensor(s) report grid power. The device type and UDP port stay the same.",
+        "data": {
+          "grid_entities": "Grid power sensor(s)"
+        }
       }
     },
     "error": {
@@ -25,7 +32,8 @@
       "pair_mismatch": "Provide an equal, non-empty number of input and output sensors."
     },
     "abort": {
-      "already_configured": "A meter on this UDP port is already configured."
+      "already_configured": "A meter on this UDP port is already configured.",
+      "reconfigure_successful": "Grid source updated."
     }
   },
   "options": {

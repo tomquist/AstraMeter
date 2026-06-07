@@ -85,6 +85,42 @@ class AstraMeterConfigFlow(ConfigFlow, domain=const.DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit the grid-power entity selection of an existing entry.
+
+        Identity (device type + UDP port) is fixed; only the grid source changes.
+        """
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            entities = user_input.get(const.CONF_GRID_ENTITIES, [])
+            if not entities:
+                errors["base"] = "no_grid_entities"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        const.CONF_PAIR_MODE: False,
+                        const.CONF_GRID_ENTITIES: entities,
+                        const.CONF_INPUT_ENTITIES: [],
+                        const.CONF_OUTPUT_ENTITIES: [],
+                    },
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    const.CONF_GRID_ENTITIES,
+                    default=entry.data.get(const.CONF_GRID_ENTITIES, []),
+                ): _ENTITIES_SELECTOR,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=schema, errors=errors
+        )
+
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
