@@ -62,7 +62,9 @@ jobs:
         run: pip install pytest-homeassistant-custom-component pytest-asyncio -e .
 
       - name: Run native integration tests (config flow, HAStatePowermeter, e2e)
-        run: pytest tests/components/astrameter -p no:cacheprovider -v
+        # `python -m pytest` (not the bare `pytest` script) puts the repo root on
+        # sys.path so the `custom_components.astrameter` integration is importable.
+        run: python -m pytest tests/components/astrameter -p no:cacheprovider -v
 
   ct002-host-protocol:
     needs: [ lint ]
