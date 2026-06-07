@@ -102,6 +102,13 @@ channels off it:
   `<next>bN`, while `<next>bN` sorts above the current stable so beta users see the
   update.
 
+- **Per-PR build** = the `package` job in `.github/workflows/validate.yaml` runs
+  on every push/PR and uploads the assembled integration as workflow artifacts
+  (`astrameter-custom-component`, a folder to extract into
+  `config/custom_components/astrameter/`, and `astrameter-zip`, the HACS-shaped
+  asset). Download them from the run's **Summary → Artifacts** to test a branch
+  manually without cutting a release.
+
 Never commit or hand-edit `custom_components/astrameter/astrameter/`; run
 `python scripts/assemble_integration.py --vendor-only` to populate it for local
 dev/tests.

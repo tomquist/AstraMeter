@@ -38,3 +38,34 @@ jobs:
         run: python3 scripts/assemble_integration.py --vendor-only
       - name: Hassfest
         uses: home-assistant/actions/hassfest@master
+
+  package:
+    name: Build installable artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # Assemble the integration the same way a release does, but stamp an
+      # identifiable pre-release version (the patch bump + this run number) so a
+      # manually installed PR build is distinguishable from a real release.
+      - name: Assemble astrameter.zip
+        run: |
+          VERSION="$(python scripts/assemble_integration.py --print-beta-version "${{ github.run_number }}")"
+          python scripts/assemble_integration.py --version "$VERSION" --output dist/astrameter.zip
+          echo "Built astrameter $VERSION"
+      # The folder artifact extracts straight into config/custom_components/astrameter/.
+      - name: Upload custom_components/astrameter (drop into your HA config)
+        uses: actions/upload-artifact@v4
+        with:
+          name: astrameter-custom-component
+          path: dist/astrameter/
+          if-no-files-found: error
+      # The zip artifact is the exact asset HACS installs (zip-of-zip on download).
+      - name: Upload astrameter.zip (HACS-shaped release asset)
+        uses: actions/upload-artifact@v4
+        with:
+          name: astrameter-zip
+          path: dist/astrameter.zip
+          if-no-files-found: error
