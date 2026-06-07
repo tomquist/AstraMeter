@@ -11,7 +11,7 @@ class ClientFilter:
     def __init__(self, netmasks: list[IPv4Network]):
         self.netmasks = netmasks
 
-    def matches(self, client_ip) -> bool:
+    def matches(self, client_ip: str) -> bool:
         try:
             client_ip_addr = IPv4Address(client_ip)
             for netmask in self.netmasks:

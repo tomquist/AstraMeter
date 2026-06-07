@@ -118,7 +118,9 @@ async def test_ct002_e2e_entities_and_control(
         if e.unique_id.endswith("_online")
     ]
     assert online_ids, "powermeter online sensor not created"
-    assert hass.states.get(online_ids[0]).state == "on"
+    online_state = hass.states.get(online_ids[0])
+    assert online_state is not None, "powermeter online sensor has no state"
+    assert online_state.state == "on"
 
     # Control: turn the consumer's Active switch off via the service.
     switch_ids = [

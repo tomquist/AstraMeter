@@ -12,8 +12,12 @@ from __future__ import annotations
 import subprocess
 import sys
 
-# Entrypoints the native integration imports (the "clean" subset).
+# Entrypoints the native integration imports (the "clean" subset). The package
+# __init__s are included too: their lazy __getattr__ must keep a bare
+# ``import astrameter.config`` / ``import astrameter.powermeter`` light.
 _INTEGRATION_IMPORTS = [
+    "astrameter.config",
+    "astrameter.powermeter",
     "astrameter.powermeter.base",
     "astrameter.powermeter.wrappers.apply",
     "astrameter.config.client_filter",

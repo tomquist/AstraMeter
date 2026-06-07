@@ -28,5 +28,10 @@ def __getattr__(name: str) -> Any:
     if name == "read_all_powermeter_configs":
         from .config_loader import read_all_powermeter_configs
 
+        globals()[name] = read_all_powermeter_configs  # cache for subsequent lookups
         return read_all_powermeter_configs
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
