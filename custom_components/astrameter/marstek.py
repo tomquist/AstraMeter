@@ -32,8 +32,10 @@ from astrameter.mqtt_insights.marstek_mqtt import (
     build_cd4_response,
     build_response,
     device_topics_for,
+    normalize_mac,
     parse_app_topic,
     parse_marstek_poll_payload,
+    ver_v_from_marstek_api_version,
 )
 
 if TYPE_CHECKING:
@@ -59,8 +61,6 @@ async def async_register_managed_ct(
         MarstekApiError,
         MarstekConfig,
         ensure_managed_fake_device,
-        normalize_mac,
-        ver_v_from_marstek_api_version,
     )
 
     cfg = MarstekConfig(base_url=base_url, mailbox=mailbox, password=password)
