@@ -236,7 +236,9 @@ THROTTLE_INTERVAL = 0
 #DEDUPE_TIME_WINDOW = 0
 ```
 
-Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[HOMEASSISTANT]`, or globally under `[GENERAL]`):
+#### Per-powermeter options
+
+These apply in any powermeter section (e.g. `[TASMOTA]` or `[HOMEASSISTANT]`), or globally under `[GENERAL]` as a default for every powermeter:
 - **THROTTLE_INTERVAL** — Override global throttling for this powermeter
 - **WAIT_FOR_NEXT_MESSAGE** — Override the global wait-for-fresh-push behaviour
   for this powermeter (set to `false` to opt out of the wait entirely)
@@ -260,7 +262,30 @@ Per-powermeter options (apply in any powermeter section, e.g. `[TASMOTA]` or `[H
   watts. Prevents spikes from passing through during long periods of constant
   readings (the MAD=0 degenerate case); 50 W is a reasonable starting value.
 
-CT002/CT003 active-steering options (all under `[CT002]` or `[CT003]`):
+### CT002 / CT003
+
+```ini
+[CT002]
+# CT type is derived from the emulated device (ct002 -> HME-4, ct003 -> HME-3).
+# CT MAC (12 hex digits, from Marstek app).
+# If empty, the emulator accepts any request CT MAC and echoes the request’s
+# CT MAC in responses. If set, the emulator responds only to that CT MAC.
+CT_MAC = 001122334455
+# UDP port to bind for CT002/CT003 (default 12345).
+UDP_PORT = 12345
+# WiFi RSSI reported to the storage system
+WIFI_RSSI = -50
+# Ignore repeated requests from the same consumer within this window (seconds).
+# Also supported by the Shelly emulator (keyed by battery IP); set it under
+# [GENERAL] to apply regardless of the emulated device type.
+DEDUPE_TIME_WINDOW = 0
+# Forget consumers after this many seconds without updates (multi-consumer support)
+CONSUMER_TTL = 120
+```
+
+#### Active steering, balancing & efficiency
+
+All keys in this subsection go under the `[CT002]` or `[CT003]` section (they are **not** read from `[GENERAL]` or from powermeter sections):
 - **ACTIVE_CONTROL** — When true (default), the emulator smooths the grid reading, splits
   the target across batteries, and balances their load.
   When false, the emulator relays raw meter values and batteries decide on their own.
@@ -368,27 +393,6 @@ mid-interval failures still trigger a swap.
   battery's saturation score decays while it has no target. Applied each cycle.
   Lower values allow faster recovery; 1.0 means the battery never becomes
   eligible again.
-
-### CT002 / CT003
-
-```ini
-[CT002]
-# CT type is derived from the emulated device (ct002 -> HME-4, ct003 -> HME-3).
-# CT MAC (12 hex digits, from Marstek app).
-# If empty, the emulator accepts any request CT MAC and echoes the request’s
-# CT MAC in responses. If set, the emulator responds only to that CT MAC.
-CT_MAC = 001122334455
-# UDP port to bind for CT002/CT003 (default 12345).
-UDP_PORT = 12345
-# WiFi RSSI reported to the storage system
-WIFI_RSSI = -50
-# Ignore repeated requests from the same consumer within this window (seconds).
-# Also supported by the Shelly emulator (keyed by battery IP); set it under
-# [GENERAL] to apply regardless of the emulated device type.
-DEDUPE_TIME_WINDOW = 0
-# Forget consumers after this many seconds without updates (multi-consumer support)
-CONSUMER_TTL = 120
-```
 
 Optional Marstek cloud auto-registration:
 - **MARSTEK.ENABLE** — auto-create/check managed fake CT device(s) at startup
