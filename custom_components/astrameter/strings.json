@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AstraMeter",
+        "description": "Emulate a smart meter for Marstek batteries. Pick the device type and the Home Assistant sensor(s) that report grid power.",
+        "data": {
+          "device_type": "Device type",
+          "udp_port": "UDP port (CT002/CT003)",
+          "grid_entities": "Grid power sensor(s)",
+          "pair_mode": "Subtract an import/export entity pair instead"
+        }
+      },
+      "pair": {
+        "title": "Import / export pair",
+        "description": "Grid power is computed as input minus output, per matching pair.",
+        "data": {
+          "input_entities": "Import (consumption) sensor(s)",
+          "output_entities": "Export (production) sensor(s)"
+        }
+      }
+    },
+    "error": {
+      "no_grid_entities": "Select at least one grid power sensor.",
+      "pair_mismatch": "Provide an equal, non-empty number of input and output sensors."
+    },
+    "abort": {
+      "already_configured": "A meter on this UDP port is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "AstraMeter tuning",
+        "data": {
+          "active_control": "Active control (steer the battery)",
+          "throttle_interval": "Throttle interval (s)",
+          "smooth_target_alpha": "Smoothing alpha (0 = off)",
+          "deadband": "Deadband (W)",
+          "min_dc_output": "Min DC output (W)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "device_type": {
+      "options": {
+        "ct002": "Marstek CT002",
+        "ct003": "Marstek CT003",
+        "shellypro3em_old": "Shelly Pro 3EM (firmware < 1.4)",
+        "shellypro3em_new": "Shelly Pro 3EM (firmware >= 1.4)",
+        "shellyemg3": "Shelly EM Gen3",
+        "shellyproem50": "Shelly Pro EM-50"
+      }
+    }
+  },
+  "issues": {
+    "port_in_use": {
+      "title": "AstraMeter could not bind its UDP port",
+      "description": "AstraMeter could not bind UDP port {port}. Another process (for example the AstraMeter add-on) may already be using it. Free the port and reload the integration."
+    }
+  }
+}

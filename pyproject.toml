@@ -50,6 +50,7 @@ asyncio_mode = "auto"
 timeout = 90
 markers = [
     "esphome_e2e: cross-backend e2e suite that also drives the compiled ESPHome host binary (run via the ct002-host-e2e CI job; esphome params skip without the CLI)",
+    "astrameter_e2e: native HA integration end-to-end (real HA Core + BatterySimulator over loopback UDP)",
 ]
 
 [tool.ruff]

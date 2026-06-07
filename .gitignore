@@ -13,3 +13,7 @@ test-results.xml
 coverage.xml
 config.ini
 .DS_Store
+.venv-ha/
+custom_components/astrameter/astrameter/
+dist/
+astrameter.zip

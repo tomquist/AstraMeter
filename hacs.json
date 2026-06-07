@@ -1,0 +1,7 @@
+{
+  "name": "AstraMeter",
+  "render_readme": true,
+  "zip_release": true,
+  "filename": "astrameter.zip",
+  "homeassistant": "2024.12.0"
+}
