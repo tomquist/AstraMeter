@@ -144,7 +144,11 @@ async def test_shelly_e2e_entities(hass: HomeAssistant, socket_enabled) -> None:
     await hass.async_block_till_done()
     assert entry.state.recoverable is False or entry.state.name == "LOADED"
 
-    sim = ShellyBatterySimulator("127.0.0.1", port)
+    # Shelly device types bind a fixed per-model UDP port (real Shelly meters
+    # use fixed ports, so CONF_UDP_PORT is ignored for them) — poll the port the
+    # emulator actually bound rather than the one we passed in.
+    runtime = hass.data[const.DOMAIN][entry.entry_id]
+    sim = ShellyBatterySimulator("127.0.0.1", runtime.udp_port)
     await sim.start()
     try:
         total = await _drive(hass, sim)
