@@ -19,9 +19,12 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          # The home-assistant/brands icon is tracked as a separate PR; ignore
-          # the brands check until it lands so this job reflects repo state.
-          ignore: brands
+          # `brands` (home-assistant/brands icon) and `topics` (GitHub repo
+          # topics) are repo-admin/external prerequisites tracked separately;
+          # ignore them so this job reflects the integration's own validity.
+          # Add topics (home-assistant, hacs, marstek, energy) + the brands PR
+          # before submitting to the HACS default store.
+          ignore: brands topics
 
   hassfest:
     name: Hassfest validation

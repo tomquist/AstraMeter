@@ -80,6 +80,32 @@ The AstraMeter project can be installed and run in several ways depending on you
    - Go to the app's Info tab
    - Click "Start" to run the app
 
+### Native Home Assistant Integration (HACS)
+
+> _Work in progress._
+
+If you run **Home Assistant Container or Core** (no Supervisor, so the add-on
+above isn't available), you can install AstraMeter as a **native integration**
+via [HACS](https://hacs.xyz/). It runs in-process on HA and exposes the
+battery/meter state as **native entities** (no MQTT broker) configured entirely
+through the UI.
+
+1. In HACS, add this repository as a **custom repository**
+   (`https://github.com/tomquist/astrameter`, category **Integration**), then
+   install **AstraMeter** and restart Home Assistant.
+2. Go to **Settings → Devices & Services → Add Integration → AstraMeter**, pick
+   the device type to emulate (CT002/CT003 or a Shelly variant) and the Home
+   Assistant sensor(s) that report your grid power (a single sensor, three for a
+   3-phase setup, or an import/export pair to subtract).
+3. Point your Marstek battery at Home Assistant's IP on the device's UDP port
+   (12345 for CT002/CT003), exactly as with the add-on.
+
+To follow pre-release builds, enable **"Show beta versions"** for the repository
+in HACS.
+
+> ⚠️ The integration binds the same UDP ports as the AstraMeter add-on, so don't
+> run both against the same battery on one host.
+
 ### Docker Installation
 
 #### Prerequisites
