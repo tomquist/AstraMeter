@@ -43,6 +43,27 @@ jobs:
       - name: Mypy
         run: uv run mypy src/
 
+  ha-integration:
+    # The native Home Assistant integration tests need modern HA, which requires
+    # Python >= 3.13 and conflicts with the project's universal uv lock, so they
+    # run in a dedicated pip environment rather than via `uv sync`.
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Home Assistant test harness
+        run: pip install pytest-homeassistant-custom-component pytest-asyncio -e .
+
+      - name: Run native integration tests (config flow, HAStatePowermeter, e2e)
+        run: pytest tests/components/astrameter -p no:cacheprovider -v
+
   ct002-host-protocol:
     needs: [ lint ]
     runs-on: ubuntu-latest

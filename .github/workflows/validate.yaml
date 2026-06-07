@@ -1,0 +1,37 @@
+name: Validate Integration
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions: {}
+
+jobs:
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: HACS Action
+        uses: hacs/action@main
+        with:
+          category: integration
+          # The home-assistant/brands icon is tracked as a separate PR; ignore
+          # the brands check until it lands so this job reflects repo state.
+          ignore: brands
+
+  hassfest:
+    name: Hassfest validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Vendor the astrameter package into the integration
+        run: python3 scripts/assemble_integration.py --vendor-only
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
