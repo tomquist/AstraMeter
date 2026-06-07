@@ -38,6 +38,24 @@ def _pyproject_version() -> str:
     return m.group(1) if m else "0.0.0"
 
 
+def beta_version(base: str, build: int | str) -> str:
+    """Compute the beta (pre-release) version string for a ``develop`` build.
+
+    The beta targets the *smallest possible* next release — the **patch bump** of
+    the current ``pyproject`` version — so HACS update detection converges
+    cleanly. ``release.sh`` enforces every real release ``> current pyproject``,
+    so any eventual stable version is ``>= <next>`` and therefore sorts **above**
+    every ``<next>bN`` (PEP 440 / AwesomeVersion: ``2.1.3b7 < 2.1.3 < 2.2.0``),
+    while ``<next>bN > current stable`` so beta users see the update. ``build``
+    (``github.run_number``) is a monotonic counter so newer betas sort highest.
+    """
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", base)
+    if not m:
+        raise ValueError(f"Cannot parse a MAJOR.MINOR.PATCH version from {base!r}")
+    major, minor, patch = (int(m.group(i)) for i in (1, 2, 3))
+    return f"{major}.{minor}.{patch + 1}b{build}"
+
+
 def _ignore(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if n in _EXCLUDE_NAMES or n.endswith((".pyc", "_test.py"))}
 
@@ -94,7 +112,18 @@ def main() -> int:
         action="store_true",
         help="Only populate custom_components/astrameter/astrameter/ for dev/tests",
     )
+    parser.add_argument(
+        "--print-beta-version",
+        metavar="BUILD",
+        default=None,
+        help="Print the <next>b<BUILD> beta version for the current pyproject "
+        "version and exit (used by the develop beta-release workflow)",
+    )
     args = parser.parse_args()
+
+    if args.print_beta_version is not None:
+        print(beta_version(_pyproject_version(), args.print_beta_version))
+        return 0
 
     if args.vendor_only:
         vendor_core(VENDOR_DIR)
@@ -106,7 +135,11 @@ def main() -> int:
     stage_integration(staging, version)
     output = Path(args.output)
     build_zip(staging, output)
-    print(f"Built {output.relative_to(REPO_ROOT)} (version {version})")
+    try:
+        shown = output.relative_to(REPO_ROOT)
+    except ValueError:
+        shown = output
+    print(f"Built {shown} (version {version})")
     return 0
 
 

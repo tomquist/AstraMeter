@@ -78,6 +78,34 @@ The `esphome` backend uses a "test-hooks" binary (`test.e2e.host.yaml`) that com
 - Base feature work on **`develop`** and open PRs against **`develop`**.
 - Releases are merged to **`main`** as appropriate for the project maintainer.
 
+## Releases and the HACS channels
+
+The native HACS integration (`custom_components/astrameter/`) is shipped as an
+assembled `astrameter.zip` release asset (`hacs.json` declares
+`zip_release`/`filename`). The `astrameter` core package is **vendored into the
+zip at build time** by `scripts/assemble_integration.py` (copied from
+`src/astrameter` into a gitignored `custom_components/astrameter/astrameter/`),
+so the committed tree only carries the integration glue — never a mirror of the
+core. The existing `main`/`develop` branch model is unchanged; HACS gets two
+channels off it:
+
+- **Stable** = release tags. The normal `release.sh` / `release.yml` flow
+  (develop → `main`, tag) additionally assembles `astrameter.zip` and attaches it
+  to the GitHub release. HACS's default channel resolves the newest non-prerelease
+  tag and downloads that asset.
+- **Beta** = `develop` pushes. `.github/workflows/beta-release.yaml` runs on every
+  push to `develop`, assembles the zip, and cuts an auto-pruned `prerelease`
+  tagged `<next>b<run_number>` — where `<next>` is the **patch bump** of the
+  current `pyproject` version. Users opt in via HACS **"Show beta versions."**
+  Targeting the patch bump (the smallest possible next release) makes the channel
+  converge: every real release is `> current pyproject`, so it sorts above every
+  `<next>bN`, while `<next>bN` sorts above the current stable so beta users see the
+  update.
+
+Never commit or hand-edit `custom_components/astrameter/astrameter/`; run
+`python scripts/assemble_integration.py --vendor-only` to populate it for local
+dev/tests.
+
 ## Changelog
 
 For user-visible changes, add or update the single bullet under **`## Next`** in [CHANGELOG.md](CHANGELOG.md) (see [AGENTS.md](AGENTS.md) — Changelog).
