@@ -89,8 +89,7 @@ void add_power_sensor(JsonObject components, const std::string &key, const std::
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type, const std::string &network_mac,
-    const std::string &battery_ip) {
+    const std::string &device_type) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string safe_cid = sanitize_id(consumer_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev + "_" + safe_cid;
@@ -299,44 +298,11 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     }
     device["manufacturer"] = "Marstek";
     device["via_device"] = meter_identifier;
-    // Connections array
-    bool is_hex12 = mac_slug.size() == 12;
-    if (is_hex12) {
-      for (char c : mac_slug) {
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
-          is_hex12 = false;
-          break;
-        }
-      }
-    }
-    JsonArray conns = device["connections"].to<JsonArray>();
-    bool any_conn = false;
-    if (is_hex12) {
-      std::string bt;
-      bt.reserve(17);
-      for (size_t i = 0; i < 12; i += 2) {
-        if (i) bt.push_back(':');
-        bt.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(mac_slug[i]))));
-        bt.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(mac_slug[i + 1]))));
-      }
-      JsonArray e = conns.add<JsonArray>();
-      e.add("bluetooth");
-      e.add(bt);
-      any_conn = true;
-    }
-    if (!network_mac.empty()) {
-      JsonArray e = conns.add<JsonArray>();
-      e.add("mac");
-      e.add(network_mac);
-      any_conn = true;
-    }
-    if (!battery_ip.empty()) {
-      JsonArray e = conns.add<JsonArray>();
-      e.add("ip");
-      e.add(battery_ip);
-      any_conn = true;
-    }
-    if (!any_conn) device.remove("connections");
+    // No device `connections`: in HA a `connection` is a global cross-
+    // integration identity, so advertising the battery's own MAC merges this
+    // device into the battery device owned by another bridge (e.g. hm2mqtt).
+    // See discovery.py and issue #438. The device is identified by its own
+    // namespaced `identifiers` and linked to the meter via `via_device`.
     if (!device_type.empty()) device["model_id"] = device_type;
 
     add_origin(root);

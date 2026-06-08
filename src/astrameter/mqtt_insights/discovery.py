@@ -40,8 +40,6 @@ def build_ct002_consumer_discovery(
     consumer_id: str,
     ha_prefix: str,
     device_type: str = "",
-    network_mac: str = "",
-    battery_ip: str = "",
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     safe_cid = _sanitize_id(consumer_id)
@@ -247,18 +245,16 @@ def build_ct002_consumer_discovery(
         "manufacturer": "Marstek",
         "via_device": meter_identifier,
     }
-    connections: list[list[str]] = []
-    if re.fullmatch(r"[0-9a-f]{12}", mac_slug):
-        bt_mac = ":".join(
-            mac_slug[i : i + 2] for i in range(0, len(mac_slug), 2)
-        ).upper()
-        connections.append(["bluetooth", bt_mac])
-    if network_mac:
-        connections.append(["mac", network_mac])
-    if battery_ip:
-        connections.append(["ip", battery_ip])
-    if connections:
-        device_info["connections"] = connections
+    # No device ``connections`` are advertised. In HA's device registry a
+    # ``connection`` is a *global*, cross-integration identity for a physical
+    # device, and a single matching connection is enough for HA to merge two
+    # devices into one. The battery is already owned by a separate bridge
+    # (e.g. hm2mqtt, which publishes ``["bluetooth", MAC]``), so advertising the
+    # battery's own MAC made HA fold this standalone "AstraMeter Consumer"
+    # device into the battery device — non-deterministically, depending on MQTT
+    # registration order (issue #438). We instead identify this device solely by
+    # its own namespaced ``identifiers`` and link it to the meter via
+    # ``via_device`` (the same self-contained pattern Zigbee2MQTT uses).
     if device_type:
         device_info["model_id"] = device_type
 
