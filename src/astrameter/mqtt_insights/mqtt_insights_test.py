@@ -34,7 +34,6 @@ from .service import (
     POWERMETER_IDLE_THRESHOLD,
     MqttInsightsConfig,
     MqttInsightsService,
-    _arp_lookup,
 )
 
 # ── Discovery payload unit tests ──────────────────────────────────────────
@@ -74,7 +73,10 @@ def test_ct002_consumer_discovery_structure():
     assert dev["name"] == "AstraMeter Consumer HMJ-2 aabbccddeeff"
     assert dev["manufacturer"] == "Marstek"
     assert dev["model_id"] == "HMJ-2"
-    assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in dev["connections"]
+    # The consumer device advertises no connections — the battery MAC is never
+    # exposed (it would merge with the hm2mqtt battery device; issue #438); the
+    # meter link is carried by via_device.
+    assert "connections" not in dev
     assert dev["via_device"] == "astrameter_ct002_dev1"
 
     # Check two-level availability
@@ -209,21 +211,27 @@ def test_ct002_consumer_discovery_non_mac_consumer():
     assert payload["device"]["via_device"] == "astrameter_ct002_dev1"
 
 
-def test_ct002_consumer_discovery_network_mac_and_ip():
-    """network_mac and battery_ip add connection entries."""
+def test_ct002_consumer_discovery_emits_no_connections_issue_438():
+    """The consumer device advertises NO ``connections`` at all.
+
+    Advertising the battery's own MAC (bluetooth or mac) would make HA merge
+    this standalone "AstraMeter Consumer" device into the battery device owned
+    by another bridge (e.g. hm2mqtt, which publishes ``["bluetooth", MAC]`` for
+    the same battery), non-deterministically depending on MQTT registration
+    order. The device is identified solely by its own namespaced
+    ``identifiers`` and linked to the meter via ``via_device``. See #438.
+    """
     _, payload = build_ct002_consumer_discovery(
         "astrameter",
         "dev1",
-        "aabbccddeeff",
+        "aabbccddeeff",  # a 12-hex MAC consumer_id — must NOT become a connection
         "homeassistant",
-        network_mac="11:22:33:44:55:66",
-        battery_ip="192.168.1.10",
+        device_type="HMJ-2",
     )
-    conns = payload["device"]["connections"]
-    assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in conns
-    assert ["mac", "11:22:33:44:55:66"] in conns
-    assert ["ip", "192.168.1.10"] in conns
-    assert payload["device"]["via_device"] == "astrameter_ct002_dev1"
+    dev = payload["device"]
+    assert "connections" not in dev
+    assert dev["identifiers"] == ["astrameter_consumer_aabbccddeeff"]
+    assert dev["via_device"] == "astrameter_ct002_dev1"
 
 
 def test_ct002_device_discovery_structure():
@@ -416,49 +424,6 @@ def test_sanitize_id():
     assert _sanitize_id("192.168.1.100") == "192_168_1_100"
     assert _sanitize_id("AA:BB:CC") == "AA_BB_CC"
     assert _sanitize_id("normal-id_123") == "normal-id_123"
-
-
-async def test_arp_lookup_found(tmp_path):
-    """ARP lookup finds a matching entry."""
-    arp_file = tmp_path / "arp"
-    arp_file.write_text(
-        "IP address       HW type     Flags       HW address            Mask     Device\n"
-        "192.168.1.10     0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
-        "192.168.1.20     0x1         0x2         11:22:33:44:55:66     *        eth0\n"
-    )
-    from unittest.mock import mock_open, patch
-
-    real_data = arp_file.read_text()
-    m = mock_open(read_data=real_data)
-    # mock_open doesn't support iteration by default; wire it up
-    m.return_value.__iter__ = lambda self: iter(real_data.splitlines(keepends=True))
-    with patch("builtins.open", m):
-        result = await _arp_lookup("192.168.1.10")
-    assert result == "AA:BB:CC:DD:EE:FF"
-
-
-async def test_arp_lookup_not_found(tmp_path):
-    """ARP lookup returns empty when IP is not in the table."""
-    from unittest.mock import mock_open, patch
-
-    data = (
-        "IP address       HW type     Flags       HW address            Mask     Device\n"
-        "192.168.1.10     0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
-    )
-    m = mock_open(read_data=data)
-    m.return_value.__iter__ = lambda self: iter(data.splitlines(keepends=True))
-    with patch("builtins.open", m):
-        result = await _arp_lookup("192.168.1.99")
-    assert result == ""
-
-
-async def test_arp_lookup_file_missing():
-    """ARP lookup returns empty when /proc/net/arp is not available."""
-    from unittest.mock import patch
-
-    with patch("builtins.open", side_effect=OSError):
-        result = await _arp_lookup("192.168.1.10")
-    assert result == ""
 
 
 # ── Config tests ──────────────────────────────────────────────────────────

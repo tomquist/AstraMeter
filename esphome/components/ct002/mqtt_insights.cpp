@@ -124,7 +124,6 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   ESP_LOGD(TAG, "MQTT disconnected");
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
-  this->discovered_consumers_with_ip_.clear();
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
@@ -265,26 +264,17 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);
 
-  // Consumer-level discovery on first sight — re-published when
-  // battery_ip first becomes known so HA's device.connections array
-  // picks up the ["ip", ...] entry (Python: service.py:447-476 re-runs
-  // discovery whenever ARP lookup succeeds for a previously-unknown
-  // consumer). We track "discovered with IP" separately from
-  // "discovered" so a later IP arrival triggers exactly one
-  // re-discovery, not one per subsequent event.
+  // Consumer-level discovery on first sight. The payload no longer depends on
+  // battery_ip (no `connections` are emitted; see ha_discovery.cpp / #438), so
+  // a single publish per consumer suffices — matching Python service.py.
   if (this->ha_discovery_) {
     const bool first_sight =
         this->discovered_consumers_.find(consumer_id) == this->discovered_consumers_.end();
-    const bool ip_just_arrived =
-        !snap.last_ip.empty() &&
-        this->discovered_consumers_with_ip_.find(consumer_id) ==
-            this->discovered_consumers_with_ip_.end();
-    if (first_sight || ip_just_arrived) {
+    if (first_sight) {
       this->discovered_consumers_.insert(consumer_id);
-      if (!snap.last_ip.empty()) this->discovered_consumers_with_ip_.insert(consumer_id);
       auto [topic, payload] = build_ct002_consumer_discovery(
           this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-          snap.device_type, /*network_mac=*/"", snap.last_ip);
+          snap.device_type);
       this->mqtt_->publish(topic, payload, 0, true);
     }
   }
@@ -296,7 +286,6 @@ void MqttInsightsComponent::publish_consumer_removed_(const std::string &consume
                                   "/consumer/" + consumer_id + "/availability";
   this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
   this->discovered_consumers_.erase(consumer_id);
-  this->discovered_consumers_with_ip_.erase(consumer_id);
 }
 
 void MqttInsightsComponent::handle_command_message_(const std::string &topic,
