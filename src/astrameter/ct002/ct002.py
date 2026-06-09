@@ -740,10 +740,22 @@ class CT002:
         # integral controller), and we don't even know which phase to
         # credit since ``consumer.phase`` defaults to "A" until the
         # battery declares its real phase.  See issue #376.
+        #
+        # With active control OFF the response carries the raw absolute
+        # grid reading, not a per-battery delta, so "reported + reading"
+        # double-counts the entire grid imbalance for every battery and
+        # the summed chrg/dchrg fields inflate without bound (issue
+        # #418).  There is no instruction in that mode; the battery's
+        # self-reported output is the best estimate of its net power.
         if not in_inspection_mode:
             consumer = self._get_consumer(consumer_id)
-            phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
-            consumer.last_instructed_power = float(reported_power + values[phase_idx])
+            if self.active_control:
+                phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
+                consumer.last_instructed_power = float(
+                    reported_power + values[phase_idx]
+                )
+            else:
+                consumer.last_instructed_power = float(reported_power)
 
         try:
             response_fields = self._build_response_fields(fields, values)

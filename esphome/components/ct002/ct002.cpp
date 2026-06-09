@@ -279,10 +279,20 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 
   if (!in_inspection_mode) {
     auto &consumer = this->get_consumer_(consumer_id);
-    size_t phase_idx = 0;
-    if (consumer.phase == "B") phase_idx = 1;
-    else if (consumer.phase == "C") phase_idx = 2;
-    consumer.last_instructed_power = reported_power + values[phase_idx];
+    if (this->active_control_) {
+      size_t phase_idx = 0;
+      if (consumer.phase == "B") phase_idx = 1;
+      else if (consumer.phase == "C") phase_idx = 2;
+      consumer.last_instructed_power = reported_power + values[phase_idx];
+    } else {
+      // Active control off: the response carries the raw absolute grid
+      // reading, not a per-battery delta, so "reported + reading" would
+      // double-count the grid imbalance for every battery and inflate the
+      // summed chrg/dchrg cross-talk fields without bound (issue #418).
+      // There is no instruction in this mode; the battery's self-reported
+      // output is the best estimate of its net power.
+      consumer.last_instructed_power = reported_power;
+    }
   }
 
   auto response_fields = this->build_response_fields_(fields, values);

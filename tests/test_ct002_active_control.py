@@ -5,6 +5,70 @@ import time
 
 from astrameter.ct002.balancer import ProbeState
 from astrameter.ct002.ct002 import CT002
+from astrameter.ct002.protocol import build_payload
+
+
+class _FakeTransport:
+    def __init__(self):
+        self.sent = []
+
+    def sendto(self, data, addr):
+        self.sent.append((data, addr))
+
+
+async def _poll(device, transport, mac, phase, power, addr):
+    """Send one battery request datagram through the full request handler."""
+    fields = ["VNSE3-0", mac, "HME-4", "", phase, str(power)]
+    await device._handle_request(bytes(build_payload(fields)), addr, transport)
+
+
+class TestPassiveModeCrossTalk:
+    """Regression tests for issue #418.
+
+    With ``ACTIVE_CONTROL=False`` the response carries the raw absolute grid
+    reading, not a per-battery delta, so ``last_instructed_power`` must track
+    only the battery's self-reported output.  Adding the grid reading to every
+    battery's report double-counts the imbalance and inflates the summed
+    chrg/dchrg cross-talk fields without bound, collapsing inter-battery
+    coordination.
+    """
+
+    async def test_passive_mode_tracks_reported_power_only(self):
+        device = CT002(active_control=False)
+
+        async def before_send(addr, fields, consumer_id):
+            return [3062, 0, 0]
+
+        device.before_send = before_send
+        transport = _FakeTransport()
+        await _poll(device, transport, "02B250000001", "A", 507, ("10.0.0.1", 1111))
+        await _poll(device, transport, "02B250000002", "A", 322, ("10.0.0.2", 2222))
+
+        assert device._consumers["02b250000001"].last_instructed_power == 507.0
+        assert device._consumers["02b250000002"].last_instructed_power == 322.0
+        by_phase = device._collect_reports_by_phase()
+        # The cross-talk field reflects the actual combined output (829 W),
+        # not reported + grid for each battery (507+3062 + 322+3062 = 6953 W).
+        assert by_phase["A"]["dchrg_power"] == 829
+        assert by_phase["A"]["chrg_power"] == 0
+        assert len(transport.sent) == 2
+
+    async def test_active_mode_still_records_instructed_net_power(self):
+        device = CT002(active_control=True, fair_distribution=False)
+
+        async def before_send(addr, fields, consumer_id):
+            return [400, 0, 0]
+
+        device.before_send = before_send
+        transport = _FakeTransport()
+        # Two rounds so both batteries are known when the split is computed.
+        for _ in range(2):
+            await _poll(device, transport, "02B250000001", "A", 100, ("10.0.0.1", 1111))
+            await _poll(device, transport, "02B250000002", "A", 100, ("10.0.0.2", 2222))
+
+        # Each battery gets half of the 400 W delta on top of its 100 W.
+        assert device._consumers["02b250000001"].last_instructed_power == 300.0
+        assert device._consumers["02b250000002"].last_instructed_power == 300.0
 
 
 class TestActiveControl:

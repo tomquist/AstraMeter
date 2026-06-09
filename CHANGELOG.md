@@ -4,6 +4,7 @@
 
 - **Added** the AVM **FRITZ!Smart Energy 250** smart-meter read head as a power source (`[FRITZ]`). AstraMeter logs into the FRITZ!Box over the AHA-HTTP-Interface (`login_sid.lua` + `getdevicelistinfos`) and reads the read head's signed grid power by AIN — positive = import, negative = feed-in. See [docs/powermeters.md](docs/powermeters.md#fritzsmart-energy-250).
 - **Fixed** the HomeWizard powermeter's MQTT Insights **Online** sensor flapping on/off while the P1 meter is in a broken state. A stalled dongle keeps accepting the WebSocket and replays a single cached reading on every watchdog reconnect, which briefly reset the freshness window; AstraMeter now treats the source as online only while readings flow as a continuous stream, so the sensor stays off until live data resumes ([#427](https://github.com/tomquist/astrameter/issues/427)).
+- **Fixed** multi-battery oscillation with `ACTIVE_CONTROL = False` (Python and ESPHome): the chrg/dchrg cross-talk fields in the CT002/CT003 response added the raw grid reading to every battery's reported output, inflating the totals to physically impossible values (e.g. 9 kW "discharge" from two 2.5 kW batteries) and collapsing inter-battery coordination. In passive mode the emulator now reports each battery's self-reported output instead ([#418](https://github.com/tomquist/astrameter/issues/418)).
 
 
 ## 2.1.2

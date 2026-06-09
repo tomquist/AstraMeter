@@ -250,8 +250,9 @@ async def test_handle_request_records_net_instructed_power_not_delta():
     Venus discharging at +500 W, we correct down by 100 W.  The simulator
     interprets the response as ``new_target = current_power + grid_reading``,
     so the *net* target is +400 W.  ``last_instructed_power`` must record
-    400, not the raw -100 delta."""
-    device = CT002(ct_mac="112233445566", active_control=False)
+    400, not the raw -100 delta.  (With a single consumer the balancer
+    passes the injected reading through as this battery's delta.)"""
+    device = CT002(ct_mac="112233445566", active_control=True)
     await _drive_request(
         device,
         battery_mac="AABBCCDDEEFF",
@@ -268,7 +269,7 @@ async def test_handle_request_records_net_instructed_power_not_delta():
 async def test_handle_request_pv_passthrough_records_zero_net_target():
     """Venus D scenario from issue #376: reports +500 (passthrough), we
     send a -500 charge delta → net target 0, A_dchrg_power must be 0."""
-    device = CT002(ct_mac="112233445566", active_control=False)
+    device = CT002(ct_mac="112233445566", active_control=True)
     await _drive_request(
         device,
         battery_mac="AABBCCDDEEFF",
