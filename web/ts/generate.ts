@@ -639,11 +639,12 @@ export function generateHomeAssistant(state: State): string {
   add("wait_for_next_message", !isBlank(g.waitForNextMessage) ? g.waitForNextMessage : tuning.WAIT_FOR_NEXT_MESSAGE);
   add("dedupe_time_window", g.dedupeTimeWindow);
 
-  // CT identity / efficiency options.
+  // CT identity / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};
   add("ct_mac", ctf.CT_MAC);
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
+  add("min_dc_output", ctf.MIN_DC_OUTPUT);
 
   // Signal-conditioning filters (transform, smoothing, deadband, hampel, pid).
   // Option names are the lower-cased INI keys; throttle/wait handled above.
