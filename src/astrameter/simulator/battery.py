@@ -13,6 +13,7 @@ import random
 import time
 
 from . import protocol
+from .firmware_steering import FirmwareSteeringController
 
 logger = logging.getLogger("astra_sim.battery")
 
@@ -41,7 +42,12 @@ class BatterySimulator:
         max_dc_input: int = 0,
         dc_input_power: float = 0.0,
         idle_on_cross_phase_discharge: bool = False,
+        steering: str = "firmware",
     ) -> None:
+        if steering not in ("firmware", "integral"):
+            raise ValueError(
+                f"Invalid steering {steering!r}, must be 'firmware' or 'integral'"
+            )
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
                 f"Invalid phase {phase!r}, must be one of "
@@ -67,6 +73,7 @@ class BatterySimulator:
         self.power_update_delay_ticks = max(0, int(power_update_delay_ticks))
         self.max_dc_input = max(0, int(max_dc_input))
         self.idle_on_cross_phase_discharge = idle_on_cross_phase_discharge
+        self.steering = steering
 
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
@@ -79,6 +86,14 @@ class BatterySimulator:
         self._pending_power_targets: list[tuple[int, float]] = []
         self._dc_input_power: float = 0.0
         self.dc_input_power = dc_input_power  # reuse setter clamp
+
+        # Self-consumption control law (the steering a real Venus-class battery
+        # runs on the grid value it reads back from the CT). ``hi``/``lo`` are
+        # the charge / discharge power limits in the controller's convention
+        # (setpoint positive = charge, negative = discharge).
+        self._steering = FirmwareSteeringController()
+        self._steer_hi = float(self.max_charge_power)
+        self._steer_lo = -float(self.max_discharge_power)
 
     # -- public read-only properties ---------------------------------------
 
@@ -244,12 +259,19 @@ class BatterySimulator:
         return response_fields
 
     def _handle_ct_response(self, response_fields: list[str]) -> None:
-        """Apply integral-control target update and dchrg-driven idle rule.
+        """Derive the new AC target from the CT response.
 
-        Real Marstek batteries derive their new AC target by adding the
-        reported grid reading (sum of fields 4-6) to their current output.
-        If the opt-in firmware-mimic flag is on, a charging battery also
-        idles when it sees another phase being instructed to discharge.
+        With ``steering="firmware"`` (default) the grid value read back from the
+        CT (sum of the per-phase power fields, positive = importing) is fed to
+        :class:`FirmwareSteeringController`, which slews an internal setpoint
+        toward nulling it — the control law a real Venus-class battery runs. The
+        controller's sign is the inverse of the simulator's (setpoint positive =
+        charge), so the simulator target is the negated setpoint. With
+        ``steering="integral"`` the legacy rule ``new_target = output + grid`` is
+        used instead.
+
+        If the opt-in cross-phase flag is on, a charging battery also idles when
+        it sees another phase being instructed to discharge.
         """
 
         def field(idx: int) -> int:
@@ -260,13 +282,17 @@ class BatterySimulator:
 
         grid_reading = field(4) + field(5) + field(6)
         dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
-        new_target: float = self._current_power + grid_reading
+
+        if self.steering == "firmware":
+            setpoint = self._steering.step(grid_reading, self._steer_hi, self._steer_lo)
+            new_target: float = -setpoint  # controller: +charge → simulator: +discharge
+        else:  # "integral": new target = current output + grid residual
+            new_target = self._current_power + grid_reading
 
         # Real Marstek firmware idles a charging battery when it sees
         # another battery (on a different phase) being instructed to
         # discharge — to avoid one battery feeding the other through
-        # the grid.  Opt-in; default off keeps existing simulator
-        # tests stable.
+        # the grid.  Opt-in; default off.
         if (
             self.idle_on_cross_phase_discharge
             and new_target < 0

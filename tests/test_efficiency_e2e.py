@@ -115,6 +115,11 @@ class _SimHarness:
                     poll_interval=battery_poll_interval,
                     min_power_threshold=battery_min_power_threshold,
                     startup_delay=battery_startup_delay,
+                    # These tests assert the *emulator's* control quality against
+                    # a deterministic plant, so pin the simple integral battery
+                    # model (the firmware steering's accelerating ramp adds
+                    # realistic transients that would change these thresholds).
+                    steering="integral",
                 )
             )
 
