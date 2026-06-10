@@ -8,8 +8,9 @@ import logging
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import get_args
 
-from .battery import BatterySimulator
+from .battery import BatterySimulator, DischargeIdleMode
 from .load_model import Load, LoadModel
 from .powermeter_sim import PowermeterSimulator
 
@@ -30,6 +31,7 @@ class BatteryConfig:
     max_dc_input: int = 0
     dc_input_power: float = 0.0
     idle_on_cross_phase_discharge: bool = False
+    discharge_idle_mode: DischargeIdleMode = "aggregate"
 
 
 @dataclass
@@ -100,6 +102,7 @@ class SimulationRunner:
                 max_dc_input=bc.max_dc_input,
                 dc_input_power=bc.dc_input_power,
                 idle_on_cross_phase_discharge=bc.idle_on_cross_phase_discharge,
+                discharge_idle_mode=bc.discharge_idle_mode,
             )
             for bc in cfg.batteries
         ]
@@ -185,6 +188,7 @@ def parse_config(data: dict) -> SimulationConfig:
             idle_on_cross_phase_discharge=bool(
                 bd.get("idle_on_cross_phase_discharge", False)
             ),
+            discharge_idle_mode=bd.get("discharge_idle_mode", "aggregate"),
         )
         batteries.append(bc)
 
@@ -235,6 +239,11 @@ def validate_config(cfg: SimulationConfig) -> None:
             raise ValueError(
                 f"Battery {bc.mac}: dc_input_power must be within "
                 f"[0, max_dc_input={bc.max_dc_input}], got {bc.dc_input_power}"
+            )
+        if bc.discharge_idle_mode not in get_args(DischargeIdleMode):
+            raise ValueError(
+                f"Battery {bc.mac}: discharge_idle_mode must be one of "
+                f"{list(get_args(DischargeIdleMode))}, got {bc.discharge_idle_mode!r}"
             )
         mac = bc.mac.upper()
         if len(mac) != 12 or not all(c in "0123456789ABCDEF" for c in mac):

@@ -97,13 +97,16 @@ and the discharge reaction.
 ## Implications for the simulator
 
 `src/astrameter/simulator/battery.py` models the discharge reaction with the
-opt‑in `idle_on_cross_phase_discharge` flag. To match the firmware:
+opt‑in `idle_on_cross_phase_discharge` flag, plus a `discharge_idle_mode`
+selector that mirrors the firmware `rechrg_mode` switch:
 
-- The reaction keys off the **aggregate** discharge cross‑talk (any phase's
-  `*_dchrg_power > 0`), **including the battery's own phase** — mirroring
-  aggregate mode (`rechrg_mode == 1`), the realistic configuration for a single
-  household meter and the one that reproduces #447. An earlier model that
-  excluded the own phase did not correspond to any firmware mode.
-- Per‑phase mode (own‑phase‑only) is a real alternate firmware mode but is not
-  separately simulated; the aggregate model is a strict superset for the
-  multi‑battery / single‑meter scenarios we test.
+- `discharge_idle_mode="aggregate"` (default, `rechrg_mode == 1`): the reaction
+  keys off the **sum** of all phases' `*_dchrg_power`, **including the
+  battery's own phase**. This is the realistic configuration for a single
+  household meter and the one that reproduces #447.
+- `discharge_idle_mode="per_phase"` (`rechrg_mode != 1`): the reaction keys off
+  **only the battery's own phase** `*_dchrg_power`.
+
+Both modes include the battery's own phase in the signal. The earlier model
+that excluded the own phase (reacting to "other phases only") corresponded to
+no firmware mode and has been removed.

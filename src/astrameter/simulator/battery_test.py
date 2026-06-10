@@ -197,6 +197,64 @@ def test_idle_on_own_phase_dchrg() -> None:
     assert b.target_power == 0.0
 
 
+def test_per_phase_mode_idles_on_own_phase_dchrg() -> None:
+    """per_phase mode (rechrg_mode != 1) reacts to the battery's own phase."""
+    b = _battery(idle_on_cross_phase_discharge=True, discharge_idle_mode="per_phase")
+    b._current_power = -500.0  # phase A, charging
+
+    # Own phase (A) dchrg > 0 → idle.
+    fields = _response_fields(phase_targets=(-500, 0, 0), dchrg=(400, 0, 0))
+    b._handle_ct_response(fields)
+
+    assert b.target_power == 0.0
+
+
+def test_per_phase_mode_ignores_foreign_phase_dchrg() -> None:
+    """per_phase mode ignores discharge on other phases (own phase only)."""
+    b = _battery(idle_on_cross_phase_discharge=True, discharge_idle_mode="per_phase")
+    b._current_power = -500.0  # phase A, charging
+
+    # Discharge only on phase B → phase-A battery does NOT react; integral rule
+    # applies: current -500 + grid -500 = -1000.
+    fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
+    b._handle_ct_response(fields)
+
+    assert b.target_power == -1000.0
+
+
+def test_invalid_discharge_idle_mode_raises() -> None:
+    with pytest.raises(ValueError, match="discharge_idle_mode"):
+        _battery(discharge_idle_mode="nonsense")  # type: ignore[arg-type]
+
+
+def test_parse_config_discharge_idle_mode() -> None:
+    data = {
+        "batteries": [
+            {"mac": "02B250000001", "phase": "A"},  # default aggregate
+            {
+                "mac": "02B250000002",
+                "phase": "B",
+                "discharge_idle_mode": "per_phase",
+            },
+        ],
+    }
+    cfg = parse_config(data)
+    validate_config(cfg)
+    assert cfg.batteries[0].discharge_idle_mode == "aggregate"
+    assert cfg.batteries[1].discharge_idle_mode == "per_phase"
+
+
+def test_validate_config_rejects_bad_discharge_idle_mode() -> None:
+    data = {
+        "batteries": [
+            {"mac": "02B250000001", "phase": "A", "discharge_idle_mode": "bogus"},
+        ],
+    }
+    cfg = parse_config(data)
+    with pytest.raises(ValueError, match="discharge_idle_mode"):
+        validate_config(cfg)
+
+
 def test_parse_config_power_update_delay_ticks() -> None:
     data = {
         "power_update_delay_ticks": 3,
