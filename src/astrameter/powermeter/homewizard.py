@@ -151,7 +151,9 @@ class HomeWizardPowermeter(Powermeter):
             self._connected = False
             await asyncio.sleep(5)
 
-    async def _measurement_watchdog(self, ws: aiohttp.ClientWebSocketResponse[bool]) -> None:
+    async def _measurement_watchdog(
+        self, ws: aiohttp.ClientWebSocketResponse[bool]
+    ) -> None:
         """Force-close *ws* when no measurement has arrived within
         :data:`WATCHDOG_TIMEOUT_SECONDS`.
 
