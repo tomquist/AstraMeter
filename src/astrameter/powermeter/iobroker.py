@@ -40,6 +40,7 @@ class IoBroker(Powermeter):
             raise RuntimeError("Session not started; call start() first")
         url = f"http://{self.ip}:{self.port}{path}"
         async with self.session.get(url) as resp:
+            resp.raise_for_status()
             return await resp.json(content_type=None)
 
     async def get_powermeter_watts(self) -> list[float]:

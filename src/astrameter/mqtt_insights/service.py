@@ -63,8 +63,8 @@ async def _arp_lookup(ip: str) -> str:
                         and parts[3] != "00:00:00:00:00:00"
                     ):
                         return parts[3].upper()
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug("ARP lookup for %s failed: %s", ip, exc)
         return ""
 
     return await asyncio.to_thread(_sync_lookup)
@@ -950,7 +950,8 @@ class MqttInsightsService:
             return await asyncio.wait_for(
                 pm.get_powermeter_watts(), timeout=POWERMETER_PROBE_TIMEOUT
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug("Health probe for powermeter %s failed: %s", pm.name, exc)
             return None
 
     @staticmethod

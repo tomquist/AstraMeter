@@ -75,7 +75,7 @@ class _SmaProtocol(asyncio.DatagramProtocol):
             logger.debug(f"SMA Energy Meter: dropping invalid packet: {e}")
 
     def error_received(self, exc: Exception) -> None:
-        logger.debug(f"SMA Energy Meter: OS error: {exc}")
+        logger.warning("SMA Energy Meter: OS error on UDP socket: %s", exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         if exc:

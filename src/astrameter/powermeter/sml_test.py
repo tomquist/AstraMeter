@@ -270,8 +270,8 @@ async def test_read_serial_timeout():
     sml._reader = mock_reader
 
     original_powers = sml._current.powers[:]
-    # Should not raise — timeout is handled gracefully
-    await sml._read_serial()
+    with pytest.raises(TimeoutError, match="SML serial read timed out"):
+        await sml._read_serial()
     assert sml._current.powers == original_powers
 
 
