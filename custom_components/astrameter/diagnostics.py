@@ -6,9 +6,14 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.redact import async_redact_data
 
 from . import const
 from .coordinator import AstraMeterRuntime
+
+# Diagnostics are user-downloadable and routinely pasted into bug reports, so
+# never surface the Marstek account credentials in them.
+TO_REDACT = {const.CONF_MARSTEK_MAILBOX, const.CONF_MARSTEK_PASSWORD}
 
 
 async def async_get_config_entry_diagnostics(
@@ -20,7 +25,7 @@ async def async_get_config_entry_diagnostics(
     )
     diag: dict[str, Any] = {
         "entry": {
-            "data": dict(entry.data),
+            "data": async_redact_data(entry.data, TO_REDACT),
             "options": dict(entry.options),
         },
     }
