@@ -88,7 +88,9 @@ class FirmwareSteeringController:
         split evenly between them, as the device does).
         """
         nb = max(1, int(device_count))
-        g = int(g) // nb if nb > 1 else int(g)
+        g = int(g)
+        if nb > 1:
+            g = int(g / nb)  # signed integer division, truncated toward zero
 
         sp = self.setpoint
         # Keep the setpoint inside the dynamic power window; pulling it back in

@@ -42,12 +42,7 @@ class BatterySimulator:
         max_dc_input: int = 0,
         dc_input_power: float = 0.0,
         idle_on_cross_phase_discharge: bool = False,
-        steering: str = "firmware",
     ) -> None:
-        if steering not in ("firmware", "integral"):
-            raise ValueError(
-                f"Invalid steering {steering!r}, must be 'firmware' or 'integral'"
-            )
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
                 f"Invalid phase {phase!r}, must be one of "
@@ -73,7 +68,6 @@ class BatterySimulator:
         self.power_update_delay_ticks = max(0, int(power_update_delay_ticks))
         self.max_dc_input = max(0, int(max_dc_input))
         self.idle_on_cross_phase_discharge = idle_on_cross_phase_discharge
-        self.steering = steering
 
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
@@ -259,16 +253,21 @@ class BatterySimulator:
         return response_fields
 
     def _handle_ct_response(self, response_fields: list[str]) -> None:
-        """Derive the new AC target from the CT response.
+        """Derive the new AC target via the Venus-class steering controller.
 
-        With ``steering="firmware"`` (default) the grid value read back from the
-        CT (sum of the per-phase power fields, positive = importing) is fed to
-        :class:`FirmwareSteeringController`, which slews an internal setpoint
-        toward nulling it — the control law a real Venus-class battery runs. The
-        controller's sign is the inverse of the simulator's (setpoint positive =
-        charge), so the simulator target is the negated setpoint. With
-        ``steering="integral"`` the legacy rule ``new_target = output + grid`` is
-        used instead.
+        The grid value read back from the CT (sum of the per-phase power fields,
+        positive = importing) is fed to :class:`FirmwareSteeringController`,
+        which slews an internal setpoint toward nulling it — the control law a
+        real Venus-class battery runs. The controller's sign is the inverse of
+        the simulator's (setpoint positive = charge), so the simulator target is
+        the negated setpoint.
+
+        Cross-battery share-split: a real battery divides the grid value by the
+        number of batteries reported on its phase (the ``*_chrg_nb`` count), so
+        several batteries on one phase each take their share rather than all
+        chasing the full residual. This matters in relay mode / against a real
+        CT; AstraMeter's active-control emulator distributes per-battery targets
+        itself and reports a count of 1, so the split is a no-op there.
 
         If the opt-in cross-phase flag is on, a charging battery also idles when
         it sees another phase being instructed to discharge.
@@ -282,12 +281,16 @@ class BatterySimulator:
 
         grid_reading = field(4) + field(5) + field(6)
         dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
+        # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
+        phase_count = field(8 + "ABC".index(self.phase))
 
-        if self.steering == "firmware":
-            setpoint = self._steering.step(grid_reading, self._steer_hi, self._steer_lo)
-            new_target: float = -setpoint  # controller: +charge → simulator: +discharge
-        else:  # "integral": new target = current output + grid residual
-            new_target = self._current_power + grid_reading
+        setpoint = self._steering.step(
+            grid_reading,
+            self._steer_hi,
+            self._steer_lo,
+            device_count=phase_count,
+        )
+        new_target: float = -setpoint  # controller: +charge → simulator: +discharge
 
         # Real Marstek firmware idles a charging battery when it sees
         # another battery (on a different phase) being instructed to

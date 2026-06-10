@@ -30,7 +30,6 @@ class BatteryConfig:
     max_dc_input: int = 0
     dc_input_power: float = 0.0
     idle_on_cross_phase_discharge: bool = False
-    steering: str = "firmware"
 
 
 @dataclass
@@ -101,7 +100,6 @@ class SimulationRunner:
                 max_dc_input=bc.max_dc_input,
                 dc_input_power=bc.dc_input_power,
                 idle_on_cross_phase_discharge=bc.idle_on_cross_phase_discharge,
-                steering=bc.steering,
             )
             for bc in cfg.batteries
         ]
@@ -187,7 +185,6 @@ def parse_config(data: dict) -> SimulationConfig:
             idle_on_cross_phase_discharge=bool(
                 bd.get("idle_on_cross_phase_discharge", False)
             ),
-            steering=str(bd.get("steering", "firmware")),
         )
         batteries.append(bc)
 
