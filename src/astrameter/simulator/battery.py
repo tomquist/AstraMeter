@@ -249,7 +249,14 @@ class BatterySimulator:
         Real Marstek batteries derive their new AC target by adding the
         reported grid reading (sum of fields 4-6) to their current output.
         If the opt-in firmware-mimic flag is on, a charging battery also
-        idles when it sees another phase being instructed to discharge.
+        idles when the discharge cross-talk signal is positive.
+
+        The idle rule mirrors the firmware's actual aggregation (verified by
+        disassembly — see ``docs/marstek-firmware-behavior.md``): the battery
+        reduces the per-phase ``*_dchrg_power`` block to a single discharge
+        signal that, in the whole-house "aggregate" mode (``rechrg_mode==1``),
+        is the **sum across all phases including its own**.  So any phase
+        reporting a positive ``dchrg`` — own phase included — counts.
         """
 
         def field(idx: int) -> int:
@@ -262,24 +269,30 @@ class BatterySimulator:
         dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
         new_target: float = self._current_power + grid_reading
 
-        # Real Marstek firmware idles a charging battery when it sees
-        # another battery (on a different phase) being instructed to
-        # discharge — to avoid one battery feeding the other through
-        # the grid.  Opt-in; default off keeps existing simulator
-        # tests stable.
+        # Real Marstek firmware idles a charging battery when the aggregated
+        # discharge cross-talk is positive — to avoid one battery feeding
+        # another through the grid.  The firmware includes the battery's own
+        # phase in this signal (it is not an "other phases only" check), so a
+        # discharge reported on any phase triggers it.  Opt-in; default off
+        # keeps existing simulator tests stable.
         if (
             self.idle_on_cross_phase_discharge
             and new_target < 0
-            and self._other_phase_discharging(dchrg)
+            and self._discharge_crosstalk_present(dchrg)
         ):
             new_target = 0.0
 
         self._apply_ct_derived_target(new_target)
 
-    def _other_phase_discharging(self, dchrg: tuple[int, int, int]) -> bool:
-        """True if a phase other than this battery's reports a positive dchrg."""
-        own_idx = "ABC".index(self.phase)
-        return any(v > 0 for i, v in enumerate(dchrg) if i != own_idx)
+    @staticmethod
+    def _discharge_crosstalk_present(dchrg: tuple[int, int, int]) -> bool:
+        """True if any phase (including the battery's own) reports a positive dchrg.
+
+        Matches the firmware aggregate mode, which sums ``A_dchrg + B_dchrg +
+        C_dchrg`` (own phase included).  ``*_dchrg_power`` fields are always
+        non-negative, so "any positive" is equivalent to "sum positive".
+        """
+        return any(v > 0 for v in dchrg)
 
     # -- main loop ---------------------------------------------------------
 

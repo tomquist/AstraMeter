@@ -178,17 +178,23 @@ def test_no_idle_when_flag_off() -> None:
     assert b.target_power == -1000.0
 
 
-def test_idle_ignores_own_phase_dchrg() -> None:
-    """A_dchrg on the battery's own phase doesn't trigger the idle rule."""
+def test_idle_on_own_phase_dchrg() -> None:
+    """Own-phase dchrg DOES trigger the idle rule.
+
+    The firmware aggregates the discharge cross-talk across all phases
+    including the battery's own (verified by disassembly — see
+    ``docs/marstek-firmware-behavior.md``), so a discharge reported on the
+    battery's own phase (e.g. another battery on the same phase) idles it just
+    like a foreign-phase discharge would.
+    """
     b = _battery(idle_on_cross_phase_discharge=True)  # phase A
     b._current_power = -500.0
 
-    # Same-phase (A) dchrg should NOT trigger idle.  Use grid -500 so
-    # the integral rule wants new_target = -1000.
+    # Same-phase (A) dchrg > 0 while we want to charge (grid -500) → idle.
     fields = _response_fields(phase_targets=(-500, 0, 0), dchrg=(400, 0, 0))
     b._handle_ct_response(fields)
 
-    assert b.target_power == -1000.0
+    assert b.target_power == 0.0
 
 
 def test_parse_config_power_update_delay_ticks() -> None:

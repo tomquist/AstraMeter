@@ -7,6 +7,11 @@ This document summarizes the CT002/CT003 protocol based on community reverse‑e
 Capture-based findings for issue #111 are documented in:
 - [ct002-capture-analysis.md](ct002-capture-analysis.md)
 
+How the **battery** firmware consumes these response fields (struct layout,
+per-phase vs. aggregate `*_dchrg_power` handling), recovered by disassembly, is
+documented in:
+- [marstek-firmware-behavior.md](marstek-firmware-behavior.md)
+
 The CT002 and CT003 share the **same protocol**. The only difference is the CT type value:
 - **CT002:** `HME-4`
 - **CT003:** `HME-3`
