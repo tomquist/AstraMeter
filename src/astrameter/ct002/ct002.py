@@ -729,8 +729,16 @@ class CT002:
         # Record the *net* power we expect this battery to be at after
         # applying the instruction (its reported output plus the delta we
         # deliver — the battery's firmware computes
-        # ``new_target = current_power + grid_reading_field``).  The
-        # cross-talk *_chrg_power / *_dchrg_power fields convey net power
+        # ``new_target = current_power + (A_field + B_field + C_field)``, i.e.
+        # it integrates the *sum* of the three phase fields, not just its own
+        # phase).  We mirror that here: ``reported_power + sum(values)`` is the
+        # battery's true intended net output.  Using only the own-phase
+        # fragment understates a charge command whenever the balancer splits it
+        # across phases (one battery per phase), so a full battery passing PV
+        # through (+P) while being told to charge could come out *positive* and
+        # be mis-broadcast as discharge — the issue #447 oscillation.
+        #
+        # The cross-talk *_chrg_power / *_dchrg_power fields convey net power
         # per phase so other batteries can see who is actively
         # charging/discharging cells; storing only the delta would lose
         # the steady-state signal and flip signs on small corrections.
@@ -739,11 +747,10 @@ class CT002:
         # battery is running its phase-discovery routine, not our
         # integral controller), and we don't even know which phase to
         # credit since ``consumer.phase`` defaults to "A" until the
-        # battery declares its real phase.  See issue #376.
+        # battery declares its real phase.  See issues #376 and #447.
         if not in_inspection_mode:
             consumer = self._get_consumer(consumer_id)
-            phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
-            consumer.last_instructed_power = float(reported_power + values[phase_idx])
+            consumer.last_instructed_power = float(reported_power + sum(values[:3]))
 
         try:
             response_fields = self._build_response_fields(fields, values)

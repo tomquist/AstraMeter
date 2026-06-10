@@ -279,10 +279,14 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 
   if (!in_inspection_mode) {
     auto &consumer = this->get_consumer_(consumer_id);
-    size_t phase_idx = 0;
-    if (consumer.phase == "B") phase_idx = 1;
-    else if (consumer.phase == "C") phase_idx = 2;
-    consumer.last_instructed_power = reported_power + values[phase_idx];
+    // Mirror the battery firmware: it integrates the SUM of the three phase
+    // fields (new_target = current + A_field + B_field + C_field), so the
+    // intended net output is reported_power + sum(values), not just the
+    // own-phase fragment.  Using only one phase understates a charge command
+    // the balancer split across phases and can mis-broadcast a full,
+    // PV-passthrough battery as discharging (issue #447).  Keep in sync with
+    // src/astrameter/ct002/ct002.py.
+    consumer.last_instructed_power = reported_power + values[0] + values[1] + values[2];
   }
 
   auto response_fields = this->build_response_fields_(fields, values);
