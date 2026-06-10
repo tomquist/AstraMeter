@@ -3,6 +3,7 @@
 ## Next
 
 - **Added** the AVM **FRITZ!Smart Energy 250** smart-meter read head as a power source (`[FRITZ]`). AstraMeter logs into the FRITZ!Box over the AHA-HTTP-Interface (`login_sid.lua` + `getdevicelistinfos`) and reads the read head's signed grid power by AIN — positive = import, negative = feed-in. See [docs/powermeters.md](docs/powermeters.md#fritzsmart-energy-250).
+- **Added** the **Min DC Output** option to the Home Assistant add-on's Configuration tab, so it no longer requires a custom config file or MQTT to set. The web config generator's add-on target now emits it too ([#446](https://github.com/tomquist/astrameter/issues/446)).
 - **Fixed** the HomeWizard powermeter's MQTT Insights **Online** sensor flapping on/off while the P1 meter is in a broken state. A stalled dongle keeps accepting the WebSocket and replays a single cached reading on every watchdog reconnect, which briefly reset the freshness window; AstraMeter now treats the source as online only while readings flow as a continuous stream, so the sensor stays off until live data resumes ([#427](https://github.com/tomquist/astrameter/issues/427)).
 
 
