@@ -189,7 +189,7 @@ class _MixedHarness:
         for _ in range(n):
             for b in (self.venus, self.b2500):
                 await b.step(b.poll_interval)
-            self.clock.advance(0.3)
+            self.clock.advance(self.venus.poll_interval)
 
     def grid(self) -> float:
         g = self.powermeter.compute_grid()

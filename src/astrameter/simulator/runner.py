@@ -172,10 +172,19 @@ def parse_config(data: dict) -> SimulationConfig:
     batteries: list[BatteryConfig] = []
     for bd in data.get("batteries", []):
         delay = bd.get("power_update_delay_ticks", default_delay)
+        # Any *string* is a valid device type (unknown models classify as
+        # AC-coupled, like the real CT — see ``device_capabilities``); only
+        # reject non-strings rather than silently coercing e.g. null -> "None".
+        meter_dev_type = bd.get("meter_dev_type", "HMG-50")
+        if not isinstance(meter_dev_type, str):
+            raise ValueError(
+                f"Battery {bd.get('mac', '<unknown>')}: meter_dev_type must be "
+                f"a string, got {meter_dev_type!r}"
+            )
         bc = BatteryConfig(
             mac=bd["mac"],
             phase=bd["phase"],
-            meter_dev_type=str(bd.get("meter_dev_type", "HMG-50")),
+            meter_dev_type=meter_dev_type,
             max_charge_power=bd.get("max_charge_power", 800),
             max_discharge_power=bd.get("max_discharge_power", 800),
             capacity_wh=bd.get("capacity_wh", 2560.0),

@@ -265,6 +265,14 @@ def test_parse_config_meter_dev_type() -> None:
     assert cfg.batteries[1].meter_dev_type == "HMG-50"  # default
 
 
+@pytest.mark.parametrize("bad", [None, 2, ["HMJ-2"]])
+def test_parse_config_rejects_non_string_meter_dev_type(bad: object) -> None:
+    """Non-string values fail at parse time instead of coercing to e.g. "None"."""
+    data = {"batteries": [{"mac": "02B250000001", "phase": "A", "meter_dev_type": bad}]}
+    with pytest.raises(ValueError, match="meter_dev_type must be a string"):
+        parse_config(data)
+
+
 def test_parse_config_power_update_delay_ticks() -> None:
     data = {
         "power_update_delay_ticks": 3,
