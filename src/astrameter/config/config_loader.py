@@ -78,7 +78,11 @@ class ClientFilter:
                 if client_ip_addr in netmask:
                     return True
         except ValueError as e:
-            logger.error(f"Error: {e}")
+            logger.error(
+                "Invalid client IP %r, cannot match against filters: %s",
+                client_ip,
+                e,
+            )
             return False
         return False
 

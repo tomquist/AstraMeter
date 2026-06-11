@@ -132,8 +132,7 @@ class Sml(Powermeter):
         try:
             data = await asyncio.wait_for(self._reader.read(512), timeout=10)
         except asyncio.TimeoutError:
-            logger.error("serial read timed out")
-            return
+            raise TimeoutError("SML serial read timed out") from None
         stream.add(data)
         for i in range(10):
             sml_frame = await self._try_read_frame(stream)
@@ -147,7 +146,7 @@ class Sml(Powermeter):
                 )
                 logger.debug("got sml frame: %s after %s attempts", self._current, i)
                 return
-        logger.error("failed to read SML frame after 10 attempts")
+        raise OSError("Failed to read SML frame after 10 attempts")
 
     async def _try_read_frame(self, stream: SmlStreamReader) -> SmlFrame | None:
         try:
@@ -163,11 +162,9 @@ class Sml(Powermeter):
             try:
                 data = await asyncio.wait_for(self._reader.read(512), timeout=10)
             except asyncio.TimeoutError:
-                logger.error("serial read timed out")
-                return None
+                raise TimeoutError("SML serial read timed out") from None
             if not data:
-                logger.error("serial connection closed")
-                return None
+                raise OSError("SML serial connection closed unexpectedly")
             # May buffer partial SML; frame may parse on a later loop iteration.
             stream.add(data)
         return sml_frame
