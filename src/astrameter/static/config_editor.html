@@ -280,7 +280,7 @@ async function loadConfig() {
     renderAll();
   } catch (e) {
     document.getElementById('config-container').innerHTML =
-      '<p class="loading" style="color:#c0392b">&#10060; Failed to load configuration: ' + e.message + '</p>';
+      '<p class="loading" style="color:#c0392b">&#10060; Failed to load configuration: ' + esc(e.message) + '</p>';
   }
 }
 
