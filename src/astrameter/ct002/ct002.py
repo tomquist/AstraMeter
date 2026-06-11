@@ -425,9 +425,9 @@ class CT002:
 
     def _collect_reports_by_phase(self):
         by_phase = {
-            "A": {"chrg_power": 0, "dchrg_power": 0, "active": False},
-            "B": {"chrg_power": 0, "dchrg_power": 0, "active": False},
-            "C": {"chrg_power": 0, "dchrg_power": 0, "active": False},
+            "A": {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0},
+            "B": {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0},
+            "C": {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0},
         }
 
         for consumer in self._consumers.values():
@@ -436,6 +436,11 @@ class CT002:
             phase = consumer.phase.upper()
             if phase not in by_phase:
                 phase = "A"
+            # Count every battery reporting on the phase (regardless of its
+            # current power) so relay mode can forward the real per-phase
+            # battery count — each battery divides the forwarded aggregate by it
+            # to take its 1/N share.
+            by_phase[phase]["count"] += 1
             # Use the net AC power we *instructed* this consumer to be at
             # (its reported output plus the delta in the last response),
             # not what it physically reported.  A battery passing PV
@@ -560,10 +565,19 @@ class CT002:
         phase_values = self._collect_reports_by_phase()
         phase_power = [phase_a, phase_b, phase_c]
         for phase, idx in (("A", 0), ("B", 1), ("C", 2)):
-            if phase_values[phase]["active"] or phase_power[idx] != 0:
-                response_fields[8 + idx] = "1"
-            response_fields[15 + idx] = str(phase_values[phase]["chrg_power"])
-            response_fields[20 + idx] = str(phase_values[phase]["dchrg_power"])
+            pv = phase_values[phase]
+            if self.active_control:
+                # Active control distributes a per-consumer target, so each
+                # battery should apply it as-is (not divide): report a count of
+                # 1 when the phase is active, 0 otherwise.
+                if pv["active"] or phase_power[idx] != 0:
+                    response_fields[8 + idx] = "1"
+            else:
+                # Relay mode forwards the per-phase aggregate; report the real
+                # battery count so each battery takes its 1/N share.
+                response_fields[8 + idx] = str(pv["count"])
+            response_fields[15 + idx] = str(pv["chrg_power"])
+            response_fields[20 + idx] = str(pv["dchrg_power"])
 
         response_fields += ["0"] * (len(RESPONSE_LABELS) - len(response_fields))
         self._info_idx_counter = (self._info_idx_counter + 1) % 256

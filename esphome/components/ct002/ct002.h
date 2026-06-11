@@ -227,6 +227,7 @@ class CT002Component : public Component {
     std::array<float, 3> chrg_power{0.0f, 0.0f, 0.0f};
     std::array<float, 3> dchrg_power{0.0f, 0.0f, 0.0f};
     std::array<bool, 3> active{false, false, false};
+    std::array<int, 3> count{0, 0, 0};
   };
   PhaseReports collect_reports_by_phase_() const;
   std::vector<float> compute_smooth_target_(const std::vector<float> &values,

@@ -420,6 +420,10 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
     else if (phase == "B") idx = 1;
     else if (phase == "C") idx = 2;
     else idx = 0;
+    // Count every battery reporting on the phase (regardless of power) so relay
+    // mode can forward the real per-phase battery count (each battery divides
+    // the forwarded aggregate by it to take its 1/N share).
+    out.count[idx] += 1;
     const float power = static_cast<float>(round_half_even(c.last_instructed_power));
     if (power == 0.0f) continue;
     out.active[idx] = true;
@@ -520,8 +524,16 @@ std::vector<std::string> CT002Component::build_response_fields_(
   const auto phase_reports = this->collect_reports_by_phase_();
   const float phase_power[3] = {phase_a, phase_b, phase_c};
   for (size_t i = 0; i < 3; ++i) {
-    if (phase_reports.active[i] || phase_power[i] != 0.0f) {
-      fields[8 + i] = "1";
+    if (this->active_control_) {
+      // Active control distributes a per-consumer target, so each battery
+      // applies it as-is: report a count of 1 when the phase is active.
+      if (phase_reports.active[i] || phase_power[i] != 0.0f) {
+        fields[8 + i] = "1";
+      }
+    } else {
+      // Relay mode forwards the per-phase aggregate; report the real battery
+      // count so each battery takes its 1/N share.
+      fields[8 + i] = std::to_string(phase_reports.count[i]);
     }
     fields[15 + i] = to_int_str(phase_reports.chrg_power[i]);
     fields[20 + i] = to_int_str(phase_reports.dchrg_power[i]);

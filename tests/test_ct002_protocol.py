@@ -139,6 +139,49 @@ def test_ct002_relays_sum_of_charge_instructions_by_phase():
     assert response_for_b[16] == "-240"  # B_chrg_power
 
 
+def test_ct002_relay_reports_battery_count_per_phase():
+    """Relay mode forwards the real per-phase battery count as *_chrg_nb.
+
+    Each battery divides the forwarded aggregate by this count to take its
+    1/N share, so the count must be the actual number of batteries on the
+    phase, not a flat 1.
+    """
+    device = CT002(active_control=False)
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+
+    # Two batteries on phase A, one on B, none on C.
+    _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
+    _set_instruction(device, "consumer-a2", phase="A", instructed=-120)
+    _set_instruction(device, "consumer-b", phase="B", instructed=-240)
+
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[10, 20, 30],
+    )
+
+    assert response[8] == "2"  # A_chrg_nb: two batteries on phase A
+    assert response[9] == "1"  # B_chrg_nb: one battery on phase B
+    assert response[10] == "0"  # C_chrg_nb: none
+
+
+def test_ct002_active_control_reports_count_one_per_phase():
+    """Active control distributes a per-consumer target, so *_chrg_nb stays 1."""
+    device = CT002(active_control=True)
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+
+    _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
+    _set_instruction(device, "consumer-a2", phase="A", instructed=-120)
+
+    # Only phase A carries power, so B/C stay inactive.
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[10, 0, 0],
+    )
+
+    assert response[8] == "1"  # A_chrg_nb: flat 1 in active control (2 batteries)
+    assert response[10] == "0"  # C_chrg_nb: inactive phase
+
+
 def test_ct002_splits_positive_instructions_into_dchrg_fields():
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "100"]
