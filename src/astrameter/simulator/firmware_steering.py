@@ -9,9 +9,12 @@ and a small-import hold). It is the steering law documented in
 per-step arithmetic, and the gate thresholds and ordering, are the exact values
 the HMG-50 firmware uses.
 
-Scope: this models the **HMG-50** (Venus C/D) specifically. The VNSE3-0
-(Venus E) runs a different steering law, so do not assume these vectors describe
-a VNSE3-0.
+Scope: the gain table and ramp arithmetic here are the **HMG-50** (Venus C/D)
+ones. The VNSE3-0 (Venus E) shares the *same input-conditioning gate* — the
+same >50 W spike filter, <20 W own-output exemption, signed deadband and
+small-import hold — but with a tighter ±10 W deadband, and it uses a different
+ramp/step law (no float gain table), so the GOLDEN ramp vectors here are
+HMG-50-specific.
 
 Conventions
 -----------

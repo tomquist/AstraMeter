@@ -302,9 +302,12 @@ the constants below are the literal values used.
 
 > **Model scope.** The float controller documented here is the **HMG‑50**
 > (Venus C/D) one. It is **not** universal:
-> - The **VNSE3‑0** (Venus E) runs a different steering law — despite both being
->   "Venus", it does not share this gain table or conditioning gate. Don't
->   assume the numbers below describe a VNSE3‑0.
+> - The **VNSE3‑0** (Venus E) shares the **same step‑3 conditioning gate** — the
+>   same >50 W spike filter, <20 W own‑output exemption, signed deadband and
+>   small‑import hold — but with a tighter **±10 W** deadband instead of ±20 W,
+>   and it uses a **different ramp/step law** (no float gain table, integer
+>   setpoint). So the gate logic carries over, but the gain table and ramp
+>   arithmetic below are HMG‑50‑specific.
 > - The **B2500 class** (HMJ) runs an **integer‑only** controller (its firmware
 >   has no floating‑point unit and no float gain table), so while the
 >   higher‑level behavior is the same — poll the meter, select the
