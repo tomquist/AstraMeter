@@ -94,14 +94,21 @@ class BatterySimulator:
 
         # The B2500 family (HMA/HMJ/HMK) is DC-coupled with no built-in inverter
         # and no AC input: it steers its DC output into an external microinverter
-        # with a different integer hysteresis law instead of the Venus ramp.
+        # with a different integer hysteresis law instead of the Venus ramp. The
+        # unit has two DC output channels, each its own regulator running every
+        # cycle; the grid-derived demand is split between them, so the combined
+        # output slews at twice a single channel's rate (~34 vs ~17 W/cycle).
         caps = device_capabilities(self.meter_dev_type)
         self._is_dc_output = (
             caps.has_dc_input
             and not caps.has_builtin_inverter
             and not caps.has_ac_input
         )
-        self._b2500 = B2500SteeringController() if self._is_dc_output else None
+        self._b2500_channels = (
+            [B2500SteeringController(), B2500SteeringController()]
+            if self._is_dc_output
+            else []
+        )
 
     # -- public read-only properties ---------------------------------------
 
@@ -303,7 +310,7 @@ class BatterySimulator:
 
         grid_reading = field(4) + field(5) + field(6)
 
-        if self._b2500 is not None:
+        if self._b2500_channels:
             self._steer_b2500_output(grid_reading)
             return
 
@@ -321,24 +328,28 @@ class BatterySimulator:
         self._apply_ct_derived_target(-setpoint)
 
     def _steer_b2500_output(self, grid_reading: int) -> None:
-        """Steer a DC-coupled B2500's output toward nulling the grid.
+        """Steer a DC-coupled B2500's two output channels toward nulling the grid.
 
         The B2500 can only discharge its DC output into an external microinverter
         to offset the grid — it has no AC input and never charges from AC. So the
-        setpoint is floored at 0 (a grid surplus winds the output down to idle
-        rather than absorbing it), and the output follows the B2500's integer
-        hysteresis regulator rather than the Venus ramp. ``regulate`` sees the
-        battery's own measured output as feedback.
+        demand is floored at 0 (a grid surplus winds the output down to idle
+        rather than absorbing it), follows the B2500's integer hysteresis
+        regulator rather than the Venus ramp, and is split evenly across the two
+        output channels (each regulating against its own ~half of the measured
+        output), so the combined output slews at ~twice a single channel's rate.
         """
-        assert self._b2500 is not None
-        # ``setpoint_from_grid`` clamps to ``max_power / 2`` (the firmware's
-        # per-output half-cap); the unit's two outputs share ``max_discharge``,
-        # so pass ``2x`` to cap the combined output at the configured limit.
-        setpoint = max(
+        # Total demand: 0.9 * grid, capped at the discharge envelope. The
+        # firmware clamps each channel to ``max_power / 2``, so pass ``2x`` the
+        # per-unit limit; halving the result gives each channel its share.
+        demand = max(
             0,
-            self._b2500.setpoint_from_grid(grid_reading, 2 * self.max_discharge_power),
+            B2500SteeringController.setpoint_from_grid(
+                grid_reading, 2 * self.max_discharge_power
+            ),
         )
-        out = self._b2500.regulate(setpoint, max(0, round(self._current_power)))
+        per_channel = demand // 2
+        own = max(0, round(self._current_power)) // 2  # each channel's ~half
+        out = sum(ch.regulate(per_channel, own) for ch in self._b2500_channels)
         self._apply_ct_derived_target(float(out))
 
     # -- main loop ---------------------------------------------------------

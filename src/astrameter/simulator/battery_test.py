@@ -198,23 +198,29 @@ def test_steering_spike_debounced_for_one_response() -> None:
 
 
 def test_b2500_device_type_selects_dc_output_steering() -> None:
-    """A B2500-family device type (HMA/HMJ/HMK) steers its DC output; a Venus
-    device type uses the ramp controller."""
-    assert _battery(meter_dev_type="HMJ-2")._b2500 is not None
-    assert _battery(meter_dev_type="HMG-50")._b2500 is None
+    """A B2500-family device type (HMA/HMJ/HMK) steers its DC output via two
+    channels; a Venus device type uses the ramp controller."""
+    assert len(_battery(meter_dev_type="HMJ-2")._b2500_channels) == 2
+    assert _battery(meter_dev_type="HMG-50")._b2500_channels == []
 
 
 def test_b2500_steers_dc_output_toward_grid_null() -> None:
     """A B2500 ramps its DC output up via the hysteresis law to offset import,
-    converging near 0.9 * grid (within the ±10 W deadband)."""
+    converging near 0.9 * grid. Its two channels slew in parallel, so the
+    combined output rises ~34 W/cycle (twice a single channel's ~17 W)."""
     b = _battery(meter_dev_type="HMJ-2", max_discharge_power=800)
     fields = _response_fields(phase_targets=(300, 0, 0))  # grid import 300 W
+    outs = []
     for _ in range(20):
         b._update_power(1.0)
         b._handle_ct_response(fields)
-    # Discharging (positive), converged near 0.9 * 300 = 270 W.
+        outs.append(round(b.current_power))
+    # Two channels slewing ~17 W each → ~34 W/cycle combined.
+    assert 30 <= outs[2] - outs[1] <= 40
+    # Discharging (positive), converged near 0.9 * 300 = 270 W (within the two
+    # channels' combined ±20 W deadband).
     assert b.target_power > 0
-    assert abs(b.current_power - 270) <= 10
+    assert abs(b.current_power - 270) <= 20
 
 
 def test_b2500_does_not_charge_from_ac_on_surplus() -> None:
@@ -231,7 +237,7 @@ def test_b2500_does_not_charge_from_ac_on_surplus() -> None:
     for _ in range(20):
         b._update_power(1.0)
         b._handle_ct_response(down)
-    assert 0 <= b.current_power <= 10  # idle, never charges from AC
+    assert 0 <= b.current_power <= 20  # idle (two channels), never charges from AC
 
 
 def test_non_participating_battery_appends_seventh_field() -> None:
