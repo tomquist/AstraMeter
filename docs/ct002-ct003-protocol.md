@@ -472,25 +472,26 @@ if abs(power - setpoint) < 10:   power = setpoint            # snap within +/-10
 elif abs(power - setpoint) <= 20: power += sign(setpoint-power) * 10   # else step 10 W
 
 # 4. per-channel hysteresis regulator (every cycle)
-if   power > setpoint + 10:  cmd -= 100     # +/-10 W deadband, +/-100 W per-cycle slew
-elif power < setpoint - 10:  cmd += 100
+#    `cmd` is an INTERNAL command unit, not watts; it steps by +/-100.
+if   power > setpoint + 10:  cmd -= 100     # +/-10 W deadband (on measured power)
+elif power < setpoint - 10:  cmd += 100     # +/-100 internal-cmd step per cycle
 # else: hold
-applied = (cmd - 5) * 10 / 59 + cal[mode]   # per-mode output calibration
+applied = (cmd - 5) * 10 / 59 + cal[mode]   # command -> output (watts), per-mode cal
 drive_converter(applied)                    # hand to the DC power stage
 ```
 
 Notes for an implementer:
-- **Unit‑calibration constants collapse in a watt‑domain model.** `scale /
-  1_000_000` and `k` are the device's ADC/unit conversions, and `(cmd − 5) ×
-  10 / 59 + cal[mode]` is its command→duty mapping. A simulator that already
-  works in watts (grid, output, and `cmd` all in watts) takes all three as
-  identity, so the whole law reduces to: `setpoint = min(0.9 × grid,
-  max_power/2)`, then the ±10 W / ±100 W hysteresis regulator on `power` toward
-  `setpoint`, applying `cmd` directly. Keep the device‑internal forms only if
-  you model raw ADC counts.
-- The **±10 W deadband** and **±100 W/cycle slew** are the integer analog of the
-  Venus deadband+ramp; there is **no** acceleration counter, no `sqrt`, and no
-  spike filter. The response is a plain bounded integrator toward `setpoint`.
+- **`cmd` is not watts; the effective output slew is ~17 W/cycle.** The `× 10 /
+  59` in the calibration means a ±100 `cmd` step moves the *output* by only
+  `100 × 10 / 59 ≈ 17 W`. So in a watt‑domain model, either keep `cmd` internal
+  with `output = (cmd − 5) × 10 / 59`, or model the output directly as a bounded
+  integrator that **slews ~17 W/cycle** toward `setpoint` with a **±10 W
+  deadband**. (The `scale / 1_000_000` and `k` in steps 1–2 are likewise the
+  device's ADC/unit conversions; a watt‑domain `grid`/`power` takes them as
+  identity, leaving `setpoint = min(0.9 × grid, max_power/2)`.)
+- The **±10 W deadband** plus the slew is the integer analog of the Venus
+  deadband+ramp; there is **no** acceleration counter, no `sqrt`, and no spike
+  filter. The response is a plain bounded integrator toward `setpoint`.
 - **Two control variants exist.** The above is the normal path. When the AC line
   is in a specific window the device runs an **AC‑active** path that additionally
   (a) averages the channel current over 5 samples with the min and max dropped,
@@ -500,6 +501,28 @@ Notes for an implementer:
 - The power envelope is the **B2500's** (≈800 W class), **not** the Venus's
   ±2500 W. `max_power` in step 1 is that envelope.
 - Everything is integer (16‑bit watt‑scale values); there is no float state.
+
+**Reference trajectories.** Check an implementation against these. Both start
+from `cmd = 60` (output ≈ 9 W) and let the output feed back each cycle
+(`power := previous output`); `mode = 0`, `cal = 0`.
+
+*Regulator (GOLDEN)* — fixed `setpoint = 300 W`, watching `(cmd, output)` per
+cycle as it slews up at ~17 W/cycle and parks once `|output − setpoint| ≤ 10`:
+
+```text
+cmd:    160  260  360  460  560  660  760  860  960 1060 1160 1260 1360 1460 ...
+output:  26   43   60   77   94  111  127  144  161  178  195  212  229  246 ... -> 297 (hold)
+```
+
+*Full pass (GATED)* — `setpoint = min(0.9 × grid, max_power/2)` then the
+regulator. `grid = 360 W → setpoint 324`; `grid = 1000 W → setpoint clamps to
+400` (`max_power = 800`). The `output` column matches the GOLDEN slew because
+the regulator is identical; only the `setpoint` differs:
+
+```text
+grid=360  -> setpoint=324, output: 26 43 60 77 94 111 127 144 ... -> 314 (hold)
+grid=1000 -> setpoint=400 (clamped), output: 26 43 60 77 ...      -> 399 (hold)
+```
 
 ## Active vs. relay control (AstraMeter)
 
