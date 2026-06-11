@@ -204,39 +204,35 @@ def test_b2500_device_type_selects_dc_output_steering() -> None:
     assert _battery(meter_dev_type="HMG-50")._b2500_channels == []
 
 
-def test_b2500_steers_dc_output_toward_grid_null() -> None:
-    """A B2500 ramps its DC output up via the hysteresis law to offset import,
-    converging near 0.9 * grid. Its two channels slew in parallel, so the
-    combined output rises ~34 W/cycle (twice a single channel's ~17 W)."""
-    b = _battery(meter_dev_type="HMJ-2", max_discharge_power=800)
-    fields = _response_fields(phase_targets=(300, 0, 0))  # grid import 300 W
-    outs = []
-    for _ in range(20):
+def _drive_b2500(b: BatterySimulator, load: float, cycles: int) -> None:
+    """Step a B2500 against a phase-A *load* with a closed grid loop
+    (``grid = load - output``), the way the real meter sees it."""
+    for _ in range(cycles):
         b._update_power(1.0)
-        b._handle_ct_response(fields)
-        outs.append(round(b.current_power))
-    # Two channels slewing ~17 W each → ~34 W/cycle combined.
-    assert 30 <= outs[2] - outs[1] <= 40
-    # Discharging (positive), converged near 0.9 * 300 = 270 W (within the two
-    # channels' combined ±20 W deadband).
-    assert b.target_power > 0
-    assert abs(b.current_power - 270) <= 20
+        grid = round(load - b.current_power)
+        b._handle_ct_response(_response_fields(phase_targets=(grid, 0, 0)))
+
+
+def test_b2500_steers_dc_output_to_null_grid() -> None:
+    """A B2500 integrates its DC output to null the grid: in a closed loop the
+    combined output converges to the load (grid → ~0), discharging."""
+    b = _battery(meter_dev_type="HMJ-2", max_discharge_power=800)
+    _drive_b2500(b, load=300.0, cycles=40)
+    assert b.target_power > 0  # discharging
+    assert abs(b.current_power - 300) <= 20  # grid nulled (within deadband)
 
 
 def test_b2500_does_not_charge_from_ac_on_surplus() -> None:
     """With no AC input, a B2500 winds its output down to idle on a grid surplus
     instead of charging (unlike a Venus, which would go negative)."""
     b = _battery(meter_dev_type="HMJ-2")
-    up = _response_fields(phase_targets=(300, 0, 0))
-    for _ in range(20):
-        b._update_power(1.0)
-        b._handle_ct_response(up)
+    _drive_b2500(b, load=300.0, cycles=40)
     assert b.current_power > 100  # discharging to offset import
 
-    down = _response_fields(phase_targets=(-300, 0, 0))  # grid surplus
-    for _ in range(20):
+    surplus = _response_fields(phase_targets=(-300, 0, 0))  # sustained export
+    for _ in range(40):
         b._update_power(1.0)
-        b._handle_ct_response(down)
+        b._handle_ct_response(surplus)
     assert 0 <= b.current_power <= 20  # idle (two channels), never charges from AC
 
 

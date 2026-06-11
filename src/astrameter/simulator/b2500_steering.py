@@ -13,6 +13,15 @@ cycle. The loop holds while the measured output power is within a ±10 W deadban
 of the setpoint, and otherwise nudges ``cmd`` by ±100 — a plain bounded
 integrator toward the setpoint.
 
+The setpoint is **incremental**: each cycle it is the current output plus 90% of
+the residual grid (``setpoint = output + 0.9 * grid``), so the loop integrates
+the grid toward zero (fixed point ``output = load``). A purely *proportional*
+``setpoint = 0.9 * grid`` would droop to ~47% of load and never null the grid;
+the device reaches full self-consumption because the firmware drives its output
+off an *accumulated* meter value. The ``0.9`` per-step gain and the regulator
+constants are firmware-extracted; the integral structure reproduces the device's
+observed grid-nulling behavior.
+
 SOC and temperature are handled by a *separate* BMS (charge-current derating,
 cell-voltage limits) and are **not** part of this steering loop.
 """
@@ -27,7 +36,7 @@ DEADBAND_W = 10  # hold while abs(power - setpoint) <= 10 W
 CMD_STEP = 100  # internal command step per cycle (~17 W of output)
 CMD_FLOOR = 5  # output = (cmd - CMD_FLOOR) * CAL_NUM / CAL_DEN
 CAL_NUM, CAL_DEN = 10, 59  # command -> output (watts) calibration
-APPROACH_NUM, APPROACH_DEN = 9, 10  # setpoint = grid * 0.9
+APPROACH_NUM, APPROACH_DEN = 9, 10  # correct 90% of the residual grid per cycle
 
 
 @dataclass
@@ -61,11 +70,16 @@ class B2500SteeringController:
             self.cmd = (self.cmd + CMD_STEP) & 0xFFFF
         return self.output()
 
-    @staticmethod
-    def setpoint_from_grid(grid: int, max_power: int) -> int:
-        """Meter-derived output setpoint: 90% of grid, clamped to half the envelope."""
-        return min(int(grid) * APPROACH_NUM // APPROACH_DEN, int(max_power) // 2)
-
     def step(self, grid: int, power: int, max_power: int) -> int:
-        """Full per-cycle pass: derive the setpoint from *grid*, then regulate."""
-        return self.regulate(self.setpoint_from_grid(grid, max_power), power)
+        """Full per-cycle pass: form the incremental setpoint, then regulate.
+
+        *grid* is the residual grid power (positive = import), *power* the
+        channel's measured output, *max_power* the output envelope. The setpoint
+        is ``power + 0.9 * grid`` clamped to ``[0, max_power]`` — incremental, so
+        a sustained import winds the output up until the grid is nulled (rather
+        than parking at 90% of the residual). The B2500 has no AC input, so the
+        setpoint never goes negative: a surplus winds the output down to idle.
+        """
+        setpoint = power + int(grid) * APPROACH_NUM // APPROACH_DEN
+        setpoint = max(0, min(setpoint, int(max_power)))
+        return self.regulate(setpoint, power)

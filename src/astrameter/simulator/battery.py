@@ -331,24 +331,21 @@ class BatterySimulator:
         """Steer a DC-coupled B2500's two output channels toward nulling the grid.
 
         The B2500 can only discharge its DC output into an external microinverter
-        to offset the grid — it has no AC input and never charges from AC. So the
-        demand is floored at 0 (a grid surplus winds the output down to idle
-        rather than absorbing it), follows the B2500's integer hysteresis
-        regulator rather than the Venus ramp, and is split evenly across the two
-        output channels (each regulating against its own ~half of the measured
-        output), so the combined output slews at ~twice a single channel's rate.
+        to offset the grid — it has no AC input and never charges from AC. The
+        setpoint is **incremental** (current output plus 90% of the residual
+        grid), so the loop integrates the grid toward zero rather than parking at
+        a fraction of the load; it is floored at 0 (a surplus winds the output
+        down to idle), capped at the discharge envelope, follows the B2500's
+        integer hysteresis regulator rather than the Venus ramp, and is split
+        evenly across the two output channels (each regulating against its own
+        ~half of the measured output), so the combined output slews at ~twice a
+        single channel's rate.
         """
-        # Total demand: 0.9 * grid, capped at the discharge envelope. The
-        # firmware clamps each channel to ``max_power / 2``, so pass ``2x`` the
-        # per-unit limit; halving the result gives each channel its share.
-        demand = max(
-            0,
-            B2500SteeringController.setpoint_from_grid(
-                grid_reading, 2 * self.max_discharge_power
-            ),
-        )
-        per_channel = demand // 2
-        own = max(0, round(self._current_power)) // 2  # each channel's ~half
+        cur = max(0, round(self._current_power))
+        target = cur + grid_reading * 9 // 10  # incremental: 90% of the residual
+        target = max(0, min(target, self.max_discharge_power))
+        per_channel = target // 2
+        own = cur // 2  # each channel's ~half of the measured output
         out = sum(ch.regulate(per_channel, own) for ch in self._b2500_channels)
         self._apply_ct_derived_target(float(out))
 

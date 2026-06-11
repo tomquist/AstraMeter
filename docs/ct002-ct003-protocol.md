@@ -456,13 +456,16 @@ each with its own copy; steps 2–4 run per channel):
 **Cadence.** One regulation pass per poll cycle, like the Venus.
 
 ```text
-# 1. setpoint from the metered grid power (per cycle)
-#    `grid` is the metered power the device steers against (the CT/meter reading,
-#    NOT the device's own output).
-setpoint = grid * scale / 1_000_000        # `scale` is a runtime unit-calibration
-setpoint = setpoint * 9 / 10               # 90% approach factor
-setpoint = min(setpoint, max_power / 2)    # clamp to half the power envelope
-#    (a single-output configuration halves once more)
+# 1. setpoint from the residual grid (per cycle) -- INCREMENTAL
+#    `grid` is the residual grid power read back (positive = import). The setpoint
+#    is the current output plus 90% of the residual, so the loop *integrates* the
+#    grid toward zero (fixed point output = load). A proportional `0.9 * grid`
+#    would droop to ~47% of load and never null the grid; the device reaches full
+#    self-consumption because it drives off an accumulated meter value. The 90%
+#    per-step gain is the firmware's; the +output makes it integral.
+setpoint = power + grid * 9 / 10           # 90% of the residual, added to output
+setpoint = clamp(setpoint, 0, max_power)   # never negative (no AC charge), capped
+#    (per channel: half this, since the two outputs split the demand)
 
 # 2. measured output power for the channel
 power = volts * amps / k                   # k a fixed unit divisor
@@ -486,9 +489,12 @@ Notes for an implementer:
   `100 × 10 / 59 ≈ 17 W`. So in a watt‑domain model, either keep `cmd` internal
   with `output = (cmd − 5) × 10 / 59`, or model the output directly as a bounded
   integrator that **slews ~17 W/cycle** toward `setpoint` with a **±10 W
-  deadband**. (The `scale / 1_000_000` and `k` in steps 1–2 are likewise the
-  device's ADC/unit conversions; a watt‑domain `grid`/`power` takes them as
-  identity, leaving `setpoint = min(0.9 × grid, max_power/2)`.)
+  deadband**. (The `k` in step 2 is the device's V·I → W conversion; a
+  watt‑domain `power` takes it as identity.)
+- **The setpoint is incremental, not absolute.** `output + 0.9 × grid` integrates
+  the residual to zero. Modelling it as an absolute `0.9 × grid` is a subtle bug:
+  with closed‑loop feedback (`grid = load − output`) it parks at ~47% of load and
+  the grid never nulls.
 - The **±10 W deadband** plus the slew is the integer analog of the Venus
   deadband+ramp; there is **no** acceleration counter, no `sqrt`, and no spike
   filter. The response is a plain bounded integrator toward `setpoint`.
@@ -514,14 +520,13 @@ cmd:    160  260  360  460  560  660  760  860  960 1060 1160 1260 1360 1460 ...
 output:  26   43   60   77   94  111  127  144  161  178  195  212  229  246 ... -> 297 (hold)
 ```
 
-*Full pass (GATED)* — `setpoint = min(0.9 × grid, max_power/2)` then the
-regulator. `grid = 360 W → setpoint 324`; `grid = 1000 W → setpoint clamps to
-400` (`max_power = 800`). The `output` column matches the GOLDEN slew because
-the regulator is identical; only the `setpoint` differs:
+*Closed loop* — the full `step` with the incremental setpoint against a fixed
+**300 W load** (`grid = load − output` each cycle). The output integrates up and
+parks once it offsets the load (grid within the deadband), confirming the loop
+nulls the grid rather than drooping:
 
 ```text
-grid=360  -> setpoint=324, output: 26 43 60 77 94 111 127 144 ... -> 314 (hold)
-grid=1000 -> setpoint=400 (clamped), output: 26 43 60 77 ...      -> 399 (hold)
+output: 26 43 60 77 94 111 127 144 161 178 195 212 229 246 263 280 297 -> 297 (hold, grid≈3)
 ```
 
 ## Active vs. relay control (AstraMeter)
