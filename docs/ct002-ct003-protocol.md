@@ -200,9 +200,12 @@ phase `D`: the meter is wired across a 3‑phase supply and the battery is set t
 compensate the **total** grid exchange, not a single phase. The `x` bucket is
 the transient state while a device is still detecting its phase (`phase_t = 0`).
 
-> The AstraMeter emulator models phases `A`/`B`/`C` and folds `D` and any
-> non‑`A/B/C` value into the unassigned/inspection path; it does not yet
-> implement the combined (`ABC`) control mode.
+> The AstraMeter emulator mirrors this bucketing: `'0'`/unassigned reporters
+> aggregate into the `x_*` fields, phase‑`D` reporters into the `ABC_*` fields
+> and the `ABC_chrg_nb` count, and `A`/`B`/`C` into their own buckets. It does
+> not yet implement a combined (`ABC`) **control** mode, though: a phase‑`D`
+> battery is served the relay path (raw grid reading + aggregates) even when
+> active control is on, exactly as during inspection.
 
 ### CT003 energy fields (fields 25–28)
 
@@ -226,6 +229,9 @@ the reporter's IP, type, phase, signed power, and `participate` flag.
 Per response cycle the CT:
 
 1. **Evicts stale slots** — a slot not refreshed within ~1–2 cycles is cleared.
+   (AstraMeter mirrors this by default: a consumer that misses ~2 of its own
+   poll cycles drops out of the counts/aggregates; set `CONSUMER_TTL` /
+   `consumer_ttl` to use a fixed window instead.)
 2. **Builds per‑bucket aggregates** over the live slots, but only for a slot that
    is occupied **and** has `participate != 0`:
    - bucket by phase (`A`/`B`/`C`, the combined `ABC` bucket for phase `D`, or

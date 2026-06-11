@@ -45,7 +45,9 @@ THROTTLE_INTERVAL = 0
 ## Ignore repeated requests from the same consumer within this window (seconds).
 ## Overrides the [GENERAL] DEDUPE_TIME_WINDOW for this section.
 # DEDUPE_TIME_WINDOW = 0
-## Forget consumers after this many seconds without updates (multi-consumer support)
+## Forget consumers after this many seconds without updates (multi-consumer support).
+## Unset (default): adaptive — a battery is dropped after missing ~2 of its own
+## poll cycles (min 5s), like the real CT. Set a number for a fixed window.
 # CONSUMER_TTL = 120
 ## Log concise status (phase consumption + consumer charge/discharge) on each request when enabled
 # DEBUG_STATUS = False

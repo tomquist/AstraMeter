@@ -279,7 +279,9 @@ WIFI_RSSI = -50
 # Also supported by the Shelly emulator (keyed by battery IP); set it under
 # [GENERAL] to apply regardless of the emulated device type.
 DEDUPE_TIME_WINDOW = 0
-# Forget consumers after this many seconds without updates (multi-consumer support)
+# Forget consumers after this many seconds without updates (multi-consumer support).
+# Unset (default): adaptive — a battery is dropped after missing ~2 of its own
+# poll cycles (min 5s), like the real CT. Set a number for a fixed window.
 CONSUMER_TTL = 120
 ```
 

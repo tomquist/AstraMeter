@@ -333,13 +333,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_MAX_SENSOR_AGE, default="30s"
             ): cv.positive_time_period_milliseconds,
-            # TTL after which a silent consumer is evicted, matching
-            # Python's consumer_ttl default. Lower it for fleets with
-            # short-lived bench-test batteries; raise it if your network
-            # has long polling gaps.
-            cv.Optional(
-                CONF_CONSUMER_TTL, default="120s"
-            ): cv.positive_time_period_seconds,
+            # Fixed TTL after which a silent consumer is evicted. Unset
+            # (default) = adaptive eviction (~2 missed poll cycles per
+            # consumer, like the real CT), matching Python's consumer_ttl
+            # default. Set a fixed value if your network has long polling
+            # gaps.
+            cv.Optional(CONF_CONSUMER_TTL): cv.positive_time_period_seconds,
             # Drop repeat polls from the same battery within this window.
             # 0 (default) disables dedup, matching Python's
             # dedupe_time_window=0.0. Useful on noisy networks where a
@@ -380,7 +379,10 @@ async def to_code(config):
     cg.add(var.set_udp_port(config[CONF_UDP_PORT]))
     cg.add(var.set_active_control(config[CONF_ACTIVE_CONTROL]))
     cg.add(var.set_max_sensor_age_ms(config[CONF_MAX_SENSOR_AGE].total_milliseconds))
-    cg.add(var.set_consumer_ttl_seconds(int(config[CONF_CONSUMER_TTL].total_seconds)))
+    if CONF_CONSUMER_TTL in config:
+        cg.add(
+            var.set_consumer_ttl_seconds(int(config[CONF_CONSUMER_TTL].total_seconds))
+        )
     cg.add(var.set_dedupe_window_ms(int(config[CONF_DEDUPE_WINDOW].total_milliseconds)))
 
     if CONF_TEST_CONTROL_PORT in config:

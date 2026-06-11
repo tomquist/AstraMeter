@@ -99,7 +99,9 @@ ct002:
   #                                # false → forward raw grid readings as-is
   # max_sensor_age: 30s            # treat the input as 0 if no sensor update
   #                                # arrives within this window
-  # consumer_ttl: 120s             # evict a battery this long after it goes silent
+  # consumer_ttl: 120s             # fixed eviction window for a silent battery;
+  #                                # unset (default) adapts to each battery's
+  #                                # poll rate (~2 missed polls, like the real CT)
   # dedupe_window: 0s              # 0 = off; >0 drops duplicate polls from the
   #                                # same battery within the window
 

@@ -696,7 +696,7 @@ export const CT_BASIC: Field[] = [
   { key: "CT_MAC", ey: "ct_mac", label: "CT MAC", help: "12 hex digits from the Marstek app. Leave blank to answer any battery and mirror its MAC.", type: "text", placeholder: "(blank = any)" },
   { key: "UDP_PORT", ey: "udp_port", label: "UDP port", help: "Port the emulator listens on. Default 12345.", type: "number", placeholder: "12345" },
   { key: "WIFI_RSSI", ey: "wifi_rssi", label: "Reported WiFi RSSI", help: "Signal strength reported back to the battery. Default -50.", type: "number", placeholder: "-50" },
-  { key: "CONSUMER_TTL", ey: "consumer_ttl", label: "Consumer TTL (seconds)", help: "Forget a battery this long after it goes silent. Default 120.", type: "number", placeholder: "120" },
+  { key: "CONSUMER_TTL", ey: "consumer_ttl", label: "Consumer TTL (seconds)", help: "Forget a battery this long after it goes silent. Blank (default) adapts to each battery's poll rate (~2 missed polls, like the real CT); set a number for a fixed window.", type: "number", placeholder: "(adaptive)" },
   { key: "DEDUPE_TIME_WINDOW", ey: "dedupe_window", label: "Dedupe window (seconds)", help: "Drop duplicate polls from the same battery within this window. 0 = off.", type: "number", placeholder: "0" },
 ];
 
