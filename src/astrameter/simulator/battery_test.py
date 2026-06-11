@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from astrameter.simulator.battery import BatterySimulator
+from astrameter.simulator.firmware_steering import FirmwareSteeringController
 from astrameter.simulator.runner import parse_config, validate_config
 
 
@@ -151,45 +152,49 @@ def _response_fields(
     ]
 
 
-def test_idle_on_cross_phase_discharge_when_flag_on() -> None:
-    """A charging battery sees another phase's dchrg>0 → target snaps to 0."""
-    b = _battery(idle_on_cross_phase_discharge=True)  # phase A
+def test_cross_phase_dchrg_does_not_idle_battery() -> None:
+    """Another phase's dchrg>0 has no effect — real firmware only reads its
+    own phase bucket, never other phases' charge/discharge fields (see
+    docs/ct002-ct003-protocol.md, "Phase selection")."""
+    b = _battery()  # phase A
     b._current_power = -500.0  # currently charging
 
-    # phase_C grid = -500 (charge signal); B_dchrg = 400 (cross-phase
-    # discharge instruction from another battery on phase B).
-    fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
-    b._handle_ct_response(fields)
-
-    assert b.target_power == 0.0, (
-        f"Expected target forced to 0 by cross-phase dchrg signal, got {b.target_power}"
-    )
-
-
-def test_no_idle_when_flag_off() -> None:
-    """Flag off → cross-phase dchrg ignored, steering controller drives target."""
-    b = _battery(idle_on_cross_phase_discharge=False)  # phase A
-    b._current_power = -500.0
-
+    # phase_C grid = -500 (charge signal); B_dchrg = 400 (a battery on phase B
+    # is being instructed to discharge).
     fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
     b._handle_ct_response(fields)
 
     # grid_reading=-500 (export): the controller's first step drives its setpoint
-    # to +500 (charge), i.e. simulator target -500.
+    # to +500 (charge), i.e. simulator target -500 — undisturbed by B_dchrg.
     assert b.target_power == -500.0
 
 
-def test_idle_ignores_own_phase_dchrg() -> None:
-    """A_dchrg on the battery's own phase doesn't trigger the idle rule."""
-    b = _battery(idle_on_cross_phase_discharge=True)  # phase A
-    b._current_power = -500.0
+def test_steering_deadband_uses_own_output() -> None:
+    """A <20 W grid residual is ignored while the battery is idle, but acted
+    on once its own output is above ~1 W (the firmware deadband condition)."""
+    b = _battery()  # phase A
+    b._current_power = 0.0
+    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    assert b.target_power == 0.0
 
-    # Same-phase (A) dchrg should NOT trigger idle; the controller's first step
-    # on grid_reading=-500 yields target -500.
-    fields = _response_fields(phase_targets=(-500, 0, 0), dchrg=(400, 0, 0))
+    b._current_power = 100.0
+    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    assert b.target_power != 0.0
+
+
+def test_steering_spike_debounced_for_one_response() -> None:
+    """An idle battery reacts to a >50 W grid jump only on the second sample."""
+    b = _battery()  # phase A
+    b._current_power = 0.0
+    fields = _response_fields(phase_targets=(200, 0, 0))
+
     b._handle_ct_response(fields)
+    assert b.target_power == 0.0  # first sample debounced
 
-    assert b.target_power == -500.0
+    b._handle_ct_response(fields)
+    # Discharge begins, exactly the bare ramp law's first response to g=200.
+    expected = -FirmwareSteeringController().step_raw(200, 800.0, -800.0)
+    assert b.target_power == expected
 
 
 def test_non_participating_battery_appends_seventh_field() -> None:
@@ -231,7 +236,6 @@ def test_parse_config_venus_d_fields() -> None:
                 "phase": "A",
                 "max_dc_input": 800,
                 "dc_input_power": 500,
-                "idle_on_cross_phase_discharge": True,
             },
         ],
     }
@@ -240,4 +244,3 @@ def test_parse_config_venus_d_fields() -> None:
     bc = cfg.batteries[0]
     assert bc.max_dc_input == 800
     assert bc.dc_input_power == 500.0
-    assert bc.idle_on_cross_phase_discharge is True

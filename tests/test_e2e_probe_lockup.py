@@ -343,23 +343,28 @@ class TestProbeLockup:
             h.force_efficiency_rotation()
             # Step through the probe and handoff.  Allow enough steps
             # for the probe (~5s) + post-probe fade (~5s) + settling.
+            standby_peak = 0.0
             for _ in range(150):
                 await h.step()
+                standby_peak = max(standby_peak, abs(h.battery_powers()[standby_idx]))
 
             after_powers = h.battery_powers()
             grid_after = abs(h.grid_total())
 
-            # Main assertion: the grid must still be close to zero.
+            # Main assertion: the grid must still be close to zero (the lockup
+            # bug pinned it at the full load magnitude for ~1.5 h).
             assert grid_after < 30.0, (
                 f"Grid is uncompensated after probe handoff: "
                 f"grid={grid_after:.1f} W. Powers: {after_powers}."
             )
-            # The rotation must have actually happened — the previously
-            # active battery must no longer be the sole contributor.
-            new_active = 0 if abs(after_powers[0]) > abs(after_powers[1]) else 1
-            assert new_active != active_idx, (
-                f"Rotation didn't swap the active battery. "
-                f"before={before_powers} after={after_powers}"
+            # The rotation must have actually happened — the standby battery
+            # must have taken over the load during the handoff window. Which
+            # battery ends up carrying the load afterwards is not asserted: two
+            # faithful Venus controllers on one phase overshoot and brake during
+            # the handoff, and that churn can re-concentrate the load on either.
+            assert standby_peak > 40.0, (
+                f"Rotation never handed the load to the standby battery. "
+                f"before={before_powers} standby peak={standby_peak:.1f} W"
             )
         finally:
             await h.stop()

@@ -300,16 +300,19 @@ This is the exact control law the storage runs on the selected grid value. It is
 enough to reproduce the device's behavior bit‑for‑bit. Powers are in **watts**;
 the constants below are the literal values used.
 
-> **Model scope.** The float controller documented here is the **Venus class**
-> (HMG‑50, VNSE3‑0). It is **not** universal: the **B2500 class** (HMJ) runs an
-> **integer‑only** controller (its firmware has no floating‑point unit and no
-> float gain table), so while the higher‑level behavior is the same — poll the
-> meter, select the phase/combined bucket via `phase_t`, divide by the per‑phase
-> device count, and slew an inverter setpoint — its step sizing, deadband and
-> clamps use different (integer) values and are **not** the table below. The
-> B2500 also has a smaller power envelope than the Venus's ±2500 W. Treat the
-> numbers below as Venus‑class; model a B2500 with the same structure but its
-> own limits.
+> **Model scope.** The float controller documented here is the **HMG‑50**
+> (Venus C/D) one. It is **not** universal:
+> - The **VNSE3‑0** (Venus E) runs a different steering law — despite both being
+>   "Venus", it does not share this gain table or conditioning gate. Don't
+>   assume the numbers below describe a VNSE3‑0.
+> - The **B2500 class** (HMJ) runs an **integer‑only** controller (its firmware
+>   has no floating‑point unit and no float gain table), so while the
+>   higher‑level behavior is the same — poll the meter, select the
+>   phase/combined bucket via `phase_t`, divide by the per‑phase device count,
+>   and slew an inverter setpoint — its step sizing, deadband and clamps use
+>   different (integer) values and are **not** the table below. The B2500 also
+>   has a smaller power envelope than the Venus's ±2500 W; model it with the
+>   same structure but its own limits.
 
 **Per‑device persistent state**
 
@@ -343,12 +346,17 @@ g = g / nb                         # nb >= 1
 #    - require the meter to be active, else reset the setpoint
 #    - a 10-tick debounce rejects a charge<->discharge sign flip until it persists
 
-# 3. deadband + spike filter
-if abs(g) < 20 and out < 1:        # +/-20 W deadband
-    return                         # hold setpoint, do nothing
-if abs(g - prev_g) > 50 and abs(out_as_int - prev_out) < 20:
-    skip_one_step()                # transient load step: act on the next sample
+# 3. input-conditioning gate (spike filter, deadband, small-import hold)
+#    prev_g / prev_out are updated FIRST, on every cycle (held samples too).
 prev_g = g; prev_out = out_as_int
+if abs(g) > 20 and abs(g - prev_g_old) > 50 and abs(out_as_int - prev_out_old) < 20:
+    return                         # >50 W spike the own output can't explain: skip.
+                                   # No one-shot — a sustained drift whose own
+                                   # output never moves keeps being skipped.
+if abs(g) < 20 and out < 1:        # +/-20 W deadband (SIGNED out: a charging
+    return                         # battery reads out < 0 and is held too)
+if 0 <= g < 10:                    # small residual import: hold even while
+    return                         # producing, don't chase the last few watts
 
 # 4. keep the setpoint inside the dynamic power window
 if setpoint > hi:                  # above the upper power limit
@@ -401,6 +409,12 @@ Notes for an implementer:
   the discharge cap that rejects values over 800 W).
 - The final `apply_to_inverter` hands the setpoint to the power‑stage controller
   across the inverter‑MCU boundary.
+- Two subtleties the step‑3 gate's one‑line summaries hide: the deadband's
+  `out < 1` is a **signed** comparison (a charging battery reads `out < 0` and is
+  also held), and the spike filter has **no** one‑shot — `prev_g`/`prev_out`
+  advance every cycle, so a sustained drift whose own output never moves is
+  skipped every cycle, while a one‑off blip is gone from the baseline by the next
+  sample.
 
 > AstraMeter does not implement this storage‑side controller — when AstraMeter is
 > the active‑control authority it computes per‑battery targets itself (see below).
