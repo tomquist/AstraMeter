@@ -210,7 +210,7 @@ async def test_ct002_handle_request_respects_participate_field():
         return [0, 0, 0]
 
     # 7th field == "0" → opted out → treated as inactive by active control.
-    optout = CT002(ct_mac="112233445566", active_control=False)
+    optout = CT002(ct_mac="112233445566", active_control=True)
     optout.before_send = before_send
     req = build_payload(
         ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100", "0"]
