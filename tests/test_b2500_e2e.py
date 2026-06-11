@@ -109,3 +109,93 @@ async def test_b2500_does_not_charge_on_surplus_end_to_end() -> None:
         assert 0 <= h.battery.current_power <= 30  # idle, never negative
     finally:
         await h.stop()
+
+
+class _MixedHarness:
+    """A Venus (HMG-50) and a B2500 (HMJ), both on phase A, in **relay mode**
+    (``ACTIVE_CONTROL = False``) — each battery steers itself off the raw grid the
+    CT forwards. They use different control laws, so this exercises whether the
+    two together still drive the shared grid to zero."""
+
+    def __init__(self) -> None:
+        self.clock = HarnessClock()
+        free_udp, http_port = find_free_ports(2)
+        ct_mac = "112233445566"
+        self.load_model = LoadModel(base_load=[0.0, 0.0, 0.0], base_noise=0.0, loads=[])
+        self.powermeter = PowermeterSimulator(
+            batteries=[], load_model=self.load_model, host="127.0.0.1", port=http_port
+        )
+
+        def mk(mac: str, dev: str) -> BatterySimulator:
+            return BatterySimulator(
+                mac=mac,
+                phase="A",
+                ct_mac=ct_mac,
+                ct_host="127.0.0.1",
+                ct_port=free_udp,
+                meter_dev_type=dev,
+                max_charge_power=800,
+                max_discharge_power=800,
+                initial_soc=0.5,
+                ramp_rate=400.0,
+                poll_interval=0.3,
+                min_power_threshold=5.0,
+                startup_delay=0.0,
+                inspection_count=0,
+            )
+
+        self.venus = mk("02B250000001", "HMG-50")
+        self.b2500 = mk("02B250000002", "HMJ-2")
+        self.powermeter.batteries.extend([self.venus, self.b2500])
+        self.ct002 = CT002(
+            udp_port=free_udp,
+            ct_mac=ct_mac,
+            active_control=False,  # relay: batteries steer themselves
+            fair_distribution=True,
+            min_efficient_power=0,
+            clock=self.clock,
+            reset_fn=None,
+            consumer_ttl=100000,
+        )
+
+        async def update_readings(_addr, _fields=None, _consumer_id=None):
+            grid = self.powermeter.compute_grid()
+            return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+
+        self.ct002.before_send = update_readings
+
+    async def start(self) -> None:
+        await self.powermeter.start()
+        await self.ct002.start()
+
+    async def stop(self) -> None:
+        await self.ct002.stop()
+        await self.powermeter.stop()
+
+    async def settle(self, n: int = 150) -> None:
+        for _ in range(n):
+            for b in (self.venus, self.b2500):
+                await b.step(b.poll_interval)
+            self.clock.advance(0.3)
+
+    def grid(self) -> float:
+        g = self.powermeter.compute_grid()
+        return g["phase_a"] + g["phase_b"] + g["phase_c"]
+
+
+async def test_venus_and_b2500_null_grid_in_relay_mode() -> None:
+    """In relay mode a Venus + a B2500 each steer themselves off the raw grid;
+    after **every** grid change they together drive the shared grid back to ~0
+    (imports, exports, and back to no load)."""
+    h = _MixedHarness()
+    await h.start()
+    try:
+        for load in (400.0, 800.0, -300.0, 200.0, 0.0):
+            h.load_model.base_load = [load, 0.0, 0.0]
+            await h.settle()
+            assert abs(h.grid()) < 25, (
+                f"grid not nulled at load={load}: grid={h.grid():.1f}, "
+                f"venus={h.venus.current_power:.0f}, b2500={h.b2500.current_power:.0f}"
+            )
+    finally:
+        await h.stop()
