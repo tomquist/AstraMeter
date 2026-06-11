@@ -192,6 +192,22 @@ def test_idle_ignores_own_phase_dchrg() -> None:
     assert b.target_power == -500.0
 
 
+def test_non_participating_battery_appends_seventh_field() -> None:
+    """A non-participating battery appends the 7th 'participate' field as 0."""
+    b = _battery(participates=False)
+    b._current_power = -100.0
+    fields = b._request_fields()
+    assert len(fields) == 7
+    assert fields[6] == "0"
+
+
+def test_participating_battery_omits_seventh_field() -> None:
+    """A participating battery sends only the 6 base fields (Venus-style)."""
+    b = _battery(participates=True)
+    b._current_power = -100.0
+    assert len(b._request_fields()) == 6
+
+
 def test_parse_config_power_update_delay_ticks() -> None:
     data = {
         "power_update_delay_ticks": 3,

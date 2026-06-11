@@ -79,6 +79,10 @@ class Consumer:
     timestamp: float = 0.0
     device_type: str = ""
     poll_interval: float | None = None
+    # "Participate" flag from the request's optional 7th field. ``0`` on the
+    # wire means "do not aggregate me"; defaults to ``True`` when the field is
+    # absent (older senders send only 6 fields).
+    participates: bool = True
     # Control state (set by explicit API calls)
     manual_target: float = 0.0
     manual_enabled: bool = False
@@ -324,6 +328,7 @@ class CT002:
         device_type="",
         *,
         source_ip: str | None = None,
+        participates: bool = True,
     ):
         normalized_phase = str(phase).upper() if phase else "A"
         consumer = self._get_consumer(consumer_id)
@@ -343,6 +348,7 @@ class CT002:
         consumer.power = parse_int(power, 0)
         consumer.timestamp = now
         consumer.device_type = device_type
+        consumer.participates = participates
         if source_ip:
             consumer.last_ip = source_ip
 
@@ -380,7 +386,9 @@ class CT002:
         consumer = self._consumers.get(consumer_id)
         if consumer is None:
             return ConsumerMode("auto")
-        if not consumer.active:
+        # A consumer that opted out via the "participate" flag is treated as
+        # inactive (not driven by active control).
+        if not consumer.active or not consumer.participates:
             return ConsumerMode("inactive")
         if consumer.manual_enabled:
             return ConsumerMode("manual", consumer.manual_target)
@@ -408,7 +416,14 @@ class CT002:
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }
-        inactive = frozenset(cid for cid, c in self._consumers.items() if not c.active)
+        # A consumer that opted out via the request's "participate" flag is
+        # treated as inactive: active control excludes it from the distribution
+        # pool (it isn't driven), mirroring the aggregation exclusion above.
+        inactive = frozenset(
+            cid
+            for cid, c in self._consumers.items()
+            if not c.active or not c.participates
+        )
         manual = frozenset(
             cid for cid, c in self._consumers.items() if c.manual_enabled
         )
@@ -432,6 +447,11 @@ class CT002:
 
         for consumer in self._consumers.values():
             if consumer.timestamp <= 0:
+                continue
+            # Respect the request's "participate" flag: a battery that opted out
+            # (7th field == 0) is not aggregated into the per-phase buckets or
+            # the forwarded count.
+            if not consumer.participates:
                 continue
             phase = consumer.phase.upper()
             if phase not in by_phase:
@@ -669,6 +689,11 @@ class CT002:
         consumer_id = self._consumer_key(addr, fields)
         reported_phase = (fields[4] if len(fields) > 4 else "").strip().upper()
         reported_power = parse_int(fields[5] if len(fields) > 5 else 0)
+        # Optional 7th field: "participate" flag (newer senders, e.g. B2500).
+        # Absent/empty defaults to participating; an explicit 0 opts out of
+        # aggregation.
+        participate_raw = fields[6].strip() if len(fields) > 6 else ""
+        participates = participate_raw == "" or parse_int(participate_raw, 1) != 0
 
         # Anything other than A/B/C is treated as inspection mode. Observed
         # inspection markers in real traffic include "0", empty, and "D"
@@ -712,6 +737,7 @@ class CT002:
             power=reported_power,
             device_type=meter_dev_type,
             source_ip=str(addr[0]),
+            participates=participates,
         )
 
         updated, meter_failed = await self._call_before_send(addr, fields, consumer_id)

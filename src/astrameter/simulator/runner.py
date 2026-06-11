@@ -30,6 +30,7 @@ class BatteryConfig:
     max_dc_input: int = 0
     dc_input_power: float = 0.0
     idle_on_cross_phase_discharge: bool = False
+    participates: bool = True
 
 
 @dataclass
@@ -100,6 +101,7 @@ class SimulationRunner:
                 max_dc_input=bc.max_dc_input,
                 dc_input_power=bc.dc_input_power,
                 idle_on_cross_phase_discharge=bc.idle_on_cross_phase_discharge,
+                participates=bc.participates,
             )
             for bc in cfg.batteries
         ]
@@ -185,6 +187,7 @@ def parse_config(data: dict) -> SimulationConfig:
             idle_on_cross_phase_discharge=bool(
                 bd.get("idle_on_cross_phase_discharge", False)
             ),
+            participates=bool(bd.get("participates", True)),
         )
         batteries.append(bc)
 

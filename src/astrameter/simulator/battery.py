@@ -42,6 +42,7 @@ class BatterySimulator:
         max_dc_input: int = 0,
         dc_input_power: float = 0.0,
         idle_on_cross_phase_discharge: bool = False,
+        participates: bool = True,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
@@ -68,6 +69,7 @@ class BatterySimulator:
         self.power_update_delay_ticks = max(0, int(power_update_delay_ticks))
         self.max_dc_input = max(0, int(max_dc_input))
         self.idle_on_cross_phase_discharge = idle_on_cross_phase_discharge
+        self.participates = participates
 
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
@@ -206,9 +208,9 @@ class BatterySimulator:
 
     # -- protocol ----------------------------------------------------------
 
-    async def _send_request(self) -> list[str] | None:
+    def _request_fields(self) -> list[str]:
+        """Build the CT002 request fields for this poll."""
         phase_field = "0" if self._request_count < self.inspection_count else self.phase
-
         fields = [
             self.meter_dev_type,
             self.mac,
@@ -217,7 +219,17 @@ class BatterySimulator:
             phase_field,
             str(round(self._current_power)),
         ]
-        payload = protocol.build_payload(fields)
+        if not self.participates:
+            # Opt out of CT aggregation via the optional 7th "participate"
+            # field. Participating batteries omit it (matches Venus, which
+            # sends only 6 fields).
+            fields.append("0")
+        return fields
+
+    async def _send_request(self) -> list[str] | None:
+        request_fields = self._request_fields()
+        phase_field = request_fields[4]
+        payload = protocol.build_payload(request_fields)
 
         loop = asyncio.get_running_loop()
         transport = None

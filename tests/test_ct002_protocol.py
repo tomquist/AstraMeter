@@ -182,6 +182,54 @@ def test_ct002_active_control_reports_count_one_per_phase():
     assert response[10] == "0"  # C_chrg_nb: inactive phase
 
 
+def test_ct002_excludes_non_participating_from_aggregation():
+    """A consumer that sent participate=0 is left out of the relay aggregates."""
+    device = CT002(active_control=False)
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+
+    _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
+    _set_instruction(device, "consumer-a2", phase="A", instructed=-120)
+    # consumer-a2 opts out.
+    device._consumers["consumer-a2"].participates = False
+
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[10, 0, 0],
+    )
+
+    # Only the participating battery's -180 is forwarded, and the count is 1.
+    assert response[8] == "1"  # A_chrg_nb: one participating battery
+    assert response[15] == "-180"  # A_chrg_power excludes the opted-out -120
+
+
+async def test_ct002_handle_request_respects_participate_field():
+    """The optional 7th request field marks a consumer non-participating."""
+    transport = MagicMock()
+
+    async def before_send(_addr, _fields, _consumer_id):
+        return [0, 0, 0]
+
+    # 7th field == "0" → opted out → treated as inactive by active control.
+    optout = CT002(ct_mac="112233445566", active_control=False)
+    optout.before_send = before_send
+    req = build_payload(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100", "0"]
+    )
+    await optout._handle_request(req, ("1.1.1.1", 12345), transport)
+    consumer = next(iter(optout._consumers.values()))
+    assert consumer.participates is False
+    assert optout._consumer_mode(consumer.consumer_id).mode == "inactive"
+
+    # No 7th field → defaults to participating.
+    default = CT002(ct_mac="112233445566", active_control=False)
+    default.before_send = before_send
+    req2 = build_payload(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    )
+    await default._handle_request(req2, ("1.1.1.1", 12345), transport)
+    assert next(iter(default._consumers.values())).participates is True
+
+
 def test_ct002_splits_positive_instructions_into_dchrg_fields():
     device = CT002()
     request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "100"]

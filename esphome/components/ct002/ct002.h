@@ -40,6 +40,9 @@ struct Consumer {
   bool active{true};
   bool manual_enabled{false};
   float manual_target{0.0f};
+  // "Participate" flag from the request's optional 7th field. ``0`` on the wire
+  // means "do not aggregate me"; defaults to true when the field is absent.
+  bool participates{true};
   // Relative fair-share weight (1.0 = neutral). Tuned live via the MQTT
   // "Distribution Weight" entity; mirrors Python's Consumer.distribution_weight.
   float distribution_weight{1.0f};
@@ -217,7 +220,7 @@ class CT002Component : public Component {
   bool dedup_should_process_(const std::string &consumer_id);
   void update_consumer_report_(const std::string &consumer_id, const std::string &phase,
                               float power, const std::string &device_type,
-                              const std::string &source_ip);
+                              const std::string &source_ip, bool participates = true);
 
   bool validate_ct_mac_(const std::vector<std::string> &request_fields) const;
   std::vector<std::string> build_response_fields_(
