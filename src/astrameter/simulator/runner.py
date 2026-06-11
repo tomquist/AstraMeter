@@ -20,6 +20,7 @@ logger = logging.getLogger("astra_sim.runner")
 class BatteryConfig:
     mac: str
     phase: str
+    meter_dev_type: str = "HMG-50"
     max_charge_power: int = 800
     max_discharge_power: int = 800
     capacity_wh: float = 2560.0
@@ -89,6 +90,7 @@ class SimulationRunner:
                 ct_mac=cfg.ct_mac,
                 ct_host=cfg.ct_host,
                 ct_port=cfg.ct_port,
+                meter_dev_type=bc.meter_dev_type,
                 max_charge_power=bc.max_charge_power,
                 max_discharge_power=bc.max_discharge_power,
                 capacity_wh=bc.capacity_wh,
@@ -173,6 +175,7 @@ def parse_config(data: dict) -> SimulationConfig:
         bc = BatteryConfig(
             mac=bd["mac"],
             phase=bd["phase"],
+            meter_dev_type=str(bd.get("meter_dev_type", "HMG-50")),
             max_charge_power=bd.get("max_charge_power", 800),
             max_discharge_power=bd.get("max_discharge_power", 800),
             capacity_wh=bd.get("capacity_wh", 2560.0),

@@ -12,7 +12,10 @@ import logging
 import random
 import time
 
+from astrameter.ct002.balancer import device_capabilities
+
 from . import protocol
+from .b2500_steering import B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
 
 logger = logging.getLogger("astra_sim.battery")
@@ -81,13 +84,24 @@ class BatterySimulator:
         self._dc_input_power: float = 0.0
         self.dc_input_power = dc_input_power  # reuse setter clamp
 
-        # Self-consumption control law (the steering a real Venus-class battery
-        # runs on the grid value it reads back from the CT). ``hi``/``lo`` are
-        # the charge / discharge power limits in the controller's convention
+        # Self-consumption control law. Most Marstek batteries (Venus class) run
+        # the firmware ramp controller on the grid value read back from the CT;
+        # ``hi``/``lo`` are the charge / discharge limits in its convention
         # (setpoint positive = charge, negative = discharge).
         self._steering = FirmwareSteeringController()
         self._steer_hi = float(self.max_charge_power)
         self._steer_lo = -float(self.max_discharge_power)
+
+        # The B2500 family (HMA/HMJ/HMK) is DC-coupled with no built-in inverter
+        # and no AC input: it steers its DC output into an external microinverter
+        # with a different integer hysteresis law instead of the Venus ramp.
+        caps = device_capabilities(self.meter_dev_type)
+        self._is_dc_output = (
+            caps.has_dc_input
+            and not caps.has_builtin_inverter
+            and not caps.has_ac_input
+        )
+        self._b2500 = B2500SteeringController() if self._is_dc_output else None
 
     # -- public read-only properties ---------------------------------------
 
@@ -263,16 +277,15 @@ class BatterySimulator:
         return response_fields
 
     def _handle_ct_response(self, response_fields: list[str]) -> None:
-        """Derive the new AC target via the Venus-class steering controller.
+        """Derive the new AC target from the grid value read back from the CT.
 
-        The grid value read back from the CT (sum of the per-phase power fields,
-        positive = importing) is fed to :class:`FirmwareSteeringController`,
-        which slews an internal setpoint toward nulling it — the control law a
-        real Venus-class battery runs, including its input-conditioning gates
-        (±20 W deadband and >50 W single-sample spike filter, both keyed on the
-        battery's own output). The controller's sign is the inverse of the
-        simulator's (setpoint positive = charge), so the simulator target is
-        the negated setpoint.
+        The grid value (sum of the per-phase power fields, positive = importing)
+        is fed to this battery's steering controller. Venus-class batteries run
+        :class:`FirmwareSteeringController` (a ramp law with input-conditioning
+        gates), whose sign is the inverse of the simulator's (setpoint positive =
+        charge), so the simulator target is the negated setpoint. A DC-coupled
+        B2500 instead runs :class:`B2500SteeringController` on its DC output (see
+        :meth:`_steer_b2500_output`).
 
         Cross-battery share-split: a real battery divides the grid value by the
         number of batteries reported on its phase (the ``*_chrg_nb`` count), so
@@ -289,6 +302,11 @@ class BatterySimulator:
                 return 0
 
         grid_reading = field(4) + field(5) + field(6)
+
+        if self._b2500 is not None:
+            self._steer_b2500_output(grid_reading)
+            return
+
         # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
         phase_count = field(8 + "ABC".index(self.phase))
 
@@ -301,6 +319,27 @@ class BatterySimulator:
         )
         # Controller: +charge → simulator: +discharge.
         self._apply_ct_derived_target(-setpoint)
+
+    def _steer_b2500_output(self, grid_reading: int) -> None:
+        """Steer a DC-coupled B2500's output toward nulling the grid.
+
+        The B2500 can only discharge its DC output into an external microinverter
+        to offset the grid — it has no AC input and never charges from AC. So the
+        setpoint is floored at 0 (a grid surplus winds the output down to idle
+        rather than absorbing it), and the output follows the B2500's integer
+        hysteresis regulator rather than the Venus ramp. ``regulate`` sees the
+        battery's own measured output as feedback.
+        """
+        assert self._b2500 is not None
+        # ``setpoint_from_grid`` clamps to ``max_power / 2`` (the firmware's
+        # per-output half-cap); the unit's two outputs share ``max_discharge``,
+        # so pass ``2x`` to cap the combined output at the configured limit.
+        setpoint = max(
+            0,
+            self._b2500.setpoint_from_grid(grid_reading, 2 * self.max_discharge_power),
+        )
+        out = self._b2500.regulate(setpoint, max(0, round(self._current_power)))
+        self._apply_ct_derived_target(float(out))
 
     # -- main loop ---------------------------------------------------------
 

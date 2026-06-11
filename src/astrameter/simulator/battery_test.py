@@ -197,6 +197,43 @@ def test_steering_spike_debounced_for_one_response() -> None:
     assert b.target_power == expected
 
 
+def test_b2500_device_type_selects_dc_output_steering() -> None:
+    """A B2500-family device type (HMA/HMJ/HMK) steers its DC output; a Venus
+    device type uses the ramp controller."""
+    assert _battery(meter_dev_type="HMJ-2")._b2500 is not None
+    assert _battery(meter_dev_type="HMG-50")._b2500 is None
+
+
+def test_b2500_steers_dc_output_toward_grid_null() -> None:
+    """A B2500 ramps its DC output up via the hysteresis law to offset import,
+    converging near 0.9 * grid (within the ±10 W deadband)."""
+    b = _battery(meter_dev_type="HMJ-2", max_discharge_power=800)
+    fields = _response_fields(phase_targets=(300, 0, 0))  # grid import 300 W
+    for _ in range(20):
+        b._update_power(1.0)
+        b._handle_ct_response(fields)
+    # Discharging (positive), converged near 0.9 * 300 = 270 W.
+    assert b.target_power > 0
+    assert abs(b.current_power - 270) <= 10
+
+
+def test_b2500_does_not_charge_from_ac_on_surplus() -> None:
+    """With no AC input, a B2500 winds its output down to idle on a grid surplus
+    instead of charging (unlike a Venus, which would go negative)."""
+    b = _battery(meter_dev_type="HMJ-2")
+    up = _response_fields(phase_targets=(300, 0, 0))
+    for _ in range(20):
+        b._update_power(1.0)
+        b._handle_ct_response(up)
+    assert b.current_power > 100  # discharging to offset import
+
+    down = _response_fields(phase_targets=(-300, 0, 0))  # grid surplus
+    for _ in range(20):
+        b._update_power(1.0)
+        b._handle_ct_response(down)
+    assert 0 <= b.current_power <= 10  # idle, never charges from AC
+
+
 def test_non_participating_battery_appends_seventh_field() -> None:
     """A non-participating battery appends the 7th 'participate' field as 0."""
     b = _battery(participates=False)
@@ -211,6 +248,19 @@ def test_participating_battery_omits_seventh_field() -> None:
     b = _battery(participates=True)
     b._current_power = -100.0
     assert len(b._request_fields()) == 6
+
+
+def test_parse_config_meter_dev_type() -> None:
+    data = {
+        "batteries": [
+            {"mac": "02B250000001", "phase": "A", "meter_dev_type": "HMJ-2"},
+            {"mac": "02B250000002", "phase": "B"},
+        ],
+    }
+    cfg = parse_config(data)
+    validate_config(cfg)
+    assert cfg.batteries[0].meter_dev_type == "HMJ-2"
+    assert cfg.batteries[1].meter_dev_type == "HMG-50"  # default
 
 
 def test_parse_config_power_update_delay_ticks() -> None:
