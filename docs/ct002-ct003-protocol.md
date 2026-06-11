@@ -308,14 +308,14 @@ the constants below are the literal values used.
 >   and it uses a **different ramp/step law** (no float gain table, integer
 >   setpoint). So the gate logic carries over, but the gain table and ramp
 >   arithmetic below are HMG‑50‑specific.
-> - The **B2500 class** (HMJ) runs an **integer‑only** controller (its firmware
->   has no floating‑point unit and no float gain table), so while the
->   higher‑level behavior is the same — poll the meter, select the
->   phase/combined bucket via `phase_t`, divide by the per‑phase device count,
->   and slew an inverter setpoint — its step sizing, deadband and clamps use
->   different (integer) values and are **not** the table below. The B2500 also
->   has a smaller power envelope than the Venus's ±2500 W; model it with the
->   same structure but its own limits.
+> - The **B2500 class** (HMJ) is a **DC‑coupled** unit (PV/DC in, DC out to one
+>   or two external microinverters), so it steers its **DC output power** rather
+>   than an AC inverter setpoint. Its controller is **integer‑only** and
+>   **table/hysteresis‑based** — none of the float gain table, the `sqrt` step,
+>   or the step‑3 spike filter apply. It is documented separately under
+>   **"B2500‑class (HMJ) DC‑output steering"** below. (SOC and temperature are
+>   handled by a *separate* BMS — charge‑current derating, cell‑voltage limits —
+>   and are **not** part of its steering loop.)
 
 **Per‑device persistent state**
 
@@ -427,6 +427,79 @@ Notes for an implementer:
 > Sign convention: in the buckets, **negative** power is charging (grid surplus
 > to absorb) and **positive** is discharging (load to cover); the controller
 > drives the selected phase's net toward zero.
+
+### B2500‑class (HMJ) DC‑output steering (simulator‑grade)
+
+The B2500 is **DC‑coupled**: PV/DC in, DC out to one or two external
+microinverters. It self‑consumes by reading the meter and steering its **DC
+output power** per channel — there is no AC inverter loop and **none** of the
+Venus float ramp law above applies. The controller is **integer‑only** and built
+from a meter‑derived setpoint feeding a per‑channel hysteresis regulator. It is
+enough to reproduce the device's output behavior.
+
+> **Keep this separate from the BMS.** SOC (interpolated from cell voltage) and
+> temperature drive a *charge‑current derating* curve and cell‑voltage limits in
+> a **different** subsystem. Those never enter the steering loop below — do not
+> fold an SOC/temperature term into the output setpoint.
+
+**Per‑channel persistent state** (the B2500 has **two** independent DC outputs,
+each with its own copy; steps 2–4 run per channel):
+
+| name | meaning |
+|------|---------|
+| `setpoint` | desired output power for this channel, W (from the meter) |
+| `target` | ramped intermediate that chases `setpoint` (AC‑active path only) |
+| `cmd` | internal output command being slewed; calibrated, then applied |
+| `power` | measured output power = `V × I / k` (per‑channel volts × amps) |
+| `state` | per‑channel state machine (0–4: off / starting / regulating / …) |
+
+**Cadence.** One regulation pass per poll cycle, like the Venus.
+
+```text
+# 1. setpoint from the metered grid power (per cycle)
+#    `grid` is the metered power the device steers against (the CT/meter reading,
+#    NOT the device's own output).
+setpoint = grid * scale / 1_000_000        # `scale` is a runtime unit-calibration
+setpoint = setpoint * 9 / 10               # 90% approach factor
+setpoint = min(setpoint, max_power / 2)    # clamp to half the power envelope
+#    (a single-output configuration halves once more)
+
+# 2. measured output power for the channel
+power = volts * amps / k                   # k a fixed unit divisor
+
+# 3. feedback conditioning (deadband smoothing, only once stable ~500 cycles)
+if abs(power - setpoint) < 10:   power = setpoint            # snap within +/-10 W
+elif abs(power - setpoint) <= 20: power += sign(setpoint-power) * 10   # else step 10 W
+
+# 4. per-channel hysteresis regulator (every cycle)
+if   power > setpoint + 10:  cmd -= 100     # +/-10 W deadband, +/-100 W per-cycle slew
+elif power < setpoint - 10:  cmd += 100
+# else: hold
+applied = (cmd - 5) * 10 / 59 + cal[mode]   # per-mode output calibration
+drive_converter(applied)                    # hand to the DC power stage
+```
+
+Notes for an implementer:
+- **Unit‑calibration constants collapse in a watt‑domain model.** `scale /
+  1_000_000` and `k` are the device's ADC/unit conversions, and `(cmd − 5) ×
+  10 / 59 + cal[mode]` is its command→duty mapping. A simulator that already
+  works in watts (grid, output, and `cmd` all in watts) takes all three as
+  identity, so the whole law reduces to: `setpoint = min(0.9 × grid,
+  max_power/2)`, then the ±10 W / ±100 W hysteresis regulator on `power` toward
+  `setpoint`, applying `cmd` directly. Keep the device‑internal forms only if
+  you model raw ADC counts.
+- The **±10 W deadband** and **±100 W/cycle slew** are the integer analog of the
+  Venus deadband+ramp; there is **no** acceleration counter, no `sqrt`, and no
+  spike filter. The response is a plain bounded integrator toward `setpoint`.
+- **Two control variants exist.** The above is the normal path. When the AC line
+  is in a specific window the device runs an **AC‑active** path that additionally
+  (a) averages the channel current over 5 samples with the min and max dropped,
+  and (b) ramps a `target` toward `setpoint` in **±40 W** steps (gated by a
+  ~100‑cycle timer and `power ≥ 20 W`) before regulating to it. Model the normal
+  path first; the AC‑active path only makes the approach slower/smoother.
+- The power envelope is the **B2500's** (≈800 W class), **not** the Venus's
+  ±2500 W. `max_power` in step 1 is that envelope.
+- Everything is integer (16‑bit watt‑scale values); there is no float state.
 
 ## Active vs. relay control (AstraMeter)
 
