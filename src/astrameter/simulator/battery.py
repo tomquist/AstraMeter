@@ -104,8 +104,13 @@ class BatterySimulator:
             and not caps.has_builtin_inverter
             and not caps.has_ac_input
         )
+        # Two channels, each capped at half the unit's discharge envelope.
+        _ch_max = max(1, self.max_discharge_power // 2)
         self._b2500_channels = (
-            [B2500SteeringController(), B2500SteeringController()]
+            [
+                B2500SteeringController(max_output=_ch_max),
+                B2500SteeringController(max_output=_ch_max),
+            ]
             if self._is_dc_output
             else []
         )
@@ -344,6 +349,13 @@ class BatterySimulator:
         cur = max(0, round(self._current_power))
         target = cur + grid_reading * 9 // 10  # incremental: 90% of the residual
         target = max(0, min(target, self.max_discharge_power))
+        # At full SoC the PV passes straight through to the output and cannot be
+        # curtailed below the DC input (the pack is full, the PV has nowhere else
+        # to go). The steering can't drive the output under that floor, so don't
+        # let it try — otherwise it fights the passthrough override and the
+        # output oscillates instead of settling at the PV level.
+        if self._soc >= 1.0 and self._dc_input_power > 0:
+            target = max(target, round(self._dc_input_power))
         per_channel = target // 2
         own = cur // 2  # each channel's ~half of the measured output
         out = sum(ch.regulate(per_channel, own) for ch in self._b2500_channels)

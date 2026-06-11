@@ -112,12 +112,18 @@ async def test_b2500_does_not_charge_on_surplus_end_to_end() -> None:
 
 
 class _MixedHarness:
-    """A Venus (HMG-50) and a B2500 (HMJ), both on phase A, in **relay mode**
-    (``ACTIVE_CONTROL = False``) — each battery steers itself off the raw grid the
-    CT forwards. They use different control laws, so this exercises whether the
-    two together still drive the shared grid to zero."""
+    """A Venus (HMG-50) and a B2500 (HMJ), both on phase A. Defaults to **relay
+    mode** (``ACTIVE_CONTROL = False``) — each battery steers itself off the raw
+    grid the CT forwards. They use different control laws, so this exercises
+    whether the two together still drive the shared grid to zero. The B2500 can
+    optionally carry PV (``b2500_pv``) at a given SoC to exercise passthrough."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        active_control: bool = False,
+        b2500_pv: float = 0.0,
+        b2500_soc: float = 0.5,
+    ) -> None:
         self.clock = HarnessClock()
         free_udp, http_port = find_free_ports(2)
         ct_mac = "112233445566"
@@ -126,7 +132,7 @@ class _MixedHarness:
             batteries=[], load_model=self.load_model, host="127.0.0.1", port=http_port
         )
 
-        def mk(mac: str, dev: str) -> BatterySimulator:
+        def mk(mac: str, dev: str, initial_soc: float = 0.5, **kw) -> BatterySimulator:
             return BatterySimulator(
                 mac=mac,
                 phase="A",
@@ -136,21 +142,28 @@ class _MixedHarness:
                 meter_dev_type=dev,
                 max_charge_power=800,
                 max_discharge_power=800,
-                initial_soc=0.5,
+                initial_soc=initial_soc,
                 ramp_rate=400.0,
                 poll_interval=0.3,
                 min_power_threshold=5.0,
                 startup_delay=0.0,
                 inspection_count=0,
+                **kw,
             )
 
         self.venus = mk("02B250000001", "HMG-50")
-        self.b2500 = mk("02B250000002", "HMJ-2")
+        self.b2500 = mk(
+            "02B250000002",
+            "HMJ-2",
+            initial_soc=b2500_soc,
+            max_dc_input=int(b2500_pv),
+            dc_input_power=b2500_pv,
+        )
         self.powermeter.batteries.extend([self.venus, self.b2500])
         self.ct002 = CT002(
             udp_port=free_udp,
             ct_mac=ct_mac,
-            active_control=False,  # relay: batteries steer themselves
+            active_control=active_control,
             fair_distribution=True,
             min_efficient_power=0,
             clock=self.clock,
@@ -225,5 +238,28 @@ async def test_mixed_surplus_only_venus_absorbs() -> None:
         assert h.b2500.current_power >= -1  # still never charges
         assert h.venus.current_power < -650  # charging near its limit
         assert h.grid() < -150  # residual export, cannot be nulled
+    finally:
+        await h.stop()
+
+
+@pytest.mark.parametrize("active_control", [True, False])
+async def test_b2500_full_soc_passthrough_absorbed_by_venus(
+    active_control: bool,
+) -> None:
+    """A full B2500 with surplus PV passes it through to its DC output (it can't
+    store it). That output settles at the PV level — the steering can't curtail
+    below the passthrough — and a co-resident Venus absorbs the exported surplus,
+    so the grid still nulls. (The DC analog of the issue #376 passthrough.)"""
+    # 500 W PV, full SoC; only 100 W local load, so ~400 W of PV is surplus.
+    h = _MixedHarness(active_control=active_control, b2500_pv=500.0, b2500_soc=1.0)
+    h.load_model.base_load = [100.0, 0.0, 0.0]
+    await h.start()
+    try:
+        await h.settle(300)
+        # B2500 outputs ~its PV (passthrough floor); it never sinks below it and
+        # has not wound up far above it (no integrator runaway).
+        assert 470 <= h.b2500.current_power <= 560
+        assert h.venus.current_power < -300  # Venus absorbs the exported surplus
+        assert abs(h.grid()) < 30  # grid nulled despite the passthrough
     finally:
         await h.stop()

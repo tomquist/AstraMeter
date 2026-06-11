@@ -47,6 +47,12 @@ class B2500SteeringController:
     """
 
     cmd: int = 60  # internal command unit (not watts)
+    # Output ceiling (W). The command is clamped so its output never runs past
+    # this — anti-windup. On real hardware the measured-output feedback
+    # saturates at the inverter limit, so the command can't wind up; a
+    # watt-domain model needs the clamp explicitly, or the integrator runs away
+    # whenever the physical output is capped (and recovers only ~17 W/cycle).
+    max_output: int = 2500
 
     def output(self) -> int:
         """The DC output power (W) the current command maps to.
@@ -62,12 +68,16 @@ class B2500SteeringController:
         """Advance one hysteresis cycle toward *setpoint*; return the new output.
 
         *power* is the channel's measured output power (W). Holds within the
-        ±10 W deadband, else slews ``cmd`` by ±100.
+        ±10 W deadband, else slews ``cmd`` by ±100, clamped so the output stays
+        within ``[0, max_output]`` (anti-windup).
         """
         if power > setpoint + DEADBAND_W:
             self.cmd = (self.cmd - CMD_STEP) & 0xFFFF
         elif power < setpoint - DEADBAND_W:
             self.cmd = (self.cmd + CMD_STEP) & 0xFFFF
+        cmd_ceiling = CMD_FLOOR + self.max_output * CAL_DEN // CAL_NUM
+        if self.cmd > cmd_ceiling:
+            self.cmd = cmd_ceiling
         return self.output()
 
     def step(self, grid: int, power: int, max_power: int) -> int:

@@ -498,6 +498,18 @@ Notes for an implementer:
 - The **±10 W deadband** plus the slew is the integer analog of the Venus
   deadband+ramp; there is **no** acceleration counter, no `sqrt`, and no spike
   filter. The response is a plain bounded integrator toward `setpoint`.
+- **Clamp the command (anti‑windup).** On the device the `power` feedback is the
+  *measured* output, which saturates at the inverter limit — so once the output
+  is capped, `power ≈ setpoint` and the command stops growing. A watt‑domain
+  model whose feedback is a separately‑clamped output must add the clamp
+  explicitly (`cmd` bounded so its output stays within `[0, max_power]`), or the
+  integrator winds up while the output is pinned and then recovers at only
+  ~17 W/cycle.
+- **At full SoC the output can't drop below the PV throughput.** When the pack is
+  full, incoming PV passes straight through to the output (it has nowhere else to
+  go), so the effective setpoint is floored at the PV power; the grid steering
+  can't curtail below it (it exports the surplus, which a co‑resident AC battery
+  absorbs). Don't let the steering fight that floor.
 - **Two control variants exist.** The above is the normal path. When the AC line
   is in a specific window the device runs an **AC‑active** path that additionally
   (a) averages the channel current over 5 samples with the min and max dropped,
