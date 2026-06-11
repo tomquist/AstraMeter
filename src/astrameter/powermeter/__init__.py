@@ -1,5 +1,5 @@
 from .amisreader import AmisReader
-from .base import Powermeter
+from .base import HttpPollingPowermeter, Powermeter
 from .emlog import Emlog
 from .envoy import Envoy
 from .esphome import ESPHome
@@ -38,6 +38,7 @@ __all__ = [
     "HampelPowermeter",
     "HomeAssistant",
     "HomeWizardPowermeter",
+    "HttpPollingPowermeter",
     "IoBroker",
     "JsonHttpPowermeter",
     "ModbusPowermeter",
