@@ -88,6 +88,32 @@ same ASCII wire field.
 - The `participate` flag (field 7) is an additional, explicit gate: even a fully phase‑committed reporter
   is **excluded from aggregation** when it sends `0`.
 
+### When a battery sends `participate = 0`
+
+The flag lets a battery opt out of being counted by the CT. The Venus class
+(HMG‑50, VNSE3‑0) never sends the field, so it is always treated as
+participating. The B2500 class (HMJ) computes it from its operating state and
+sends `1` **only while it is actively following the CT** — that is, when **all**
+of the following hold:
+
+- the CT/meter‑control feature is **enabled**,
+- the work mode is the **automatic CT‑following** mode (not one of the
+  manual / scheduled modes),
+- no internal **inhibit** flag is set, and
+- at least one of its two inverter/battery channels is in the **running** state
+  (the inverter is actually on, not idle/booting).
+
+Otherwise it sends `participate = 0`. In practice a B2500 opts out when it is in
+a **manual or scheduled work mode**, when CT control is **disabled**, when an
+inhibit is active, or when its **inverter is not running** (off/idle/starting).
+It also reports power `0` when the feature is disabled or in one of the manual
+modes (in the other manual mode it still reports its real power but with
+`participate = 0`).
+
+> The exact work‑mode numbering and the precise enable/inhibit conditions are
+> inferred from the device's behavior; the rule "participates only while actively
+> CT‑following with the inverter running" is the reliable summary.
+
 ### Example Request (human readable)
 
 ```text
@@ -208,6 +234,26 @@ Per response cycle the CT:
      positive → its `*_dchrg_power`; bump the bucket's `*_chrg_nb` count.
 3. **Replies to one slave per cycle**, round‑robin across the active slots
    (each requester receives its own unicast response).
+
+**Effect of `participate = 0` on steering.** A non‑participating battery is still
+**served a normal response** every cycle — it is excluded from the aggregation in
+step 2, **not** from the round‑robin in step 3 — so it keeps receiving the grid
+reading and the aggregates, and can run its own program (e.g. a manual schedule)
+while reading the meter. But because its power and its slot are left out of the
+per‑phase `*_chrg_power` / `*_dchrg_power` buckets **and** the `*_chrg_nb` count:
+
+- **for that battery:** it is effectively invisible to the shared pool — its
+  activity is not reflected back to anyone;
+- **for the other batteries on its phase:** the count they divide the per‑phase
+  grid by is **smaller** (so each participating battery takes a **larger share**,
+  not counting on the opted‑out one to help), and the cross‑talk
+  charge/discharge aggregate **omits** the opted‑out battery's contribution.
+
+This is the relay‑mode coordination: opting out removes a battery from the
+shared load split without stopping it from being polled. (AstraMeter mirrors the
+aggregation/count exclusion, and additionally drops a non‑participating consumer
+from its active‑control distribution pool — the real CT is relay‑only and has no
+active‑control authority.)
 
 The storage side validates each response (checksum, length, and `info_idx`
 de‑duplication) before applying it. This aggregate + sign‑split model matches
