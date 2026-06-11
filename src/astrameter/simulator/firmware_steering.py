@@ -1,11 +1,20 @@
-"""Marstek Venus-class self-consumption steering controller.
+"""Marstek HMG-50 self-consumption steering controller.
 
-This reproduces the closed-loop control law a real Marstek Venus (HMG-50 /
-VNSE3-0) battery runs on the grid value it reads back from the CT: a
-gain-scheduled, accelerating step that drives the selected grid power toward
-zero. It is the steering law documented in
-``docs/ct002-ct003-protocol.md`` ("Steering / ramp logic"); the constants and
-per-step arithmetic below are the exact values that controller uses.
+This reproduces the closed-loop control law a real Marstek HMG-50 (Venus C/D)
+battery runs on the grid value it reads back from the CT: a gain-scheduled,
+accelerating step that drives the selected grid power toward zero, preceded by
+the device's input-conditioning gate (a >50 W spike filter, a ±20 W deadband
+and a small-import hold). It is the steering law documented in
+``docs/ct002-ct003-protocol.md`` ("Steering / ramp logic"); the gain table and
+per-step arithmetic, and the gate thresholds and ordering, are the exact values
+the HMG-50 firmware uses.
+
+Scope: the gain table and ramp arithmetic here are the **HMG-50** (Venus C/D)
+ones. The VNSE3-0 (Venus E) shares the *same input-conditioning gate* — the
+same >50 W spike filter, <20 W own-output exemption, signed deadband and
+small-import hold — but with a tighter ±10 W deadband, and it uses a different
+ramp/step law (no float gain table), so the GOLDEN ramp vectors here are
+HMG-50-specific.
 
 Conventions
 -----------
@@ -26,11 +35,25 @@ import math
 import struct
 from dataclasses import dataclass
 
-__all__ = ["HARD_CLAMP_W", "STEP_BASE_W", "FirmwareSteeringController"]
+__all__ = [
+    "DEADBAND_W",
+    "HARD_CLAMP_W",
+    "SMALL_IMPORT_HOLD_W",
+    "SPIKE_JUMP_W",
+    "SPIKE_OWN_DELTA_W",
+    "STEP_BASE_W",
+    "FirmwareSteeringController",
+]
 
 HARD_CLAMP_W = 2500.0
 STEP_BASE_W = 10.0
 WINDOW_PULLBACK_W = 100.0
+# Input-conditioning thresholds the HMG-50 applies before the ramp law (see
+# the module docstring).
+DEADBAND_W = 20
+SPIKE_JUMP_W = 50
+SPIKE_OWN_DELTA_W = 20
+SMALL_IMPORT_HOLD_W = 10
 _RAMP_MIN, _RAMP_MAX = -5, 5
 
 
@@ -65,6 +88,15 @@ def _u32(x: int) -> int:
     return x & 0xFFFFFFFF
 
 
+def _share_split(g: float, device_count: int) -> int:
+    """Split the grid value across the batteries sharing the bucket."""
+    nb = max(1, int(device_count))
+    g = int(g)
+    if nb > 1:
+        g = int(g / nb)  # signed integer division, truncated toward zero
+    return g
+
+
 @dataclass
 class FirmwareSteeringController:
     """One battery's steering state. Call :meth:`step` once per CT response."""
@@ -76,21 +108,91 @@ class FirmwareSteeringController:
     # captured the last time the grid reading rose. Both feed the step size.
     s58: int = 0
     ref: int = 0
+    # Previous cycle's (share-split) grid value and own output (as an int), the
+    # baseline the conditioning gate compares the next sample against. The
+    # firmware updates both on *every* regulation cycle — held and skipped
+    # samples included.
+    prev_g: int = 0
+    prev_out: int = 0
 
     def __post_init__(self) -> None:
         self.setpoint = _f32(self.setpoint)
 
-    def step(self, g: float, hi: float, lo: float, *, device_count: int = 1) -> float:
+    def step(
+        self,
+        g: float,
+        hi: float,
+        lo: float,
+        *,
+        device_count: int = 1,
+        out: float = 0.0,
+    ) -> float:
         """Advance one regulation cycle for grid value *g*; return the new setpoint.
 
-        *hi* / *lo* are the charge / discharge power limits. *device_count* is
-        the number of batteries sharing this phase bucket (the grid value is
-        split evenly between them, as the device does).
+        Runs the firmware's input-conditioning gate (:meth:`_gate`) before the
+        ramp law (:meth:`step_raw`). When the gate holds the sample the setpoint
+        is returned unchanged and the ramp-law state is untouched; only the
+        gate's own baseline (``prev_g`` / ``prev_out``) advances.
+
+        *out* is the battery's own measured output power (positive =
+        discharging, the same convention as the request's power field). *hi* /
+        *lo* are the charge / discharge power limits. *device_count* is the
+        number of batteries sharing this phase bucket (the grid value is split
+        evenly between them, as the device does, before the gate sees it).
         """
-        nb = max(1, int(device_count))
-        g = int(g)
-        if nb > 1:
-            g = int(g / nb)  # signed integer division, truncated toward zero
+        g = _share_split(g, device_count)
+        if not self._gate(g, out):
+            return self._clamp()
+        return self.step_raw(g, hi, lo)
+
+    def _gate(self, g: int, out: float) -> bool:
+        """The firmware's pre-ramp conditioning gate; ``True`` ⇒ run the ramp.
+
+        Mirrors the HMG-50 firmware's pre-ramp conditioning bit-for-bit. Three
+        conditions hold the setpoint, in this order:
+
+        - **>50 W spike filter** — a grid jump over 50 W from the previous
+          sample that the battery's own output change (< 20 W) does not explain
+          is treated as a transient and skipped. There is **no** one-shot: the
+          baseline advances every cycle, so a *sustained* drift whose own
+          output never moves keeps being skipped, while a real load step is
+          picked up on the next sample once the jump is in the baseline.
+        - **±20 W deadband** — ``abs(g) < 20`` with the battery's own output
+          below 1 W (a **signed** test: a charging battery reads negative and
+          is also held) parks the setpoint.
+        - **small-import hold** — a residual import of ``0 <= g < 10`` is held
+          even while the battery is producing, so it doesn't chase the last
+          few watts of import.
+
+        ``prev_g`` / ``prev_out`` are updated on every call, matching the
+        firmware (which stores them before any of the hold branches).
+        """
+        out_i = int(out)
+        is_spike = (
+            abs(g) > DEADBAND_W
+            and abs(g - self.prev_g) > SPIKE_JUMP_W
+            and abs(out_i - self.prev_out) < SPIKE_OWN_DELTA_W
+        )
+        self.prev_g = g
+        self.prev_out = out_i
+        if is_spike:
+            return False
+        if abs(g) < DEADBAND_W and out_i < 1:
+            return False
+        # A small residual import (0 <= g < 10) is held; everything else runs.
+        return not 0 <= g < SMALL_IMPORT_HOLD_W
+
+    def step_raw(
+        self, g: float, hi: float, lo: float, *, device_count: int = 1
+    ) -> float:
+        """Advance the bare gain-scheduled ramp law, bypassing the input gates.
+
+        This is the inner law :meth:`step` runs on samples that pass the
+        deadband / spike-filter conditioning. *hi* / *lo* are the charge /
+        discharge power limits. *device_count* splits the grid value across
+        the batteries sharing the bucket.
+        """
+        g = _share_split(g, device_count)
 
         sp = self.setpoint
         # Keep the setpoint inside the dynamic power window; pulling it back in

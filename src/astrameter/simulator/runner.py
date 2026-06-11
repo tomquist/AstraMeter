@@ -20,6 +20,7 @@ logger = logging.getLogger("astra_sim.runner")
 class BatteryConfig:
     mac: str
     phase: str
+    meter_dev_type: str = "HMG-50"
     max_charge_power: int = 800
     max_discharge_power: int = 800
     capacity_wh: float = 2560.0
@@ -29,7 +30,6 @@ class BatteryConfig:
     power_update_delay_ticks: int = 0
     max_dc_input: int = 0
     dc_input_power: float = 0.0
-    idle_on_cross_phase_discharge: bool = False
     participates: bool = True
 
 
@@ -90,6 +90,7 @@ class SimulationRunner:
                 ct_mac=cfg.ct_mac,
                 ct_host=cfg.ct_host,
                 ct_port=cfg.ct_port,
+                meter_dev_type=bc.meter_dev_type,
                 max_charge_power=bc.max_charge_power,
                 max_discharge_power=bc.max_discharge_power,
                 capacity_wh=bc.capacity_wh,
@@ -100,7 +101,6 @@ class SimulationRunner:
                 power_update_delay_ticks=bc.power_update_delay_ticks,
                 max_dc_input=bc.max_dc_input,
                 dc_input_power=bc.dc_input_power,
-                idle_on_cross_phase_discharge=bc.idle_on_cross_phase_discharge,
                 participates=bc.participates,
             )
             for bc in cfg.batteries
@@ -172,9 +172,19 @@ def parse_config(data: dict) -> SimulationConfig:
     batteries: list[BatteryConfig] = []
     for bd in data.get("batteries", []):
         delay = bd.get("power_update_delay_ticks", default_delay)
+        # Any *string* is a valid device type (unknown models classify as
+        # AC-coupled, like the real CT — see ``device_capabilities``); only
+        # reject non-strings rather than silently coercing e.g. null -> "None".
+        meter_dev_type = bd.get("meter_dev_type", "HMG-50")
+        if not isinstance(meter_dev_type, str):
+            raise ValueError(
+                f"Battery {bd.get('mac', '<unknown>')}: meter_dev_type must be "
+                f"a string, got {meter_dev_type!r}"
+            )
         bc = BatteryConfig(
             mac=bd["mac"],
             phase=bd["phase"],
+            meter_dev_type=meter_dev_type,
             max_charge_power=bd.get("max_charge_power", 800),
             max_discharge_power=bd.get("max_discharge_power", 800),
             capacity_wh=bd.get("capacity_wh", 2560.0),
@@ -184,9 +194,6 @@ def parse_config(data: dict) -> SimulationConfig:
             power_update_delay_ticks=int(delay),
             max_dc_input=int(bd.get("max_dc_input", 0)),
             dc_input_power=float(bd.get("dc_input_power", 0.0)),
-            idle_on_cross_phase_discharge=bool(
-                bd.get("idle_on_cross_phase_discharge", False)
-            ),
             participates=bool(bd.get("participates", True)),
         )
         batteries.append(bc)

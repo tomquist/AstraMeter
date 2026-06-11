@@ -300,16 +300,22 @@ This is the exact control law the storage runs on the selected grid value. It is
 enough to reproduce the device's behavior bit‑for‑bit. Powers are in **watts**;
 the constants below are the literal values used.
 
-> **Model scope.** The float controller documented here is the **Venus class**
-> (HMG‑50, VNSE3‑0). It is **not** universal: the **B2500 class** (HMJ) runs an
-> **integer‑only** controller (its firmware has no floating‑point unit and no
-> float gain table), so while the higher‑level behavior is the same — poll the
-> meter, select the phase/combined bucket via `phase_t`, divide by the per‑phase
-> device count, and slew an inverter setpoint — its step sizing, deadband and
-> clamps use different (integer) values and are **not** the table below. The
-> B2500 also has a smaller power envelope than the Venus's ±2500 W. Treat the
-> numbers below as Venus‑class; model a B2500 with the same structure but its
-> own limits.
+> **Model scope.** The float controller documented here is the **HMG‑50**
+> (Venus C/D) one. It is **not** universal:
+> - The **VNSE3‑0** (Venus E) shares the **same step‑3 conditioning gate** — the
+>   same >50 W spike filter, <20 W own‑output exemption, signed deadband and
+>   small‑import hold — but with a tighter **±10 W** deadband instead of ±20 W,
+>   and it uses a **different ramp/step law** (no float gain table, integer
+>   setpoint). So the gate logic carries over, but the gain table and ramp
+>   arithmetic below are HMG‑50‑specific.
+> - The **B2500 class** (HMJ) is a **DC‑coupled** unit (PV/DC in, DC out to one
+>   or two external microinverters), so it steers its **DC output power** rather
+>   than an AC inverter setpoint. Its controller is **integer‑only** and
+>   **table/hysteresis‑based** — none of the float gain table, the `sqrt` step,
+>   or the step‑3 spike filter apply. It is documented separately under
+>   **"B2500‑class (HMJ) DC‑output steering"** below. (SOC and temperature are
+>   handled by a *separate* BMS — charge‑current derating, cell‑voltage limits —
+>   and are **not** part of its steering loop.)
 
 **Per‑device persistent state**
 
@@ -343,12 +349,17 @@ g = g / nb                         # nb >= 1
 #    - require the meter to be active, else reset the setpoint
 #    - a 10-tick debounce rejects a charge<->discharge sign flip until it persists
 
-# 3. deadband + spike filter
-if abs(g) < 20 and out < 1:        # +/-20 W deadband
-    return                         # hold setpoint, do nothing
-if abs(g - prev_g) > 50 and abs(out_as_int - prev_out) < 20:
-    skip_one_step()                # transient load step: act on the next sample
+# 3. input-conditioning gate (spike filter, deadband, small-import hold)
+#    prev_g / prev_out are updated FIRST, on every cycle (held samples too).
 prev_g = g; prev_out = out_as_int
+if abs(g) > 20 and abs(g - prev_g_old) > 50 and abs(out_as_int - prev_out_old) < 20:
+    return                         # >50 W spike the own output can't explain: skip.
+                                   # No one-shot — a sustained drift whose own
+                                   # output never moves keeps being skipped.
+if abs(g) < 20 and out < 1:        # +/-20 W deadband (SIGNED out: a charging
+    return                         # battery reads out < 0 and is held too)
+if 0 <= g < 10:                    # small residual import: hold even while
+    return                         # producing, don't chase the last few watts
 
 # 4. keep the setpoint inside the dynamic power window
 if setpoint > hi:                  # above the upper power limit
@@ -401,6 +412,12 @@ Notes for an implementer:
   the discharge cap that rejects values over 800 W).
 - The final `apply_to_inverter` hands the setpoint to the power‑stage controller
   across the inverter‑MCU boundary.
+- Two subtleties the step‑3 gate's one‑line summaries hide: the deadband's
+  `out < 1` is a **signed** comparison (a charging battery reads `out < 0` and is
+  also held), and the spike filter has **no** one‑shot — `prev_g`/`prev_out`
+  advance every cycle, so a sustained drift whose own output never moves is
+  skipped every cycle, while a one‑off blip is gone from the baseline by the next
+  sample.
 
 > AstraMeter does not implement this storage‑side controller — when AstraMeter is
 > the active‑control authority it computes per‑battery targets itself (see below).
@@ -410,6 +427,119 @@ Notes for an implementer:
 > Sign convention: in the buckets, **negative** power is charging (grid surplus
 > to absorb) and **positive** is discharging (load to cover); the controller
 > drives the selected phase's net toward zero.
+
+### B2500‑class (HMJ) DC‑output steering (simulator‑grade)
+
+The B2500 is **DC‑coupled**: PV/DC in, DC out to one or two external
+microinverters. It self‑consumes by reading the meter and steering its **DC
+output power** per channel — there is no AC inverter loop and **none** of the
+Venus float ramp law above applies. The controller is **integer‑only** and built
+from a meter‑derived setpoint feeding a per‑channel hysteresis regulator. It is
+enough to reproduce the device's output behavior.
+
+> **Keep this separate from the BMS.** SOC (interpolated from cell voltage) and
+> temperature drive a *charge‑current derating* curve and cell‑voltage limits in
+> a **different** subsystem. Those never enter the steering loop below — do not
+> fold an SOC/temperature term into the output setpoint.
+
+**Per‑channel persistent state** (the B2500 has **two** independent DC outputs,
+each with its own copy; steps 2–4 run per channel):
+
+| name | meaning |
+|------|---------|
+| `setpoint` | desired output power for this channel, W (from the meter) |
+| `target` | ramped intermediate that chases `setpoint` (AC‑active path only) |
+| `cmd` | internal output command being slewed; calibrated, then applied |
+| `power` | measured output power = `V × I / k` (per‑channel volts × amps) |
+| `state` | per‑channel state machine (0–4: off / starting / regulating / …) |
+
+**Cadence.** One regulation pass per poll cycle, like the Venus.
+
+```text
+# 1. setpoint from the residual grid (per cycle) -- INCREMENTAL
+#    `grid` is the residual grid power read back (positive = import). The setpoint
+#    is the current output plus 90% of the residual, so the loop *integrates* the
+#    grid toward zero (fixed point output = load). A proportional `0.9 * grid`
+#    would droop to ~47% of load and never null the grid; the device reaches full
+#    self-consumption because it drives off an accumulated meter value. The 90%
+#    per-step gain is the firmware's; the +output makes it integral.
+setpoint = power + grid * 9 / 10           # 90% of the residual, added to output
+setpoint = clamp(setpoint, 0, max_power)   # never negative (no AC charge), capped
+#    (per channel: half this, since the two outputs split the demand)
+
+# 2. measured output power for the channel
+power = volts * amps / k                   # k a fixed unit divisor
+
+# 3. feedback conditioning (deadband smoothing, only once stable ~500 cycles)
+if abs(power - setpoint) < 10:   power = setpoint            # snap within +/-10 W
+elif abs(power - setpoint) <= 20: power += sign(setpoint-power) * 10   # else step 10 W
+
+# 4. per-channel hysteresis regulator (every cycle)
+#    `cmd` is an INTERNAL command unit, not watts; it steps by +/-100.
+if   power > setpoint + 10:  cmd -= 100     # +/-10 W deadband (on measured power)
+elif power < setpoint - 10:  cmd += 100     # +/-100 internal-cmd step per cycle
+# else: hold
+applied = (cmd - 5) * 10 / 59 + cal[mode]   # command -> output (watts), per-mode cal
+drive_converter(applied)                    # hand to the DC power stage
+```
+
+Notes for an implementer:
+- **`cmd` is not watts; the effective output slew is ~17 W/cycle.** The `× 10 /
+  59` in the calibration means a ±100 `cmd` step moves the *output* by only
+  `100 × 10 / 59 ≈ 17 W`. So in a watt‑domain model, either keep `cmd` internal
+  with `output = (cmd − 5) × 10 / 59`, or model the output directly as a bounded
+  integrator that **slews ~17 W/cycle** toward `setpoint` with a **±10 W
+  deadband**. (The `k` in step 2 is the device's V·I → W conversion; a
+  watt‑domain `power` takes it as identity.)
+- **The setpoint is incremental, not absolute.** `output + 0.9 × grid` integrates
+  the residual to zero. Modelling it as an absolute `0.9 × grid` is a subtle bug:
+  with closed‑loop feedback (`grid = load − output`) it parks at ~47% of load and
+  the grid never nulls.
+- The **±10 W deadband** plus the slew is the integer analog of the Venus
+  deadband+ramp; there is **no** acceleration counter, no `sqrt`, and no spike
+  filter. The response is a plain bounded integrator toward `setpoint`.
+- **Clamp the command (anti‑windup).** On the device the `power` feedback is the
+  *measured* output, which saturates at the inverter limit — so once the output
+  is capped, `power ≈ setpoint` and the command stops growing. A watt‑domain
+  model whose feedback is a separately‑clamped output must add the clamp
+  explicitly (`cmd` bounded so its output stays within `[0, max_power]`), or the
+  integrator winds up while the output is pinned and then recovers at only
+  ~17 W/cycle.
+- **At full SoC the output can't drop below the PV throughput.** When the pack is
+  full, incoming PV passes straight through to the output (it has nowhere else to
+  go), so the effective setpoint is floored at the PV power; the grid steering
+  can't curtail below it (it exports the surplus, which a co‑resident AC battery
+  absorbs). Don't let the steering fight that floor.
+- **Two control variants exist.** The above is the normal path. When the AC line
+  is in a specific window the device runs an **AC‑active** path that additionally
+  (a) averages the channel current over 5 samples with the min and max dropped,
+  and (b) ramps a `target` toward `setpoint` in **±40 W** steps (gated by a
+  ~100‑cycle timer and `power ≥ 20 W`) before regulating to it. Model the normal
+  path first; the AC‑active path only makes the approach slower/smoother.
+- The power envelope is the **B2500's** (≈800 W class), **not** the Venus's
+  ±2500 W. `max_power` in step 1 is that envelope.
+- Everything is integer (16‑bit watt‑scale values); there is no float state.
+
+**Reference trajectories.** Check an implementation against these. Both start
+from `cmd = 60` (output ≈ 9 W) and let the output feed back each cycle
+(`power := previous output`); `mode = 0`, `cal = 0`.
+
+*Regulator (GOLDEN)* — fixed `setpoint = 300 W`, watching `(cmd, output)` per
+cycle as it slews up at ~17 W/cycle and parks once `|output − setpoint| ≤ 10`:
+
+```text
+cmd:    160  260  360  460  560  660  760  860  960 1060 1160 1260 1360 1460 ...
+output:  26   43   60   77   94  111  127  144  161  178  195  212  229  246 ... -> 297 (hold)
+```
+
+*Closed loop* — the full `step` with the incremental setpoint against a fixed
+**300 W load** (`grid = load − output` each cycle). The output integrates up and
+parks once it offsets the load (grid within the deadband), confirming the loop
+nulls the grid rather than drooping:
+
+```text
+output: 26 43 60 77 94 111 127 144 161 178 195 212 229 246 263 280 297 -> 297 (hold, grid≈3)
+```
 
 ## Active vs. relay control (AstraMeter)
 

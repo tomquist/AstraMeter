@@ -2,10 +2,10 @@
 
 A Venus D-like battery (full SoC, PV passthrough -> AC) on phase A reports
 positive ``power`` to the CT002 emulator while a Venus E-like battery on
-phase C is charging.  Real Marstek firmware reads ``*_dchrg_power`` from the
-CT002 response and idles a charging battery when another phase shows
-discharge — that's the user-visible bug: Venus E stops charging the moment
-Venus D enables "feed excess to grid."
+phase C is charging.  The user-visible bug was Venus E stopping charging the
+moment Venus D enabled "feed excess to grid": the emulator misattributed
+Venus D's passthrough output as an instructed discharge (``A_dchrg_power``),
+distorting the response state the batteries steer on.
 
 AstraMeter must keep instructing Venus E to charge across many ticks (i.e.
 not broadcast Venus D's passthrough as a discharge signal). The same
@@ -76,7 +76,6 @@ class _Issue376Harness:
             inspection_count=0,
             max_dc_input=500,
             dc_input_power=500.0,
-            idle_on_cross_phase_discharge=True,
         )
         self.venus_e = BatterySimulator(
             mac="02B250000002",
@@ -92,7 +91,6 @@ class _Issue376Harness:
             min_power_threshold=5.0,
             startup_delay=0.0,
             inspection_count=0,
-            idle_on_cross_phase_discharge=True,
         )
         self.batteries = [self.venus_d, self.venus_e]
 
@@ -187,8 +185,11 @@ async def test_venus_e_keeps_charging_during_venus_d_pv_passthrough() -> None:
     h = _Issue376Harness()
     await h.start()
     try:
-        # Warm-up: let the balancer settle.
-        await h.step(40)
+        # Warm-up: let the balancer settle. The faithful battery model's
+        # input-conditioning gate debounces the initial large export for a
+        # cycle, so the steering takes a little longer to ramp in than the
+        # bare law did; give it enough cycles to reach steady state.
+        await h.step(80)
 
         venus_e_powers: list[float] = []
         for _ in range(10):

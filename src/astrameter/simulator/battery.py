@@ -12,7 +12,10 @@ import logging
 import random
 import time
 
+from astrameter.ct002.balancer import device_capabilities
+
 from . import protocol
+from .b2500_steering import B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
 
 logger = logging.getLogger("astra_sim.battery")
@@ -41,7 +44,6 @@ class BatterySimulator:
         power_update_delay_ticks: int = 0,
         max_dc_input: int = 0,
         dc_input_power: float = 0.0,
-        idle_on_cross_phase_discharge: bool = False,
         participates: bool = True,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
@@ -68,7 +70,6 @@ class BatterySimulator:
         self.time_scale = max(0.1, time_scale)
         self.power_update_delay_ticks = max(0, int(power_update_delay_ticks))
         self.max_dc_input = max(0, int(max_dc_input))
-        self.idle_on_cross_phase_discharge = idle_on_cross_phase_discharge
         self.participates = participates
 
         self._current_power: float = 0.0
@@ -83,13 +84,36 @@ class BatterySimulator:
         self._dc_input_power: float = 0.0
         self.dc_input_power = dc_input_power  # reuse setter clamp
 
-        # Self-consumption control law (the steering a real Venus-class battery
-        # runs on the grid value it reads back from the CT). ``hi``/``lo`` are
-        # the charge / discharge power limits in the controller's convention
+        # Self-consumption control law. Most Marstek batteries (Venus class) run
+        # the firmware ramp controller on the grid value read back from the CT;
+        # ``hi``/``lo`` are the charge / discharge limits in its convention
         # (setpoint positive = charge, negative = discharge).
         self._steering = FirmwareSteeringController()
         self._steer_hi = float(self.max_charge_power)
         self._steer_lo = -float(self.max_discharge_power)
+
+        # The B2500 family (HMA/HMJ/HMK) is DC-coupled with no built-in inverter
+        # and no AC input: it steers its DC output into an external microinverter
+        # with a different integer hysteresis law instead of the Venus ramp. The
+        # unit has two DC output channels, each its own regulator running every
+        # cycle; the grid-derived demand is split between them, so the combined
+        # output slews at twice a single channel's rate (~34 vs ~17 W/cycle).
+        caps = device_capabilities(self.meter_dev_type)
+        self._is_dc_output = (
+            caps.has_dc_input
+            and not caps.has_builtin_inverter
+            and not caps.has_ac_input
+        )
+        # Two channels, each capped at half the unit's discharge envelope.
+        _ch_max = max(1, self.max_discharge_power // 2)
+        self._b2500_channels = (
+            [
+                B2500SteeringController(max_output=_ch_max),
+                B2500SteeringController(max_output=_ch_max),
+            ]
+            if self._is_dc_output
+            else []
+        )
 
     # -- public read-only properties ---------------------------------------
 
@@ -265,14 +289,15 @@ class BatterySimulator:
         return response_fields
 
     def _handle_ct_response(self, response_fields: list[str]) -> None:
-        """Derive the new AC target via the Venus-class steering controller.
+        """Derive the new AC target from the grid value read back from the CT.
 
-        The grid value read back from the CT (sum of the per-phase power fields,
-        positive = importing) is fed to :class:`FirmwareSteeringController`,
-        which slews an internal setpoint toward nulling it — the control law a
-        real Venus-class battery runs. The controller's sign is the inverse of
-        the simulator's (setpoint positive = charge), so the simulator target is
-        the negated setpoint.
+        The grid value (sum of the per-phase power fields, positive = importing)
+        is fed to this battery's steering controller. Venus-class batteries run
+        :class:`FirmwareSteeringController` (a ramp law with input-conditioning
+        gates), whose sign is the inverse of the simulator's (setpoint positive =
+        charge), so the simulator target is the negated setpoint. A DC-coupled
+        B2500 instead runs :class:`B2500SteeringController` on its DC output (see
+        :meth:`_steer_b2500_output`).
 
         Cross-battery share-split: a real battery divides the grid value by the
         number of batteries reported on its phase (the ``*_chrg_nb`` count), so
@@ -280,9 +305,6 @@ class BatterySimulator:
         chasing the full residual. This matters in relay mode / against a real
         CT; AstraMeter's active-control emulator distributes per-battery targets
         itself and reports a count of 1, so the split is a no-op there.
-
-        If the opt-in cross-phase flag is on, a charging battery also idles when
-        it sees another phase being instructed to discharge.
         """
 
         def field(idx: int) -> int:
@@ -292,7 +314,11 @@ class BatterySimulator:
                 return 0
 
         grid_reading = field(4) + field(5) + field(6)
-        dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
+
+        if self._b2500_channels:
+            self._steer_b2500_output(grid_reading)
+            return
+
         # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
         phase_count = field(8 + "ABC".index(self.phase))
 
@@ -301,26 +327,39 @@ class BatterySimulator:
             self._steer_hi,
             self._steer_lo,
             device_count=phase_count,
+            out=self._current_power,
         )
-        new_target: float = -setpoint  # controller: +charge → simulator: +discharge
+        # Controller: +charge → simulator: +discharge.
+        self._apply_ct_derived_target(-setpoint)
 
-        # Real Marstek firmware idles a charging battery when it sees
-        # another battery (on a different phase) being instructed to
-        # discharge — to avoid one battery feeding the other through
-        # the grid.  Opt-in; default off.
-        if (
-            self.idle_on_cross_phase_discharge
-            and new_target < 0
-            and self._other_phase_discharging(dchrg)
-        ):
-            new_target = 0.0
+    def _steer_b2500_output(self, grid_reading: int) -> None:
+        """Steer a DC-coupled B2500's two output channels toward nulling the grid.
 
-        self._apply_ct_derived_target(new_target)
-
-    def _other_phase_discharging(self, dchrg: tuple[int, int, int]) -> bool:
-        """True if a phase other than this battery's reports a positive dchrg."""
-        own_idx = "ABC".index(self.phase)
-        return any(v > 0 for i, v in enumerate(dchrg) if i != own_idx)
+        The B2500 can only discharge its DC output into an external microinverter
+        to offset the grid — it has no AC input and never charges from AC. The
+        setpoint is **incremental** (current output plus 90% of the residual
+        grid), so the loop integrates the grid toward zero rather than parking at
+        a fraction of the load; it is floored at 0 (a surplus winds the output
+        down to idle), capped at the discharge envelope, follows the B2500's
+        integer hysteresis regulator rather than the Venus ramp, and is split
+        evenly across the two output channels (each regulating against its own
+        ~half of the measured output), so the combined output slews at ~twice a
+        single channel's rate.
+        """
+        cur = max(0, round(self._current_power))
+        target = cur + grid_reading * 9 // 10  # incremental: 90% of the residual
+        target = max(0, min(target, self.max_discharge_power))
+        # At full SoC the PV passes straight through to the output and cannot be
+        # curtailed below the DC input (the pack is full, the PV has nowhere else
+        # to go). The steering can't drive the output under that floor, so don't
+        # let it try — otherwise it fights the passthrough override and the
+        # output oscillates instead of settling at the PV level.
+        if self._soc >= 1.0 and self._dc_input_power > 0:
+            target = max(target, round(self._dc_input_power))
+        per_channel = target // 2
+        own = cur // 2  # each channel's ~half of the measured output
+        out = sum(ch.regulate(per_channel, own) for ch in self._b2500_channels)
+        self._apply_ct_derived_target(float(out))
 
     # -- main loop ---------------------------------------------------------
 

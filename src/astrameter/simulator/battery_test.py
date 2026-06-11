@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from astrameter.simulator.battery import BatterySimulator
+from astrameter.simulator.firmware_steering import FirmwareSteeringController
 from astrameter.simulator.runner import parse_config, validate_config
 
 
@@ -151,45 +152,88 @@ def _response_fields(
     ]
 
 
-def test_idle_on_cross_phase_discharge_when_flag_on() -> None:
-    """A charging battery sees another phase's dchrg>0 → target snaps to 0."""
-    b = _battery(idle_on_cross_phase_discharge=True)  # phase A
+def test_cross_phase_dchrg_does_not_idle_battery() -> None:
+    """Another phase's dchrg>0 has no effect — real firmware only reads its
+    own phase bucket, never other phases' charge/discharge fields (see
+    docs/ct002-ct003-protocol.md, "Phase selection")."""
+    b = _battery()  # phase A
     b._current_power = -500.0  # currently charging
 
-    # phase_C grid = -500 (charge signal); B_dchrg = 400 (cross-phase
-    # discharge instruction from another battery on phase B).
-    fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
-    b._handle_ct_response(fields)
-
-    assert b.target_power == 0.0, (
-        f"Expected target forced to 0 by cross-phase dchrg signal, got {b.target_power}"
-    )
-
-
-def test_no_idle_when_flag_off() -> None:
-    """Flag off → cross-phase dchrg ignored, steering controller drives target."""
-    b = _battery(idle_on_cross_phase_discharge=False)  # phase A
-    b._current_power = -500.0
-
+    # phase_C grid = -500 (charge signal); B_dchrg = 400 (a battery on phase B
+    # is being instructed to discharge).
     fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
     b._handle_ct_response(fields)
 
     # grid_reading=-500 (export): the controller's first step drives its setpoint
-    # to +500 (charge), i.e. simulator target -500.
+    # to +500 (charge), i.e. simulator target -500 — undisturbed by B_dchrg.
     assert b.target_power == -500.0
 
 
-def test_idle_ignores_own_phase_dchrg() -> None:
-    """A_dchrg on the battery's own phase doesn't trigger the idle rule."""
-    b = _battery(idle_on_cross_phase_discharge=True)  # phase A
-    b._current_power = -500.0
+def test_steering_deadband_uses_own_output() -> None:
+    """A <20 W grid residual is ignored while the battery is idle, but acted
+    on once its own output is above ~1 W (the firmware deadband condition)."""
+    b = _battery()  # phase A
+    b._current_power = 0.0
+    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    assert b.target_power == 0.0
 
-    # Same-phase (A) dchrg should NOT trigger idle; the controller's first step
-    # on grid_reading=-500 yields target -500.
-    fields = _response_fields(phase_targets=(-500, 0, 0), dchrg=(400, 0, 0))
+    b._current_power = 100.0
+    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    assert b.target_power != 0.0
+
+
+def test_steering_spike_debounced_for_one_response() -> None:
+    """An idle battery reacts to a >50 W grid jump only on the second sample."""
+    b = _battery()  # phase A
+    b._current_power = 0.0
+    fields = _response_fields(phase_targets=(200, 0, 0))
+
     b._handle_ct_response(fields)
+    assert b.target_power == 0.0  # first sample debounced
 
-    assert b.target_power == -500.0
+    b._handle_ct_response(fields)
+    # Discharge begins, exactly the bare ramp law's first response to g=200.
+    expected = -FirmwareSteeringController().step_raw(200, 800.0, -800.0)
+    assert b.target_power == expected
+
+
+def test_b2500_device_type_selects_dc_output_steering() -> None:
+    """A B2500-family device type (HMA/HMJ/HMK) steers its DC output via two
+    channels; a Venus device type uses the ramp controller."""
+    assert len(_battery(meter_dev_type="HMJ-2")._b2500_channels) == 2
+    assert _battery(meter_dev_type="HMG-50")._b2500_channels == []
+
+
+def _drive_b2500(b: BatterySimulator, load: float, cycles: int) -> None:
+    """Step a B2500 against a phase-A *load* with a closed grid loop
+    (``grid = load - output``), the way the real meter sees it."""
+    for _ in range(cycles):
+        b._update_power(1.0)
+        grid = round(load - b.current_power)
+        b._handle_ct_response(_response_fields(phase_targets=(grid, 0, 0)))
+
+
+def test_b2500_steers_dc_output_to_null_grid() -> None:
+    """A B2500 integrates its DC output to null the grid: in a closed loop the
+    combined output converges to the load (grid → ~0), discharging."""
+    b = _battery(meter_dev_type="HMJ-2", max_discharge_power=800)
+    _drive_b2500(b, load=300.0, cycles=40)
+    assert b.target_power > 0  # discharging
+    assert abs(b.current_power - 300) <= 20  # grid nulled (within deadband)
+
+
+def test_b2500_does_not_charge_from_ac_on_surplus() -> None:
+    """With no AC input, a B2500 winds its output down to idle on a grid surplus
+    instead of charging (unlike a Venus, which would go negative)."""
+    b = _battery(meter_dev_type="HMJ-2")
+    _drive_b2500(b, load=300.0, cycles=40)
+    assert b.current_power > 100  # discharging to offset import
+
+    surplus = _response_fields(phase_targets=(-300, 0, 0))  # sustained export
+    for _ in range(40):
+        b._update_power(1.0)
+        b._handle_ct_response(surplus)
+    assert 0 <= b.current_power <= 20  # idle (two channels), never charges from AC
 
 
 def test_non_participating_battery_appends_seventh_field() -> None:
@@ -206,6 +250,27 @@ def test_participating_battery_omits_seventh_field() -> None:
     b = _battery(participates=True)
     b._current_power = -100.0
     assert len(b._request_fields()) == 6
+
+
+def test_parse_config_meter_dev_type() -> None:
+    data = {
+        "batteries": [
+            {"mac": "02B250000001", "phase": "A", "meter_dev_type": "HMJ-2"},
+            {"mac": "02B250000002", "phase": "B"},
+        ],
+    }
+    cfg = parse_config(data)
+    validate_config(cfg)
+    assert cfg.batteries[0].meter_dev_type == "HMJ-2"
+    assert cfg.batteries[1].meter_dev_type == "HMG-50"  # default
+
+
+@pytest.mark.parametrize("bad", [None, 2, ["HMJ-2"]])
+def test_parse_config_rejects_non_string_meter_dev_type(bad: object) -> None:
+    """Non-string values fail at parse time instead of coercing to e.g. "None"."""
+    data = {"batteries": [{"mac": "02B250000001", "phase": "A", "meter_dev_type": bad}]}
+    with pytest.raises(ValueError, match="meter_dev_type must be a string"):
+        parse_config(data)
 
 
 def test_parse_config_power_update_delay_ticks() -> None:
@@ -231,7 +296,6 @@ def test_parse_config_venus_d_fields() -> None:
                 "phase": "A",
                 "max_dc_input": 800,
                 "dc_input_power": 500,
-                "idle_on_cross_phase_discharge": True,
             },
         ],
     }
@@ -240,4 +304,3 @@ def test_parse_config_venus_d_fields() -> None:
     bc = cfg.batteries[0]
     assert bc.max_dc_input == 800
     assert bc.dc_input_power == 500.0
-    assert bc.idle_on_cross_phase_discharge is True
