@@ -69,10 +69,14 @@ Likely (high confidence):
 - `v1..v3` are per-phase-like values
 - `v4` behaves like a total/aggregate value (often close to sum with small +/- drift)
 
-Partially confirmed (targeted experiments still useful for edge-cases):
+Now resolved (see [ct002-ct003-protocol.md](ct002-ct003-protocol.md#response-fields)):
 
-- later fields after `v4` are largely consistent with status/counter/energy-style telemetry.
-- remaining uncertainty is mainly field-by-field naming confidence under all operating states.
+- The numeric layout is fixed: 4 phase/total powers, 4 "active" counts, signed
+  RSSI, an 8‑bit wrapping `info_idx`, a 10‑value charge/discharge block (an
+  unassigned `x` bucket, phases A/B/C, and a combined `ABC` bucket), and (CT003
+  only) 4 trailing tariff energy registers.
+- `v1..v3` are the per‑phase powers and `v4` is the total — as suspected here.
+- The `chrg`/`dchrg` block is signed 16‑bit, so it saturates at ±32767 W.
 
 ## 4) Scenario comparison: single-active vs multi-active
 
@@ -166,9 +170,14 @@ Legend:
 
 - Newer traces with explicit discharge scenarios confirm the same aggregate logic as charge traces,
   but mapped to the `*_dchrg_power` block instead of `*_chrg_power`.
-- Field hypothesis update:
-  - `F25` and likely `F26` are plausible CT003 import/export counter-like values (scaling still unknown).
-  - `F27` and `F28` may also be meter-state/counter related, but semantics are still not fully confirmed.
+- Field hypothesis update — **now resolved** (see
+  [ct002-ct003-protocol.md](ct002-ct003-protocol.md#ct003-energy-fields-fields-2528)):
+  - `F25`–`F28` are four trailing unsigned‑32‑bit fields that **only CT003
+    (`HME-3`) carries** (CT002/`HME-4` stops at field 24). They are the cumulative
+    import/export energy registers CT003 reads from a P1/SML smart meter,
+    matching the four standard OBIS codes `1-0:1.8.1`, `1-0:1.8.2`, `1-0:2.8.1`,
+    `1-0:2.8.2`. Exact scaling (carried as kWh with three decimals) is the
+    remaining unknown.
 
 - Two devices (battery B and battery C) both report phase `B` in these captures.
   - So phase label is not guaranteed to be globally unique per device.
@@ -181,9 +190,11 @@ For emulator/protocol implementation:
 - Parse request tail strictly as:
   - `phase = fields[4]`
   - `power = int(fields[5])`
-- Accept phase `A`, `B`, `C` for normal aggregation; accept `0` or empty as inspection mode (respond
-  but do not aggregate). Reject other phase values.
-- Treat later response fields as implementation-defined unless verified with controlled experiments.
+- Accept phase `A`, `B`, `C`, `D` for normal aggregation; accept `0` or empty as inspection mode
+  (respond but do not aggregate).
+- The full response field layout (and per‑field types/widths) is now documented in
+  [ct002-ct003-protocol.md](ct002-ct003-protocol.md#response-fields). Controlled
+  experiments are now only needed for the CT003 energy‑register scaling.
 
 ## 9) Suggested follow-up experiments
 

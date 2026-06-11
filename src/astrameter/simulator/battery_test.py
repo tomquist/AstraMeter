@@ -167,15 +167,16 @@ def test_idle_on_cross_phase_discharge_when_flag_on() -> None:
 
 
 def test_no_idle_when_flag_off() -> None:
-    """Flag off → cross-phase dchrg ignored, integral target rule applies."""
+    """Flag off → cross-phase dchrg ignored, steering controller drives target."""
     b = _battery(idle_on_cross_phase_discharge=False)  # phase A
     b._current_power = -500.0
 
     fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
     b._handle_ct_response(fields)
 
-    # current_power=-500 + grid_reading=-500 → -1000
-    assert b.target_power == -1000.0
+    # grid_reading=-500 (export): the controller's first step drives its setpoint
+    # to +500 (charge), i.e. simulator target -500.
+    assert b.target_power == -500.0
 
 
 def test_idle_ignores_own_phase_dchrg() -> None:
@@ -183,12 +184,28 @@ def test_idle_ignores_own_phase_dchrg() -> None:
     b = _battery(idle_on_cross_phase_discharge=True)  # phase A
     b._current_power = -500.0
 
-    # Same-phase (A) dchrg should NOT trigger idle.  Use grid -500 so
-    # the integral rule wants new_target = -1000.
+    # Same-phase (A) dchrg should NOT trigger idle; the controller's first step
+    # on grid_reading=-500 yields target -500.
     fields = _response_fields(phase_targets=(-500, 0, 0), dchrg=(400, 0, 0))
     b._handle_ct_response(fields)
 
-    assert b.target_power == -1000.0
+    assert b.target_power == -500.0
+
+
+def test_non_participating_battery_appends_seventh_field() -> None:
+    """A non-participating battery appends the 7th 'participate' field as 0."""
+    b = _battery(participates=False)
+    b._current_power = -100.0
+    fields = b._request_fields()
+    assert len(fields) == 7
+    assert fields[6] == "0"
+
+
+def test_participating_battery_omits_seventh_field() -> None:
+    """A participating battery sends only the 6 base fields (Venus-style)."""
+    b = _battery(participates=True)
+    b._current_power = -100.0
+    assert len(b._request_fields()) == 6
 
 
 def test_parse_config_power_update_delay_ticks() -> None:

@@ -13,6 +13,7 @@ import random
 import time
 
 from . import protocol
+from .firmware_steering import FirmwareSteeringController
 
 logger = logging.getLogger("astra_sim.battery")
 
@@ -41,6 +42,7 @@ class BatterySimulator:
         max_dc_input: int = 0,
         dc_input_power: float = 0.0,
         idle_on_cross_phase_discharge: bool = False,
+        participates: bool = True,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
@@ -67,6 +69,7 @@ class BatterySimulator:
         self.power_update_delay_ticks = max(0, int(power_update_delay_ticks))
         self.max_dc_input = max(0, int(max_dc_input))
         self.idle_on_cross_phase_discharge = idle_on_cross_phase_discharge
+        self.participates = participates
 
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
@@ -79,6 +82,14 @@ class BatterySimulator:
         self._pending_power_targets: list[tuple[int, float]] = []
         self._dc_input_power: float = 0.0
         self.dc_input_power = dc_input_power  # reuse setter clamp
+
+        # Self-consumption control law (the steering a real Venus-class battery
+        # runs on the grid value it reads back from the CT). ``hi``/``lo`` are
+        # the charge / discharge power limits in the controller's convention
+        # (setpoint positive = charge, negative = discharge).
+        self._steering = FirmwareSteeringController()
+        self._steer_hi = float(self.max_charge_power)
+        self._steer_lo = -float(self.max_discharge_power)
 
     # -- public read-only properties ---------------------------------------
 
@@ -197,9 +208,9 @@ class BatterySimulator:
 
     # -- protocol ----------------------------------------------------------
 
-    async def _send_request(self) -> list[str] | None:
+    def _request_fields(self) -> list[str]:
+        """Build the CT002 request fields for this poll."""
         phase_field = "0" if self._request_count < self.inspection_count else self.phase
-
         fields = [
             self.meter_dev_type,
             self.mac,
@@ -208,7 +219,17 @@ class BatterySimulator:
             phase_field,
             str(round(self._current_power)),
         ]
-        payload = protocol.build_payload(fields)
+        if not self.participates:
+            # Opt out of CT aggregation via the optional 7th "participate"
+            # field. Participating batteries omit it (matches Venus, which
+            # sends only 6 fields).
+            fields.append("0")
+        return fields
+
+    async def _send_request(self) -> list[str] | None:
+        request_fields = self._request_fields()
+        phase_field = request_fields[4]
+        payload = protocol.build_payload(request_fields)
 
         loop = asyncio.get_running_loop()
         transport = None
@@ -244,12 +265,24 @@ class BatterySimulator:
         return response_fields
 
     def _handle_ct_response(self, response_fields: list[str]) -> None:
-        """Apply integral-control target update and dchrg-driven idle rule.
+        """Derive the new AC target via the Venus-class steering controller.
 
-        Real Marstek batteries derive their new AC target by adding the
-        reported grid reading (sum of fields 4-6) to their current output.
-        If the opt-in firmware-mimic flag is on, a charging battery also
-        idles when it sees another phase being instructed to discharge.
+        The grid value read back from the CT (sum of the per-phase power fields,
+        positive = importing) is fed to :class:`FirmwareSteeringController`,
+        which slews an internal setpoint toward nulling it — the control law a
+        real Venus-class battery runs. The controller's sign is the inverse of
+        the simulator's (setpoint positive = charge), so the simulator target is
+        the negated setpoint.
+
+        Cross-battery share-split: a real battery divides the grid value by the
+        number of batteries reported on its phase (the ``*_chrg_nb`` count), so
+        several batteries on one phase each take their share rather than all
+        chasing the full residual. This matters in relay mode / against a real
+        CT; AstraMeter's active-control emulator distributes per-battery targets
+        itself and reports a count of 1, so the split is a no-op there.
+
+        If the opt-in cross-phase flag is on, a charging battery also idles when
+        it sees another phase being instructed to discharge.
         """
 
         def field(idx: int) -> int:
@@ -260,13 +293,21 @@ class BatterySimulator:
 
         grid_reading = field(4) + field(5) + field(6)
         dchrg = (field(20), field(21), field(22))  # A/B/C_dchrg_power
-        new_target: float = self._current_power + grid_reading
+        # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
+        phase_count = field(8 + "ABC".index(self.phase))
+
+        setpoint = self._steering.step(
+            grid_reading,
+            self._steer_hi,
+            self._steer_lo,
+            device_count=phase_count,
+        )
+        new_target: float = -setpoint  # controller: +charge → simulator: +discharge
 
         # Real Marstek firmware idles a charging battery when it sees
         # another battery (on a different phase) being instructed to
         # discharge — to avoid one battery feeding the other through
-        # the grid.  Opt-in; default off keeps existing simulator
-        # tests stable.
+        # the grid.  Opt-in; default off.
         if (
             self.idle_on_cross_phase_discharge
             and new_target < 0

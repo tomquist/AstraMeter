@@ -249,6 +249,15 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     // syntax instead of strtol's lenient prefix parse.
     reported_power = parse_int_strict(fields[5], 0);
   }
+  // Optional 7th field: "participate" flag (newer senders, e.g. B2500).
+  // Absent/empty defaults to participating; an explicit 0 opts out.
+  bool participates = true;
+  if (fields.size() > 6) {
+    std::string p = fields[6];
+    while (!p.empty() && std::isspace(static_cast<unsigned char>(p.front()))) p.erase(p.begin());
+    while (!p.empty() && std::isspace(static_cast<unsigned char>(p.back()))) p.pop_back();
+    participates = p.empty() || parse_int_strict(p, 1) != 0;
+  }
 
   // Deduplication — drop repeat polls from the same consumer inside the
   // configured window (keyed by consumer_id so retransmits are suppressed
@@ -262,7 +271,8 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 
   const std::string meter_dev_type = fields[0];
   this->update_consumer_report_(consumer_id, in_inspection_mode ? "A" : reported_phase,
-                                static_cast<float>(reported_power), meter_dev_type, addr_ip);
+                                static_cast<float>(reported_power), meter_dev_type, addr_ip,
+                                participates);
 
   // Read the filter pipeline → balancer.
   std::vector<float> values;
@@ -329,7 +339,7 @@ Consumer &CT002Component::get_consumer_(const std::string &consumer_id) {
 void CT002Component::update_consumer_report_(const std::string &consumer_id,
                                             const std::string &phase, float power,
                                             const std::string &device_type,
-                                            const std::string &source_ip) {
+                                            const std::string &source_ip, bool participates) {
   std::string normalized_phase = phase.empty() ? std::string("A") : phase;
   for (auto &c : normalized_phase) c = static_cast<char>(std::toupper(c));
   auto &consumer = this->get_consumer_(consumer_id);
@@ -360,6 +370,7 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   consumer.power = power;
   consumer.timestamp = now;
   consumer.device_type = device_type;
+  consumer.participates = participates;
   if (!source_ip.empty()) consumer.last_ip = source_ip;
 
   // Phase detected (new battery) / phase changed (re-detected on a
@@ -413,6 +424,9 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
   for (const auto &kv : this->consumers_) {
     const auto &c = kv.second;
     if (c.timestamp <= 0.0) continue;
+    // Respect the request's "participate" flag: a battery that opted out (7th
+    // field == 0) is not aggregated into the per-phase buckets or the count.
+    if (!c.participates) continue;
     std::string phase = c.phase;
     for (auto &ch : phase) ch = static_cast<char>(std::toupper(ch));
     size_t idx = 0;
@@ -420,6 +434,10 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
     else if (phase == "B") idx = 1;
     else if (phase == "C") idx = 2;
     else idx = 0;
+    // Count every battery reporting on the phase (regardless of power) so relay
+    // mode can forward the real per-phase battery count (each battery divides
+    // the forwarded aggregate by it to take its 1/N share).
+    out.count[idx] += 1;
     const float power = static_cast<float>(round_half_even(c.last_instructed_power));
     if (power == 0.0f) continue;
     out.active[idx] = true;
@@ -446,13 +464,16 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   std::unordered_set<std::string> inactive;
   std::unordered_set<std::string> manual;
   for (const auto &kv : this->consumers_) {
-    if (!kv.second.active) inactive.insert(kv.first);
+    // A consumer that opted out via the "participate" flag is treated as
+    // inactive: active control excludes it from the distribution pool.
+    if (!kv.second.active || !kv.second.participates) inactive.insert(kv.first);
     if (kv.second.manual_enabled) manual.insert(kv.first);
   }
   ConsumerMode mode{ConsumerModeKind::AUTO};
   auto it = this->consumers_.find(consumer_id);
   if (it != this->consumers_.end()) {
-    if (!it->second.active) mode = ConsumerMode{ConsumerModeKind::INACTIVE};
+    if (!it->second.active || !it->second.participates)
+      mode = ConsumerMode{ConsumerModeKind::INACTIVE};
     else if (it->second.manual_enabled)
       mode = ConsumerMode{ConsumerModeKind::MANUAL, it->second.manual_target};
   }
@@ -520,8 +541,16 @@ std::vector<std::string> CT002Component::build_response_fields_(
   const auto phase_reports = this->collect_reports_by_phase_();
   const float phase_power[3] = {phase_a, phase_b, phase_c};
   for (size_t i = 0; i < 3; ++i) {
-    if (phase_reports.active[i] || phase_power[i] != 0.0f) {
-      fields[8 + i] = "1";
+    if (this->active_control_) {
+      // Active control distributes a per-consumer target, so each battery
+      // applies it as-is: report a count of 1 when the phase is active.
+      if (phase_reports.active[i] || phase_power[i] != 0.0f) {
+        fields[8 + i] = "1";
+      }
+    } else {
+      // Relay mode forwards the per-phase aggregate; report the real battery
+      // count so each battery takes its 1/N share.
+      fields[8 + i] = std::to_string(phase_reports.count[i]);
     }
     fields[15 + i] = to_int_str(phase_reports.chrg_power[i]);
     fields[20 + i] = to_int_str(phase_reports.dchrg_power[i]);

@@ -32,6 +32,9 @@ configuration:
   efficiency_rotation_interval:
     name: Efficiency Rotation Interval
     description: "Seconds between rotating which battery has priority when Min Efficient Power is active (default 900). Ensures fair wear across batteries by periodically swapping which batteries are active and which are idled. Minimum value is 1. Only applies to CT002/CT003 device types."
+  min_dc_output:
+    name: Min DC Output
+    description: "Minimum discharge (in watts) to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Applies per battery and only affects DC-only batteries without their own inverter (Venus and Jupiter are unaffected). Set to 0 to disable (default); recommended >= 20. Only applies to CT002/CT003 device types."
   marstek_auto_register_ct_device:
     name: Auto-register Managed CT Device (Marstek)
     description: "If enabled, the app signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."
