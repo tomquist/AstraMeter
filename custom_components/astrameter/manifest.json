@@ -1,0 +1,15 @@
+{
+  "domain": "astrameter",
+  "name": "AstraMeter",
+  "after_dependencies": ["mqtt"],
+  "codeowners": ["@tomquist"],
+  "config_flow": true,
+  "documentation": "https://github.com/tomquist/astrameter",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/tomquist/astrameter/issues",
+  "loggers": ["astrameter"],
+  "quality_scale": "bronze",
+  "requirements": ["jsonpath-ng", "configupdater>=3.2"],
+  "version": "0.0.0"
+}

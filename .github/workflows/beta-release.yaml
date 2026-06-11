@@ -1,0 +1,84 @@
+# Publishes the HACS *beta* channel from the develop branch.
+#
+# On every push to develop this assembles the shippable `astrameter.zip`
+# (scripts/assemble_integration.py) and cuts an auto-versioned GitHub
+# **prerelease** with the zip attached. HACS users who enable "Show beta
+# versions" for the repository get these builds; everyone else only ever sees
+# the stable release tags. The branch model is unchanged — main stays the
+# default branch / last release, develop stays the integration branch.
+#
+# Beta tags are `<next>b<run_number>` where <next> is the PATCH bump of the
+# current pyproject version (the smallest possible next release). That makes the
+# channel converge: release.sh enforces every real release > current pyproject,
+# so the eventual stable version sorts ABOVE every <next>bN, while <next>bN sorts
+# above the current stable so beta users see the update. Old betas are pruned so
+# the Releases page stays clean.
+
+name: Beta Release (develop)
+
+on:
+  push:
+    branches: ["develop"]
+
+# Don't race two develop pushes into overlapping release cuts/prunes.
+concurrency:
+  group: beta-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  beta:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compute beta version
+        id: ver
+        run: |
+          BETA=$(python scripts/assemble_integration.py \
+            --print-beta-version "${{ github.run_number }}")
+          echo "version=$BETA" >> "$GITHUB_OUTPUT"
+          echo "Beta version: $BETA"
+
+      - name: Assemble astrameter.zip (stamped with the beta version)
+        run: |
+          python scripts/assemble_integration.py \
+            --version "${{ steps.ver.outputs.version }}" \
+            --output dist/astrameter.zip
+
+      - name: Prune previous beta prereleases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Delete every existing prerelease (and its tag) so only the freshly
+          # cut beta remains. Stable releases (prerelease=false) are untouched.
+          gh release list --limit 200 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease) | .tagName' \
+            | while read -r tag; do
+                [ -z "$tag" ] && continue
+                echo "Pruning prerelease $tag"
+                gh release delete "$tag" --yes --cleanup-tag || true
+              done
+
+      - name: Publish beta prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: "Beta ${{ steps.ver.outputs.version }}"
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          files: dist/astrameter.zip
+          body: |
+            Automated HACS **beta** build from `develop`
+            (commit ${{ github.sha }}).
+
+            Install via HACS with **"Show beta versions"** enabled. This is a
+            pre-release and may be less stable than the latest tagged release.

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import configparser
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv4Network
+from ipaddress import IPv4Network
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
 if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
 
+from astrameter.config.client_filter import ClientFilter
 from astrameter.config.logger import logger
 from astrameter.powermeter import (
     AmisReader,
@@ -22,7 +23,6 @@ from astrameter.powermeter import (
     JsonHttpPowermeter,
     ModbusPowermeter,
     MqttPowermeter,
-    PidPowermeter,
     Powermeter,
     Script,
     Shelly1PM,
@@ -33,18 +33,11 @@ from astrameter.powermeter import (
     SmaEnergyMeter,
     Sml,
     Tasmota,
-    ThrottledPowermeter,
     TQEnergyManager,
-    TransformedPowermeter,
     VZLogger,
     parse_sml_obis_config,
 )
-from astrameter.powermeter.wrappers.hampel import HampelPowermeter
-from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
-from astrameter.powermeter.wrappers.smoothing import (
-    DeadbandPowermeter,
-    SmoothedPowermeter,
-)
+from astrameter.powermeter.wrappers.apply import FilterOptions, apply_wrappers
 
 SHELLY_SECTION = "SHELLY"
 TASMOTA_SECTION = "TASMOTA"
@@ -65,22 +58,6 @@ ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
 FRITZ_SECTION = "FRITZ"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
-
-
-class ClientFilter:
-    def __init__(self, netmasks: list[IPv4Network]):
-        self.netmasks = netmasks
-
-    def matches(self, client_ip) -> bool:
-        try:
-            client_ip_addr = IPv4Address(client_ip)
-            for netmask in self.netmasks:
-                if client_ip_addr in netmask:
-                    return True
-        except ValueError as e:
-            logger.error(f"Error: {e}")
-            return False
-        return False
 
 
 @dataclass
@@ -182,6 +159,11 @@ def read_all_powermeter_configs(
     for section in config.sections():
         powermeter = create_powermeter(section, config)
         if powermeter is not None:
+            # Resolve filter knobs (with logging) into FilterOptions, then apply
+            # the canonical chain via apply_wrappers so the CLI and the native
+            # integration share one pipeline definition.
+            opts = FilterOptions()
+
             # Apply power transform if configured
             has_offset = config.has_option(section, "POWER_OFFSET")
             has_multiplier = config.has_option(section, "POWER_MULTIPLIER")
@@ -199,7 +181,8 @@ def read_all_powermeter_configs(
                 logger.info(
                     f"Applying power transform (multiplier={multipliers}, offset={offsets}) to {section}"
                 )
-                powermeter = TransformedPowermeter(powermeter, offsets, multipliers)
+                opts.offsets = offsets
+                opts.multipliers = multipliers
 
             section_throttle_interval = config.getfloat(
                 section, "THROTTLE_INTERVAL", fallback=global_throttle_interval
@@ -217,7 +200,7 @@ def read_all_powermeter_configs(
                     section_throttle_interval,
                     section,
                 )
-                powermeter = ThrottledPowermeter(powermeter, section_throttle_interval)
+                opts.throttle_interval = section_throttle_interval
 
             section_hampel_window = config.getint(
                 section, "HAMPEL_WINDOW", fallback=global_hampel_window
@@ -244,12 +227,9 @@ def read_all_powermeter_configs(
                     section_hampel_min_threshold,
                     section,
                 )
-                powermeter = HampelPowermeter(
-                    powermeter,
-                    window=section_hampel_window,
-                    n_sigma=section_hampel_n_sigma,
-                    min_threshold=section_hampel_min_threshold,
-                )
+                opts.hampel_window = section_hampel_window
+                opts.hampel_n_sigma = section_hampel_n_sigma
+                opts.hampel_min_threshold = section_hampel_min_threshold
 
             section_smooth_alpha = config.getfloat(
                 section, "SMOOTH_TARGET_ALPHA", fallback=global_smooth_alpha
@@ -271,11 +251,8 @@ def read_all_powermeter_configs(
                     section_max_smooth_step,
                     section,
                 )
-                powermeter = SmoothedPowermeter(
-                    powermeter,
-                    alpha=section_smooth_alpha,
-                    max_step=section_max_smooth_step,
-                )
+                opts.smooth_alpha = section_smooth_alpha
+                opts.max_smooth_step = section_max_smooth_step
 
             section_deadband = config.getfloat(
                 section, "DEADBAND", fallback=global_deadband
@@ -292,7 +269,7 @@ def read_all_powermeter_configs(
                     section_deadband,
                     section,
                 )
-                powermeter = DeadbandPowermeter(powermeter, deadband=section_deadband)
+                opts.deadband = section_deadband
 
             section_pid_kp = config.getfloat(section, "PID_KP", fallback=global_pid_kp)
             if section_pid_kp > 0:
@@ -325,22 +302,21 @@ def read_all_powermeter_configs(
                     section_pid_mode,
                     section,
                 )
-                powermeter = PidPowermeter(
-                    powermeter,
-                    kp=section_pid_kp,
-                    ki=section_pid_ki,
-                    kd=section_pid_kd,
-                    output_max=section_pid_output_max,
-                    mode=section_pid_mode,
-                )
+                opts.pid_kp = section_pid_kp
+                opts.pid_ki = section_pid_ki
+                opts.pid_kd = section_pid_kd
+                opts.pid_output_max = section_pid_output_max
+                opts.pid_mode = section_pid_mode
+
+            # Wrap outermost so health tracking sees the final processed read
+            # and labels the powermeter's MQTT Insights device with the section.
+            opts.health_name = section
+            powermeter = apply_wrappers(powermeter, opts)
 
             client_filter = create_client_filter(section, config)
             wait_for_next_message = config.getboolean(
                 section, "WAIT_FOR_NEXT_MESSAGE", fallback=global_wait_for_next_message
             )
-            # Wrap outermost so health tracking sees the final processed read
-            # and labels the powermeter's MQTT Insights device with the section.
-            powermeter = HealthTrackingPowermeter(powermeter, name=section)
             powermeters.append((powermeter, client_filter, wait_for_next_message))
     return powermeters
 

@@ -78,6 +78,44 @@ The `esphome` backend uses a "test-hooks" binary (`test.e2e.host.yaml`) that com
 - Base feature work on **`develop`** and open PRs against **`develop`**.
 - Releases are merged to **`main`** as appropriate for the project maintainer.
 
+## Releases and the HACS channels
+
+The native HACS integration (`custom_components/astrameter/`) is shipped as an
+assembled `astrameter.zip` release asset (`hacs.json` declares
+`zip_release`/`filename`). The `astrameter` core package is **vendored into the
+zip at build time** by `scripts/assemble_integration.py` (copied from
+`src/astrameter` into a gitignored `custom_components/astrameter/astrameter/`),
+so the committed tree only carries the integration glue — never a mirror of the
+core. The existing `main`/`develop` branch model is unchanged; HACS gets two
+channels off it:
+
+- **Stable** = release tags. The normal `release.sh` / `release.yml` flow
+  (develop → `main`, tag) additionally assembles `astrameter.zip` and attaches it
+  to the GitHub release. HACS's default channel resolves the newest non-prerelease
+  tag and downloads that asset.
+- **Beta** = `develop` pushes. `.github/workflows/beta-release.yaml` runs on every
+  push to `develop`, assembles the zip, and cuts an auto-pruned `prerelease`
+  tagged `<next>b<run_number>` — where `<next>` is the **patch bump** of the
+  current `pyproject` version. Users opt in via HACS **"Show beta versions."**
+  Targeting the patch bump (the smallest possible next release) makes the channel
+  converge: every real release is `> current pyproject`, so it sorts above every
+  `<next>bN`, while `<next>bN` sorts above the current stable so beta users see the
+  update.
+
+- **Per-PR build** = the `package` job in `.github/workflows/validate.yaml` runs
+  on every push/PR and uploads the assembled integration as workflow artifacts
+  (`astrameter-custom-component`, a folder to extract into
+  `config/custom_components/astrameter/`, and `astrameter-zip`, the HACS-shaped
+  asset). Download them from the run's **Summary → Artifacts** to test a branch
+  manually without cutting a release. On pull requests the job also posts a
+  single sticky comment with direct links to both artifacts and refreshes that
+  same comment on every rebuild (fork PRs are skipped — their token is
+  read-only).
+
+Never commit or hand-edit `custom_components/astrameter/astrameter/`; run
+`python scripts/assemble_integration.py --vendor-only` to populate it for local
+dev/tests.
+
 ## Changelog
 
 For user-visible changes, add or update the single bullet under **`## Next`** in [CHANGELOG.md](CHANGELOG.md) (see [AGENTS.md](AGENTS.md) — Changelog).

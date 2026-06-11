@@ -50,11 +50,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
+      # Assemble the shippable HACS integration zip stamped with the release
+      # version. hacs.json declares zip_release/filename: "astrameter.zip", so
+      # HACS installs the stable channel by downloading this asset from the tag.
+      - name: Assemble astrameter.zip
+        run: |
+          python scripts/assemble_integration.py \
+            --version "${{ github.event.inputs.version }}" \
+            --output dist/astrameter.zip
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
+          files: dist/astrameter.zip
           body: |
             Release v${{ github.event.inputs.version }}
 
