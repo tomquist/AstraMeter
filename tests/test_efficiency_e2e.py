@@ -391,7 +391,9 @@ class TestEfficiencyE2E:
                 f"Max probe power={max_probe_power:.0f}W"
             )
             max_grid = max(grid_errors)
-            assert max_grid < 50, (
+            # Measured headroom (both backends, paced and unpaced): <10 W.
+            # 30 matches the settle convention used elsewhere in this suite.
+            assert max_grid < 30, (
                 f"Grid should stay near zero during probe, max={max_grid:.0f}W. "
                 f"Powers: {h.battery_powers()}"
             )
@@ -590,7 +592,9 @@ class TestEfficiencyE2E:
                 f"max_grid={max(grid_errors):.0f}W powers={h.battery_powers()}"
             )
             max_grid = max(grid_errors)
-            assert max_grid < 55, (
+            # Measured headroom (both backends, paced and unpaced): <1 W.
+            # 30 matches the settle convention used elsewhere in this suite.
+            assert max_grid < 30, (
                 f"Rejected probe should not leave a large grid gap; max={max_grid:.0f}W. "
                 f"Powers: {h.battery_powers()}"
             )
