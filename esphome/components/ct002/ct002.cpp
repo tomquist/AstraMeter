@@ -599,6 +599,11 @@ std::vector<std::string> CT002Component::build_response_fields_(
     if (this->active_control_) {
       // Active control distributes a per-consumer target, so each battery
       // applies it as-is: report a count of 1 when the phase is active.
+      // Deliberately NOT the real per-phase count (issue #459): the battery
+      // divides the grid value by this count (relay share-split, g / nb);
+      // our value is already this battery's individual target, so a real
+      // count N would make every battery under-respond by a factor of N.
+      // The issue #455 relay-count fix applies to the relay branch only.
       if (phase_reports.active[bucket] || phase_power[i] != 0.0f) {
         fields[8 + i] = "1";
       }

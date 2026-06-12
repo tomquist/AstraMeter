@@ -690,6 +690,15 @@ class CT002:
                 # Active control distributes a per-consumer target, so each
                 # battery should apply it as-is (not divide): report a count of
                 # 1 when the phase is active, 0 otherwise.
+                #
+                # Deliberately NOT the real per-phase count (issue #459): the
+                # battery firmware divides the grid value it reads by this
+                # count (the relay-mode share-split, g / nb).  Our active
+                # control already did the distribution — the value in the
+                # phase-power field is this battery's *individual* target — so
+                # a real count N would make every battery under-respond by a
+                # factor of N.  The issue #455 relay-count fix applies to the
+                # relay branch below only; don't generalize it here.
                 if pv["active"] or phase_power[idx] != 0:
                     response_fields[8 + idx] = "1"
             else:
