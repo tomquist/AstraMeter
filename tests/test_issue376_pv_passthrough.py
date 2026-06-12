@@ -164,12 +164,23 @@ class _Issue376Harness:
         """Aggregated *_dchrg_power for a phase (positive instructed power)."""
         if self.backend == "python":
             return self.ct002._collect_reports_by_phase()[phase]["dchrg_power"]
-        consumers = self._esphome.dump()["consumers"].values()
-        return sum(
-            c["last_instructed"]
-            for c in consumers
-            if c["phase"] == phase and c["last_instructed"] > 0
-        )
+        total = 0.0
+        for c in self._esphome.dump()["consumers"].values():
+            if c["phase"] != phase:
+                continue
+            power = c["last_instructed"]
+            # Mirror collect_reports_by_phase_'s issue #376/#458 intent filter:
+            # an involuntary output whose sign contradicts the control intent
+            # (e.g. PV passthrough at full SoC while told to charge) is zeroed,
+            # so it isn't broadcast as a discharge signal. The real emulator
+            # applies this; the dump exposes raw last_instructed + last_intent,
+            # so the helper must replicate it to match the Python backend.
+            intent = c["last_intent"]
+            if (intent <= 0 and power > 0) or (intent >= 0 and power < 0):
+                power = 0.0
+            if power > 0:
+                total += power
+        return total
 
     def last_instructed(self, mac: str) -> float:
         if self.backend == "python":
