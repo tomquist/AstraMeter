@@ -12,6 +12,8 @@ import asyncio
 import pytest
 
 from astrameter.simulator.evaluation import (
+    _METRIC_GLOSSARY,
+    _REPORT_METRICS,
     BatterySpec,
     Event,
     Scenario,
@@ -104,6 +106,15 @@ def test_markdown_compare_renders():
     md = render_markdown_compare([base], [res])
     assert "| overshoot_max_w |" in md
     assert "tiny" in md
+    # The collapsible metric glossary is included with a row per metric.
+    assert "What do these metrics mean?" in md
+    for key in _REPORT_METRICS:
+        assert f"| `{key}` |" in md
+
+
+def test_metric_glossary_covers_every_reported_metric():
+    glossary_keys = [key for key, _ in _METRIC_GLOSSARY]
+    assert glossary_keys == _REPORT_METRICS
 
 
 @pytest.mark.parametrize("name", ["single_venus_steps"])

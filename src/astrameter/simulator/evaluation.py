@@ -694,6 +694,66 @@ _REPORT_METRICS = [
     "battery_travel_w_per_h",
 ]
 
+# Short, human-readable description for each metric in `_REPORT_METRICS`,
+# rendered as a collapsible glossary in the CI PR comment. Keep in sync with
+# `_REPORT_METRICS` and the metric computation in `_score()`.
+_METRIC_GLOSSARY = [
+    (
+        "settle_mean_s",
+        f"Mean seconds after a load/PV step for grid power to return inside the "
+        f"±{SETTLE_BAND_W:g} W settle band and hold for {SETTLE_HOLD_S:g} s "
+        f"(reaction speed).",
+    ),
+    (
+        "settle_p95_s",
+        "95th-percentile settle time — the slow tail of reactions.",
+    ),
+    (
+        "unsettled_events",
+        f"Number of disturbance events that never settled within the "
+        f"{EVENT_WINDOW_S / 60:g}-minute measurement window.",
+    ),
+    (
+        "overshoot_mean_w",
+        "Mean overshoot (W): how far grid power swings past zero to the "
+        "opposite sign after an event.",
+    ),
+    (
+        "overshoot_max_w",
+        "Worst-case overshoot (W) across all events.",
+    ),
+    (
+        "band_crossings_per_h",
+        f"Sign flips per hour across the ±{OSC_BAND_W:g} W hysteresis band — "
+        f"oscillation / hunting.",
+    ),
+    (
+        "steady_rms_w",
+        f"RMS grid power (W) during steady state (excluding the "
+        f"{STEADY_EXCLUDE_S:g} s after each event) — residual jitter when "
+        f"nothing is changing.",
+    ),
+    (
+        "mean_abs_grid_w",
+        "Mean absolute grid power (W) over the whole run — overall tracking accuracy.",
+    ),
+    (
+        "avoidable_import_wh",
+        "Energy imported from the grid (Wh) the battery could have supplied "
+        "(it had charge and discharge headroom) — missed self-consumption.",
+    ),
+    (
+        "avoidable_export_wh",
+        "Energy exported to the grid (Wh) an AC-chargeable battery could have "
+        "absorbed (it had room and charge headroom) — missed charging.",
+    ),
+    (
+        "battery_travel_w_per_h",
+        "Total absolute change in battery setpoints per hour (W/h) — control "
+        "effort / actuator wear; lower is smoother.",
+    ),
+]
+
 
 def render_text(results: list[dict]) -> str:
     lines = []
@@ -724,7 +784,15 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
         "Lower is better for every metric. See "
         "`src/astrameter/simulator/evaluation.py` for definitions.",
         "",
+        "<details><summary><b>What do these metrics mean?</b></summary>",
+        "",
+        "| Metric | Meaning |",
+        "|---|---|",
     ]
+    out.extend(f"| `{key}` | {desc} |" for key, desc in _METRIC_GLOSSARY)
+    out.append("")
+    out.append("</details>")
+    out.append("")
     for res in head:
         b = base_by.get(res["scenario"])
         out.append(
