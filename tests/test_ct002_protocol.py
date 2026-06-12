@@ -96,6 +96,20 @@ def test_reporting_consumer_rows_order_and_shape() -> None:
     )
 
 
+def test_reporting_consumer_rows_preserve_inspection_and_combined_phases() -> None:
+    """The cd=4 slave list carries each battery's canonical phase char, so an
+    inspecting ('0') or combined-mode ('D') battery must not be reported as
+    phase a — that would diverge from the ESPHome mirror and a real CT."""
+    device = CT002()
+    device._update_consumer_report("ins-mac", "0", 0, "HMG-50", source_ip="10.0.0.2")
+    device._update_consumer_report("d-mac", "D", 5, "HMA-2", source_ip="10.0.0.3")
+    rows = device.reporting_consumer_rows()
+    assert rows == (
+        ReportingConsumerRow("HMA-2", "d-mac", "10.0.0.3", "d"),
+        ReportingConsumerRow("HMG-50", "ins-mac", "10.0.0.2", "0"),
+    )
+
+
 def _set_instruction(
     device: CT002, consumer_id: str, phase: str, instructed: float
 ) -> None:

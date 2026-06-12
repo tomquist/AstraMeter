@@ -124,7 +124,9 @@ class Consumer:
     last_ip: str = ""
 
 
-ReportingPhase = Literal["a", "b", "c"]
+# Lowercase phase label carried on reporting rows: the three physical phases,
+# ``d`` (combined / whole-home) and ``0`` (unassigned / inspection).
+ReportingPhase = Literal["a", "b", "c", "d", "0"]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -565,8 +567,11 @@ class CT002:
     def reporting_consumer_rows(self) -> tuple[ReportingConsumerRow, ...]:
         """Stable-ordered view of reporting consumers for integrations.
 
-        *phase* is normalized to ``a``/``b``/``c``; *last_ip* may be empty when unknown.
-        Rows follow sorted ``consumer_id`` so list position stays predictable.
+        *phase* is normalized to ``a``/``b``/``c``/``d``/``0`` — the canonical
+        phase char the battery reported (``d`` = combined, ``0`` = unassigned/
+        inspection), matching what the ESPHome mirror and a real CT's ``cd=4``
+        slave list carry; *last_ip* may be empty when unknown.  Rows follow
+        sorted ``consumer_id`` so list position stays predictable.
         """
         reporters = sorted(
             (c for c in self._consumers.values() if c.timestamp > 0),
@@ -574,9 +579,9 @@ class CT002:
         )
         out: list[ReportingConsumerRow] = []
         for c in reporters:
-            pu = (c.phase or "A").strip().lower()
-            if pu not in ("a", "b", "c"):
-                pu = "a"
+            pu = (c.phase or "0").strip().lower()
+            if pu not in ("a", "b", "c", "d"):
+                pu = "0"
             host = c.last_ip.strip() if c.last_ip else ""
             out.append(
                 ReportingConsumerRow(
