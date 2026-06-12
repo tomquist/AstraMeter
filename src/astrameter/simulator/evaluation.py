@@ -22,9 +22,10 @@ Run the suite (from the repo root, with dev deps)::
     uv run python -m astrameter.simulator.evaluation --compare base.json \\
         --input head.json
 
-``--compare`` renders a Markdown before/after table; CI runs the suite on
-the PR base and head and posts that comparison as a sticky PR comment (see
-``.github/workflows/ci.yml``, job ``steering-eval``).
+``--compare`` renders a Markdown before/after table — including a Mermaid
+chart of each scenario's grid-power trace (base vs head) — and CI runs the
+suite on the PR base and head and posts that comparison as a sticky PR
+comment (see ``.github/workflows/ci.yml``, job ``steering-eval``).
 """
 
 from __future__ import annotations
@@ -68,6 +69,10 @@ STEADY_EXCLUDE_S = 120.0
 HEADROOM_MARGIN_W = 5.0
 SOC_EMPTY = 0.02
 SOC_FULL = 0.98
+# Number of points each scenario's grid-power trace is downsampled to for the
+# Mermaid chart in the CI PR comment. Base and head share this fixed count so
+# the two lines align by index regardless of poll cadence.
+GRAPH_POINTS = 80
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +346,29 @@ def _settle_time(samples: list[_Sample], start: float, end: float) -> float | No
     return None
 
 
+def _downsample_grid(
+    samples: list[_Sample], duration_s: float, n: int = GRAPH_POINTS
+) -> list[float]:
+    """Bucket the grid trace into *n* evenly spaced mean values over the run.
+
+    Empty buckets carry the previous value forward so the chart has no gaps;
+    the fixed length lets base and head overlay by index in the PR comment.
+    """
+    if not samples or duration_s <= 0 or n <= 0:
+        return []
+    buckets: list[list[float]] = [[] for _ in range(n)]
+    for s in samples:
+        idx = min(int(s.t / duration_s * n), n - 1)
+        buckets[idx].append(s.grid)
+    out: list[float] = []
+    last = 0.0
+    for bucket in buckets:
+        if bucket:
+            last = sum(bucket) / len(bucket)
+        out.append(round(last, 1))
+    return out
+
+
 def _compute_metrics(
     scenario: Scenario,
     seed: int,
@@ -452,6 +480,7 @@ def _compute_metrics(
         "avoidable_import_wh": round(avoid_import_wh, 1),
         "avoidable_export_wh": round(avoid_export_wh, 1),
         "battery_travel_w_per_h": round(travel_w / duration_h, 0),
+        "grid_trace": _downsample_grid(samples, scenario.duration_s),
     }
 
 
@@ -807,6 +836,7 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
             delta = _fmt_delta(float(b[key]), float(res[key])) if b else "—"
             out.append(f"| {key} | {bv} | {res[key]} | {delta} |")
         out.append("")
+        out.extend(_grid_chart(b, res))
         out.append("</details>")
     missing = [
         r["scenario"]
@@ -817,6 +847,39 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
         out.append("")
         out.append(f"_Scenarios only in base: {', '.join(missing)}_")
     return "\n".join(out)
+
+
+def _grid_chart(base: dict | None, head: dict) -> list[str]:
+    """Mermaid ``xychart`` of grid power over time, base vs head overlaid.
+
+    Renders nothing when the head result predates the trace (older JSON
+    artifacts), so the comment stays valid across mixed-version runs.
+    """
+    head_trace = head.get("grid_trace") or []
+    if not head_trace:
+        return []
+    base_trace = (base or {}).get("grid_trace") or []
+    duration_min = round(float(head.get("duration_h", 0.0)) * 60)
+    caption = (
+        "Grid power over time (W) — line 1 = base, line 2 = head:"
+        if base_trace
+        else "Grid power over time (W) — head:"
+    )
+    lines = [
+        caption,
+        "",
+        "```mermaid",
+        "xychart-beta",
+        '    title "grid power (W)"',
+        f'    x-axis "minutes" 0 --> {duration_min}',
+        '    y-axis "W"',
+    ]
+    if base_trace:
+        lines.append(f"    line [{', '.join(f'{v:g}' for v in base_trace)}]")
+    lines.append(f"    line [{', '.join(f'{v:g}' for v in head_trace)}]")
+    lines.append("```")
+    lines.append("")
+    return lines
 
 
 def _summary_line(base: dict | None, head: dict) -> str:

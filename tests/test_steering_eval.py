@@ -14,6 +14,7 @@ import pytest
 from astrameter.simulator.evaluation import (
     _METRIC_GLOSSARY,
     _REPORT_METRICS,
+    GRAPH_POINTS,
     BatterySpec,
     Event,
     Scenario,
@@ -110,6 +111,16 @@ def test_markdown_compare_renders():
     assert "What do these metrics mean?" in md
     for key in _REPORT_METRICS:
         assert f"| `{key}` |" in md
+    # Each scenario embeds a Mermaid grid-power chart with a base and head line.
+    assert "```mermaid" in md
+    assert "xychart-beta" in md
+    assert md.count("    line [") == 2
+
+
+def test_grid_trace_is_downsampled_to_fixed_length():
+    res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    assert len(res["grid_trace"]) == GRAPH_POINTS
+    assert all(isinstance(v, float) for v in res["grid_trace"])
 
 
 def test_metric_glossary_covers_every_reported_metric():
