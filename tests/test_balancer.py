@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
@@ -497,10 +499,15 @@ class TestLoadBalancerLifecycle:
 
 class TestPaceReading:
     """Ramp pacing for the auto path (issue #458) — mirrored by the C++
-    host test ``LoadBalancer.PaceReadingCapsGrowsAndResets``."""
+    host test ``LoadBalancer.PaceReadingCapsGrowsAndResets``.
+
+    The caps are W per ``PACE_REFERENCE_DT``; these tests drive a fake
+    clock at the reference cadence (1 s per poll), where the time-based
+    law reduces to the original per-poll semantics."""
 
     def _make_balancer(self, **cfg_kwargs):
         cfg_kwargs.setdefault("fair_distribution", False)
+        self.clock = _FakeClock()
         return LoadBalancer(
             config=BalancerConfig(**cfg_kwargs),
             saturation_alpha=0.15,
@@ -509,9 +516,11 @@ class TestPaceReading:
             saturation_grace_seconds=90.0,
             saturation_stall_timeout_seconds=60.0,
             saturation_enabled=False,
+            clock=self.clock,
         )
 
-    def _auto(self, lb, reported, grid):
+    def _auto(self, lb, reported, grid, dt=1.0):
+        self.clock.advance(dt)
         reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": reported}}
         return lb.compute_target(
             "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), ()
@@ -533,6 +542,73 @@ class TestPaceReading:
         assert self._auto(lb, 520, 80) == 80.0
         # Direction reversal: cap resets to the base step.
         assert self._auto(lb, 600, -300) == -50.0
+
+    def test_slow_firmware_crawl_still_bootstraps_the_cap(self):
+        """Issue #469 follow-up: the HMG ramp law can step as little as
+        10 W/poll on a constant reading (its sqrt term collapses when its
+        internal reference captures the reading itself).  The tracking
+        threshold must sit below that so the cap still grows and the loop
+        escapes the crawl, instead of deadlocking at 10 W/poll."""
+        lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
+        assert self._auto(lb, 0, 2000) == 50.0
+        # Battery crawls at +10 W/poll — below the old 20 W threshold,
+        # above the new 5 W one: the cap must double anyway.
+        assert self._auto(lb, 10, 1990) == 100.0
+        assert self._auto(lb, 20, 1980) == 200.0
+
+    def test_fast_poller_clamp_scales_with_cadence(self):
+        """The caps are W per reference second: a 0.5 s poller's grown cap
+        clamps at half the per-poll value (same W/s slew), floored at the
+        base step so coarse hysteresis regulators still get a reading big
+        enough to clear their input hold window."""
+        lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
+        assert self._auto(lb, 0, 600, dt=0.5) == 50.0  # base floor
+        # Tracking at +25 W per 0.5 s (50 W/s): growth gate scales too
+        # (5 * 0.5 = 2.5 W).  Cap grows by 2**0.5 per poll; the sent
+        # reading stays floored at the base step until cap * 0.5 > 50.
+        assert self._auto(lb, 25, 575, dt=0.5) == pytest.approx(50.0)  # cap ~70.7
+        assert self._auto(lb, 50, 550, dt=0.5) == pytest.approx(50.0)  # cap = 100
+        reading = self._auto(lb, 75, 525, dt=0.5)  # cap ~141.4
+        assert reading == pytest.approx(70.71, abs=0.01)
+        reading = self._auto(lb, 110, 490, dt=0.5)  # cap = 200
+        assert reading == pytest.approx(100.0, abs=0.01)
+        # At the max cap the per-poll clamp is half the 1 s value: the
+        # battery integrates the same 200 W/s either way.
+        assert self._auto(lb, 160, 440, dt=0.5) == pytest.approx(100.0, abs=0.01)
+
+    def test_deprioritized_wind_down_is_paced(self):
+        """A consumer faded out by efficiency mode is steered to zero
+        through the pacing cap — the firmware applies a charge-direction
+        reading in full in one cycle, so an unpaced wind-down would dump
+        its whole output on the pool in one poll (issue #469 follow-up)."""
+        lb = self._make_balancer(
+            pace_base_step=50, pace_max_step=200, min_efficient_power=400
+        )
+        reports = {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 300},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 300},
+        }
+
+        def target_for(cid):
+            self.clock.advance(1.0)
+            return lb.compute_target(
+                cid,
+                ConsumerMode("auto"),
+                reports,
+                0.0,
+                frozenset(),
+                frozenset(),
+                (self.clock(),),
+            )[0]
+
+        # 600 W demand over two units is below min_efficient_power * 2:
+        # one unit gets deprioritized and fades toward zero.
+        deltas = [target_for("b") for _ in range(40)]
+        assert lb._deprioritized == {"b"}
+        # Every wind-down step is bounded by the pacing cap — never the
+        # full -300 W one-shot.
+        assert all(d >= -200.0 for d in deltas)
+        assert min(deltas) < 0
 
     def test_zero_base_disables_pacing(self):
         lb = self._make_balancer(pace_base_step=0)

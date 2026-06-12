@@ -74,12 +74,36 @@ def _report_weight(report: dict) -> float:
 # Ramp pacing (issue #458): the battery only grows its own ramp gain while
 # an error persists, and its spike filter ignores reading jumps over 50 W
 # whose own output moved less than 20 W.  We mirror that: the pacing cap
-# doubles per poll, and only when the battery's reported output moved at
-# least this far in the commanded direction since the previous paced poll
-# (a non-moving battery — startup delay, saturation — keeps the cap at the
-# base step, which also keeps successive readings inside the spike filter).
-PACE_TRACKING_DELTA_W = 20.0
+# doubles per reference second, and only when the battery's reported output
+# moved at least this far in the commanded direction since the previous
+# paced poll (a non-moving battery — startup delay, saturation — keeps the
+# cap at the base step, which also keeps successive readings inside the
+# spike filter).
+#
+# The threshold must sit BELOW the battery firmware's guaranteed minimum
+# step on a *constant* reading (issue #469 follow-up): the HMG ramp law
+# steps ``sqrt(g² - ref²) + 10`` per cycle, and when its internal ``ref``
+# happens to capture the reading itself (a coin flip on the sign of the
+# last pre-step noise sample) the step collapses to exactly 10 W.  With a
+# 20 W threshold that locked the loop at 10 W/poll for an entire step
+# response — the cap never grew because the battery "wasn't tracking", and
+# the battery never accelerated because the paced reading never rose.  5 W
+# still rejects a genuinely stalled battery (startup delay, saturation:
+# 0 W movement) while letting the firmware's worst-case crawl bootstrap
+# the cap.
+PACE_TRACKING_DELTA_W = 5.0
 PACE_GROWTH_FACTOR = 2.0
+# Reference poll interval the pace caps are defined against: the configured
+# ``pace_base_step`` / ``pace_max_step`` are watts per reference second, and
+# the per-poll clamp scales with the consumer's observed inter-poll time so
+# that fast pollers can't integrate the same per-poll reading into a higher
+# W/s slew (a 0.45 s V3 given 200 W per poll moves ~440 W/s against a meter
+# that refreshes once a second — the dominant overshoot source in the
+# mixed-cadence scenarios).  The scale is clamped at 1.0: slow pollers keep
+# the per-poll cap (their staleness grows with their interval, so widening
+# the clamp proportionally would re-introduce the stale-feedback overshoot
+# pacing exists to bound).
+PACE_REFERENCE_DT = 1.0
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
@@ -286,12 +310,16 @@ class BalancerConsumerState:
     last_intent: float | None = None
     fade_weight: float = 1.0
     # Ramp-pacing state (see BalancerConfig.pace_base_step): the current
-    # per-poll cap on the sent reading, the sign of the last paced reading,
-    # and the battery's reported power at the last pacing step (used to
-    # detect whether it is tracking the command before growing the cap).
+    # cap on the sent reading in W per reference second, the sign of the
+    # last paced reading, the battery's reported power at the last pacing
+    # step (used to detect whether it is tracking the command before
+    # growing the cap), and the wall-clock time of the last paced poll
+    # (0.0 = none yet) used to scale the per-poll clamp to the consumer's
+    # cadence.
     pace_cap: float = 0.0
     pace_sign: int = 0
     pace_prev_reported: float | None = None
+    pace_last_at: float = 0.0
     saturation_score: float = 0.0
     saturation_grace_until: float = 0.0
     saturation_grace_started_at: float = 0.0
@@ -907,6 +935,7 @@ class LoadBalancer:
         state.pace_cap = 0.0
         state.pace_sign = 0
         state.pace_prev_reported = None
+        state.pace_last_at = 0.0
         state.saturation_score = 0.0
         grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
@@ -1032,16 +1061,33 @@ class LoadBalancer:
         state.last_intent = eff_min
         return out
 
-    def _steer_to_zero(self, consumer_id: str | None, reports: dict) -> list[float]:
-        """Drive a consumer's output to zero (``NetOutputW(0)``)."""
-        if consumer_id:
-            state = self._get_consumer(consumer_id)
-            state.last_target = 0
-            state.last_intent = 0
+    def _steer_to_zero(
+        self, consumer_id: str | None, reports: dict, *, paced: bool = False
+    ) -> list[float]:
+        """Drive a consumer's output to zero (``NetOutputW(0)``).
+
+        With ``paced=True`` the wind-down reading goes through the ramp-pacing
+        cap like any other auto-path command.  The auto-pool callers
+        (deprioritized fade-out, charge-blind hold) use this: the battery
+        firmware applies a *negative* (charge-direction) reading in full in a
+        single cycle — its accelerating ramp only paces the discharge
+        direction — so an unpaced wind-down dumps a discharging consumer's
+        whole output in one poll, leaving the rest of the pool a step
+        disturbance the meter only reports a poll later (issue #469's
+        load-off import spikes).  Inactive consumers and the
+        ``min_efficient_power <= 0`` paths keep the one-shot behaviour: those
+        are user-initiated mode changes, not part of a closed-loop handoff.
+        """
         reported = parse_int(
             reports.get(consumer_id, {}).get("power", 0) if consumer_id else 0
         )
         reading = to_grid_reading(NetOutputW(0), reported)
+        if paced and consumer_id:
+            reading = self._pace_reading(consumer_id, reading, reported)
+        if consumer_id:
+            state = self._get_consumer(consumer_id)
+            state.last_target = reading if paced else 0
+            state.last_intent = 0
         if reading == 0:
             return [0, 0, 0]
         phase = (
@@ -1180,7 +1226,7 @@ class LoadBalancer:
         # at 0 — don't fall through to the fair-share math where a residual
         # correction could leak a nonzero target.
         if consumer_id and consumer_id in charge_blind:
-            return self._steer_to_zero(consumer_id, reports)
+            return self._steer_to_zero(consumer_id, reports, paced=True)
 
         # --- Fading path ---
         if any_fading and consumer_id:
@@ -1188,7 +1234,7 @@ class LoadBalancer:
             fade_w = state.fade_weight
             reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
             if fade_w == 0.0:
-                return self._steer_to_zero(consumer_id, reports)
+                return self._steer_to_zero(consumer_id, reports, paced=True)
 
             total_battery = sum(
                 parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
@@ -1213,7 +1259,7 @@ class LoadBalancer:
             and consumer_id
             and faded_adjustments.get(consumer_id) == 0.0
         ):
-            return self._steer_to_zero(consumer_id, reports)
+            return self._steer_to_zero(consumer_id, reports, paced=True)
 
         # Fold the per-battery user weight into the effectiveness map so the
         # fair-share split honours the configured ratio.  ``eff_part`` stays the
@@ -1282,18 +1328,28 @@ class LoadBalancer:
         stepping by at most ``min(GAIN[ramp], |reading|)`` per poll — so the
         reading we send is the only bound on its per-poll movement once the
         ramp has accelerated.  Pacing keeps that bound tight: the cap starts
-        at the firmware's first-step gain (``pace_base_step``), doubles
-        toward ``pace_max_step`` only while the battery demonstrably tracks
-        the command, follows the error back down as it shrinks (so the final
-        approach is gentle), and resets to the base step when the command
-        direction reverses.  This bounds stale-feedback overshoot to roughly
-        the battery's *demonstrated* slew instead of its maximum ramp gain.
+        at the firmware's first-step gain (``pace_base_step``), doubles per
+        reference second toward ``pace_max_step`` only while the battery
+        demonstrably tracks the command, follows the error back down as it
+        shrinks (so the final approach is gentle), and resets to the base
+        step when the command direction reverses.  This bounds
+        stale-feedback overshoot to roughly the battery's *demonstrated*
+        slew instead of its maximum ramp gain.  The caps are defined in W
+        per :data:`PACE_REFERENCE_DT`; the per-poll clamp scales with the
+        consumer's observed inter-poll time (clamped at 1.0) so a fast
+        poller cannot integrate the same per-poll reading into a higher W/s
+        slew.
 
-        Only the persistent auto regulation loop is paced.  Probe targets
-        (own ramp schedule, must clear inverter floors in one step), the
-        MIN_DC_OUTPUT floor (must jump to the floor), manual targets and
-        steer-to-zero (one-shot transitions the firmware ramp already paces)
-        deliberately bypass this.
+        Only the auto-pool paths are paced — the persistent regulation
+        loop, the fade transition, and the deprioritized/charge-blind
+        wind-down to zero (the firmware applies a charge-direction reading
+        in full in one cycle, so an unpaced wind-down would dump a
+        discharging consumer's whole output as a one-poll step disturbance
+        on the rest of the pool).  Probe targets (own ramp schedule, must
+        clear inverter floors in one step), the MIN_DC_OUTPUT floor (must
+        jump to the floor), manual targets and inactive-consumer
+        steer-to-zero (a user-initiated one-shot, not a closed-loop
+        handoff) deliberately bypass this.
 
         Pacing deliberately applies to direction reversals too (capping the
         wind-down/reversal rate bounds the overshoot at zero crossings, a
@@ -1307,24 +1363,50 @@ class LoadBalancer:
         if base <= 0:
             return reading
         state = self._get_consumer(consumer_id)
+        now = self._clock()
+        # Cadence scale: the caps are W per PACE_REFERENCE_DT; a faster
+        # poller gets a proportionally smaller per-poll clamp so its W/s
+        # slew matches a reference-cadence battery.  Clamped at 1.0 so a
+        # slow poller keeps the per-poll cap (see PACE_REFERENCE_DT).  The
+        # first paced poll, and anything past a long gap, uses the full
+        # reference scale.
+        dt = now - state.pace_last_at if state.pace_last_at > 0.0 else 0.0
+        if dt <= 0.0:
+            # First paced poll, a non-advancing clock, or a backwards jump:
+            # assume one reference period rather than starving the clamp.
+            dt = PACE_REFERENCE_DT
+        state.pace_last_at = now
+        dt_ratio = min(1.0, dt / PACE_REFERENCE_DT)
         sign = 1 if reading > 0 else -1 if reading < 0 else 0
         cap = state.pace_cap if state.pace_cap > 0 else base
+        # The clamp never drops below the base step: devices with
+        # hysteresis-style regulators (B2500) need a minimum reading to
+        # clear their input hold window at all, and the base step is the
+        # rate the cap growth schedule was tuned to bootstrap from.  The
+        # cadence scale still bounds the *grown* cap, which is where the
+        # fast-poller overshoot lived.
+        limit = max(base, cap * dt_ratio)
         if sign == 0 or sign != state.pace_sign:
             cap = base
-        elif abs(reading) > cap:
+        elif abs(reading) > limit:
             moved = (
                 (reported - state.pace_prev_reported) * sign
                 if state.pace_prev_reported is not None
                 else 0.0
             )
-            if moved >= PACE_TRACKING_DELTA_W:
-                cap = min(cap * PACE_GROWTH_FACTOR, self._cfg.pace_max_step)
+            # The tracking threshold and growth rate scale with the same
+            # cadence ratio: a fast poller is expected to have moved less
+            # between polls, and its cap doubles per reference second, not
+            # per poll.
+            if moved >= PACE_TRACKING_DELTA_W * dt_ratio:
+                cap = min(cap * PACE_GROWTH_FACTOR**dt_ratio, self._cfg.pace_max_step)
         else:
-            cap = max(base, abs(reading))
+            cap = max(base, abs(reading) / dt_ratio)
         state.pace_cap = cap
         state.pace_sign = sign
         state.pace_prev_reported = reported
-        return max(-cap, min(cap, reading))
+        limit = max(base, cap * dt_ratio)
+        return max(-limit, min(limit, reading))
 
     def _balance_correction(
         self,
