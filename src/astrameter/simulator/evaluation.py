@@ -73,6 +73,12 @@ SOC_FULL = 0.98
 # Mermaid chart in the CI PR comment. Base and head share this fixed count so
 # the two lines align by index regardless of poll cadence.
 GRAPH_POINTS = 1800
+# Mermaid's plot line has a fixed pixel stroke width with no config knob, so we
+# enlarge the chart canvas instead: GitHub scales the SVG down to the comment
+# width, which renders the line proportionally thinner — and the extra width
+# gives the 1800 points room to resolve instead of blobbing together.
+GRAPH_WIDTH = 1800
+GRAPH_HEIGHT = 600
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +875,8 @@ def _grid_chart(base: dict | None, head: dict) -> list[str]:
         caption,
         "",
         "```mermaid",
+        f'%%{{init: {{"xyChart": {{"width": {GRAPH_WIDTH}, '
+        f'"height": {GRAPH_HEIGHT}}}}}}}%%',
         "xychart-beta",
         '    title "grid power (W)"',
         f'    x-axis "minutes" 0 --> {duration_min}',
