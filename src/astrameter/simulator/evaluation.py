@@ -72,7 +72,7 @@ SOC_FULL = 0.98
 # Number of points each scenario's grid-power trace is downsampled to for the
 # Mermaid chart in the CI PR comment. Base and head share this fixed count so
 # the two lines align by index regardless of poll cadence.
-GRAPH_POINTS = 80
+GRAPH_POINTS = 1800
 
 
 # ---------------------------------------------------------------------------
