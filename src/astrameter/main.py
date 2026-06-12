@@ -157,7 +157,9 @@ async def run_device(
         dedupe_time_window = cfg.getfloat(
             ct_section, "DEDUPE_TIME_WINDOW", fallback=global_dedupe_time_window
         )
-        consumer_ttl = cfg.getint(ct_section, "CONSUMER_TTL", fallback=120)
+        # Unset (default) → adaptive eviction (~2 missed poll cycles, like the
+        # real CT); a number → fixed TTL in seconds.
+        consumer_ttl = cfg.getint(ct_section, "CONSUMER_TTL", fallback=None)
         debug_status = cfg.getboolean(ct_section, "DEBUG_STATUS", fallback=False)
         if os.environ.get("DEBUG_STATUS", "").lower() in ("1", "true", "yes"):
             debug_status = True

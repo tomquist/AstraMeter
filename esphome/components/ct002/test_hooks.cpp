@@ -106,6 +106,15 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "saturation_decay_factor") this->saturation_decay_factor_ = f;
   else if (key == "saturation_grace_seconds") this->saturation_grace_seconds_ = f;
   else if (key == "saturation_stall_timeout_seconds") this->saturation_stall_timeout_seconds_ = f;
+  // Component-level fields the shared e2e scenarios toggle at runtime (the
+  // balancer rebuild below is harmless for these).
+  else if (key == "active_control") this->active_control_ = (v != 0.0);
+  else if (key == "consumer_ttl") {
+    // Negative = adaptive eviction (Python's consumer_ttl=None default);
+    // >= 0 = fixed TTL in seconds.
+    if (v < 0.0) this->consumer_ttl_seconds_.reset();
+    else this->consumer_ttl_seconds_ = static_cast<uint32_t>(v);
+  }
   else return false;
   // Rebuild so the change takes effect (resets balancer state — fine before
   // a scenario begins).

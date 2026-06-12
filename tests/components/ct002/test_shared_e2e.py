@@ -108,6 +108,7 @@ class PythonBackend:
             reset_fn=None,
             dedupe_time_window=0.0,  # off by default; set_dedupe() toggles it
             saturation_detection=saturation_detection,
+            consumer_ttl=100000,  # fixed, matching test.e2e.host.yaml
         )
 
         async def _before_send(_addr, _fields=None, _consumer_id=None):
@@ -136,6 +137,15 @@ class PythonBackend:
     def set_dedupe(self, window_s: float) -> None:
         # Mirrors the binary's runtime `dedupe <ms>` control.
         self.ct002._dedup._window = float(window_s)
+
+    def set_active_control(self, enabled: bool) -> None:
+        # Mirrors the binary's `cfg active_control` control command.
+        self.ct002.active_control = bool(enabled)
+
+    def set_consumer_ttl(self, seconds: float | None) -> None:
+        # None = adaptive eviction (the production default); mirrors the
+        # binary's `cfg consumer_ttl` control command (-1 = adaptive).
+        self.ct002.consumer_ttl = seconds
 
     def poll(self, mac: str, phase: str, power: int):
         transport = _FakeTransport()
@@ -179,6 +189,12 @@ class EsphomeBackend:
 
     def set_dedupe(self, window_s: float) -> None:
         self._cmd(f"dedupe {int(window_s * 1000)}")
+
+    def set_active_control(self, enabled: bool) -> None:
+        self._cmd(f"cfg active_control {1 if enabled else 0}")
+
+    def set_consumer_ttl(self, seconds: float | None) -> None:
+        self._cmd(f"cfg consumer_ttl {-1 if seconds is None else seconds}")
 
     def set_sensor_stale(self) -> None:
         # Back-date the sensor stamps so the next read reports the grid sensor
@@ -434,6 +450,112 @@ def test_crosstalk_charge_signals_other_battery(backend) -> None:
     )
 
 
+# Bucket field indices beyond A/B/C: x_chrg=14/x_dchrg=19 (unassigned /
+# inspection), ABC_chrg_nb=11, ABC_chrg=18/ABC_dchrg=23 (combined, phase "D").
+_X_CHRG, _X_DCHRG = 14, 19
+_ABC_NB, _ABC_CHRG, _ABC_DCHRG = 11, 18, 23
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_relay_buckets_carry_reported_power(backend) -> None:
+    """Relay mode forwards each battery's *reported* power in the cross-talk
+    buckets — not reported+grid — matching the real CT (issue #457)."""
+    backend.set_clock(15000)
+    backend.set_active_control(False)
+    backend.set_grid(300)  # nonzero grid: the pre-#457 bug added this in
+    rx = backend.poll("A5A5A5A5A5A5", "A", -100)
+    assert rx is not None, f"[{backend.name}] no response to battery X"
+
+    ry = backend.poll("B6B6B6B6B6B6", "B", 0)
+    assert ry is not None, f"[{backend.name}] no response to battery Y"
+    assert int(ry[_A_CHRG]) == -100, (
+        f"[{backend.name}] relay A_chrg_power must be X's reported -100 "
+        f"(not -100+300), got {ry[_A_CHRG]}"
+    )
+    assert int(ry[_A_DCHRG]) == 0, (
+        f"[{backend.name}] A_dchrg_power should stay 0, got {ry[_A_DCHRG]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_inspection_reporter_lands_in_x_bucket(backend) -> None:
+    """An inspection ('0') reporter populates the x bucket and is excluded
+    from phase A's count/aggregate (issue #460)."""
+    backend.set_clock(16000)
+    backend.set_active_control(False)
+    backend.set_grid(0)
+    rx = backend.poll("C7C7C7C7C7C7", "0", -200)  # mid phase-detection
+    assert rx is not None, f"[{backend.name}] no response to inspecting battery"
+
+    ry = backend.poll("D8D8D8D8D8D8", "A", 50)
+    assert ry is not None, f"[{backend.name}] no response to battery Y"
+    assert int(ry[_X_CHRG]) == -200, (
+        f"[{backend.name}] inspecting battery's -200 must land in x_chrg_power, "
+        f"got {ry[_X_CHRG]}"
+    )
+    assert int(ry[8]) == 1, (
+        f"[{backend.name}] A_chrg_nb must count only Y (not the inspecting "
+        f"battery), got {ry[8]}"
+    )
+    assert int(ry[_A_DCHRG]) == 50, (
+        f"[{backend.name}] A_dchrg_power should carry only Y's reported 50, "
+        f"got {ry[_A_DCHRG]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_combined_phase_d_lands_in_abc_bucket(backend) -> None:
+    """A combined-mode (phase 'D') reporter populates the ABC bucket and
+    ABC_chrg_nb instead of phase A (issue #460)."""
+    backend.set_clock(17000)
+    backend.set_active_control(False)
+    backend.set_grid(0)
+    rx = backend.poll("E9E9E9E9E9E9", "D", 300)
+    assert rx is not None, f"[{backend.name}] no response to combined battery"
+
+    ry = backend.poll("FAFAFAFAFAFA", "A", 0)
+    assert ry is not None, f"[{backend.name}] no response to battery Y"
+    assert int(ry[_ABC_NB]) == 1, (
+        f"[{backend.name}] ABC_chrg_nb must count the phase-D battery, got {ry[_ABC_NB]}"
+    )
+    assert int(ry[_ABC_DCHRG]) == 300, (
+        f"[{backend.name}] phase-D battery's 300 must land in ABC_dchrg_power, "
+        f"got {ry[_ABC_DCHRG]}"
+    )
+    assert int(ry[8]) == 1, (
+        f"[{backend.name}] A_chrg_nb must count only Y itself (not the "
+        f"phase-D battery), got {ry[8]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_adaptive_eviction_drops_silent_battery_from_relay_count(backend) -> None:
+    """With the default adaptive TTL, a battery that misses ~2 of its own
+    poll cycles drops out of the relay count/aggregate (issue #462)."""
+    backend.set_clock(18000)
+    backend.set_active_control(False)
+    backend.set_consumer_ttl(None)  # adaptive (the production default)
+    backend.set_grid(0)
+
+    # Establish a ~10 s cadence for both batteries.
+    for step in range(3):
+        backend.set_clock(18000 + step * 10)
+        assert backend.poll("ABABABABABAB", "A", 100) is not None
+        assert backend.poll("CDCDCDCDCDCD", "A", 50) is not None
+
+    # Y goes silent; X polls again 25 s later (> 2x the 10 s cadence).
+    backend.set_clock(18020 + 25)
+    rx = backend.poll("ABABABABABAB", "A", 100)
+    assert rx is not None, f"[{backend.name}] no response to battery X"
+    assert int(rx[8]) == 1, (
+        f"[{backend.name}] silent battery should be evicted from A_chrg_nb, got {rx[8]}"
+    )
+    assert int(rx[_A_DCHRG]) == 100, (
+        f"[{backend.name}] A_dchrg_power should drop the silent battery's 50, "
+        f"got {rx[_A_DCHRG]}"
+    )
+
+
 # ── Direct dual-backend wire comparison ────────────────────────────────────
 #
 # The strongest parity guard: drive the *same* randomized poll sequence
@@ -495,7 +617,9 @@ def test_python_esphome_wire_identical() -> None:
             esp._cmd("cfg saturation_enabled 0")
             rng = random.Random(20260531)
             macs = ["AAAA00000001", "BBBB00000002", "CCCC00000003"]
-            phases = ["A", "B", "C"]
+            # "0" (inspection → x bucket) and "D" (combined → ABC bucket)
+            # exercise the non-A/B/C aggregation paths added for issue #460.
+            phases = ["A", "B", "C", "0", "D"]
             clock = 20000
             for step in range(60):
                 clock += DEDUPE_WINDOW_S + 5  # always clear the dedup window

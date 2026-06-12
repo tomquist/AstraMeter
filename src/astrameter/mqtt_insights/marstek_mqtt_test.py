@@ -258,6 +258,17 @@ def test_format_cd4_slave_csv_empty_ip_becomes_zero() -> None:
     )
 
 
+def test_format_cd4_slave_csv_carries_inspection_and_combined_phases() -> None:
+    rows = (
+        ReportingConsumerRow("HMG-50", "ins-mac", "10.0.0.2", "0"),
+        ReportingConsumerRow("HMA-2", "d-mac", "10.0.0.3", "d"),
+    )
+    assert format_cd4_slave_csv(rows) == (
+        "slv_t=HMG-50,slv_id=ins-mac,slv_ip=10.0.0.2,slv_p=0,"
+        "slv_t=HMA-2,slv_id=d-mac,slv_ip=10.0.0.3,slv_p=d"
+    )
+
+
 def test_format_cd4_slave_csv_escapes_specials() -> None:
     s = format_cd4_slave_csv((ReportingConsumerRow("a,b", "x=y", "1.2.3.4", "b"),))
     assert s == "slv_t=a_b,slv_id=x_y,slv_ip=1.2.3.4,slv_p=b"

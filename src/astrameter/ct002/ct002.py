@@ -54,6 +54,32 @@ UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
 POLL_INTERVAL_EMA_ALPHA = 0.3
 
+# Cross-talk aggregation buckets, mirroring the real CT (see
+# docs/ct002-ct003-protocol.md): one per phase, plus ``x`` for
+# unassigned/inspection ("0") reporters and ``ABC`` for combined-mode
+# (phase "D") reporters.
+PHASE_BUCKETS = ("x", "A", "B", "C", "ABC")
+
+# Default eviction policy (``consumer_ttl=None``): the real CT clears a slave
+# slot that missed roughly 1-2 of its own poll cycles, so by default a
+# consumer expires after missing ~2 cycles of its observed cadence.  The floor
+# keeps a transient EMA dip (e.g. a burst of retransmits) from evicting a live
+# battery, and the fallback covers a consumer whose cadence is still unknown
+# (only one poll seen).  Issue #462.
+ADAPTIVE_TTL_POLL_MULTIPLIER = 2.0
+ADAPTIVE_TTL_MIN_SECONDS = 5.0
+ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0
+
+
+def _bucket_for_phase(phase: str) -> str:
+    """Map a stored consumer phase to its aggregation bucket."""
+    p = (phase or "").strip().upper()
+    if p in ("A", "B", "C"):
+        return p
+    if p == "D":
+        return "ABC"
+    return "x"
+
 
 # ---------------------------------------------------------------------------
 # Per-consumer state
@@ -98,7 +124,9 @@ class Consumer:
     last_ip: str = ""
 
 
-ReportingPhase = Literal["a", "b", "c"]
+# Lowercase phase label carried on reporting rows: the three physical phases,
+# ``d`` (combined / whole-home) and ``0`` (unassigned / inspection).
+ReportingPhase = Literal["a", "b", "c", "d", "0"]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -135,7 +163,10 @@ class CT002:
         ct_type="HME-4",
         wifi_rssi=-50,
         dedupe_time_window=0.0,
-        consumer_ttl=120,
+        # None (default) = adaptive eviction: a consumer expires after missing
+        # ~2 of its own poll cycles, like the real CT.  A number = fixed TTL
+        # in seconds (the pre-#462 behavior; set CONSUMER_TTL to get this).
+        consumer_ttl=None,
         debug_status=False,
         active_control=True,
         fair_distribution=True,
@@ -330,10 +361,16 @@ class CT002:
         source_ip: str | None = None,
         participates: bool = True,
     ):
-        normalized_phase = str(phase).upper() if phase else "A"
+        normalized_phase = str(phase).strip().upper() if phase else ""
+        if normalized_phase not in ("A", "B", "C", "D"):
+            # Anything else ("0", empty, future markers) is the
+            # unassigned/inspection state; store the wire's canonical "0" so
+            # aggregation routes it to the x bucket instead of inventing a
+            # phase (issue #460).
+            normalized_phase = "0"
         consumer = self._get_consumer(consumer_id)
         previous_phase = consumer.phase if consumer.timestamp > 0 else None
-        now = time.time()
+        now = self._clock()
         if consumer.timestamp > 0:
             raw_interval = now - consumer.timestamp
             if consumer.poll_interval is None:
@@ -352,8 +389,11 @@ class CT002:
         if source_ip:
             consumer.last_ip = source_ip
 
-        if normalized_phase in ("A", "B", "C") and previous_phase != normalized_phase:
-            if previous_phase in ("A", "B", "C"):
+        if (
+            normalized_phase in ("A", "B", "C", "D")
+            and previous_phase != normalized_phase
+        ):
+            if previous_phase in ("A", "B", "C", "D"):
                 logger.info(
                     "CT002 consumer %s phase changed: %s -> %s",
                     consumer_id,
@@ -367,18 +407,48 @@ class CT002:
                     normalized_phase,
                 )
 
+    def _consumer_ttl_seconds(self, consumer: Consumer) -> float:
+        """Seconds of silence after which *consumer* counts as gone.
+
+        A configured ``consumer_ttl`` is used verbatim; otherwise the TTL
+        adapts to the consumer's observed poll cadence (~2 missed cycles,
+        like the real CT — see the ADAPTIVE_TTL_* constants).
+        """
+        if self.consumer_ttl is not None:
+            return float(self.consumer_ttl)
+        if consumer.poll_interval is None:
+            return ADAPTIVE_TTL_FALLBACK_SECONDS
+        return max(
+            ADAPTIVE_TTL_MIN_SECONDS,
+            ADAPTIVE_TTL_POLL_MULTIPLIER * consumer.poll_interval,
+        )
+
+    def _consumer_expired(self, consumer: Consumer, now: float) -> bool:
+        return (
+            consumer.timestamp > 0
+            and now - consumer.timestamp > self._consumer_ttl_seconds(consumer)
+        )
+
     def _cleanup_consumers(self):
-        now = time.time()
+        now = self._clock()
         stale = [
             key
             for key, consumer in self._consumers.items()
-            if consumer.timestamp > 0 and now - consumer.timestamp > self.consumer_ttl
+            if self._consumer_expired(consumer, now)
         ]
         for key in stale:
             self._call_event_listener(key, {"_removed": True})
             del self._consumers[key]
             self._balancer.remove_consumer(key)
-        self._dedup.purge_older_than(self.consumer_ttl)
+        # Dedup entries only matter within the dedupe window; with an adaptive
+        # TTL there is no single number, so purge on a horizon that is safely
+        # past any per-consumer TTL and the dedupe window itself.
+        purge_horizon = (
+            float(self.consumer_ttl)
+            if self.consumer_ttl is not None
+            else max(ADAPTIVE_TTL_FALLBACK_SECONDS, self.dedupe_time_window)
+        )
+        self._dedup.purge_older_than(purge_horizon)
 
     def _consumer_mode(self, consumer_id: str | None) -> ConsumerMode:
         if not consumer_id:
@@ -440,11 +510,11 @@ class CT002:
 
     def _collect_reports_by_phase(self):
         by_phase = {
-            "A": {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0},
-            "B": {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0},
-            "C": {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0},
+            bucket: {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0}
+            for bucket in PHASE_BUCKETS
         }
 
+        now = self._clock()
         for consumer in self._consumers.values():
             if consumer.timestamp <= 0:
                 continue
@@ -453,29 +523,41 @@ class CT002:
             # the forwarded count.
             if not consumer.participates:
                 continue
-            phase = consumer.phase.upper()
-            if phase not in by_phase:
-                phase = "A"
-            # Count every battery reporting on the phase (regardless of its
+            # The real CT clears a slot that missed ~1-2 poll cycles before
+            # aggregating, so a battery that drops off the network stops being
+            # counted almost immediately.  Mirror that per response here; the
+            # cleanup loop removes the entry shortly after (issue #462).
+            if self._consumer_expired(consumer, now):
+                continue
+            bucket = _bucket_for_phase(consumer.phase)
+            # Count every battery reporting into the bucket (regardless of its
             # current power) so relay mode can forward the real per-phase
             # battery count — each battery divides the forwarded aggregate by it
             # to take its 1/N share.
-            by_phase[phase]["count"] += 1
-            # Use the net AC power we *instructed* this consumer to be at
-            # (its reported output plus the delta in the last response),
-            # not what it physically reported.  A battery passing PV
-            # through to AC at 100% SoC reports positive power even
-            # though we told it to charge; reporting the instructed net
-            # power keeps the cross-talk dchrg signal free of those
-            # involuntary outputs (issue #376).
-            power = round(consumer.last_instructed_power)
+            by_phase[bucket]["count"] += 1
+            if self.active_control and bucket in ("A", "B", "C"):
+                # Active control: use the net AC power we *instructed* this
+                # consumer to be at (its reported output plus the delta in the
+                # last response), not what it physically reported.  A battery
+                # passing PV through to AC at 100% SoC reports positive power
+                # even though we told it to charge; reporting the instructed
+                # net power keeps the cross-talk dchrg signal free of those
+                # involuntary outputs (issue #376).
+                power = round(consumer.last_instructed_power)
+            else:
+                # Relay mode forwards each battery's *reported* power, exactly
+                # like the real CT (issue #457).  x/ABC consumers are never
+                # actively instructed (the emulator has no combined control
+                # mode and gives no instruction during inspection), so their
+                # reported power is the only truthful signal in either mode.
+                power = consumer.power
             if power == 0:
                 continue
-            by_phase[phase]["active"] = True
+            by_phase[bucket]["active"] = True
             if power < 0:
-                by_phase[phase]["chrg_power"] += power
+                by_phase[bucket]["chrg_power"] += power
             else:
-                by_phase[phase]["dchrg_power"] += power
+                by_phase[bucket]["dchrg_power"] += power
         return by_phase
 
     def reporting_consumer_count(self) -> int:
@@ -485,8 +567,11 @@ class CT002:
     def reporting_consumer_rows(self) -> tuple[ReportingConsumerRow, ...]:
         """Stable-ordered view of reporting consumers for integrations.
 
-        *phase* is normalized to ``a``/``b``/``c``; *last_ip* may be empty when unknown.
-        Rows follow sorted ``consumer_id`` so list position stays predictable.
+        *phase* is normalized to ``a``/``b``/``c``/``d``/``0`` — the canonical
+        phase char the battery reported (``d`` = combined, ``0`` = unassigned/
+        inspection), matching what the ESPHome mirror and a real CT's ``cd=4``
+        slave list carry; *last_ip* may be empty when unknown.  Rows follow
+        sorted ``consumer_id`` so list position stays predictable.
         """
         reporters = sorted(
             (c for c in self._consumers.values() if c.timestamp > 0),
@@ -494,9 +579,9 @@ class CT002:
         )
         out: list[ReportingConsumerRow] = []
         for c in reporters:
-            pu = (c.phase or "A").strip().lower()
-            if pu not in ("a", "b", "c"):
-                pu = "a"
+            pu = (c.phase or "0").strip().lower()
+            if pu not in ("a", "b", "c", "d"):
+                pu = "0"
             host = c.last_ip.strip() if c.last_ip else ""
             out.append(
                 ReportingConsumerRow(
@@ -520,8 +605,8 @@ class CT002:
         if meter_value is not None:
             parts.append(f"meter {meter_value}W")
         phases = " ".join(f"{p}:{int(v)}W" for p, v in zip("ABC", values, strict=False))
-        chrg = " ".join(f"{p}:{phase_values[p]['chrg_power']}" for p in "ABC")
-        dchrg = " ".join(f"{p}:{phase_values[p]['dchrg_power']}" for p in "ABC")
+        chrg = " ".join(f"{p}:{phase_values[p]['chrg_power']}" for p in PHASE_BUCKETS)
+        dchrg = " ".join(f"{p}:{phase_values[p]['dchrg_power']}" for p in PHASE_BUCKETS)
         consumers_with_reports = sorted(
             ((c.consumer_id, c) for c in self._consumers.values() if c.timestamp > 0),
             key=lambda x: x[0],
@@ -598,6 +683,17 @@ class CT002:
                 response_fields[8 + idx] = str(pv["count"])
             response_fields[15 + idx] = str(pv["chrg_power"])
             response_fields[20 + idx] = str(pv["dchrg_power"])
+
+        # x (unassigned/inspection) bucket — chrg/dchrg only; the response
+        # carries no x count field.
+        response_fields[14] = str(phase_values["x"]["chrg_power"])
+        response_fields[19] = str(phase_values["x"]["dchrg_power"])
+        # ABC (combined, phase "D") bucket.  Combined-mode consumers are never
+        # actively instructed (the emulator has no combined control mode), so
+        # they are effectively relayed in both modes: forward the real count.
+        response_fields[11] = str(phase_values["ABC"]["count"])
+        response_fields[18] = str(phase_values["ABC"]["chrg_power"])
+        response_fields[23] = str(phase_values["ABC"]["dchrg_power"])
 
         response_fields += ["0"] * (len(RESPONSE_LABELS) - len(response_fields))
         self._info_idx_counter = (self._info_idx_counter + 1) % 256
@@ -731,9 +827,13 @@ class CT002:
             return
 
         meter_dev_type = fields[0] if len(fields) > 0 else ""
+        # Store the phase exactly as reported: "D" selects the combined ABC
+        # bucket and any inspection marker is normalized to "0" (the x bucket)
+        # by _update_consumer_report — forcing "A" here would mis-count
+        # inspection and combined reporters into phase A (issue #460).
         self._update_consumer_report(
             consumer_id,
-            phase=reported_phase if not in_inspection_mode else "A",
+            phase=reported_phase,
             power=reported_power,
             device_type=meter_dev_type,
             source_ip=str(addr[0]),
@@ -769,17 +869,18 @@ class CT002:
         # Record the *net* power we expect this battery to be at after
         # applying the instruction (its reported output plus the delta we
         # deliver — the battery's firmware computes
-        # ``new_target = current_power + grid_reading_field``).  The
-        # cross-talk *_chrg_power / *_dchrg_power fields convey net power
-        # per phase so other batteries can see who is actively
+        # ``new_target = current_power + grid_reading_field``).  In active
+        # control the cross-talk *_chrg_power / *_dchrg_power fields convey
+        # this net power per phase so other batteries can see who is actively
         # charging/discharging cells; storing only the delta would lose
-        # the steady-state signal and flip signs on small corrections.
-        # Skip during inspection mode: there is no instruction to record
-        # (we send raw meter readings as information, not a target; the
-        # battery is running its phase-discovery routine, not our
-        # integral controller), and we don't even know which phase to
-        # credit since ``consumer.phase`` defaults to "A" until the
-        # battery declares its real phase.  See issue #376.
+        # the steady-state signal and flip signs on small corrections
+        # (issue #376).  In relay mode the buckets forward the *reported*
+        # power instead, like the real CT (issue #457) — this value is then
+        # only a diagnostic.  Skip during inspection mode: there is no
+        # instruction to record (we send raw meter readings as information,
+        # not a target; the battery is running its phase-discovery routine,
+        # not our integral controller); its reported power is aggregated
+        # into the x bucket from ``consumer.power`` instead.
         if not in_inspection_mode:
             consumer = self._get_consumer(consumer_id)
             phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
