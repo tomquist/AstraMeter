@@ -121,6 +121,10 @@ class Scenario:
     base_noise: float = 10.0
     loads: list[Load] = field(default_factory=list)
     ct_kwargs: dict[str, float] = field(default_factory=dict)
+    # Real grid meters report with latency; the controller acts on a reading
+    # refreshed at this cadence (matching a typical ~1 s powermeter poll /
+    # THROTTLE_INTERVAL) while the metrics see the true instantaneous grid.
+    meter_interval_s: float = 1.0
 
 
 @dataclass
@@ -129,6 +133,10 @@ class EvalWorld:
 
     load_model: LoadModel
     batteries: list[BatterySimulator]
+    # Solar is curve x factor so labeled transients (cloud dips) compose with
+    # the unlabeled day curve instead of being overwritten by its next tick.
+    solar_curve_w: float = 0.0
+    solar_factor: float = 1.0
 
     def set_load(self, name: str, active: bool) -> None:
         for ld in self.load_model.loads:
@@ -137,8 +145,16 @@ class EvalWorld:
                 return
         raise KeyError(f"no load named {name!r}")
 
-    def set_solar(self, watts: float) -> None:
-        self.load_model.set_solar(watts)
+    def set_solar_curve(self, watts: float) -> None:
+        self.solar_curve_w = watts
+        self._apply_solar()
+
+    def set_solar_factor(self, factor: float) -> None:
+        self.solar_factor = factor
+        self._apply_solar()
+
+    def _apply_solar(self) -> None:
+        self.load_model.set_solar(self.solar_curve_w * self.solar_factor)
 
     def set_dc_input(self, battery_index: int, watts: float) -> None:
         self.batteries[battery_index].dc_input_power = watts
@@ -234,19 +250,31 @@ async def run_scenario(
     )
 
     samples: list[_Sample] = []
+    # The controller reads the meter at the meter's own cadence (stale in
+    # between, like a real powermeter poll); metrics record the true grid.
+    meter_cache: dict[str, float] = {}
+    meter_read_at = [-math.inf]
 
     async def before_send(_addr, _fields=None, _consumer_id=None):
-        grid = powermeter.compute_grid()
-        total = grid["phase_a"] + grid["phase_b"] + grid["phase_c"]
+        now = clock() - _EPOCH
+        true_grid = powermeter.compute_grid()
+        if now - meter_read_at[0] >= scenario.meter_interval_s:
+            meter_cache.clear()
+            meter_cache.update(true_grid)
+            meter_read_at[0] = now
         samples.append(
             _Sample(
-                t=clock() - _EPOCH,
-                grid=total,
+                t=now,
+                grid=true_grid["phase_a"] + true_grid["phase_b"] + true_grid["phase_c"],
                 powers=tuple(b.current_power for b in batteries),
                 socs=tuple(b.soc for b in batteries),
             )
         )
-        return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
+        return [
+            meter_cache["phase_a"],
+            meter_cache["phase_b"],
+            meter_cache["phase_c"],
+        ]
 
     ct002.before_send = before_send
     await ct002.start()
@@ -461,9 +489,16 @@ def _set_load(name: str, active: bool) -> Callable[[EvalWorld], None]:
     return apply
 
 
-def _set_solar(watts: float) -> Callable[[EvalWorld], None]:
+def _set_solar_curve(watts: float) -> Callable[[EvalWorld], None]:
     def apply(w: EvalWorld) -> None:
-        w.set_solar(watts)
+        w.set_solar_curve(watts)
+
+    return apply
+
+
+def _set_solar_factor(factor: float) -> Callable[[EvalWorld], None]:
+    def apply(w: EvalWorld) -> None:
+        w.set_solar_factor(factor)
 
     return apply
 
@@ -498,13 +533,15 @@ def _household_steps(rng: random.Random, duration: float) -> list[Event]:
         load_event(t0, "kettle", True)
         load_event(t0 + 180.0, "kettle", False)
         del burst
-    # Oven: thermostat cycling between 30% and 60% of the run.
+    # Oven: thermostat cycling between 30% and 60% of the run.  Cycles are
+    # emitted as on/off pairs so the oven never stays on past its block
+    # (an unpaired trailing "on" would stack loads beyond the battery's
+    # ceiling for the rest of the run).
     t = duration * 0.3
-    on = True
-    while t < duration * 0.6:
-        load_event(t, "oven", on)
-        t += 240.0 if on else 180.0
-        on = not on
+    while t + 240.0 < duration * 0.6:
+        load_event(t, "oven", True)
+        load_event(t + 240.0, "oven", False)
+        t += 240.0 + 180.0
     # Dishwasher: one long block in the second half.
     load_event(duration * 0.8, "dishwasher", True)
     load_event(duration * 0.8 + 600.0, "dishwasher", False)
@@ -523,20 +560,22 @@ def _solar_curve(duration: float, peak: float) -> list[Event]:
     events: list[Event] = []
     for t in range(0, int(duration), 60):
         watts = peak * math.sin(math.pi * t / duration)
-        events.append(Event(at=float(t), apply=_set_solar(watts)))
+        events.append(Event(at=float(t), apply=_set_solar_curve(watts)))
     return events
 
 
-def _cloud_dips(rng: random.Random, duration: float, peak: float) -> list[Event]:
-    """Labeled cloud transients: solar collapses to 20% for ~2 minutes."""
+def _cloud_dips(rng: random.Random, duration: float) -> list[Event]:
+    """Labeled cloud transients: solar collapses to 20% for ~2 minutes.
+
+    Implemented as a multiplicative factor so the per-minute day curve keeps
+    ticking underneath without cancelling the dip.
+    """
     events: list[Event] = []
     for frac in (0.4, 0.55):
         t0 = duration * frac + rng.uniform(-60.0, 60.0)
-        dip = peak * math.sin(math.pi * t0 / duration) * 0.2
-        restore = peak * math.sin(math.pi * (t0 + 120.0) / duration)
-        events.append(Event(at=t0, label="cloud_on", apply=_set_solar(dip)))
+        events.append(Event(at=t0, label="cloud_on", apply=_set_solar_factor(0.2)))
         events.append(
-            Event(at=t0 + 120.0, label="cloud_off", apply=_set_solar(restore))
+            Event(at=t0 + 120.0, label="cloud_off", apply=_set_solar_factor(1.0))
         )
     return events
 
@@ -584,8 +623,7 @@ def build_scenarios() -> dict[str, Scenario]:
             duration_s=dur_solar,
             base_load=[400.0, 0.0, 0.0],
             build_events=lambda rng: (
-                _solar_curve(dur_solar, solar_peak)
-                + _cloud_dips(rng, dur_solar, solar_peak)
+                _solar_curve(dur_solar, solar_peak) + _cloud_dips(rng, dur_solar)
             ),
         )
     )
