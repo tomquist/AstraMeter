@@ -180,6 +180,16 @@ class _Issue376Harness:
         assert entry is not None, f"no consumer {mac} in dump"
         return entry["last_instructed"]
 
+    def last_intent(self, mac: str) -> float:
+        """The balancer's unpaced control intent (absolute net-output target)."""
+        if self.backend == "python":
+            intent = self.ct002._balancer.get_last_intent(mac.lower())
+            assert intent is not None
+            return intent
+        entry = self._esphome.dump()["consumers"].get(mac.lower())
+        assert entry is not None, f"no consumer {mac} in dump"
+        return entry["last_intent"]
+
 
 async def test_venus_e_keeps_charging_during_venus_d_pv_passthrough() -> None:
     h = _Issue376Harness()
@@ -209,10 +219,13 @@ async def test_venus_e_keeps_charging_during_venus_d_pv_passthrough() -> None:
             f"[{h.backend}] A_dchrg_power should be 0 (Venus D was instructed to charge)"
         )
 
-        # 3. Sanity: Venus D *was* instructed to charge.
-        assert h.last_instructed(h.venus_d.mac) < 0.0, (
-            f"[{h.backend}] Venus D should have been instructed to charge "
-            f"(negative target on phase A)"
+        # 3. Sanity: Venus D *was* told to charge.  With ramp pacing the
+        #    per-poll instructed net power approaches the goal gradually (and
+        #    a full battery never gets there), so the unpaced control intent
+        #    is the signal that must be negative.
+        assert h.last_intent(h.venus_d.mac) < 0.0, (
+            f"[{h.backend}] Venus D's control intent should be charging "
+            f"(negative net-output target)"
         )
 
         # 4. Sanity: Venus D is in fact passing PV through to AC.

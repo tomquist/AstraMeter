@@ -21,6 +21,8 @@ def _make_balancer(*, fair_distribution: bool = True) -> LoadBalancer:
             balance_deadband=15,
             max_correction_per_step=80,
             min_efficient_power=0,
+            # Pin the raw weighted-share math; ramp pacing has its own tests.
+            pace_base_step=0,
         ),
         saturation_alpha=0.15,
         saturation_min_target=20,

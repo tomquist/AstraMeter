@@ -19,6 +19,12 @@
 namespace esphome {
 namespace ct002 {
 
+// Ramp pacing (issue #458): the pacing cap doubles per poll, and only when
+// the battery's reported output moved at least PACE_TRACKING_DELTA_W in the
+// commanded direction since the previous paced poll. Mirrors balancer.py.
+inline constexpr float PACE_TRACKING_DELTA_W = 20.0f;
+inline constexpr float PACE_GROWTH_FACTOR = 2.0f;
+
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
@@ -65,12 +71,20 @@ inline float to_grid_reading(NetOutputW target, float reported) {
 struct BalancerConfig {
   bool fair_distribution{true};
   float balance_gain{0.2f};
-  float balance_deadband{15.0f};
+  // Kept above the battery firmware's own +-20 W input deadband so the
+  // balancer never chases share errors the battery would ignore (issue #458).
+  float balance_deadband{25.0f};
   float error_boost_threshold{150.0f};
   float error_boost_max{0.5f};
   float error_reduce_threshold{20.0f};
   float max_correction_per_step{80.0f};
   float max_target_step{0.0f};
+  // Ramp pacing for the auto path (issue #458): per-poll cap on the sent
+  // reading, starting at the firmware ramp's first-step gain and growing
+  // toward pace_max_step only while the battery is observed tracking.
+  // pace_base_step = 0 disables. See balancer.py for the tuning rationale.
+  float pace_base_step{50.0f};
+  float pace_max_step{200.0f};
   float min_efficient_power{0.0f};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
@@ -91,7 +105,17 @@ struct ConsumerMode {
 
 struct BalancerConsumerState {
   std::optional<float> last_target;
+  // Absolute net-output target (NetOutputW currency) intended for this
+  // consumer, recorded *before* wire pacing. The cross-talk chrg/dchrg
+  // attribution uses it to filter involuntary outputs (issue #376).
+  std::optional<float> last_intent;
   float fade_weight{1.0f};
+  // Ramp-pacing state (see BalancerConfig::pace_base_step): current per-poll
+  // cap, sign of the last paced reading, and the battery's reported power at
+  // the last pacing step (tracking detection).
+  float pace_cap{0.0f};
+  int pace_sign{0};
+  std::optional<float> pace_prev_reported{};
   // Long-running EMA accumulator — double prevents small-bias drift on
   // steady signals over hours of runtime.
   double saturation_score{0.0};
@@ -171,6 +195,8 @@ class LoadBalancer {
 
   double get_saturation(const std::string &consumer_id) const;
   std::optional<float> get_last_target(const std::string &consumer_id) const;
+  // Absolute net-output target intended pre-pacing (see BalancerConsumerState).
+  std::optional<float> get_last_intent(const std::string &consumer_id) const;
 
  protected:
   BalancerConsumerState &get_consumer_(const std::string &consumer_id);
@@ -217,6 +243,7 @@ class LoadBalancer {
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
+  float pace_reading_(const std::string &consumer_id, float reading, float reported);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);

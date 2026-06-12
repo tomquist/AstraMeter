@@ -299,8 +299,9 @@ All keys in this subsection go under the `[CT002]` or `[CT003]` section (they ar
   Assistant — see [Per-battery controls](#per-battery-controls-home-assistant-entities).
 - **BALANCE_GAIN** (default 0.2) — How aggressively to correct imbalance between batteries.
   0.0 = no correction (equal split only); 0.3–0.5 = faster rebalancing but may overshoot.
-- **BALANCE_DEADBAND** (default 15 W) — Ignore imbalance smaller than this.
-  Prevents micro-corrections when batteries are already close.
+- **BALANCE_DEADBAND** (default 25 W) — Ignore imbalance smaller than this.
+  Prevents micro-corrections when batteries are already close; kept above the battery
+  firmware's own ±20 W input deadband so corrections it would ignore are never sent.
 - **MAX_CORRECTION_PER_STEP** (default 80 W) — Cap on the per-cycle balance correction.
   Limits how much a single battery's target can deviate from its fair share in one step.
 - **ERROR_BOOST_THRESHOLD** / **ERROR_BOOST_MAX** (defaults 150 W / 0.5) — When the
@@ -311,6 +312,11 @@ All keys in this subsection go under the `[CT002]` or `[CT003]` section (they ar
   down proportionally, producing gentler corrections as batteries approach equilibrium.
 - **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
   relative to its current output. A hard clamp on per-cycle change.
+- **PACE_BASE_STEP** / **PACE_MAX_STEP** (defaults 50 W / 200 W) — Ramp pacing for the
+  auto control loop: each battery's per-poll command delta is capped, starting at the
+  battery firmware ramp's ~50 W first step and growing toward the max only while the
+  battery demonstrably follows the command. Keeps the firmware's accelerating internal
+  ramp from overshooting on meter latency. `PACE_BASE_STEP = 0` disables pacing.
 
 *DC battery keep-alive — applies to each DC-only battery on its own (also with a
 single battery, independent of balancing):*

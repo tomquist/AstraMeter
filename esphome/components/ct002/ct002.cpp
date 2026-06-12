@@ -476,6 +476,16 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
       // consumer to be at, so PV passthrough doesn't masquerade as
       // discharge (issue #376).
       power = static_cast<float>(round_half_even(c.last_instructed_power));
+      // With ramp pacing the per-poll delta is capped, so the instructed
+      // net power can keep the sign of the battery's involuntary output
+      // while the control *intent* points the other way (the issue #376
+      // scenario). Filter by the balancer's recorded unpaced intent.
+      const auto intent = this->balancer_ ? this->balancer_->get_last_intent(kv.first)
+                                          : std::optional<float>{};
+      if (intent.has_value() &&
+          ((*intent <= 0.0f && power > 0.0f) || (*intent >= 0.0f && power < 0.0f))) {
+        power = 0.0f;
+      }
     } else {
       // Relay mode forwards each battery's *reported* power, exactly like
       // the real CT (issue #457). x/ABC consumers are never actively

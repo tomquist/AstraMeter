@@ -174,9 +174,11 @@ class CT002:
         error_boost_threshold=150,
         error_boost_max=0.5,
         error_reduce_threshold=20,
-        balance_deadband=15,
+        balance_deadband=25,
         max_correction_per_step=80,
         max_target_step=0,
+        pace_base_step=50,
+        pace_max_step=200,
         saturation_detection=True,
         saturation_alpha=0.15,
         min_target_for_saturation=20,
@@ -239,6 +241,8 @@ class CT002:
                 error_reduce_threshold=error_reduce_threshold,
                 max_correction_per_step=max_correction_per_step,
                 max_target_step=max_target_step,
+                pace_base_step=pace_base_step,
+                pace_max_step=pace_max_step,
                 min_efficient_power=min_efficient_power,
                 probe_min_power=probe_min_power,
                 efficiency_rotation_interval=efficiency_rotation_interval,
@@ -544,6 +548,17 @@ class CT002:
                 # net power keeps the cross-talk dchrg signal free of those
                 # involuntary outputs (issue #376).
                 power = round(consumer.last_instructed_power)
+                # With ramp pacing the per-poll delta is capped, so the
+                # instructed net power can keep the sign of the battery's
+                # involuntary output for many polls while the *control
+                # intent* points the other way (the issue #376 scenario:
+                # full battery passing PV through while told to charge).
+                # Filter by the balancer's recorded unpaced intent.
+                intent = self._balancer.get_last_intent(consumer.consumer_id)
+                if intent is not None and (
+                    (intent <= 0 and power > 0) or (intent >= 0 and power < 0)
+                ):
+                    power = 0
             else:
                 # Relay mode forwards each battery's *reported* power, exactly
                 # like the real CT (issue #457).  x/ABC consumers are never

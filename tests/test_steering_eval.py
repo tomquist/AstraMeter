@@ -135,3 +135,52 @@ def test_full_scenario_definitions_build(name):
     sc = build_scenarios()[name]
     events = sc.build_events(random.Random(1))
     assert events and all(e.at >= 0 for e in events)
+
+
+class TestRampPacingRegression:
+    """Issue #458 acceptance: bounded overshoot on the firmware plant.
+
+    Runs the same load-step scenario with pacing on (defaults) and off and
+    asserts the paced controller keeps the opposite-direction grid excursion
+    bounded where the unpaced one overshoots by hundreds of watts.
+    """
+
+    @staticmethod
+    def _step_scenario() -> Scenario:
+        duration = 600.0
+
+        def events(_rng) -> list[Event]:
+            return [
+                Event(
+                    at=60.0,
+                    label="step_on",
+                    apply=lambda w: w.load_model.base_load.__setitem__(0, 1800.0),
+                ),
+                Event(
+                    at=360.0,
+                    label="step_off",
+                    apply=lambda w: w.load_model.base_load.__setitem__(0, 300.0),
+                ),
+            ]
+
+        return Scenario(
+            name="pacing_regression",
+            description="1.5 kW load step on the firmware plant",
+            batteries=[BatterySpec()],
+            duration_s=duration,
+            base_load=[300.0, 0.0, 0.0],
+            base_noise=0.0,
+            build_events=events,
+        )
+
+    def test_paced_overshoot_bounded(self):
+        paced = asyncio.run(run_scenario(self._step_scenario(), seed=5))
+        unpaced = asyncio.run(
+            run_scenario(self._step_scenario(), seed=5, overrides={"pace_base_step": 0})
+        )
+        # The unpaced firmware ramp overshoots the step by hundreds of watts;
+        # pacing must keep the excursion within ~2 base steps.
+        assert paced["overshoot_max_w"] < 110, paced
+        assert unpaced["overshoot_max_w"] > 250, unpaced
+        # Both must still settle every step event inside its window.
+        assert paced["unsettled_events"] == 0, paced

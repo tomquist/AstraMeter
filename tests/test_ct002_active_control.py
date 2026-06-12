@@ -7,11 +7,22 @@ from astrameter.ct002.balancer import ProbeState
 from astrameter.ct002.ct002 import CT002
 
 
+def _ct002(**kwargs) -> CT002:
+    """CT002 with ramp pacing disabled.
+
+    These tests pin the raw distribution / saturation / efficiency math;
+    the pacing layer that sits on top of it has its own tests
+    (tests/test_balancer.py::TestPaceReading) and e2e coverage.
+    """
+    kwargs.setdefault("pace_base_step", 0)
+    return CT002(**kwargs)
+
+
 class TestActiveControl:
     """Tests for smooth target and load splitting."""
 
     def test_smooth_target_splits_across_consumers(self):
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("a", "A", 100)
         device._update_consumer_report("b", "A", 100)
         out = device._compute_smooth_target([400, 0, 0], "a")
@@ -20,19 +31,19 @@ class TestActiveControl:
         assert out[2] == 0
 
     def test_active_control_off_passes_through_values(self):
-        device = CT002(active_control=False)
+        device = _ct002(active_control=False)
         device._update_consumer_report("a", "A", 0)
         out = device._compute_smooth_target([100, 50, 25], "a")
         assert out == [100, 50, 25]
 
     def test_no_consumer_id_returns_fair_share(self):
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("a", "A", 0)
         out = device._compute_smooth_target([300, 0, 0], None)
         assert out[0] == 300
 
     def test_active_control_splits_target_across_detected_phases(self):
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "B", 0)
 
@@ -46,7 +57,7 @@ class TestActiveControl:
         # 1-phase configurations supply a single grid reading; the balancer
         # collapses values to a scalar internally, so it must still run
         # rather than passing the raw reading through unmodified.
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("a", "A", 0)
 
         out = device._compute_smooth_target([400], "a")
@@ -58,7 +69,7 @@ class TestFairDistribution:
     """Tests for fair load distribution across consumers."""
 
     def test_underperforming_consumer_gets_higher_target(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -72,7 +83,7 @@ class TestFairDistribution:
         assert out_a[0] > 200
 
     def test_overperforming_consumer_gets_lower_target(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -86,7 +97,7 @@ class TestFairDistribution:
         assert out_b[0] < 200
 
     def test_fair_distribution_off_gives_equal_share(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
         )
@@ -97,7 +108,7 @@ class TestFairDistribution:
         assert out_a[0] == out_b[0] == 200
 
     def test_balance_gain_zero_no_correction(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0,
@@ -112,7 +123,7 @@ class TestFairDistribution:
         assert out_a[0] == out_b[0] == 200
 
     def test_large_error_gets_boosted_correction(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -130,7 +141,7 @@ class TestFairDistribution:
         assert out_b[0] < 150
 
     def test_error_boost_disabled_when_threshold_zero(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -147,7 +158,7 @@ class TestFairDistribution:
         assert out_b[0] == 140
 
     def test_small_offset_gets_small_adjustment(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -161,7 +172,7 @@ class TestFairDistribution:
         assert 98 < out_b[0] < 102
 
     def test_error_reduce_disabled_when_threshold_zero(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -177,7 +188,7 @@ class TestFairDistribution:
         assert out_a[0] == 103
 
     def test_balance_deadband_skips_small_correction(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.3,
@@ -191,7 +202,7 @@ class TestFairDistribution:
         assert out_a[0] == 100
 
     def test_max_correction_per_step_caps_correction(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.5,
@@ -205,7 +216,7 @@ class TestFairDistribution:
         assert 200 < out_a[0] <= 250
 
     def test_max_target_step_caps_target_vs_actual(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             balance_gain=0.5,
@@ -223,7 +234,7 @@ class TestSaturationDetection:
     """Tests for saturation detection (full/empty battery)."""
 
     def test_saturated_consumer_gets_reduced_share(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             saturation_detection=True,
@@ -240,7 +251,7 @@ class TestSaturationDetection:
         assert out_b[0] > 200
 
     def test_saturation_ema_smooths_in(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=True,
@@ -258,7 +269,7 @@ class TestSaturationDetection:
         assert out2[0] < out1[0]
 
     def test_saturation_ema_smooths_out_when_recovering(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=True,
@@ -277,7 +288,7 @@ class TestSaturationDetection:
         assert out2[0] > out1[0]
 
     def test_saturation_ignores_low_target(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=True,
@@ -292,7 +303,7 @@ class TestSaturationDetection:
         assert out[0] == 10
 
     def test_saturation_off_no_reduction(self):
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=False,
@@ -307,7 +318,7 @@ class TestSaturationDetection:
 
     def test_saturation_opposite_sign_meaningful_output_not_saturated(self):
         """Meaningful output in the wrong direction can be normal ramp-down."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=True,
@@ -331,7 +342,7 @@ class TestSaturationDetection:
         saturation.  A battery lagging behind a moving target (e.g. due to load
         fluctuation) should not be penalised.
         """
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=True,
@@ -349,7 +360,7 @@ class TestSaturationDetection:
     def test_saturation_boundary_at_threshold(self):
         """Output exactly at min_target_for_saturation is not saturated;
         output just below it is."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             saturation_detection=True,
@@ -375,7 +386,7 @@ class TestCleanup:
     """Tests that saturation state is cleaned up with consumers."""
 
     def test_cleanup_removes_saturation_state(self):
-        device = CT002(saturation_detection=True, consumer_ttl=0.01)
+        device = _ct002(saturation_detection=True, consumer_ttl=0.01)
         device._update_consumer_report("a", "A", 0)
         device._balancer._get_consumer("a").last_target = 100
         device._balancer._get_consumer("a").saturation_score = 0.5
@@ -384,7 +395,7 @@ class TestCleanup:
         assert "a" not in device._balancer._consumers
 
     def test_cleanup_removes_efficiency_state(self):
-        device = CT002(min_efficient_power=150, consumer_ttl=0.01)
+        device = _ct002(min_efficient_power=150, consumer_ttl=0.01)
         device._update_consumer_report("a", "A", 0)
         device._balancer._deprioritized.add("a")
         device._balancer._priority.append("a")
@@ -401,7 +412,7 @@ class TestEfficiencyOptimization:
 
     def test_disabled_by_default(self):
         """With min_efficient_power=0, output is identical to current behavior."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=0,
@@ -413,7 +424,7 @@ class TestEfficiencyOptimization:
 
     def test_low_demand_concentrates_on_one_consumer(self):
         """200W with 2 consumers and threshold=150 → one gets ~200W, other ~0W."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -428,7 +439,7 @@ class TestEfficiencyOptimization:
 
     def test_high_demand_activates_all_consumers(self):
         """600W with 2 consumers and threshold=150 → both get ~300W."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -443,7 +454,7 @@ class TestEfficiencyOptimization:
     def test_hysteresis_prevents_oscillation(self):
         """At steady 250W with threshold=150, system should stay at 1 active
         (not oscillate between 1 and 2)."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -461,7 +472,7 @@ class TestEfficiencyOptimization:
 
     def test_exits_limiting_at_higher_threshold(self):
         """Hysteresis requires higher per-consumer demand to exit limiting."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -483,7 +494,7 @@ class TestEfficiencyOptimization:
 
     def test_priority_rotation(self):
         """After rotation interval, the deprioritized consumer changes."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -508,7 +519,7 @@ class TestEfficiencyOptimization:
 
     def test_single_consumer_always_active(self):
         """With only 1 consumer, it's always active regardless of threshold."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -520,7 +531,7 @@ class TestEfficiencyOptimization:
 
     def test_three_consumers_demand_supports_two(self):
         """350W with 3 consumers and threshold=150 → 2 active, 1 deprioritized."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -535,7 +546,7 @@ class TestEfficiencyOptimization:
 
     def test_negative_target_concentrates(self):
         """Charging (negative target) should also concentrate on fewer batteries."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -556,7 +567,7 @@ class TestEfficiencyOptimization:
 
     def test_cache_consistency_across_consumers(self):
         """Same sample should produce consistent deprioritized set."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -571,7 +582,7 @@ class TestEfficiencyOptimization:
 
     def test_works_with_fair_distribution_off(self):
         """Efficiency optimization should work even with fair_distribution=False."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -590,7 +601,7 @@ class TestEfficiencyFade:
 
     def test_fade_gradual_deprioritize(self):
         """With default alpha, deprioritized consumer should fade gradually."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -608,7 +619,7 @@ class TestEfficiencyFade:
     def test_fade_blend_drives_consumer_down(self):
         """During fade-down, the blend formula should produce negative targets
         to actively drive the consumer toward zero, not just reduce its share."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -647,7 +658,7 @@ class TestEfficiencyFade:
 
     def test_fade_gradual_activate(self):
         """When demand rises, reactivated consumer fades in gradually."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -675,7 +686,7 @@ class TestEfficiencyFade:
 
     def test_fade_converges(self):
         """After enough calls, fade weight snaps to target."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -691,7 +702,7 @@ class TestEfficiencyFade:
 
     def test_fade_instant_with_alpha_one(self):
         """With alpha=1.0, fade is instant (matches old behavior)."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -706,7 +717,7 @@ class TestEfficiencyFade:
 
     def test_fade_rotation_during_fade(self):
         """Rotation fires even while a consumer is mid-fade."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -728,7 +739,7 @@ class TestEfficiencyFade:
 
     def test_fade_consumer_disconnect_mid_fade(self):
         """Consumer with active fade gets pruned by cleanup."""
-        device = CT002(
+        device = _ct002(
             min_efficient_power=150,
             consumer_ttl=0.01,
         )
@@ -740,7 +751,7 @@ class TestEfficiencyFade:
 
     def test_fade_new_consumer_during_fade(self):
         """New consumer starts its fade from 1.0, not from 0.0."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -760,7 +771,7 @@ class TestEfficiencyFade:
 
     def test_fade_demand_reversal(self):
         """Deprioritization reverses mid-fade; EMA reverses direction."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -787,7 +798,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_rotation_on_saturation(self):
         """Active consumer with saturation above threshold gets swapped out."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -812,7 +823,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_no_force_rotation_below_threshold(self):
         """Saturation below threshold does not trigger a swap."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -838,7 +849,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_no_force_rotation_all_saturated(self):
         """When all consumers are saturated, no swap occurs (no healthy replacement)."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -861,7 +872,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_rotation_resets_timer(self):
         """Forced swap resets the rotation timer."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -884,7 +895,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_rotation_disabled_when_zero(self):
         """Threshold=0.0 disables forced swap even with high saturation."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -905,7 +916,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_saturation_decay(self):
         """Saturation decays multiplicatively when target < min_target."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             saturation_detection=True,
             saturation_decay_factor=0.9,
@@ -919,7 +930,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_saturation_decay_floor(self):
         """Saturation entry is removed when it decays below 0.001."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             saturation_detection=True,
             saturation_decay_factor=0.5,
@@ -932,7 +943,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_swap_during_active_fade(self):
         """Forced swap during an active fade converges correctly."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -962,7 +973,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_rotation_cache_invalidation(self):
         """After forced swap, next consumer call returns post-swap result."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -988,7 +999,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_rotation_three_consumers(self):
         """With 3 consumers and 2 active slots, only the saturated one swaps."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1021,7 +1032,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_activation_resets_stale_saturation(self):
         """Activation clears residual saturation when a consumer becomes active."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1047,7 +1058,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_rampdown_does_not_poison_replacement_battery(self):
         """A healthy battery ramping down must remain eligible for takeover."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=True,
             min_efficient_power=150,
@@ -1070,7 +1081,7 @@ class TestEfficiencySaturationSwap:
 
     def test_efficiency_force_rotation_on_saturation_charging(self):
         """Forced swap also works for charging (negative target / solar excess)."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1095,7 +1106,7 @@ class TestEfficiencySaturationSwap:
     def test_rotation_grace_period_prevents_immediate_swap_back(self):
         """After timed rotation promotes a consumer, saturation updates are
         skipped during the grace period so the battery has time to ramp up."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1143,7 +1154,7 @@ class TestEfficiencySaturationSwap:
 
     def test_rotation_grace_period_expires(self):
         """Probe timeout restores the previous active battery."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1184,7 +1195,7 @@ class TestEfficiencySaturationSwap:
 
     def test_probe_backup_uses_delta_not_absolute_output(self):
         """Initial probe command should ramp up instead of jumping to absolute output."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1207,7 +1218,7 @@ class TestEfficiencySaturationSwap:
 
     def test_probe_backup_ignores_probe_output_and_follows_demand(self):
         """Backup should keep following live demand during probe."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
@@ -1230,7 +1241,7 @@ class TestEfficiencySaturationSwap:
 
     def test_probe_backup_backs_off_after_first_qualifying_sample(self):
         """Once the probe has one qualifying sample, backup should subtract actual probe output."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             probe_min_power=80,
@@ -1260,7 +1271,7 @@ class TestInactiveConsumers:
     def test_inactive_consumer_drives_to_zero_on_phase(self):
         """An inactive consumer with non-zero reported power should get
         target = -reported_power on its phase, not just [0,0,0]."""
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("bat1", "B", 250)
         device.set_consumer_active("bat1", False)
 
@@ -1271,7 +1282,7 @@ class TestInactiveConsumers:
 
     def test_inactive_consumer_already_at_zero_returns_zeros(self):
         """An inactive consumer reporting 0W should get [0,0,0]."""
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("bat1", "A", 0)
         device.set_consumer_active("bat1", False)
 
@@ -1280,7 +1291,7 @@ class TestInactiveConsumers:
 
     def test_inactive_consumer_excluded_from_fair_distribution(self):
         """Fair share should only count active consumers."""
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("bat1", "A", 0)
         device._update_consumer_report("bat2", "A", 0)
         device.set_consumer_active("bat1", False)
@@ -1291,7 +1302,7 @@ class TestInactiveConsumers:
 
     def test_inactive_consumer_excluded_from_efficiency_rotation(self):
         """Inactive consumers should not appear in the efficiency priority list."""
-        device = CT002(
+        device = _ct002(
             active_control=True,
             fair_distribution=False,
             min_efficient_power=200,
@@ -1309,7 +1320,7 @@ class TestInactiveConsumers:
 
     def test_reactivated_consumer_rejoins_distribution(self):
         """After re-activating, consumer should participate normally."""
-        device = CT002(active_control=True, fair_distribution=False)
+        device = _ct002(active_control=True, fair_distribution=False)
         device._update_consumer_report("bat1", "A", 0)
         device._update_consumer_report("bat2", "A", 0)
 
@@ -1324,7 +1335,7 @@ class TestInactiveConsumers:
         assert result[0] == 200  # now split between two
 
     def test_set_consumer_active_toggle(self):
-        device = CT002()
+        device = _ct002()
         assert device.is_consumer_active("x")
         device.set_consumer_active("x", False)
         assert not device.is_consumer_active("x")
@@ -1333,7 +1344,7 @@ class TestInactiveConsumers:
 
     def test_reactivation_clears_stale_state(self):
         """Re-enabling a consumer should clear saturation and last_target."""
-        device = CT002(active_control=True)
+        device = _ct002(active_control=True)
         device._balancer._get_consumer("bat1").saturation_score = 0.8
         device._balancer._get_consumer("bat1").last_target = 50
         device.set_consumer_active("bat1", False)
@@ -1346,7 +1357,7 @@ class TestInactiveConsumers:
 
     def test_last_target_set_to_zero_for_inactive(self):
         """Inactive consumer's last_target should be recorded as 0."""
-        device = CT002(active_control=True)
+        device = _ct002(active_control=True)
         device._update_consumer_report("bat1", "A", 100)
         device.set_consumer_active("bat1", False)
         device._compute_smooth_target([400, 0, 0], "bat1")

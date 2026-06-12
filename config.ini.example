@@ -64,8 +64,10 @@ THROTTLE_INTERVAL = 0
 ## How aggressively to correct imbalance between batteries.
 ## 0 = no correction (equal split only); 0.3-0.5 = faster rebalancing.
 # BALANCE_GAIN = 0.2
-## Ignore imbalance smaller than this (W). Prevents micro-corrections.
-# BALANCE_DEADBAND = 15
+## Ignore imbalance smaller than this (W). Prevents micro-corrections. Kept
+## above the battery firmware's own +-20 W input deadband so corrections the
+## battery would ignore are never sent.
+# BALANCE_DEADBAND = 25
 ## Cap on the per-cycle balance correction (W). Limits how fast a single
 ## battery's target can deviate from its fair share.
 # MAX_CORRECTION_PER_STEP = 80
@@ -80,6 +82,13 @@ THROTTLE_INTERVAL = 0
 # ERROR_REDUCE_THRESHOLD = 20
 ## Hard clamp on target change relative to current battery output (W). 0 disables.
 # MAX_TARGET_STEP = 0
+## Ramp pacing: cap each battery's per-poll command delta. The cap starts at
+## PACE_BASE_STEP (matching the battery firmware ramp's ~50 W first step) and
+## grows toward PACE_MAX_STEP only while the battery demonstrably follows the
+## command; it resets when the direction reverses. Keeps the firmware's
+## accelerating ramp from overshooting on meter latency. 0 disables pacing.
+# PACE_BASE_STEP = 50
+# PACE_MAX_STEP = 200
 
 ## --- DC battery keep-alive ---
 ## Applies per battery (independent of balancing — also relevant with a single

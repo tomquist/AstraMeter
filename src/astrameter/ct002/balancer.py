@@ -71,6 +71,16 @@ def _report_weight(report: dict) -> float:
     return 1.0 if weight is None else float(weight)
 
 
+# Ramp pacing (issue #458): the battery only grows its own ramp gain while
+# an error persists, and its spike filter ignores reading jumps over 50 W
+# whose own output moved less than 20 W.  We mirror that: the pacing cap
+# doubles per poll, and only when the battery's reported output moved at
+# least this far in the commanded direction since the previous paced poll
+# (a non-moving battery — startup delay, saturation — keeps the cap at the
+# base step, which also keeps successive readings inside the spike filter).
+PACE_TRACKING_DELTA_W = 20.0
+PACE_GROWTH_FACTOR = 2.0
+
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
@@ -183,7 +193,10 @@ class BalancerConfig:
 
     fair_distribution: bool = True
     balance_gain: float = 0.2
-    balance_deadband: float = 15
+    # Share-rebalance deadband.  Kept above the battery firmware's own ±20 W
+    # input deadband so the balancer never chases share errors the battery
+    # would ignore anyway (issue #458).
+    balance_deadband: float = 25
     error_boost_threshold: float = 150
     error_boost_max: float = 0.5
     error_reduce_threshold: float = 20
@@ -199,6 +212,24 @@ class BalancerConfig:
     # applied to batteries selected by ``_needs_dc_output_floor`` (B2500
     # family) unless overridden per-device.  See issue #425.
     min_dc_output: float = 0
+    # Ramp pacing for the auto path (issue #458).  The battery firmware runs
+    # its own gain-scheduled ramp on the reading we send, stepping at most
+    # ``min(GAIN[ramp], |reading|)`` per poll, where GAIN accelerates from
+    # ~50 W to ~400 W while an error persists.  With one or two polls of
+    # feedback lag an uncapped reading lets that accelerated ramp overshoot
+    # by hundreds of watts.  Pacing clamps each consumer's sent reading to a
+    # per-consumer cap that starts at ``pace_base_step`` (the firmware's
+    # first-step gain), grows x2 toward ``pace_max_step`` only while the
+    # battery is observed tracking the command, follows the error back down,
+    # and resets on direction reversal.  ``pace_base_step = 0`` disables.
+    # Defaults (50/200) were tuned with the steering evaluation suite
+    # (``python -m astrameter.simulator.evaluation``): vs the unpaced
+    # baseline they cut overshoot ~80% and battery travel ~33% across the
+    # scenario matrix for ~8% slower settling; growing the cap to the
+    # firmware's full 400 W gain measurably overshoots under one poll of
+    # meter latency, so the cap tops out at 200 W.
+    pace_base_step: float = 50
+    pace_max_step: float = 200
 
     def __post_init__(self) -> None:
         def _clamp(name: str, lo: float, hi: float) -> None:
@@ -220,6 +251,8 @@ class BalancerConfig:
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
         _clamp("min_dc_output", 0, float("inf"))
+        _clamp("pace_base_step", 0, float("inf"))
+        _clamp("pace_max_step", self.pace_base_step, float("inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +277,21 @@ class BalancerConsumerState:
     """Bundled per-consumer state owned by LoadBalancer."""
 
     last_target: float | None = None
+    # Absolute net-output target (NetOutputW currency) the control path
+    # intended for this consumer, recorded *before* wire pacing.  While
+    # ``last_target`` is the (paced) reading actually sent, ``last_intent``
+    # preserves the control direction — the cross-talk chrg/dchrg
+    # attribution uses it to filter involuntary outputs such as PV
+    # passthrough from a full battery (issue #376).
+    last_intent: float | None = None
     fade_weight: float = 1.0
+    # Ramp-pacing state (see BalancerConfig.pace_base_step): the current
+    # per-poll cap on the sent reading, the sign of the last paced reading,
+    # and the battery's reported power at the last pacing step (used to
+    # detect whether it is tracking the command before growing the cap).
+    pace_cap: float = 0.0
+    pace_sign: int = 0
+    pace_prev_reported: float | None = None
     saturation_score: float = 0.0
     saturation_grace_until: float = 0.0
     saturation_grace_started_at: float = 0.0
@@ -731,6 +778,7 @@ class LoadBalancer:
             probe.requested_power_abs = abs(desired_probe)
             reading = to_grid_reading(NetOutputW(desired_probe), probe_actual)
             state.last_target = reading
+            state.last_intent = desired_probe
             return self._split_by_phase(reading, {candidate_id: reports[candidate_id]})
 
         backup_weights = {
@@ -748,6 +796,7 @@ class LoadBalancer:
         reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
         reading = to_grid_reading(NetOutputW(desired), reported)
         state.last_target = reading
+        state.last_intent = desired
         return self._split_by_phase(reading, support_reports, backup_weights)
 
     # ------------------------------------------------------------------
@@ -814,6 +863,7 @@ class LoadBalancer:
             reported = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
             reading = to_grid_reading(NetOutputW(consumer_mode.manual_value), reported)
             state.last_target = reading
+            state.last_intent = consumer_mode.manual_value
             return self._split_by_phase(reading, active_reports)
 
         # Auto-pool reports (exclude manual consumers)
@@ -853,6 +903,10 @@ class LoadBalancer:
         """
         state = self._get_consumer(consumer_id)
         state.last_target = None
+        state.last_intent = None
+        state.pace_cap = 0.0
+        state.pace_sign = 0
+        state.pace_prev_reported = None
         state.saturation_score = 0.0
         grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
@@ -898,6 +952,15 @@ class LoadBalancer:
     def get_last_target(self, consumer_id: str) -> float | None:
         state = self._consumers.get(consumer_id)
         return state.last_target if state else None
+
+    def get_last_intent(self, consumer_id: str) -> float | None:
+        """Absolute net-output target intended for the consumer, pre-pacing.
+
+        ``None`` until the consumer has received its first instruction.  See
+        :attr:`BalancerConsumerState.last_intent`.
+        """
+        state = self._consumers.get(consumer_id)
+        return state.last_intent if state else None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -964,13 +1027,17 @@ class LoadBalancer:
         phase = (report.get("phase") or "A").upper()
         out = [0.0, 0.0, 0.0]
         out[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = reading
-        self._get_consumer(consumer_id).last_target = reading
+        state = self._get_consumer(consumer_id)
+        state.last_target = reading
+        state.last_intent = eff_min
         return out
 
     def _steer_to_zero(self, consumer_id: str | None, reports: dict) -> list[float]:
         """Drive a consumer's output to zero (``NetOutputW(0)``)."""
         if consumer_id:
-            self._get_consumer(consumer_id).last_target = 0
+            state = self._get_consumer(consumer_id)
+            state.last_target = 0
+            state.last_intent = 0
         reported = parse_int(
             reports.get(consumer_id, {}).get("power", 0) if consumer_id else 0
         )
@@ -1130,8 +1197,10 @@ class LoadBalancer:
             total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             reading = to_grid_reading(NetOutputW(desired), reported)
+            reading = self._pace_reading(consumer_id, reading, reported)
 
             state.last_target = reading
+            state.last_intent = desired
 
             return self._split_by_phase(reading, reports, eff_part)
 
@@ -1199,9 +1268,63 @@ class LoadBalancer:
         reading = to_grid_reading(NetOutputW(reported + residual), reported)
 
         if consumer_id:
-            self._get_consumer(consumer_id).last_target = reading
+            reading = self._pace_reading(consumer_id, reading, reported)
+            state = self._get_consumer(consumer_id)
+            state.last_target = reading
+            state.last_intent = reported + residual
 
         return self._split_by_phase(reading, reports, eff_part)
+
+    def _pace_reading(self, consumer_id: str, reading: float, reported: float) -> float:
+        """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
+
+        The battery integrates the reading with its own accelerating ramp,
+        stepping by at most ``min(GAIN[ramp], |reading|)`` per poll — so the
+        reading we send is the only bound on its per-poll movement once the
+        ramp has accelerated.  Pacing keeps that bound tight: the cap starts
+        at the firmware's first-step gain (``pace_base_step``), doubles
+        toward ``pace_max_step`` only while the battery demonstrably tracks
+        the command, follows the error back down as it shrinks (so the final
+        approach is gentle), and resets to the base step when the command
+        direction reverses.  This bounds stale-feedback overshoot to roughly
+        the battery's *demonstrated* slew instead of its maximum ramp gain.
+
+        Only the persistent auto regulation loop is paced.  Probe targets
+        (own ramp schedule, must clear inverter floors in one step), the
+        MIN_DC_OUTPUT floor (must jump to the floor), manual targets and
+        steer-to-zero (one-shot transitions the firmware ramp already paces)
+        deliberately bypass this.
+
+        Pacing deliberately applies to direction reversals too (capping the
+        wind-down/reversal rate bounds the overshoot at zero crossings, a
+        major oscillation source on load drops).  Consumers needing the
+        *unpaced* control intent — the cross-talk chrg/dchrg attribution
+        that filters involuntary PV passthrough (issue #376) — read it from
+        ``last_intent`` / :meth:`get_last_intent`, which every control path
+        records before pacing.
+        """
+        base = self._cfg.pace_base_step
+        if base <= 0:
+            return reading
+        state = self._get_consumer(consumer_id)
+        sign = 1 if reading > 0 else -1 if reading < 0 else 0
+        cap = state.pace_cap if state.pace_cap > 0 else base
+        if sign == 0 or sign != state.pace_sign:
+            cap = base
+        elif abs(reading) > cap:
+            moved = (
+                (reported - state.pace_prev_reported) * sign
+                if state.pace_prev_reported is not None
+                else 0.0
+            )
+            if moved >= PACE_TRACKING_DELTA_W:
+                cap = min(cap * PACE_GROWTH_FACTOR, self._cfg.pace_max_step)
+        else:
+            cap = max(base, abs(reading))
+        state.pace_cap = cap
+        state.pace_sign = sign
+        state.pace_prev_reported = reported
+        return max(-cap, min(cap, reading))
 
     def _balance_correction(
         self,
