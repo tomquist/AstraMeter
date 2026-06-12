@@ -208,6 +208,109 @@ jobs:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
 
+  # Steering-quality evaluation (issue #458): runs the deterministic
+  # active-control simulation suite (src/astrameter/simulator/evaluation.py)
+  # on the PR base and head and posts the before/after metrics as a sticky
+  # PR comment. Purely informational — thresholds that must hold live in
+  # pytest regressions, not here.
+  steering-eval:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run evaluation (head)
+        run: uv run python -m astrameter.simulator.evaluation --json head.json
+
+      # The base run uses the base commit's own harness + controller. Until
+      # the harness exists on the base branch this produces an empty
+      # baseline and the comment shows head-only numbers.
+      - name: Run evaluation (base)
+        if: github.event_name == 'pull_request'
+        run: |
+          git worktree add /tmp/steering-base "${{ github.event.pull_request.base.sha }}"
+          if [ -f /tmp/steering-base/src/astrameter/simulator/evaluation.py ]; then
+            (cd /tmp/steering-base \
+              && uv sync --frozen --extra dev \
+              && uv run python -m astrameter.simulator.evaluation --json "$GITHUB_WORKSPACE/base.json")
+          else
+            echo "[]" > "$GITHUB_WORKSPACE/base.json"
+          fi
+
+      - name: Render comparison
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python -m astrameter.simulator.evaluation \
+            --input head.json --compare base.json > steering-eval-comment.md
+          cat steering-eval-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload metrics artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: steering-eval
+          path: |
+            head.json
+            base.json
+            steering-eval-comment.md
+          if-no-files-found: ignore
+
+      # Forks get a read-only token; they still see the table in the job
+      # summary above.
+      - name: Post sticky PR comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- steering-eval -->';
+            const body = marker + '\n' +
+              fs.readFileSync('steering-eval-comment.md', 'utf8');
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
   build:
     needs: [ validate ]
     permissions:
