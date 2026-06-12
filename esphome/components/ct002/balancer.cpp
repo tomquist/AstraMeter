@@ -104,6 +104,8 @@ void BalancerConfig::clamp() {
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   clamp_v(efficiency_saturation_threshold, 0.0f, 1.0f);
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
+  if (pace_base_step < 0.0f) pace_base_step = 0.0f;
+  if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
 }
 
 // -------------------------------------------------------------------------
@@ -460,6 +462,7 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
     probe.requested_power_abs = std::fabs(desired_probe);
     const float reading = to_grid_reading(NetOutputW(desired_probe), probe_actual);
     state.last_target = reading;
+    state.last_intent = desired_probe;
     ReportMap cand_only;
     cand_only[candidate_id] = cand_it->second;
     return split_by_phase_(reading, cand_only);
@@ -485,6 +488,7 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
   const float reported = (sup_it != support_reports.end()) ? sup_it->second.power : 0.0f;
   const float reading = to_grid_reading(NetOutputW(desired), reported);
   state.last_target = reading;
+  state.last_intent = desired;
   return split_by_phase_(reading, support_reports, &backup_weights);
 }
 
@@ -529,13 +533,19 @@ std::array<float, 3> LoadBalancer::apply_min_dc_output_(
   else if (phase == "C") idx = 2;
   std::array<float, 3> out{0.0f, 0.0f, 0.0f};
   out[idx] = reading;
-  this->get_consumer_(*consumer_id).last_target = reading;
+  auto &mdc_state = this->get_consumer_(*consumer_id);
+  mdc_state.last_target = reading;
+  mdc_state.last_intent = eff_min;
   return out;
 }
 
 std::array<float, 3> LoadBalancer::steer_to_zero_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports) {
-  if (consumer_id) this->get_consumer_(*consumer_id).last_target = 0.0f;
+  if (consumer_id) {
+    auto &stz_state = this->get_consumer_(*consumer_id);
+    stz_state.last_target = 0.0f;
+    stz_state.last_intent = 0.0f;
+  }
   float reported = 0.0f;
   std::string phase = "A";
   if (consumer_id) {
@@ -616,6 +626,7 @@ std::array<float, 3> LoadBalancer::compute_target(
                                : 0.0f;
     const float reading = to_grid_reading(NetOutputW(mode.manual_value), reported);
     state->last_target = reading;
+    state->last_intent = mode.manual_value;
     return split_by_phase_(reading, active_reports);
   }
 
@@ -660,6 +671,10 @@ void LoadBalancer::detach_from_auto_pool(const std::string &consumer_id) {
 void LoadBalancer::reset_consumer(const std::string &consumer_id) {
   auto &state = this->get_consumer_(consumer_id);
   state.last_target.reset();
+  state.last_intent.reset();
+  state.pace_cap = 0.0f;
+  state.pace_sign = 0;
+  state.pace_prev_reported.reset();
   state.saturation_score = 0.0;
   const double grace =
       this->clock_() + std::min(static_cast<double>(this->saturation_grace_seconds_),
@@ -709,6 +724,11 @@ double LoadBalancer::get_saturation(const std::string &consumer_id) const {
 std::optional<float> LoadBalancer::get_last_target(const std::string &consumer_id) const {
   auto it = this->consumers_.find(consumer_id);
   return (it != this->consumers_.end()) ? it->second.last_target : std::optional<float>{};
+}
+
+std::optional<float> LoadBalancer::get_last_intent(const std::string &consumer_id) const {
+  auto it = this->consumers_.find(consumer_id);
+  return (it != this->consumers_.end()) ? it->second.last_intent : std::optional<float>{};
 }
 
 // -------------------------------------------------------------------------
@@ -784,8 +804,10 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     float total_fade = 0.0f;
     for (const auto &r : reports) total_fade += this->get_consumer_(r.first).fade_weight;
     const float desired = (total_fade > 0.0f) ? demand * fade_w / total_fade : 0.0f;
-    const float reading = to_grid_reading(NetOutputW(desired), reported);
+    float reading = to_grid_reading(NetOutputW(desired), reported);
+    reading = this->pace_reading_(*consumer_id, reading, reported);
     state.last_target = reading;
+    state.last_intent = desired;
     return split_by_phase_(reading, reports, &eff_part);
   }
 
@@ -843,9 +865,50 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     auto it = reports.find(*consumer_id);
     if (it != reports.end()) reported = it->second.power;
   }
-  const float reading = to_grid_reading(NetOutputW(reported + residual), reported);
-  if (consumer_id) this->get_consumer_(*consumer_id).last_target = reading;
+  float reading = to_grid_reading(NetOutputW(reported + residual), reported);
+  if (consumer_id) {
+    reading = this->pace_reading_(*consumer_id, reading, reported);
+    auto &auto_state = this->get_consumer_(*consumer_id);
+    auto_state.last_target = reading;
+    auto_state.last_intent = reported + residual;
+  }
   return split_by_phase_(reading, reports, &eff_part);
+}
+
+// Clamp the auto-path reading to the consumer's ramp-pacing cap (issue #458).
+// The battery integrates the reading with its own accelerating ramp, stepping
+// by at most min(GAIN[ramp], |reading|) per poll — so the reading we send is
+// the only bound on its per-poll movement once the ramp has accelerated. The
+// cap starts at pace_base_step, doubles toward pace_max_step only while the
+// battery demonstrably tracks the command, follows the error back down as it
+// shrinks, and resets to the base step on direction reversal. Only the
+// persistent auto loop is paced; probe / MIN_DC_OUTPUT floor / manual /
+// steer-to-zero paths bypass it (see balancer.py for the rationale).
+float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
+                                  float reported) {
+  const float base = this->cfg_.pace_base_step;
+  if (base <= 0.0f) return reading;
+  auto &state = this->get_consumer_(consumer_id);
+  // Reversals are paced too (bounds overshoot at zero crossings); consumers
+  // needing the unpaced control intent (issue #376 cross-talk attribution)
+  // read last_intent instead.
+  const int sign = (reading > 0.0f) ? 1 : (reading < 0.0f ? -1 : 0);
+  float cap = (state.pace_cap > 0.0f) ? state.pace_cap : base;
+  if (sign == 0 || sign != state.pace_sign) {
+    cap = base;
+  } else if (std::fabs(reading) > cap) {
+    float moved = 0.0f;
+    if (state.pace_prev_reported.has_value())
+      moved = (reported - *state.pace_prev_reported) * sign;
+    if (moved >= PACE_TRACKING_DELTA_W)
+      cap = std::min(cap * PACE_GROWTH_FACTOR, this->cfg_.pace_max_step);
+  } else {
+    cap = std::max(base, std::fabs(reading));
+  }
+  state.pace_cap = cap;
+  state.pace_sign = sign;
+  state.pace_prev_reported = reported;
+  return std::max(-cap, std::min(cap, reading));
 }
 
 float LoadBalancer::balance_correction_(const std::string &consumer_id,

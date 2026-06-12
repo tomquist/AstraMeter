@@ -164,12 +164,23 @@ class _Issue376Harness:
         """Aggregated *_dchrg_power for a phase (positive instructed power)."""
         if self.backend == "python":
             return self.ct002._collect_reports_by_phase()[phase]["dchrg_power"]
-        consumers = self._esphome.dump()["consumers"].values()
-        return sum(
-            c["last_instructed"]
-            for c in consumers
-            if c["phase"] == phase and c["last_instructed"] > 0
-        )
+        total = 0.0
+        for c in self._esphome.dump()["consumers"].values():
+            if c["phase"] != phase:
+                continue
+            power = c["last_instructed"]
+            # Mirror collect_reports_by_phase_'s issue #376/#458 intent filter:
+            # an involuntary output whose sign contradicts the control intent
+            # (e.g. PV passthrough at full SoC while told to charge) is zeroed,
+            # so it isn't broadcast as a discharge signal. The real emulator
+            # applies this; the dump exposes raw last_instructed + last_intent,
+            # so the helper must replicate it to match the Python backend.
+            intent = c["last_intent"]
+            if (intent <= 0 and power > 0) or (intent >= 0 and power < 0):
+                power = 0.0
+            if power > 0:
+                total += power
+        return total
 
     def last_instructed(self, mac: str) -> float:
         if self.backend == "python":
@@ -179,6 +190,16 @@ class _Issue376Harness:
         entry = self._esphome.dump()["consumers"].get(mac.lower())
         assert entry is not None, f"no consumer {mac} in dump"
         return entry["last_instructed"]
+
+    def last_intent(self, mac: str) -> float:
+        """The balancer's unpaced control intent (absolute net-output target)."""
+        if self.backend == "python":
+            intent = self.ct002._balancer.get_last_intent(mac.lower())
+            assert intent is not None
+            return intent
+        entry = self._esphome.dump()["consumers"].get(mac.lower())
+        assert entry is not None, f"no consumer {mac} in dump"
+        return entry["last_intent"]
 
 
 async def test_venus_e_keeps_charging_during_venus_d_pv_passthrough() -> None:
@@ -209,10 +230,13 @@ async def test_venus_e_keeps_charging_during_venus_d_pv_passthrough() -> None:
             f"[{h.backend}] A_dchrg_power should be 0 (Venus D was instructed to charge)"
         )
 
-        # 3. Sanity: Venus D *was* instructed to charge.
-        assert h.last_instructed(h.venus_d.mac) < 0.0, (
-            f"[{h.backend}] Venus D should have been instructed to charge "
-            f"(negative target on phase A)"
+        # 3. Sanity: Venus D *was* told to charge.  With ramp pacing the
+        #    per-poll instructed net power approaches the goal gradually (and
+        #    a full battery never gets there), so the unpaced control intent
+        #    is the signal that must be negative.
+        assert h.last_intent(h.venus_d.mac) < 0.0, (
+            f"[{h.backend}] Venus D's control intent should be charging "
+            f"(negative net-output target)"
         )
 
         # 4. Sanity: Venus D is in fact passing PV through to AC.

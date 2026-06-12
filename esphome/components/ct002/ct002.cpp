@@ -476,6 +476,16 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
       // consumer to be at, so PV passthrough doesn't masquerade as
       // discharge (issue #376).
       power = static_cast<float>(round_half_even(c.last_instructed_power));
+      // With ramp pacing the per-poll delta is capped, so the instructed
+      // net power can keep the sign of the battery's involuntary output
+      // while the control *intent* points the other way (the issue #376
+      // scenario). Filter by the balancer's recorded unpaced intent.
+      const auto intent = this->balancer_ ? this->balancer_->get_last_intent(kv.first)
+                                          : std::optional<float>{};
+      if (intent.has_value() &&
+          ((*intent <= 0.0f && power > 0.0f) || (*intent >= 0.0f && power < 0.0f))) {
+        power = 0.0f;
+      }
     } else {
       // Relay mode forwards each battery's *reported* power, exactly like
       // the real CT (issue #457). x/ABC consumers are never actively
@@ -589,6 +599,11 @@ std::vector<std::string> CT002Component::build_response_fields_(
     if (this->active_control_) {
       // Active control distributes a per-consumer target, so each battery
       // applies it as-is: report a count of 1 when the phase is active.
+      // Deliberately NOT the real per-phase count (issue #459): the battery
+      // divides the grid value by this count (relay share-split, g / nb);
+      // our value is already this battery's individual target, so a real
+      // count N would make every battery under-respond by a factor of N.
+      // The issue #455 relay-count fix applies to the relay branch only.
       if (phase_reports.active[bucket] || phase_power[i] != 0.0f) {
         fields[8 + i] = "1";
       }

@@ -9,9 +9,12 @@
 //
 // Commands (one per line, whitespace separated):
 //   cfg <fair> <min_eff> <rot_interval> <sat_threshold> <sat_alpha> \
-//       <sat_min_target> <sat_grace> <sat_enabled> [<min_dc_output>]
+//       <sat_min_target> <sat_grace> <sat_enabled> [<min_dc_output> \
+//       [<pace_base_step> <pace_max_step>]]
 //        (Re)create the balancer with the given config. Must be the first
-//        command. The trailing global MIN_DC_OUTPUT is optional (absent = 0).
+//        command. The trailing global MIN_DC_OUTPUT is optional (absent = 0);
+//        the trailing ramp-pacing pair is optional too (absent = the struct
+//        defaults, i.e. pacing on at 50/200).
 //        Saturation grace defaults are applied per consumer lazily.
 //   clock <seconds>           Set the mock clock to an absolute value.
 //   advance <seconds>         Advance the mock clock.
@@ -25,6 +28,7 @@
 //        per target call, matching how the Python harness drives it).
 //   sat <cid>                 Print the consumer's saturation score.
 //   last <cid>                Print the consumer's last_target (or "none").
+//   intent <cid>              Print the consumer's last_intent (or "none").
 //
 // Output: one line per target/sat/last command.
 
@@ -81,6 +85,14 @@ int main() {
       cfg.efficiency_rotation_interval = rot;
       cfg.efficiency_saturation_threshold = sat_threshold;
       cfg.min_dc_output = min_dc;
+      // Optional trailing ramp-pacing pair (absent = keep the struct
+      // defaults; assigning on a failed extraction would zero them and
+      // silently disable pacing).
+      float pace_base = 0.0f, pace_max = 0.0f;
+      if (in >> pace_base >> pace_max) {
+        cfg.pace_base_step = pace_base;
+        cfg.pace_max_step = pace_max;
+      }
       balancer = std::make_unique<LoadBalancer>(
           cfg, sat_alpha, sat_min_target, /*sat_decay=*/0.995f, sat_grace,
           /*sat_stall=*/60.0f, sat_enabled != 0, []() { return g_clock; }, nullptr);
@@ -117,6 +129,15 @@ int main() {
       const auto lt = balancer->get_last_target(cid);
       if (lt.has_value()) {
         std::cout << *lt << "\n";
+      } else {
+        std::cout << "none\n";
+      }
+    } else if (cmd == "intent") {
+      std::string cid;
+      in >> cid;
+      const auto li = balancer->get_last_intent(cid);
+      if (li.has_value()) {
+        std::cout << *li << "\n";
       } else {
         std::cout << "none\n";
       }

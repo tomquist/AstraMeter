@@ -106,6 +106,7 @@ TEST(LoadBalancer, ManualSetsTargetMinusReported) {
 TEST(LoadBalancer, AutoSplitsGridAcrossConsumersOnSamePhase) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;
+  cfg.pace_base_step = 0.0f;  // pin the raw split math, not ramp pacing
   auto b = make_balancer(cfg);
   ReportMap reports;
   reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f};
@@ -122,6 +123,7 @@ TEST(LoadBalancer, AutoSplitsGridAcrossConsumersOnSamePhase) {
 TEST(LoadBalancer, AutoSplitHonoursDistributionWeight) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;
+  cfg.pace_base_step = 0.0f;  // pin the raw split math, not ramp pacing
   auto b = make_balancer(cfg);
   ReportMap reports;
   // Weights 1.5 vs 1.0 → a ~60:40 split of the 500 W demand.
@@ -138,6 +140,7 @@ TEST(LoadBalancer, AutoSplitHonoursDistributionWeight) {
 TEST(LoadBalancer, ZeroWeightTakesNoShare) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;
+  cfg.pace_base_step = 0.0f;  // pin the raw split math, not ramp pacing
   auto b = make_balancer(cfg);
   ReportMap reports;
   // Weight 0 → battery parked at 0 W; the other absorbs the full demand.
@@ -152,6 +155,7 @@ TEST(LoadBalancer, ZeroWeightTakesNoShare) {
 TEST(LoadBalancer, AutoSplitAcrossPhases) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;
+  cfg.pace_base_step = 0.0f;  // pin the raw split math, not ramp pacing
   auto b = make_balancer(cfg);
   ReportMap reports;
   reports["a"] = ConsumerReport{"HMA-2", "A", 0.0f};
@@ -162,6 +166,46 @@ TEST(LoadBalancer, AutoSplitAcrossPhases) {
   EXPECT_FLOAT_EQ(out[0], 100.0f);
   EXPECT_FLOAT_EQ(out[1], 100.0f);
   EXPECT_FLOAT_EQ(out[2], 0.0f);
+}
+
+TEST(LoadBalancer, PaceReadingCapsGrowsAndResets) {
+  // Mirrors tests/test_balancer.py TestPaceReading: the auto-path reading is
+  // capped at pace_base_step, the cap doubles only while the battery tracks
+  // (moved >= 20 W toward the command), follows the error down, and resets
+  // on direction reversal.
+  BalancerConfig cfg;
+  cfg.fair_distribution = false;
+  cfg.pace_base_step = 50.0f;
+  cfg.pace_max_step = 200.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  // First poll: 600 W demand capped to the base step.
+  auto out = b.compute_target("a", ConsumerMode{}, reports, 600.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 50.0f);
+  // Battery did not move (startup delay): cap must stay at the base step.
+  out = b.compute_target("a", ConsumerMode{}, reports, 600.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 50.0f);
+  // Battery tracks (+50 W): cap doubles to 100.
+  reports["a"].power = 50.0f;
+  out = b.compute_target("a", ConsumerMode{}, reports, 550.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 100.0f);
+  // Tracks again (+100 W): cap doubles to 200 (the configured max).
+  reports["a"].power = 150.0f;
+  out = b.compute_target("a", ConsumerMode{}, reports, 450.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 200.0f);
+  // Tracks again, but the max holds.
+  reports["a"].power = 350.0f;
+  out = b.compute_target("a", ConsumerMode{}, reports, 250.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 200.0f);
+  // Error fits under the cap: passes through, cap follows it down.
+  reports["a"].power = 520.0f;
+  out = b.compute_target("a", ConsumerMode{}, reports, 80.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 80.0f);
+  // Direction reversal: cap resets to the base step.
+  reports["a"].power = 600.0f;
+  out = b.compute_target("a", ConsumerMode{}, reports, -300.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], -50.0f);
 }
 
 TEST(LoadBalancer, DcOnlyBatteryClampedToZeroUnderSurplus) {

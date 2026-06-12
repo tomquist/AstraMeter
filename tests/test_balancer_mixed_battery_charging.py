@@ -178,12 +178,15 @@ class B2500PassThrough:
 
 
 def _make_balancer(clock: _FakeClock) -> LoadBalancer:
-    """Balancer with CT002 defaults (matching the out-of-the-box config)."""
+    """Balancer with CT002 defaults, except ramp pacing disabled so the
+    assertions pin the raw share math (pacing has dedicated tests in
+    tests/test_balancer.py::TestPaceReading)."""
     return LoadBalancer(
         config=BalancerConfig(
             fair_distribution=True,
             balance_gain=0.2,
             balance_deadband=15,
+            pace_base_step=0,
             error_boost_threshold=150,
             error_boost_max=0.5,
             error_reduce_threshold=20,
@@ -637,7 +640,9 @@ def test_sustained_surplus_dc_only_balancer_never_asks_to_discharge() -> None:
 
 def _make_balancer_min_dc(clock: _FakeClock, min_dc_output: float) -> LoadBalancer:
     return LoadBalancer(
-        config=BalancerConfig(min_efficient_power=0, min_dc_output=min_dc_output),
+        config=BalancerConfig(
+            min_efficient_power=0, min_dc_output=min_dc_output, pace_base_step=0
+        ),
         saturation_alpha=0.15,
         saturation_min_target=20,
         saturation_decay_factor=0.995,

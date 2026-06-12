@@ -92,6 +92,8 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "error_reduce_threshold") this->balancer_cfg_.error_reduce_threshold = f;
   else if (key == "max_correction_per_step") this->balancer_cfg_.max_correction_per_step = f;
   else if (key == "max_target_step") this->balancer_cfg_.max_target_step = f;
+  else if (key == "pace_base_step") this->balancer_cfg_.pace_base_step = f;
+  else if (key == "pace_max_step") this->balancer_cfg_.pace_max_step = f;
   else if (key == "min_efficient_power") this->balancer_cfg_.min_efficient_power = f;
   else if (key == "probe_min_power") this->balancer_cfg_.probe_min_power = f;
   else if (key == "efficiency_rotation_interval") this->balancer_cfg_.efficiency_rotation_interval = f;
@@ -210,7 +212,7 @@ void CT002Component::handle_control_command_(const std::string &cmd,
   } else if (matched >= 1 && std::strcmp(verb, "dump") == 0) {
     // Serialize the internal state the Python e2e suites read directly, so
     // the black-box binary can be asserted on the same way. Pipe-delimited:
-    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>|...
+    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>,<last_intent>|...
     std::string s = "ok|smooth_target=";
     char num[48];
     std::snprintf(num, sizeof(num), "%.3f",
@@ -221,16 +223,20 @@ void CT002Component::handle_control_command_(const std::string &cmd,
       if (consumer.timestamp <= 0.0) continue;
       const double sat = this->balancer_ ? this->balancer_->get_saturation(kv.first) : 0.0;
       double last_target = 0.0;
+      double last_intent = 0.0;
       if (this->balancer_) {
         auto lt = this->balancer_->get_last_target(kv.first);
         if (lt.has_value()) last_target = *lt;
+        auto li = this->balancer_->get_last_intent(kv.first);
+        if (li.has_value()) last_intent = *li;
       }
       s += "|";
       s += kv.first;
-      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f", consumer.phase.c_str(),
+      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f,%.1f",
+                    consumer.phase.c_str(),
                     static_cast<double>(consumer.last_instructed_power), last_target, sat,
                     consumer.active ? 1 : 0, consumer.manual_enabled ? 1 : 0,
-                    static_cast<double>(consumer.power));
+                    static_cast<double>(consumer.power), last_intent);
       s += num;
     }
     reply = s;

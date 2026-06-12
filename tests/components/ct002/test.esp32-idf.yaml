@@ -68,7 +68,7 @@ ct002:
   balancer:
     fair_distribution: true
     balance_gain: 0.2
-    balance_deadband: 15
+    balance_deadband: 25
     min_efficient_power: 0
   saturation:
     enabled: true

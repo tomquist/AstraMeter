@@ -175,11 +175,13 @@ async def run_device(
         error_reduce_threshold = cfg.getint(
             ct_section, "ERROR_REDUCE_THRESHOLD", fallback=20
         )
-        balance_deadband = cfg.getint(ct_section, "BALANCE_DEADBAND", fallback=15)
+        balance_deadband = cfg.getint(ct_section, "BALANCE_DEADBAND", fallback=25)
         max_correction_per_step = cfg.getint(
             ct_section, "MAX_CORRECTION_PER_STEP", fallback=80
         )
         max_target_step = cfg.getint(ct_section, "MAX_TARGET_STEP", fallback=0)
+        pace_base_step = cfg.getint(ct_section, "PACE_BASE_STEP", fallback=50)
+        pace_max_step = cfg.getint(ct_section, "PACE_MAX_STEP", fallback=200)
         saturation_detection = cfg.getboolean(
             ct_section, "SATURATION_DETECTION", fallback=True
         )
@@ -261,6 +263,8 @@ async def run_device(
             balance_deadband=balance_deadband,
             max_correction_per_step=max_correction_per_step,
             max_target_step=max_target_step,
+            pace_base_step=pace_base_step,
+            pace_max_step=pace_max_step,
             saturation_detection=saturation_detection,
             saturation_alpha=saturation_alpha,
             min_target_for_saturation=min_target_for_saturation,

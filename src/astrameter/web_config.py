@@ -292,6 +292,8 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "ERROR_BOOST_MAX": {"type": "float"},
         "ERROR_REDUCE_THRESHOLD": {"type": "integer"},
         "MAX_TARGET_STEP": {"type": "integer"},
+        "PACE_BASE_STEP": {"type": "integer"},
+        "PACE_MAX_STEP": {"type": "integer"},
         "SATURATION_DETECTION": {"type": "boolean"},
         "SATURATION_ALPHA": {"type": "float", "min": 0, "max": 1},
         "MIN_TARGET_FOR_SATURATION": {"type": "integer"},

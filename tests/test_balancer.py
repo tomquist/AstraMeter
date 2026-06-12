@@ -5,6 +5,7 @@ import time
 from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
+    ConsumerMode,
     LoadBalancer,
     NetOutputW,
     SaturationTracker,
@@ -492,3 +493,67 @@ class TestLoadBalancerLifecycle:
     def test_get_last_target_unknown_consumer(self):
         lb = self._make_balancer()
         assert lb.get_last_target("unknown") is None
+
+
+class TestPaceReading:
+    """Ramp pacing for the auto path (issue #458) — mirrored by the C++
+    host test ``LoadBalancer.PaceReadingCapsGrowsAndResets``."""
+
+    def _make_balancer(self, **cfg_kwargs):
+        cfg_kwargs.setdefault("fair_distribution", False)
+        return LoadBalancer(
+            config=BalancerConfig(**cfg_kwargs),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+        )
+
+    def _auto(self, lb, reported, grid):
+        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": reported}}
+        return lb.compute_target(
+            "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), ()
+        )[0]
+
+    def test_caps_grows_when_tracking_and_resets_on_reversal(self):
+        lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
+        # First poll: a 600 W demand is capped to the base step.
+        assert self._auto(lb, 0, 600) == 50.0
+        # Battery did not move (startup delay): cap stays at the base step.
+        assert self._auto(lb, 0, 600) == 50.0
+        # Battery tracks (+50 W toward the command): cap doubles.
+        assert self._auto(lb, 50, 550) == 100.0
+        # Tracks again (+100 W): cap doubles to the configured max.
+        assert self._auto(lb, 150, 450) == 200.0
+        # Tracks again, but the max holds.
+        assert self._auto(lb, 350, 250) == 200.0
+        # Error fits under the cap: passes through, cap follows it down.
+        assert self._auto(lb, 520, 80) == 80.0
+        # Direction reversal: cap resets to the base step.
+        assert self._auto(lb, 600, -300) == -50.0
+
+    def test_zero_base_disables_pacing(self):
+        lb = self._make_balancer(pace_base_step=0)
+        assert self._auto(lb, 0, 600) == 600.0
+
+    def test_pace_max_clamped_to_at_least_base(self):
+        cfg = BalancerConfig(pace_base_step=80, pace_max_step=10)
+        assert cfg.pace_max_step == 80
+
+    def test_small_errors_pass_unclamped(self):
+        lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
+        assert self._auto(lb, 0, 30) == 30.0
+
+    def test_manual_and_inactive_paths_are_not_paced(self):
+        lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
+        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 600}}
+        manual = lb.compute_target(
+            "a", ConsumerMode("manual", 0.0), reports, 0, frozenset(), frozenset(), ()
+        )
+        assert manual[0] == -600.0
+        inactive = lb.compute_target(
+            "a", ConsumerMode("inactive"), reports, 0, frozenset(), frozenset(), ()
+        )
+        assert inactive[0] == -600.0

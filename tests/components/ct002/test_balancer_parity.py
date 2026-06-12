@@ -107,14 +107,24 @@ class PyDriver:
                 sat_grace,
                 sat_enabled,
             ) = parts[1:9]
-            # Optional trailing global MIN_DC_OUTPUT (absent = disabled).
+            # Optional trailing global MIN_DC_OUTPUT (absent = disabled) and
+            # ramp-pacing pair (absent = dataclass defaults, pacing on).
             min_dc = float(parts[9]) if len(parts) > 9 else 0.0
+            pace_kwargs = (
+                {
+                    "pace_base_step": float(parts[10]),
+                    "pace_max_step": float(parts[11]),
+                }
+                if len(parts) > 11
+                else {}
+            )
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
                 min_dc_output=min_dc,
+                **pace_kwargs,
             )
             self.balancer = LoadBalancer(
                 cfg,
@@ -165,6 +175,9 @@ class PyDriver:
         elif cmd == "last":
             lt = self.balancer.get_last_target(parts[1])
             self.out.append("none" if lt is None else f"{lt:.4f}")
+        elif cmd == "intent":
+            li = self.balancer.get_last_intent(parts[1])
+            self.out.append("none" if li is None else f"{li:.4f}")
 
 
 def _run_cpp(harness: Path, lines: list[str]) -> list[str]:
@@ -350,8 +363,11 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     sat_threshold = rng.choice([0.0, 0.3, 0.4])
     sat_enabled = rng.choice([0, 1])
     min_dc = rng.choice([0, 0, 25, 50])
+    # Vary ramp pacing too: off, defaults (omitted), constant cap, tight cap.
+    pace = rng.choice(["", "", " 0 0", " 50 200", " 50 50", " 30 120"])
     lines = [
-        f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} {min_dc}",
+        f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} "
+        f"{min_dc}{pace}",
         f"clock {rng.randint(1000, 9000)}",
     ]
     n_consumers = rng.randint(1, 3)
@@ -375,6 +391,7 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
         for cid in cids:
             lines.append(f"sat {cid}")
             lines.append(f"last {cid}")
+            lines.append(f"intent {cid}")
         lines.append(f"advance {rng.choice([0.5, 1, 2, 5, 30, 60])}")
     return lines
 

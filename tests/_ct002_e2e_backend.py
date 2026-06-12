@@ -138,7 +138,7 @@ class EsphomeSim:
         """Parse the `dump` reply into {smooth_target, consumers: {mac: {...}}}.
 
         Wire format: ok|smooth_target=<f>|<mac>,<phase>,<last_instructed>,
-        <last_target>,<sat>,<active>,<manual>,<reported>|..."""
+        <last_target>,<sat>,<active>,<manual>,<reported>,<last_intent>|..."""
         parts = self._cmd("dump").split("|")
         out: dict = {"smooth_target": 0.0, "consumers": {}}
         for tok in parts[1:]:
@@ -154,6 +154,7 @@ class EsphomeSim:
                     "active": f[5] == "1",
                     "manual": f[6] == "1",
                     "reported": float(f[7]),
+                    "last_intent": float(f[8]),
                 }
         return out
 

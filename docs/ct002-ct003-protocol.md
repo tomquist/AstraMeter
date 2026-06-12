@@ -347,6 +347,14 @@ the constants below are the literal values used.
 below run once per gate, which is why the response visibly ramps rather than
 snapping.
 
+> **AstraMeter note (issue #459).** The share-split is why AstraMeter's
+> *active control* reports `*_chrg_nb = 1` and must keep doing so: it sends
+> each battery an **individual** target in the phase-power field, so a real
+> count `N` would make every battery divide its already-individual target by
+> `N` and under-respond by that factor. Only *relay mode*
+> (`ACTIVE_CONTROL = False`), which forwards the per-phase **aggregate**,
+> reports the real count so the batteries do this `g / nb` split themselves.
+
 ```text
 # 1. share split across batteries on the same phase/bucket
 g = g / nb                         # nb >= 1

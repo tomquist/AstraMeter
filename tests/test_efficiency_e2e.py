@@ -413,7 +413,6 @@ class TestEfficiencyE2E:
         try:
             await h.step_until(lambda: h.active_battery_count() == 1)
             await h.step(10)
-            active_before = h.active_battery_indexes()[0]
 
             h.clock.advance(8)
 
@@ -429,8 +428,21 @@ class TestEfficiencyE2E:
                 await h.step()
                 grid_errors.append(abs(h.grid_total()))
 
-            assert abs(h.battery_powers()[active_before]) > 100, (
-                f"Previous battery should still cover demand. Powers: {h.battery_powers()}"
+            # Coverage stays with the pool throughout the slow-poll probe: the
+            # demand is served either by the previous battery (probe still
+            # ramping / not yet committed, as on the Python backend here) or by
+            # the candidate once it has cleanly taken over. Ramp pacing (#458)
+            # lets the candidate ramp up without being whipsawed into a charge
+            # transient, so on the C++ backend the probe now *commits* within
+            # the window and the candidate covers the full load — previously it
+            # was driven to charge and the probe was rejected, leaving the old
+            # battery active. Either outcome keeps the demand covered, which is
+            # what this test guards (with the bounded/settled grid asserts
+            # below), so assert pool-level coverage rather than a specific unit.
+            total_discharge = sum(p for p in h.battery_powers() if p > 0)
+            assert total_discharge > 100, (
+                f"Demand should remain covered by the pool. "
+                f"Powers: {h.battery_powers()}"
             )
             # No runaway: the error stays bounded (a true coverage failure grows
             # without bound, like the stale-meter lockup) ...
