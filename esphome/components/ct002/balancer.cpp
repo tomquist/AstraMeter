@@ -1068,6 +1068,18 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
   if (enter_limiting && n > 1) {
     slots = std::max<size_t>(
         1, std::min<size_t>(n - 1, static_cast<size_t>(abs_target / cfg.min_efficient_power)));
+    if (was_limiting && prev_slots >= 1 && prev_slots < slots) {
+      // Growing the active set while limiting takes the same 20% margin as
+      // exiting limiting entirely.  Without it, demand sitting at an exact
+      // multiple of min_efficient_power (e.g. ~300 W base load with a 150 W
+      // floor) toggles a unit active/deprioritized on every meter-noise tick,
+      // keeping the fade EMA permanently mid-transition and the pool hunting
+      // (issue #469).  Shrinking stays immediate, mirroring how entering
+      // limiting is immediate.
+      const size_t grown = static_cast<size_t>(
+          abs_target / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR));
+      slots = std::max(prev_slots, std::min<size_t>(n - 1, grown));
+    }
   } else {
     slots = n;
   }
