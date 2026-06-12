@@ -23,6 +23,17 @@ CI runs the same steps (see `.github/workflows/ci.yml`).
 
 `esphome/components/ct002/` is a C++ mirror of the Python CT002 stack. Any change to shared behavior must land on **both** sides in the same change. See `CONTRIBUTING.md` for the file mapping and what has no C++ counterpart. Verify with `uv run pytest tests/components/ct002/`.
 
+## Steering-quality evaluation (run when touching balancer behavior)
+
+`uv run python -m astrameter.simulator.evaluation` simulates hours of
+realistic household activity against the firmware-accurate battery plant and
+reports reaction/oscillation/energy metrics per scenario. When changing
+`src/astrameter/ct002/balancer.py` (or anything else in the active-control
+loop), capture a baseline first (`--json base.json` on the unchanged code),
+re-run after the change, and compare with `--input head.json --compare
+base.json`. CI runs the same suite on PR base + head (job `steering-eval`)
+and posts the comparison as a sticky PR comment.
+
 ## Changelog
 
 For user-facing work on a branch, keep **one bullet under `## Next`** that summarizes the **overall** outcome of that branch. **Add** it when you first document the change; on **later iterations** on the same branch, **edit that same bullet** if the scope or wording shifts—do **not** append extra bullets for each follow-up. Skip `CHANGELOG.md` entirely when nothing users would notice changes (refactors, tests-only, etc.).
