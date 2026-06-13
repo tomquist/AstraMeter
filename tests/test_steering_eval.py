@@ -104,6 +104,8 @@ def test_scenario_registry_shape():
     assert "two_venus_solar/eff" in scenarios
     assert "mixed_cadence_solar/fair" in scenarios
     assert "mixed_cadence_solar/eff" in scenarios
+    # Washing-machine spike-absorption stress (issue #473).
+    assert "single_venus_washer" in scenarios
     assert scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"] > 0
     for sc in scenarios.values():
         assert sc.duration_s > 0 and sc.batteries
@@ -220,13 +222,36 @@ def test_metric_glossary_covers_every_reported_metric():
     assert glossary_keys == _REPORT_METRICS
 
 
-@pytest.mark.parametrize("name", ["single_venus_steps"])
+@pytest.mark.parametrize("name", ["single_venus_steps", "single_venus_washer"])
 def test_full_scenario_definitions_build(name):
     import random
 
     sc = build_scenarios()[name]
     events = sc.build_events(random.Random(1))
     assert events and all(e.at >= 0 for e in events)
+
+
+def test_washer_scenario_measures_per_spike_absorption():
+    """The washing-machine scenario (issue #473) must expose per-spike
+    absorption: every motor edge is a labelled step the metrics measure, so a
+    balancer change's effect on spike handling shows up in settle/overshoot
+    and the oscillation metrics. We assert the scenario *measures* the spikes,
+    not a particular (currently poor) score — improving the balancer should
+    drive these down, which is the whole point of the scenario."""
+    sc = build_scenarios()["single_venus_washer"]
+    res = asyncio.run(run_scenario(sc, seed=1))
+    # The drum tumbles many times; each edge is a measurable step event.
+    assert res["events_measured"] > 10
+    # Per-spike reaction and oscillation are quantified (>= 0, populated).
+    for key in (
+        "settle_mean_s",
+        "settle_p95_s",
+        "unsettled_events",
+        "overshoot_max_w",
+        "band_crossings_per_h",
+        "steady_rms_w",
+    ):
+        assert res[key] >= 0, key
 
 
 class TestRampPacingRegression:
