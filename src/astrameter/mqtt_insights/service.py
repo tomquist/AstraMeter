@@ -103,6 +103,7 @@ class MqttInsightsService:
         self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
         self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
+        self._active_control_handlers: dict[str, Callable[[bool], None]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
         self._marstek_bindings: dict[str, MarstekMqttBinding] = {}
@@ -177,6 +178,11 @@ class MqttInsightsService:
     ) -> None:
         self._rotation_handlers[device_id] = handler
 
+    def register_active_control_handler(
+        self, device_id: str, handler: Callable[[bool], None]
+    ) -> None:
+        self._active_control_handlers[device_id] = handler
+
     def unregister_handlers(self, device_id: str) -> None:
         """Remove all command handlers for a device (e.g. on device stop)."""
         self._active_handlers.pop(device_id, None)
@@ -185,6 +191,7 @@ class MqttInsightsService:
         self._distribution_weight_handlers.pop(device_id, None)
         self._min_dc_output_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
+        self._active_control_handlers.pop(device_id, None)
 
     # ── Marstek MQTT responder ────────────────────────────────────────
 
@@ -846,6 +853,25 @@ class MqttInsightsService:
                     logger.exception("Rotation handler error for device %s", device_id)
             else:
                 logger.debug("No rotation handler for device %s", device_id)
+        if "active_control" in cmd:
+            value = cmd["active_control"]
+            if not isinstance(value, bool):
+                logger.warning(
+                    "Invalid active_control value for device %s: %r",
+                    device_id,
+                    value,
+                )
+                return
+            ac_handler = self._active_control_handlers.get(device_id)
+            if ac_handler:
+                try:
+                    ac_handler(value)
+                except Exception:
+                    logger.exception(
+                        "Active control handler error for device %s", device_id
+                    )
+            else:
+                logger.debug("No active_control handler for device %s", device_id)
 
     # ── Powermeter health ─────────────────────────────────────────────
 

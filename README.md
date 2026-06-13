@@ -625,6 +625,13 @@ live from Home Assistant:
   shown for DC batteries where it has an effect (e.g. the Marstek B2500); overrides
   the global setting for that battery.
 
+The CT device itself also exposes a config switch:
+
+- **Active Control** — on (default) lets the emulator smooth the grid reading and
+  compute per-battery targets; turn it **off** to fall back to relay mode (the raw
+  per-phase aggregate is forwarded and the batteries decide), the live equivalent of
+  **ACTIVE_CONTROL = False**.
+
 Each of these controls publishes its set-command **retained**, so Home
 Assistant restores your values across an AstraMeter restart without any extra
 configuration.
@@ -651,7 +658,8 @@ Replies follow the usual `hame_energy/…` / `marstek_energy/…` App/device top
 - **Active switch**: pause/resume individual consumers (targets zeroed when inactive)
 
 **Published entities** (per CT002 device):
-- Smooth target, active control status, consumer count
+- Smooth target, consumer count, and an **Active Control** switch (on by default;
+  turn off for relay mode)
 
 **Published entities** (per Shelly battery):
 - Grid power (L1/L2/L3/total), active status, last seen

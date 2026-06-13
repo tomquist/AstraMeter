@@ -342,15 +342,24 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     st["state_topic"] = state_topic;
     st["value_template"] = "{{ value_json.smooth_target }}";
 
+    // Active Control switch — on (default) lets the emulator compute per-battery
+    // targets; off falls back to relay mode. The command is published retained
+    // to the device-level command topic so an "off" choice survives a restart
+    // (mirrors discovery.py).
     JsonObject ac = components["active_control"].to<JsonObject>();
-    ac["platform"] = "binary_sensor";
+    ac["platform"] = "switch";
     ac["unique_id"] = uid_prefix + "_active_control";
     ac["name"] = "Active Control";
-    ac["device_class"] = "running";
     ac["state_topic"] = state_topic;
     ac["value_template"] = "{{ value_json.active_control }}";
-    ac["payload_on"] = "True";
-    ac["payload_off"] = "False";
+    ac["command_topic"] = base_topic + "/ct002/" + device_id + "/set";
+    ac["command_template"] = "{\"active_control\": {{ \"true\" if value == \"ON\" else \"false\" }}}";
+    ac["payload_on"] = "ON";
+    ac["payload_off"] = "OFF";
+    ac["state_on"] = "True";
+    ac["state_off"] = "False";
+    ac["retain"] = true;
+    ac["entity_category"] = "config";
 
     JsonObject cc = components["consumer_count"].to<JsonObject>();
     cc["platform"] = "sensor";
