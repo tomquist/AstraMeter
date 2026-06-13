@@ -231,26 +231,22 @@ def test_full_scenario_definitions_build(name):
     assert events and all(e.at >= 0 for e in events)
 
 
-def test_washer_scenario_measures_per_spike_absorption():
-    """The washing-machine scenario (issue #473) must expose per-spike
-    absorption: every motor edge is a labelled step the metrics measure, so a
-    balancer change's effect on spike handling shows up in settle/overshoot
-    and the oscillation metrics. We assert the scenario *measures* the spikes,
-    not a particular (currently poor) score — improving the balancer should
-    drive these down, which is the whole point of the scenario."""
+def test_washer_scenario_reproduces_spike_hunting():
+    """The washing-machine scenario (issue #473) reproduces the field signature:
+    a ~16 s drum-tumble rhythm the controller cannot keep up with, so the grid
+    hunts instead of holding zero. The scenario is scored on the steady-state
+    oscillation/tracking aggregates (a ~16 s-periodic disturbance never holds
+    the settle band), and a balancer fix should drive these down — that's the
+    point of the baseline. We assert it *reproduces* hunting, not a specific
+    (currently poor) score."""
     sc = build_scenarios()["single_venus_washer"]
     res = asyncio.run(run_scenario(sc, seed=1))
-    # The drum tumbles many times; each edge is a measurable step event.
-    assert res["events_measured"] > 10
-    # Per-spike reaction and oscillation are quantified (>= 0, populated).
-    for key in (
-        "settle_mean_s",
-        "settle_p95_s",
-        "unsettled_events",
-        "overshoot_max_w",
-        "band_crossings_per_h",
-        "steady_rms_w",
-    ):
+    # The periodic drum disturbance makes the grid oscillate and mistrack.
+    assert res["band_crossings_per_h"] > 0
+    assert res["steady_rms_w"] > 0
+    assert res["mean_abs_grid_w"] > 0
+    # All reported metrics are populated and non-negative.
+    for key in _REPORT_METRICS:
         assert res[key] >= 0, key
 
 

@@ -611,54 +611,56 @@ _HOUSEHOLD_LOADS = [
     Load("dishwasher", 1100.0, "A"),
 ]
 
-# Washing-machine drum motor: a single ~330 W load that the main-wash tumble
-# switches on and off.  Amplitude and base load are sized to reproduce the
-# field report in issue #473 — a steady ~500 W house with the grid swinging
-# roughly -90 W (export) to +170 W (import) each time the motor toggled.
-_WASHER_LOADS = [Load("washer_motor", 330.0, "A")]
+# Washing-machine drum motor: a single ~200 W load the main-wash tumble runs,
+# briefly pauses, and restarts.  Amplitude and base load are sized to reproduce
+# the field report in issue #473 — a steady ~500 W house with the grid spiking
+# a couple hundred watts each time the drum motor restarts.  Note the modelled
+# pause drops the full running load, so the export dip is roughly as deep as
+# the import spike; the field trace was asymmetric (a shallower ~-90 W dip vs a
+# ~+170 W spike) because a real motor restart draws a brief inrush above its
+# running power, which this single on/off load does not model.
+_WASHER_LOADS = [Load("washer_motor", 200.0, "A")]
 
 
 def _washer_cycle(rng: random.Random, duration: float) -> list[Event]:
-    """Main-wash drum tumble: the motor switches on/off on a fixed rhythm.
+    """Main-wash drum tumble: the motor runs, briefly pauses, and restarts.
 
-    This reproduces the field-reported washing-machine signature (issue #473):
-    a ~330 W load that toggles every ~16 s, each edge a step the controller
-    must absorb fast.  In the wild a single Venus took 3-6 s to swallow each
-    edge, so the grid spiked hundreds of watts before recovering.
+    This reproduces the field-reported washing-machine signature (issue #473).
+    A real drum tumbles in one direction for ~12 s, pauses ~4 s, then reverses,
+    so the grid trace is *not* a 50/50 square wave: the motor runs steadily
+    (grid calm once the battery has caught up), then a short pause drops the
+    load (a brief **export dip** as the battery is still discharging), then the
+    restart re-applies it (an **import spike** that decays over several
+    seconds), then calm again — the dip → spike → ~10 s calm rhythm seen in the
+    log, repeating every ~16 s.
 
-    Each edge is a *labelled* step, and the on/off dwell (~16 s) leaves the
-    settle window room to re-enter and hold the ±25 W band — so
-    ``settle_mean_s`` reads the per-spike absorption time directly and
-    ``unsettled_events`` counts spikes not absorbed within ~6 s.  A balancer
-    that handles these spikes well must drive ``settle_mean_s`` well under the
-    unacceptable 3-6 s the field controller showed.
+    The events are unlabelled on purpose: a ~16 s-periodic disturbance never
+    holds the ±25 W band for the settle hold time, so this scenario is scored
+    on the steady-state oscillation/tracking aggregates (``steady_rms_w``,
+    ``mean_abs_grid_w``, ``band_crossings_per_h``, ``battery_travel_w_per_h``)
+    rather than per-step settling. A balancer that absorbs the spikes quickly
+    drives those down; the field controller's 3-6 s recovery keeps them high.
     """
     events: list[Event] = []
-    on_dwell = 16.0
-    off_dwell = 16.0
+    period = 16.0
+    pause = 3.0
     start = duration * 0.15
     end = duration * 0.85
-    t = start
-    motor_on = False
-    while t < end:
-        motor_on = not motor_on
-        # Small deterministic per-edge jitter so the rhythm doesn't phase-lock
+    # Motor on for the whole wash block; the rhythm is the brief pauses.
+    events.append(Event(at=start, apply=_set_load("washer_motor", True)))
+    t = start + (period - pause)
+    while t + pause < end:
+        # Small deterministic per-pause jitter so the rhythm doesn't phase-lock
         # to the 1 s meter cadence (and different seeds probe different
-        # alignments), without ever reordering the on/off sequence.
-        at = max(1.0, t + rng.uniform(-0.5, 0.5))
+        # alignments), without ever reordering the pause/restart pair.
+        j = rng.uniform(-0.5, 0.5)
+        events.append(Event(at=max(1.0, t + j), apply=_set_load("washer_motor", False)))
         events.append(
-            Event(
-                at=at,
-                label="tumble_on" if motor_on else "tumble_off",
-                apply=_set_load("washer_motor", motor_on),
-            )
+            Event(at=max(1.0, t + pause + j), apply=_set_load("washer_motor", True))
         )
-        t += on_dwell if motor_on else off_dwell
-    if motor_on:
-        # Always leave the program with the motor off.
-        events.append(
-            Event(at=end, label="tumble_off", apply=_set_load("washer_motor", False))
-        )
+        t += period
+    # Always leave the program with the motor off.
+    events.append(Event(at=end, apply=_set_load("washer_motor", False)))
     return events
 
 
@@ -743,8 +745,9 @@ def build_scenarios() -> dict[str, Scenario]:
         Scenario(
             name="single_venus_washer",
             description=(
-                "One Venus, washing-machine drum tumble (~330 W toggling "
-                "every ~16 s) — per-spike absorption stress (issue #473)"
+                "One Venus, washing-machine drum tumble (~200 W motor "
+                "pausing/restarting every ~16 s) — spike-absorption stress "
+                "(issue #473)"
             ),
             batteries=[_VENUS],
             duration_s=dur_washer,
