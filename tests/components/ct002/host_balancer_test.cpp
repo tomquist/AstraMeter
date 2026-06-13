@@ -171,8 +171,10 @@ TEST(LoadBalancer, AutoSplitAcrossPhases) {
 TEST(LoadBalancer, PaceReadingCapsGrowsAndResets) {
   // Mirrors tests/test_balancer.py TestPaceReading: the auto-path reading is
   // capped at pace_base_step, the cap doubles only while the battery tracks
-  // (moved >= 20 W toward the command), follows the error down, and resets
-  // on direction reversal.
+  // (moved >= PACE_TRACKING_DELTA_W toward the command), follows the error
+  // down, and resets on direction reversal. The frozen test clock makes the
+  // time-based law reduce to per-poll semantics (dt = 0 -> one reference
+  // period).
   BalancerConfig cfg;
   cfg.fair_distribution = false;
   cfg.pace_base_step = 50.0f;

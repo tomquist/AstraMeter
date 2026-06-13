@@ -19,11 +19,17 @@
 namespace esphome {
 namespace ct002 {
 
-// Ramp pacing (issue #458): the pacing cap doubles per poll, and only when
-// the battery's reported output moved at least PACE_TRACKING_DELTA_W in the
-// commanded direction since the previous paced poll. Mirrors balancer.py.
-inline constexpr float PACE_TRACKING_DELTA_W = 20.0f;
+// Ramp pacing (issue #458): the pacing cap doubles per reference second, and
+// only when the battery's reported output moved at least
+// PACE_TRACKING_DELTA_W (scaled by the consumer's poll cadence) in the
+// commanded direction since the previous paced poll. The threshold sits
+// below the battery firmware's guaranteed 10 W minimum step on a constant
+// reading (it would deadlock a step response otherwise), and the caps are W
+// per PACE_REFERENCE_DT so fast pollers cannot integrate per-poll readings
+// into a higher W/s slew. Mirrors balancer.py.
+inline constexpr float PACE_TRACKING_DELTA_W = 5.0f;
 inline constexpr float PACE_GROWTH_FACTOR = 2.0f;
+inline constexpr double PACE_REFERENCE_DT = 1.0;
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
@@ -116,6 +122,7 @@ struct BalancerConsumerState {
   float pace_cap{0.0f};
   int pace_sign{0};
   std::optional<float> pace_prev_reported{};
+  double pace_last_at{0.0};
   // Long-running EMA accumulator — double prevents small-bias drift on
   // steady signals over hours of runtime.
   double saturation_score{0.0};
@@ -232,7 +239,7 @@ class LoadBalancer {
                                             std::array<float, 3> result);
 
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
-                                      const ReportMap &reports);
+                                      const ReportMap &reports, bool paced = false);
   static std::array<float, 3> split_by_phase_(
       float target, const ReportMap &reports,
       const std::unordered_map<std::string, float> *weights = nullptr);

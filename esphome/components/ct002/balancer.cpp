@@ -539,13 +539,12 @@ std::array<float, 3> LoadBalancer::apply_min_dc_output_(
   return out;
 }
 
+// With paced=true the wind-down reading goes through the ramp-pacing cap:
+// the battery firmware applies a charge-direction reading in full in one
+// cycle, so an unpaced wind-down dumps a discharging consumer's whole output
+// as a one-poll step disturbance on the pool (see balancer.py).
 std::array<float, 3> LoadBalancer::steer_to_zero_(
-    const std::optional<std::string> &consumer_id, const ReportMap &reports) {
-  if (consumer_id) {
-    auto &stz_state = this->get_consumer_(*consumer_id);
-    stz_state.last_target = 0.0f;
-    stz_state.last_intent = 0.0f;
-  }
+    const std::optional<std::string> &consumer_id, const ReportMap &reports, bool paced) {
   float reported = 0.0f;
   std::string phase = "A";
   if (consumer_id) {
@@ -555,7 +554,13 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
       phase = it->second.phase.empty() ? "A" : it->second.phase;
     }
   }
-  const float reading = to_grid_reading(NetOutputW(0.0f), reported);
+  float reading = to_grid_reading(NetOutputW(0.0f), reported);
+  if (paced && consumer_id) reading = this->pace_reading_(*consumer_id, reading, reported);
+  if (consumer_id) {
+    auto &stz_state = this->get_consumer_(*consumer_id);
+    stz_state.last_target = paced ? reading : 0.0f;
+    stz_state.last_intent = 0.0f;
+  }
   if (reading == 0.0f) return {0.0f, 0.0f, 0.0f};
   for (auto &c : phase) c = static_cast<char>(std::toupper(c));
   std::array<float, 3> result{0.0f, 0.0f, 0.0f};
@@ -675,6 +680,7 @@ void LoadBalancer::reset_consumer(const std::string &consumer_id) {
   state.pace_cap = 0.0f;
   state.pace_sign = 0;
   state.pace_prev_reported.reset();
+  state.pace_last_at = 0.0;
   state.saturation_score = 0.0;
   const double grace =
       this->clock_() + std::min(static_cast<double>(this->saturation_grace_seconds_),
@@ -789,7 +795,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   }
 
   if (consumer_id && charge_blind.count(*consumer_id)) {
-    return this->steer_to_zero_(consumer_id, reports);
+    return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
   }
 
   if (any_fading && consumer_id) {
@@ -797,7 +803,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     const float fade_w = state.fade_weight;
     auto it = reports.find(*consumer_id);
     const float reported = (it != reports.end()) ? it->second.power : 0.0f;
-    if (fade_w == 0.0f) return this->steer_to_zero_(consumer_id, reports);
+    if (fade_w == 0.0f) return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
     float total_battery = 0.0f;
     for (const auto &r : reports) total_battery += r.second.power;
     const float demand = total_battery + grid_total;
@@ -817,7 +823,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   if (!faded_adjustments.empty() && consumer_id) {
     auto it = faded_adjustments.find(*consumer_id);
     if (it != faded_adjustments.end() && it->second == 0.0f) {
-      return this->steer_to_zero_(consumer_id, reports);
+      return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
     }
   }
 
@@ -882,33 +888,58 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
 // cap starts at pace_base_step, doubles toward pace_max_step only while the
 // battery demonstrably tracks the command, follows the error back down as it
 // shrinks, and resets to the base step on direction reversal. Only the
-// persistent auto loop is paced; probe / MIN_DC_OUTPUT floor / manual /
-// steer-to-zero paths bypass it (see balancer.py for the rationale).
+// The auto-pool paths are paced (regulation loop, fade transition, and the
+// deprioritized/charge-blind wind-down to zero); probe / MIN_DC_OUTPUT floor /
+// manual / inactive steer-to-zero bypass it (see balancer.py for the
+// rationale). Caps are W per PACE_REFERENCE_DT; the per-poll clamp scales
+// with the consumer's observed inter-poll time, clamped at 1.0.
 float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
                                   float reported) {
   const float base = this->cfg_.pace_base_step;
   if (base <= 0.0f) return reading;
   auto &state = this->get_consumer_(consumer_id);
+  const double now = this->clock_();
+  double dt = (state.pace_last_at > 0.0) ? now - state.pace_last_at : 0.0;
+  if (dt <= 0.0) {
+    // First paced poll, a non-advancing clock, or a backwards jump: assume
+    // one reference period rather than starving the clamp.
+    dt = PACE_REFERENCE_DT;
+  }
+  state.pace_last_at = now;
+  const float dt_ratio = static_cast<float>(std::min(1.0, dt / PACE_REFERENCE_DT));
   // Reversals are paced too (bounds overshoot at zero crossings); consumers
   // needing the unpaced control intent (issue #376 cross-talk attribution)
   // read last_intent instead.
   const int sign = (reading > 0.0f) ? 1 : (reading < 0.0f ? -1 : 0);
   float cap = (state.pace_cap > 0.0f) ? state.pace_cap : base;
+  // Floored at the base step: hysteresis-regulator devices (B2500) need a
+  // minimum reading to clear their input hold window at all; the cadence
+  // scale still bounds the grown cap (mirrors balancer.py).
+  float limit = std::max(base, cap * dt_ratio);
   if (sign == 0 || sign != state.pace_sign) {
     cap = base;
-  } else if (std::fabs(reading) > cap) {
+  } else if (std::fabs(reading) > limit) {
     float moved = 0.0f;
     if (state.pace_prev_reported.has_value())
       moved = (reported - *state.pace_prev_reported) * sign;
-    if (moved >= PACE_TRACKING_DELTA_W)
-      cap = std::min(cap * PACE_GROWTH_FACTOR, this->cfg_.pace_max_step);
+    // The tracking threshold and growth rate scale with the same cadence
+    // ratio: a fast poller is expected to have moved less between polls,
+    // and its cap doubles per reference second, not per poll.
+    if (moved >= PACE_TRACKING_DELTA_W * dt_ratio)
+      cap = std::min(cap * std::pow(PACE_GROWTH_FACTOR, dt_ratio), this->cfg_.pace_max_step);
   } else {
-    cap = std::max(base, std::fabs(reading));
+    cap = std::max(base, std::fabs(reading) / dt_ratio);
   }
+  // Enforce the pace_max_step contract: the grow branch already clamps, but the
+  // else branch back-computes cap as fabs(reading) / dt_ratio, which a fast poll
+  // (small dt_ratio) can inflate past the max — and a later normal-cadence poll
+  // would then slew beyond pace_max_step.
+  cap = std::min(cap, this->cfg_.pace_max_step);
   state.pace_cap = cap;
   state.pace_sign = sign;
   state.pace_prev_reported = reported;
-  return std::max(-cap, std::min(cap, reading));
+  limit = std::max(base, cap * dt_ratio);
+  return std::max(-limit, std::min(limit, reading));
 }
 
 float LoadBalancer::balance_correction_(const std::string &consumer_id,
@@ -1068,6 +1099,18 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
   if (enter_limiting && n > 1) {
     slots = std::max<size_t>(
         1, std::min<size_t>(n - 1, static_cast<size_t>(abs_target / cfg.min_efficient_power)));
+    if (was_limiting && prev_slots >= 1 && prev_slots < slots) {
+      // Growing the active set while limiting takes the same 20% margin as
+      // exiting limiting entirely.  Without it, demand sitting at an exact
+      // multiple of min_efficient_power (e.g. ~300 W base load with a 150 W
+      // floor) toggles a unit active/deprioritized on every meter-noise tick,
+      // keeping the fade EMA permanently mid-transition and the pool hunting
+      // (issue #469).  Shrinking stays immediate, mirroring how entering
+      // limiting is immediate.
+      const size_t grown = static_cast<size_t>(
+          abs_target / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR));
+      slots = std::max(prev_slots, std::min<size_t>(n - 1, grown));
+    }
   } else {
     slots = n;
   }
