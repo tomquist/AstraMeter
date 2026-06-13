@@ -130,6 +130,12 @@ class Scenario:
     # refreshed at this cadence (matching a typical ~1 s powermeter poll /
     # THROTTLE_INTERVAL) while the metrics see the true instantaneous grid.
     meter_interval_s: float = 1.0
+    # Transport/measurement delay on top of the refresh interval: the value the
+    # controller reads reflects the true grid as it was this many seconds ago
+    # (a P1 dongle / HA push sensor measures, then takes time to arrive). Acting
+    # on a stale reading is a classic driver of sustained oscillation, so this
+    # is what reproduces a loop that hunts instead of settling. 0 = no delay.
+    meter_latency_s: float = 0.0
 
 
 @dataclass
@@ -257,15 +263,32 @@ async def run_scenario(
     samples: list[_Sample] = []
     # The controller reads the meter at the meter's own cadence (stale in
     # between, like a real powermeter poll); metrics record the true grid.
+    # ``grid_history`` keeps recent true readings so a refresh can serve the
+    # value as it was ``meter_latency_s`` ago (transport/measurement delay).
     meter_cache: dict[str, float] = {}
     meter_read_at = [-math.inf]
+    grid_history: list[tuple[float, dict[str, float]]] = []
 
     async def before_send(_addr, _fields=None, _consumer_id=None):
         now = clock() - _EPOCH
         true_grid = powermeter.compute_grid()
+        grid_history.append((now, true_grid))
+        # Drop history older than what the delayed read can still need.
+        horizon = now - scenario.meter_latency_s - scenario.meter_interval_s - 1.0
+        while len(grid_history) > 1 and grid_history[0][0] < horizon:
+            grid_history.pop(0)
         if now - meter_read_at[0] >= scenario.meter_interval_s:
+            # Serve the reading as it was meter_latency_s ago (zero-order hold
+            # on the history: the most recent sample at or before target_t).
+            target_t = now - scenario.meter_latency_s
+            delayed = grid_history[0][1]
+            for ht, hg in grid_history:
+                if ht <= target_t:
+                    delayed = hg
+                else:
+                    break
             meter_cache.clear()
-            meter_cache.update(true_grid)
+            meter_cache.update(delayed)
             meter_read_at[0] = now
         samples.append(
             _Sample(
@@ -436,6 +459,16 @@ def _compute_metrics(
     steady_rms = math.sqrt(sum(g * g for g in steady) / len(steady)) if steady else 0.0
     mean_abs = sum(abs(s.grid) for s in samples) / len(samples) if samples else 0.0
 
+    # --- sustained oscillation amplitude ---
+    # The robust peak-to-peak grid swing (p95 - p5) over the whole run. Unlike
+    # the step-response metrics (settle/overshoot, which only fire on labelled
+    # load steps and read 0 for a continuously hunting loop), this is non-zero
+    # for *any* sustained oscillation and grades it directly: a loop that holds
+    # zero scores ~0, one that constantly swings ±X scores ~2X. Percentiles (not
+    # min/max) keep a single brief transient from dominating.
+    all_grid = [s.grid for s in samples]
+    grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
+
     # --- energy & battery travel ---
     import_wh = export_wh = avoid_import_wh = avoid_export_wh = 0.0
     travel_w = 0.0
@@ -483,6 +516,7 @@ def _compute_metrics(
         else 0.0,
         "overshoot_max_w": round(max(overshoots), 1) if overshoots else 0.0,
         "band_crossings_per_h": round(crossings / duration_h, 2),
+        "grid_p2p_w": round(grid_p2p, 1),
         "steady_rms_w": round(steady_rms, 1),
         "mean_abs_grid_w": round(mean_abs, 1),
         "import_wh": round(import_wh, 1),
@@ -611,35 +645,37 @@ _HOUSEHOLD_LOADS = [
     Load("dishwasher", 1100.0, "A"),
 ]
 
-# Washing-machine drum motor: a single ~200 W load the main-wash tumble runs,
-# briefly pauses, and restarts.  Amplitude and base load are sized to reproduce
-# the field report in issue #473 — a steady ~500 W house with the grid spiking
-# a couple hundred watts each time the drum motor restarts.  Note the modelled
-# pause drops the full running load, so the export dip is roughly as deep as
-# the import spike; the field trace was asymmetric (a shallower ~-90 W dip vs a
-# ~+170 W spike) because a real motor restart draws a brief inrush above its
-# running power, which this single on/off load does not model.
-_WASHER_LOADS = [Load("washer_motor", 200.0, "A")]
+# Washing-machine drum motor: a single ~120 W load the main-wash tumble runs,
+# briefly pauses, and restarts.  Sized (with the scenario's ~1 s meter latency)
+# to reproduce the field report in issue #473 — a steady ~500 W house whose
+# grid never holds zero, hunting on the order of the log's ±100-180 W swings.
+# Fidelity notes: the simulated battery plant limit-cycles somewhat harder and
+# faster than the real (better-damped) firmware, so the sustained swing here is
+# larger/quicker than that one log; and the modelled pause drops the full
+# running load, so the export dip is about as deep as the import spike, whereas
+# the field trace was asymmetric (shallower dip, larger spike) due to motor
+# restart inrush this single on/off load does not model.
+_WASHER_LOADS = [Load("washer_motor", 120.0, "A")]
 
 
 def _washer_cycle(rng: random.Random, duration: float) -> list[Event]:
     """Main-wash drum tumble: the motor runs, briefly pauses, and restarts.
 
     This reproduces the field-reported washing-machine signature (issue #473).
-    A real drum tumbles in one direction for ~12 s, pauses ~4 s, then reverses,
-    so the grid trace is *not* a 50/50 square wave: the motor runs steadily
-    (grid calm once the battery has caught up), then a short pause drops the
-    load (a brief **export dip** as the battery is still discharging), then the
-    restart re-applies it (an **import spike** that decays over several
-    seconds), then calm again — the dip → spike → ~10 s calm rhythm seen in the
-    log, repeating every ~16 s.
+    A real drum tumbles in one direction, briefly pauses, then reverses, so a
+    short pause drops the load (a brief **export dip** as the battery is still
+    discharging) and the restart re-applies it (an **import spike**), repeating
+    every ~16 s. Paired with the scenario's ~1 s meter latency, the loop acts on
+    stale readings and never fully settles between pauses, so the grid hunts
+    continuously rather than holding zero — matching the log, which never showed
+    a steady-at-zero phase.
 
-    The events are unlabelled on purpose: a ~16 s-periodic disturbance never
-    holds the ±25 W band for the settle hold time, so this scenario is scored
-    on the steady-state oscillation/tracking aggregates (``steady_rms_w``,
-    ``mean_abs_grid_w``, ``band_crossings_per_h``, ``battery_travel_w_per_h``)
-    rather than per-step settling. A balancer that absorbs the spikes quickly
-    drives those down; the field controller's 3-6 s recovery keeps them high.
+    The events are unlabelled on purpose: a continuously hunting loop never
+    holds the ±25 W band for the settle hold time, so this scenario is scored on
+    the sustained-oscillation aggregates (``grid_p2p_w``, ``band_crossings_per_h``,
+    ``steady_rms_w``, ``mean_abs_grid_w``, ``battery_travel_w_per_h``) rather than
+    per-step settling — the step-response metrics read 0 for this failure mode.
+    A balancer that damps the hunt drives those down.
     """
     events: list[Event] = []
     period = 16.0
@@ -745,15 +781,21 @@ def build_scenarios() -> dict[str, Scenario]:
         Scenario(
             name="single_venus_washer",
             description=(
-                "One Venus, washing-machine drum tumble (~200 W motor "
-                "pausing/restarting every ~16 s) — spike-absorption stress "
-                "(issue #473)"
+                "One Venus, washing-machine drum tumble (~120 W motor "
+                "pausing/restarting every ~16 s) over a meter with ~1 s "
+                "latency — sustained-oscillation stress (issue #473)"
             ),
             batteries=[_VENUS],
             duration_s=dur_washer,
             base_load=[450.0, 0.0, 0.0],
             loads=list(_WASHER_LOADS),
             build_events=lambda rng: _washer_cycle(rng, dur_washer),
+            # The field setup read an HA push sensor with measurement+transport
+            # delay; that latency is what turns each drum disturbance into a
+            # loop that hunts continuously instead of settling between pauses
+            # (issue #473). Without it the loop settles into ~10 s calm windows
+            # the real trace never showed.
+            meter_latency_s=1.0,
         )
     )
 
@@ -867,6 +909,7 @@ _REPORT_METRICS = [
     "overshoot_mean_w",
     "overshoot_max_w",
     "band_crossings_per_h",
+    "grid_p2p_w",
     "steady_rms_w",
     "mean_abs_grid_w",
     "avoidable_import_wh",
@@ -905,7 +948,14 @@ _METRIC_GLOSSARY = [
     (
         "band_crossings_per_h",
         f"Sign flips per hour across the ±{OSC_BAND_W:g} W hysteresis band — "
-        f"oscillation / hunting.",
+        f"oscillation / hunting frequency.",
+    ),
+    (
+        "grid_p2p_w",
+        "Sustained peak-to-peak grid swing (95th - 5th percentile) over the "
+        "whole run — oscillation amplitude. Non-zero whenever the loop keeps "
+        "hunting, including continuous oscillation the step-response metrics "
+        "(settle/overshoot) miss.",
     ),
     (
         "steady_rms_w",
@@ -1006,8 +1056,14 @@ def render_markdown_compare(
         out.append("| Metric | Base | Head | Δ |")
         out.append("|---|---:|---:|---:|")
         for key in _REPORT_METRICS:
-            bv = b[key] if b else "—"
-            delta = _fmt_delta(float(b[key]), float(res[key])) if b else "—"
+            # A base produced before this metric existed (e.g. a newly added
+            # metric on the PR head) simply has no value to compare against.
+            if b is not None and key in b:
+                bv: object = b[key]
+                delta = _fmt_delta(float(b[key]), float(res[key]))
+            else:
+                bv = "—"
+                delta = "—"
             out.append(f"| {key} | {bv} | {res[key]} | {delta} |")
         out.append("")
         out.append("</details>")

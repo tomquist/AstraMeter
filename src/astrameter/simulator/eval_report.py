@@ -65,7 +65,8 @@ def _metrics_table(
     rows.append("<th>&Delta;</th></tr></thead><tbody>")
     for key in report_metrics:
         hv = head[key]
-        if base is None:
+        # A base produced before this metric existed has no value to compare.
+        if base is None or key not in base:
             rows.append(
                 f"<tr><td>{_esc(key)}</td><td>&mdash;</td>"
                 f"<td>{_esc(hv)}</td><td>&mdash;</td></tr>"
