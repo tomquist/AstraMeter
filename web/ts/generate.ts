@@ -298,7 +298,7 @@ function esphomeSensor(state: State) {
     const jsonRoot = esp.jsonRoot || "JsonObject root";
     const headerLines =
       esp.headersField && !isBlank(f[esp.headersField])
-        ? `\n${IND}${IND}${IND}${IND}headers:\n` +
+        ? `\n${IND}${IND}${IND}${IND}${IND}headers:\n` +
           String(f[esp.headersField])
             .split(";")
             .map((h) => h.trim())
@@ -307,19 +307,19 @@ function esphomeSensor(state: State) {
               const idx = h.indexOf(":");
               const k = idx >= 0 ? h.slice(0, idx).trim() : h;
               const v = idx >= 0 ? h.slice(idx + 1).trim() : "";
-              return `${IND}${IND}${IND}${IND}${IND}${k}: ${v}`;
+              return `${IND}${IND}${IND}${IND}${IND}${IND}${k}: ${v}`;
             })
             .join("\n")
         : "";
     const interval =
       `interval:\n${IND}- interval: 1s\n${IND}${IND}then:\n${IND}${IND}${IND}- http_request.get:\n` +
-      `${IND}${IND}${IND}${IND}url: ${url}${headerLines}\n` +
-      `${IND}${IND}${IND}${IND}capture_response: true\n${IND}${IND}${IND}${IND}on_response:\n${IND}${IND}${IND}${IND}${IND}then:\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}- lambda: |-\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}json::parse_json(body, [](${jsonRoot}) -> bool {\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${lambdaBody}\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}return true;\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}});`;
+      `${IND}${IND}${IND}${IND}${IND}url: ${url}${headerLines}\n` +
+      `${IND}${IND}${IND}${IND}${IND}capture_response: true\n${IND}${IND}${IND}${IND}${IND}on_response:\n${IND}${IND}${IND}${IND}${IND}${IND}then:\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}- lambda: |-\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}json::parse_json(body, [](${jsonRoot}) -> bool {\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${lambdaBody}\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}return true;\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}});`;
     topBlocks.push(interval);
     if (use3) warnings.push("Three-phase HTTP support is illustrative — confirm the JSON field names for your meter.");
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases: use3 ? 3 : 1, warnings };

@@ -199,6 +199,14 @@ const eyJsonHeaders = generateEsphome({
 has(eyJsonHeaders, "headers:", "esp/json_http: headersField emits a headers block");
 has(eyJsonHeaders, "Authorization: Bearer t", "esp/json_http: first header");
 has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
+// The url/capture_response/on_response keys must be nested *under* the
+// http_request.get action (indented one level deeper than the list item),
+// otherwise ESPHome rejects them as sibling actions (issue #477).
+has(eyJsonHeaders, "      - http_request.get:\n          url: http://x/api", "esp/json_http: url nested under http_request.get");
+has(eyJsonHeaders, "          capture_response: true", "esp/json_http: capture_response nested under action");
+has(eyJsonHeaders, "          on_response:", "esp/json_http: on_response nested under action");
+has(eyJsonHeaders, "          headers:", "esp/json_http: headers nested under action");
+has(eyJsonHeaders, "            Authorization: Bearer t", "esp/json_http: header entry nested under headers");
 
 const eyModbusTcp = generateEsphome({
   target: "esphome",
