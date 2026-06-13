@@ -182,6 +182,9 @@ async def run_device(
         max_target_step = cfg.getint(ct_section, "MAX_TARGET_STEP", fallback=0)
         pace_base_step = cfg.getint(ct_section, "PACE_BASE_STEP", fallback=50)
         pace_max_step = cfg.getint(ct_section, "PACE_MAX_STEP", fallback=200)
+        osc_damp_max = cfg.getfloat(ct_section, "OSC_DAMP_MAX", fallback=0.8)
+        osc_damp_alpha = cfg.getfloat(ct_section, "OSC_DAMP_ALPHA", fallback=0.15)
+        osc_damp_decay = cfg.getfloat(ct_section, "OSC_DAMP_DECAY", fallback=0.1)
         saturation_detection = cfg.getboolean(
             ct_section, "SATURATION_DETECTION", fallback=True
         )
@@ -265,6 +268,9 @@ async def run_device(
             max_target_step=max_target_step,
             pace_base_step=pace_base_step,
             pace_max_step=pace_max_step,
+            osc_damp_max=osc_damp_max,
+            osc_damp_alpha=osc_damp_alpha,
+            osc_damp_decay=osc_damp_decay,
             saturation_detection=saturation_detection,
             saturation_alpha=saturation_alpha,
             min_target_for_saturation=min_target_for_saturation,

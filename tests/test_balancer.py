@@ -646,3 +646,67 @@ class TestPaceReading:
             "a", ConsumerMode("inactive"), reports, 0, frozenset(), frozenset(), ()
         )
         assert inactive[0] == -600.0
+
+
+class TestDampOscillation:
+    """Oscillation-gated residual damping (issue #473) — mirrored by the C++
+    host test ``LoadBalancer.DampOscillation`` and the differential parity
+    suite (both stacks run the same damper on the same residual stream)."""
+
+    def _lb(self, **cfg):
+        cfg.setdefault("osc_damp_max", 0.8)
+        cfg.setdefault("osc_damp_alpha", 0.25)
+        cfg.setdefault("osc_damp_decay", 0.1)
+        cfg.setdefault("osc_damp_threshold", 450)
+        return LoadBalancer(
+            config=BalancerConfig(**cfg),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+        )
+
+    def test_steady_same_sign_is_not_damped(self):
+        # A genuine load step holds one sign: the residual passes through.
+        lb = self._lb()
+        for _ in range(10):
+            assert lb._damp_oscillation("a", 100.0) == pytest.approx(100.0)
+
+    def test_sustained_reversals_are_damped(self):
+        # A hunting limit cycle (sign flips every poll) accumulates the score
+        # and shrinks the residual toward (1 - osc_damp_max) of its magnitude.
+        lb = self._lb()
+        outs = [
+            lb._damp_oscillation("a", 100.0 if i % 2 == 0 else -100.0)
+            for i in range(20)
+        ]
+        # Early polls are near full magnitude; once the score saturates the
+        # magnitude is cut by ~osc_damp_max (0.8 -> ~20 of 100).
+        assert abs(outs[1]) > abs(outs[-1])
+        assert abs(outs[-1]) == pytest.approx(20.0, abs=2.0)
+
+    def test_large_residual_bypasses_damping_even_while_hunting(self):
+        # Drive the score up with small reversals, then a step above the
+        # threshold must react at full gain (not be bled by the prior hunt).
+        lb = self._lb(osc_damp_threshold=450)
+        for i in range(20):
+            lb._damp_oscillation("a", 100.0 if i % 2 == 0 else -100.0)
+        assert lb._damp_oscillation("a", 1500.0) == pytest.approx(1500.0)
+
+    def test_single_reversal_barely_damps(self):
+        # One sign flip (e.g. a solar ramp crossing zero once) only adds
+        # osc_damp_alpha to the score, so the response stays near full gain.
+        lb = self._lb()
+        for _ in range(8):
+            lb._damp_oscillation("a", 100.0)
+        out = lb._damp_oscillation("a", -100.0)
+        # score == alpha (0.25) -> factor 1 - 0.8*0.25 = 0.8 -> ~80 of 100.
+        assert abs(out) == pytest.approx(80.0, abs=1.0)
+
+    def test_disabled_when_max_zero(self):
+        lb = self._lb(osc_damp_max=0.0)
+        for i in range(10):
+            r = 100.0 if i % 2 == 0 else -100.0
+            assert lb._damp_oscillation("a", r) == pytest.approx(r)

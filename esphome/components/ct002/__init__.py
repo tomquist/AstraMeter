@@ -99,6 +99,10 @@ CONF_MAX_CORRECTION_PER_STEP = "max_correction_per_step"
 CONF_MAX_TARGET_STEP = "max_target_step"
 CONF_PACE_BASE_STEP = "pace_base_step"
 CONF_PACE_MAX_STEP = "pace_max_step"
+CONF_OSC_DAMP_MAX = "osc_damp_max"
+CONF_OSC_DAMP_ALPHA = "osc_damp_alpha"
+CONF_OSC_DAMP_DECAY = "osc_damp_decay"
+CONF_OSC_DAMP_THRESHOLD = "osc_damp_threshold"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
@@ -198,6 +202,12 @@ BALANCER_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_TARGET_STEP, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PACE_BASE_STEP, default=50.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PACE_MAX_STEP, default=200.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_OSC_DAMP_MAX, default=0.8): cv.float_range(min=0.0, max=1.0),
+        cv.Optional(CONF_OSC_DAMP_ALPHA, default=0.15): cv.float_range(
+            min=0.0, max=1.0
+        ),
+        cv.Optional(CONF_OSC_DAMP_DECAY, default=0.1): cv.float_range(min=0.0, max=1.0),
+        cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=450.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
@@ -436,6 +446,10 @@ async def to_code(config):
         ("max_target_step", bal.get(CONF_MAX_TARGET_STEP, 0.0)),
         ("pace_base_step", bal.get(CONF_PACE_BASE_STEP, 50.0)),
         ("pace_max_step", bal.get(CONF_PACE_MAX_STEP, 200.0)),
+        ("osc_damp_max", bal.get(CONF_OSC_DAMP_MAX, 0.8)),
+        ("osc_damp_alpha", bal.get(CONF_OSC_DAMP_ALPHA, 0.15)),
+        ("osc_damp_decay", bal.get(CONF_OSC_DAMP_DECAY, 0.1)),
+        ("osc_damp_threshold", bal.get(CONF_OSC_DAMP_THRESHOLD, 450.0)),
         ("min_efficient_power", bal.get(CONF_MIN_EFFICIENT_POWER, 0.0)),
         ("probe_min_power", bal.get(CONF_PROBE_MIN_POWER, 80.0)),
         (
