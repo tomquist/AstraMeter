@@ -106,6 +106,14 @@ def test_scenario_registry_shape():
     assert "mixed_cadence_solar/eff" in scenarios
     # Washing-machine spike-absorption stress (issue #473).
     assert "single_venus_washer" in scenarios
+    # Venus D (VNSD-0 integer loop) variants, including a heterogeneous phase
+    # sharing with a Venus C (HMG float ramp).
+    assert "single_venus_d_steps" in scenarios
+    assert "single_venus_d_washer" in scenarios
+    assert "single_venus_d_solar" in scenarios
+    assert "venus_d_plus_c/fair" in scenarios
+    assert "venus_d_plus_c/eff" in scenarios
+    assert scenarios["single_venus_d_steps"].batteries[0].device_type == "VNSD-0"
     assert scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"] > 0
     for sc in scenarios.values():
         assert sc.duration_s > 0 and sc.batteries
@@ -241,7 +249,17 @@ def test_metric_glossary_covers_every_reported_metric():
     assert glossary_keys == _REPORT_METRICS
 
 
-@pytest.mark.parametrize("name", ["single_venus_steps", "single_venus_washer"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "single_venus_steps",
+        "single_venus_washer",
+        "single_venus_d_steps",
+        "single_venus_d_washer",
+        "single_venus_d_solar",
+        "venus_d_plus_c/fair",
+    ],
+)
 def test_full_scenario_definitions_build(name):
     import random
 

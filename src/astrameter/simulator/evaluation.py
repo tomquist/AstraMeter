@@ -557,6 +557,10 @@ def _compute_metrics(
 _VENUS = BatterySpec()  # HMG-50 (V2-class), 1 s poll
 _VENUS_V3 = BatterySpec(device_type="VNSE3-0", poll_interval=0.45)
 _VENUS_V2_SLOW = BatterySpec(poll_interval=3.1)
+# Venus D (VNSD-0): AC-coupled like the rest, but runs the integer
+# proportional-integrator self-consumption loop instead of the float ramp — no
+# spike filter, a tighter ±11 W deadband, and a unity-by-default ctrl_ratio gain.
+_VENUS_D = BatterySpec(device_type="VNSD-0")
 _B2500 = BatterySpec(
     device_type="HMA-1",
     max_charge_power=0,
@@ -823,6 +827,63 @@ def build_scenarios() -> dict[str, Scenario]:
             ),
         )
     )
+
+    add(
+        Scenario(
+            name="single_venus_d_steps",
+            description="One Venus D (VNSD-0 integer loop), stepped house load",
+            batteries=[_VENUS_D],
+            duration_s=dur_steps,
+            loads=list(_HOUSEHOLD_LOADS),
+            build_events=lambda rng: _household_steps(rng, dur_steps),
+        )
+    )
+
+    add(
+        Scenario(
+            name="single_venus_d_washer",
+            description=(
+                "One Venus D, washing-machine drum tumble over a ~1 s-latency "
+                "meter — sustained-oscillation stress for the integer loop "
+                "(±11 W deadband, no spike filter), cf. single_venus_washer"
+            ),
+            batteries=[_VENUS_D],
+            duration_s=dur_washer,
+            base_load=[450.0, 0.0, 0.0],
+            loads=list(_WASHER_LOADS),
+            build_events=lambda rng: _washer_cycle(rng, dur_washer),
+            meter_latency_s=1.0,
+        )
+    )
+
+    add(
+        Scenario(
+            name="single_venus_d_solar",
+            description="One Venus D, solar day curve crossing into export + clouds",
+            batteries=[BatterySpec(device_type="VNSD-0", initial_soc=0.4)],
+            duration_s=dur_solar,
+            base_load=[400.0, 0.0, 0.0],
+            build_events=lambda rng: (
+                _solar_curve(dur_solar, solar_peak) + _cloud_dips(rng, dur_solar)
+            ),
+        )
+    )
+
+    # Heterogeneous phase: a Venus D (integer integrator) sharing one phase with
+    # a Venus C (HMG float ramp), so the two different control laws coexist
+    # under the same balancer.
+    for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
+        add(
+            Scenario(
+                name=f"venus_d_plus_c/{mode}",
+                description="One Venus D + one Venus C sharing one phase",
+                batteries=[_VENUS_D, _VENUS],
+                duration_s=dur_steps,
+                loads=list(_HOUSEHOLD_LOADS),
+                build_events=lambda rng: _household_steps(rng, dur_steps),
+                ct_kwargs=dict(kwargs),
+            )
+        )
 
     for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
         add(
