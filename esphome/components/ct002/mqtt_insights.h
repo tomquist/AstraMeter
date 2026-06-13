@@ -5,8 +5,10 @@
 //   * No reconnect loop — ESPHome's mqtt component owns reconnect; we
 //     detect connect/disconnect transitions by polling is_connected() and
 //     re-publish discovery on rising edges.
-//   * No ARP lookup — lwIP doesn't expose /proc/net/arp; we surface
-//     bluetooth + ip connections only (network_mac stays empty).
+//   * The consumer device emits no HA `connections` (neither the battery MAC
+//     nor an IP): a connection is a global cross-integration identity, so the
+//     battery MAC would merge this device into the battery device owned by
+//     another bridge (see ha_discovery.cpp, #438).
 //
 // Wiring: the component takes a CT002Component* (required) and a
 // MQTTClientComponent* (defaults to global_mqtt_client). It subscribes to
@@ -108,10 +110,6 @@ class MqttInsightsComponent : public Component {
   // Discovery dedupe — keys cleared on disconnect.
   bool device_discovered_{false};
   std::unordered_set<std::string> discovered_consumers_;
-  // Subset of discovered_consumers_ that had a non-empty battery_ip when
-  // discovery was published. Used to trigger exactly one re-publish when
-  // an IP first becomes known (mirrors Python's ARP-success re-discovery).
-  std::unordered_set<std::string> discovered_consumers_with_ip_;
 
   // Marstek broadcast scheduling — uses set_interval, captured here so we
   // can cancel if reconfigured at runtime. Single timer because there's
