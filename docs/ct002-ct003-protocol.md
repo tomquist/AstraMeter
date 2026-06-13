@@ -307,13 +307,29 @@ enough to reproduce the device's behavior bit‑for‑bit. Powers are in **watts
 the constants below are the literal values used.
 
 > **Model scope.** The float controller documented here is the **HMG‑50**
-> (Venus C/D) one. It is **not** universal:
+> one (Venus C; **not** Venus D — see the VNSD‑0 note below). It is **not**
+> universal:
 > - The **VNSE3‑0** (Venus E) shares the **same step‑3 conditioning gate** — the
 >   same >50 W spike filter, <20 W own‑output exemption, signed deadband and
 >   small‑import hold — but with a tighter **±10 W** deadband instead of ±20 W,
 >   and it uses a **different ramp/step law** (no float gain table, integer
 >   setpoint). So the gate logic carries over, but the gain table and ramp
 >   arithmetic below are HMG‑50‑specific.
+> - The **VNSD‑0** (Venus D) does **not** run this float law at all — **none**
+>   of the float gain‑table / `sqrt`‑step constants apply. Its CT‑following
+>   controller is **integer** and built as a configurable proportional
+>   **integrator**, run per CT response:
+>   `setpoint += (ctrl_ratio/100)·error − 5 W`, where `error = g − grid_standard`
+>   (the configured grid setpoint offset). The per‑step branches are
+>   sign‑conditioned on `error` and the device's own measured grid; the result
+>   is clamped to the configured charge / discharge limits (defaults +2200 W /
+>   −800 W) and zeroed inside a **±11 W** (single‑phase) / **±15 W** (combined)
+>   deadband. `ctrl_ratio` is the loop gain (30–100 %, default **100** ⇒ unity,
+>   i.e. one step ≈ `error − 5`). There is **no** −5…+5 gain‑scheduled ramp, no
+>   `sqrt` step and no float ±2500 W clamp — so a sustained 500 W import ramps
+>   ~495 W per cycle straight to the charge clamp, not the HMG‑50's ~50 W
+>   near‑zero step. (The fine power slewing is delegated to a separate inverter
+>   sub‑processor reached over the internal bus.)
 > - The **B2500 class** (HMJ) is a **DC‑coupled** unit (PV/DC in, DC out to one
 >   or two external microinverters), so it steers its **DC output power** rather
 >   than an AC inverter setpoint. Its controller is **integer‑only** and

@@ -1,6 +1,6 @@
 """Marstek HMG-50 self-consumption steering controller.
 
-This reproduces the closed-loop control law a real Marstek HMG-50 (Venus C/D)
+This reproduces the closed-loop control law a real Marstek HMG-50 (Venus C)
 battery runs on the grid value it reads back from the CT: a gain-scheduled,
 accelerating step that drives the selected grid power toward zero, preceded by
 the device's input-conditioning gate (a >50 W spike filter, a ±20 W deadband
@@ -9,12 +9,21 @@ and a small-import hold). It is the steering law documented in
 per-step arithmetic, and the gate thresholds and ordering, are the exact values
 the HMG-50 firmware uses.
 
-Scope: the gain table and ramp arithmetic here are the **HMG-50** (Venus C/D)
+Scope: the gain table and ramp arithmetic here are the **HMG-50** (Venus C)
 ones. The VNSE3-0 (Venus E) shares the *same input-conditioning gate* — the
 same >50 W spike filter, <20 W own-output exemption, signed deadband and
 small-import hold — but with a tighter ±10 W deadband, and it uses a different
 ramp/step law (no float gain table), so the GOLDEN ramp vectors here are
 HMG-50-specific.
+
+The **VNSD-0** (Venus D) does *not* use this law at all -- none of the float
+gain-table / ``sqrt``-step constants apply. Its CT-following loop is an integer
+proportional integrator -- ``setpoint += (ctrl_ratio/100)*error - 5 W`` clamped
+to the configured charge/discharge limits with a +/-11 W (single) / +/-15 W
+(combined) deadband -- modelled separately in
+:mod:`astrameter.simulator.venus_d_steering`. Neither this controller nor its
+GOLDEN vectors model Venus D. See ``docs/ct002-ct003-protocol.md`` ("Model
+scope", VNSD-0 note).
 
 Conventions
 -----------
