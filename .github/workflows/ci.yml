@@ -261,13 +261,28 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           uv run python -m astrameter.simulator.evaluation \
-            --input head.json --compare base.json > steering-eval-comment.md
+            --input head.json --compare base.json \
+            --html steering-eval-report.html > steering-eval-comment.md
           cat steering-eval-comment.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload metrics artifacts
-        uses: actions/upload-artifact@v4
+      # The report is uploaded unzipped (v7 + archive:false): a single
+      # self-contained file (all CSS/JS inlined, no external links) that GitHub
+      # can render in the browser straight from its artifact page. archive:false
+      # accepts exactly one file and uses the filename as the artifact name, so
+      # the report and the raw metrics go to separate artifacts.
+      - name: Upload report (unzipped, browser-viewable)
+        id: report
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
         with:
-          name: steering-eval
+          archive: false
+          path: steering-eval-report.html
+          if-no-files-found: ignore
+
+      - name: Upload raw metrics
+        uses: actions/upload-artifact@v7
+        with:
+          name: steering-eval-data
           path: |
             head.json
             base.json
@@ -281,12 +296,24 @@ jobs:
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
+        env:
+          # Direct per-artifact URL from the upload step (login-required, valid
+          # until the artifact/run expires) — the closest thing to a direct
+          # link to the report; GitHub has no stable raw-file permalink.
+          REPORT_URL: ${{ steps.report.outputs.artifact-url }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- steering-eval -->';
+            const reportUrl = process.env.REPORT_URL;
+            const link = reportUrl
+              ? `\n\n📊 [**Open the interactive report**](${reportUrl}) — ` +
+                `\`steering-eval-report.html\`, a single self-contained file ` +
+                `(opens in-browser; download it if your browser blocks inline ` +
+                `scripts).\n`
+              : '';
             const body = marker + '\n' +
-              fs.readFileSync('steering-eval-comment.md', 'utf8');
+              fs.readFileSync('steering-eval-comment.md', 'utf8') + link;
             const {data: comments} = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,

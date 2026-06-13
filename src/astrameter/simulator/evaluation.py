@@ -70,15 +70,9 @@ HEADROOM_MARGIN_W = 5.0
 SOC_EMPTY = 0.02
 SOC_FULL = 0.98
 # Number of points each scenario's grid-power trace is downsampled to for the
-# Mermaid chart in the CI PR comment. Base and head share this fixed count so
-# the two lines align by index regardless of poll cadence.
+# interactive charts in the HTML report. Base and head share this fixed count
+# so the two lines align by index regardless of poll cadence.
 GRAPH_POINTS = 1800
-# Mermaid's plot line has a fixed pixel stroke width with no config knob, so we
-# enlarge the chart canvas instead: GitHub scales the SVG down to the comment
-# width, which renders the line proportionally thinner — and the extra width
-# gives the 1800 points room to resolve instead of blobbing together.
-GRAPH_WIDTH = 1800
-GRAPH_HEIGHT = 600
 
 
 # ---------------------------------------------------------------------------
@@ -352,20 +346,24 @@ def _settle_time(samples: list[_Sample], start: float, end: float) -> float | No
     return None
 
 
-def _downsample_grid(
-    samples: list[_Sample], duration_s: float, n: int = GRAPH_POINTS
+def _downsample_series(
+    samples: list[_Sample],
+    duration_s: float,
+    pick: Callable[[_Sample], float],
+    n: int = GRAPH_POINTS,
 ) -> list[float]:
-    """Bucket the grid trace into *n* evenly spaced mean values over the run.
+    """Bucket a per-sample value into *n* evenly spaced means over the run.
 
+    *pick* selects the value from each sample (grid, a battery's power, ...).
     Empty buckets carry the previous value forward so the chart has no gaps;
-    the fixed length lets base and head overlay by index in the PR comment.
+    the fixed length lets traces from different runs overlay by index.
     """
     if not samples or duration_s <= 0 or n <= 0:
         return []
     buckets: list[list[float]] = [[] for _ in range(n)]
     for s in samples:
         idx = min(int(s.t / duration_s * n), n - 1)
-        buckets[idx].append(s.grid)
+        buckets[idx].append(pick(s))
     out: list[float] = []
     last = 0.0
     for bucket in buckets:
@@ -373,6 +371,12 @@ def _downsample_grid(
             last = sum(bucket) / len(bucket)
         out.append(round(last, 1))
     return out
+
+
+def _battery_pick(i: int) -> Callable[[_Sample], float]:
+    """Return a picker for battery *i*'s output (a typed closure, so the
+    per-battery downsampling avoids an inline lambda mypy can't infer)."""
+    return lambda s: s.powers[i]
 
 
 def _compute_metrics(
@@ -486,7 +490,25 @@ def _compute_metrics(
         "avoidable_import_wh": round(avoid_import_wh, 1),
         "avoidable_export_wh": round(avoid_export_wh, 1),
         "battery_travel_w_per_h": round(travel_w / duration_h, 0),
-        "grid_trace": _downsample_grid(samples, scenario.duration_s),
+        "grid_trace": _downsample_series(
+            samples, scenario.duration_s, lambda s: s.grid
+        ),
+        # Net house consumption at the meter coupling = grid + Σ(battery AC
+        # output) by energy balance.  It's the same scripted load in base and
+        # head, so one trace is enough; the HTML grid chart overlays it as
+        # context (grid = consumption minus battery output).
+        "consumption_trace": _downsample_series(
+            samples, scenario.duration_s, lambda s: s.grid + sum(s.powers)
+        ),
+        # Per-battery output traces (one downsampled series each) and labels,
+        # for the per-scenario battery-output chart in the HTML report.
+        "battery_labels": [
+            f"B{i + 1} {specs[i].device_type}" for i in range(len(specs))
+        ],
+        "battery_traces": [
+            _downsample_series(samples, scenario.duration_s, _battery_pick(i))
+            for i in range(len(specs))
+        ],
     }
 
 
@@ -811,13 +833,24 @@ def _fmt_delta(base: float, head: float) -> str:
 
 
 def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
-    """Markdown before/after table for the CI PR comment."""
+    """Markdown before/after tables for the CI PR comment.
+
+    The comment carries the metrics tables for an at-a-glance read; the
+    interactive grid-power charts live in the self-contained HTML report
+    (:func:`astrameter.simulator.eval_report.render_html_report`) that CI
+    uploads as the ``steering-eval`` artifact, since GitHub can't render an
+    interactive chart inline in a comment.
+    """
     base_by = {r["scenario"]: r for r in base}
     out = [
         "### Steering evaluation (base vs head)",
         "",
         "Lower is better for every metric. See "
         "`src/astrameter/simulator/evaluation.py` for definitions.",
+        "",
+        "📊 **Interactive grid-power charts** (zoom / hover / toggle series) are in "
+        "the self-contained `steering-eval-report.html` report — see the link "
+        "below (it opens directly in the browser).",
         "",
         "<details><summary><b>What do these metrics mean?</b></summary>",
         "",
@@ -842,7 +875,6 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
             delta = _fmt_delta(float(b[key]), float(res[key])) if b else "—"
             out.append(f"| {key} | {bv} | {res[key]} | {delta} |")
         out.append("")
-        out.extend(_grid_chart(b, res))
         out.append("</details>")
     missing = [
         r["scenario"]
@@ -853,41 +885,6 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
         out.append("")
         out.append(f"_Scenarios only in base: {', '.join(missing)}_")
     return "\n".join(out)
-
-
-def _grid_chart(base: dict | None, head: dict) -> list[str]:
-    """Mermaid ``xychart`` of grid power over time, base vs head overlaid.
-
-    Renders nothing when the head result predates the trace (older JSON
-    artifacts), so the comment stays valid across mixed-version runs.
-    """
-    head_trace = head.get("grid_trace") or []
-    if not head_trace:
-        return []
-    base_trace = (base or {}).get("grid_trace") or []
-    duration_min = round(float(head.get("duration_h", 0.0)) * 60)
-    caption = (
-        "Grid power over time (W) — line 1 = base, line 2 = head:"
-        if base_trace
-        else "Grid power over time (W) — head:"
-    )
-    lines = [
-        caption,
-        "",
-        "```mermaid",
-        f'%%{{init: {{"xyChart": {{"width": {GRAPH_WIDTH}, '
-        f'"height": {GRAPH_HEIGHT}}}}}}}%%',
-        "xychart-beta",
-        '    title "grid power (W)"',
-        f'    x-axis "minutes" 0 --> {duration_min}',
-        '    y-axis "W"',
-    ]
-    if base_trace:
-        lines.append(f"    line [{', '.join(f'{v:g}' for v in base_trace)}]")
-    lines.append(f"    line [{', '.join(f'{v:g}' for v in head_trace)}]")
-    lines.append("```")
-    lines.append("")
-    return lines
 
 
 def _summary_line(base: dict | None, head: dict) -> str:
@@ -969,6 +966,12 @@ def main(argv: list[str] | None = None) -> None:
         metavar="BASELINE_JSON",
         help="compare results against a baseline JSON",
     )
+    parser.add_argument(
+        "--html",
+        metavar="PATH",
+        help="write the self-contained interactive HTML report to PATH "
+        "(uses --compare's baseline when given, else head-only)",
+    )
     parser.add_argument("--list", action="store_true", help="list scenarios and exit")
     args = parser.parse_args(argv)
 
@@ -988,12 +991,26 @@ def main(argv: list[str] | None = None) -> None:
         with open(args.json, "w") as fh:
             json.dump(results, fh, indent=2)
 
+    base = None
     if args.compare:
         with open(args.compare) as fh:
             base = json.load(fh)
         print(render_markdown_compare(base, results))
     elif not args.input:
         print(render_text(results))
+
+    if args.html:
+        from .eval_report import render_html_report
+
+        report = render_html_report(
+            base,
+            results,
+            report_metrics=_REPORT_METRICS,
+            metric_glossary=_METRIC_GLOSSARY,
+            fmt_delta=_fmt_delta,
+        )
+        with open(args.html, "w", encoding="utf-8") as fh:
+            fh.write(report)
 
 
 if __name__ == "__main__":
