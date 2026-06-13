@@ -65,21 +65,21 @@ ${t}${t}unit_of_measurement: W${m(0)}`;return{topBlocks:h,sensorBlock:`sensor:
 `+u,phases:1,warnings:i}}if(l.kind==="http"){h.push(`http_request:
 ${t}useragent: esphome/astrameter
 ${t}timeout: 5s`);let f=s===3&&l.url3,_=(f?y:["grid_l1"]).map((A,R)=>k(A)+m(R)),u=f?l.url3(p):l.url1?l.url1(p):"http://example.com/api",g=f?l.lambda3:typeof l.lambda1=="function"?l.lambda1(p):l.lambda1,P=l.jsonRoot||"JsonObject root",I=l.headersField&&!d(p[l.headersField])?`
-${t}${t}${t}${t}headers:
-`+String(p[l.headersField]).split(";").map(A=>A.trim()).filter(Boolean).map(A=>{let R=A.indexOf(":"),fe=R>=0?A.slice(0,R).trim():A,be=R>=0?A.slice(R+1).trim():"";return`${t}${t}${t}${t}${t}${fe}: ${be}`}).join(`
+${t}${t}${t}${t}${t}headers:
+`+String(p[l.headersField]).split(";").map(A=>A.trim()).filter(Boolean).map(A=>{let R=A.indexOf(":"),fe=R>=0?A.slice(0,R).trim():A,be=R>=0?A.slice(R+1).trim():"";return`${t}${t}${t}${t}${t}${t}${fe}: ${be}`}).join(`
 `):"",J=`interval:
 ${t}- interval: 1s
 ${t}${t}then:
 ${t}${t}${t}- http_request.get:
-${t}${t}${t}${t}url: ${u}${I}
-${t}${t}${t}${t}capture_response: true
-${t}${t}${t}${t}on_response:
-${t}${t}${t}${t}${t}then:
-${t}${t}${t}${t}${t}${t}- lambda: |-
-${t}${t}${t}${t}${t}${t}${t}${t}json::parse_json(body, [](${P}) -> bool {
-${t}${t}${t}${t}${t}${t}${t}${t}${t}${t}${g}
-${t}${t}${t}${t}${t}${t}${t}${t}${t}${t}return true;
-${t}${t}${t}${t}${t}${t}${t}${t}});`;return h.push(J),f&&i.push("Three-phase HTTP support is illustrative \u2014 confirm the JSON field names for your meter."),{topBlocks:h,sensorBlock:`sensor:
+${t}${t}${t}${t}${t}url: ${u}${I}
+${t}${t}${t}${t}${t}capture_response: true
+${t}${t}${t}${t}${t}on_response:
+${t}${t}${t}${t}${t}${t}then:
+${t}${t}${t}${t}${t}${t}${t}- lambda: |-
+${t}${t}${t}${t}${t}${t}${t}${t}${t}json::parse_json(body, [](${P}) -> bool {
+${t}${t}${t}${t}${t}${t}${t}${t}${t}${t}${t}${g}
+${t}${t}${t}${t}${t}${t}${t}${t}${t}${t}${t}return true;
+${t}${t}${t}${t}${t}${t}${t}${t}${t}});`;return h.push(J),f&&i.push("Three-phase HTTP support is illustrative \u2014 confirm the JSON field names for your meter."),{topBlocks:h,sensorBlock:`sensor:
 `+_.join(`
 `),phases:f?3:1,warnings:i}}i.push(`${o.label} has no ESPHome component yet \u2014 this is a placeholder. Run the Python add-on for this meter, or publish its reading to MQTT/Home Assistant and read that instead.`);let T=`${t}- platform: template
 ${t}${t}id: grid_l1
