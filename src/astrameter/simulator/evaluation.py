@@ -886,7 +886,9 @@ def _fmt_delta(base: float, head: float) -> str:
     return f"{(head - base) / abs(base) * 100.0:+.0f}%"
 
 
-def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
+def render_markdown_compare(
+    base: list[dict], head: list[dict], *, report_available: bool = False
+) -> str:
     """Markdown before/after tables for the CI PR comment.
 
     The comment carries the metrics tables for an at-a-glance read; the
@@ -894,6 +896,11 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
     (:func:`astrameter.simulator.eval_report.render_html_report`) that CI
     uploads as the ``steering-eval`` artifact, since GitHub can't render an
     interactive chart inline in a comment.
+
+    Set *report_available* when an HTML report is being produced (and CI will
+    append a link to it); only then is the "see the link below" pointer
+    included, so a plain ``--compare`` run doesn't promise a report that
+    doesn't exist.
     """
     base_by = {r["scenario"]: r for r in base}
     out = [
@@ -902,10 +909,15 @@ def render_markdown_compare(base: list[dict], head: list[dict]) -> str:
         "Lower is better for every metric. See "
         "`src/astrameter/simulator/evaluation.py` for definitions.",
         "",
-        "📊 **Interactive grid-power charts** (zoom / hover / toggle series) are in "
-        "the self-contained `steering-eval-report.html` report — see the link "
-        "below (it opens directly in the browser).",
-        "",
+    ]
+    if report_available:
+        out += [
+            "📊 **Interactive grid-power charts** (zoom / hover / toggle series) "
+            "are in the self-contained `steering-eval-report.html` report — see "
+            "the link below (it opens directly in the browser).",
+            "",
+        ]
+    out += [
         "<details><summary><b>What do these metrics mean?</b></summary>",
         "",
         "| Metric | Meaning |",
@@ -1049,7 +1061,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.compare:
         with open(args.compare) as fh:
             base = json.load(fh)
-        print(render_markdown_compare(base, results))
+        print(render_markdown_compare(base, results, report_available=bool(args.html)))
     elif not args.input:
         print(render_text(results))
 

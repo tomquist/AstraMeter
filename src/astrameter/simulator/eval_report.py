@@ -213,8 +213,10 @@ def render_html_report(
         .replace("__UPLOT_JS__", _asset("uPlot.iife.min.js"))
         .replace("__BODY__", body)
         # JSON is injected last so a stray placeholder token in the data can't
-        # be re-expanded. Series colours travel inside this JSON.
-        .replace("__CHARTS_JSON__", json.dumps(charts))
+        # be re-expanded. Series colours travel inside this JSON.  Escape '<'
+        # (as the JSON-valid '<') so trace data can't break out of the
+        # inline <script> via a "</script>" — e.g. a battery label.
+        .replace("__CHARTS_JSON__", json.dumps(charts).replace("<", "\\u003c"))
     )
 
 

@@ -119,10 +119,14 @@ def test_markdown_compare_renders():
     assert "What do these metrics mean?" in md
     for key in _REPORT_METRICS:
         assert f"| `{key}` |" in md
-    # The interactive charts moved to the HTML artifact; the comment now points
-    # at it instead of embedding a (static, unreadable) Mermaid chart.
+    # The interactive charts moved to the HTML artifact, never an embedded
+    # (static, unreadable) Mermaid chart.
     assert "mermaid" not in md
-    assert "steering-eval-report.html" in md
+    # The report pointer only appears when a report is actually produced, so a
+    # plain --compare run doesn't promise a link that won't exist.
+    assert "steering-eval-report.html" not in md
+    md_with_report = render_markdown_compare([base], [res], report_available=True)
+    assert "steering-eval-report.html" in md_with_report
 
 
 def test_html_report_is_self_contained_and_interactive():
@@ -150,6 +154,23 @@ def test_html_report_is_self_contained_and_interactive():
     # Metrics table with colour-coded (lower-is-better) deltas.
     assert "overshoot_max_w" in h
     assert 'class="better"' in h or 'class="worse"' in h
+
+
+def test_html_report_escapes_script_breakout_in_chart_data():
+    res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    # A label that would close the inline <script> if embedded verbatim.
+    res = dict(res, battery_labels=["</script><b>x"])
+    h = render_html_report(
+        None,
+        [res],
+        report_metrics=_REPORT_METRICS,
+        metric_glossary=_METRIC_GLOSSARY,
+        fmt_delta=_fmt_delta,
+    )
+    # The raw breakout sequence must not survive into the chart JSON; '<' is
+    # escaped to the JSON-valid <.
+    assert "</script><b>x" not in h
+    assert "\\u003c/script>" in h
 
 
 def test_html_report_handles_missing_baseline():
