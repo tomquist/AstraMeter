@@ -17,6 +17,7 @@ from astrameter.ct002.balancer import device_capabilities
 from . import protocol
 from .b2500_steering import B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
+from .venus_d_steering import VenusDSteeringController
 
 logger = logging.getLogger("astra_sim.battery")
 
@@ -113,6 +114,20 @@ class BatterySimulator:
             ]
             if self._is_dc_output
             else []
+        )
+
+        # Venus D (VNSD-0) is AC-coupled like the rest of the Venus class but
+        # runs a different self-consumption loop: an integer proportional
+        # integrator rather than the float ramp (see :mod:`venus_d_steering`).
+        # Its setpoint convention is the opposite of the ramp controller's —
+        # positive = discharge, negative = charge — so ``hi`` is the discharge
+        # limit and ``lo`` the (negative) charge limit, and the simulator target
+        # is the setpoint *unnegated*.
+        self._is_venus_d = (
+            self.meter_dev_type.upper().startswith("VNSD") and not self._is_dc_output
+        )
+        self._venus_d_steering = (
+            VenusDSteeringController() if self._is_venus_d else None
         )
 
     # -- public read-only properties ---------------------------------------
@@ -297,7 +312,9 @@ class BatterySimulator:
         gates), whose sign is the inverse of the simulator's (setpoint positive =
         charge), so the simulator target is the negated setpoint. A DC-coupled
         B2500 instead runs :class:`B2500SteeringController` on its DC output (see
-        :meth:`_steer_b2500_output`).
+        :meth:`_steer_b2500_output`). A Venus D (VNSD-0) runs
+        :class:`VenusDSteeringController`, an integer integrator whose setpoint is
+        already in the simulator's sign (positive = discharge), applied directly.
 
         Cross-battery share-split: a real battery divides the grid value by the
         number of batteries reported on its phase (the ``*_chrg_nb`` count), so
@@ -317,6 +334,21 @@ class BatterySimulator:
 
         if self._b2500_channels:
             self._steer_b2500_output(grid_reading)
+            return
+
+        if self._venus_d_steering is not None:
+            # Venus D: integer integrator, positive setpoint = discharge. Its own
+            # grid reading (used only for the per-step branch) tracks the CT
+            # value in this closed loop. ±15 W deadband in combined (phase D)
+            # mode, ±11 W otherwise.
+            vd_setpoint = self._venus_d_steering.step(
+                grid_reading,
+                float(self.max_discharge_power),
+                -float(self.max_charge_power),
+                measured_grid=grid_reading,
+                phase_count=2 if self.phase == "D" else 1,
+            )
+            self._apply_ct_derived_target(float(vd_setpoint))
             return
 
         # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
