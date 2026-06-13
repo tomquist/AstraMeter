@@ -91,6 +91,17 @@ struct BalancerConfig {
   // pace_base_step = 0 disables. See balancer.py for the tuning rationale.
   float pace_base_step{50.0f};
   float pace_max_step{200.0f};
+  // Oscillation-gated damping (issue #473): under meter latency the gain-1
+  // grid-following residual limit-cycles. An EMA of how often a consumer's
+  // residual reverses sign scales the residual down by up to osc_damp_max; a
+  // genuine step holds one sign (score ~0, full gain), only a hunt is damped.
+  // osc_damp_max = 0 disables. See balancer.py for the tuning rationale.
+  float osc_damp_max{0.8f};
+  float osc_damp_alpha{0.15f};
+  float osc_damp_decay{0.1f};
+  // Only residuals below this magnitude are damped; a larger one is a genuine
+  // demand step that reacts at full gain. See balancer.py.
+  float osc_damp_threshold{450.0f};
   float min_efficient_power{0.0f};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
@@ -123,6 +134,10 @@ struct BalancerConsumerState {
   int pace_sign{0};
   std::optional<float> pace_prev_reported{};
   double pace_last_at{0.0};
+  // Oscillation-gated damping (see BalancerConfig::osc_damp_max): accumulated
+  // reversal score and the sign of the last non-zero residual that fed it.
+  float osc_score{0.0f};
+  int osc_last_sign{0};
   // Long-running EMA accumulator — double prevents small-bias drift on
   // steady signals over hours of runtime.
   double saturation_score{0.0};
@@ -251,6 +266,7 @@ class LoadBalancer {
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
   float pace_reading_(const std::string &consumer_id, float reading, float reported);
+  float damp_oscillation_(const std::string &consumer_id, float residual);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);

@@ -106,6 +106,10 @@ void BalancerConfig::clamp() {
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
   if (pace_base_step < 0.0f) pace_base_step = 0.0f;
   if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
+  clamp_v(osc_damp_max, 0.0f, 1.0f);
+  clamp_v(osc_damp_alpha, 0.0f, 1.0f);
+  clamp_v(osc_damp_decay, 0.0f, 1.0f);
+  if (osc_damp_threshold < 0.0f) osc_damp_threshold = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -681,6 +685,8 @@ void LoadBalancer::reset_consumer(const std::string &consumer_id) {
   state.pace_sign = 0;
   state.pace_prev_reported.reset();
   state.pace_last_at = 0.0;
+  state.osc_score = 0.0f;
+  state.osc_last_sign = 0;
   state.saturation_score = 0.0;
   const double grace =
       this->clock_() + std::min(static_cast<double>(this->saturation_grace_seconds_),
@@ -866,6 +872,9 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   if ((grid_total < 0.0f && residual > 0.0f) || (grid_total > 0.0f && residual < 0.0f)) {
     residual = 0.0f;
   }
+  if (consumer_id) {
+    residual = this->damp_oscillation_(*consumer_id, residual);
+  }
   float reported = 0.0f;
   if (consumer_id) {
     auto it = reports.find(*consumer_id);
@@ -879,6 +888,35 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     auto_state.last_intent = reported + residual;
   }
   return split_by_phase_(reading, reports, &eff_part);
+}
+
+// Scale residual down while the consumer is hunting (issue #473). Tracks an
+// accumulating score of how often the residual reverses sign: a genuine load
+// step holds one sign, so a single reversal barely moves the score and full
+// gain is kept; a latency-driven limit cycle reverses every few polls, so the
+// score accumulates toward 1 and shrinks the residual by up to osc_damp_max,
+// bleeding the loop gain that sustains the hunt. Mirrors balancer.py
+// _damp_oscillation.
+float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float residual) {
+  if (this->cfg_.osc_damp_max <= 0.0f) return residual;
+  auto &state = this->get_consumer_(consumer_id);
+  int sign = (residual > 0.0f) ? 1 : (residual < 0.0f ? -1 : 0);
+  // A residual past the threshold is a genuine demand step, not hunting: react
+  // at full gain (and bleed any hunt memory) so a real load/solar change isn't
+  // slowed just because the loop was hunting beforehand.
+  if (this->cfg_.osc_damp_threshold > 0.0f &&
+      std::fabs(residual) > this->cfg_.osc_damp_threshold) {
+    state.osc_score *= 1.0f - this->cfg_.osc_damp_decay;
+    if (sign != 0) state.osc_last_sign = sign;
+    return residual;
+  }
+  if (sign != 0 && state.osc_last_sign != 0 && sign != state.osc_last_sign) {
+    state.osc_score = std::min(1.0f, state.osc_score + this->cfg_.osc_damp_alpha);
+  } else {
+    state.osc_score *= 1.0f - this->cfg_.osc_damp_decay;
+  }
+  if (sign != 0) state.osc_last_sign = sign;
+  return residual * (1.0f - this->cfg_.osc_damp_max * state.osc_score);
 }
 
 // Clamp the auto-path reading to the consumer's ramp-pacing cap (issue #458).

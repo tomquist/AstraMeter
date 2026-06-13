@@ -94,6 +94,10 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "max_target_step") this->balancer_cfg_.max_target_step = f;
   else if (key == "pace_base_step") this->balancer_cfg_.pace_base_step = f;
   else if (key == "pace_max_step") this->balancer_cfg_.pace_max_step = f;
+  else if (key == "osc_damp_max") this->balancer_cfg_.osc_damp_max = f;
+  else if (key == "osc_damp_alpha") this->balancer_cfg_.osc_damp_alpha = f;
+  else if (key == "osc_damp_decay") this->balancer_cfg_.osc_damp_decay = f;
+  else if (key == "osc_damp_threshold") this->balancer_cfg_.osc_damp_threshold = f;
   else if (key == "min_efficient_power") this->balancer_cfg_.min_efficient_power = f;
   else if (key == "probe_min_power") this->balancer_cfg_.probe_min_power = f;
   else if (key == "efficiency_rotation_interval") this->balancer_cfg_.efficiency_rotation_interval = f;

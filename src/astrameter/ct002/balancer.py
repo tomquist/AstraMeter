@@ -254,6 +254,23 @@ class BalancerConfig:
     # meter latency, so the cap tops out at 200 W.
     pace_base_step: float = 50
     pace_max_step: float = 200
+    # Oscillation-gated damping (issue #473).  Under meter latency the gain-1
+    # grid-following residual limit-cycles: the controller keeps reacting to a
+    # stale reading that doesn't yet reflect its last command, so it overshoots
+    # and the grid hunts continuously.  We track an EMA of how often a
+    # consumer's residual *reverses sign* (the signature of hunting, not of a
+    # genuine load step, which holds one sign) and scale the residual down by up
+    # to ``osc_damp_max`` as that score rises.  A clean step keeps full gain
+    # (sign constant -> score ~0 -> factor ~1), so step reaction is unchanged;
+    # only a hunting loop is damped.  ``osc_damp_max = 0`` disables.
+    osc_damp_max: float = 0.8
+    osc_damp_alpha: float = 0.15
+    osc_damp_decay: float = 0.1
+    # Only near-null corrections are damped: a residual above this magnitude is
+    # a genuine demand step (kettle, solar ramp), not hunting, so it passes
+    # through at full gain and reacts immediately.  Keeps the damper from
+    # bleeding a real step response just because the loop was hunting before it.
+    osc_damp_threshold: float = 450
 
     def __post_init__(self) -> None:
         def _clamp(name: str, lo: float, hi: float) -> None:
@@ -277,6 +294,10 @@ class BalancerConfig:
         _clamp("min_dc_output", 0, float("inf"))
         _clamp("pace_base_step", 0, float("inf"))
         _clamp("pace_max_step", self.pace_base_step, float("inf"))
+        _clamp("osc_damp_max", 0.0, 1.0)
+        _clamp("osc_damp_alpha", 0.0, 1.0)
+        _clamp("osc_damp_decay", 0.0, 1.0)
+        _clamp("osc_damp_threshold", 0.0, float("inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +341,11 @@ class BalancerConsumerState:
     pace_sign: int = 0
     pace_prev_reported: float | None = None
     pace_last_at: float = 0.0
+    # Oscillation-gated damping (see BalancerConfig.osc_damp_max): accumulated
+    # reversal score (1.0 = sustained hunting, 0.0 = steady) and the sign of the
+    # last non-zero residual that fed it.
+    osc_score: float = 0.0
+    osc_last_sign: int = 0
     saturation_score: float = 0.0
     saturation_grace_until: float = 0.0
     saturation_grace_started_at: float = 0.0
@@ -936,6 +962,8 @@ class LoadBalancer:
         state.pace_sign = 0
         state.pace_prev_reported = None
         state.pace_last_at = 0.0
+        state.osc_score = 0.0
+        state.osc_last_sign = 0
         state.saturation_score = 0.0
         grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
@@ -1306,6 +1334,9 @@ class LoadBalancer:
         if (grid_total < 0 and residual > 0) or (grid_total > 0 and residual < 0):
             residual = 0
 
+        if consumer_id:
+            residual = self._damp_oscillation(consumer_id, residual)
+
         reported = (
             parse_int(reports.get(consumer_id, {}).get("power", 0))
             if consumer_id
@@ -1320,6 +1351,45 @@ class LoadBalancer:
             state.last_intent = reported + residual
 
         return self._split_by_phase(reading, reports, eff_part)
+
+    def _damp_oscillation(self, consumer_id: str, residual: float) -> float:
+        """Scale ``residual`` down while the consumer is hunting (issue #473).
+
+        Tracks an EMA (``osc_score``) of how often the residual reverses sign.
+        A genuine load step holds one sign, so the score decays to 0 and the
+        residual passes through unchanged; a latency-driven limit cycle flips
+        sign nearly every poll, driving the score toward 1 and shrinking the
+        residual by up to ``osc_damp_max`` — bleeding the loop gain that
+        sustains the hunt without slowing same-direction reactions.  Mirrors
+        the C++ port (balancer.cpp ``damp_oscillation_``).
+        """
+        cfg = self._cfg
+        if cfg.osc_damp_max <= 0.0:
+            return residual
+        state = self._get_consumer(consumer_id)
+        sign = 1 if residual > 0 else (-1 if residual < 0 else 0)
+        # A residual past the threshold is a genuine demand step, not hunting:
+        # react at full gain (and bleed any hunt memory) so a real load/solar
+        # change isn't slowed just because the loop was hunting beforehand.
+        if cfg.osc_damp_threshold > 0.0 and abs(residual) > cfg.osc_damp_threshold:
+            state.osc_score *= 1.0 - cfg.osc_damp_decay
+            if sign != 0:
+                state.osc_last_sign = sign
+            return residual
+        # Accumulate the score by ``osc_damp_alpha`` on each sign reversal and
+        # bleed it by ``osc_damp_decay`` otherwise.  A few reversals (a solar
+        # ramp crossing zero, or the brief ring-down after a load step) only
+        # nudge it, so genuine reactions keep near-full gain; only *repeated*
+        # reversals — a hunting limit cycle —
+        # accumulate the score toward 1 and engage the damping.  The reversal
+        # rate, not a one-off flip, is what distinguishes a hunt from a step.
+        if sign != 0 and state.osc_last_sign != 0 and sign != state.osc_last_sign:
+            state.osc_score = min(1.0, state.osc_score + cfg.osc_damp_alpha)
+        else:
+            state.osc_score *= 1.0 - cfg.osc_damp_decay
+        if sign != 0:
+            state.osc_last_sign = sign
+        return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
 
     def _pace_reading(self, consumer_id: str, reading: float, reported: float) -> float:
         """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
