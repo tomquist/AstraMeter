@@ -1402,6 +1402,11 @@ class LoadBalancer:
                 cap = min(cap * PACE_GROWTH_FACTOR**dt_ratio, self._cfg.pace_max_step)
         else:
             cap = max(base, abs(reading) / dt_ratio)
+        # Enforce the pace_max_step contract: the grow branch already clamps,
+        # but the else branch back-computes cap as abs(reading) / dt_ratio,
+        # which a fast poll (small dt_ratio) can inflate past the max — and a
+        # later normal-cadence poll would then slew beyond pace_max_step.
+        cap = min(cap, self._cfg.pace_max_step)
         state.pace_cap = cap
         state.pace_sign = sign
         state.pace_prev_reported = reported

@@ -930,6 +930,11 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   } else {
     cap = std::max(base, std::fabs(reading) / dt_ratio);
   }
+  // Enforce the pace_max_step contract: the grow branch already clamps, but the
+  // else branch back-computes cap as fabs(reading) / dt_ratio, which a fast poll
+  // (small dt_ratio) can inflate past the max — and a later normal-cadence poll
+  // would then slew beyond pace_max_step.
+  cap = std::min(cap, this->cfg_.pace_max_step);
   state.pace_cap = cap;
   state.pace_sign = sign;
   state.pace_prev_reported = reported;

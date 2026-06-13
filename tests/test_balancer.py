@@ -576,6 +576,19 @@ class TestPaceReading:
         # battery integrates the same 200 W/s either way.
         assert self._auto(lb, 160, 440, dt=0.5) == pytest.approx(100.0, abs=0.01)
 
+    def test_cap_clamped_to_max_after_fast_polls(self):
+        # The else branch back-computes the cap as abs(reading) / dt_ratio; a
+        # very fast poll could push that above pace_max_step. It must be
+        # clamped so a later normal-cadence poll can't slew past pace_max_step.
+        lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
+        # Two fast polls at the base step: the second hits the else branch and
+        # would store cap = 50 / 0.05 = 1000 W without the clamp.
+        self._auto(lb, 0, 50, dt=0.05)
+        self._auto(lb, 0, 50, dt=0.05)
+        # A subsequent normal-cadence, high-demand poll must still be bounded by
+        # pace_max_step (200), not the inflated cap.
+        assert self._auto(lb, 0, 5000, dt=1.0) == pytest.approx(200.0, abs=0.01)
+
     def test_deprioritized_wind_down_is_paced(self):
         """A consumer faded out by efficiency mode is steered to zero
         through the pacing cap — the firmware applies a charge-direction

@@ -93,6 +93,10 @@ def test_slot_count_holds_through_boundary_noise_but_tracks_real_steps() -> None
     def run(demand: float, ticks: int = 1) -> None:
         nonlocal tick
         for _ in range(ticks):
+            # carried=295 holds the first battery's reported output fixed while
+            # only `demand` (grid_total) varies, so the test isolates the
+            # slot-count response to boundary *noise* vs real demand steps —
+            # the report doesn't drift and confound the comparison.
             _tick(lb, demand, carried=295.0, tick=tick)
             tick += 1
             clock.advance(1.0)
