@@ -73,6 +73,10 @@ SOC_FULL = 0.98
 # interactive charts in the HTML report. Base and head share this fixed count
 # so the two lines align by index regardless of poll cadence.
 GRAPH_POINTS = 1800
+# Resolution of the half-sine solar day curve (s).  Fine enough that each step
+# is a few watts (vs ~50 W per minute at the steepest part of the sine), so the
+# controller sees a smooth ramp rather than a minutely staircase of load steps.
+SOLAR_CURVE_STEP_S = 2
 
 
 # ---------------------------------------------------------------------------
@@ -701,9 +705,14 @@ def _washer_cycle(rng: random.Random, duration: float) -> list[Event]:
 
 
 def _solar_curve(duration: float, peak: float) -> list[Event]:
-    """Unlabeled per-minute half-sine solar day curve."""
+    """Unlabeled half-sine solar day curve.
+
+    Updated every ``SOLAR_CURVE_STEP_S`` so the curve is smooth: a coarse
+    per-minute step jumps ~50 W per tick where the sine is steepest (sunrise /
+    sunset), which the controller would chase as a series of small load steps.
+    """
     events: list[Event] = []
-    for t in range(0, int(duration), 60):
+    for t in range(0, int(duration), SOLAR_CURVE_STEP_S):
         watts = peak * math.sin(math.pi * t / duration)
         events.append(Event(at=float(t), apply=_set_solar_curve(watts)))
     return events
@@ -712,8 +721,8 @@ def _solar_curve(duration: float, peak: float) -> list[Event]:
 def _cloud_dips(rng: random.Random, duration: float) -> list[Event]:
     """Labeled cloud transients: solar collapses to 20% for ~2 minutes.
 
-    Implemented as a multiplicative factor so the per-minute day curve keeps
-    ticking underneath without cancelling the dip.
+    Implemented as a multiplicative factor so the day curve keeps ticking
+    underneath without cancelling the dip.
     """
     events: list[Event] = []
     for frac in (0.4, 0.55):
@@ -726,9 +735,10 @@ def _cloud_dips(rng: random.Random, duration: float) -> list[Event]:
 
 
 def _dc_solar_curve(duration: float, peak: float, battery_index: int) -> list[Event]:
-    """Unlabeled per-minute DC-input solar curve for a B2500-style battery."""
+    """Unlabeled DC-input solar curve for a B2500-style battery (smooth — see
+    :func:`_solar_curve`)."""
     events: list[Event] = []
-    for t in range(0, int(duration), 60):
+    for t in range(0, int(duration), SOLAR_CURVE_STEP_S):
         watts = peak * math.sin(math.pi * t / duration)
         events.append(Event(at=float(t), apply=_set_dc_input(battery_index, watts)))
     return events
