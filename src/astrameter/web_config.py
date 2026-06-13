@@ -297,6 +297,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "OSC_DAMP_MAX": {"type": "float", "min": 0, "max": 1},
         "OSC_DAMP_ALPHA": {"type": "float", "min": 0, "max": 1},
         "OSC_DAMP_DECAY": {"type": "float", "min": 0, "max": 1},
+        "OSC_DAMP_THRESHOLD": {"type": "float", "min": 0},
         "SATURATION_DETECTION": {"type": "boolean"},
         "SATURATION_ALPHA": {"type": "float", "min": 0, "max": 1},
         "MIN_TARGET_FOR_SATURATION": {"type": "integer"},

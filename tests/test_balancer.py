@@ -655,6 +655,9 @@ class TestDampOscillation:
 
     def _lb(self, **cfg):
         cfg.setdefault("osc_damp_max", 0.8)
+        # Intentionally above BalancerConfig's 0.15 default: a larger alpha
+        # accumulates the score in fewer reversals, so the assertions below
+        # (e.g. one reversal -> factor 1 - 0.8*0.25 = 0.8) use round numbers.
         cfg.setdefault("osc_damp_alpha", 0.25)
         cfg.setdefault("osc_damp_decay", 0.1)
         cfg.setdefault("osc_damp_threshold", 450)

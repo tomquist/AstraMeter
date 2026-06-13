@@ -685,6 +685,8 @@ void LoadBalancer::reset_consumer(const std::string &consumer_id) {
   state.pace_sign = 0;
   state.pace_prev_reported.reset();
   state.pace_last_at = 0.0;
+  state.osc_score = 0.0f;
+  state.osc_last_sign = 0;
   state.saturation_score = 0.0;
   const double grace =
       this->clock_() + std::min(static_cast<double>(this->saturation_grace_seconds_),

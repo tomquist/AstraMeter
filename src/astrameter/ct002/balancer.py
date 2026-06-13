@@ -962,6 +962,8 @@ class LoadBalancer:
         state.pace_sign = 0
         state.pace_prev_reported = None
         state.pace_last_at = 0.0
+        state.osc_score = 0.0
+        state.osc_last_sign = 0
         state.saturation_score = 0.0
         grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
