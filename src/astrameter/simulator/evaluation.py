@@ -646,6 +646,24 @@ def _dc_solar_curve(duration: float, peak: float, battery_index: int) -> list[Ev
     return events
 
 
+def _household_and_solar(
+    rng: random.Random, duration: float, solar_peak: float
+) -> list[Event]:
+    """Household appliance steps over an AC solar day curve with cloud dips.
+
+    Combines the discharge-side step schedule with a half-sine PV curve big
+    enough to push the pool into export/charge territory around midday, so the
+    scenario exercises the full bidirectional loop (charge distribution, the
+    AC-charge clamp, zero-crossings) on top of the step responses — not just
+    discharge.
+    """
+    return (
+        _household_steps(rng, duration)
+        + _solar_curve(duration, solar_peak)
+        + _cloud_dips(rng, duration)
+    )
+
+
 def build_scenarios() -> dict[str, Scenario]:
     """All evaluation scenarios, keyed by name.
 
@@ -698,6 +716,26 @@ def build_scenarios() -> dict[str, Scenario]:
             )
         )
 
+    # Solar peak (W) for the multi-Venus solar scenarios: above the base load
+    # plus typical appliance draw, so midday PV pushes the pool into charging /
+    # export for stretches.
+    solar_peak_house = 3000.0
+    for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
+        add(
+            Scenario(
+                name=f"two_venus_solar/{mode}",
+                description="Two Venus, household load + solar day curve + clouds",
+                batteries=[_VENUS, _VENUS],
+                duration_s=dur_solar,
+                base_load=[400.0, 0.0, 0.0],
+                loads=list(_HOUSEHOLD_LOADS),
+                build_events=lambda rng: _household_and_solar(
+                    rng, dur_solar, solar_peak_house
+                ),
+                ct_kwargs=dict(kwargs),
+            )
+        )
+
     dur_mixed = 5400.0
     for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
         add(
@@ -724,6 +762,22 @@ def build_scenarios() -> dict[str, Scenario]:
                 duration_s=dur_steps,
                 loads=list(_HOUSEHOLD_LOADS),
                 build_events=lambda rng: _household_steps(rng, dur_steps),
+                ct_kwargs=dict(kwargs),
+            )
+        )
+
+    for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
+        add(
+            Scenario(
+                name=f"mixed_cadence_solar/{mode}",
+                description="Slow V2 + fast V3, household load + solar + clouds",
+                batteries=[_VENUS_V2_SLOW, _VENUS_V3],
+                duration_s=dur_solar,
+                base_load=[400.0, 0.0, 0.0],
+                loads=list(_HOUSEHOLD_LOADS),
+                build_events=lambda rng: _household_and_solar(
+                    rng, dur_solar, solar_peak_house
+                ),
                 ct_kwargs=dict(kwargs),
             )
         )

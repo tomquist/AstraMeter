@@ -98,6 +98,12 @@ def test_scenario_registry_shape():
     assert "two_venus/eff" in scenarios
     assert "mixed_venus_b2500/fair" in scenarios
     assert "mixed_venus_b2500/eff" in scenarios
+    # Venus families also have solar variants (load + PV day curve + clouds),
+    # exercising the charge/export side of the loop, not just discharge.
+    assert "two_venus_solar/fair" in scenarios
+    assert "two_venus_solar/eff" in scenarios
+    assert "mixed_cadence_solar/fair" in scenarios
+    assert "mixed_cadence_solar/eff" in scenarios
     assert scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"] > 0
     for sc in scenarios.values():
         assert sc.duration_s > 0 and sc.batteries
