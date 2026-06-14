@@ -120,7 +120,11 @@ struct BalancerConfig {
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
-  float efficiency_saturation_threshold{0.4f};
+  // double (compared against the double saturation_score EMA) so the swap
+  // decision matches the canonical Python double math; a float 0.4f sits a few
+  // 1e-8 above 0.4 and flips the comparison on a knife-edge score, diverging the
+  // deprioritized set from Python.
+  double efficiency_saturation_threshold{0.4};
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
@@ -146,7 +150,10 @@ struct BalancerConsumerState {
   // consumer, recorded *before* wire pacing. The cross-talk chrg/dchrg
   // attribution uses it to filter involuntary outputs (issue #376).
   std::optional<float> last_intent;
-  float fade_weight{1.0f};
+  // Long-running EMA weight — double (like saturation_score) so the fade
+  // trajectory and its snap-to-goal threshold match the canonical Python double
+  // math poll-for-poll; float drifts enough to flip the snap on a different poll.
+  double fade_weight{1.0};
   // Ramp-pacing state (see BalancerConfig::pace_base_step): current per-poll
   // cap, sign of the last paced reading, and the battery's reported power at
   // the last pacing step (tracking detection).
@@ -196,7 +203,7 @@ using ReportMap = std::unordered_map<std::string, ConsumerReport>;
 
 class SaturationTracker {
  public:
-  SaturationTracker(float alpha, float min_target, float decay_factor,
+  SaturationTracker(double alpha, float min_target, double decay_factor,
                     float stall_timeout_seconds, bool enabled,
                     std::function<double()> clock);
 
@@ -209,16 +216,19 @@ class SaturationTracker {
  private:
   std::function<double()> clock_;
   bool enabled_;
-  float alpha_;
+  // double (like the saturation_score it drives) so the EMA matches the
+  // canonical Python double math; a float alpha/decay sits ~1e-8 off the double
+  // value and drifts the score across the swap threshold on a knife-edge.
+  double alpha_;
   float min_target_;
-  float decay_factor_;
+  double decay_factor_;
   float stall_timeout_seconds_;
 };
 
 class LoadBalancer {
  public:
-  LoadBalancer(BalancerConfig config, float saturation_alpha,
-               float saturation_min_target, float saturation_decay_factor,
+  LoadBalancer(BalancerConfig config, double saturation_alpha,
+               float saturation_min_target, double saturation_decay_factor,
                float saturation_grace_seconds, float saturation_stall_timeout_seconds,
                bool saturation_enabled, std::function<double()> clock,
                std::function<void()> reset_fn);

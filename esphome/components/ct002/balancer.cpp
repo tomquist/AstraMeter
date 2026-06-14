@@ -102,7 +102,8 @@ void BalancerConfig::clamp() {
   if (probe_min_power < 0.0f) probe_min_power = 0.0f;
   if (efficiency_rotation_interval < 1.0f) efficiency_rotation_interval = 1.0f;
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
-  clamp_v(efficiency_saturation_threshold, 0.0f, 1.0f);
+  efficiency_saturation_threshold =
+      std::max(0.0, std::min(1.0, efficiency_saturation_threshold));
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
   if (pace_base_step < 0.0f) pace_base_step = 0.0f;
   if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
@@ -117,14 +118,14 @@ void BalancerConfig::clamp() {
 // SaturationTracker
 // -------------------------------------------------------------------------
 
-SaturationTracker::SaturationTracker(float alpha, float min_target, float decay_factor,
+SaturationTracker::SaturationTracker(double alpha, float min_target, double decay_factor,
                                      float stall_timeout_seconds, bool enabled,
                                      std::function<double()> clock)
     : clock_(std::move(clock)),
       enabled_(enabled),
-      alpha_(std::max(0.01f, std::min(1.0f, alpha))),
+      alpha_(std::max(0.01, std::min(1.0, alpha))),
       min_target_(std::max(1.0f, min_target)),
-      decay_factor_(std::max(0.0f, std::min(1.0f, decay_factor))),
+      decay_factor_(std::max(0.0, std::min(1.0, decay_factor))),
       stall_timeout_seconds_(std::max(0.0f, stall_timeout_seconds)) {}
 
 void SaturationTracker::update(BalancerConsumerState &state,
@@ -201,8 +202,8 @@ void SaturationTracker::clear(BalancerConsumerState &state) {
 // LoadBalancer
 // -------------------------------------------------------------------------
 
-LoadBalancer::LoadBalancer(BalancerConfig config, float saturation_alpha,
-                           float saturation_min_target, float saturation_decay_factor,
+LoadBalancer::LoadBalancer(BalancerConfig config, double saturation_alpha,
+                           float saturation_min_target, double saturation_decay_factor,
                            float saturation_grace_seconds,
                            float saturation_stall_timeout_seconds,
                            bool saturation_enabled, std::function<double()> clock,
@@ -312,13 +313,13 @@ void LoadBalancer::commit_probe_(const ReportMap &reports, double now, float act
   if (total_actual > 0.0) {
     for (const auto &cid : participants) {
       auto it = reports.find(cid);
-      const float share = it != reports.end() ? std::fabs(it->second.power) : 0.0f;
-      this->get_consumer_(cid).fade_weight = static_cast<float>(share / total_actual);
+      const double share = it != reports.end() ? std::fabs(it->second.power) : 0.0;
+      this->get_consumer_(cid).fade_weight = share / total_actual;
     }
   } else {
     const size_t active_count = std::max<size_t>(1, probe.active_ids.size());
     for (const auto &cid : probe.active_ids)
-      this->get_consumer_(cid).fade_weight = 1.0f / active_count;
+      this->get_consumer_(cid).fade_weight = 1.0 / active_count;
     for (const auto &cid : probe.backup_ids) this->get_consumer_(cid).fade_weight = 0.0f;
   }
   this->post_probe_fade_until_ = now + std::min(5.0f, this->probe_timeout_seconds_);
@@ -814,16 +815,16 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
 
   if (any_fading && consumer_id) {
     auto &state = this->get_consumer_(*consumer_id);
-    const float fade_w = state.fade_weight;
+    const double fade_w = state.fade_weight;
     auto it = reports.find(*consumer_id);
     const float reported = (it != reports.end()) ? it->second.power : 0.0f;
-    if (fade_w == 0.0f) return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
+    if (fade_w == 0.0) return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
     float total_battery = 0.0f;
     for (const auto &r : reports) total_battery += r.second.power;
-    const float demand = total_battery + grid_total;
-    float total_fade = 0.0f;
+    const double demand = static_cast<double>(total_battery) + grid_total;
+    double total_fade = 0.0;
     for (const auto &r : reports) total_fade += this->get_consumer_(r.first).fade_weight;
-    const float desired = (total_fade > 0.0f) ? demand * fade_w / total_fade : 0.0f;
+    const double desired = (total_fade > 0.0) ? demand * fade_w / total_fade : 0.0;
     float reading = to_grid_reading(NetOutputW(desired), reported);
     reading = this->pace_reading_(*consumer_id, reading, reported);
     state.last_target = reading;
@@ -1281,7 +1282,7 @@ bool LoadBalancer::maybe_force_swap_saturated_(std::vector<std::string> &priorit
                                                size_t slots, double now) {
   const auto &cfg = this->cfg_;
   if (cfg.efficiency_saturation_threshold <= 0.0f || slots >= priority.size()) return false;
-  const float threshold = cfg.efficiency_saturation_threshold;
+  const double threshold = cfg.efficiency_saturation_threshold;
   std::optional<size_t> saturated_idx;
   for (size_t i = 0; i < slots; ++i) {
     auto it = this->consumers_.find(priority[i]);
@@ -1320,16 +1321,16 @@ std::unordered_map<std::string, float> LoadBalancer::fade_efficiency_weights_(
       continue;
     }
     auto goal_it = raw_adjustments.find(cid);
-    const float goal = goal_it != raw_adjustments.end() ? goal_it->second : 1.0f;
-    const float prev = state.fade_weight;
-    float effective_alpha = alpha;
+    const double goal = goal_it != raw_adjustments.end() ? goal_it->second : 1.0;
+    const double prev = state.fade_weight;
+    double effective_alpha = alpha;
     if (post_probe_active && this->post_probe_fade_ids_.find(cid) != this->post_probe_fade_ids_.end()) {
-      effective_alpha = std::min(alpha, 0.25f);
+      effective_alpha = std::min<double>(alpha, 0.25);
     }
-    float new_w = prev + effective_alpha * (goal - prev);
-    if (std::fabs(new_w - goal) < 0.05f) new_w = goal;
+    double new_w = prev + effective_alpha * (goal - prev);
+    if (std::fabs(new_w - goal) < 0.05) new_w = goal;
     state.fade_weight = new_w;
-    if (new_w < 1.0f) result[cid] = new_w;
+    if (new_w < 1.0) result[cid] = static_cast<float>(new_w);
   }
   if (!post_probe_active) this->clear_post_probe_fade_();
   // Cleanup consumers no longer in the pool and not in priority_.
