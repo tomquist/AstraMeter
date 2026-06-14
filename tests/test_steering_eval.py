@@ -21,7 +21,10 @@ from astrameter.simulator.evaluation import (
     Scenario,
     _aggregate,
     _fmt_delta,
+    _merge_seeds,
     _overall_summary,
+    _run_all,
+    _seed_label,
     build_scenarios,
     render_markdown_compare,
     render_text,
@@ -316,6 +319,69 @@ def test_html_report_renders_aggregate_section():
     )
     assert "Aggregate &mdash; mean across 2 scenarios" in h
     assert "improved" in h  # the one-line verdict is rendered
+
+
+def test_merge_seeds_averages_metrics_and_traces():
+    r1 = {
+        "scenario": "x",
+        "seed": 1,
+        "settle_mean_s": 10.0,
+        "unsettled_events": 0,
+        "grid_trace": [0.0, 10.0],
+        "battery_traces": [[1.0, 3.0]],
+        "battery_labels": ["B1 HMG-50"],
+    }
+    r2 = dict(
+        r1,
+        seed=2,
+        settle_mean_s=20.0,
+        unsettled_events=1,
+        grid_trace=[2.0, 20.0],
+        battery_traces=[[3.0, 5.0]],
+    )
+    merged = _merge_seeds([r1, r2])
+    assert merged["seeds"] == [1, 2] and merged["n_seeds"] == 2
+    assert "seed" not in merged  # the single-seed field is replaced
+    # Scalars and traces are the element-wise mean over seeds.
+    assert merged["settle_mean_s"] == 15.0
+    assert merged["unsettled_events"] == 0.5
+    assert merged["grid_trace"] == [1.0, 15.0]
+    assert merged["battery_traces"] == [[2.0, 4.0]]
+    # Labels (identical across seeds) pass through.
+    assert merged["battery_labels"] == ["B1 HMG-50"]
+
+
+def test_merge_seeds_single_seed_is_passthrough():
+    r = {"scenario": "x", "seed": 1, "settle_mean_s": 10.0}
+    # One seed: nothing to average, the original row (with its seed) is returned.
+    assert _merge_seeds([r]) is r
+
+
+def test_seed_label_reads_single_or_averaged():
+    assert _seed_label({"seed": 3}) == "seed 3"
+    assert _seed_label({"n_seeds": 4, "seeds": [1, 2, 3, 4]}) == "mean of 4 seeds"
+
+
+def test_markdown_compare_notes_seed_averaging():
+    res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    head = [dict(res, n_seeds=3, seeds=[1, 2, 3])]
+    md = render_markdown_compare([res], head)
+    # The reader is told the head figures are seed-averaged (not a single draw).
+    assert "Metrics are the per-scenario" in md
+    assert "mean of 3 seeds" in md
+
+
+def test_run_all_runs_seeds_in_parallel_and_merges():
+    # End-to-end through the process pool: one real (short) scenario over two
+    # seeds collapses to a single seed-averaged row.
+    results = _run_all(["single_venus_washer"], [1, 2], {})
+    assert len(results) == 1
+    r = results[0]
+    assert r["scenario"] == "single_venus_washer"
+    assert r["n_seeds"] == 2 and r["seeds"] == [1, 2]
+    assert "seed" not in r
+    for key in _REPORT_METRICS:
+        assert key in r
 
 
 def test_metric_glossary_covers_every_reported_metric():

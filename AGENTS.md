@@ -27,16 +27,19 @@ CI runs the same steps (see `.github/workflows/ci.yml`).
 
 `uv run python -m astrameter.simulator.evaluation` simulates hours of
 realistic household activity against the firmware-accurate battery plant and
-reports reaction/oscillation/energy metrics per scenario. When changing
-`src/astrameter/ct002/balancer.py` (or anything else in the active-control
-loop), capture a baseline first (`--json base.json` on the unchanged code),
-re-run after the change, and compare with `--input head.json --compare
-base.json`. CI runs the same suite on PR base + head (job `steering-eval`)
-and posts the comparison as a sticky PR comment. The comparison leads with an
-**aggregate roll-up** (per-metric mean across all scenarios plus a one-line
-overall verdict — how many metrics improved/regressed and the mean relative
-change), so an across-the-board improvement or regression is visible without
-reading every scenario table.
+reports reaction/oscillation/energy metrics per scenario. Each scenario is run
+over several seeds (`--seeds`, default 5) **in parallel across CPU cores**, and
+every metric is the mean over those seeds — so the figures are the
+seed-averaged signal, not one noisy draw (use `--seeds 1` for a quick
+single-seed run). When changing `src/astrameter/ct002/balancer.py` (or anything
+else in the active-control loop), capture a baseline first (`--json base.json`
+on the unchanged code), re-run after the change, and compare with `--input
+head.json --compare base.json`. CI runs the same suite on PR base + head (job
+`steering-eval`) and posts the comparison as a sticky PR comment. The
+comparison leads with an **aggregate roll-up** (per-metric mean across all
+scenarios plus a one-line overall verdict — how many metrics
+improved/regressed and the mean relative change), so an across-the-board
+improvement or regression is visible without reading every scenario table.
 
 ## Changelog
 

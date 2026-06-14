@@ -14,18 +14,28 @@ Each scenario produces metrics answering three questions (issue #458):
 * **Energy** — how many Wh leak to/from the grid that a battery with
   headroom could have covered?
 
+Each scenario is run over several seeds (``--seeds``, default 5) **in parallel
+across CPU cores** and every metric is reported as the mean over those seeds,
+so the figures reflect the seed-averaged signal rather than one noisy draw.
+Process isolation (not asyncio) is what parallelizes the CPU-bound sim and, as
+a bonus, gives each seed its own global ``random`` state so runs stay
+deterministic. Per-scenario rows are then rolled up into a single cross-scenario
+``AGGREGATE`` so an across-the-board win or regression is visible at a glance.
+
 Run the suite (from the repo root, with dev deps)::
 
     uv run python -m astrameter.simulator.evaluation
     uv run python -m astrameter.simulator.evaluation --scenario two_venus/fair \\
-        --set balance_deadband=25 --json head.json
+        --set balance_deadband=25 --seeds 10 --json head.json
     uv run python -m astrameter.simulator.evaluation --compare base.json \\
         --input head.json
 
-``--compare`` renders a Markdown before/after table — including a Mermaid
-chart of each scenario's grid-power trace (base vs head) — and CI runs the
-suite on the PR base and head and posts that comparison as a sticky PR
-comment (see ``.github/workflows/ci.yml``, job ``steering-eval``).
+``--compare`` renders a Markdown before/after table — leading with the
+seed-averaged ``AGGREGATE`` roll-up — and CI runs the suite on the PR base and
+head and posts that comparison as a sticky PR comment (see
+``.github/workflows/ci.yml``, job ``steering-eval``). The interactive
+grid-power charts live in the self-contained HTML report CI uploads as the
+``steering-eval`` artifact.
 """
 
 from __future__ import annotations
@@ -35,10 +45,12 @@ import asyncio
 import itertools
 import json
 import math
+import os
 import random
 import socket
 import sys
 from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from astrameter.ct002.balancer import device_capabilities
@@ -1056,6 +1068,46 @@ _METRIC_GLOSSARY = [
 ]
 
 
+def _mean_value(values: list):
+    """Average a homogeneous list of result values across seeds.
+
+    Recurses into nested lists (a battery's trace, the list of per-battery
+    traces) so traces average element-by-element; string lists (battery
+    labels, identical across seeds) pass through as the first value."""
+    v0 = values[0]
+    if isinstance(v0, bool):
+        return v0
+    if isinstance(v0, (int, float)):
+        return round(sum(float(v) for v in values) / len(values), 1)
+    if isinstance(v0, list):
+        if v0 and isinstance(v0[0], str):
+            return v0  # labels are identical across seeds
+        return [_mean_value([v[i] for v in values]) for i in range(len(v0))]
+    return v0  # strings / anything else: identical across seeds
+
+
+def _merge_seeds(per_seed: list[dict]) -> dict:
+    """Collapse one scenario's per-seed results into a single averaged row.
+
+    Every numeric metric (and every trace, element-wise) becomes the mean over
+    the seeds, so the reported figure is the seed-averaged signal rather than
+    one noisy draw. A lone seed is returned unchanged (no averaging, keeps the
+    original ``seed`` field). The merged row carries ``seeds`` / ``n_seeds``
+    instead of a single ``seed``."""
+    if len(per_seed) == 1:
+        return per_seed[0]
+    merged: dict = {
+        "scenario": per_seed[0]["scenario"],
+        "seeds": [r["seed"] for r in per_seed],
+        "n_seeds": len(per_seed),
+    }
+    for key in per_seed[0]:
+        if key in ("scenario", "seed"):
+            continue
+        merged[key] = _mean_value([r[key] for r in per_seed])
+    return merged
+
+
 def _aggregate(results: list[dict]) -> dict:
     """Collapse a result list into one synthetic "AGGREGATE" row.
 
@@ -1137,12 +1189,20 @@ def render_text(results: list[dict]) -> str:
         lines.append("")
     for res in results:
         lines.append(
-            f"== {res['scenario']} (seed {res['seed']}, "
+            f"== {res['scenario']} ({_seed_label(res)}, "
             f"{res['duration_h']}h, {res['events_measured']} events)"
         )
         for key in _REPORT_METRICS:
             lines.append(f"  {key:<24} {res[key]}")
     return "\n".join(lines)
+
+
+def _seed_label(res: dict) -> str:
+    """How a result's seed provenance reads in a header: a single ``seed N`` or
+    ``mean of N seeds`` once per-seed results have been merged."""
+    if res.get("n_seeds"):
+        return f"mean of {res['n_seeds']} seeds"
+    return f"seed {res.get('seed', '?')}"
 
 
 def _fmt_delta(base: float, head: float) -> str:
@@ -1170,6 +1230,31 @@ def _md_metric_rows(base: dict | None, head: dict) -> list[str]:
             delta = "—"
         rows.append(f"| {key} | {bv} | {hv} | {delta} |")
     return rows
+
+
+def _seeds_phrase(results: list[dict]) -> str:
+    """`mean of N seeds` / `single seed` describing how a result set was run."""
+    n = max((int(r.get("n_seeds", 1)) for r in results), default=1)
+    return f"mean of {n} seeds" if n > 1 else "single seed"
+
+
+def _seeds_caption(base: list[dict] | None, head: list[dict]) -> str:
+    """One sentence on the seed count behind each side, or ``""`` when both ran a
+    single seed (so the note only appears once figures are seed-averaged)."""
+    hp = _seeds_phrase(head)
+    bp = _seeds_phrase(base) if base else None
+    if hp == "single seed" and (bp is None or bp == "single seed"):
+        return ""
+    if bp is None or bp == hp:
+        return f"Metrics are the per-scenario {hp}."
+    return f"Metrics are the per-scenario mean over seeds (base: {bp}, head: {hp})."
+
+
+def _seeds_note(base: list[dict], head: list[dict]) -> list[str]:
+    """The :func:`_seeds_caption` sentence as italic Markdown lines (empty when
+    there's nothing to note)."""
+    caption = _seeds_caption(base, head)
+    return [f"_{caption}_", ""] if caption else []
 
 
 def render_markdown_compare(
@@ -1204,6 +1289,9 @@ def render_markdown_compare(
         "Lower is better for every metric. See "
         "`src/astrameter/simulator/evaluation.py` for definitions.",
         "",
+    ]
+    out += _seeds_note(base, head)
+    out += [
         f"#### Aggregate — mean across {head_agg['n_scenarios']} scenarios",
         "",
     ]
@@ -1277,9 +1365,45 @@ def _parse_overrides(pairs: list[str]) -> dict[str, float]:
     return overrides
 
 
-async def _run_all(
-    names: list[str], seed: int, overrides: dict[str, float]
+def _run_one(name: str, seed: int, overrides: dict[str, float]) -> dict:
+    """Run one (scenario, seed) to completion in its own process.
+
+    A process-pool worker: it rebuilds the scenario registry from *name*
+    (closures in ``Scenario.build_events`` aren't picklable, so we ship the
+    name, not the object) and drives the async scenario under a fresh event
+    loop. Process isolation also gives each seed its own global ``random``
+    state, so concurrent runs stay bit-for-bit deterministic — which a single
+    interpreter (asyncio interleaving the shared global RNG) could not."""
+    scenarios = build_scenarios()
+    return asyncio.run(run_scenario(scenarios[name], seed=seed, overrides=overrides))
+
+
+def _run_tasks(
+    tasks: list[tuple[str, int]], overrides: dict[str, float]
+) -> dict[tuple[str, int], dict]:
+    """Run every (scenario, seed) task, in parallel across CPU cores.
+
+    The simulation is CPU-bound, so processes (not asyncio) are what actually
+    parallelize it; one task runs inline to avoid pool overhead."""
+    if len(tasks) <= 1:
+        return {t: _run_one(t[0], t[1], overrides) for t in tasks}
+    workers = min(len(tasks), os.cpu_count() or 1)
+    out: dict[tuple[str, int], dict] = {}
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_run_one, name, seed, overrides): (name, seed)
+            for name, seed in tasks
+        }
+        for fut in as_completed(futures):
+            out[futures[fut]] = fut.result()
+    return out
+
+
+def _run_all(
+    names: list[str], seeds: list[int], overrides: dict[str, float]
 ) -> list[dict]:
+    """Run the selected scenarios across all *seeds* concurrently, then collapse
+    each scenario's per-seed results into one seed-averaged row."""
     scenarios = build_scenarios()
     unknown = [n for n in names if n not in scenarios]
     if unknown:
@@ -1287,11 +1411,13 @@ async def _run_all(
             f"unknown scenario(s): {', '.join(unknown)}; "
             f"available: {', '.join(sorted(scenarios))}"
         )
+    selected = names or sorted(scenarios)
+    raw = _run_tasks([(name, seed) for name in selected for seed in seeds], overrides)
     results = []
-    for name in names or sorted(scenarios):
-        res = await run_scenario(scenarios[name], seed=seed, overrides=overrides)
-        print(render_text([res]), file=sys.stderr, flush=True)
-        results.append(res)
+    for name in selected:
+        merged = _merge_seeds([raw[(name, seed)] for seed in seeds])
+        print(render_text([merged]), file=sys.stderr, flush=True)
+        results.append(merged)
     return results
 
 
@@ -1306,7 +1432,20 @@ def main(argv: list[str] | None = None) -> None:
         default=[],
         help="run only this scenario (repeatable; default: all)",
     )
-    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=1,
+        help="first seed (default: 1); with --seeds N, runs seed..seed+N-1",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=5,
+        metavar="N",
+        help="number of seeds to run per scenario and average over, in "
+        "parallel across CPU cores (default: 5; 1 disables seed averaging)",
+    )
     parser.add_argument(
         "--set",
         dest="overrides",
@@ -1344,8 +1483,11 @@ def main(argv: list[str] | None = None) -> None:
         with open(args.input) as fh:
             results = json.load(fh)
     else:
+        if args.seeds < 1:
+            raise SystemExit("--seeds must be >= 1")
         overrides = _parse_overrides(args.overrides)
-        results = asyncio.run(_run_all(args.scenario, args.seed, overrides))
+        seeds = list(range(args.seed, args.seed + args.seeds))
+        results = _run_all(args.scenario, seeds, overrides)
 
     if args.json:
         with open(args.json, "w") as fh:
@@ -1374,6 +1516,7 @@ def main(argv: list[str] | None = None) -> None:
             aggregate_summary=(
                 _overall_summary(base_agg, head_agg) if base_agg is not None else ""
             ),
+            note=_seeds_caption(base, results),
         )
         with open(args.html, "w", encoding="utf-8") as fh:
             fh.write(report)
