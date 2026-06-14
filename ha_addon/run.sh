@@ -85,6 +85,11 @@ else
         min_dc_output="$(bashio::config 'min_dc_output')"
     fi
 
+    active_control=""
+    if bashio::config.has_value 'active_control'; then
+        active_control="$(bashio::config 'active_control')"
+    fi
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -98,12 +103,14 @@ else
         if [ "$has_ct002" -eq 1 ] && [ "$has_ct003" -eq 1 ]; then
             echo "[CT002]"
             echo "CT_MAC=$ct_mac"
+            [ -n "$active_control" ] && echo "ACTIVE_CONTROL=$active_control"
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             echo ""
             echo "[CT003]"
             echo "CT_MAC=$ct_mac"
+            [ -n "$active_control" ] && echo "ACTIVE_CONTROL=$active_control"
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
@@ -111,6 +118,7 @@ else
         else
             echo "[$ct_section]"
             echo "CT_MAC=$ct_mac"
+            [ -n "$active_control" ] && echo "ACTIVE_CONTROL=$active_control"
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
