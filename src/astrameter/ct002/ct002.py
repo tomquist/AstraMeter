@@ -902,6 +902,7 @@ class CT002:
             # matching the ESPHome component, which uses ``[0, 0, 0]`` when
             # its sensor ages out (see esphome/components/ct002/ct002.cpp).
             values = [0, 0, 0]
+            self._last_smooth_target = 0.0
         else:
             values = self._get_consumer_value(consumer_id)
             if values is None:
@@ -909,7 +910,11 @@ class CT002:
         raw_values = ([*list(values), 0, 0, 0])[:3]
         meter_value = sum(parse_int(v, 0) for v in raw_values)
         is_active = self.is_consumer_active(consumer_id)
-        if self.active_control and not in_inspection_mode:
+        # A failed meter must not re-drive control: a stale/synthetic reading run
+        # through the balancer (in particular the feedback-lag predictor, which
+        # would read the battery's own output change as in-flight steering) winds
+        # the battery up instead of holding it. Send the zero-delta hold as-is.
+        if self.active_control and not in_inspection_mode and not meter_failed:
             values = self._compute_smooth_target(values, consumer_id)
         values = ([*list(values), 0, 0, 0])[:3]
 

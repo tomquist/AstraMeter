@@ -903,7 +903,11 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
 // balancer.py _predicted_grid.
 float LoadBalancer::predicted_grid_(const ReportMap &reports, float grid_total) {
   const double max_lag = this->cfg_.predict_lag_s;
-  if (max_lag <= 0.0) return grid_total;
+  // Skip during an efficiency probe handoff: the pool's output is mid-transition
+  // (the candidate ramping from startup delay while backups cover), not
+  // following our steady command, so the lag compensation misfires. Don't record
+  // it either, so the estimator isn't poisoned. Mirrors balancer.py.
+  if (max_lag <= 0.0 || this->probe_state_.has_value()) return grid_total;
   const double now = this->clock_();
   double total_now = 0.0;
   for (const auto &r : reports) total_now += r.second.power;

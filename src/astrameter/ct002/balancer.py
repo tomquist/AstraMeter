@@ -1432,7 +1432,12 @@ class LoadBalancer:
         default for a low-latency install.
         """
         max_lag = self._cfg.predict_lag_s
-        if max_lag <= 0:
+        # Skip during an efficiency probe handoff: the candidate ramps from its
+        # startup delay while backups cover, so the pool's output is mid-
+        # transition, not following our steady command — feeding that abrupt
+        # swing through the lag compensation misfires. Don't record it either, so
+        # the estimator isn't poisoned by the handoff transient.
+        if max_lag <= 0 or self._probe_state is not None:
             return grid_total
         now = self._clock()
         total_now = float(sum(parse_int(r.get("power", 0)) for r in reports.values()))

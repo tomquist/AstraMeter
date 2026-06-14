@@ -290,12 +290,23 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 
   // Read the filter pipeline → balancer.
   std::vector<float> values;
-  if (this->pipeline_head_) values = this->pipeline_head_->get_powermeter_watts();
-  if (values.empty()) values = {0.0f, 0.0f, 0.0f};
+  bool meter_available = false;
+  if (this->pipeline_head_) {
+    values = this->pipeline_head_->get_powermeter_watts();
+    meter_available = !values.empty();  // {} = sensor stale / unavailable
+  }
+  if (values.empty()) {
+    values = {0.0f, 0.0f, 0.0f};
+    this->last_smooth_target_ = 0.0f;
+  }
   while (values.size() < 3) values.push_back(0.0f);
   values.resize(3);
 
-  if (this->active_control_ && !in_inspection_mode) {
+  // A failed/stale meter must not re-drive control: a stale reading run through
+  // the balancer (in particular the feedback-lag predictor, which would read the
+  // battery's own output change as in-flight steering) winds the battery up
+  // instead of holding it. Send the zero-delta hold as-is. Mirrors ct002.py.
+  if (this->active_control_ && !in_inspection_mode && meter_available) {
     values = this->compute_smooth_target_(values, consumer_id);
   }
   while (values.size() < 3) values.push_back(0.0f);
