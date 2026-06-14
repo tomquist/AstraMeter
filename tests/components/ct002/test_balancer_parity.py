@@ -167,7 +167,11 @@ class PyDriver:
                 float(grid),
                 frozenset(),
                 frozenset(),
-                (),
+                # sample_id mirrors the meter reading (as in production, where
+                # it is the grid values): a changed grid is a fresh sample, so
+                # the grid-state predictor's meter-correction / trust-adaptation
+                # branch is exercised in the differential comparison.
+                (float(grid),),
             )
             self.out.append(f"{res[0]:.4f} {res[1]:.4f} {res[2]:.4f}")
         elif cmd == "sat":

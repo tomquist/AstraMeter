@@ -756,9 +756,20 @@ class TestRampPacingRegression:
         )
 
     def test_paced_overshoot_bounded(self):
-        paced = asyncio.run(run_scenario(self._step_scenario(), seed=5))
+        # Isolate ramp pacing: disable the adaptive grid-state predictor (on by
+        # default), which independently bounds the windup this test attributes
+        # to pacing — leaving it on would make the unpaced run look bounded too.
+        paced = asyncio.run(
+            run_scenario(
+                self._step_scenario(), seed=5, overrides={"grid_predict_trust": 0}
+            )
+        )
         unpaced = asyncio.run(
-            run_scenario(self._step_scenario(), seed=5, overrides={"pace_base_step": 0})
+            run_scenario(
+                self._step_scenario(),
+                seed=5,
+                overrides={"pace_base_step": 0, "grid_predict_trust": 0},
+            )
         )
         # The unpaced firmware ramp overshoots the step by hundreds of watts;
         # pacing must keep the excursion within ~2 base steps.

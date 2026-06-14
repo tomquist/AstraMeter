@@ -31,6 +31,20 @@ inline constexpr float PACE_TRACKING_DELTA_W = 5.0f;
 inline constexpr float PACE_GROWTH_FACTOR = 2.0f;
 inline constexpr double PACE_REFERENCE_DT = 1.0;
 
+// Adaptive grid-state predictor (see BalancerConfig::grid_predict_trust and
+// LoadBalancer::predict_control_grid_). The meter trust is bounded to
+// [PRED_TRUST_MIN, PRED_TRUST_MAX] and adapted per fresh meter sample whose
+// innovation clears PRED_INNOVATION_GATE_W. The raise is a small additive step
+// (trust climbs only under a sustained same-sign innovation run — a genuine
+// lasting disturbance) while the shrink is a hard multiplicative cut (a single
+// sign flip, the signature of latency-driven hunting, collapses it). Mirrors
+// balancer.py.
+inline constexpr float PRED_TRUST_MIN = 0.15f;
+inline constexpr float PRED_TRUST_MAX = 0.6f;
+inline constexpr float PRED_TRUST_RAISE_STEP = 0.08f;
+inline constexpr float PRED_TRUST_SHRINK = 0.4f;
+inline constexpr float PRED_INNOVATION_GATE_W = 40.0f;
+
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
@@ -110,6 +124,12 @@ struct BalancerConfig {
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
+  // Adaptive grid-state predictor: act on a predicted grid that credits the
+  // pool's freshly-reported output between meter refreshes and trusts each
+  // fresh meter sample by an online-learned amount, compensating for meter
+  // latency without per-meter tuning. 0 disables (act on the raw meter); any
+  // positive value only seeds the self-adapting trust. See balancer.py.
+  float grid_predict_trust{0.5f};
 
   void clamp();
 };
@@ -267,6 +287,8 @@ class LoadBalancer {
                             float fair_share);
   float pace_reading_(const std::string &consumer_id, float reading, float reported);
   float damp_oscillation_(const std::string &consumer_id, float residual);
+  float predict_control_grid_(const ReportMap &reports, float grid_total,
+                              const std::vector<float> &sample_id);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
@@ -298,6 +320,18 @@ class LoadBalancer {
   double post_probe_fade_until_{0.0};
   std::unordered_set<std::string> post_probe_fade_ids_;
   bool all_dc_surplus_warned_{false};
+
+  // Adaptive grid-state predictor state (see predict_control_grid_).
+  // pred_grid_ is the estimate the control path acts on; pred_pool_output_ is
+  // the pool's last-seen reported output (its per-call delta advances the
+  // estimate); pred_sample_id_ flags a genuinely fresh meter reading;
+  // pred_trust_ is the online-adapted meter trust and pred_innov_sign_ the sign
+  // of the last significant innovation that drove it.
+  std::optional<float> pred_grid_{};
+  float pred_pool_output_{0.0f};
+  std::optional<std::vector<float>> pred_sample_id_{};
+  float pred_trust_{0.0f};
+  int pred_innov_sign_{0};
 };
 
 }  // namespace ct002

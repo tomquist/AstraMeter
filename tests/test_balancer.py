@@ -5,6 +5,8 @@ import time
 import pytest
 
 from astrameter.ct002.balancer import (
+    PRED_TRUST_MAX,
+    PRED_TRUST_SHRINK,
     BalancerConfig,
     BalancerConsumerState,
     ConsumerMode,
@@ -507,6 +509,11 @@ class TestPaceReading:
 
     def _make_balancer(self, **cfg_kwargs):
         cfg_kwargs.setdefault("fair_distribution", False)
+        # These tests exercise ramp pacing in isolation, asserting the cap
+        # against a residual that equals the raw grid; the adaptive grid-state
+        # predictor (on by default) would act on a different, predicted grid, so
+        # disable it here to keep the pacing math under test.
+        cfg_kwargs.setdefault("grid_predict_trust", 0.0)
         self.clock = _FakeClock()
         return LoadBalancer(
             config=BalancerConfig(**cfg_kwargs),
@@ -646,6 +653,81 @@ class TestPaceReading:
             "a", ConsumerMode("inactive"), reports, 0, frozenset(), frozenset(), ()
         )
         assert inactive[0] == -600.0
+
+
+class TestGridPredictor:
+    """Adaptive grid-state predictor (``grid_predict_trust``).
+
+    The C++ port is covered by the differential parity suite, which now threads
+    a grid-derived ``sample_id`` so the meter-correction / trust-adaptation
+    branch is exercised there too; these tests pin the Python contract directly.
+
+    Pacing and oscillation damping are disabled so the single consumer's
+    returned reading equals the predicted grid the control path acted on
+    (``fair_distribution=False`` ⇒ residual = fair_share = predicted grid).
+    """
+
+    def _make(self, **cfg):
+        cfg.setdefault("fair_distribution", False)
+        cfg.setdefault("pace_base_step", 0.0)
+        cfg.setdefault("osc_damp_max", 0.0)
+        self.clock = _FakeClock()
+        return LoadBalancer(
+            config=BalancerConfig(**cfg),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+            clock=self.clock,
+        )
+
+    def _grid(self, lb, reported, grid):
+        # sample_id = (grid,) mirrors production (the meter reading), so a
+        # changed grid is a fresh sample.
+        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": reported}}
+        return lb.compute_target(
+            "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), (grid,)
+        )[0]
+
+    def test_disabled_is_raw_passthrough(self):
+        lb = self._make(grid_predict_trust=0.0)
+        assert self._grid(lb, 0, 300) == 300.0
+        # Reported output never feeds back when the predictor is off.
+        assert self._grid(lb, 100, 300) == 300.0
+
+    def test_first_sample_returns_raw_grid(self):
+        lb = self._make(grid_predict_trust=0.5)
+        assert self._grid(lb, 0, 300) == 300.0
+
+    def test_credits_delivered_output_within_a_sample(self):
+        """Between meter refreshes (same sample_id) the estimate falls by the
+        pool's reported output change, so the loop commands only the remainder
+        instead of re-issuing the in-flight correction."""
+        lb = self._make(grid_predict_trust=0.5)
+        assert self._grid(lb, 0, 300) == 300.0  # init
+        # Same grid → same sample → no meter correction, only output crediting.
+        assert self._grid(lb, 120, 300) == pytest.approx(180.0)
+        assert self._grid(lb, 300, 300) == pytest.approx(0.0)
+
+    def test_meter_correction_uses_trust_on_a_fresh_sample(self):
+        lb = self._make(grid_predict_trust=0.5)
+        assert self._grid(lb, 0, 0) == 0.0  # init, trust seeded to 0.5
+        # Fresh sample: innovation 200, first significant one raises trust to
+        # 0.58, estimate += 0.58 * 200.
+        assert self._grid(lb, 0, 200) == pytest.approx(116.0)
+
+    def test_trust_rises_on_sustained_step_and_collapses_on_reversal(self):
+        lb = self._make(grid_predict_trust=0.5)
+        self._grid(lb, 0, 0)
+        # A sustained same-sign run drives the trust up to the cap.
+        for g in (200, 400, 600):
+            self._grid(lb, 0, g)
+        assert lb._pred_trust == pytest.approx(PRED_TRUST_MAX)
+        # A single sign reversal (the signature of hunting) cuts it hard.
+        self._grid(lb, 0, -200)
+        assert lb._pred_trust < PRED_TRUST_MAX * PRED_TRUST_SHRINK + 1e-6
 
 
 class TestDampOscillation:

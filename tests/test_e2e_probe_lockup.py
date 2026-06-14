@@ -369,32 +369,34 @@ class TestProbeLockup:
         finally:
             await h.stop()
 
-    async def test_stale_meter_during_probe_causes_persistent_lockup(
+    async def test_stale_meter_during_probe_handoff_stays_balanced(
         self,
     ) -> None:
-        """Documents the log2 failure *in the absence of powermeter
-        staleness detection*.
+        """The grid-state predictor mitigates the log2 blind-handoff drift.
 
-        The harness's in-test ``before_send`` does NOT implement
-        staleness detection — when ``frozen_grid`` is set it silently
-        returns the cached values.  This deliberately exercises the
-        path where the emulator has no way to know the meter has
-        gone quiet: the balancer computes ``target ≈ 0`` because its
-        meter source is pinned at ~0, and the real grid drifts to the
-        full magnitude of the load (what the user observed for ~1.5 h
-        until manual restart).
+        This is the same scenario that used to lock up: the harness's in-test
+        ``before_send`` does NOT implement staleness detection — when
+        ``frozen_grid`` is set it silently returns the cached values — so the
+        emulator has no way to know the meter has gone quiet and must drive the
+        rotation blind.  Previously the balancer computed ``target ≈ 0`` from
+        the pinned reading and the real grid drifted to the full magnitude of
+        the load (what the user observed for ~1.5 h until manual restart).
 
-        The actual fix for the reported bug lives **one layer up**:
-        ``HomeWizardPowermeter`` / ``HomeAssistant`` now raise
-        ``ValueError`` when their cached value is too old, at which
-        point CT002 takes a different code path — that path is
-        exercised by
+        The adaptive grid-state predictor now keeps the *total* commanded output
+        continuous through the handoff: it credits each battery's reported
+        output change, so winding one unit down and another up nets to zero and
+        the real grid stays near balance even though the meter is frozen.  The
+        old assertion (``grid drifts > 40 W``) is therefore inverted here — the
+        docstring of the previous version anticipated exactly this once the
+        balancer could recover without help from the powermeter layer.
+
+        This does NOT make the powermeter-layer staleness detection redundant:
+        the predictor only suppresses *handoff-induced* drift, not a genuine
+        load change that occurs while the meter is frozen (it has no meter
+        signal to catch that).  The real fix for a sustained outage still lives
+        one layer up — ``HomeWizardPowermeter`` / ``HomeAssistant`` raise
+        ``ValueError`` on a too-old cache — and is exercised by
         :meth:`test_powermeter_stale_error_is_handled_gracefully`.
-
-        Keeping this test around as a regression marker: if the
-        balancer ever gains the ability to recover *without* help
-        from the powermeter layer, this assertion will start to fail
-        and this test should be updated or deleted.
 
         Python-only: the frozen-meter trigger is injected through the
         in-process ``before_send`` hook, which has no ESPHome analog (the
@@ -437,19 +439,17 @@ class TestProbeLockup:
             grid_after = h.grid_total()
             smoothed = h.ct002._last_smooth_target
 
-            # The real grid is measurably off-balance because the
-            # emulator drove the handoff blind.  Accept either sign:
-            # the failure mode could be either over-discharge or
-            # under-coverage depending on how the batteries behave.
             print(
                 f"\n  after: powers={after} grid={grid_after:.1f} "
                 f"smoothed_emulator={smoothed}"
             )
-            assert abs(grid_after) > 40.0, (
-                "Stale-meter reproduction failed to trigger the "
-                f"lockup: grid={grid_after:.1f} W.  The test needs a "
-                "stronger trigger or the emulator has gained recovery "
-                "behaviour that invalidates this regression."
+            # The predictor keeps total output continuous through the blind
+            # handoff, so the real grid stays near balance despite the frozen
+            # meter — the old uncompensated drift is gone.
+            assert abs(grid_after) < 40.0, (
+                "Grid-state predictor should hold the handoff near balance with "
+                f"a frozen meter, but grid drifted to {grid_after:.1f} W. "
+                f"Powers: {after}."
             )
         finally:
             await h.stop()

@@ -116,8 +116,12 @@ int main() {
         if (md >= 0.0f) r.min_dc_output = md;
         reports[rc] = r;
       }
+      // sample_id mirrors the meter reading (as in production, where it is the
+      // grid values): a changed grid is a fresh sample, so the grid-state
+      // predictor's meter-correction / trust-adaptation branch is exercised.
+      const std::vector<float> sample_id{grid};
       const auto out = balancer->compute_target(cid, parse_mode(mode_str, manual), reports,
-                                                grid, {}, {}, {});
+                                                grid, {}, {}, sample_id);
       std::cout << out[0] << " " << out[1] << " " << out[2] << "\n";
     } else if (cmd == "sat") {
       std::string cid;

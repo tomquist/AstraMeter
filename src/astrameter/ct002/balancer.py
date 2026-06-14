@@ -105,6 +105,24 @@ PACE_GROWTH_FACTOR = 2.0
 # pacing exists to bound).
 PACE_REFERENCE_DT = 1.0
 
+# Adaptive grid-state predictor (see BalancerConfig.grid_predict_trust and
+# LoadBalancer._predict_control_grid).  The meter trust is bounded to
+# ``[PRED_TRUST_MIN, PRED_TRUST_MAX]`` and adapted per fresh meter sample whose
+# innovation clears ``PRED_INNOVATION_GATE_W`` (above the steady-state
+# meter-noise floor, so random sign flips at the null don't adapt it).  The
+# raise is a small *additive* step so trust only climbs under a *sustained*
+# same-sign innovation run — the signature of a genuine lasting disturbance (a
+# cloud, a big load step) — while the shrink is a hard *multiplicative* cut so a
+# single sign flip (the signature of latency-driven hunting, or an oscillatory
+# external load) collapses it at once.  This asymmetry is what lets one law both
+# track real steps fast and stay rock-steady against a hunting load, with no
+# per-meter tuning.
+PRED_TRUST_MIN = 0.15
+PRED_TRUST_MAX = 0.6
+PRED_TRUST_RAISE_STEP = 0.08
+PRED_TRUST_SHRINK = 0.4
+PRED_INNOVATION_GATE_W = 40.0
+
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
@@ -271,6 +289,23 @@ class BalancerConfig:
     # through at full gain and reacts immediately.  Keeps the damper from
     # bleeding a real step response just because the loop was hunting before it.
     osc_damp_threshold: float = 450
+    # Adaptive grid-state predictor.  The controller acts on a *predicted* grid
+    # rather than the raw meter: every poll the prediction is advanced by the
+    # pool's own freshly-reported output change, and on each fresh meter sample
+    # it is pulled toward the reading by an *adaptive* trust.  The battery
+    # reports are fresher than the grid meter (which is delayed by its poll
+    # interval plus transport/measurement latency), so crediting the pool's
+    # just-delivered output reconstructs the grid the meter has not yet shown —
+    # the controller stops re-issuing a correction already in flight, the
+    # dominant source of overshoot and latency-driven limit-cycling.  Because it
+    # advances by the *reported* (actual) output, battery non-ideality (ramp,
+    # deadband, saturation) is captured for free.  The trust is learned online
+    # from the innovation's sign pattern (see ``_predict_control_grid``), so the
+    # loop self-tunes to each meter's latency instead of the user configuring a
+    # throttle/pacing per powermeter.  ``0`` disables it (act on the raw meter);
+    # any positive value only *seeds* the self-adapting trust, so the exact
+    # value barely matters — ``0.5`` is a neutral default.
+    grid_predict_trust: float = 0.5
 
     def __post_init__(self) -> None:
         def _clamp(name: str, lo: float, hi: float) -> None:
@@ -298,6 +333,7 @@ class BalancerConfig:
         _clamp("osc_damp_alpha", 0.0, 1.0)
         _clamp("osc_damp_decay", 0.0, 1.0)
         _clamp("osc_damp_threshold", 0.0, float("inf"))
+        _clamp("grid_predict_trust", 0.0, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +592,23 @@ class LoadBalancer:
         # Latch so the "surplus with no AC-chargeable battery" notice is
         # logged once per transition into that state, not every tick.
         self._all_dc_surplus_warned: bool = False
+        # Adaptive grid-state observer (see BalancerConfig.grid_predict_trust).
+        # ``_pred_grid`` is the estimate of the *instantaneous* grid the control
+        # path acts on; ``_pred_meter`` models what the *latent* meter currently
+        # reads (so a fresh reading's innovation isolates genuine disturbances
+        # from corrections still in flight); ``_pred_pool_output`` is the pool's
+        # last-seen reported output (its per-call delta advances both estimates);
+        # ``_pred_sample_id`` flags a genuinely fresh meter reading; and
+        # ``_pred_catchup`` is the online estimate of how fast the meter absorbs
+        # the pool's output (the learned meter responsiveness — see
+        # ``_predict_control_grid``).
+        self._pred_grid: float | None = None
+        self._pred_pool_output: float = 0.0
+        self._pred_sample_id: tuple | None = None
+        # Adaptive meter trust and the sign of the last significant innovation
+        # that drove it (see ``_predict_control_grid``).
+        self._pred_trust: float = 0.0
+        self._pred_innov_sign: int = 0
 
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
@@ -1161,6 +1214,15 @@ class LoadBalancer:
         sample_id: tuple = (),
     ) -> list[float]:
         """Automatic allocation for auto-pool consumers."""
+        # Predicted grid the residual/fair-share control acts on (compensates
+        # for meter latency; see ``_predict_control_grid``).  Updated on every
+        # call so the running estimate stays continuous across the probe /
+        # fading / charge-blind early-return paths, which keep using the raw
+        # meter for their categorical (charge-territory, demand-sizing)
+        # decisions.  Only the steady residual loop below acts on the
+        # prediction.
+        control_grid = self._predict_control_grid(reports, grid_total, sample_id)
+
         saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
@@ -1306,9 +1368,9 @@ class LoadBalancer:
         }
         total_effective = sum(share_part.values())
         fair_share = (
-            (grid_total / total_effective) * share_part.get(consumer_id, 1.0)
+            (control_grid / total_effective) * share_part.get(consumer_id, 1.0)
             if consumer_id and consumer_id in reports and total_effective > 0
-            else grid_total / num_consumers
+            else control_grid / num_consumers
         )
 
         cfg = self._cfg
@@ -1330,8 +1392,8 @@ class LoadBalancer:
             residual = fair_share
 
         # Clamp sign disagreement: prevent the inverter from acting
-        # against the current grid direction.
-        if (grid_total < 0 and residual > 0) or (grid_total > 0 and residual < 0):
+        # against the current (predicted) grid direction.
+        if (control_grid < 0 and residual > 0) or (control_grid > 0 and residual < 0):
             residual = 0
 
         if consumer_id:
@@ -1351,6 +1413,94 @@ class LoadBalancer:
             state.last_intent = reported + residual
 
         return self._split_by_phase(reading, reports, eff_part)
+
+    def _predict_control_grid(
+        self, reports: dict, grid_total: float, sample_id: tuple
+    ) -> float:
+        """Return the grid power the control path should act on.
+
+        An online grid-state observer that compensates for meter latency
+        *without* per-meter tuning — the whole point, since the same setting
+        then works whether the meter refreshes once a second or pushes a
+        reading delayed by several seconds, and the user no longer has to hunt
+        for the right throttle/pacing for their powermeter.
+
+        Two signals observe the same physical grid at different delays: the
+        batteries' self-reported output (fresh — as fresh as each battery's
+        poll) and the grid meter (latent — its refresh interval plus
+        transport/measurement delay).  The observer fuses them:
+
+        * **Output crediting** — every call, advance the estimate by the pool's
+          actual reported output change ``Δu`` (grid moves opposite to net
+          output: more discharge ⇒ less import).  A correction is credited the
+          moment the battery delivers it, long before the meter shows it, so the
+          loop never re-issues (and winds up) a correction that is already in
+          flight — the double-count that makes a latent loop overshoot and
+          limit-cycle.  Between two meter refreshes the estimate falls as the
+          battery ramps, so each poll commands only the *remaining* error.
+        * **Meter correction** — on a genuinely fresh reading, pull the estimate
+          toward the meter by the *adaptive* trust.  This is the only channel by
+          which disturbances the pool did not cause (load steps, clouds, PV
+          ramps) enter the estimate.
+
+        The trust is the adaptive element, and it resolves the one real tension:
+        a high trust tracks disturbance steps fast but lets meter latency drive
+        overshoot/hunting back in; a low trust is rock-steady but lags real
+        steps.  The right value is not a property of the install to be
+        configured — it depends on what the grid is doing *right now*, so the
+        loop learns it from the **innovation** ``meter - estimate`` on each
+        fresh sample:
+
+        * Consecutive innovations of the *same* sign mean the estimate is
+          lagging a genuine, sustained disturbance — raise the trust to catch up
+          (a single big step ramps the trust up over a few samples, then the
+          innovation collapses and the trust stops rising).
+        * Innovations that *flip* sign mean the loop is overshooting / hunting
+          on stale feedback — shrink the trust hard so the fast output-credited
+          prediction dominates and the hunt is starved of the gain that sustains
+          it.
+
+        Only innovations above a small magnitude gate adapt the trust, so
+        steady-state meter noise (whose sign flips at random) neither collapses
+        nor inflates it.
+
+        Returns the raw meter total unchanged when disabled
+        (``grid_predict_trust <= 0``).  ``grid_predict_trust`` seeds the initial
+        trust; the loop adapts away from it within
+        ``[PRED_TRUST_MIN, PRED_TRUST_MAX]``, so its exact value barely matters
+        — that insensitivity is the point.  The prediction uses the auto-pool
+        reports, so manual/inactive batteries and the house load enter only via
+        the innovation, like any other disturbance the pool did not command.
+        """
+        if self._cfg.grid_predict_trust <= 0.0:
+            return grid_total
+        pool_output = sum(parse_int(r.get("power", 0)) for r in reports.values())
+        if self._pred_grid is None:
+            self._pred_grid = grid_total
+            self._pred_pool_output = pool_output
+            self._pred_sample_id = sample_id
+            self._pred_trust = min(
+                PRED_TRUST_MAX, max(PRED_TRUST_MIN, self._cfg.grid_predict_trust)
+            )
+            return grid_total
+        self._pred_grid -= pool_output - self._pred_pool_output
+        self._pred_pool_output = pool_output
+        if sample_id != self._pred_sample_id:
+            self._pred_sample_id = sample_id
+            innovation = grid_total - self._pred_grid
+            sign = 1 if innovation > 0 else (-1 if innovation < 0 else 0)
+            if abs(innovation) >= PRED_INNOVATION_GATE_W and sign != 0:
+                if self._pred_innov_sign == 0 or sign == self._pred_innov_sign:
+                    self._pred_trust = min(
+                        PRED_TRUST_MAX, self._pred_trust + PRED_TRUST_RAISE_STEP
+                    )
+                else:
+                    self._pred_trust = max(
+                        PRED_TRUST_MIN, self._pred_trust * PRED_TRUST_SHRINK
+                    )
+                self._pred_innov_sign = sign
+            self._pred_grid += self._pred_trust * innovation
+        return self._pred_grid
 
     def _damp_oscillation(self, consumer_id: str, residual: float) -> float:
         """Scale ``residual`` down while the consumer is hunting (issue #473).

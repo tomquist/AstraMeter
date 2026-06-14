@@ -179,6 +179,10 @@ TEST(LoadBalancer, PaceReadingCapsGrowsAndResets) {
   cfg.fair_distribution = false;
   cfg.pace_base_step = 50.0f;
   cfg.pace_max_step = 200.0f;
+  // Exercise pacing against the raw grid; the adaptive predictor (on by
+  // default) would act on a different, predicted grid (mirrors the Python
+  // TestPaceReading helper, which disables it for the same reason).
+  cfg.grid_predict_trust = 0.0f;
   auto b = make_balancer(cfg);
   ReportMap reports;
   reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
@@ -208,6 +212,34 @@ TEST(LoadBalancer, PaceReadingCapsGrowsAndResets) {
   reports["a"].power = 600.0f;
   out = b.compute_target("a", ConsumerMode{}, reports, -300.0f, {}, {}, {});
   EXPECT_FLOAT_EQ(out[0], -50.0f);
+}
+
+TEST(LoadBalancer, GridPredictorCreditsDeliveredOutput) {
+  // Mirrors tests/test_balancer.py TestGridPredictor (output-crediting case).
+  // Pacing and oscillation damping off, single consumer,
+  // fair_distribution=false → the returned reading equals the predicted grid
+  // the control path acted on. sample_id = {grid} mirrors production (the meter
+  // reading). The trust-adaptation path is validated against Python by the
+  // differential parity suite, which now threads a grid-derived sample_id.
+  BalancerConfig cfg;
+  cfg.fair_distribution = false;
+  cfg.pace_base_step = 0.0f;
+  cfg.osc_damp_max = 0.0f;
+  cfg.grid_predict_trust = 0.5f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  auto step = [&](float reported, float grid) {
+    reports["a"].power = reported;
+    return b.compute_target("a", ConsumerMode{}, reports, grid, {}, {},
+                            std::vector<float>{grid})[0];
+  };
+  // First sample returns the raw grid (predictor seeds its estimate).
+  EXPECT_FLOAT_EQ(step(0.0f, 300.0f), 300.0f);
+  // Same grid → same sample → only output crediting: estimate falls by the
+  // pool's reported output change, so the loop commands only the remainder.
+  EXPECT_NEAR(step(120.0f, 300.0f), 180.0f, 1e-3f);
+  EXPECT_NEAR(step(300.0f, 300.0f), 0.0f, 1e-3f);
 }
 
 TEST(LoadBalancer, DcOnlyBatteryClampedToZeroUnderSurplus) {

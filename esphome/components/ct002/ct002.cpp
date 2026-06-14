@@ -291,11 +291,19 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   // Read the filter pipeline → balancer.
   std::vector<float> values;
   if (this->pipeline_head_) values = this->pipeline_head_->get_powermeter_watts();
+  // An empty reading means the powermeter is unavailable (sensor aged out /
+  // outage). The {0,0,0} below is then a *sentinel*, not a real reading: skip
+  // active control so the stateful controller (grid-state predictor, saturation
+  // EMA, ...) never treats a fabricated zero grid as a fresh sample and emits a
+  // non-zero delta from its internal state — the wind-up issue #403 guards
+  // against. The battery holds on the literal zero adjustment instead. Mirrors
+  // ct002.py _handle_request.
+  const bool meter_ok = !values.empty();
   if (values.empty()) values = {0.0f, 0.0f, 0.0f};
   while (values.size() < 3) values.push_back(0.0f);
   values.resize(3);
 
-  if (this->active_control_ && !in_inspection_mode) {
+  if (this->active_control_ && !in_inspection_mode && meter_ok) {
     values = this->compute_smooth_target_(values, consumer_id);
   }
   while (values.size() < 3) values.push_back(0.0f);

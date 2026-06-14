@@ -320,23 +320,41 @@ def test_grid_injection_sign(backend) -> None:
 
 @pytest.mark.timeout(30, func_only=True)
 def test_convergence(backend) -> None:
-    """Closing the loop drives the target toward zero on both stacks: once the
-    battery reports it took the first target, the grid is back to ~0 and the
-    next target shrinks."""
+    """Closing the loop drives the target toward zero on both stacks.
+
+    Each poll the battery reports the output it has integrated so far and the
+    grid reflects the *remaining* imbalance (a fixed load minus that output) —
+    a physically consistent loop, so the adaptive grid-state predictor sees the
+    same monotonic catch-up the real meter would.  With a fixed load both the
+    grid and the per-poll correction must drive toward zero.
+    """
+    load = 300
     backend.set_clock(2000)
-    backend.set_grid(300)
+    backend.set_grid(load)
     r1 = backend.poll("AABBCCDDEEFF", "A", 0)
     assert r1 is not None and int(r1[4]) > 0, (
         f"[{backend.name}] first target should be positive"
     )
     t1 = int(r1[4])
 
-    backend.advance_clock(DEDUPE_WINDOW_S + 5)
-    backend.set_grid(0)  # battery now covers the load → grid ~0
-    r2 = backend.poll("AABBCCDDEEFF", "A", t1)
-    assert r2 is not None, f"[{backend.name}] no response on second poll"
-    assert abs(int(r2[4])) < abs(t1), (
-        f"[{backend.name}] target should shrink toward zero: first={t1}, second={r2[4]}"
+    # Drive the closed loop: the battery integrates each delta into its reported
+    # output, and the grid is load - output.
+    reported = t1
+    last = t1
+    for _ in range(12):
+        backend.advance_clock(DEDUPE_WINDOW_S + 5)
+        backend.set_grid(load - reported)
+        r = backend.poll("AABBCCDDEEFF", "A", reported)
+        assert r is not None, f"[{backend.name}] no response while converging"
+        last = int(r[4])
+        reported += last
+    assert abs(last) < abs(t1), (
+        f"[{backend.name}] per-poll correction should shrink toward zero: "
+        f"first={t1}, last={last}"
+    )
+    assert abs(load - reported) < 25, (
+        f"[{backend.name}] loop should converge to ~0 grid: "
+        f"load={load}, battery={reported}"
     )
 
 

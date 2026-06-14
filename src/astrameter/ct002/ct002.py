@@ -183,6 +183,7 @@ class CT002:
         osc_damp_alpha=0.15,
         osc_damp_decay=0.1,
         osc_damp_threshold=450,
+        grid_predict_trust=0.5,
         saturation_detection=True,
         saturation_alpha=0.15,
         min_target_for_saturation=20,
@@ -251,6 +252,7 @@ class CT002:
                 osc_damp_alpha=osc_damp_alpha,
                 osc_damp_decay=osc_damp_decay,
                 osc_damp_threshold=osc_damp_threshold,
+                grid_predict_trust=grid_predict_trust,
                 min_efficient_power=min_efficient_power,
                 probe_min_power=probe_min_power,
                 efficiency_rotation_interval=efficiency_rotation_interval,
@@ -907,7 +909,14 @@ class CT002:
         raw_values = ([*list(values), 0, 0, 0])[:3]
         meter_value = sum(parse_int(v, 0) for v in raw_values)
         is_active = self.is_consumer_active(consumer_id)
-        if self.active_control and not in_inspection_mode:
+        # On a meter failure the ``[0, 0, 0]`` above is a *sentinel*, not a real
+        # reading: run active control only when the meter is healthy.  Feeding
+        # the sentinel through the balancer would let the stateful controller
+        # (the grid-state predictor, saturation EMA, ...) treat a fabricated
+        # zero grid as a fresh sample and emit a non-zero delta from its
+        # internal state — exactly the wind-up issue #403 guards against — so
+        # the battery must instead hold on the literal zero adjustment.
+        if self.active_control and not in_inspection_mode and not meter_failed:
             values = self._compute_smooth_target(values, consumer_id)
         values = ([*list(values), 0, 0, 0])[:3]
 

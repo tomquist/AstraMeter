@@ -110,6 +110,7 @@ void BalancerConfig::clamp() {
   clamp_v(osc_damp_alpha, 0.0f, 1.0f);
   clamp_v(osc_damp_decay, 0.0f, 1.0f);
   if (osc_damp_threshold < 0.0f) osc_damp_threshold = 0.0f;
+  clamp_v(grid_predict_trust, 0.0f, 1.0f);
 }
 
 // -------------------------------------------------------------------------
@@ -750,6 +751,13 @@ std::optional<float> LoadBalancer::get_last_intent(const std::string &consumer_i
 std::array<float, 3> LoadBalancer::compute_auto_target_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
     float grid_total, const std::vector<float> &sample_id) {
+  // Predicted grid the residual/fair-share control acts on (compensates for
+  // meter latency; see predict_control_grid_). Updated on every call so the
+  // estimate stays continuous across the probe / fading / charge-blind early
+  // returns, which keep using the raw meter for their categorical decisions;
+  // only the steady residual loop below acts on the prediction.
+  const float control_grid = this->predict_control_grid_(reports, grid_total, sample_id);
+
   std::unordered_map<std::string, float> saturation;
   for (const auto &c : this->consumers_)
     saturation[c.first] = static_cast<float>(c.second.saturation_score);
@@ -850,10 +858,10 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   float fair_share;
   if (consumer_id && reports.count(*consumer_id)) {
     const float w = share_part.count(*consumer_id) ? share_part[*consumer_id] : 1.0f;
-    fair_share = (total_effective > 0.0f) ? (grid_total / total_effective) * w
-                                          : grid_total / num_consumers;
+    fair_share = (total_effective > 0.0f) ? (control_grid / total_effective) * w
+                                          : control_grid / num_consumers;
   } else {
-    fair_share = grid_total / num_consumers;
+    fair_share = control_grid / num_consumers;
   }
 
   // fair_share / balance_correction_ produce the residual: this consumer's
@@ -869,7 +877,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   } else {
     residual = fair_share;
   }
-  if ((grid_total < 0.0f && residual > 0.0f) || (grid_total > 0.0f && residual < 0.0f)) {
+  if ((control_grid < 0.0f && residual > 0.0f) ||
+      (control_grid > 0.0f && residual < 0.0f)) {
     residual = 0.0f;
   }
   if (consumer_id) {
@@ -917,6 +926,50 @@ float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float resi
   }
   if (sign != 0) state.osc_last_sign = sign;
   return residual * (1.0f - this->cfg_.osc_damp_max * state.osc_score);
+}
+
+// Online grid-state observer that compensates for meter latency without
+// per-meter tuning. Two signals see the same grid at different delays: the
+// batteries' self-reported output (fresh) and the grid meter (latent). Every
+// call the estimate is advanced by the pool's actual reported output change
+// (grid moves opposite to net output), crediting an in-flight correction
+// before the meter shows it — so the loop never re-issues (and winds up) a
+// correction already delivered. On a fresh meter sample the estimate is pulled
+// toward the reading by an adaptive trust: a sustained same-sign innovation run
+// (a genuine disturbance) raises it additively so steps are tracked fast, while
+// a sign flip (latency-driven hunting) shrinks it multiplicatively so the fast
+// prediction dominates and the hunt is starved. Returns the raw meter when
+// disabled. Mirrors balancer.py LoadBalancer._predict_control_grid.
+float LoadBalancer::predict_control_grid_(const ReportMap &reports, float grid_total,
+                                          const std::vector<float> &sample_id) {
+  if (this->cfg_.grid_predict_trust <= 0.0f) return grid_total;
+  float pool_output = 0.0f;
+  for (const auto &r : reports) pool_output += r.second.power;
+  if (!this->pred_grid_.has_value()) {
+    this->pred_grid_ = grid_total;
+    this->pred_pool_output_ = pool_output;
+    this->pred_sample_id_ = sample_id;
+    this->pred_trust_ =
+        std::min(PRED_TRUST_MAX, std::max(PRED_TRUST_MIN, this->cfg_.grid_predict_trust));
+    return grid_total;
+  }
+  *this->pred_grid_ -= pool_output - this->pred_pool_output_;
+  this->pred_pool_output_ = pool_output;
+  if (!this->pred_sample_id_.has_value() || *this->pred_sample_id_ != sample_id) {
+    this->pred_sample_id_ = sample_id;
+    const float innovation = grid_total - *this->pred_grid_;
+    const int sign = (innovation > 0.0f) ? 1 : (innovation < 0.0f ? -1 : 0);
+    if (std::fabs(innovation) >= PRED_INNOVATION_GATE_W && sign != 0) {
+      if (this->pred_innov_sign_ == 0 || sign == this->pred_innov_sign_) {
+        this->pred_trust_ = std::min(PRED_TRUST_MAX, this->pred_trust_ + PRED_TRUST_RAISE_STEP);
+      } else {
+        this->pred_trust_ = std::max(PRED_TRUST_MIN, this->pred_trust_ * PRED_TRUST_SHRINK);
+      }
+      this->pred_innov_sign_ = sign;
+    }
+    *this->pred_grid_ += this->pred_trust_ * innovation;
+  }
+  return *this->pred_grid_;
 }
 
 // Clamp the auto-path reading to the consumer's ramp-pacing cap (issue #458).
