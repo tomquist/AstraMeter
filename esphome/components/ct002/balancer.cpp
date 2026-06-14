@@ -1166,7 +1166,7 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
     }
   }
 
-  const std::string cache_key = serialize_cache_key(sample_id, this->priority_);
+  std::string cache_key = serialize_cache_key(sample_id, this->priority_);
   if (this->cache_sample_.has_value() && *this->cache_sample_ == cache_key) {
     return this->cache_result_;
   }
@@ -1229,6 +1229,12 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
       deprioritized.insert(this->priority_[i]);
     result.clear();
     for (const auto &cid : deprioritized) result[cid] = 0.0f;
+    // The swap reordered priority_; recompute the cache key from the *post*-swap
+    // order so the next same-sample tick hits the cache, matching Python
+    // (_compute_efficiency_deprioritized). Storing the pre-swap key here caused
+    // the next tick to miss the cache and re-run the swap/probe machinery,
+    // diverging from the canonical stack.
+    cache_key = serialize_cache_key(sample_id, this->priority_);
     for (size_t i = 0; i < slots && i < this->priority_.size(); ++i) {
       if (pre_swap_active.find(this->priority_[i]) == pre_swap_active.end()) {
         this->saturation_.clear(this->get_consumer_(this->priority_[i]));
