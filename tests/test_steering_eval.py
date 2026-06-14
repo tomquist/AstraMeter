@@ -60,6 +60,9 @@ def _tiny_scenario() -> Scenario:
         duration_s=duration,
         base_load=[200.0, 0.0, 0.0],
         base_noise=0.0,
+        # Isolate the harness smoke test from the suite's realistic-meter
+        # default: a clean meter keeps these assertions deterministic.
+        meter_latency_s=0.0,
         build_events=events,
     )
 
@@ -129,6 +132,20 @@ def test_scenario_registry_shape():
     # condition the synthetic latency-free scenarios never cover).
     assert scenarios["single_venus_trace"].meter_latency_s > 0
     assert scenarios["two_venus_trace/fair"].meter_latency_s > 0
+    # Everyday scenarios now default to a realistic (non-zero) meter delay — no
+    # real meter is delay-free, so overshoot/settle is measured under latency.
+    assert scenarios["single_venus_steps"].meter_latency_s > 0
+    assert scenarios["two_venus/fair"].meter_latency_s > 0
+    # Slow-meter variants: a fresh reading only every 10 s (coarse-sampling
+    # stress), covering meters that emit a point ~once per 10 s.
+    for slow in (
+        "single_venus_steps_slow",
+        "single_venus_solar_slow",
+        "two_venus_slow/fair",
+    ):
+        assert slow in scenarios
+        assert scenarios[slow].meter_interval_s == 10.0
+        assert scenarios[slow].meter_latency_s > 0
     # The noisy variant carries a markedly louder baseline than the stepped one.
     assert (
         scenarios["single_venus_noisy"].base_noise
@@ -499,6 +516,9 @@ def test_metric_glossary_covers_every_reported_metric():
         "venus_d_plus_c/fair",
         "single_venus_trace",
         "two_venus_trace/fair",
+        "single_venus_steps_slow",
+        "single_venus_solar_slow",
+        "two_venus_slow/fair",
     ],
 )
 def test_full_scenario_definitions_build(name):
@@ -563,6 +583,20 @@ def test_trace_scenario_replays_real_load_and_scores_aggregates():
     assert res["consumption_trace"] != res2["consumption_trace"]
 
 
+def test_slow_meter_variant_tracks_worse_than_default():
+    """A slow meter (fresh reading only every ~10 s) makes the loop act on
+    badly stale data, so it mistracks far more than the same scenario on the
+    realistic ~1 s default meter. The slow variant exists to cover meters that
+    emit a point only ~once per 10 s; here we assert it is meaningfully harder,
+    not a specific (poor) score."""
+    sc = build_scenarios()
+    fast = asyncio.run(run_scenario(sc["single_venus_steps"], seed=1))
+    slow = asyncio.run(run_scenario(sc["single_venus_steps_slow"], seed=1))
+    assert sc["single_venus_steps_slow"].meter_interval_s == 10.0
+    # Coarse 10 s sampling drives a large grid swing the 1 s meter avoids.
+    assert slow["grid_p2p_w"] > 2 * fast["grid_p2p_w"]
+
+
 def test_meter_latency_drives_sustained_oscillation():
     """Acting on a delayed meter reading turns a settling loop into one that
     hunts: the washing-machine scenario's grid swing (grid_p2p_w) is markedly
@@ -612,6 +646,9 @@ class TestRampPacingRegression:
             duration_s=duration,
             base_load=[300.0, 0.0, 0.0],
             base_noise=0.0,
+            # Isolate the ramp-pacing regression from meter latency (the suite
+            # default): this test asserts controller-pacing overshoot bounds.
+            meter_latency_s=0.0,
             build_events=events,
         )
 

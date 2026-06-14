@@ -155,13 +155,16 @@ class Scenario:
     # Real grid meters report with latency; the controller acts on a reading
     # refreshed at this cadence (matching a typical ~1 s powermeter poll /
     # THROTTLE_INTERVAL) while the metrics see the true instantaneous grid.
+    # Slow sources (some HTTP/MQTT meters) only emit a fresh point every ~10 s.
     meter_interval_s: float = 1.0
     # Transport/measurement delay on top of the refresh interval: the value the
     # controller reads reflects the true grid as it was this many seconds ago
     # (a P1 dongle / HA push sensor measures, then takes time to arrive). Acting
     # on a stale reading is a classic driver of sustained oscillation, so this
-    # is what reproduces a loop that hunts instead of settling. 0 = no delay.
-    meter_latency_s: float = 0.0
+    # is what reproduces a loop that hunts instead of settling. The default is a
+    # realistic slight delay for a common ~1 s meter (no real meter is delay-
+    # free); set 0.0 only to isolate controller behaviour from meter latency.
+    meter_latency_s: float = 0.5
 
 
 @dataclass
@@ -898,6 +901,23 @@ def build_scenarios() -> dict[str, Scenario]:
         )
     )
 
+    add(
+        Scenario(
+            name="single_venus_steps_slow",
+            description=(
+                "One Venus, stepped house load over a slow meter (fresh reading "
+                "only every 10 s + ~1 s delay) — coarse-sampling stress, cf. "
+                "single_venus_steps"
+            ),
+            batteries=[_VENUS],
+            duration_s=dur_steps,
+            loads=list(_HOUSEHOLD_LOADS),
+            build_events=lambda rng: _household_steps(rng, dur_steps),
+            meter_interval_s=10.0,
+            meter_latency_s=1.0,
+        )
+    )
+
     dur_washer = 1800.0
     add(
         Scenario(
@@ -975,6 +995,25 @@ def build_scenarios() -> dict[str, Scenario]:
 
     add(
         Scenario(
+            name="single_venus_solar_slow",
+            description=(
+                "One Venus, solar day + clouds over a slow meter (fresh reading "
+                "only every 10 s + ~1 s delay) — coarse sampling of a moving PV "
+                "setpoint, cf. single_venus_solar"
+            ),
+            batteries=[BatterySpec(initial_soc=0.4)],
+            duration_s=dur_solar,
+            base_load=[400.0, 0.0, 0.0],
+            build_events=lambda rng: (
+                _solar_curve(dur_solar, solar_peak) + _cloud_dips(rng, dur_solar)
+            ),
+            meter_interval_s=10.0,
+            meter_latency_s=1.0,
+        )
+    )
+
+    add(
+        Scenario(
             name="single_venus_d_steps",
             description="One Venus D (VNSD-0 integer loop), stepped house load",
             batteries=[_VENUS_D],
@@ -1042,6 +1081,23 @@ def build_scenarios() -> dict[str, Scenario]:
                 ct_kwargs=dict(kwargs),
             )
         )
+
+    add(
+        Scenario(
+            name="two_venus_slow/fair",
+            description=(
+                "Two Venus sharing one phase, stepped load over a slow meter "
+                "(fresh reading only every 10 s + ~1 s delay) — coarse sampling "
+                "with share-splitting, cf. two_venus/fair"
+            ),
+            batteries=[_VENUS, _VENUS],
+            duration_s=dur_steps,
+            loads=list(_HOUSEHOLD_LOADS),
+            build_events=lambda rng: _household_steps(rng, dur_steps),
+            meter_interval_s=10.0,
+            meter_latency_s=1.0,
+        )
+    )
 
     for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
         add(
