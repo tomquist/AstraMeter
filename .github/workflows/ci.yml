@@ -289,22 +289,31 @@ jobs:
             --scenario '${{ matrix.scenario }}' \
             --json "head-${{ steps.safe.outputs.safe }}.json"
 
-      # The base run uses the base commit's own harness + controller. Until
-      # the harness exists on the base branch this produces an empty array
-      # and the compare job shows head-only numbers for this scenario.
+      # The base run uses the base commit's own harness + controller. Until the
+      # harness exists on the base branch — or for a scenario this PR adds that
+      # the base doesn't have yet — this produces an empty array and the compare
+      # job shows head-only numbers for this scenario.
       - name: Run evaluation (base)
         if: github.event_name == 'pull_request'
         run: |
           safe="${{ steps.safe.outputs.safe }}"
+          scenario='${{ matrix.scenario }}'
+          base_out="$GITHUB_WORKSPACE/base-${safe}.json"
           git worktree add /tmp/steering-base "${{ github.event.pull_request.base.sha }}"
           if [ -f /tmp/steering-base/src/astrameter/simulator/evaluation.py ]; then
-            (cd /tmp/steering-base \
-              && uv sync --frozen --extra dev \
-              && uv run python -m astrameter.simulator.evaluation \
-                   --scenario '${{ matrix.scenario }}' \
-                   --json "$GITHUB_WORKSPACE/base-${safe}.json")
+            cd /tmp/steering-base
+            uv sync --frozen --extra dev
+            # A scenario this PR introduces won't exist on base; emit an empty
+            # array (head-only compare) instead of failing the whole job.
+            if uv run python -m astrameter.simulator.evaluation --list 2>/dev/null \
+                 | awk '{print $1}' | grep -qxF "$scenario"; then
+              uv run python -m astrameter.simulator.evaluation \
+                --scenario "$scenario" --json "$base_out"
+            else
+              echo "[]" > "$base_out"
+            fi
           else
-            echo "[]" > "$GITHUB_WORKSPACE/base-${safe}.json"
+            echo "[]" > "$base_out"
           fi
 
       - name: Upload scenario/seed metrics
