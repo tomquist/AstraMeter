@@ -213,13 +213,50 @@ jobs:
   # on the PR base and head and posts the before/after metrics as a sticky
   # PR comment. Purely informational — thresholds that must hold live in
   # pytest regressions, not here.
-  steering-eval:
+  #
+  # The suite is split across three jobs so every scenario runs in its own
+  # matrix worker in parallel, cutting wall time from ~(N_scenarios * seeds)
+  # sequential minutes down to roughly one scenario's worth.
+  steering-eval-discover:
     needs: [ lint ]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: List scenarios
+        id: list
+        run: |
+          matrix=$(uv run python -m astrameter.simulator.evaluation --list \
+            | awk '{print $1}' \
+            | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  steering-eval-run:
+    needs: [ steering-eval-discover ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(needs.steering-eval-discover.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -239,22 +276,83 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev
 
+      - name: Compute safe artifact name
+        id: safe
+        run: |
+          safe=$(echo '${{ matrix.scenario }}' | tr '/' '-')
+          echo "name=steering-eval-${safe}" >> "$GITHUB_OUTPUT"
+          echo "safe=${safe}" >> "$GITHUB_OUTPUT"
+
       - name: Run evaluation (head)
-        run: uv run python -m astrameter.simulator.evaluation --json head.json
+        run: |
+          uv run python -m astrameter.simulator.evaluation \
+            --scenario '${{ matrix.scenario }}' \
+            --json "head-${{ steps.safe.outputs.safe }}.json"
 
       # The base run uses the base commit's own harness + controller. Until
-      # the harness exists on the base branch this produces an empty
-      # baseline and the comment shows head-only numbers.
+      # the harness exists on the base branch this produces an empty array
+      # and the compare job shows head-only numbers for this scenario.
       - name: Run evaluation (base)
         if: github.event_name == 'pull_request'
         run: |
+          safe="${{ steps.safe.outputs.safe }}"
           git worktree add /tmp/steering-base "${{ github.event.pull_request.base.sha }}"
           if [ -f /tmp/steering-base/src/astrameter/simulator/evaluation.py ]; then
             (cd /tmp/steering-base \
               && uv sync --frozen --extra dev \
-              && uv run python -m astrameter.simulator.evaluation --json "$GITHUB_WORKSPACE/base.json")
+              && uv run python -m astrameter.simulator.evaluation \
+                   --scenario '${{ matrix.scenario }}' \
+                   --json "$GITHUB_WORKSPACE/base-${safe}.json")
           else
-            echo "[]" > "$GITHUB_WORKSPACE/base.json"
+            echo "[]" > "$GITHUB_WORKSPACE/base-${safe}.json"
+          fi
+
+      - name: Upload scenario metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.safe.outputs.name }}
+          path: |
+            head-${{ steps.safe.outputs.safe }}.json
+            base-${{ steps.safe.outputs.safe }}.json
+          if-no-files-found: ignore
+
+  steering-eval-compare:
+    needs: [ steering-eval-run ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Download all scenario metrics
+        uses: actions/download-artifact@v4
+        with:
+          pattern: steering-eval-*
+          path: eval-artifacts
+          merge-multiple: true
+
+      - name: Merge scenario JSONs
+        run: |
+          jq -s 'add' eval-artifacts/head-*.json > head.json
+          if ls eval-artifacts/base-*.json 2>/dev/null | grep -q .; then
+            jq -s 'add' eval-artifacts/base-*.json > base.json
+          else
+            echo "[]" > base.json
           fi
 
       - name: Render comparison
