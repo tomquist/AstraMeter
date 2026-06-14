@@ -90,6 +90,11 @@ else
         active_control="$(bashio::config 'active_control')"
     fi
 
+    grid_predict_trust=""
+    if bashio::config.has_value 'grid_predict_trust'; then
+        grid_predict_trust="$(bashio::config 'grid_predict_trust')"
+    fi
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -107,6 +112,7 @@ else
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
+            [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
             echo ""
             echo "[CT003]"
             echo "CT_MAC=$ct_mac"
@@ -114,6 +120,7 @@ else
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
+            [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
             echo ""
         else
             echo "[$ct_section]"
@@ -122,6 +129,7 @@ else
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
+            [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
             echo ""
         fi
 

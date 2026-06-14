@@ -38,6 +38,9 @@ configuration:
   min_dc_output:
     name: Min DC Output
     description: "Minimum discharge (in watts) to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Applies per battery and only affects DC-only batteries without their own inverter (Venus and Jupiter are unaffected). Set to 0 to disable (default); recommended >= 20. Only applies to CT002/CT003 device types."
+  grid_predict_trust:
+    name: Grid Prediction
+    description: "Keeps the grid closer to zero — less import, less export, less overshoot and hunting — by adapting automatically to your power meter, including meters that report with a delay (e.g. a Home Assistant push sensor). 0.5 (default) is recommended and needs no tuning; lower values react more cautiously and 0 turns the feature off (steer directly on the raw meter reading). Only applies to CT002/CT003 device types."
   marstek_auto_register_ct_device:
     name: Auto-register Managed CT Device (Marstek)
     description: "If enabled, the app signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."

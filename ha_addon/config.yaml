@@ -42,6 +42,7 @@ options:
   min_efficient_power: 0
   efficiency_rotation_interval: 900
   min_dc_output: 0
+  grid_predict_trust: 0.5
   log_level: "info"
 schema:
   power_input_alias: str
@@ -57,6 +58,7 @@ schema:
   min_efficient_power: int(0,)?
   efficiency_rotation_interval: int(1,)?
   min_dc_output: float(0,)?
+  grid_predict_trust: float(0,1)?
   log_level: list(critical|error|warning|info|debug)
   power_offset: str?
   power_multiplier: str?

@@ -717,6 +717,7 @@ export const CT_BALANCER: Field[] = [
   { key: "OSC_DAMP_ALPHA", ey: "osc_damp_alpha", label: "Oscillation damping ramp-up", help: "How fast the hunting detector engages on repeated reversals. Higher = sooner/stronger. Default 0.15.", type: "number", placeholder: "0.15" },
   { key: "OSC_DAMP_DECAY", ey: "osc_damp_decay", label: "Oscillation damping decay", help: "How fast the detector relaxes when no longer hunting. Default 0.1.", type: "number", placeholder: "0.1" },
   { key: "OSC_DAMP_THRESHOLD", ey: "osc_damp_threshold", label: "Oscillation damping threshold (W)", help: "Corrections larger than this are a genuine demand step (kettle, solar ramp) and are never damped. Default 450.", type: "number", placeholder: "450" },
+  { key: "GRID_PREDICT_TRUST", ey: "grid_predict_trust", label: "Grid prediction", help: "Keeps the grid closer to zero (less import/export, less overshoot and hunting) by adapting automatically to your power meter, including meters that report with a delay. 0.5 (default) needs no tuning; lower reacts more cautiously, 0 = off.", type: "number", placeholder: "0.5" },
 ];
 
 // Applies to each DC-only battery individually (also with a single battery,

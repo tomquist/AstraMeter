@@ -109,6 +109,7 @@ CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
 CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
+CONF_GRID_PREDICT_TRUST = "grid_predict_trust"
 
 # Saturation tracker sub-block
 CONF_SATURATION = "saturation"
@@ -220,6 +221,9 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.0, max=1.0
         ),
         cv.Optional(CONF_MIN_DC_OUTPUT, default=0.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_GRID_PREDICT_TRUST, default=0.5): cv.float_range(
+            min=0.0, max=1.0
+        ),
     }
 )
 
@@ -462,6 +466,7 @@ async def to_code(config):
             bal.get(CONF_EFFICIENCY_SATURATION_THRESHOLD, 0.4),
         ),
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
+        ("grid_predict_trust", bal.get(CONF_GRID_PREDICT_TRUST, 0.5)),
     )
     cg.add(var.set_balancer_config(bcfg))
 
