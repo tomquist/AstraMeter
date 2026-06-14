@@ -153,6 +153,10 @@ def test_scenario_registry_shape():
         assert slow in scenarios
         assert scenarios[slow].meter_interval_s == 10.0
         assert scenarios[slow].meter_latency_s > 0
+    # SoC-saturation scenarios: a small pack started near an edge and driven
+    # hard enough to actually hit empty / full (the handoff to grid).
+    assert "single_venus_drain" in scenarios
+    assert "single_venus_fill" in scenarios
     # The noisy variant carries a markedly louder baseline than the stepped one.
     assert (
         scenarios["single_venus_noisy"].base_noise
@@ -527,6 +531,8 @@ def test_metric_glossary_covers_every_reported_metric():
         "single_venus_steps_slow",
         "single_venus_solar_slow",
         "two_venus_slow/fair",
+        "single_venus_drain",
+        "single_venus_fill",
     ],
 )
 def test_full_scenario_definitions_build(name):
@@ -618,6 +624,24 @@ def test_trace_eff_variant_concentrates_unlike_fair():
     assert imbalance(eff) > 100.0
     assert min_battery_idle_fraction(fair) < 0.1
     assert min_battery_idle_fraction(eff) > 0.5
+
+
+def test_soc_saturation_scenarios_hit_the_edges():
+    """The drain/fill scenarios actually push the pack into empty/full
+    saturation, exercising the handoff to the grid. Once saturated the battery
+    can't help, so the *avoidable* energy is a small fraction of the total grid
+    exchange (most of it is unavoidable physics, correctly excluded)."""
+    sc = build_scenarios()
+    drain = asyncio.run(run_scenario(sc["single_venus_drain"], seed=1))
+    fill = asyncio.run(run_scenario(sc["single_venus_fill"], seed=1))
+    # Drain empties the pack; grid import takes over and is mostly unavoidable.
+    assert drain["soc_min"] < 0.05
+    assert drain["import_wh"] > 100
+    assert drain["avoidable_import_wh"] < 0.3 * drain["import_wh"]
+    # Fill tops out the pack; surplus is exported and mostly unavoidable.
+    assert fill["soc_max"] > 0.95
+    assert fill["export_wh"] > 100
+    assert fill["avoidable_export_wh"] < 0.3 * fill["export_wh"]
 
 
 def test_slow_meter_variant_tracks_worse_than_default():

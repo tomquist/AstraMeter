@@ -544,11 +544,20 @@ def _compute_metrics(
                 avoid_export_wh += -wh
         travel_w += sum(abs(cur.powers[i] - prev.powers[i]) for i in range(len(specs)))
 
+    # Lowest / highest state of charge any battery reached over the run — lets a
+    # scenario verify it actually drives the pack into empty/full saturation
+    # (not reported in the metric tables; available for tests and context).
+    all_socs = [soc for s in samples for soc in s.socs]
+    soc_min = round(min(all_socs), 3) if all_socs else 0.0
+    soc_max = round(max(all_socs), 3) if all_socs else 0.0
+
     return {
         "scenario": scenario.name,
         "seed": seed,
         "duration_h": round(duration_h, 3),
         "samples": len(samples),
+        "soc_min": soc_min,
+        "soc_max": soc_max,
         "events_measured": events_measured,
         "unsettled_events": unsettled,
         "settle_mean_s": round(sum(settle_times) / len(settle_times), 1)
@@ -1029,6 +1038,44 @@ def build_scenarios() -> dict[str, Scenario]:
             ),
             meter_interval_s=10.0,
             meter_latency_s=1.0,
+        )
+    )
+
+    # SoC-saturation scenarios: short runs against a 5 kWh pack barely move the
+    # SoC, so the empty/full handoff (battery stops discharging/charging and the
+    # grid must take over) was never exercised. These use a realistic single-unit
+    # 2.56 kWh pack started near an edge and driven hard enough to hit it.
+    dur_drain = 10800.0  # 3 h
+    add(
+        Scenario(
+            name="single_venus_drain",
+            description=(
+                "One Venus emptying under a sustained real evening load (2.56 kWh "
+                "pack, low initial SoC) — empty-saturation handoff to grid import"
+            ),
+            batteries=[BatterySpec(capacity_wh=2560.0, initial_soc=0.35)],
+            duration_s=dur_drain,
+            base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+            base_noise=_TRACE_METER_NOISE,
+            build_events=lambda rng: _trace_events(rng, dur_drain),
+            meter_latency_s=0.5,
+        )
+    )
+
+    add(
+        Scenario(
+            name="single_venus_fill",
+            description=(
+                "One Venus filling under a strong solar day (2.56 kWh pack, high "
+                "initial SoC) — full-saturation handoff: charge clamp + export"
+            ),
+            batteries=[BatterySpec(capacity_wh=2560.0, initial_soc=0.8)],
+            duration_s=dur_solar,
+            base_load=[300.0, 0.0, 0.0],
+            build_events=lambda rng: (
+                _solar_curve(dur_solar, 2200.0) + _cloud_dips(rng, dur_solar)
+            ),
+            meter_latency_s=0.5,
         )
     )
 
