@@ -61,12 +61,13 @@ import sys
 from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from astrameter.ct002.balancer import device_capabilities
 from astrameter.ct002.ct002 import CT002
 
 from .battery import BatterySimulator
-from .load_model import Load, LoadModel
+from .load_model import Load, LoadModel, load_power_trace
 from .powermeter_sim import PowermeterSimulator
 
 # Mock-time epoch all scenarios start from (any fixed value works; using a
@@ -180,6 +181,11 @@ class EvalWorld:
                 ld.active = active
                 return
         raise KeyError(f"no load named {name!r}")
+
+    def set_base(self, watts: float, phase_index: int = 0) -> None:
+        """Set the base (whole-house) load on a phase — used to replay a
+        recorded power trace as the scenario's background consumption."""
+        self.load_model.base_load[phase_index] = watts
 
     def set_solar_curve(self, watts: float) -> None:
         self.solar_curve_w = watts
@@ -630,6 +636,13 @@ def _set_dc_input(battery_index: int, watts: float) -> Callable[[EvalWorld], Non
     return apply
 
 
+def _set_base(watts: float) -> Callable[[EvalWorld], None]:
+    def apply(w: EvalWorld) -> None:
+        w.set_base(watts)
+
+    return apply
+
+
 def _household_steps(rng: random.Random, duration: float) -> list[Event]:
     """Scripted appliance schedule: kettle spikes, oven cycling, dishwasher.
 
@@ -748,6 +761,58 @@ def _no_events(_rng: random.Random) -> list[Event]:
     and scored on the sustained-oscillation aggregates (the step-response metrics
     read 0 with no labeled events)."""
     return []
+
+
+# Real household whole-house power trace (UCI, 1-minute, CC BY 4.0 — see
+# traces/README.md). Unlike the synthetic base load + IID noise, a recorded
+# trace carries the *correlated drift* and *persistent appliance switching* of a
+# real home, so it rewards a balancer that tracks genuine load changes instead
+# of one tuned to reject white noise (which over-damps and then lags in the
+# field). Loaded once at import; scenarios slice a per-seed window from it.
+_TRACE_DIR = Path(__file__).parent / "traces"
+_HOUSEHOLD_TRACE = load_power_trace(_TRACE_DIR / "uci_household.csv")
+# Light sub-minute jitter laid over the 1-minute trace: the recording is
+# zero-order-held between samples, so without this the load would be perfectly
+# flat between minutes (unrealistically calm); a real meter never is.
+_TRACE_SUBMINUTE_NOISE = 15.0
+
+
+def _trace_events(rng: random.Random, duration: float) -> list[Event]:
+    """Replay a per-seed window of the real household trace as the base load.
+
+    Each seed picks a different start offset into the recording (so seeds see
+    genuinely different load regimes — quiet stretches vs cooking spikes — not
+    just re-randomised noise), then the recorded samples drive the whole-house
+    base load over the run. The events are **unlabelled**: real load changes
+    aren't clean single steps, so (like the washer/noisy scenarios) this is
+    scored on the sustained-oscillation/energy aggregates rather than per-step
+    settling. A balancer that tracks the real load without hunting drives those
+    down.
+    """
+    trace = _HOUSEHOLD_TRACE
+    t0 = trace[0][0]
+    span = trace[-1][0] - t0
+    max_off = max(0.0, span - duration)
+    start = rng.uniform(0.0, max_off)
+    events: list[Event] = []
+    for t, watts in trace:
+        rel = (t - t0) - start
+        if rel < 0.0:
+            continue
+        if rel > duration:
+            break
+        events.append(Event(at=rel, apply=_set_base(watts)))
+    # Anchor the base load from t=0 to the sample active at `start`, so the run
+    # opens on real load rather than the Scenario's placeholder base_load.
+    if not events or events[0].at > 0.0:
+        first = trace[0][1]
+        for t, watts in trace:
+            if (t - t0) <= start:
+                first = watts
+            else:
+                break
+        events.insert(0, Event(at=0.0, apply=_set_base(first)))
+    return events
 
 
 def _solar_curve(duration: float, peak: float) -> list[Event]:
@@ -871,6 +936,27 @@ def build_scenarios() -> dict[str, Scenario]:
         )
     )
 
+    add(
+        Scenario(
+            name="single_venus_trace",
+            description=(
+                "One Venus, real recorded household load (UCI 1-min trace, "
+                "CC BY 4.0) over a meter with realistic ~0.8 s latency — "
+                "real-world correlated-load stress (cf. the synthetic-noise "
+                "single_venus_noisy)"
+            ),
+            batteries=[_VENUS],
+            duration_s=dur_steps,
+            base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+            base_noise=_TRACE_SUBMINUTE_NOISE,
+            build_events=lambda rng: _trace_events(rng, dur_steps),
+            # Real installs read the meter with measurement+transport delay;
+            # pairing the real load with realistic latency is the field condition
+            # the synthetic latency-free scenarios never cover.
+            meter_latency_s=0.8,
+        )
+    )
+
     dur_solar = 5400.0
     solar_peak = 1800.0
     add(
@@ -969,6 +1055,25 @@ def build_scenarios() -> dict[str, Scenario]:
                 base_load=list(_NOISY_BASE_LOAD),
                 base_noise=_NOISY_BASE_NOISE,
                 build_events=_no_events,
+                ct_kwargs=dict(kwargs),
+            )
+        )
+
+    for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
+        add(
+            Scenario(
+                name=f"two_venus_trace/{mode}",
+                description=(
+                    "Two Venus sharing one phase, real recorded household load "
+                    "(UCI 1-min trace, CC BY 4.0) over a ~0.8 s-latency meter — "
+                    "real-world correlated-load stress for share-splitting"
+                ),
+                batteries=[_VENUS, _VENUS],
+                duration_s=dur_steps,
+                base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+                base_noise=_TRACE_SUBMINUTE_NOISE,
+                build_events=lambda rng: _trace_events(rng, dur_steps),
+                meter_latency_s=0.8,
                 ct_kwargs=dict(kwargs),
             )
         )

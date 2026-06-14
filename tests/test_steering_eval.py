@@ -120,6 +120,15 @@ def test_scenario_registry_shape():
     assert "single_venus_noisy" in scenarios
     assert "two_venus_noisy/fair" in scenarios
     assert "two_venus_noisy/eff" in scenarios
+    # Real recorded-household-load stress (correlated drift + spikes over a
+    # latency-delayed meter), single and two Venus.
+    assert "single_venus_trace" in scenarios
+    assert "two_venus_trace/fair" in scenarios
+    assert "two_venus_trace/eff" in scenarios
+    # The real-trace scenarios opt into realistic meter latency (the field
+    # condition the synthetic latency-free scenarios never cover).
+    assert scenarios["single_venus_trace"].meter_latency_s > 0
+    assert scenarios["two_venus_trace/fair"].meter_latency_s > 0
     # The noisy variant carries a markedly louder baseline than the stepped one.
     assert (
         scenarios["single_venus_noisy"].base_noise
@@ -488,6 +497,8 @@ def test_metric_glossary_covers_every_reported_metric():
         "single_venus_d_washer",
         "single_venus_d_solar",
         "venus_d_plus_c/fair",
+        "single_venus_trace",
+        "two_venus_trace/fair",
     ],
 )
 def test_full_scenario_definitions_build(name):
@@ -530,6 +541,26 @@ def test_noisy_scenario_has_no_labeled_events_but_scores_aggregates():
     assert res["mean_abs_grid_w"] > 0
     for key in _REPORT_METRICS:
         assert res[key] >= 0, key
+
+
+def test_trace_scenario_replays_real_load_and_scores_aggregates():
+    """The real-trace scenario drives the base load from a recorded household
+    trace (no scripted load steps, so the step-response metrics read 0) and is
+    scored on the sustained-oscillation/energy aggregates, all populated and
+    non-negative. Different seeds slice a different window of the recording, so
+    the load actually differs between seeds (genuine structural diversity, not
+    just re-randomised noise)."""
+    sc = build_scenarios()["single_venus_trace"]
+    res = asyncio.run(run_scenario(sc, seed=1))
+    assert res["events_measured"] == 0
+    assert res["grid_p2p_w"] > 0
+    assert res["mean_abs_grid_w"] > 0
+    for key in _REPORT_METRICS:
+        assert res[key] >= 0, key
+    # Two seeds slice different offsets into the recording, so the consumption
+    # trace (the scripted load itself) differs between them.
+    res2 = asyncio.run(run_scenario(sc, seed=2))
+    assert res["consumption_trace"] != res2["consumption_trace"]
 
 
 def test_meter_latency_drives_sustained_oscillation():

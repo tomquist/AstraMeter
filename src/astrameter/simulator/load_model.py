@@ -9,8 +9,31 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 
 PHASES = ("A", "B", "C")
+
+
+def load_power_trace(path: str | Path) -> list[tuple[float, float]]:
+    """Read a ``t_s,watts`` power trace into ``[(seconds, watts), ...]``.
+
+    Lines starting with ``#`` (the attribution/license header), blank lines and
+    a single ``t_s,watts`` column header are ignored, so the vendored CSVs under
+    ``traces/`` (real household data, see ``traces/README.md``) load directly.
+    Samples are returned sorted by time.
+    """
+    points: list[tuple[float, float]] = []
+    for raw in Path(path).read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        a, _, b = line.partition(",")
+        try:
+            points.append((float(a), float(b)))
+        except ValueError:
+            continue  # header row (``t_s,watts``) or stray text
+    points.sort(key=lambda p: p[0])
+    return points
 
 
 @dataclass
