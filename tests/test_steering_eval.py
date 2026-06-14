@@ -124,17 +124,21 @@ def test_scenario_registry_shape():
     assert "two_venus_noisy/fair" in scenarios
     assert "two_venus_noisy/eff" in scenarios
     # Real recorded-household-load stress (correlated drift + spikes over a
-    # latency-delayed meter), single and two Venus. Only a fair-share two-Venus
-    # variant: efficiency mode is inert under a real load this size (both
-    # batteries stay above min_efficient_power), so an /eff copy would just
-    # duplicate /fair — efficiency is covered by the stepped/solar `…/eff`.
+    # latency-delayed meter), single and two Venus (fair + eff).
     assert "single_venus_trace" in scenarios
-    assert "two_venus_trace" in scenarios
-    assert "two_venus_trace/eff" not in scenarios
+    assert "two_venus_trace/fair" in scenarios
+    assert "two_venus_trace/eff" in scenarios
+    # The trace /eff variant raises min_efficient_power above the default eff
+    # floor so the concentration swap actually triggers within the real load's
+    # range (at the default floor it would duplicate /fair).
+    assert (
+        scenarios["two_venus_trace/eff"].ct_kwargs["min_efficient_power"]
+        > scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"]
+    )
     # The real-trace scenarios opt into realistic meter latency (the field
     # condition the synthetic latency-free scenarios never cover).
     assert scenarios["single_venus_trace"].meter_latency_s > 0
-    assert scenarios["two_venus_trace"].meter_latency_s > 0
+    assert scenarios["two_venus_trace/fair"].meter_latency_s > 0
     # Everyday scenarios now default to a realistic (non-zero) meter delay — no
     # real meter is delay-free, so overshoot/settle is measured under latency.
     assert scenarios["single_venus_steps"].meter_latency_s > 0
@@ -518,7 +522,8 @@ def test_metric_glossary_covers_every_reported_metric():
         "single_venus_d_solar",
         "venus_d_plus_c/fair",
         "single_venus_trace",
-        "two_venus_trace",
+        "two_venus_trace/fair",
+        "two_venus_trace/eff",
         "single_venus_steps_slow",
         "single_venus_solar_slow",
         "two_venus_slow/fair",
@@ -584,6 +589,35 @@ def test_trace_scenario_replays_real_load_and_scores_aggregates():
     # trace (the scripted load itself) differs between them.
     res2 = asyncio.run(run_scenario(sc, seed=2))
     assert res["consumption_trace"] != res2["consumption_trace"]
+
+
+def test_trace_eff_variant_concentrates_unlike_fair():
+    """The two-Venus trace /eff variant raises min_efficient_power so efficiency
+    optimization actually engages on a real load: during a calm stretch it
+    concentrates onto one Venus and idles the second (which only cuts in on
+    peaks), so its per-battery split is markedly *unequal* where /fair always
+    splits evenly. Whether concentration happens depends on the window's load
+    level, so seed 2 is used — a calm-window slice where it clearly engages
+    (busy-window seeds keep both active, which is the correct load-dependent
+    behaviour). Guards against /eff silently degenerating into a copy of /fair."""
+    sc = build_scenarios()
+    fair = asyncio.run(run_scenario(sc["two_venus_trace/fair"], seed=2))
+    eff = asyncio.run(run_scenario(sc["two_venus_trace/eff"], seed=2))
+
+    def imbalance(res):
+        b0, b1 = res["battery_traces"]
+        return sum(abs(a - b) for a, b in zip(b0, b1, strict=True)) / len(b0)
+
+    def min_battery_idle_fraction(res):
+        b0, b1 = res["battery_traces"]
+        idle = sum(1 for a, b in zip(b0, b1, strict=True) if min(abs(a), abs(b)) < 20)
+        return idle / len(b0)
+
+    # fair splits evenly (tiny imbalance, never idles a unit); eff concentrates.
+    assert imbalance(eff) > 5 * imbalance(fair)
+    assert imbalance(eff) > 100.0
+    assert min_battery_idle_fraction(fair) < 0.1
+    assert min_battery_idle_fraction(eff) > 0.5
 
 
 def test_slow_meter_variant_tracks_worse_than_default():

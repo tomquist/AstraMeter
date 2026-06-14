@@ -617,6 +617,15 @@ _EFF_MODE: dict[str, float] = {
     "efficiency_rotation_interval": 900.0,
 }
 
+# Efficiency knobs for the real-trace two-Venus scenario. The concentration
+# cut-in is roughly at total load = 2 x min_efficient_power (for two units), so a
+# higher floor than the default 150 W is needed to land that threshold inside the
+# recorded load's range: at 500 W the second Venus idles on the calm overnight
+# base (~66% of the run) and cuts in on the morning/cooking peaks (~33%). With
+# the default 150 W floor both units stay active the whole run and /eff would be
+# an exact copy of /fair.
+_TRACE_EFF_MODE: dict[str, float] = {**_EFF_MODE, "min_efficient_power": 500.0}
+
 
 # Typed closure factories for event actions (a plain lambda with extra
 # defaulted parameters doesn't type-check against ``Callable[[EvalWorld], None]``).
@@ -1127,27 +1136,33 @@ def build_scenarios() -> dict[str, Scenario]:
             )
         )
 
-    # Single fair-share variant only: efficiency optimization is inert under a
-    # real household load this size (both batteries stay well above
-    # min_efficient_power, so eff never deprioritizes one — it produces a copy
-    # of fair). Efficiency mode is exercised by the stepped/solar/mixed `…/eff`
-    # scenarios, where low-load gaps actually trigger concentration.
-    add(
-        Scenario(
-            name="two_venus_trace",
-            description=(
-                "Two Venus sharing one phase, real recorded household load "
-                "(RAE House 1, 1 Hz trace, CC BY) over a ~0.8 s-latency meter "
-                "— real-world correlated-load stress for share-splitting"
-            ),
-            batteries=[_VENUS, _VENUS],
-            duration_s=dur_steps,
-            base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
-            base_noise=_TRACE_METER_NOISE,
-            build_events=lambda rng: _trace_events(rng, dur_steps),
-            meter_latency_s=0.8,
+    # fair always splits the load across both units; eff (with the raised
+    # _TRACE_EFF_MODE floor) concentrates on one Venus during the calm base and
+    # lets the second cut in on peaks — so the two variants differ under a real
+    # load instead of /eff duplicating /fair (which it does at the default floor).
+    for mode, kwargs in (("fair", {}), ("eff", _TRACE_EFF_MODE)):
+        suffix = (
+            "fair-share splitting across both units"
+            if mode == "fair"
+            else "efficiency concentration: the 2nd Venus cuts in only on peaks"
         )
-    )
+        add(
+            Scenario(
+                name=f"two_venus_trace/{mode}",
+                description=(
+                    "Two Venus sharing one phase, real recorded household load "
+                    "(RAE House 1, 1 Hz trace, CC BY) over a ~0.8 s-latency "
+                    f"meter — {suffix}"
+                ),
+                batteries=[_VENUS, _VENUS],
+                duration_s=dur_steps,
+                base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+                base_noise=_TRACE_METER_NOISE,
+                build_events=lambda rng: _trace_events(rng, dur_steps),
+                meter_latency_s=0.8,
+                ct_kwargs=dict(kwargs),
+            )
+        )
 
     # Solar peak (W) for the multi-Venus solar scenarios: above the base load
     # plus typical appliance draw, so midday PV pushes the pool into charging /
