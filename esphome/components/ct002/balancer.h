@@ -96,9 +96,9 @@ struct BalancerConfig {
   // residual reverses sign scales the residual down by up to osc_damp_max; a
   // genuine step holds one sign (score ~0, full gain), only a hunt is damped.
   // osc_damp_max = 0 disables. See balancer.py for the tuning rationale.
-  float osc_damp_max{0.8f};
+  float osc_damp_max{0.9f};
   float osc_damp_alpha{0.15f};
-  float osc_damp_decay{0.1f};
+  float osc_damp_decay{0.07f};
   // Only residuals below this magnitude are damped; a larger one is a genuine
   // demand step that reacts at full gain. See balancer.py.
   float osc_damp_threshold{450.0f};
@@ -265,7 +265,8 @@ class LoadBalancer {
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
-  float pace_reading_(const std::string &consumer_id, float reading, float reported);
+  float pace_reading_(const std::string &consumer_id, float reading, float reported,
+                      int participants = 1);
   float damp_oscillation_(const std::string &consumer_id, float residual);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(

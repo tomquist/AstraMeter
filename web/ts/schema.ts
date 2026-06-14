@@ -713,9 +713,9 @@ export const CT_BALANCER: Field[] = [
   { key: "ERROR_BOOST_MAX", ey: "error_boost_max", label: "Error boost max", help: "Maximum extra gain multiplier. Default 0.5.", type: "number", placeholder: "0.5" },
   { key: "ERROR_REDUCE_THRESHOLD", ey: "error_reduce_threshold", label: "Error reduce threshold (W)", help: "Below this imbalance, gain is scaled down. Default 20.", type: "number", placeholder: "20" },
   { key: "MAX_TARGET_STEP", ey: "max_target_step", label: "Max target step (W)", help: "Hard clamp on per-cycle target change. 0 = off.", type: "number", placeholder: "0" },
-  { key: "OSC_DAMP_MAX", ey: "osc_damp_max", label: "Oscillation damping", help: "Max gain reduction while a battery hunts (keeps reversing direction) under a laggy/delayed meter; genuine load/solar steps stay at full speed. 0 = off. Default 0.8.", type: "number", placeholder: "0.8" },
+  { key: "OSC_DAMP_MAX", ey: "osc_damp_max", label: "Oscillation damping", help: "Max gain reduction while a battery hunts (keeps reversing direction) under a laggy/delayed meter; genuine load/solar steps stay at full speed. 0 = off. Default 0.9.", type: "number", placeholder: "0.9" },
   { key: "OSC_DAMP_ALPHA", ey: "osc_damp_alpha", label: "Oscillation damping ramp-up", help: "How fast the hunting detector engages on repeated reversals. Higher = sooner/stronger. Default 0.15.", type: "number", placeholder: "0.15" },
-  { key: "OSC_DAMP_DECAY", ey: "osc_damp_decay", label: "Oscillation damping decay", help: "How fast the detector relaxes when no longer hunting. Default 0.1.", type: "number", placeholder: "0.1" },
+  { key: "OSC_DAMP_DECAY", ey: "osc_damp_decay", label: "Oscillation damping decay", help: "How fast the detector relaxes when no longer hunting. Default 0.07.", type: "number", placeholder: "0.07" },
   { key: "OSC_DAMP_THRESHOLD", ey: "osc_damp_threshold", label: "Oscillation damping threshold (W)", help: "Corrections larger than this are a genuine demand step (kettle, solar ramp) and are never damped. Default 450.", type: "number", placeholder: "450" },
 ];
 

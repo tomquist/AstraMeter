@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import time
 from collections.abc import Callable
 from typing import Literal, NamedTuple, NewType
@@ -263,9 +264,20 @@ class BalancerConfig:
     # to ``osc_damp_max`` as that score rises.  A clean step keeps full gain
     # (sign constant -> score ~0 -> factor ~1), so step reaction is unchanged;
     # only a hunting loop is damped.  ``osc_damp_max = 0`` disables.
-    osc_damp_max: float = 0.8
+    #
+    # ``osc_damp_decay`` bleeds the hunt score on every non-reversal poll.  At
+    # the firmware-step cadence a *sustained* hunt (the washing-machine drum
+    # case: a reversal nearly every poll for minutes) and a brief post-step
+    # ring-down (a handful of reversals, then settling) both accumulate score;
+    # the slower the decay, the more the score persists into the calm that
+    # follows.  A slow decay (0.07) lets a sustained hunt build the score high
+    # enough to bite while a short ring-down still bleeds off before it can
+    # damp the genuine settling — together with the higher ``osc_damp_max``
+    # this roughly halves the washing-machine travel/oscillation without
+    # slowing step reactions (tuned with the steering-evaluation suite).
+    osc_damp_max: float = 0.9
     osc_damp_alpha: float = 0.15
-    osc_damp_decay: float = 0.1
+    osc_damp_decay: float = 0.07
     # Only near-null corrections are damped: a residual above this magnitude is
     # a genuine demand step (kettle, solar ramp), not hunting, so it passes
     # through at full gain and reacts immediately.  Keeps the damper from
@@ -1271,7 +1283,11 @@ class LoadBalancer:
             total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             reading = to_grid_reading(NetOutputW(desired), reported)
-            reading = self._pace_reading(consumer_id, reading, reported)
+            # Units still carrying load share the aggregate-slew bound.
+            participants = sum(
+                1 for cid in reports if self._get_consumer(cid).fade_weight > 0
+            )
+            reading = self._pace_reading(consumer_id, reading, reported, participants)
 
             state.last_target = reading
             state.last_intent = desired
@@ -1345,7 +1361,10 @@ class LoadBalancer:
         reading = to_grid_reading(NetOutputW(reported + residual), reported)
 
         if consumer_id:
-            reading = self._pace_reading(consumer_id, reading, reported)
+            # Count the units sharing this correction so pacing can bound the
+            # pool's *aggregate* slew (not Nx a single cap) — see _pace_reading.
+            participants = sum(1 for w in share_part.values() if w > 0)
+            reading = self._pace_reading(consumer_id, reading, reported, participants)
             state = self._get_consumer(consumer_id)
             state.last_target = reading
             state.last_intent = reported + residual
@@ -1391,7 +1410,13 @@ class LoadBalancer:
             state.osc_last_sign = sign
         return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
 
-    def _pace_reading(self, consumer_id: str, reading: float, reported: float) -> float:
+    def _pace_reading(
+        self,
+        consumer_id: str,
+        reading: float,
+        reported: float,
+        participants: int = 1,
+    ) -> float:
         """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
 
         The battery integrates the reading with its own accelerating ramp,
@@ -1409,6 +1434,27 @@ class LoadBalancer:
         consumer's observed inter-poll time (clamped at 1.0) so a fast
         poller cannot integrate the same per-poll reading into a higher W/s
         slew.
+
+        *participants* is the number of pool consumers simultaneously
+        correcting the same grid error this tick.  Pacing is a per-consumer
+        cap, but N consumers all chasing one shared meter reading slew the
+        *aggregate* pool output at N times any single cap — and under a fixed
+        meter latency the overshoot at a zero-crossing scales with that
+        aggregate slew, which is exactly why the multi-battery scenarios
+        overshoot several times harder than the single-battery ones for the
+        same per-unit cap.  The grown cap is therefore divided by
+        ``sqrt(participants)``: dividing by the *full* count would pin the
+        whole pool to a single unit's slew, which kills the overshoot but
+        ramps a load step so slowly the pool leaks energy to the grid while
+        it crawls up; ``sqrt(N)`` keeps the aggregate ramp faster than one
+        unit (a pool still covers a step quicker than a lone battery) while
+        bleeding most of the Nx overshoot.  The ``base`` step is never
+        divided: each unit keeps the firmware's minimum first-step movement
+        (so hysteresis-regulator devices still clear their input hold window
+        and fine corrections aren't starved), and the bound only engages once
+        the cap has grown — i.e. exactly during the fast ramp that drives the
+        overshoot.  At ``participants == 1`` (single battery) the clamp is
+        identical to the un-divided behaviour.
 
         Only the auto-pool paths are paced — the persistent regulation
         loop, the fade transition, and the deprioritized/charge-blind
@@ -1432,6 +1478,11 @@ class LoadBalancer:
         base = self._cfg.pace_base_step
         if base <= 0:
             return reading
+        participants = max(1, participants)
+        # Aggregate-slew divisor (see docstring): sqrt(N), not N, so the pool
+        # ramps faster than a lone unit while still shedding most of the Nx
+        # overshoot.
+        slew_divisor = math.sqrt(participants)
         state = self._get_consumer(consumer_id)
         now = self._clock()
         # Cadence scale: the caps are W per PACE_REFERENCE_DT; a faster
@@ -1454,8 +1505,10 @@ class LoadBalancer:
         # clear their input hold window at all, and the base step is the
         # rate the cap growth schedule was tuned to bootstrap from.  The
         # cadence scale still bounds the *grown* cap, which is where the
-        # fast-poller overshoot lived.
-        limit = max(base, cap * dt_ratio)
+        # fast-poller overshoot lived.  The grown cap is further divided by
+        # the participant count so N units sharing the load slew the pool's
+        # aggregate output at the configured cap, not Nx it (see docstring).
+        limit = max(base, cap * dt_ratio / slew_divisor)
         if sign == 0 or sign != state.pace_sign:
             cap = base
         elif abs(reading) > limit:
@@ -1480,7 +1533,7 @@ class LoadBalancer:
         state.pace_cap = cap
         state.pace_sign = sign
         state.pace_prev_reported = reported
-        limit = max(base, cap * dt_ratio)
+        limit = max(base, cap * dt_ratio / slew_divisor)
         return max(-limit, min(limit, reading))
 
     def _balance_correction(

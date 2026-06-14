@@ -817,7 +817,11 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     for (const auto &r : reports) total_fade += this->get_consumer_(r.first).fade_weight;
     const float desired = (total_fade > 0.0f) ? demand * fade_w / total_fade : 0.0f;
     float reading = to_grid_reading(NetOutputW(desired), reported);
-    reading = this->pace_reading_(*consumer_id, reading, reported);
+    // Units still carrying load share the aggregate-slew bound.
+    int participants = 0;
+    for (const auto &r : reports)
+      if (this->get_consumer_(r.first).fade_weight > 0.0f) participants++;
+    reading = this->pace_reading_(*consumer_id, reading, reported, participants);
     state.last_target = reading;
     state.last_intent = desired;
     return split_by_phase_(reading, reports, &eff_part);
@@ -882,7 +886,12 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   }
   float reading = to_grid_reading(NetOutputW(reported + residual), reported);
   if (consumer_id) {
-    reading = this->pace_reading_(*consumer_id, reading, reported);
+    // Count the units sharing this correction so pacing can bound the pool's
+    // aggregate slew (not Nx a single cap) — see pace_reading_.
+    int participants = 0;
+    for (const auto &kv : share_part)
+      if (kv.second > 0.0f) participants++;
+    reading = this->pace_reading_(*consumer_id, reading, reported, participants);
     auto &auto_state = this->get_consumer_(*consumer_id);
     auto_state.last_target = reading;
     auto_state.last_intent = reported + residual;
@@ -931,10 +940,25 @@ float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float resi
 // manual / inactive steer-to-zero bypass it (see balancer.py for the
 // rationale). Caps are W per PACE_REFERENCE_DT; the per-poll clamp scales
 // with the consumer's observed inter-poll time, clamped at 1.0.
+//
+// `participants` is the number of pool units correcting the same grid error
+// this tick. Pacing is a per-consumer cap, but N units chasing one shared
+// meter reading slew the *aggregate* pool output at N times any single cap,
+// and the zero-crossing overshoot scales with that aggregate slew — which is
+// why the multi-battery scenarios overshoot far harder than the single-unit
+// ones. The grown cap is divided by sqrt(participants): dividing by the full
+// count would pin the pool to a single unit's slew (kills overshoot but leaks
+// energy while it crawls up a step); sqrt(N) keeps the pool ramping faster
+// than one unit while shedding most of the Nx overshoot. The base step is
+// never divided (each unit keeps the firmware minimum first step) and the
+// bound only bites once the cap has grown. participants == 1 reproduces the
+// un-divided behaviour. Mirrors balancer.py _pace_reading.
 float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
-                                  float reported) {
+                                  float reported, int participants) {
   const float base = this->cfg_.pace_base_step;
   if (base <= 0.0f) return reading;
+  if (participants < 1) participants = 1;
+  const float slew_divisor = std::sqrt(static_cast<float>(participants));
   auto &state = this->get_consumer_(consumer_id);
   const double now = this->clock_();
   double dt = (state.pace_last_at > 0.0) ? now - state.pace_last_at : 0.0;
@@ -952,8 +976,10 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   float cap = (state.pace_cap > 0.0f) ? state.pace_cap : base;
   // Floored at the base step: hysteresis-regulator devices (B2500) need a
   // minimum reading to clear their input hold window at all; the cadence
-  // scale still bounds the grown cap (mirrors balancer.py).
-  float limit = std::max(base, cap * dt_ratio);
+  // scale still bounds the grown cap (mirrors balancer.py). The grown cap is
+  // further divided by sqrt(participants) so a multi-unit pool slews its
+  // aggregate output near the configured cap, not Nx it.
+  float limit = std::max(base, cap * dt_ratio / slew_divisor);
   if (sign == 0 || sign != state.pace_sign) {
     cap = base;
   } else if (std::fabs(reading) > limit) {
@@ -976,7 +1002,7 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   state.pace_cap = cap;
   state.pace_sign = sign;
   state.pace_prev_reported = reported;
-  limit = std::max(base, cap * dt_ratio);
+  limit = std::max(base, cap * dt_ratio / slew_divisor);
   return std::max(-limit, std::min(limit, reading));
 }
 
