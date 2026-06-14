@@ -5,9 +5,10 @@ from __future__ import annotations
 import itertools
 from pathlib import Path
 
-from .load_model import load_power_trace
+from .load_model import load_net_trace, load_power_trace
 
 _TRACE = Path(__file__).parent / "traces" / "rae_household.csv"
+_NET_TRACE = Path(__file__).parent / "traces" / "cyprus_netload.csv"
 
 
 def test_load_power_trace_skips_comments_and_header(tmp_path):
@@ -43,3 +44,24 @@ def test_vendored_household_trace_loads():
     # it exercises both the steering band and the saturated-grid regime.
     watts = [w for _, w in trace]
     assert min(watts) < 900 and max(watts) > 2500
+
+
+def test_load_net_trace_reads_three_columns(tmp_path):
+    p = tmp_path / "n.csv"
+    p.write_text("# c\nt_s,load_w,pv_w\n0,300,0\n30,250.5,1200\n60,400,900\n")
+    assert load_net_trace(p) == [
+        (0.0, 300.0, 0.0),
+        (30.0, 250.5, 1200.0),
+        (60.0, 400.0, 900.0),
+    ]
+
+
+def test_vendored_net_trace_loads():
+    trace = load_net_trace(_NET_TRACE)
+    assert len(trace) > 600  # multi-hour 30 s window
+    assert trace[0][0] == 0.0
+    spacings = {round(b[0] - a[0]) for a, b in itertools.pairwise(trace)}
+    assert spacings == {30}
+    # Real partly-cloudy midday: substantial PV, and load/PV both non-negative.
+    assert max(pv for _, _, pv in trace) > 2000
+    assert all(load >= 0 and pv >= 0 for _, load, pv in trace)

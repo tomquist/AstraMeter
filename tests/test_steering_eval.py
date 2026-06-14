@@ -161,6 +161,9 @@ def test_scenario_registry_shape():
     # single-phase A) — exercises per-phase target distribution.
     assert "phase_imbalance" in scenarios
     assert [b.phase for b in scenarios["phase_imbalance"].batteries] == ["A", "B", "C"]
+    # Real PV net-load (recorded PV + load with cloud transients), cf. the
+    # synthetic half-sine single_venus_solar.
+    assert "single_venus_pv" in scenarios
     # The noisy variant carries a markedly louder baseline than the stepped one.
     assert (
         scenarios["single_venus_noisy"].base_noise
@@ -538,6 +541,7 @@ def test_metric_glossary_covers_every_reported_metric():
         "single_venus_drain",
         "single_venus_fill",
         "phase_imbalance",
+        "single_venus_pv",
     ],
 )
 def test_full_scenario_definitions_build(name):
@@ -629,6 +633,23 @@ def test_trace_eff_variant_concentrates_unlike_fair():
     assert imbalance(eff) > 100.0
     assert min_battery_idle_fraction(fair) < 0.1
     assert min_battery_idle_fraction(eff) > 0.5
+
+
+def test_pv_net_load_scenario_charges_from_real_solar():
+    """The real-PV net-load scenario drives PV + load together from a recorded
+    Cyprus prosumer (partly-cloudy day). Net export charges the battery (SoC
+    rises from its 0.4 start) and the loop tracks the real solar variability
+    well (low mean abs grid). Confirms the bidirectional path runs on real PV
+    rather than the synthetic half-sine."""
+    sc = build_scenarios()["single_venus_pv"]
+    res = asyncio.run(run_scenario(sc, seed=2))
+    # Export-dominated midday: the pack charges up from the 0.4 start.
+    assert res["soc_max"] > 0.45
+    # The loop tracks the net-load (battery absorbs the surplus) without large
+    # residual grid on average.
+    assert res["mean_abs_grid_w"] < 120
+    # The battery is actually working (charging), not idle.
+    assert min(res["battery_traces"][0]) < -20
 
 
 def test_phase_imbalance_nulls_each_phase_independently():

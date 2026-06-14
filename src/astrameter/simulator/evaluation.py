@@ -67,7 +67,7 @@ from astrameter.ct002.balancer import device_capabilities
 from astrameter.ct002.ct002 import CT002
 
 from .battery import BatterySimulator
-from .load_model import Load, LoadModel, load_power_trace
+from .load_model import Load, LoadModel, load_net_trace, load_power_trace
 from .powermeter_sim import PowermeterSimulator
 
 # Mock-time epoch all scenarios start from (any fixed value works; using a
@@ -675,6 +675,17 @@ def _set_base(watts: float) -> Callable[[EvalWorld], None]:
     return apply
 
 
+def _set_net(load_w: float, pv_w: float) -> Callable[[EvalWorld], None]:
+    """Set the base load and the solar (PV) curve together from one recorded
+    net-load sample, so the two stay correlated (same site, same instant)."""
+
+    def apply(w: EvalWorld) -> None:
+        w.set_base(load_w)
+        w.set_solar_curve(pv_w)
+
+    return apply
+
+
 def _household_steps(rng: random.Random, duration: float) -> list[Event]:
     """Scripted appliance schedule: kettle spikes, oven cycling, dishwasher.
 
@@ -854,6 +865,53 @@ def _trace_events(rng: random.Random, duration: float) -> list[Event]:
             else:
                 break
         events.insert(0, Event(at=0.0, apply=_set_base(first)))
+    return events
+
+
+# Real prosumer net-load trace (Cyprus, 30 s, CC BY — see traces/README.md):
+# matching PV generation + load from one site, so their timing is genuinely
+# correlated. A partly-cloudy day, so the PV carries real cloud transients the
+# synthetic half-sine lacks. Scaled to a balcony-system size (keeps PV under the
+# load model's 2 kW solar clamp while preserving the cloud-dip shape).
+_NET_TRACE = load_net_trace(_TRACE_DIR / "cyprus_netload.csv")
+_PV_SCALE = 0.45
+
+
+def _pv_net_events(rng: random.Random, duration: float) -> list[Event]:
+    """Replay a per-seed window of the real PV + load net-load trace.
+
+    Drives the base load and the solar (PV) curve together from the same
+    recorded sample (so they stay correlated), scaled by :data:`_PV_SCALE`. Each
+    seed slices a different offset, so seeds see different parts of the day
+    (morning ramp, cloudy midday, afternoon). Unlabelled — scored on the
+    sustained-oscillation/energy aggregates, like the load-trace scenarios.
+    """
+    trace = _NET_TRACE
+    t0 = trace[0][0]
+    span = trace[-1][0] - t0
+    max_off = max(0.0, span - duration)
+    start = rng.uniform(0.0, max_off)
+    events: list[Event] = []
+    for t, load_w, pv_w in trace:
+        rel = (t - t0) - start
+        if rel < 0.0:
+            continue
+        if rel > duration:
+            break
+        events.append(
+            Event(at=rel, apply=_set_net(load_w * _PV_SCALE, pv_w * _PV_SCALE))
+        )
+    # Anchor both load and PV from t=0 to the sample active at `start`.
+    if not events or events[0].at > 0.0:
+        first = trace[0]
+        for sample in trace:
+            if (sample[0] - t0) <= start:
+                first = sample
+            else:
+                break
+        events.insert(
+            0, Event(at=0.0, apply=_set_net(first[1] * _PV_SCALE, first[2] * _PV_SCALE))
+        )
     return events
 
 
@@ -1084,6 +1142,27 @@ def build_scenarios() -> dict[str, Scenario]:
             build_events=lambda rng: (
                 _solar_curve(dur_solar, 2200.0) + _cloud_dips(rng, dur_solar)
             ),
+            meter_latency_s=0.5,
+        )
+    )
+
+    # Real PV net-load: matching recorded PV + load from one Cyprus prosumer on a
+    # partly-cloudy day, replacing the synthetic half-sine + scripted cloud dips
+    # with genuine PV cloud transients. Exercises the bidirectional loop (charge
+    # on export, discharge on cloud dips) against real solar variability.
+    add(
+        Scenario(
+            name="single_venus_pv",
+            description=(
+                "One Venus, real recorded PV + load net-load (Cyprus prosumer, "
+                "30 s, real cloud transients) — bidirectional charge/export "
+                "tracking, cf. the synthetic single_venus_solar"
+            ),
+            batteries=[BatterySpec(initial_soc=0.4)],
+            duration_s=dur_solar,
+            base_load=[_NET_TRACE[0][1] * _PV_SCALE, 0.0, 0.0],
+            base_noise=_TRACE_METER_NOISE,
+            build_events=lambda rng: _pv_net_events(rng, dur_solar),
             meter_latency_s=0.5,
         )
     )

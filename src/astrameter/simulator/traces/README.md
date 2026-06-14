@@ -32,3 +32,28 @@ To refresh or replace the excerpt, download `house1_power_blk1` from the source
 above and extract a clean contiguous window of the `mains` column into the
 `t_s,watts` format used here (House 1 is North American split-phase; only the
 watt timeseries is used, so the nominal voltage is irrelevant).
+
+## `cyprus_netload.csv`
+
+A 7-hour midday window of matching PV generation (`Ppv`) and load demand
+(`Pload`) from one residential prosumer in Cyprus, on a partly-cloudy day — so
+the PV carries real cloud-driven transients a synthetic half-sine lacks, and the
+PV/load timing is genuinely correlated (same site, same instant).
+
+- **Source:** Venizelou, V. et al. (2023). *Photovoltaic Generation and Load
+  Demand Datasets with 30 seconds resolution from an Actual Prosumer in Cyprus*
+  [Dataset]. Zenodo. <https://doi.org/10.5281/zenodo.8348862>
+- **License:** Creative Commons Attribution 4.0 International (CC BY 4.0).
+  Redistribution with attribution is permitted; the citation above is the
+  required credit.
+- **Resolution:** 30-second samples (the dataset's native cadence).
+- **Why this window:** 2022-09-01 09:00–16:00 is partly cloudy (PV peaks ~4.2 kW
+  with ~40 cloud dips >15% of peak across the window), so the net-load swings
+  through real solar variability. The evaluation scales both columns to a
+  balcony-system size (so the scaled PV stays under the load model's 2 kW solar
+  clamp) while preserving the cloud-dip shape; each seed slices a different part
+  of the day (morning ramp / cloudy midday / afternoon).
+
+To refresh or replace the excerpt, download a day file from the source above and
+extract a clean daytime window of the `Ppv`/`Pload` columns into the
+`t_s,load_w,pv_w` format used here.

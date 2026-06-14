@@ -36,6 +36,29 @@ def load_power_trace(path: str | Path) -> list[tuple[float, float]]:
     return points
 
 
+def load_net_trace(path: str | Path) -> list[tuple[float, float, float]]:
+    """Read a ``t_s,load_w,pv_w`` trace into ``[(seconds, load, pv), ...]``.
+
+    Same comment/blank/header handling as :func:`load_power_trace`, for the
+    vendored real prosumer net-load CSVs (load + PV from one site, see
+    ``traces/README.md``). Samples are returned sorted by time.
+    """
+    points: list[tuple[float, float, float]] = []
+    for raw in Path(path).read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(",")
+        if len(parts) < 3:
+            continue
+        try:
+            points.append((float(parts[0]), float(parts[1]), float(parts[2])))
+        except ValueError:
+            continue  # header row (``t_s,load_w,pv_w``) or stray text
+    points.sort(key=lambda p: p[0])
+    return points
+
+
 @dataclass
 class Load:
     name: str
