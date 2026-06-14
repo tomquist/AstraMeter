@@ -1127,24 +1127,27 @@ def build_scenarios() -> dict[str, Scenario]:
             )
         )
 
-    for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
-        add(
-            Scenario(
-                name=f"two_venus_trace/{mode}",
-                description=(
-                    "Two Venus sharing one phase, real recorded household load "
-                    "(RAE House 1, 1 Hz trace, CC BY) over a ~0.8 s-latency "
-                    "meter — real-world correlated-load stress for share-splitting"
-                ),
-                batteries=[_VENUS, _VENUS],
-                duration_s=dur_steps,
-                base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
-                base_noise=_TRACE_METER_NOISE,
-                build_events=lambda rng: _trace_events(rng, dur_steps),
-                meter_latency_s=0.8,
-                ct_kwargs=dict(kwargs),
-            )
+    # Single fair-share variant only: efficiency optimization is inert under a
+    # real household load this size (both batteries stay well above
+    # min_efficient_power, so eff never deprioritizes one — it produces a copy
+    # of fair). Efficiency mode is exercised by the stepped/solar/mixed `…/eff`
+    # scenarios, where low-load gaps actually trigger concentration.
+    add(
+        Scenario(
+            name="two_venus_trace",
+            description=(
+                "Two Venus sharing one phase, real recorded household load "
+                "(RAE House 1, 1 Hz trace, CC BY) over a ~0.8 s-latency meter "
+                "— real-world correlated-load stress for share-splitting"
+            ),
+            batteries=[_VENUS, _VENUS],
+            duration_s=dur_steps,
+            base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+            base_noise=_TRACE_METER_NOISE,
+            build_events=lambda rng: _trace_events(rng, dur_steps),
+            meter_latency_s=0.8,
         )
+    )
 
     # Solar peak (W) for the multi-Venus solar scenarios: above the base load
     # plus typical appliance draw, so midday PV pushes the pool into charging /

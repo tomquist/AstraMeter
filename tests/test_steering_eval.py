@@ -124,14 +124,17 @@ def test_scenario_registry_shape():
     assert "two_venus_noisy/fair" in scenarios
     assert "two_venus_noisy/eff" in scenarios
     # Real recorded-household-load stress (correlated drift + spikes over a
-    # latency-delayed meter), single and two Venus.
+    # latency-delayed meter), single and two Venus. Only a fair-share two-Venus
+    # variant: efficiency mode is inert under a real load this size (both
+    # batteries stay above min_efficient_power), so an /eff copy would just
+    # duplicate /fair — efficiency is covered by the stepped/solar `…/eff`.
     assert "single_venus_trace" in scenarios
-    assert "two_venus_trace/fair" in scenarios
-    assert "two_venus_trace/eff" in scenarios
+    assert "two_venus_trace" in scenarios
+    assert "two_venus_trace/eff" not in scenarios
     # The real-trace scenarios opt into realistic meter latency (the field
     # condition the synthetic latency-free scenarios never cover).
     assert scenarios["single_venus_trace"].meter_latency_s > 0
-    assert scenarios["two_venus_trace/fair"].meter_latency_s > 0
+    assert scenarios["two_venus_trace"].meter_latency_s > 0
     # Everyday scenarios now default to a realistic (non-zero) meter delay — no
     # real meter is delay-free, so overshoot/settle is measured under latency.
     assert scenarios["single_venus_steps"].meter_latency_s > 0
@@ -515,7 +518,7 @@ def test_metric_glossary_covers_every_reported_metric():
         "single_venus_d_solar",
         "venus_d_plus_c/fair",
         "single_venus_trace",
-        "two_venus_trace/fair",
+        "two_venus_trace",
         "single_venus_steps_slow",
         "single_venus_solar_slow",
         "two_venus_slow/fair",
