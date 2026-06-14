@@ -250,13 +250,14 @@ jobs:
   steering-eval-run:
     needs: [ steering-eval-discover ]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         scenario: ${{ fromJSON(needs.steering-eval-discover.outputs.matrix) }}
+        seed: [ 1, 2, 3, 4, 5 ]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -280,40 +281,43 @@ jobs:
         id: safe
         run: |
           safe=$(echo '${{ matrix.scenario }}' | tr '/' '-')
-          echo "name=steering-eval-${safe}" >> "$GITHUB_OUTPUT"
+          echo "name=steering-eval-${safe}-${{ matrix.seed }}" >> "$GITHUB_OUTPUT"
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
 
       - name: Run evaluation (head)
         run: |
           uv run python -m astrameter.simulator.evaluation \
             --scenario '${{ matrix.scenario }}' \
-            --json "head-${{ steps.safe.outputs.safe }}.json"
+            --seed ${{ matrix.seed }} --seeds 1 \
+            --json "head-${{ steps.safe.outputs.safe }}-${{ matrix.seed }}.json"
 
       # The base run uses the base commit's own harness + controller. Until
       # the harness exists on the base branch this produces an empty array
-      # and the compare job shows head-only numbers for this scenario.
+      # and the compare job shows head-only numbers for this scenario/seed.
       - name: Run evaluation (base)
         if: github.event_name == 'pull_request'
         run: |
           safe="${{ steps.safe.outputs.safe }}"
+          seed="${{ matrix.seed }}"
           git worktree add /tmp/steering-base "${{ github.event.pull_request.base.sha }}"
           if [ -f /tmp/steering-base/src/astrameter/simulator/evaluation.py ]; then
             (cd /tmp/steering-base \
               && uv sync --frozen --extra dev \
               && uv run python -m astrameter.simulator.evaluation \
                    --scenario '${{ matrix.scenario }}' \
-                   --json "$GITHUB_WORKSPACE/base-${safe}.json")
+                   --seed "${seed}" --seeds 1 \
+                   --json "$GITHUB_WORKSPACE/base-${safe}-${seed}.json")
           else
-            echo "[]" > "$GITHUB_WORKSPACE/base-${safe}.json"
+            echo "[]" > "$GITHUB_WORKSPACE/base-${safe}-${seed}.json"
           fi
 
-      - name: Upload scenario metrics
+      - name: Upload scenario/seed metrics
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.safe.outputs.name }}
           path: |
-            head-${{ steps.safe.outputs.safe }}.json
-            base-${{ steps.safe.outputs.safe }}.json
+            head-${{ steps.safe.outputs.safe }}-${{ matrix.seed }}.json
+            base-${{ steps.safe.outputs.safe }}-${{ matrix.seed }}.json
           if-no-files-found: ignore
 
   steering-eval-compare:
