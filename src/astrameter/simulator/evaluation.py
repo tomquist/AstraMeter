@@ -36,6 +36,15 @@ head and posts that comparison as a sticky PR comment (see
 ``.github/workflows/ci.yml``, job ``steering-eval``). The interactive
 grid-power charts live in the self-contained HTML report CI uploads as the
 ``steering-eval`` artifact.
+
+The roll-up leads with **two** one-line verdicts: an equal-weighted ``Overall``
+(how many metrics moved each way, mean relative change) and a ``Priority``
+verdict that weights metrics by real-world value — import-heavy self-consumption
+energy, do-no-harm overshoot/hunting guardrails, and cycle-life battery travel
+(see :data:`_METRIC_WEIGHTS`) — and hard-flags any do-no-harm guardrail
+regression (:data:`_GUARDRAIL_METRICS`). The flat mean answers "did most numbers
+move down?"; the priority verdict answers "did it get better *where it matters*,
+and did it break a guardrail?".
 """
 
 from __future__ import annotations
@@ -1000,6 +1009,48 @@ _REPORT_METRICS = [
     "battery_travel_w_per_h",
 ]
 
+# Real-world priority weights for the *priority-weighted* aggregate score, on
+# top of the equal-weighted roll-up.  The flat mean treats a 1% move in
+# worst-case overshoot the same as a 1% move in 95th-percentile settle time;
+# in the field those are worth very different amounts.  These weights encode the
+# value hierarchy a self-consumption controller is actually judged on:
+#
+#   * **Self-consumption energy is the product's purpose**, and the two sides
+#     are not symmetric: avoidable grid *import* is paid at the retail tariff
+#     while avoidable *export* earns only the (much lower) feed-in tariff, so
+#     import is weighted ~4x export.
+#   * **Sign-flip overshoot and sustained hunting are do-no-harm guardrails** —
+#     overshoot flips the grid sign (actively worse than no battery) and hunting
+#     wastes energy, wears the pack and reads as "broken" — so they carry heavy
+#     weight (and a separate hard regression flag, see ``_GUARDRAIL_METRICS``).
+#   * **Battery travel is cycle-life / hardware wear**, a real € cost.
+#   * **Settle time is an enabler** (it mostly feeds energy), weighted lightly.
+#
+# All metrics are lower-is-better, so a negative weighted change is an overall
+# improvement.  Weights are relative (only their ratios matter).
+_METRIC_WEIGHTS: dict[str, float] = {
+    "avoidable_import_wh": 4.0,
+    "avoidable_export_wh": 1.0,
+    "overshoot_max_w": 3.0,
+    "band_crossings_per_h": 2.0,
+    "battery_travel_w_per_h": 2.0,
+    "grid_p2p_w": 1.5,
+    "overshoot_mean_w": 1.0,
+    "mean_abs_grid_w": 1.0,
+    "steady_rms_w": 0.5,
+    "settle_mean_s": 0.5,
+    "unsettled_events": 0.5,
+    "settle_p95_s": 0.3,
+}
+
+# Do-no-harm guardrails: regressing one of these makes the system *actively
+# worse than doing nothing* (overshoot flips the grid sign; band crossings /
+# peak-to-peak are sustained hunting).  A regression beyond
+# ``_GUARDRAIL_TOLERANCE`` (5%) is surfaced as a hard warning regardless of how
+# good the weighted score looks — the "hard penalty for sign-flip overshoot".
+_GUARDRAIL_METRICS = ("overshoot_max_w", "band_crossings_per_h", "grid_p2p_w")
+_GUARDRAIL_TOLERANCE = 0.05
+
 # Short, human-readable description for each metric in `_REPORT_METRICS`,
 # rendered as a collapsible glossary in the CI PR comment. Keep in sync with
 # `_REPORT_METRICS` and the metric computation in `_score()`.
@@ -1192,6 +1243,69 @@ def _overall_summary(base_agg: dict, head_agg: dict) -> str:
     )
 
 
+def _weighted_overall(base_agg: dict, head_agg: dict) -> float | None:
+    """Priority-weighted mean relative change across aggregate metrics.
+
+    Like :func:`_overall_change`'s percentage but weighted by
+    :data:`_METRIC_WEIGHTS` so the headline reflects real-world value (import-
+    heavy energy, guardrail overshoot/hunting, cycle-life travel) rather than
+    treating every metric equally.  Lower is better, so a negative result is an
+    improvement; ``None`` when nothing comparable has a defined relative change.
+    """
+    num = den = 0.0
+    for key, weight in _METRIC_WEIGHTS.items():
+        if key not in base_agg or key not in head_agg:
+            continue
+        bv, hv = float(base_agg[key]), float(head_agg[key])
+        if bv == 0:
+            continue
+        num += weight * (hv - bv) / abs(bv)
+        den += weight
+    if den == 0:
+        return None
+    return num / den * 100.0
+
+
+def _guardrail_regressions(base_agg: dict, head_agg: dict) -> list[str]:
+    """Do-no-harm guardrail metrics (:data:`_GUARDRAIL_METRICS`) that regressed
+    beyond :data:`_GUARDRAIL_TOLERANCE`, formatted as ``metric +N%``.
+
+    These are surfaced as a hard warning independent of the weighted score: a
+    controller that wins on average but flips the grid sign harder, or hunts
+    more, has made the system worse where it matters most."""
+    out: list[str] = []
+    for key in _GUARDRAIL_METRICS:
+        if key not in base_agg or key not in head_agg:
+            continue
+        bv, hv = float(base_agg[key]), float(head_agg[key])
+        if bv > 0 and (hv - bv) / bv > _GUARDRAIL_TOLERANCE:
+            out.append(f"{key} +{(hv - bv) / bv * 100.0:.0f}%")
+    return out
+
+
+def _priority_summary(base_agg: dict, head_agg: dict) -> str:
+    """One-line priority-weighted verdict plus the do-no-harm guardrail status.
+
+    Complements :func:`_overall_summary` (the equal-weighted roll-up) with the
+    weighted score and an explicit guardrail flag — see :data:`_METRIC_WEIGHTS`
+    and :data:`_GUARDRAIL_METRICS`."""
+    pct = _weighted_overall(base_agg, head_agg)
+    if pct is None:
+        score = "no comparable metrics"
+    elif pct < 0:
+        score = f"{pct:.1f}% (better)"
+    elif pct > 0:
+        score = f"+{pct:.1f}% (worse)"
+    else:
+        score = "0% (unchanged)"
+    regressions = _guardrail_regressions(base_agg, head_agg)
+    if regressions:
+        guard = "⚠️ do-no-harm guardrail regressed: " + ", ".join(regressions)
+    else:
+        guard = "✅ no do-no-harm guardrail regressions"
+    return f"priority-weighted {score} — {guard}"
+
+
 def render_text(results: list[dict]) -> str:
     lines = []
     # A single aggregate row up top makes an overall read possible without
@@ -1300,6 +1414,8 @@ def render_markdown_compare(
     # any per-scenario table — the whole point of the roll-up.
     if base_agg is not None:
         out.append(f"**Overall: {_overall_summary(base_agg, head_agg)}.**")
+        out.append("")
+        out.append(f"**Priority: {_priority_summary(base_agg, head_agg)}.**")
         out.append("")
     out += [
         "Lower is better for every metric. See "
@@ -1529,7 +1645,11 @@ def main(argv: list[str] | None = None) -> None:
             fmt_delta=_fmt_delta,
             aggregate=(base_agg, head_agg),
             aggregate_summary=(
-                _overall_summary(base_agg, head_agg) if base_agg is not None else ""
+                _overall_summary(base_agg, head_agg)
+                + " · "
+                + _priority_summary(base_agg, head_agg)
+                if base_agg is not None
+                else ""
             ),
             note=_seeds_caption(base, results),
         )

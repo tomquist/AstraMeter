@@ -40,7 +40,13 @@ head.json --compare base.json`. CI runs the same suite on PR base + head (job
 comparison leads with an **aggregate roll-up** (per-metric mean across all
 scenarios plus a one-line overall verdict — how many metrics
 improved/regressed and the mean relative change), so an across-the-board
-improvement or regression is visible without reading every scenario table.
+improvement or regression is visible without reading every scenario table. A
+second **priority verdict** sits below it: a value-weighted score (`_METRIC_WEIGHTS`
+— import-heavy self-consumption energy, do-no-harm overshoot/hunting guardrails,
+cycle-life battery travel) plus a hard flag when any do-no-harm guardrail
+(`_GUARDRAIL_METRICS`: overshoot, band-crossings, grid p2p) regresses past 5%.
+Read the flat mean for "did most numbers move down?" and the priority verdict
+for "did it improve *where it matters*, and did it break a guardrail?".
 
 ## Changelog
 
