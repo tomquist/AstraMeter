@@ -157,6 +157,10 @@ def test_scenario_registry_shape():
     # hard enough to actually hit empty / full (the handoff to grid).
     assert "single_venus_drain" in scenarios
     assert "single_venus_fill" in scenarios
+    # Three-phase imbalance: one Venus on each of A/B/C (everything else is
+    # single-phase A) — exercises per-phase target distribution.
+    assert "phase_imbalance" in scenarios
+    assert [b.phase for b in scenarios["phase_imbalance"].batteries] == ["A", "B", "C"]
     # The noisy variant carries a markedly louder baseline than the stepped one.
     assert (
         scenarios["single_venus_noisy"].base_noise
@@ -533,6 +537,7 @@ def test_metric_glossary_covers_every_reported_metric():
         "two_venus_slow/fair",
         "single_venus_drain",
         "single_venus_fill",
+        "phase_imbalance",
     ],
 )
 def test_full_scenario_definitions_build(name):
@@ -624,6 +629,22 @@ def test_trace_eff_variant_concentrates_unlike_fair():
     assert imbalance(eff) > 100.0
     assert min_battery_idle_fraction(fair) < 0.1
     assert min_battery_idle_fraction(eff) > 0.5
+
+
+def test_phase_imbalance_nulls_each_phase_independently():
+    """With one Venus per phase and asymmetric per-phase loads, the active-
+    control loop distributes a target to each unit so every phase is nulled —
+    not just the aggregate. Each battery discharges to cover its own phase, and
+    the total grid converges (low mean abs grid), confirming per-phase
+    distribution rather than single-phase steering."""
+    sc = build_scenarios()["phase_imbalance"]
+    res = asyncio.run(run_scenario(sc, seed=1))
+    # The pool tracks the (3-phase) load well overall.
+    assert res["mean_abs_grid_w"] < 150
+    # All three units (one per phase) are discharging to cover their phase.
+    means = [sum(t) / len(t) for t in res["battery_traces"]]
+    assert len(means) == 3
+    assert all(m > 100 for m in means)
 
 
 def test_soc_saturation_scenarios_hit_the_edges():

@@ -719,6 +719,15 @@ _HOUSEHOLD_LOADS = [
     Load("dishwasher", 1100.0, "A"),
 ]
 
+# Same appliances spread one-per-phase, for the three-phase imbalance scenario
+# (everything else in the suite is single-phase A). Names match _household_steps
+# so the same scripted schedule drives them.
+_PHASE_IMBALANCE_LOADS = [
+    Load("kettle", 2000.0, "A"),
+    Load("oven", 1500.0, "B"),
+    Load("dishwasher", 1100.0, "C"),
+]
+
 # Washing-machine drum motor: a single ~120 W load the main-wash tumble runs,
 # briefly pauses, and restarts.  Sized (with the scenario's ~1 s meter latency)
 # to reproduce the field report in issue #473 — a steady ~500 W house whose
@@ -1163,6 +1172,30 @@ def build_scenarios() -> dict[str, Scenario]:
             build_events=lambda rng: _household_steps(rng, dur_steps),
             meter_interval_s=10.0,
             meter_latency_s=1.0,
+        )
+    )
+
+    # Three-phase imbalance: one Venus per phase with asymmetric per-phase base
+    # loads and a different appliance on each phase. Everything else in the suite
+    # is single-phase (load + batteries on A); this exercises the active-control
+    # loop's per-phase target distribution — each unit must null only its own
+    # phase, with no cross-phase interference.
+    add(
+        Scenario(
+            name="phase_imbalance",
+            description=(
+                "Three Venus, one per phase; asymmetric per-phase base + a "
+                "different appliance on each phase — per-phase distribution"
+            ),
+            batteries=[
+                BatterySpec(phase="A"),
+                BatterySpec(phase="B"),
+                BatterySpec(phase="C"),
+            ],
+            duration_s=dur_steps,
+            base_load=[300.0, 200.0, 150.0],
+            loads=list(_PHASE_IMBALANCE_LOADS),
+            build_events=lambda rng: _household_steps(rng, dur_steps),
         )
     )
 
