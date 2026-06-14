@@ -116,6 +116,15 @@ def test_scenario_registry_shape():
     assert "mixed_cadence_solar/eff" in scenarios
     # Washing-machine spike-absorption stress (issue #473).
     assert "single_venus_washer" in scenarios
+    # Pretty-noisy house baseline (noise-rejection stress), single and two Venus.
+    assert "single_venus_noisy" in scenarios
+    assert "two_venus_noisy/fair" in scenarios
+    assert "two_venus_noisy/eff" in scenarios
+    # The noisy variant carries a markedly louder baseline than the stepped one.
+    assert (
+        scenarios["single_venus_noisy"].base_noise
+        > scenarios["single_venus_steps"].base_noise
+    )
     # Venus D (VNSD-0 integer loop) variants, including a heterogeneous phase
     # sharing with a Venus C (HMG float ramp).
     assert "single_venus_d_steps" in scenarios
@@ -135,6 +144,9 @@ def test_markdown_compare_renders():
     md = render_markdown_compare([base], [res])
     assert "| overshoot_max_w |" in md
     assert "tiny" in md
+    # Every per-scenario table is collapsed behind one outer section so the
+    # comment leads with the aggregate roll-up.
+    assert "Per-scenario tables" in md
     # The collapsible metric glossary is included with a row per metric.
     assert "What do these metrics mean?" in md
     for key in _REPORT_METRICS:
@@ -500,6 +512,22 @@ def test_washer_scenario_reproduces_sustained_oscillation():
     assert res["band_crossings_per_h"] > 0
     assert res["mean_abs_grid_w"] > 0
     # All reported metrics are populated and non-negative.
+    for key in _REPORT_METRICS:
+        assert res[key] >= 0, key
+
+
+def test_noisy_scenario_has_no_labeled_events_but_scores_aggregates():
+    """The pretty-noisy house baseline has no scripted load steps (so the
+    step-response metrics read 0), and the loud baseline noise drives the loop:
+    it is scored on the sustained-oscillation aggregates, all of which stay
+    populated and non-negative."""
+    sc = build_scenarios()["single_venus_noisy"]
+    assert sc.build_events(__import__("random").Random(1)) == []
+    res = asyncio.run(run_scenario(sc, seed=1))
+    assert res["events_measured"] == 0
+    # The noise keeps the grid moving, so the oscillation aggregates are live.
+    assert res["grid_p2p_w"] > 0
+    assert res["mean_abs_grid_w"] > 0
     for key in _REPORT_METRICS:
         assert res[key] >= 0, key
 
