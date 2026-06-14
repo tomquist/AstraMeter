@@ -31,7 +31,8 @@ reports reaction/oscillation/energy metrics per scenario. Each scenario is run
 over several seeds (`--seeds`, default 5) **in parallel across CPU cores**, and
 every metric is the mean over those seeds — so the figures are the
 seed-averaged signal, not one noisy draw (use `--seeds 1` for a quick
-single-seed run). When changing `src/astrameter/ct002/balancer.py` (or anything
+single-seed run, and `--seed N` to set the starting seed — seeds run are
+`N..N+seeds-1`). When changing `src/astrameter/ct002/balancer.py` (or anything
 else in the active-control loop), capture a baseline first (`--json base.json`
 on the unchanged code), re-run after the change, and compare with `--input
 head.json --compare base.json`. CI runs the same suite on PR base + head (job

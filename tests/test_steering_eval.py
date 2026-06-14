@@ -20,6 +20,7 @@ from astrameter.simulator.evaluation import (
     Event,
     Scenario,
     _aggregate,
+    _compare_aggregates,
     _fmt_delta,
     _merge_seeds,
     _overall_summary,
@@ -283,6 +284,32 @@ def test_overall_summary_reports_direction():
     assert "(better)" in _overall_summary(base_agg, better)
     assert "improved" in _overall_summary(base_agg, better)
     assert "(worse)" in _overall_summary(base_agg, worse)
+
+
+def test_overall_summary_denominator_counts_only_compared_metrics():
+    # Base carries only 2 of the reported metrics (e.g. an older base from
+    # before others existed); the verdict's denominator must be the metrics
+    # actually compared, not the full list.
+    base = {"settle_mean_s": 10.0, "overshoot_max_w": 100.0}
+    head = {"settle_mean_s": 8.0, "overshoot_max_w": 90.0}
+    assert "across 2 metrics" in _overall_summary(base, head)
+
+
+def test_compare_aggregates_uses_only_shared_scenarios():
+    def mk(name: str, settle: float) -> dict:
+        return {"scenario": name, "seed": 1, "settle_mean_s": settle}
+
+    # 'z' is base-only, 'c' is head-only; both must be excluded so the two
+    # aggregates are computed over the same {a, b} population.
+    base = [mk("a", 10.0), mk("b", 20.0), mk("z", 999.0)]
+    head = [mk("a", 8.0), mk("b", 16.0), mk("c", 1.0)]
+    base_agg, head_agg = _compare_aggregates(base, head)
+    assert base_agg is not None
+    assert base_agg["n_scenarios"] == head_agg["n_scenarios"] == 2
+    assert base_agg["settle_mean_s"] == 15.0  # (10+20)/2, no 'z'
+    assert head_agg["settle_mean_s"] == 12.0  # (8+16)/2, no 'c'
+    # No baseline: head aggregates over all its scenarios, base side is None.
+    assert _compare_aggregates(None, head) == (None, _aggregate(head))
 
 
 def test_render_text_adds_aggregate_only_for_multiple_scenarios():

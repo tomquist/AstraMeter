@@ -1129,6 +1129,23 @@ def _aggregate(results: list[dict]) -> dict:
     return agg
 
 
+def _compare_aggregates(
+    base: list[dict] | None, head: list[dict]
+) -> tuple[dict | None, dict]:
+    """Aggregate base and head for a base-vs-head comparison.
+
+    With a baseline, both sides are aggregated over the **scenarios they share**
+    so the Overall verdict and aggregate table compare like for like even when
+    the two runs cover different scenario sets (e.g. a PR adds or drops a
+    scenario). Without a baseline, head is aggregated over all its scenarios."""
+    if not base:
+        return None, _aggregate(head)
+    shared = {r["scenario"] for r in base} & {r["scenario"] for r in head}
+    base_agg = _aggregate([r for r in base if r["scenario"] in shared])
+    head_agg = _aggregate([r for r in head if r["scenario"] in shared])
+    return base_agg, head_agg
+
+
 def _overall_change(
     base_agg: dict, head_agg: dict
 ) -> tuple[int, int, int, float | None]:
@@ -1171,7 +1188,7 @@ def _overall_summary(base_agg: dict, head_agg: dict) -> str:
         trend = "mean 0% (unchanged)"
     return (
         f"{improved} improved, {regressed} regressed, {unchanged} unchanged "
-        f"across {len(_REPORT_METRICS)} metrics — {trend}"
+        f"across {improved + regressed + unchanged} metrics — {trend}"
     )
 
 
@@ -1274,8 +1291,7 @@ def render_markdown_compare(
     doesn't exist.
     """
     base_by = {r["scenario"]: r for r in base}
-    head_agg = _aggregate(head)
-    base_agg = _aggregate(base) if base else None
+    base_agg, head_agg = _compare_aggregates(base, head)
     out = [
         "### Steering evaluation (base vs head)",
         "",
@@ -1504,8 +1520,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.html:
         from .eval_report import render_html_report
 
-        head_agg = _aggregate(results)
-        base_agg = _aggregate(base) if base else None
+        base_agg, head_agg = _compare_aggregates(base, results)
         report = render_html_report(
             base,
             results,
