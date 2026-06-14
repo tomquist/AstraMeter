@@ -228,6 +228,11 @@ class _EvalClock:
 class _Sample:
     t: float  # seconds since scenario start
     grid: float  # grid total W as seen by the controller (before_send)
+    # Raw whole-house consumption (load + noise - solar) at this instant, taken
+    # straight from the load model — the original source data, not derived from
+    # grid+battery, so the plotted consumption can never be polluted by control-
+    # loop oscillation (which lives in `grid`).
+    consumption: float
     powers: tuple[float, ...]
     socs: tuple[float, ...]
 
@@ -305,7 +310,11 @@ async def run_scenario(
 
     async def before_send(_addr, _fields=None, _consumer_id=None):
         now = clock() - _EPOCH
-        true_grid = powermeter.compute_grid()
+        # Draw the house load once; derive both the true grid and the raw
+        # consumption from that same sample (get_grid_contribution re-draws
+        # noise each call, so a second call would decorrelate them).
+        contribution = load_model.get_grid_contribution()
+        true_grid = powermeter.compute_grid_from(contribution)
         grid_history.append((now, true_grid))
         # Drop history older than what the delayed read can still need.
         horizon = now - scenario.meter_latency_s - scenario.meter_interval_s - 1.0
@@ -328,6 +337,7 @@ async def run_scenario(
             _Sample(
                 t=now,
                 grid=true_grid["phase_a"] + true_grid["phase_b"] + true_grid["phase_c"],
+                consumption=contribution[0] + contribution[1] + contribution[2],
                 powers=tuple(b.current_power for b in batteries),
                 socs=tuple(b.soc for b in batteries),
             )
@@ -561,12 +571,13 @@ def _compute_metrics(
         "grid_trace": _downsample_series(
             samples, scenario.duration_s, lambda s: s.grid
         ),
-        # Net house consumption at the meter coupling = grid + Σ(battery AC
-        # output) by energy balance.  It's the same scripted load in base and
-        # head, so one trace is enough; the HTML grid chart overlays it as
-        # context (grid = consumption minus battery output).
+        # Raw whole-house consumption, recorded straight from the load model
+        # (the original source data — not derived from grid+battery, so it can't
+        # be polluted by control-loop oscillation). It's the same scripted load
+        # in base and head, so one trace is enough; the HTML grid chart overlays
+        # it as context (grid = consumption minus battery output).
         "consumption_trace": _downsample_series(
-            samples, scenario.duration_s, lambda s: s.grid + sum(s.powers)
+            samples, scenario.duration_s, lambda s: s.consumption
         ),
         # Per-battery output traces (one downsampled series each) and labels,
         # for the per-scenario battery-output chart in the HTML report.
