@@ -22,10 +22,13 @@ from astrameter.simulator.evaluation import (
     _aggregate,
     _compare_aggregates,
     _fmt_delta,
+    _guardrail_regressions,
     _merge_seeds,
     _overall_summary,
+    _priority_summary,
     _run_all,
     _seed_label,
+    _weighted_overall,
     build_scenarios,
     render_markdown_compare,
     render_text,
@@ -284,6 +287,54 @@ def test_overall_summary_reports_direction():
     assert "(better)" in _overall_summary(base_agg, better)
     assert "improved" in _overall_summary(base_agg, better)
     assert "(worse)" in _overall_summary(base_agg, worse)
+
+
+def test_weighted_overall_import_outweighs_export():
+    # Same-sized relative move on import vs export: import is weighted ~4x, so
+    # an import improvement must move the weighted score more than an equal
+    # export improvement, and an import regression dominates an export gain.
+    base = {"avoidable_import_wh": 100.0, "avoidable_export_wh": 100.0}
+    import_better = {"avoidable_import_wh": 90.0, "avoidable_export_wh": 100.0}
+    export_better = {"avoidable_import_wh": 100.0, "avoidable_export_wh": 90.0}
+    assert _weighted_overall(base, import_better) < _weighted_overall(
+        base, export_better
+    )
+    # Import up 10%, export down 10%: net worse despite the symmetric trade.
+    mixed = {"avoidable_import_wh": 110.0, "avoidable_export_wh": 90.0}
+    assert _weighted_overall(base, mixed) > 0
+
+
+def test_weighted_overall_none_when_nothing_comparable():
+    assert _weighted_overall({}, {}) is None
+    # A base metric of 0 has no defined relative change → excluded.
+    assert _weighted_overall({"overshoot_max_w": 0.0}, {"overshoot_max_w": 5.0}) is None
+
+
+def test_guardrail_regression_is_flagged():
+    base = {"overshoot_max_w": 100.0, "band_crossings_per_h": 50.0, "grid_p2p_w": 40.0}
+    # overshoot_max up 30% (past the 5% tolerance), the rest flat.
+    head = {"overshoot_max_w": 130.0, "band_crossings_per_h": 50.0, "grid_p2p_w": 40.0}
+    regressions = _guardrail_regressions(base, head)
+    assert regressions == ["overshoot_max_w +30%"]
+    summary = _priority_summary(base, head)
+    assert "⚠️" in summary and "overshoot_max_w" in summary
+    # A move inside the tolerance is not flagged.
+    assert _guardrail_regressions(base, {**base, "overshoot_max_w": 103.0}) == []
+
+
+def test_priority_summary_clean_when_no_guardrail_regresses():
+    base = {"avoidable_import_wh": 100.0, "overshoot_max_w": 100.0}
+    head = {"avoidable_import_wh": 80.0, "overshoot_max_w": 80.0}
+    summary = _priority_summary(base, head)
+    assert "✅" in summary and "(better)" in summary
+
+
+def test_markdown_compare_leads_with_priority_verdict():
+    results = _two_results()
+    base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
+    md = render_markdown_compare(base, results)
+    assert "**Priority:" in md
+    assert "priority-weighted" in md
 
 
 def test_overall_summary_denominator_counts_only_compared_metrics():
