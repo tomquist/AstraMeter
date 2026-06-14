@@ -249,6 +249,16 @@ def test_ct002_device_discovery_structure():
     assert comps["smooth_target"]["device_class"] == "power"
     assert comps["smooth_target"]["state_class"] == "measurement"
 
+    # Active Control switch — controllable, retained command for restart restore
+    ac = comps["active_control"]
+    assert ac["platform"] == "switch"
+    assert ac["command_topic"] == "astrameter/ct002/dev1/set"
+    assert ac["value_template"] == "{{ value_json.active_control }}"
+    assert ac["state_on"] == "True"
+    assert ac["state_off"] == "False"
+    assert ac["retain"] is True
+    assert ac["entity_category"] == "config"
+
     # Force rotation button
     btn = comps["force_rotation"]
     assert btn["platform"] == "button"
@@ -1365,6 +1375,52 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
 
         await _poll(lambda: len(handler_calls) >= 1)
         assert handler_calls[0] == "rotated"
+    finally:
+        await service.stop()
+
+
+def test_active_control_device_command_dispatch():
+    """The device-level active_control field routes booleans to the handler
+    and rejects non-boolean payloads."""
+    service = _make_service(1883)
+    calls: list[bool] = []
+    service.register_active_control_handler("dev1", calls.append)
+
+    service._handle_device_command("dev1", {"active_control": False})
+    service._handle_device_command("dev1", {"active_control": True})
+    assert calls == [False, True]
+
+    # Non-boolean is rejected (no dispatch); unknown device is a no-op.
+    service._handle_device_command("dev1", {"active_control": "nope"})
+    service._handle_device_command("other", {"active_control": False})
+    assert calls == [False, True]
+
+    service.unregister_handlers("dev1")
+    service._handle_device_command("dev1", {"active_control": True})
+    assert calls == [False, True]
+
+
+@needs_mosquitto
+async def test_active_control_toggle_via_mqtt(mqtt_broker) -> None:
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    handler_calls: list[bool] = []
+
+    service.register_active_control_handler("dev1", handler_calls.append)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(
+                f"{base}/ct002/dev1/set",
+                payload=json.dumps({"active_control": False}).encode(),
+            )
+
+        await _poll(lambda: len(handler_calls) >= 1)
+        assert handler_calls[0] is False
     finally:
         await service.stop()
 

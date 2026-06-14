@@ -639,9 +639,13 @@ export function generateHomeAssistant(state: State): string {
   add("wait_for_next_message", !isBlank(g.waitForNextMessage) ? g.waitForNextMessage : tuning.WAIT_FOR_NEXT_MESSAGE);
   add("dedupe_time_window", g.dedupeTimeWindow);
 
-  // CT identity / efficiency / DC keep-alive options.
+  // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};
   add("ct_mac", ctf.CT_MAC);
+  // Active control is a tri-state select in the editor ("" = default on); the
+  // add-on option is a plain bool, so only an explicit On/Off is emitted.
+  if (ctf.ACTIVE_CONTROL === "True") add("active_control", true);
+  else if (ctf.ACTIVE_CONTROL === "False") add("active_control", false);
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);

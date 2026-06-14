@@ -341,6 +341,19 @@ class CT002:
         }
         self._balancer.force_rotation(current)
 
+    def set_active_control(self, active: bool) -> None:
+        """Toggle device-level active control (on = emulator computes targets,
+        off = relay mode forwarding consumer aggregates). Surfaced as the
+        device's "Active Control" switch in Home Assistant; defaults on."""
+        if self.active_control == active:
+            return
+        self.active_control = active
+        logger.info(
+            "Active control %s for %s",
+            "enabled" if active else "disabled (relay mode)",
+            self._device_id or "(default)",
+        )
+
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
         consumer = self._get_consumer(consumer_id)
         if active:

@@ -1362,3 +1362,30 @@ class TestInactiveConsumers:
         device.set_consumer_active("bat1", False)
         device._compute_smooth_target([400, 0, 0], "bat1")
         assert device._balancer._get_consumer("bat1").last_target == 0
+
+
+class TestActiveControlToggle:
+    """Tests for the device-level active-control switch (set_active_control)."""
+
+    def test_default_on(self):
+        assert _ct002().active_control is True
+
+    def test_disable_falls_back_to_relay(self):
+        """With active control off, _compute_smooth_target returns the raw
+        grid values untouched (relay mode) instead of a balancer split."""
+        device = _ct002(active_control=True, fair_distribution=False)
+        device._update_consumer_report("a", "A", 100)
+        device._update_consumer_report("b", "A", 100)
+
+        device.set_active_control(False)
+        assert device.active_control is False
+        assert device._compute_smooth_target([400, 0, 0], "a") == [400, 0, 0]
+
+    def test_toggle_back_on_resumes_split(self):
+        device = _ct002(active_control=False, fair_distribution=False)
+        device._update_consumer_report("a", "A", 100)
+        device._update_consumer_report("b", "A", 100)
+
+        device.set_active_control(True)
+        out = device._compute_smooth_target([400, 0, 0], "a")
+        assert out[0] == 200

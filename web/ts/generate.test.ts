@@ -265,13 +265,14 @@ const haOpts = generateHomeAssistant({
       },
     },
   ],
-  ct: { fields: { CT_MAC: "abc123", MIN_DC_OUTPUT: "30" } },
+  ct: { fields: { CT_MAC: "abc123", MIN_DC_OUTPUT: "30", ACTIVE_CONTROL: "False" } },
 });
 has(haOpts, "power_input_alias: \"sensor.grid_power\"", "ha-opts: power input alias");
 has(haOpts, "device_types: \"ct002\"", "ha-opts: device types");
 has(haOpts, "throttle_interval: 2", "ha-opts: throttle interval");
 has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");
 has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
+has(haOpts, "active_control: false", "ha-opts: active control off");
 has(haOpts, "min_dc_output: 30", "ha-opts: min dc output");
 has(haOpts, 'power_offset: "-20"', "ha-opts: power offset (quoted str)");
 has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
@@ -295,6 +296,7 @@ lacks(haMin, "hampel_window", "ha-opts: omits unset hampel");
 lacks(haMin, "pid_kp", "ha-opts: omits unset pid");
 lacks(haMin, "deadband", "ha-opts: omits unset deadband");
 lacks(haMin, "min_dc_output", "ha-opts: omits unset min dc output");
+lacks(haMin, "active_control", "ha-opts: omits default active control");
 
 // ── Home Assistant add-on options: calculate from in/out ─────────────────────
 const haCalc = generateHomeAssistant({

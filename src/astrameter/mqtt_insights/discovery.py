@@ -377,15 +377,29 @@ def build_ct002_device_discovery(
             "state_topic": state_topic,
             "value_template": "{{ value_json.smooth_target }}",
         },
+        # Active Control switch — on (default) lets the emulator compute
+        # per-battery targets; off falls back to relay mode (forwarding the
+        # consumer aggregates untouched). The command is published retained to
+        # the device-level command topic so an "off" choice survives an
+        # AstraMeter restart: on reconnect the broker redelivers it and the
+        # setting restores itself (the same retained-restore pattern the
+        # per-consumer settings use).
         "active_control": {
-            "platform": "binary_sensor",
+            "platform": "switch",
             "unique_id": f"{uid_prefix}_active_control",
             "name": "Active Control",
-            "device_class": "running",
             "state_topic": state_topic,
             "value_template": "{{ value_json.active_control }}",
-            "payload_on": "True",
-            "payload_off": "False",
+            "command_topic": f"{base_topic}/ct002/{device_id}/set",
+            "command_template": (
+                '{"active_control": {{ "true" if value == "ON" else "false" }}}'
+            ),
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": True,
+            "entity_category": "config",
         },
         "consumer_count": {
             "platform": "sensor",

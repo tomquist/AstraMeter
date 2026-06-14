@@ -255,9 +255,9 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     // pre-balancer), mirroring Python's _last_smooth_target — NOT the sum
     // of the balancer's per-phase output targets.
     root["smooth_target"] = std::lround(snap.smooth_target);
-    // Reflect the configured active_control setting — HA's binary_sensor
-    // should show "off" when the user disabled active control in YAML
-    // rather than always reading "running".
+    // Reflect the live active_control setting — HA's "Active Control" switch
+    // reads its state here, so it shows "off" when active control is disabled
+    // (via YAML or the switch itself) rather than always reading "on".
     root["active_control"] = this->ct002_->active_control();
     root["consumer_count"] = this->ct002_->reporting_consumer_count();
   });
@@ -402,6 +402,14 @@ void MqttInsightsComponent::handle_device_command_(const std::string &payload) {
   bool parsed = json::parse_json(payload, [&](JsonObject root) -> bool {
     if (root["force_rotation"].is<bool>() && root["force_rotation"].as<bool>()) {
       this->ct002_->force_balancer_rotation();
+    }
+    // Active Control switch — toggles the emulator between computing targets
+    // (on, default) and relay mode (off). Published retained by HA so the
+    // choice restores on restart.
+    if (root["active_control"].is<bool>()) {
+      this->ct002_->set_active_control(root["active_control"].as<bool>());
+    } else if (!root["active_control"].isNull()) {
+      ESP_LOGW(TAG, "Invalid active_control value in device command");
     }
     return true;
   });

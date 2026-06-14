@@ -394,6 +394,9 @@ async def run_device(
         insights.register_rotation_handler(
             device_id or "", device.force_efficiency_rotation
         )
+        insights.register_active_control_handler(
+            device_id or "", device.set_active_control
+        )
 
     # Marstek MQTT responder — only wired up when Marstek credentials
     # yielded a managed MAC (so hame-relay can route the replies back to
