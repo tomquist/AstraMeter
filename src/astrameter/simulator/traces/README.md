@@ -15,8 +15,12 @@ A contiguous 6-hour window of the whole-house active-power channel (`mains`,
   [Dataset]. Harvard Dataverse. <https://doi.org/10.7910/DVN/ZJW4LC>
   Paper: Makonin, Wang & Tumpach (2018), *RAE: The Rainforest Automation Energy
   Dataset for Smart Grid Meter Data Analysis*, Data 3(1):8.
-- **License:** Creative Commons Attribution (CC BY). Redistribution with
+- **License:** Creative Commons Attribution 4.0 International (CC BY 4.0),
+  <https://creativecommons.org/licenses/by/4.0/>. Redistribution with
   attribution is permitted; the citation above is the required credit.
+- **Modifications:** excerpted to a contiguous 6-hour window of the `mains`
+  column and reformatted to the `t_s,watts` columns used here; the watt values
+  are otherwise unmodified.
 - **Resolution:** 1-second samples — the dataset's native cadence, matching the
   controller's ~1 s meter-poll loop, so the controller sees real second-to-second
   structure rather than a held staircase.
@@ -40,12 +44,18 @@ A 7-hour midday window of matching PV generation (`Ppv`) and load demand
 the PV carries real cloud-driven transients a synthetic half-sine lacks, and the
 PV/load timing is genuinely correlated (same site, same instant).
 
-- **Source:** Venizelou, V. et al. (2023). *Photovoltaic Generation and Load
-  Demand Datasets with 30 seconds resolution from an Actual Prosumer in Cyprus*
-  [Dataset]. Zenodo. <https://doi.org/10.5281/zenodo.8348862>
-- **License:** Creative Commons Attribution 4.0 International (CC BY 4.0).
-  Redistribution with attribution is permitted; the citation above is the
-  required credit.
+- **Source:** Hadjidemetriou, L., Asprou, M., & Nikolaou, P. (2023).
+  *Photovoltaic Generation and Load Demand Datasets with 30 seconds resolution
+  from an Actual Prosumer in Cyprus* (Version v1) [Data set]. Zenodo.
+  <https://doi.org/10.5281/zenodo.8348862>
+- **License:** Creative Commons Attribution 4.0 International (CC BY 4.0),
+  <https://creativecommons.org/licenses/by/4.0/>. Redistribution with
+  attribution is permitted; the citation above is the required credit.
+- **Modifications:** excerpted to a contiguous 7-hour midday window of the
+  `Ppv`/`Pload` columns and reformatted to the `t_s,load_w,pv_w` columns used
+  here. The raw CSV is unscaled; the evaluation rescales both power columns by
+  ×0.45 at run time (balcony-system sizing) — that scaling is applied in code,
+  not baked into this file.
 - **Resolution:** 30-second samples (the dataset's native cadence).
 - **Why this window:** 2022-09-01 09:00–16:00 is partly cloudy (PV peaks ~4.2 kW
   with ~40 cloud dips >15% of peak across the window), so the net-load swings
