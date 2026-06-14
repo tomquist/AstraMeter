@@ -19,9 +19,12 @@ from astrameter.simulator.evaluation import (
     BatterySpec,
     Event,
     Scenario,
+    _aggregate,
     _fmt_delta,
+    _overall_summary,
     build_scenarios,
     render_markdown_compare,
+    render_text,
     run_scenario,
 )
 
@@ -242,6 +245,77 @@ def test_consumption_trace_matches_grid_plus_battery_output():
     for k in range(GRAPH_POINTS):
         expected = grid[k] + sum(b[k] for b in bat)
         assert abs(cons[k] - expected) <= 1.0
+
+
+def _two_results() -> list[dict]:
+    a = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    b = dict(a, scenario="tiny2", settle_mean_s=a["settle_mean_s"] + 4.0)
+    return [a, b]
+
+
+def test_aggregate_is_per_metric_mean_across_scenarios():
+    results = _two_results()
+    agg = _aggregate(results)
+    assert agg["scenario"] == "AGGREGATE"
+    assert agg["n_scenarios"] == 2
+    # Every reported metric is the unweighted mean of the two scenarios.
+    for key in _REPORT_METRICS:
+        expected = (float(results[0][key]) + float(results[1][key])) / 2
+        assert agg[key] == round(expected, 1), key
+
+
+def test_aggregate_omits_metrics_absent_from_every_result():
+    res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    old = {k: v for k, v in res.items() if k != "grid_p2p_w"}
+    # A base produced before grid_p2p_w existed contributes no value for it, so
+    # the aggregate simply omits the key (renderers then show '—').
+    assert "grid_p2p_w" not in _aggregate([old])
+    assert "grid_p2p_w" in _aggregate([res])
+
+
+def test_overall_summary_reports_direction():
+    base_agg = {"settle_mean_s": 10.0, "overshoot_max_w": 100.0}
+    better = {"settle_mean_s": 8.0, "overshoot_max_w": 90.0}
+    worse = {"settle_mean_s": 12.0, "overshoot_max_w": 110.0}
+    assert "(better)" in _overall_summary(base_agg, better)
+    assert "improved" in _overall_summary(base_agg, better)
+    assert "(worse)" in _overall_summary(base_agg, worse)
+
+
+def test_render_text_adds_aggregate_only_for_multiple_scenarios():
+    multi = render_text(_two_results())
+    assert "AGGREGATE (mean across 2 scenarios)" in multi
+    # A single scenario would just echo its own numbers, so no aggregate.
+    single = render_text([asyncio.run(run_scenario(_tiny_scenario(), seed=3))])
+    assert "AGGREGATE" not in single
+
+
+def test_markdown_compare_leads_with_aggregate_rollup():
+    results = _two_results()
+    base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
+    md = render_markdown_compare(base, results)
+    assert "**Overall:" in md
+    assert "Aggregate — mean across 2 scenarios" in md
+    # The overall verdict and the aggregate table both precede any per-scenario
+    # collapsible, so the roll-up is the first thing a reviewer sees.
+    assert md.index("Aggregate — mean across") < md.index("<details>")
+
+
+def test_html_report_renders_aggregate_section():
+    results = _two_results()
+    base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
+    base_agg, head_agg = _aggregate(base), _aggregate(results)
+    h = render_html_report(
+        base,
+        results,
+        report_metrics=_REPORT_METRICS,
+        metric_glossary=_METRIC_GLOSSARY,
+        fmt_delta=_fmt_delta,
+        aggregate=(base_agg, head_agg),
+        aggregate_summary=_overall_summary(base_agg, head_agg),
+    )
+    assert "Aggregate &mdash; mean across 2 scenarios" in h
+    assert "improved" in h  # the one-line verdict is rendered
 
 
 def test_metric_glossary_covers_every_reported_metric():

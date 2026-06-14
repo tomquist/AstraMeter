@@ -32,7 +32,11 @@ reports reaction/oscillation/energy metrics per scenario. When changing
 loop), capture a baseline first (`--json base.json` on the unchanged code),
 re-run after the change, and compare with `--input head.json --compare
 base.json`. CI runs the same suite on PR base + head (job `steering-eval`)
-and posts the comparison as a sticky PR comment.
+and posts the comparison as a sticky PR comment. The comparison leads with an
+**aggregate roll-up** (per-metric mean across all scenarios plus a one-line
+overall verdict — how many metrics improved/regressed and the mean relative
+change), so an across-the-board improvement or regression is visible without
+reading every scenario table.
 
 ## Changelog
 

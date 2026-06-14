@@ -1056,8 +1056,85 @@ _METRIC_GLOSSARY = [
 ]
 
 
+def _aggregate(results: list[dict]) -> dict:
+    """Collapse a result list into one synthetic "AGGREGATE" row.
+
+    Each reported metric becomes its **unweighted mean across the scenarios**
+    that carry it (a base produced before a metric existed simply doesn't
+    contribute that key — it's omitted from the aggregate, mirroring the
+    per-scenario renderers' ``—`` handling). One row that answers "did this
+    change help *overall*?" at a glance, on top of the per-scenario tables.
+
+    Means are scale-mixing on purpose: they're a rough headline, while the
+    per-metric relative deltas (and :func:`_overall_summary`) are the
+    unit-independent read on direction.
+    """
+    agg: dict = {"scenario": "AGGREGATE", "n_scenarios": len(results)}
+    for key in _REPORT_METRICS:
+        vals = [float(r[key]) for r in results if key in r]
+        if vals:
+            agg[key] = round(sum(vals) / len(vals), 1)
+    return agg
+
+
+def _overall_change(
+    base_agg: dict, head_agg: dict
+) -> tuple[int, int, int, float | None]:
+    """Count improved / regressed / unchanged aggregate metrics and the mean
+    relative change across them (``None`` when nothing is comparable).
+
+    Every reported metric is lower-is-better, so a negative mean is an overall
+    improvement. The mean is over *relative* deltas (head vs base, per metric),
+    making it unit-independent; metrics whose base aggregate is 0 contribute to
+    the up/down counts but not the percentage (no defined relative change)."""
+    improved = regressed = unchanged = 0
+    deltas: list[float] = []
+    for key in _REPORT_METRICS:
+        if key not in base_agg or key not in head_agg:
+            continue
+        bv, hv = float(base_agg[key]), float(head_agg[key])
+        if hv < bv:
+            improved += 1
+        elif hv > bv:
+            regressed += 1
+        else:
+            unchanged += 1
+        if bv != 0:
+            deltas.append((hv - bv) / abs(bv))
+    mean_pct = sum(deltas) / len(deltas) * 100.0 if deltas else None
+    return improved, regressed, unchanged, mean_pct
+
+
+def _overall_summary(base_agg: dict, head_agg: dict) -> str:
+    """One-line verdict for the aggregate: how many metrics moved each way and
+    the mean relative change (lower is better)."""
+    improved, regressed, unchanged, mean_pct = _overall_change(base_agg, head_agg)
+    if mean_pct is None:
+        trend = "no comparable metrics"
+    elif mean_pct < 0:
+        trend = f"mean {mean_pct:.1f}% (better)"
+    elif mean_pct > 0:
+        trend = f"mean +{mean_pct:.1f}% (worse)"
+    else:
+        trend = "mean 0% (unchanged)"
+    return (
+        f"{improved} improved, {regressed} regressed, {unchanged} unchanged "
+        f"across {len(_REPORT_METRICS)} metrics — {trend}"
+    )
+
+
 def render_text(results: list[dict]) -> str:
     lines = []
+    # A single aggregate row up top makes an overall read possible without
+    # eyeballing every scenario (skipped for a lone scenario — it'd just echo
+    # that scenario's own numbers).
+    if len(results) > 1:
+        agg = _aggregate(results)
+        lines.append(f"== AGGREGATE (mean across {agg['n_scenarios']} scenarios)")
+        for key in _REPORT_METRICS:
+            if key in agg:
+                lines.append(f"  {key:<24} {agg[key]}")
+        lines.append("")
     for res in results:
         lines.append(
             f"== {res['scenario']} (seed {res['seed']}, "
@@ -1074,6 +1151,25 @@ def _fmt_delta(base: float, head: float) -> str:
     if base == 0:
         return f"{head - base:+g}"
     return f"{(head - base) / abs(base) * 100.0:+.0f}%"
+
+
+def _md_metric_rows(base: dict | None, head: dict) -> list[str]:
+    """A `| Metric | Base | Head | Δ |` table body for one result pair.
+
+    Shared by the aggregate roll-up and the per-scenario tables. A base
+    produced before a metric existed (newly added metric on the PR head) has
+    no value to compare against, so both Base and Δ degrade to ``—``."""
+    rows = ["| Metric | Base | Head | Δ |", "|---|---:|---:|---:|"]
+    for key in _REPORT_METRICS:
+        hv: object = head.get(key, "—")
+        if base is not None and key in base and key in head:
+            bv: object = base[key]
+            delta = _fmt_delta(float(base[key]), float(head[key]))
+        else:
+            bv = "—"
+            delta = "—"
+        rows.append(f"| {key} | {bv} | {hv} | {delta} |")
+    return rows
 
 
 def render_markdown_compare(
@@ -1093,13 +1189,26 @@ def render_markdown_compare(
     doesn't exist.
     """
     base_by = {r["scenario"]: r for r in base}
+    head_agg = _aggregate(head)
+    base_agg = _aggregate(base) if base else None
     out = [
         "### Steering evaluation (base vs head)",
         "",
+    ]
+    # Lead with the aggregate so a reviewer sees the overall direction before
+    # any per-scenario table — the whole point of the roll-up.
+    if base_agg is not None:
+        out.append(f"**Overall: {_overall_summary(base_agg, head_agg)}.**")
+        out.append("")
+    out += [
         "Lower is better for every metric. See "
         "`src/astrameter/simulator/evaluation.py` for definitions.",
         "",
+        f"#### Aggregate — mean across {head_agg['n_scenarios']} scenarios",
+        "",
     ]
+    out += _md_metric_rows(base_agg, head_agg)
+    out.append("")
     if report_available:
         out += [
             "📊 **Interactive grid-power charts** (zoom / hover / toggle series) "
@@ -1124,18 +1233,7 @@ def render_markdown_compare(
             f"{_summary_line(b, res)}</summary>"
         )
         out.append("")
-        out.append("| Metric | Base | Head | Δ |")
-        out.append("|---|---:|---:|---:|")
-        for key in _REPORT_METRICS:
-            # A base produced before this metric existed (e.g. a newly added
-            # metric on the PR head) simply has no value to compare against.
-            if b is not None and key in b:
-                bv: object = b[key]
-                delta = _fmt_delta(float(b[key]), float(res[key]))
-            else:
-                bv = "—"
-                delta = "—"
-            out.append(f"| {key} | {bv} | {res[key]} | {delta} |")
+        out.extend(_md_metric_rows(b, res))
         out.append("")
         out.append("</details>")
     missing = [
@@ -1264,12 +1362,18 @@ def main(argv: list[str] | None = None) -> None:
     if args.html:
         from .eval_report import render_html_report
 
+        head_agg = _aggregate(results)
+        base_agg = _aggregate(base) if base else None
         report = render_html_report(
             base,
             results,
             report_metrics=_REPORT_METRICS,
             metric_glossary=_METRIC_GLOSSARY,
             fmt_delta=_fmt_delta,
+            aggregate=(base_agg, head_agg),
+            aggregate_summary=(
+                _overall_summary(base_agg, head_agg) if base_agg is not None else ""
+            ),
         )
         with open(args.html, "w", encoding="utf-8") as fh:
             fh.write(report)
