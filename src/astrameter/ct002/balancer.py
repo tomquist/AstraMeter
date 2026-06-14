@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
 from collections.abc import Callable
 from typing import Literal, NamedTuple, NewType
@@ -105,6 +104,22 @@ PACE_GROWTH_FACTOR = 2.0
 # the clamp proportionally would re-introduce the stale-feedback overshoot
 # pacing exists to bound).
 PACE_REFERENCE_DT = 1.0
+# Aggregate-slew exponent (issue #473 follow-up).  Ramp pacing is a per-consumer
+# cap, but N units chasing one shared meter reading slew the *aggregate* pool
+# output at Nx any single cap, and under meter latency the worst overshoot peaks
+# scale with that aggregate slew — which is why the multi-battery and
+# mixed-cadence scenarios overshoot harder than the single-unit ones.  The grown
+# cap is divided by ``participants ** PACE_SLEW_EXP`` to bleed those peaks.  The
+# exponent is deliberately *gentle* (0.1, vs 1.0 for a strict "aggregate ramps
+# like one unit" bound): the overshoot near the latency-driven instability
+# threshold is highly sensitive to a small slew reduction, so a ~7-12 % per-unit
+# trim (N=2 → ÷1.07, N=3 → ÷1.12) already shaves the worst peaks — while a
+# stronger divisor would slow the pool's ramp into a load/solar step enough to
+# leak the very grid energy a multi-unit pool exists to absorb (avoidable
+# import/export, the headline metric for a zero-feed loop).  Tuned with the
+# steering-evaluation suite to keep avoidable import/export improving on every
+# seed.  ``participants == 1`` (single unit) leaves pacing unchanged.
+PACE_SLEW_EXP = 0.1
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
@@ -1361,8 +1376,8 @@ class LoadBalancer:
         reading = to_grid_reading(NetOutputW(reported + residual), reported)
 
         if consumer_id:
-            # Count the units sharing this correction so pacing can bound the
-            # pool's *aggregate* slew (not Nx a single cap) — see _pace_reading.
+            # Count the units sharing this correction so pacing can trim the
+            # pool's aggregate-slew overshoot peaks — see _pace_reading.
             participants = sum(1 for w in share_part.values() if w > 0)
             reading = self._pace_reading(consumer_id, reading, reported, participants)
             state = self._get_consumer(consumer_id)
@@ -1439,22 +1454,22 @@ class LoadBalancer:
         correcting the same grid error this tick.  Pacing is a per-consumer
         cap, but N consumers all chasing one shared meter reading slew the
         *aggregate* pool output at N times any single cap — and under a fixed
-        meter latency the overshoot at a zero-crossing scales with that
-        aggregate slew, which is exactly why the multi-battery scenarios
-        overshoot several times harder than the single-battery ones for the
-        same per-unit cap.  The grown cap is therefore divided by
-        ``sqrt(participants)``: dividing by the *full* count would pin the
-        whole pool to a single unit's slew, which kills the overshoot but
-        ramps a load step so slowly the pool leaks energy to the grid while
-        it crawls up; ``sqrt(N)`` keeps the aggregate ramp faster than one
-        unit (a pool still covers a step quicker than a lone battery) while
-        bleeding most of the Nx overshoot.  The ``base`` step is never
-        divided: each unit keeps the firmware's minimum first-step movement
-        (so hysteresis-regulator devices still clear their input hold window
-        and fine corrections aren't starved), and the bound only engages once
-        the cap has grown — i.e. exactly during the fast ramp that drives the
-        overshoot.  At ``participants == 1`` (single battery) the clamp is
-        identical to the un-divided behaviour.
+        meter latency the worst overshoot peaks scale with that aggregate
+        slew, which is why the multi-battery and mixed-cadence scenarios
+        overshoot harder than the single-battery ones for the same per-unit
+        cap.  The grown cap is divided by ``participants ** PACE_SLEW_EXP`` to
+        shave those peaks.  The exponent is deliberately gentle (see
+        :data:`PACE_SLEW_EXP`): a strict bound (exponent 1) would pin the pool
+        to one unit's slew and ramp a load step so slowly it leaks the grid
+        energy the pool exists to absorb, so the divisor is sized only to keep
+        the pool just below the overshoot threshold, not to cancel the
+        multi-unit speed-up.  The ``base`` step is never divided: each unit
+        keeps the firmware's minimum first-step movement (so
+        hysteresis-regulator devices still clear their input hold window and
+        fine corrections aren't starved), and the bound only engages once the
+        cap has grown — i.e. during the fast ramp that drives the overshoot.
+        At ``participants == 1`` (single battery) the clamp is identical to
+        the un-divided behaviour.
 
         Only the auto-pool paths are paced — the persistent regulation
         loop, the fade transition, and the deprioritized/charge-blind
@@ -1479,10 +1494,10 @@ class LoadBalancer:
         if base <= 0:
             return reading
         participants = max(1, participants)
-        # Aggregate-slew divisor (see docstring): sqrt(N), not N, so the pool
-        # ramps faster than a lone unit while still shedding most of the Nx
-        # overshoot.
-        slew_divisor = math.sqrt(participants)
+        # Gentle aggregate-slew divisor (see PACE_SLEW_EXP): trims the worst
+        # multi-unit overshoot peaks without slowing the ramp enough to leak
+        # grid energy.
+        slew_divisor = participants**PACE_SLEW_EXP
         state = self._get_consumer(consumer_id)
         now = self._clock()
         # Cadence scale: the caps are W per PACE_REFERENCE_DT; a faster
@@ -1505,9 +1520,9 @@ class LoadBalancer:
         # clear their input hold window at all, and the base step is the
         # rate the cap growth schedule was tuned to bootstrap from.  The
         # cadence scale still bounds the *grown* cap, which is where the
-        # fast-poller overshoot lived.  The grown cap is further divided by
-        # the participant count so N units sharing the load slew the pool's
-        # aggregate output at the configured cap, not Nx it (see docstring).
+        # fast-poller overshoot lived.  The grown cap is also divided by a
+        # gentle function of the participant count to shave the worst
+        # multi-unit overshoot peaks (see slew_divisor / docstring).
         limit = max(base, cap * dt_ratio / slew_divisor)
         if sign == 0 or sign != state.pace_sign:
             cap = base

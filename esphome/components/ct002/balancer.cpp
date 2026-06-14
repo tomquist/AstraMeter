@@ -886,8 +886,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   }
   float reading = to_grid_reading(NetOutputW(reported + residual), reported);
   if (consumer_id) {
-    // Count the units sharing this correction so pacing can bound the pool's
-    // aggregate slew (not Nx a single cap) — see pace_reading_.
+    // Count the units sharing this correction so pacing can trim the pool's
+    // aggregate-slew overshoot peaks — see pace_reading_.
     int participants = 0;
     for (const auto &kv : share_part)
       if (kv.second > 0.0f) participants++;
@@ -944,21 +944,22 @@ float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float resi
 // `participants` is the number of pool units correcting the same grid error
 // this tick. Pacing is a per-consumer cap, but N units chasing one shared
 // meter reading slew the *aggregate* pool output at N times any single cap,
-// and the zero-crossing overshoot scales with that aggregate slew — which is
-// why the multi-battery scenarios overshoot far harder than the single-unit
-// ones. The grown cap is divided by sqrt(participants): dividing by the full
-// count would pin the pool to a single unit's slew (kills overshoot but leaks
-// energy while it crawls up a step); sqrt(N) keeps the pool ramping faster
-// than one unit while shedding most of the Nx overshoot. The base step is
-// never divided (each unit keeps the firmware minimum first step) and the
-// bound only bites once the cap has grown. participants == 1 reproduces the
-// un-divided behaviour. Mirrors balancer.py _pace_reading.
+// and the worst overshoot peaks scale with that aggregate slew — which is why
+// the multi-battery and mixed-cadence scenarios overshoot harder than the
+// single-unit ones. The grown cap is divided by participants ** PACE_SLEW_EXP
+// to shave those peaks. The exponent is deliberately gentle (vs 1.0 for a
+// strict one-unit bound): a stronger divisor would ramp a step so slowly the
+// pool leaks the grid energy it exists to absorb, so it is sized only to keep
+// the pool just below the overshoot threshold. The base step is never divided
+// (each unit keeps the firmware minimum first step) and the bound only bites
+// once the cap has grown. participants == 1 reproduces the un-divided
+// behaviour. Mirrors balancer.py _pace_reading.
 float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
                                   float reported, int participants) {
   const float base = this->cfg_.pace_base_step;
   if (base <= 0.0f) return reading;
   if (participants < 1) participants = 1;
-  const float slew_divisor = std::sqrt(static_cast<float>(participants));
+  const float slew_divisor = std::pow(static_cast<float>(participants), PACE_SLEW_EXP);
   auto &state = this->get_consumer_(consumer_id);
   const double now = this->clock_();
   double dt = (state.pace_last_at > 0.0) ? now - state.pace_last_at : 0.0;
@@ -977,8 +978,8 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // Floored at the base step: hysteresis-regulator devices (B2500) need a
   // minimum reading to clear their input hold window at all; the cadence
   // scale still bounds the grown cap (mirrors balancer.py). The grown cap is
-  // further divided by sqrt(participants) so a multi-unit pool slews its
-  // aggregate output near the configured cap, not Nx it.
+  // also divided by a gentle function of the participant count to shave the
+  // worst multi-unit overshoot peaks (see slew_divisor).
   float limit = std::max(base, cap * dt_ratio / slew_divisor);
   if (sign == 0 || sign != state.pace_sign) {
     cap = base;

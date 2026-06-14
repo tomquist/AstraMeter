@@ -30,6 +30,13 @@ namespace ct002 {
 inline constexpr float PACE_TRACKING_DELTA_W = 5.0f;
 inline constexpr float PACE_GROWTH_FACTOR = 2.0f;
 inline constexpr double PACE_REFERENCE_DT = 1.0;
+// Gentle aggregate-slew exponent: the grown cap is divided by
+// participants ** PACE_SLEW_EXP so N units chasing one shared meter reading
+// don't slew the pool's aggregate output into the worst overshoot peaks. Kept
+// deliberately small (vs 1.0 for a strict one-unit bound) so it trims those
+// peaks without slowing the pool's ramp into a step enough to leak grid energy
+// (avoidable import/export). See balancer.py PACE_SLEW_EXP for the rationale.
+inline constexpr float PACE_SLEW_EXP = 0.1f;
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
