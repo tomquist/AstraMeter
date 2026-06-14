@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .load_model import load_power_trace
 
-_TRACE = Path(__file__).parent / "traces" / "uci_household.csv"
+_TRACE = Path(__file__).parent / "traces" / "rae_household.csv"
 
 
 def test_load_power_trace_skips_comments_and_header(tmp_path):
@@ -32,14 +32,14 @@ def test_load_power_trace_sorts_by_time(tmp_path):
 
 def test_vendored_household_trace_loads():
     trace = load_power_trace(_TRACE)
-    # The fixture is a multi-hour 1-minute window: hundreds of samples, evenly
-    # spaced at 60 s, all non-negative watts.
-    assert len(trace) > 300
+    # The fixture is a multi-hour 1-second window: thousands of samples, evenly
+    # spaced at 1 s, all non-negative watts.
+    assert len(trace) > 3600
     assert trace[0][0] == 0.0
     assert all(b >= 0.0 for _, b in trace)
     spacings = {round(b[0] - a[0]) for a, b in itertools.pairwise(trace)}
-    assert spacings == {60}
+    assert spacings == {1}
     # The window spans real dynamic range (quiet baseline + cooking spikes), so
     # it exercises both the steering band and the saturated-grid regime.
     watts = [w for _, w in trace]
-    assert min(watts) < 600 and max(watts) > 2500
+    assert min(watts) < 900 and max(watts) > 2500

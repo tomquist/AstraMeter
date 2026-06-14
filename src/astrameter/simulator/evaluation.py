@@ -763,18 +763,19 @@ def _no_events(_rng: random.Random) -> list[Event]:
     return []
 
 
-# Real household whole-house power trace (UCI, 1-minute, CC BY 4.0 — see
+# Real household whole-house power trace (RAE House 1, 1 Hz, CC BY — see
 # traces/README.md). Unlike the synthetic base load + IID noise, a recorded
 # trace carries the *correlated drift* and *persistent appliance switching* of a
 # real home, so it rewards a balancer that tracks genuine load changes instead
 # of one tuned to reject white noise (which over-damps and then lags in the
 # field). Loaded once at import; scenarios slice a per-seed window from it.
 _TRACE_DIR = Path(__file__).parent / "traces"
-_HOUSEHOLD_TRACE = load_power_trace(_TRACE_DIR / "uci_household.csv")
-# Light sub-minute jitter laid over the 1-minute trace: the recording is
-# zero-order-held between samples, so without this the load would be perfectly
-# flat between minutes (unrealistically calm); a real meter never is.
-_TRACE_SUBMINUTE_NOISE = 15.0
+_HOUSEHOLD_TRACE = load_power_trace(_TRACE_DIR / "rae_household.csv")
+# Small measurement noise laid over the recorded trace: a real CT/meter adds a
+# few watts of jitter on top of the true house power. The 1 Hz trace already
+# carries real second-to-second structure, so this only models meter noise (not
+# a zero-order-hold fill).
+_TRACE_METER_NOISE = 10.0
 
 
 def _trace_events(rng: random.Random, duration: float) -> list[Event]:
@@ -940,15 +941,15 @@ def build_scenarios() -> dict[str, Scenario]:
         Scenario(
             name="single_venus_trace",
             description=(
-                "One Venus, real recorded household load (UCI 1-min trace, "
-                "CC BY 4.0) over a meter with realistic ~0.8 s latency — "
+                "One Venus, real recorded household load (RAE House 1, 1 Hz "
+                "trace, CC BY) over a meter with realistic ~0.8 s latency — "
                 "real-world correlated-load stress (cf. the synthetic-noise "
                 "single_venus_noisy)"
             ),
             batteries=[_VENUS],
             duration_s=dur_steps,
             base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
-            base_noise=_TRACE_SUBMINUTE_NOISE,
+            base_noise=_TRACE_METER_NOISE,
             build_events=lambda rng: _trace_events(rng, dur_steps),
             # Real installs read the meter with measurement+transport delay;
             # pairing the real load with realistic latency is the field condition
@@ -1065,13 +1066,13 @@ def build_scenarios() -> dict[str, Scenario]:
                 name=f"two_venus_trace/{mode}",
                 description=(
                     "Two Venus sharing one phase, real recorded household load "
-                    "(UCI 1-min trace, CC BY 4.0) over a ~0.8 s-latency meter — "
-                    "real-world correlated-load stress for share-splitting"
+                    "(RAE House 1, 1 Hz trace, CC BY) over a ~0.8 s-latency "
+                    "meter — real-world correlated-load stress for share-splitting"
                 ),
                 batteries=[_VENUS, _VENUS],
                 duration_s=dur_steps,
                 base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
-                base_noise=_TRACE_SUBMINUTE_NOISE,
+                base_noise=_TRACE_METER_NOISE,
                 build_events=lambda rng: _trace_events(rng, dur_steps),
                 meter_latency_s=0.8,
                 ct_kwargs=dict(kwargs),
