@@ -729,6 +729,27 @@ def _washer_cycle(rng: random.Random, duration: float) -> list[Event]:
     return events
 
 
+# "Pretty noisy" house baseline: a net draw that jitters hard sample-to-sample
+# (many small switching loads — fridge, electronics, pumps, chargers — with no
+# single dominant appliance). The ±_NOISY_BASE_NOISE W uniform jitter on every
+# meter read is the only disturbance: there are no scripted load steps, so (like
+# the washer scenario) this is scored on the sustained-oscillation aggregates
+# (grid_p2p_w, band_crossings_per_h, steady_rms_w, mean_abs_grid_w,
+# battery_travel_w_per_h) rather than per-step settling — a balancer that ignores
+# the noise (spike filter / deadband / damping) holds grid swing and battery
+# travel down instead of chasing every wiggle.
+_NOISY_BASE_LOAD = [400.0, 0.0, 0.0]
+_NOISY_BASE_NOISE = 150.0
+
+
+def _no_events(_rng: random.Random) -> list[Event]:
+    """A scenario with no scripted events: only the base load and its noise (plus
+    any solar) drive the loop, so the loop is exercised purely on noise rejection
+    and scored on the sustained-oscillation aggregates (the step-response metrics
+    read 0 with no labeled events)."""
+    return []
+
+
 def _solar_curve(duration: float, peak: float) -> list[Event]:
     """Unlabeled half-sine solar day curve.
 
@@ -834,6 +855,22 @@ def build_scenarios() -> dict[str, Scenario]:
         )
     )
 
+    add(
+        Scenario(
+            name="single_venus_noisy",
+            description=(
+                "One Venus, pretty noisy house baseline "
+                f"(±{_NOISY_BASE_NOISE:g} W jitter, no discrete appliance steps) "
+                "— noise-rejection stress"
+            ),
+            batteries=[_VENUS],
+            duration_s=dur_steps,
+            base_load=list(_NOISY_BASE_LOAD),
+            base_noise=_NOISY_BASE_NOISE,
+            build_events=_no_events,
+        )
+    )
+
     dur_solar = 5400.0
     solar_peak = 1800.0
     add(
@@ -915,6 +952,23 @@ def build_scenarios() -> dict[str, Scenario]:
                 duration_s=dur_steps,
                 loads=list(_HOUSEHOLD_LOADS),
                 build_events=lambda rng: _household_steps(rng, dur_steps),
+                ct_kwargs=dict(kwargs),
+            )
+        )
+
+    for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
+        add(
+            Scenario(
+                name=f"two_venus_noisy/{mode}",
+                description=(
+                    "Two Venus sharing one phase, pretty noisy house baseline "
+                    f"(±{_NOISY_BASE_NOISE:g} W jitter, no discrete appliance steps)"
+                ),
+                batteries=[_VENUS, _VENUS],
+                duration_s=dur_steps,
+                base_load=list(_NOISY_BASE_LOAD),
+                base_noise=_NOISY_BASE_NOISE,
+                build_events=_no_events,
                 ct_kwargs=dict(kwargs),
             )
         )
@@ -1446,6 +1500,14 @@ def render_markdown_compare(
     out.append("")
     out.append("</details>")
     out.append("")
+    # Collapse every per-scenario table behind one outer section so the comment
+    # leads with the aggregate roll-up and verdicts; reviewers expand this only
+    # to drill into individual scenarios (each still its own nested collapsible).
+    out.append(
+        f"<details><summary><b>Per-scenario tables</b> "
+        f"({len(head)} scenarios)</summary>"
+    )
+    out.append("")
     for res in head:
         b = base_by.get(res["scenario"])
         out.append(
@@ -1456,6 +1518,8 @@ def render_markdown_compare(
         out.extend(_md_metric_rows(b, res))
         out.append("")
         out.append("</details>")
+    out.append("")
+    out.append("</details>")
     missing = [
         r["scenario"]
         for r in base
