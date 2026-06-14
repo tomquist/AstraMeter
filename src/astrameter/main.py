@@ -188,6 +188,7 @@ async def run_device(
         osc_damp_threshold = cfg.getfloat(
             ct_section, "OSC_DAMP_THRESHOLD", fallback=450
         )
+        predict_lag_s = cfg.getfloat(ct_section, "PREDICT_LAG_S", fallback=3.0)
         saturation_detection = cfg.getboolean(
             ct_section, "SATURATION_DETECTION", fallback=True
         )
@@ -275,6 +276,7 @@ async def run_device(
             osc_damp_alpha=osc_damp_alpha,
             osc_damp_decay=osc_damp_decay,
             osc_damp_threshold=osc_damp_threshold,
+            predict_lag_s=predict_lag_s,
             saturation_detection=saturation_detection,
             saturation_alpha=saturation_alpha,
             min_target_for_saturation=min_target_for_saturation,

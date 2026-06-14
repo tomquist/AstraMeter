@@ -103,6 +103,7 @@ CONF_OSC_DAMP_MAX = "osc_damp_max"
 CONF_OSC_DAMP_ALPHA = "osc_damp_alpha"
 CONF_OSC_DAMP_DECAY = "osc_damp_decay"
 CONF_OSC_DAMP_THRESHOLD = "osc_damp_threshold"
+CONF_PREDICT_LAG_S = "predict_lag_s"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
@@ -208,6 +209,7 @@ BALANCER_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_OSC_DAMP_DECAY, default=0.1): cv.float_range(min=0.0, max=1.0),
         cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=450.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_PREDICT_LAG_S, default=3.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
@@ -462,6 +464,7 @@ async def to_code(config):
             bal.get(CONF_EFFICIENCY_SATURATION_THRESHOLD, 0.4),
         ),
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
+        ("predict_lag_s", bal.get(CONF_PREDICT_LAG_S, 3.0)),
     )
     cg.add(var.set_balancer_config(bcfg))
 

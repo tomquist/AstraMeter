@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <unordered_set>
 #include <utility>
 
@@ -28,8 +29,8 @@ using esphome::ct002::to_grid_reading;
 LoadBalancer make_balancer(BalancerConfig cfg = {}, double *clock = nullptr) {
   static double dummy = 0.0;
   if (clock == nullptr) clock = &dummy;
-  return LoadBalancer(cfg, /*sat_alpha=*/0.15f, /*sat_min_target=*/20.0f,
-                      /*sat_decay=*/0.995f, /*sat_grace=*/90.0f,
+  return LoadBalancer(cfg, /*sat_alpha=*/0.15, /*sat_min_target=*/20.0f,
+                      /*sat_decay=*/0.995, /*sat_grace=*/90.0f,
                       /*sat_stall=*/60.0f, /*sat_enabled=*/false,
                       [clock]() { return *clock; }, nullptr);
 }
@@ -172,42 +173,82 @@ TEST(LoadBalancer, PaceReadingCapsGrowsAndResets) {
   // Mirrors tests/test_balancer.py TestPaceReading: the auto-path reading is
   // capped at pace_base_step, the cap doubles only while the battery tracks
   // (moved >= PACE_TRACKING_DELTA_W toward the command), follows the error
-  // down, and resets on direction reversal. The frozen test clock makes the
-  // time-based law reduce to per-poll semantics (dt = 0 -> one reference
-  // period).
+  // down, and resets on direction reversal. The clock advances one reference
+  // second per poll (as the Python test does) so the time-based pace law
+  // reduces to per-poll semantics and the adaptive grid predictor records a
+  // fresh sample each poll (a no-op under a fresh, low-latency feed).
   BalancerConfig cfg;
   cfg.fair_distribution = false;
   cfg.pace_base_step = 50.0f;
   cfg.pace_max_step = 200.0f;
-  auto b = make_balancer(cfg);
+  double clk = 0.0;
+  auto b = make_balancer(cfg, &clk);
   ReportMap reports;
   reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  auto poll = [&](float power, float grid) {
+    reports["a"].power = power;
+    clk += 1.0;
+    return b.compute_target("a", ConsumerMode{}, reports, grid, {}, {}, {})[0];
+  };
   // First poll: 600 W demand capped to the base step.
-  auto out = b.compute_target("a", ConsumerMode{}, reports, 600.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], 50.0f);
+  EXPECT_FLOAT_EQ(poll(0.0f, 600.0f), 50.0f);
   // Battery did not move (startup delay): cap must stay at the base step.
-  out = b.compute_target("a", ConsumerMode{}, reports, 600.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], 50.0f);
+  EXPECT_FLOAT_EQ(poll(0.0f, 600.0f), 50.0f);
   // Battery tracks (+50 W): cap doubles to 100.
-  reports["a"].power = 50.0f;
-  out = b.compute_target("a", ConsumerMode{}, reports, 550.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], 100.0f);
+  EXPECT_FLOAT_EQ(poll(50.0f, 550.0f), 100.0f);
   // Tracks again (+100 W): cap doubles to 200 (the configured max).
-  reports["a"].power = 150.0f;
-  out = b.compute_target("a", ConsumerMode{}, reports, 450.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], 200.0f);
+  EXPECT_FLOAT_EQ(poll(150.0f, 450.0f), 200.0f);
   // Tracks again, but the max holds.
-  reports["a"].power = 350.0f;
-  out = b.compute_target("a", ConsumerMode{}, reports, 250.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], 200.0f);
+  EXPECT_FLOAT_EQ(poll(350.0f, 250.0f), 200.0f);
   // Error fits under the cap: passes through, cap follows it down.
-  reports["a"].power = 520.0f;
-  out = b.compute_target("a", ConsumerMode{}, reports, 80.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], 80.0f);
+  EXPECT_FLOAT_EQ(poll(520.0f, 80.0f), 80.0f);
   // Direction reversal: cap resets to the base step.
-  reports["a"].power = 600.0f;
-  out = b.compute_target("a", ConsumerMode{}, reports, -300.0f, {}, {}, {});
-  EXPECT_FLOAT_EQ(out[0], -50.0f);
+  EXPECT_FLOAT_EQ(poll(600.0f, -300.0f), -50.0f);
+}
+
+TEST(LoadBalancer, PredictedGridDisabledIsNoop) {
+  // Mirrors tests/test_balancer.py TestPredictedGrid::test_disabled_is_noop:
+  // predict_lag_s = 0 leaves the grid reading untouched, so a single consumer
+  // gets the full unpredicted residual (pacing off).
+  BalancerConfig cfg;
+  cfg.predict_lag_s = 0.0f;
+  cfg.pace_base_step = 0.0f;
+  auto b = make_balancer(cfg);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 100.0f};
+  const auto out = b.compute_target("a", ConsumerMode{}, reports, 500.0f, {}, {}, {});
+  EXPECT_FLOAT_EQ(out[0], 500.0f);
+}
+
+TEST(LoadBalancer, PredictedGridLearnsLagAndRecoversTrueGrid) {
+  // Mirrors tests/test_balancer.py
+  // TestPredictedGrid::test_learns_lag_and_recovers_true_grid. A single
+  // consumer with pacing off receives the full predicted grid as its phase-A
+  // reading, so out[0] is exactly the predicted grid. Consumption is constant,
+  // the output is a sawtooth, and the meter is one reference second stale; the
+  // estimator must learn lag = 1 s and reconstruct the true grid.
+  BalancerConfig cfg;
+  cfg.predict_lag_s = 2.0f;
+  cfg.pace_base_step = 0.0f;  // out[0] == predicted grid
+  double clk = 0.0;
+  auto b = make_balancer(cfg, &clk);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  const double consumption = 1000.0;
+  auto sawtooth = [](int step) { return static_cast<float>((step * 40) % 640); };
+  float prev_out = sawtooth(0);
+  float predicted = 0.0f, stale = 0.0f, true_grid = 0.0f;
+  for (int step = 1; step < 160; ++step) {
+    clk += 1.0;
+    const float out = sawtooth(step);
+    reports["a"].power = out;
+    stale = static_cast<float>(consumption) - prev_out;  // meter one second behind
+    predicted = b.compute_target("a", ConsumerMode{}, reports, stale, {}, {}, {})[0];
+    true_grid = static_cast<float>(consumption) - out;
+    prev_out = out;
+  }
+  EXPECT_LT(std::fabs(predicted - true_grid), std::fabs(stale - true_grid));
+  EXPECT_LE(std::fabs(predicted - true_grid), 1.0);
 }
 
 TEST(LoadBalancer, DcOnlyBatteryClampedToZeroUnderSurplus) {

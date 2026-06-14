@@ -73,8 +73,9 @@ int main() {
 
     if (cmd == "cfg") {
       int fair = 1, sat_enabled = 0;
-      float min_eff = 0.0f, rot = 900.0f, sat_threshold = 0.4f, sat_alpha = 0.15f,
-            sat_min_target = 20.0f, sat_grace = 90.0f, min_dc = 0.0f;
+      float min_eff = 0.0f, rot = 900.0f, sat_min_target = 20.0f, sat_grace = 90.0f,
+            min_dc = 0.0f;
+      double sat_threshold = 0.4, sat_alpha = 0.15;
       in >> fair >> min_eff >> rot >> sat_threshold >> sat_alpha >> sat_min_target >>
           sat_grace >> sat_enabled;
       // Optional trailing global MIN_DC_OUTPUT (0 / absent = disabled).
@@ -94,7 +95,7 @@ int main() {
         cfg.pace_max_step = pace_max;
       }
       balancer = std::make_unique<LoadBalancer>(
-          cfg, sat_alpha, sat_min_target, /*sat_decay=*/0.995f, sat_grace,
+          cfg, sat_alpha, sat_min_target, /*sat_decay=*/0.995, sat_grace,
           /*sat_stall=*/60.0f, sat_enabled != 0, []() { return g_clock; }, nullptr);
     } else if (cmd == "clock") {
       in >> g_clock;

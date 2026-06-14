@@ -115,7 +115,7 @@ class CT002Component : public Component {
   // Balancer configuration setter (called once from to_code() after
   // populating a BalancerConfig).
   void set_balancer_config(const BalancerConfig &cfg) { this->balancer_cfg_ = cfg; }
-  void set_balancer_saturation(float alpha, float min_target, float decay_factor,
+  void set_balancer_saturation(double alpha, float min_target, double decay_factor,
                               float grace_seconds, float stall_timeout_seconds, bool enabled) {
     this->saturation_alpha_ = alpha;
     this->saturation_min_target_ = min_target;
@@ -297,9 +297,10 @@ class CT002Component : public Component {
   // MQTT-insights poll_interval matches between stacks.
   static constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
   BalancerConfig balancer_cfg_;
-  float saturation_alpha_{0.15f};
+  // double (matching Python) so the saturation EMA bit-matches across stacks.
+  double saturation_alpha_{0.15};
   float saturation_min_target_{20.0f};
-  float saturation_decay_factor_{0.995f};
+  double saturation_decay_factor_{0.995};
   float saturation_grace_seconds_{90.0f};
   float saturation_stall_timeout_seconds_{60.0f};
   bool saturation_enabled_{true};

@@ -713,3 +713,68 @@ class TestDampOscillation:
         for i in range(10):
             r = 100.0 if i % 2 == 0 else -100.0
             assert lb._damp_oscillation("a", r) == pytest.approx(r)
+
+
+class TestPredictedGrid:
+    """Adaptive feedback-lag predictor (``predict_lag_s``) — mirrored by the C++
+    host tests ``LoadBalancer.PredictedGridDisabledIsNoop`` /
+    ``LoadBalancer.PredictedGridLearnsLagAndRecoversTrueGrid`` and exercised
+    end-to-end by the differential parity suite (both stacks advance the same
+    estimator on the same stream)."""
+
+    def _lb(self, clock, **cfg):
+        cfg.setdefault("predict_lag_s", 2.0)
+        return LoadBalancer(
+            config=BalancerConfig(**cfg),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+            clock=clock,
+        )
+
+    def test_disabled_is_noop(self):
+        # predict_lag_s = 0 returns the raw reading untouched.
+        lb = self._lb(_FakeClock(), predict_lag_s=0.0)
+        assert lb._predicted_grid({"a": {"power": 100}}, 500.0) == 500.0
+
+    def test_first_call_and_constant_output_are_noops(self):
+        # No history yet, and later a constant battery output: the compensation
+        # term (Σout_now - Σout_lagged) is zero, so the reading is unchanged.
+        clk = _FakeClock()
+        lb = self._lb(clk)
+        assert lb._predicted_grid({"a": {"power": 100}}, 300.0) == 300.0
+        for _ in range(5):
+            clk.advance(1.0)
+            assert lb._predicted_grid({"a": {"power": 100}}, 300.0) == 300.0
+
+    def test_learns_lag_and_recovers_true_grid(self):
+        # Closed stale-meter loop: household consumption is constant at C, the
+        # battery output follows a sawtooth (always moving, so the estimator has
+        # ripple to lock onto), and the meter the controller reads is delayed by
+        # exactly one reference second — grid_stale(t) = C - out(t-1). The
+        # predictor should learn lag = 1 s and reconstruct the true grid
+        # (C - out(t)) from the fresh reported output.
+        clk = _FakeClock()
+        lb = self._lb(clk)
+        consumption = 1000.0
+
+        def out_at_step(step: int) -> float:
+            return float((step * 40) % 640)  # sawtooth 0..600, always changing
+
+        prev_out = out_at_step(0)
+        predicted = stale = true_grid = 0.0
+        # Warm the estimator up so its differenced-variance EMA settles on lag=1.
+        for step in range(1, 160):
+            clk.advance(1.0)
+            out = out_at_step(step)
+            stale = consumption - prev_out  # meter is one second behind
+            predicted = lb._predicted_grid({"a": {"power": out}}, stale)
+            true_grid = consumption - out
+            prev_out = out
+        # On the final (still-moving) step the predicted grid reconstructs the
+        # true grid far better than the stale reading the meter reports.
+        assert abs(predicted - true_grid) < abs(stale - true_grid)
+        assert abs(predicted - true_grid) <= 1.0

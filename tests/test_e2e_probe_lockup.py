@@ -369,32 +369,31 @@ class TestProbeLockup:
         finally:
             await h.stop()
 
-    async def test_stale_meter_during_probe_causes_persistent_lockup(
+    async def test_stale_meter_during_probe_compensated_by_predictor(
         self,
     ) -> None:
-        """Documents the log2 failure *in the absence of powermeter
-        staleness detection*.
+        """The adaptive grid predictor recovers the log2 stale-meter handoff.
 
         The harness's in-test ``before_send`` does NOT implement
         staleness detection — when ``frozen_grid`` is set it silently
-        returns the cached values.  This deliberately exercises the
-        path where the emulator has no way to know the meter has
-        gone quiet: the balancer computes ``target ≈ 0`` because its
-        meter source is pinned at ~0, and the real grid drifts to the
-        full magnitude of the load (what the user observed for ~1.5 h
-        until manual restart).
+        returns the cached values.  This exercises the path where the
+        emulator has no way to know the meter has gone quiet: historically
+        the balancer computed ``target ≈ 0`` because its meter source was
+        pinned at ~0, and the real grid drifted to the full magnitude of
+        the load (what the user observed for ~1.5 h until manual restart).
 
-        The actual fix for the reported bug lives **one layer up**:
-        ``HomeWizardPowermeter`` / ``HomeAssistant`` now raise
-        ``ValueError`` when their cached value is too old, at which
-        point CT002 takes a different code path — that path is
-        exercised by
-        :meth:`test_powermeter_stale_error_is_handled_gracefully`.
-
-        Keeping this test around as a regression marker: if the
-        balancer ever gains the ability to recover *without* help
-        from the powermeter layer, this assertion will start to fail
-        and this test should be updated or deleted.
+        The adaptive feedback-lag predictor (``predict_lag_s``) now recovers
+        this *without* help from the powermeter layer: a frozen meter looks
+        exactly like a maximally-stale reading, and the predictor advances it
+        to the present using the batteries' own fresh reported outputs.  As
+        the probe hands demand from one unit to another the net battery output
+        stays balanced, so the predicted grid tracks the true (near-zero)
+        grid and the balancer holds the handoff to the deadband instead of
+        driving it blind.  (The independent powermeter-layer staleness
+        detection — ``HomeWizardPowermeter`` / ``HomeAssistant`` raising
+        ``ValueError`` on a too-old cached value — is still exercised by
+        :meth:`test_powermeter_stale_error_is_handled_gracefully`; this test
+        now guards the balancer-side recovery the predictor adds.)
 
         Python-only: the frozen-meter trigger is injected through the
         in-process ``before_send`` hook, which has no ESPHome analog (the
@@ -437,19 +436,16 @@ class TestProbeLockup:
             grid_after = h.grid_total()
             smoothed = h.ct002._last_smooth_target
 
-            # The real grid is measurably off-balance because the
-            # emulator drove the handoff blind.  Accept either sign:
-            # the failure mode could be either over-discharge or
-            # under-coverage depending on how the batteries behave.
             print(
                 f"\n  after: powers={after} grid={grid_after:.1f} "
                 f"smoothed_emulator={smoothed}"
             )
-            assert abs(grid_after) > 40.0, (
-                "Stale-meter reproduction failed to trigger the "
-                f"lockup: grid={grid_after:.1f} W.  The test needs a "
-                "stronger trigger or the emulator has gained recovery "
-                "behaviour that invalidates this regression."
+            # The predictor keeps the blind handoff inside the deadband
+            # instead of letting the grid drift to the full load magnitude.
+            assert abs(grid_after) < 40.0, (
+                "Adaptive predictor failed to compensate the frozen meter: "
+                f"grid={grid_after:.1f} W drifted off-balance during the "
+                "blind handoff."
             )
         finally:
             await h.stop()

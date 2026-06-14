@@ -89,6 +89,15 @@ THROTTLE_INTERVAL = 0
 ## accelerating ramp from overshooting on meter latency. 0 disables pacing.
 # PACE_BASE_STEP = 50
 # PACE_MAX_STEP = 200
+## Adaptive feedback-lag compensation. The grid meter is stale (a P1 dongle / HA
+## push sensor measures, then takes a second or two to arrive, and the value is
+## held between refreshes); steering against it is the main cause of overshoot
+## and hunting. AstraMeter compensates automatically by advancing the stale
+## reading using the batteries' own fresh reported outputs, and LEARNS the
+## effective lag online per install — so you do NOT tune a throttle interval for
+## this. PREDICT_LAG_S is only an upper bound (s) on the lag it will compensate;
+## a fast meter converges to ~0 compensation on its own. 0 disables.
+# PREDICT_LAG_S = 3
 
 ## --- DC battery keep-alive ---
 ## Applies per battery (independent of balancing — also relevant with a single

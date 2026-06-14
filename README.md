@@ -317,6 +317,13 @@ All keys in this subsection go under the `[CT002]` or `[CT003]` section (they ar
   battery firmware ramp's ~50 W first step and growing toward the max only while the
   battery demonstrably follows the command. Keeps the firmware's accelerating internal
   ramp from overshooting on meter latency. `PACE_BASE_STEP = 0` disables pacing.
+- **PREDICT_LAG_S** (default 3 s) — Adaptive feedback-lag compensation. The grid meter
+  is always a little stale (transport/measurement delay plus the hold between refreshes),
+  and steering against the stale value is the main cause of overshoot and hunting.
+  AstraMeter advances the reading to the present using the batteries' own fresh reported
+  outputs, and **learns the effective lag online**, so you don't tune a throttle interval
+  for it. This is only an upper bound on the lag it compensates; a fast meter self-limits
+  to ~0. `PREDICT_LAG_S = 0` disables it.
 
 *DC battery keep-alive — applies to each DC-only battery on its own (also with a
 single battery, independent of balancing):*

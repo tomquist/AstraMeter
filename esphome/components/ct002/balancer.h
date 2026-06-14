@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -36,6 +37,16 @@ inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
 inline constexpr double SATURATION_REFERENCE_DT = 1.0;
 inline constexpr double SATURATION_LONG_GAP_SECONDS = 30.0;
+
+// Adaptive feedback-lag predictor (see BalancerConfig::predict_lag_s and
+// LoadBalancer::predicted_grid_). Candidate lags are spaced every
+// PREDICT_LAG_STEP_S from 0 to the configured cap; PREDICT_LAG_ALPHA is the EMA
+// weight of the online variance estimator; PREDICT_HISTORY_MARGIN_S is how far
+// past the cap the Σout history is retained so a zero-order-hold lookup at the
+// largest candidate lag always has a sample. Mirrors balancer.py.
+inline constexpr double PREDICT_LAG_STEP_S = 0.5;
+inline constexpr double PREDICT_LAG_ALPHA = 0.02;
+inline constexpr double PREDICT_HISTORY_MARGIN_S = 30.0;
 
 // Device capabilities — the single source of truth for every device-type
 // decision (mirrors balancer.py device_capabilities). All downstream policy
@@ -106,10 +117,19 @@ struct BalancerConfig {
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
-  float efficiency_saturation_threshold{0.4f};
+  // double (compared against the double saturation_score EMA) so the swap
+  // decision matches the canonical Python double math; a float 0.4f sits a few
+  // 1e-8 above 0.4 and flips the comparison on a knife-edge score, diverging the
+  // deprioritized set from Python.
+  double efficiency_saturation_threshold{0.4};
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
+  // Adaptive feedback-lag compensation: upper bound (s) on the stale-meter lag
+  // the self-tuning grid predictor compensates. The actual effective delay is
+  // learned online per install (LoadBalancer::predicted_grid_); a fast meter
+  // converges to ~0 compensation. 0 disables. See balancer.py for the rationale.
+  float predict_lag_s{3.0f};
 
   void clamp();
 };
@@ -126,7 +146,10 @@ struct BalancerConsumerState {
   // consumer, recorded *before* wire pacing. The cross-talk chrg/dchrg
   // attribution uses it to filter involuntary outputs (issue #376).
   std::optional<float> last_intent;
-  float fade_weight{1.0f};
+  // Long-running EMA weight — double (like saturation_score) so the fade
+  // trajectory and its snap-to-goal threshold match the canonical Python double
+  // math poll-for-poll; float drifts enough to flip the snap on a different poll.
+  double fade_weight{1.0};
   // Ramp-pacing state (see BalancerConfig::pace_base_step): current per-poll
   // cap, sign of the last paced reading, and the battery's reported power at
   // the last pacing step (tracking detection).
@@ -176,7 +199,7 @@ using ReportMap = std::unordered_map<std::string, ConsumerReport>;
 
 class SaturationTracker {
  public:
-  SaturationTracker(float alpha, float min_target, float decay_factor,
+  SaturationTracker(double alpha, float min_target, double decay_factor,
                     float stall_timeout_seconds, bool enabled,
                     std::function<double()> clock);
 
@@ -189,16 +212,19 @@ class SaturationTracker {
  private:
   std::function<double()> clock_;
   bool enabled_;
-  float alpha_;
+  // double (like the saturation_score it drives) so the EMA matches the
+  // canonical Python double math; a float alpha/decay sits ~1e-8 off the
+  // double value and drifts the score across the swap threshold on a knife-edge.
+  double alpha_;
   float min_target_;
-  float decay_factor_;
+  double decay_factor_;
   float stall_timeout_seconds_;
 };
 
 class LoadBalancer {
  public:
-  LoadBalancer(BalancerConfig config, float saturation_alpha,
-               float saturation_min_target, float saturation_decay_factor,
+  LoadBalancer(BalancerConfig config, double saturation_alpha,
+               float saturation_min_target, double saturation_decay_factor,
                float saturation_grace_seconds, float saturation_stall_timeout_seconds,
                bool saturation_enabled, std::function<double()> clock,
                std::function<void()> reset_fn);
@@ -266,6 +292,7 @@ class LoadBalancer {
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
   float pace_reading_(const std::string &consumer_id, float reading, float reported);
+  float predicted_grid_(const ReportMap &reports, float grid_total);
   float damp_oscillation_(const std::string &consumer_id, float residual);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
@@ -298,6 +325,21 @@ class LoadBalancer {
   double post_probe_fade_until_{0.0};
   std::unordered_set<std::string> post_probe_fade_ids_;
   bool all_dc_surplus_warned_{false};
+
+  // Adaptive feedback-lag predictor state (see predicted_grid_). out_history_ is
+  // the pool-level history of total reported battery AC output (timestamp,
+  // Σout); out_history_tick_ collapses the per-consumer calls of one poll into a
+  // single sample. The lag estimator keeps, per candidate lag, the EMA
+  // mean/mean-square of the first difference of (grid_stale + Σout_lagged)
+  // (lag_prev_s_ is the previous value it differences against); the
+  // variance-minimising candidate is the learned effective delay lag_est_.
+  std::vector<std::pair<double, double>> out_history_;
+  double out_history_tick_{std::numeric_limits<double>::quiet_NaN()};
+  std::vector<double> lag_candidates_;
+  std::vector<double> lag_prev_s_;
+  std::vector<double> lag_dmean_;
+  std::vector<double> lag_dmsq_;
+  double lag_est_{0.0};
 };
 
 }  // namespace ct002
