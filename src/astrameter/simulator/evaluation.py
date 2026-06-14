@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import itertools
 import json
 import math
@@ -227,7 +228,10 @@ class _EvalClock:
 @dataclass(frozen=True)
 class _Sample:
     t: float  # seconds since scenario start
-    grid: float  # grid total W as seen by the controller (before_send)
+    # Instantaneous *true* grid total W at this tick (sum of true_grid phases) --
+    # the physical ground truth, NOT the delayed value the controller reads from
+    # the meter cache. Recorded in before_send for the metrics/plots.
+    grid: float
     # Raw whole-house consumption (load + noise - solar) at this instant, taken
     # straight from the load model — the original source data, not derived from
     # grid+battery, so the plotted consumption can never be polluted by control-
@@ -820,9 +824,32 @@ def _no_events(_rng: random.Random) -> list[Event]:
 # trace carries the *correlated drift* and *persistent appliance switching* of a
 # real home, so it rewards a balancer that tracks genuine load changes instead
 # of one tuned to reject white noise (which over-damps and then lags in the
-# field). Loaded once at import; scenarios slice a per-seed window from it.
+# field). Loaded lazily on first use (not at import) and cached; scenarios slice
+# a per-seed window from it.
 _TRACE_DIR = Path(__file__).parent / "traces"
-_HOUSEHOLD_TRACE = load_power_trace(_TRACE_DIR / "rae_household.csv")
+
+
+@functools.cache
+def _household_trace() -> list[tuple[float, float]]:
+    """Lazily load + cache the real household power trace (RAE House 1).
+
+    Loading on first use rather than at import keeps the module import (and so
+    ``--help`` / importing helpers for tests) side-effect-free, and turns a
+    missing trace into a clear, scenario-specific error instead of an opaque
+    import-time traceback. The vendored CSVs are dev/eval-only data and aren't
+    shipped in the wheel.
+    """
+    path = _TRACE_DIR / "rae_household.csv"
+    try:
+        return load_power_trace(path)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Real-trace scenario needs the household trace at {path}, which "
+            "isn't available (dev/eval-only data, not packaged) — run from a "
+            "source checkout. See traces/README.md."
+        ) from exc
+
+
 # Small measurement noise laid over the recorded trace: a real CT/meter adds a
 # few watts of jitter on top of the true house power. The 1 Hz trace already
 # carries real second-to-second structure, so this only models meter noise (not
@@ -842,7 +869,7 @@ def _trace_events(rng: random.Random, duration: float) -> list[Event]:
     settling. A balancer that tracks the real load without hunting drives those
     down.
     """
-    trace = _HOUSEHOLD_TRACE
+    trace = _household_trace()
     t0 = trace[0][0]
     span = trace[-1][0] - t0
     max_off = max(0.0, span - duration)
@@ -873,8 +900,25 @@ def _trace_events(rng: random.Random, duration: float) -> list[Event]:
 # correlated. A partly-cloudy day, so the PV carries real cloud transients the
 # synthetic half-sine lacks. Scaled to a balcony-system size (keeps PV under the
 # load model's 2 kW solar clamp while preserving the cloud-dip shape).
-_NET_TRACE = load_net_trace(_TRACE_DIR / "cyprus_netload.csv")
+# Loaded lazily on first use (not at import) and cached, like the household trace.
 _PV_SCALE = 0.45
+
+
+@functools.cache
+def _net_trace() -> list[tuple[float, float, float]]:
+    """Lazily load + cache the real prosumer net-load trace (Cyprus).
+
+    Same lazy/cached rationale as :func:`_household_trace`.
+    """
+    path = _TRACE_DIR / "cyprus_netload.csv"
+    try:
+        return load_net_trace(path)
+    except OSError as exc:
+        raise RuntimeError(
+            f"PV-net scenario needs the net-load trace at {path}, which isn't "
+            "available (dev/eval-only data, not packaged) — run from a source "
+            "checkout. See traces/README.md."
+        ) from exc
 
 
 def _pv_net_events(rng: random.Random, duration: float) -> list[Event]:
@@ -886,7 +930,7 @@ def _pv_net_events(rng: random.Random, duration: float) -> list[Event]:
     (morning ramp, cloudy midday, afternoon). Unlabelled — scored on the
     sustained-oscillation/energy aggregates, like the load-trace scenarios.
     """
-    trace = _NET_TRACE
+    trace = _net_trace()
     t0 = trace[0][0]
     span = trace[-1][0] - t0
     max_off = max(0.0, span - duration)
@@ -1064,7 +1108,7 @@ def build_scenarios() -> dict[str, Scenario]:
             ),
             batteries=[_VENUS],
             duration_s=dur_steps,
-            base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+            base_load=[_household_trace()[0][1], 0.0, 0.0],
             base_noise=_TRACE_METER_NOISE,
             build_events=lambda rng: _trace_events(rng, dur_steps),
             # Real installs read the meter with measurement+transport delay;
@@ -1122,7 +1166,7 @@ def build_scenarios() -> dict[str, Scenario]:
             ),
             batteries=[BatterySpec(capacity_wh=2560.0, initial_soc=0.35)],
             duration_s=dur_drain,
-            base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+            base_load=[_household_trace()[0][1], 0.0, 0.0],
             base_noise=_TRACE_METER_NOISE,
             build_events=lambda rng: _trace_events(rng, dur_drain),
             meter_latency_s=0.5,
@@ -1160,7 +1204,7 @@ def build_scenarios() -> dict[str, Scenario]:
             ),
             batteries=[BatterySpec(initial_soc=0.4)],
             duration_s=dur_solar,
-            base_load=[_NET_TRACE[0][1] * _PV_SCALE, 0.0, 0.0],
+            base_load=[_net_trace()[0][1] * _PV_SCALE, 0.0, 0.0],
             base_noise=_TRACE_METER_NOISE,
             build_events=lambda rng: _pv_net_events(rng, dur_solar),
             meter_latency_s=0.5,
@@ -1315,7 +1359,7 @@ def build_scenarios() -> dict[str, Scenario]:
                 ),
                 batteries=[_VENUS, _VENUS],
                 duration_s=dur_steps,
-                base_load=[_HOUSEHOLD_TRACE[0][1], 0.0, 0.0],
+                base_load=[_household_trace()[0][1], 0.0, 0.0],
                 base_noise=_TRACE_METER_NOISE,
                 build_events=lambda rng: _trace_events(rng, dur_steps),
                 meter_latency_s=0.8,

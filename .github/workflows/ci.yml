@@ -296,7 +296,7 @@ jobs:
       - name: Run evaluation (base)
         if: github.event_name == 'pull_request'
         run: |
-          safe="${{ steps.safe.outputs.safe }}"
+          safe='${{ steps.safe.outputs.safe }}'
           scenario='${{ matrix.scenario }}'
           base_out="$GITHUB_WORKSPACE/base-${safe}.json"
           git worktree add /tmp/steering-base "${{ github.event.pull_request.base.sha }}"

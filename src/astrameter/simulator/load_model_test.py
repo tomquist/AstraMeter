@@ -5,6 +5,8 @@ from __future__ import annotations
 import itertools
 from pathlib import Path
 
+import pytest
+
 from .load_model import load_net_trace, load_power_trace
 
 _TRACE = Path(__file__).parent / "traces" / "rae_household.csv"
@@ -46,6 +48,21 @@ def test_vendored_household_trace_loads():
     assert min(watts) < 900 and max(watts) > 2500
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",  # empty file
+        "# only a comment\n#\n\n",  # comments/blank only
+        "t_s,watts\nnope,nope\nfoo,bar\n",  # header + invalid-only rows
+    ],
+)
+def test_load_power_trace_raises_without_valid_rows(tmp_path, content):
+    p = tmp_path / "bad.csv"
+    p.write_text(content)
+    with pytest.raises(ValueError):
+        load_power_trace(p)
+
+
 def test_load_net_trace_reads_three_columns(tmp_path):
     p = tmp_path / "n.csv"
     p.write_text("# c\nt_s,load_w,pv_w\n0,300,0\n30,250.5,1200\n60,400,900\n")
@@ -65,3 +82,18 @@ def test_vendored_net_trace_loads():
     # Real partly-cloudy midday: substantial PV, and load/PV both non-negative.
     assert max(pv for _, _, pv in trace) > 2000
     assert all(load >= 0 and pv >= 0 for _, load, pv in trace)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",  # empty file
+        "# only a comment\n#\n\n",  # comments/blank only
+        "t_s,load_w,pv_w\nx,y,z\n1,2\n",  # header, invalid + too-few-column rows
+    ],
+)
+def test_load_net_trace_raises_without_valid_rows(tmp_path, content):
+    p = tmp_path / "bad.csv"
+    p.write_text(content)
+    with pytest.raises(ValueError):
+        load_net_trace(p)
