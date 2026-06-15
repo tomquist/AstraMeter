@@ -378,17 +378,23 @@ def test_guardrail_regression_is_flagged():
     assert _guardrail_regressions(base, {**base, "overshoot_max_w": 103.0}) == []
 
 
-def test_guardrail_includes_avoidable_energy():
-    # Both self-consumption money metrics are do-no-harm guardrails: a regression
-    # past the tolerance is a breach even when the dynamics are flat. Export is
-    # largely free-to-fix over-discharge (throttle the battery), not AC-charging,
-    # so a worse export figure is genuine harm — not a worthwhile trade.
+def test_guardrail_includes_import_not_export():
+    # Avoidable grid import is the retail-tariff money metric, free to fix
+    # (discharge): a regression past the tolerance is a do-no-harm breach even
+    # when the dynamics are flat.
     base = {"avoidable_import_wh": 100.0, "overshoot_max_w": 100.0}
     head = {"avoidable_import_wh": 120.0, "overshoot_max_w": 100.0}
     assert _guardrail_regressions(base, head) == ["avoidable_import_wh +20%"]
-    assert _guardrail_regressions(
-        {"avoidable_export_wh": 100.0}, {"avoidable_export_wh": 120.0}
-    ) == ["avoidable_export_wh +20%"]
+    # Avoidable export is NOT guardrailed: the metric conflates free-to-fix
+    # over-discharge with a legitimate missed-AC-charging trade (and is gated on
+    # ac_chargeable / noisy in solar), so a hard flag would penalise the
+    # legitimate case — it keeps its 1.0 soft weight instead.
+    assert (
+        _guardrail_regressions(
+            {"avoidable_export_wh": 100.0}, {"avoidable_export_wh": 120.0}
+        )
+        == []
+    )
 
 
 def test_guardrail_flags_regression_from_zero_base():

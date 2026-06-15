@@ -43,7 +43,7 @@ verdict that weights metrics by real-world value — import-heavy self-consumpti
 energy, do-no-harm overshoot/hunting guardrails, and cycle-life battery travel
 (see :data:`_METRIC_WEIGHTS`) — and hard-flags any do-no-harm guardrail
 regression (:data:`_GUARDRAIL_METRICS`: overshoot/hunting plus avoidable grid
-import/export — the self-consumption money metrics). The flat mean answers "did most numbers
+import — the retail-tariff money metric). The flat mean answers "did most numbers
 move down?"; the priority verdict answers "did it get better *where it matters*,
 and did it break a guardrail?".
 """
@@ -1494,20 +1494,25 @@ _METRIC_WEIGHTS: dict[str, float] = {
 
 # Do-no-harm guardrails: regressing one of these makes the system *actively
 # worse than doing nothing*.  Overshoot flips the grid sign; band crossings /
-# peak-to-peak are sustained hunting; avoidable import (missed self-consumption,
-# paid at the retail tariff) and avoidable export (stored energy dumped to the
-# grid because discharge wasn't throttled when the house load dropped — energy
-# that could have offset later retail import) are both real money left on the
-# table, and both are largely free to fix (throttle discharge / charge), so a
-# regression there is a do-no-harm failure rather than a worthwhile trade.  A
+# peak-to-peak are sustained hunting; avoidable import is missed self-consumption
+# (energy imported while a battery could have supplied it) — the product's
+# purpose, paid at the retail tariff and free to fix (just discharge).  A
 # regression beyond ``_GUARDRAIL_TOLERANCE`` (5%) is surfaced as a hard warning
 # regardless of how good the weighted score looks, so a smoother controller
-# can't silently trade self-consumption for stability.  The import>export value
-# asymmetry lives in ``_METRIC_WEIGHTS`` (4.0 vs 1.0), not here: the guardrail is
-# a one-sided regression flag, so including export doesn't reward over-charging —
-# it only forbids exporting *more* than the base.
+# can't silently trade self-consumption for stability.
 #
-# The energy metrics also legitimately sit at 0 in the base (a controller
+# Avoidable *export* is deliberately NOT a guardrail (it keeps its 1.0 soft
+# weight in ``_METRIC_WEIGHTS``).  The metric conflates two behaviours: free-to-
+# fix over-discharge (a battery discharging *into* a grid export because it
+# wasn't throttled when load dropped — genuine do-no-harm) and a legitimate
+# missed-AC-charging trade (letting a surplus export rather than pay a charge
+# round-trip).  A hard flag on the conflated sum would penalise the second,
+# legitimate case; it is also gated on ``ac_chargeable`` so it misses over-
+# discharge entirely for DC-only packs (e.g. B2500), and it dominates / gets
+# noisy in steady solar-surplus scenarios.  A future device-agnostic
+# over-discharge-only metric could be guardrailed cleanly.
+#
+# ``avoidable_import_wh`` also legitimately sits at 0 in the base (a controller
 # already self-consuming perfectly), so a base of 0 going positive is itself the
 # regression — see ``_guardrail_regressions`` for the zero-base handling.
 _GUARDRAIL_METRICS = (
@@ -1515,7 +1520,6 @@ _GUARDRAIL_METRICS = (
     "band_crossings_per_h",
     "grid_p2p_w",
     "avoidable_import_wh",
-    "avoidable_export_wh",
 )
 _GUARDRAIL_TOLERANCE = 0.05
 
