@@ -42,12 +42,21 @@ from astrameter.simulator.evaluation import (
 )
 
 
-def _steady_samples(net_w: float, duration_s: float) -> list[_Sample]:
+def _steady_samples(
+    net_w: float, duration_s: float, dc_w: float = 0.0
+) -> list[_Sample]:
     """A flat net-load trace at 1 s cadence (grid/powers/socs are unused by the
-    oracle, which reads only ``consumption`` and ``t``)."""
+    oracle, which reads only ``consumption``, ``dc_input`` and ``t``)."""
     n = int(duration_s) + 1
     return [
-        _Sample(t=float(i), grid=0.0, consumption=net_w, powers=(0.0,), socs=(0.0,))
+        _Sample(
+            t=float(i),
+            grid=0.0,
+            consumption=net_w,
+            powers=(0.0,),
+            socs=(0.0,),
+            dc_input=dc_w,
+        )
         for i in range(n)
     ]
 
@@ -91,6 +100,25 @@ def test_oracle_floor_when_battery_too_small():
         _one_battery_scenario(spec, 3600.0), _steady_samples(500.0, 3600.0)
     )
     assert cost == pytest.approx(RETAIL_CT_PER_KWH * 400.0 / 1000.0, rel=0.02)
+
+
+def test_oracle_credits_dc_input_solar():
+    # 500 W deficit for an hour, the battery starts EMPTY but receives 500 W of
+    # solar straight into its DC side (B2500-style). A DC-blind oracle would
+    # import the whole 500 Wh; the DC-aware oracle passes the solar through to
+    # cover the house and pays nothing.
+    spec = BatterySpec(
+        max_discharge_power=800,
+        max_charge_power=0,
+        capacity_wh=2240.0,
+        initial_soc=0.0,
+        max_dc_input=1000,
+    )
+    cost = _oracle_cost_ct(
+        _one_battery_scenario(spec, 3600.0),
+        _steady_samples(500.0, 3600.0, dc_w=500.0),
+    )
+    assert cost == pytest.approx(0.0, abs=1e-6)
 
 
 def _tiny_scenario() -> Scenario:

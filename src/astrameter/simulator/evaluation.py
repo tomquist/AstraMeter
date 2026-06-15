@@ -253,6 +253,11 @@ class _Sample:
     consumption: float
     powers: tuple[float, ...]
     socs: tuple[float, ...]
+    # Total DC-input power (W) across the fleet at this tick — PV wired straight
+    # into a battery's DC side (B2500, hybrid Venus), energy that never crosses
+    # the house meter so it is *not* in ``consumption``. The oracle needs it to
+    # know that free energy is arriving; 0 for pure-AC fleets.
+    dc_input: float = 0.0
 
 
 def _free_udp_port() -> int:
@@ -358,6 +363,7 @@ async def run_scenario(
                 consumption=contribution[0] + contribution[1] + contribution[2],
                 powers=tuple(b.current_power for b in batteries),
                 socs=tuple(b.soc for b in batteries),
+                dc_input=sum(b.dc_input_power for b in batteries),
             )
         )
         return [
@@ -475,12 +481,18 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
     """Cost (eurocents) of the *perfect-foresight* battery dispatch — the
     achievable floor this scenario's controller is benchmarked against.
 
-    The household net load is ``_Sample.consumption`` (load + noise - solar,
-    the same source the controller fights to zero out).  The oracle runs a
-    single ideal aggregate battery (summed capacity / charge / discharge power
-    across the fleet, lossless to match the simulator's lossless plant) with
-    perfect foresight and instantaneous response, greedily storing every watt of
-    surplus it can and discharging to cover every watt of deficit it can.
+    The oracle runs a single ideal aggregate battery (summed capacity / charge /
+    discharge power across the fleet, lossless to match the simulator's lossless
+    plant) with perfect foresight and instantaneous response.  Each step it picks
+    the battery's net AC output ``p`` to zero the grid if it can, otherwise to
+    store / shed the residual optimally.  Two energy streams feed it:
+      * the **household net load** ``consumption`` (load + noise - AC solar) — the
+        deficit/surplus the controller fights to zero out; and
+      * **DC-input solar** ``dc_input`` — PV wired into a battery's DC side, which
+        never crosses the house meter (so it is *not* in ``consumption``).  The
+        cells gain ``dc - p`` each step: DC solar first offsets the grid, the rest
+        charges the pack, and at a full pack it passes straight through to export
+        (matching the real B2500 / hybrid-Venus plant).
 
     Under a flat tariff with a lossless battery this greedy dispatch *is* the
     optimum: every stored Wh is equally valuable, foresight cannot conjure energy
@@ -488,21 +500,14 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
     always worth more than exporting it.  What it leaves on the grid is therefore
     physically irreducible — surplus when the pack is full, deficit when it is
     empty or power-limited — so ``actual_cost - oracle_cost`` isolates the cost
-    the *controller* could have avoided.
+    the *controller* could have avoided, and the oracle is a true lower bound (so
+    ``cost_regret_ct`` stays >= 0).
 
-    Two aggregation approximations bias the floor in *opposite* directions:
-      * **Phase routing is ignored** (the fleet is one battery): a real per-phase
-        controller can be forced to import on one phase while exporting on
-        another, which the netted aggregate avoids — so the oracle is *optimistic*
-        (a true lower bound) in the three-phase scenario.  Regret stays >= 0.
-      * **A DC-only B2500's PV-passthrough is not modelled** (it contributes 0
-        charge power; only its discharge + capacity count).  The real B2500 self-
-        consumes DC solar the aggregate — fed only by ``consumption`` — never sees
-        as chargeable, so here the oracle is *pessimistic* and a real controller
-        can beat it.  ``cost_regret_ct`` clamps at 0, so in ``mixed_venus_b2500``
-        scenarios regret is a conservative under-estimate of controller skill, not
-        a true lower bound.  (Feeding the DC-input trace into the oracle would fix
-        this; it is not in ``_Sample`` today.)"""
+    One approximation remains: **per-phase routing is ignored** (the fleet is one
+    battery).  A real per-phase controller can be forced to import on one phase
+    while exporting on another, which the netted aggregate avoids — so the oracle
+    is mildly *optimistic* (still a valid lower bound) in the three-phase
+    scenario."""
     specs = scenario.batteries
     cap_wh = sum(s.capacity_wh for s in specs)
     max_charge = sum(s.max_charge_power for s in specs)
@@ -515,15 +520,17 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
             continue
         h = dt / 3600.0
         net = prev.consumption  # >0 deficit (would import), <0 surplus (export)
-        if net > 0:
-            discharge = min(net, max_discharge, energy_wh / h)
-            energy_wh -= discharge * h
-            grid = net - discharge
-        else:
-            room_wh = cap_wh - energy_wh
-            charge = min(-net, max_charge, room_wh / h)
-            energy_wh += charge * h
-            grid = net + charge
+        dc = prev.dc_input  # free DC-side solar entering the pack this step
+        # Feasible net AC output p (positive = to house/grid). The cells change by
+        # (dc - p) per step, bounded by stored energy (can't over-drain) and room
+        # (can't over-fill); p is also bounded by the AC charge/discharge limits.
+        hi = min(max_discharge, dc + energy_wh / h)
+        lo = max(-max_charge, dc - (cap_wh - energy_wh) / h)
+        if lo > hi:  # DC inflow exceeds what a full pack can shed via the inverter
+            lo = hi  # → curtail the excess (output at the cap)
+        p = min(max(net, lo), hi)  # zero the grid if feasible, else store/shed
+        energy_wh = max(0.0, min(cap_wh, energy_wh + (dc - p) * h))
+        grid = net - p
         if grid > 0:
             import_wh += grid * h
         else:
@@ -649,11 +656,10 @@ def _compute_metrics(
     # controller left, minus what an ideal perfect-foresight battery would have
     # paid on the same load. The difference is the money the *controller* could
     # have saved — ungameable (both import and export cost), 0 = matched perfect
-    # foresight. Clamped at 0 because the aggregate oracle is a true lower bound
-    # in every AC scenario (phase netting only makes it optimistic); the one case
-    # it can be *beaten* is a B2500 self-consuming DC solar the oracle doesn't
-    # model (see ``_oracle_cost_ct``), where the clamp deliberately reports the
-    # conservative 0 rather than a misleading "controller beat the optimum".
+    # foresight. The oracle is a true lower bound (it sees the same load *and* the
+    # DC-input solar — see ``_oracle_cost_ct``), so the max(0.0, …) clamp only
+    # ever absorbs tiny per-phase-routing slack in the three-phase scenario, not a
+    # real "controller beat the optimum".
     grid_cost = _grid_cost_ct(import_wh, export_wh)
     oracle_cost = _oracle_cost_ct(scenario, samples)
     cost_regret = max(0.0, grid_cost - oracle_cost)
