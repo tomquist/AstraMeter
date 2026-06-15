@@ -42,7 +42,8 @@ The roll-up leads with **two** one-line verdicts: an equal-weighted ``Overall``
 verdict that weights metrics by real-world value — import-heavy self-consumption
 energy, do-no-harm overshoot/hunting guardrails, and cycle-life battery travel
 (see :data:`_METRIC_WEIGHTS`) — and hard-flags any do-no-harm guardrail
-regression (:data:`_GUARDRAIL_METRICS`). The flat mean answers "did most numbers
+regression (:data:`_GUARDRAIL_METRICS`: overshoot/hunting plus avoidable grid
+import — the retail-tariff money metric). The flat mean answers "did most numbers
 move down?"; the priority verdict answers "did it get better *where it matters*,
 and did it break a guardrail?".
 """
@@ -92,6 +93,19 @@ STEADY_EXCLUDE_S = 120.0
 HEADROOM_MARGIN_W = 5.0
 SOC_EMPTY = 0.02
 SOC_FULL = 0.98
+
+# --- Cost / oracle metric (the money north-star) ---------------------------
+# Flat (time-invariant) EU-typical tariffs used to price the residual grid
+# exchange in eurocents.  Import is paid at the retail tariff, export earns the
+# (much lower) feed-in tariff.  These are the only value judgment in the cost
+# metric; the asymmetry (retail >> feed-in) is what makes a controller that
+# silently exports stored energy show up as money lost.  Costs are reported in
+# *eurocents* (not euros) and the cost keys are rounded to 2 dp everywhere
+# (per-scenario rows, seed-merge and the aggregate — see ``_metric_ndp``);
+# regret clusters at fractions of a cent, so the usual 1-dp metric rounding
+# would quantize the guardrail's 5% test into noise.
+RETAIL_CT_PER_KWH = 30.0
+FEEDIN_CT_PER_KWH = 8.0
 # Number of points each scenario's grid-power trace is downsampled to for the
 # interactive charts in the HTML report. Base and head share this fixed count
 # so the two lines align by index regardless of poll cadence.
@@ -239,6 +253,11 @@ class _Sample:
     consumption: float
     powers: tuple[float, ...]
     socs: tuple[float, ...]
+    # Total DC-input power (W) across the fleet at this tick — PV wired straight
+    # into a battery's DC side (B2500, hybrid Venus), energy that never crosses
+    # the house meter so it is *not* in ``consumption``. The oracle needs it to
+    # know that free energy is arriving; 0 for pure-AC fleets.
+    dc_input: float = 0.0
 
 
 def _free_udp_port() -> int:
@@ -344,6 +363,7 @@ async def run_scenario(
                 consumption=contribution[0] + contribution[1] + contribution[2],
                 powers=tuple(b.current_power for b in batteries),
                 socs=tuple(b.soc for b in batteries),
+                dc_input=sum(b.dc_input_power for b in batteries),
             )
         )
         return [
@@ -450,6 +470,74 @@ def _battery_pick(i: int) -> Callable[[_Sample], float]:
     return lambda s: s.powers[i]
 
 
+def _grid_cost_ct(import_wh: float, export_wh: float) -> float:
+    """Electricity bill (eurocents) for a residual grid exchange: import paid at
+    the retail tariff, export credited at the (lower) feed-in tariff.  Can go
+    negative when feed-in credit exceeds import cost."""
+    return (RETAIL_CT_PER_KWH * import_wh - FEEDIN_CT_PER_KWH * export_wh) / 1000.0
+
+
+def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
+    """Cost (eurocents) of the *perfect-foresight* battery dispatch — the
+    achievable floor this scenario's controller is benchmarked against.
+
+    The oracle runs a single ideal aggregate battery (summed capacity / charge /
+    discharge power across the fleet, lossless to match the simulator's lossless
+    plant) with perfect foresight and instantaneous response.  Each step it picks
+    the battery's net AC output ``p`` to zero the grid if it can, otherwise to
+    store / shed the residual optimally.  Two energy streams feed it:
+      * the **household net load** ``consumption`` (load + noise - AC solar) — the
+        deficit/surplus the controller fights to zero out; and
+      * **DC-input solar** ``dc_input`` — PV wired into a battery's DC side, which
+        never crosses the house meter (so it is *not* in ``consumption``).  The
+        cells gain ``dc - p`` each step: DC solar first offsets the grid, the rest
+        charges the pack, and at a full pack it passes straight through to export
+        (matching the real B2500 / hybrid-Venus plant).
+
+    Under a flat tariff with a lossless battery this greedy dispatch *is* the
+    optimum: every stored Wh is equally valuable, foresight cannot conjure energy
+    a causal controller lacks, and ``retail >= feed-in`` makes storing surplus
+    always worth more than exporting it.  What it leaves on the grid is therefore
+    physically irreducible — surplus when the pack is full, deficit when it is
+    empty or power-limited — so ``actual_cost - oracle_cost`` isolates the cost
+    the *controller* could have avoided, and the oracle is a true lower bound (so
+    ``cost_regret_ct`` stays >= 0).
+
+    One approximation remains: **per-phase routing is ignored** (the fleet is one
+    battery).  A real per-phase controller can be forced to import on one phase
+    while exporting on another, which the netted aggregate avoids — so the oracle
+    is mildly *optimistic* (still a valid lower bound) in the three-phase
+    scenario."""
+    specs = scenario.batteries
+    cap_wh = sum(s.capacity_wh for s in specs)
+    max_charge = sum(s.max_charge_power for s in specs)
+    max_discharge = sum(s.max_discharge_power for s in specs)
+    energy_wh = sum(s.initial_soc * s.capacity_wh for s in specs)
+    import_wh = export_wh = 0.0
+    for prev, cur in itertools.pairwise(samples):
+        dt = min(cur.t - prev.t, 5.0)
+        if dt <= 0:
+            continue
+        h = dt / 3600.0
+        net = prev.consumption  # >0 deficit (would import), <0 surplus (export)
+        dc = prev.dc_input  # free DC-side solar entering the pack this step
+        # Feasible net AC output p (positive = to house/grid). The cells change by
+        # (dc - p) per step, bounded by stored energy (can't over-drain) and room
+        # (can't over-fill); p is also bounded by the AC charge/discharge limits.
+        hi = min(max_discharge, dc + energy_wh / h)
+        lo = max(-max_charge, dc - (cap_wh - energy_wh) / h)
+        if lo > hi:  # DC inflow exceeds what a full pack can shed via the inverter
+            lo = hi  # → curtail the excess (output at the cap)
+        p = min(max(net, lo), hi)  # zero the grid if feasible, else store/shed
+        energy_wh = max(0.0, min(cap_wh, energy_wh + (dc - p) * h))
+        grid = net - p
+        if grid > 0:
+            import_wh += grid * h
+        else:
+            export_wh += -grid * h
+    return _grid_cost_ct(import_wh, export_wh)
+
+
 def _compute_metrics(
     scenario: Scenario,
     seed: int,
@@ -505,7 +593,6 @@ def _compute_metrics(
 
     steady = [s.grid for s in samples if not in_transient(s.t)]
     steady_rms = math.sqrt(sum(g * g for g in steady) / len(steady)) if steady else 0.0
-    mean_abs = sum(abs(s.grid) for s in samples) / len(samples) if samples else 0.0
 
     # --- sustained oscillation amplitude ---
     # The robust peak-to-peak grid swing (p95 - p5) over the whole run. Unlike
@@ -517,13 +604,26 @@ def _compute_metrics(
     all_grid = [s.grid for s in samples]
     grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
 
-    # --- energy & battery travel ---
+    # --- energy, battery travel & whole-run L2 tracking error ---
+    # grid_rms is RMS grid power over the *entire* run, transients included
+    # (unlike steady_rms_w, which excludes post-event windows). It's the L2
+    # tracking term of the classic control objective: squaring punishes large
+    # excursions (overshoot, big swings) far harder than a small steady offset, so
+    # it reads "how cleanly did the loop hold zero?" as one number. Its effort
+    # partner is battery_travel_w_per_h; the two are kept separate rather than
+    # fused with an arbitrary trade-off constant. Both grid_rms and mean_abs are
+    # *time-weighted* (by dt) so they're true time-averages, not sample-averages
+    # skewed by uneven / staggered poll spacing (slow meters, multi-battery).
     import_wh = export_wh = avoid_import_wh = avoid_export_wh = 0.0
     travel_w = 0.0
+    grid_sq_dt = abs_grid_dt = total_dt = 0.0
     for prev, cur in itertools.pairwise(samples):
         dt = min(cur.t - prev.t, 5.0)
         if dt <= 0:
             continue
+        grid_sq_dt += prev.grid * prev.grid * dt
+        abs_grid_dt += abs(prev.grid) * dt
+        total_dt += dt
         wh = prev.grid * dt / 3600.0
         if wh > 0:
             import_wh += wh
@@ -547,6 +647,22 @@ def _compute_metrics(
             ):
                 avoid_export_wh += -wh
         travel_w += sum(abs(cur.powers[i] - prev.powers[i]) for i in range(len(specs)))
+
+    grid_rms = math.sqrt(grid_sq_dt / total_dt) if total_dt > 0 else 0.0
+    mean_abs = abs_grid_dt / total_dt if total_dt > 0 else 0.0
+
+    # --- money: cost vs perfect-foresight oracle (the north-star metric) ---
+    # The actual electricity bill (eurocents) for the residual grid this
+    # controller left, minus what an ideal perfect-foresight battery would have
+    # paid on the same load. The difference is the money the *controller* could
+    # have saved — ungameable (both import and export cost), 0 = matched perfect
+    # foresight. The oracle is a true lower bound (it sees the same load *and* the
+    # DC-input solar — see ``_oracle_cost_ct``), so the max(0.0, …) clamp only
+    # ever absorbs tiny per-phase-routing slack in the three-phase scenario, not a
+    # real "controller beat the optimum".
+    grid_cost = _grid_cost_ct(import_wh, export_wh)
+    oracle_cost = _oracle_cost_ct(scenario, samples)
+    cost_regret = max(0.0, grid_cost - oracle_cost)
 
     # Lowest / highest state of charge any battery reached over the run — lets a
     # scenario verify it actually drives the pack into empty/full saturation
@@ -574,12 +690,16 @@ def _compute_metrics(
         "overshoot_max_w": round(max(overshoots), 1) if overshoots else 0.0,
         "band_crossings_per_h": round(crossings / duration_h, 2),
         "grid_p2p_w": round(grid_p2p, 1),
+        "grid_rms_w": round(grid_rms, 1),
         "steady_rms_w": round(steady_rms, 1),
         "mean_abs_grid_w": round(mean_abs, 1),
         "import_wh": round(import_wh, 1),
         "export_wh": round(export_wh, 1),
         "avoidable_import_wh": round(avoid_import_wh, 1),
         "avoidable_export_wh": round(avoid_export_wh, 1),
+        "grid_cost_ct": round(grid_cost, 2),
+        "oracle_cost_ct": round(oracle_cost, 2),
+        "cost_regret_ct": round(cost_regret, 2),
         "battery_travel_w_per_h": round(travel_w / duration_h, 0),
         "grid_trace": _downsample_series(
             samples, scenario.duration_s, lambda s: s.grid
@@ -1450,10 +1570,12 @@ _REPORT_METRICS = [
     "overshoot_max_w",
     "band_crossings_per_h",
     "grid_p2p_w",
+    "grid_rms_w",
     "steady_rms_w",
     "mean_abs_grid_w",
     "avoidable_import_wh",
     "avoidable_export_wh",
+    "cost_regret_ct",
     "battery_travel_w_per_h",
 ]
 
@@ -1463,10 +1585,14 @@ _REPORT_METRICS = [
 # in the field those are worth very different amounts.  These weights encode the
 # value hierarchy a self-consumption controller is actually judged on:
 #
+#   * **Cost regret vs perfect foresight is the money north-star** — the single
+#     ungameable scalar (real bill minus the optimal-dispatch bill), so it
+#     carries top weight alongside import.
 #   * **Self-consumption energy is the product's purpose**, and the two sides
 #     are not symmetric: avoidable grid *import* is paid at the retail tariff
 #     while avoidable *export* earns only the (much lower) feed-in tariff, so
-#     import is weighted ~4x export.
+#     import is weighted ~4x export.  (``cost_regret_ct`` is the fused money view
+#     of the same effect; the two energy metrics keep their finer-grained lens.)
 #   * **Sign-flip overshoot and sustained hunting are do-no-harm guardrails** —
 #     overshoot flips the grid sign (actively worse than no battery) and hunting
 #     wastes energy, wears the pack and reads as "broken" — so they carry heavy
@@ -1477,12 +1603,14 @@ _REPORT_METRICS = [
 # All metrics are lower-is-better, so a negative weighted change is an overall
 # improvement.  Weights are relative (only their ratios matter).
 _METRIC_WEIGHTS: dict[str, float] = {
+    "cost_regret_ct": 4.0,
     "avoidable_import_wh": 4.0,
     "avoidable_export_wh": 1.0,
     "overshoot_max_w": 3.0,
     "band_crossings_per_h": 2.0,
     "battery_travel_w_per_h": 2.0,
     "grid_p2p_w": 1.5,
+    "grid_rms_w": 1.0,
     "overshoot_mean_w": 1.0,
     "mean_abs_grid_w": 1.0,
     "steady_rms_w": 0.5,
@@ -1492,11 +1620,40 @@ _METRIC_WEIGHTS: dict[str, float] = {
 }
 
 # Do-no-harm guardrails: regressing one of these makes the system *actively
-# worse than doing nothing* (overshoot flips the grid sign; band crossings /
-# peak-to-peak are sustained hunting).  A regression beyond
+# worse than doing nothing*.  Overshoot flips the grid sign; band crossings /
+# peak-to-peak are sustained hunting; avoidable import is missed self-consumption
+# (energy imported while a battery could have supplied it) — the product's
+# purpose, paid at the retail tariff and free to fix (just discharge).  Cost
+# regret is the headline money metric — the bill the controller ran up over what
+# perfect foresight would have paid — ungameable (both grid directions cost) and
+# 0 only when the controller matched the optimum, so a regression there is real
+# money lost regardless of which component moved.  A regression beyond
 # ``_GUARDRAIL_TOLERANCE`` (5%) is surfaced as a hard warning regardless of how
-# good the weighted score looks — the "hard penalty for sign-flip overshoot".
-_GUARDRAIL_METRICS = ("overshoot_max_w", "band_crossings_per_h", "grid_p2p_w")
+# good the weighted score looks, so a smoother controller can't silently trade
+# self-consumption for stability.
+#
+# Avoidable *export* is deliberately NOT a guardrail (it keeps its 1.0 soft
+# weight in ``_METRIC_WEIGHTS``).  The metric conflates two behaviours: free-to-
+# fix over-discharge (a battery discharging *into* a grid export because it
+# wasn't throttled when load dropped — genuine do-no-harm) and a legitimate
+# missed-AC-charging trade (letting a surplus export rather than pay a charge
+# round-trip).  A hard flag on the conflated sum would penalise the second,
+# legitimate case; it is also gated on ``ac_chargeable`` so it misses over-
+# discharge entirely for DC-only packs (e.g. B2500), and it dominates / gets
+# noisy in steady solar-surplus scenarios.  A future device-agnostic
+# over-discharge-only metric could be guardrailed cleanly.
+#
+# ``avoidable_import_wh`` and ``cost_regret_ct`` also legitimately sit at 0 in
+# the base (a controller already matching perfect foresight), so a base of 0
+# going positive is itself the regression — see ``_guardrail_regressions`` for
+# the zero-base handling.
+_GUARDRAIL_METRICS = (
+    "overshoot_max_w",
+    "band_crossings_per_h",
+    "grid_p2p_w",
+    "avoidable_import_wh",
+    "cost_regret_ct",
+)
 _GUARDRAIL_TOLERANCE = 0.05
 
 # Short, human-readable description for each metric in `_REPORT_METRICS`,
@@ -1540,6 +1697,13 @@ _METRIC_GLOSSARY = [
         "(settle/overshoot) miss.",
     ),
     (
+        "grid_rms_w",
+        "RMS grid power (W) over the *whole* run, transients included — the L2 "
+        "tracking error: how cleanly the loop held zero, penalising big "
+        "excursions (overshoot, swings) far harder than a small steady offset. "
+        "Pairs with battery_travel_w_per_h as the control-effort term.",
+    ),
+    (
         "steady_rms_w",
         f"RMS grid power (W) during steady state (excluding the "
         f"{STEADY_EXCLUDE_S:g} s after each event) — residual jitter when "
@@ -1560,6 +1724,15 @@ _METRIC_GLOSSARY = [
         "absorbed (it had room and charge headroom) — missed charging.",
     ),
     (
+        "cost_regret_ct",
+        f"Money north-star: electricity bill (eurocents, import @ "
+        f"{RETAIL_CT_PER_KWH:g} ct/kWh, export @ {FEEDIN_CT_PER_KWH:g} ct/kWh) "
+        f"over what a perfect-foresight optimal battery would have paid on the "
+        f"same load. Ungameable (both grid directions cost); 0 = matched the "
+        f"optimum. The single number that says how much the controller left on "
+        f"the table.",
+    ),
+    (
         "battery_travel_w_per_h",
         "Total absolute change in battery setpoints per hour (W/h) — control "
         "effort / actuator wear; lower is smoother.",
@@ -1567,21 +1740,30 @@ _METRIC_GLOSSARY = [
 ]
 
 
-def _mean_value(values: list):
+def _metric_ndp(key: str) -> int:
+    """Decimal places to round a metric to. Eurocent costs need 2: per-scenario
+    ``cost_regret_ct`` clusters at fractions of a cent, so rounding the
+    aggregate/seed-merge to 1 dp would quantize the guardrail's 5% test into
+    pure noise. Every other metric keeps the 1-dp report convention."""
+    return 2 if key.endswith("_ct") else 1
+
+
+def _mean_value(values: list, ndp: int = 1):
     """Average a homogeneous list of result values across seeds.
 
     Recurses into nested lists (a battery's trace, the list of per-battery
     traces) so traces average element-by-element; string lists (battery
-    labels, identical across seeds) pass through as the first value."""
+    labels, identical across seeds) pass through as the first value. *ndp* is
+    the rounding precision for numeric values (see :func:`_metric_ndp`)."""
     v0 = values[0]
     if isinstance(v0, bool):
         return v0
     if isinstance(v0, (int, float)):
-        return round(sum(float(v) for v in values) / len(values), 1)
+        return round(sum(float(v) for v in values) / len(values), ndp)
     if isinstance(v0, list):
         if v0 and isinstance(v0[0], str):
             return v0  # labels are identical across seeds
-        return [_mean_value([v[i] for v in values]) for i in range(len(v0))]
+        return [_mean_value([v[i] for v in values], ndp) for i in range(len(v0))]
     return v0  # strings / anything else: identical across seeds
 
 
@@ -1603,7 +1785,7 @@ def _merge_seeds(per_seed: list[dict]) -> dict:
     for key in per_seed[0]:
         if key in ("scenario", "seed"):
             continue
-        merged[key] = _mean_value([r[key] for r in per_seed])
+        merged[key] = _mean_value([r[key] for r in per_seed], _metric_ndp(key))
     return merged
 
 
@@ -1624,7 +1806,7 @@ def _aggregate(results: list[dict]) -> dict:
     for key in _REPORT_METRICS:
         vals = [float(r[key]) for r in results if key in r]
         if vals:
-            agg[key] = round(sum(vals) / len(vals), 1)
+            agg[key] = round(sum(vals) / len(vals), _metric_ndp(key))
     return agg
 
 
@@ -1716,17 +1898,28 @@ def _weighted_overall(base_agg: dict, head_agg: dict) -> float | None:
 
 def _guardrail_regressions(base_agg: dict, head_agg: dict) -> list[str]:
     """Do-no-harm guardrail metrics (:data:`_GUARDRAIL_METRICS`) that regressed
-    beyond :data:`_GUARDRAIL_TOLERANCE`, formatted as ``metric +N%``.
+    beyond :data:`_GUARDRAIL_TOLERANCE`, formatted as ``metric +N%`` (or
+    ``metric 0→N`` when the base was zero).
 
     These are surfaced as a hard warning independent of the weighted score: a
-    controller that wins on average but flips the grid sign harder, or hunts
-    more, has made the system worse where it matters most."""
+    controller that wins on average but flips the grid sign harder, hunts more,
+    or imports more from the grid has made the system worse where it matters
+    most.
+
+    A zero base needs explicit handling: a relative change against 0 is
+    undefined, so the old ``bv > 0`` filter silently dropped the worst possible
+    breach — a metric going from *nothing* to *something* (e.g. zero overshoot
+    becoming a real sign flip, or a perfectly self-consuming controller starting
+    to import). That transition is now flagged outright as ``0→N``."""
     out: list[str] = []
     for key in _GUARDRAIL_METRICS:
         if key not in base_agg or key not in head_agg:
             continue
         bv, hv = float(base_agg[key]), float(head_agg[key])
-        if bv > 0 and (hv - bv) / bv > _GUARDRAIL_TOLERANCE:
+        if bv == 0:
+            if hv > 0:
+                out.append(f"{key} 0→{hv:g}")
+        elif (hv - bv) / bv > _GUARDRAIL_TOLERANCE:
             out.append(f"{key} +{(hv - bv) / bv * 100.0:.0f}%")
     return out
 

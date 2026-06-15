@@ -15,18 +15,24 @@ from astrameter.simulator.eval_report import render_html_report
 from astrameter.simulator.evaluation import (
     _METRIC_GLOSSARY,
     _REPORT_METRICS,
+    FEEDIN_CT_PER_KWH,
     GRAPH_POINTS,
+    RETAIL_CT_PER_KWH,
     BatterySpec,
     Event,
     Scenario,
     _aggregate,
     _compare_aggregates,
     _fmt_delta,
+    _grid_cost_ct,
     _guardrail_regressions,
     _merge_seeds,
+    _metric_ndp,
+    _oracle_cost_ct,
     _overall_summary,
     _priority_summary,
     _run_all,
+    _Sample,
     _seed_label,
     _weighted_overall,
     build_scenarios,
@@ -34,6 +40,85 @@ from astrameter.simulator.evaluation import (
     render_text,
     run_scenario,
 )
+
+
+def _steady_samples(
+    net_w: float, duration_s: float, dc_w: float = 0.0
+) -> list[_Sample]:
+    """A flat net-load trace at 1 s cadence (grid/powers/socs are unused by the
+    oracle, which reads only ``consumption``, ``dc_input`` and ``t``)."""
+    n = int(duration_s) + 1
+    return [
+        _Sample(
+            t=float(i),
+            grid=0.0,
+            consumption=net_w,
+            powers=(0.0,),
+            socs=(0.0,),
+            dc_input=dc_w,
+        )
+        for i in range(n)
+    ]
+
+
+def _one_battery_scenario(spec: BatterySpec, duration_s: float) -> Scenario:
+    return Scenario(
+        name="cost",
+        description="",
+        batteries=[spec],
+        duration_s=duration_s,
+        build_events=lambda _rng: [],
+    )
+
+
+def test_grid_cost_asymmetric_tariff():
+    # 1 kWh imported costs the retail tariff; 1 kWh exported earns the (lower)
+    # feed-in tariff as a credit (negative cost).
+    assert _grid_cost_ct(1000.0, 0.0) == pytest.approx(RETAIL_CT_PER_KWH)
+    assert _grid_cost_ct(0.0, 1000.0) == pytest.approx(-FEEDIN_CT_PER_KWH)
+
+
+def test_oracle_zero_cost_when_battery_covers_load():
+    # A steady 500 W deficit for an hour against a battery with ample energy and
+    # power: the perfect-foresight battery supplies all of it, so the optimal
+    # grid exchange — and its cost — is zero.
+    spec = BatterySpec(max_discharge_power=2500, capacity_wh=5000.0, initial_soc=1.0)
+    cost = _oracle_cost_ct(
+        _one_battery_scenario(spec, 3600.0), _steady_samples(500.0, 3600.0)
+    )
+    assert cost == pytest.approx(0.0, abs=1e-6)
+
+
+def test_oracle_floor_when_battery_too_small():
+    # Only 100 Wh of stored energy but the load asks 500 W for an hour (500 Wh).
+    # The oracle supplies its 100 Wh and the remaining ~400 Wh must import — a
+    # physically irreducible floor no controller can beat.
+    spec = BatterySpec(
+        max_discharge_power=2500, max_charge_power=0, capacity_wh=100.0, initial_soc=1.0
+    )
+    cost = _oracle_cost_ct(
+        _one_battery_scenario(spec, 3600.0), _steady_samples(500.0, 3600.0)
+    )
+    assert cost == pytest.approx(RETAIL_CT_PER_KWH * 400.0 / 1000.0, rel=0.02)
+
+
+def test_oracle_credits_dc_input_solar():
+    # 500 W deficit for an hour, the battery starts EMPTY but receives 500 W of
+    # solar straight into its DC side (B2500-style). A DC-blind oracle would
+    # import the whole 500 Wh; the DC-aware oracle passes the solar through to
+    # cover the house and pays nothing.
+    spec = BatterySpec(
+        max_discharge_power=800,
+        max_charge_power=0,
+        capacity_wh=2240.0,
+        initial_soc=0.0,
+        max_dc_input=1000,
+    )
+    cost = _oracle_cost_ct(
+        _one_battery_scenario(spec, 3600.0),
+        _steady_samples(500.0, 3600.0, dc_w=500.0),
+    )
+    assert cost == pytest.approx(0.0, abs=1e-6)
 
 
 def _tiny_scenario() -> Scenario:
@@ -77,14 +162,22 @@ def test_run_scenario_produces_metrics():
         "settle_mean_s",
         "overshoot_max_w",
         "band_crossings_per_h",
+        "grid_rms_w",
         "steady_rms_w",
         "import_wh",
         "export_wh",
         "avoidable_import_wh",
         "avoidable_export_wh",
+        "cost_regret_ct",
         "battery_travel_w_per_h",
     ):
         assert res[key] >= 0, key
+    # Whole-run RMS grid >= mean |grid| (quadratic vs arithmetic mean) on the
+    # same samples — a property that must hold for any run.
+    assert res["grid_rms_w"] >= res["mean_abs_grid_w"]
+    # Regret is the actual bill minus the perfect-foresight floor; the oracle is
+    # optimal, so it never costs more than the controller actually did.
+    assert res["oracle_cost_ct"] <= res["grid_cost_ct"] + 1e-9
     # The battery covers the initial 200 W base load well before the end.
     assert res["settle_mean_s"] < res["duration_h"] * 3600
 
@@ -321,10 +414,31 @@ def test_aggregate_is_per_metric_mean_across_scenarios():
     agg = _aggregate(results)
     assert agg["scenario"] == "AGGREGATE"
     assert agg["n_scenarios"] == 2
-    # Every reported metric is the unweighted mean of the two scenarios.
+    # Every reported metric is the unweighted mean of the two scenarios, rounded
+    # at the metric's precision (eurocent costs keep 2 dp, the rest 1 dp).
     for key in _REPORT_METRICS:
         expected = (float(results[0][key]) + float(results[1][key])) / 2
-        assert agg[key] == round(expected, 1), key
+        assert agg[key] == round(expected, _metric_ndp(key)), key
+
+
+def test_cost_keys_keep_two_decimals_through_aggregation():
+    # Regret clusters at fractions of a cent, so the aggregate/seed-merge must
+    # keep 2 dp for *_ct keys (1 dp would quantize the guardrail's 5% test into
+    # noise). A sub-0.1 ct mean must survive, not round to 0.0.
+    base = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    a = dict(base, scenario="a", cost_regret_ct=0.03)
+    b = dict(base, scenario="b", cost_regret_ct=0.05)
+    assert _aggregate([a, b])["cost_regret_ct"] == 0.04
+    # Seed-merge of the same scenario keeps 2 dp too.
+    merged = _merge_seeds(
+        [
+            dict(base, seed=1, cost_regret_ct=0.03),
+            dict(base, seed=2, cost_regret_ct=0.06),
+        ]
+    )
+    assert merged["cost_regret_ct"] == 0.04
+    # Non-cost metrics still round to the 1-dp report convention.
+    assert _metric_ndp("grid_rms_w") == 1 and _metric_ndp("cost_regret_ct") == 2
 
 
 def test_aggregate_omits_metrics_absent_from_every_result():
@@ -376,6 +490,42 @@ def test_guardrail_regression_is_flagged():
     assert "⚠️" in summary and "overshoot_max_w" in summary
     # A move inside the tolerance is not flagged.
     assert _guardrail_regressions(base, {**base, "overshoot_max_w": 103.0}) == []
+
+
+def test_guardrail_includes_import_not_export():
+    # Avoidable grid import is the retail-tariff money metric, free to fix
+    # (discharge): a regression past the tolerance is a do-no-harm breach even
+    # when the dynamics are flat.
+    base = {"avoidable_import_wh": 100.0, "overshoot_max_w": 100.0}
+    head = {"avoidable_import_wh": 120.0, "overshoot_max_w": 100.0}
+    assert _guardrail_regressions(base, head) == ["avoidable_import_wh +20%"]
+    # Avoidable export is NOT guardrailed: the metric conflates free-to-fix
+    # over-discharge with a legitimate missed-AC-charging trade (and is gated on
+    # ac_chargeable / noisy in solar), so a hard flag would penalise the
+    # legitimate case — it keeps its 1.0 soft weight instead.
+    assert (
+        _guardrail_regressions(
+            {"avoidable_export_wh": 100.0}, {"avoidable_export_wh": 120.0}
+        )
+        == []
+    )
+
+
+def test_guardrail_flags_regression_from_zero_base():
+    # The worst do-no-harm breach: a metric going from nothing to something
+    # (zero overshoot becoming a real sign flip, or a perfectly self-consuming
+    # controller starting to import). A relative change against 0 is undefined,
+    # so it's flagged outright as 0→N rather than silently dropped.
+    assert _guardrail_regressions(
+        {"overshoot_max_w": 0.0}, {"overshoot_max_w": 12.0}
+    ) == ["overshoot_max_w 0→12"]
+    assert _guardrail_regressions(
+        {"avoidable_import_wh": 0.0}, {"avoidable_import_wh": 5.0}
+    ) == ["avoidable_import_wh 0→5"]
+    # 0 → 0 is not a regression.
+    assert (
+        _guardrail_regressions({"overshoot_max_w": 0.0}, {"overshoot_max_w": 0.0}) == []
+    )
 
 
 def test_priority_summary_clean_when_no_guardrail_regresses():
