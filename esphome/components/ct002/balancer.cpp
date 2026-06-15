@@ -752,7 +752,7 @@ std::optional<float> LoadBalancer::get_last_intent(const std::string &consumer_i
 std::array<float, 3> LoadBalancer::compute_auto_target_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
     float grid_total, const std::vector<float> &sample_id) {
-  grid_total = this->predicted_grid_(reports, grid_total);
+  grid_total = this->predicted_grid_(reports, grid_total, sample_id);
   std::unordered_map<std::string, float> saturation;
   for (const auto &c : this->consumers_)
     saturation[c.first] = static_cast<float>(c.second.saturation_score);
@@ -901,7 +901,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
 // difference of (grid_stale + Σout_lagged) is tracked, and the minimiser is the
 // delay at which the battery's own output ripple cancels out. Mirrors
 // balancer.py _predicted_grid.
-float LoadBalancer::predicted_grid_(const ReportMap &reports, float grid_total) {
+float LoadBalancer::predicted_grid_(const ReportMap &reports, float grid_total,
+                                    const std::vector<float> &sample_id) {
   const double max_lag = this->cfg_.predict_lag_s;
   // Skip during an efficiency probe handoff: the pool's output is mid-transition
   // (the candidate ramping from startup delay while backups cover), not
@@ -932,11 +933,20 @@ float LoadBalancer::predicted_grid_(const ReportMap &reports, float grid_total) 
     return val;
   };
 
-  // compute_target is called once per consumer per poll with identical reports;
-  // only advance the estimator on the first call of each tick.
-  if (now != this->out_history_tick_) {
+  // compute_target is called once per consumer per poll with identical reports
+  // and the same meter sample_id; advance the estimator only on the first call
+  // for each fresh meter sample. Keying on sample_id (not the wall clock)
+  // collapses those per-consumer calls reliably — in production each call reads
+  // clock_() a few milliseconds apart, so a timestamp key would advance once per
+  // battery instead of once per sample and make the learned lag depend on
+  // consumer count. Fall back to the (rounded) clock when no sample_id is given.
+  // Mirrors balancer.py.
+  const std::vector<float> tick_key =
+      sample_id.empty() ? std::vector<float>{static_cast<float>(std::round(now * 1000.0) / 1000.0)}
+                        : sample_id;
+  if (tick_key != this->out_history_tick_) {
     this->out_history_.emplace_back(now, total_now);
-    this->out_history_tick_ = now;
+    this->out_history_tick_ = tick_key;
     const double horizon = now - max_lag - PREDICT_HISTORY_MARGIN_S;
     while (this->out_history_.size() > 1 && this->out_history_.front().first < horizon)
       this->out_history_.erase(this->out_history_.begin());

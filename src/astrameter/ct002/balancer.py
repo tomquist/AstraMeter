@@ -593,14 +593,15 @@ class LoadBalancer:
         self._all_dc_surplus_warned: bool = False
         # Adaptive feedback-lag predictor state (see ``_predicted_grid``).
         # ``_out_history`` is the pool-level history of total reported battery AC
-        # output ``(timestamp, Σout)``; ``_out_history_tick`` collapses the
-        # per-consumer calls of one poll into a single sample.  The lag estimator
+        # output ``(timestamp, Σout)``; ``_out_history_tick`` is the meter
+        # ``sample_id`` of the last advance, which collapses the per-consumer
+        # calls of one poll into a single sample.  The lag estimator
         # keeps, per candidate lag, the EMA mean/mean-square of the first
         # difference of ``grid_stale + Σout_lagged`` (``_lag_prev_s`` is the
         # previous value it differences against); the variance-minimising
         # candidate is the learned effective delay ``_lag_est``.
         self._out_history: list[tuple[float, float]] = []
-        self._out_history_tick: float = math.nan
+        self._out_history_tick: tuple = ()
         self._lag_candidates: list[float] = []
         self._lag_prev_s: list[float] = []
         self._lag_dmean: list[float] = []
@@ -1211,7 +1212,7 @@ class LoadBalancer:
         sample_id: tuple = (),
     ) -> list[float]:
         """Automatic allocation for auto-pool consumers."""
-        grid_total = self._predicted_grid(reports, grid_total)
+        grid_total = self._predicted_grid(reports, grid_total, sample_id)
         saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
@@ -1403,7 +1404,9 @@ class LoadBalancer:
 
         return self._split_by_phase(reading, reports, eff_part)
 
-    def _predicted_grid(self, reports: dict, grid_total: float) -> float:
+    def _predicted_grid(
+        self, reports: dict, grid_total: float, sample_id: tuple = ()
+    ) -> float:
         """Advance the stale grid reading to the present (self-tuning predictor).
 
         The grid meter is stale (transport/measurement delay plus the hold
@@ -1462,10 +1465,17 @@ class LoadBalancer:
             return val
 
         # ``compute_target`` is called once per consumer per poll with identical
-        # reports; only advance the estimator on the first call of each tick.
-        if now != self._out_history_tick:
+        # reports and the same meter ``sample_id``; advance the estimator only on
+        # the first call for each fresh meter sample.  Keying on ``sample_id``
+        # (not the wall clock) collapses those per-consumer calls reliably — in
+        # production each call reads ``self._clock()`` a few milliseconds apart,
+        # so a timestamp key would advance once per battery instead of once per
+        # sample and make the learned lag depend on consumer count.  Fall back to
+        # the (rounded) clock only when no ``sample_id`` is supplied.
+        tick_key = sample_id if sample_id else (round(now, 3),)
+        if tick_key != self._out_history_tick:
             self._out_history.append((now, total_now))
-            self._out_history_tick = now
+            self._out_history_tick = tick_key
             horizon = now - max_lag - PREDICT_HISTORY_MARGIN_S
             while len(self._out_history) > 1 and self._out_history[0][0] < horizon:
                 self._out_history.pop(0)

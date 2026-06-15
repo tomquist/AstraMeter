@@ -292,7 +292,8 @@ class LoadBalancer {
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
   float pace_reading_(const std::string &consumer_id, float reading, float reported);
-  float predicted_grid_(const ReportMap &reports, float grid_total);
+  float predicted_grid_(const ReportMap &reports, float grid_total,
+                        const std::vector<float> &sample_id);
   float damp_oscillation_(const std::string &consumer_id, float residual);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
@@ -328,13 +329,14 @@ class LoadBalancer {
 
   // Adaptive feedback-lag predictor state (see predicted_grid_). out_history_ is
   // the pool-level history of total reported battery AC output (timestamp,
-  // Σout); out_history_tick_ collapses the per-consumer calls of one poll into a
-  // single sample. The lag estimator keeps, per candidate lag, the EMA
-  // mean/mean-square of the first difference of (grid_stale + Σout_lagged)
-  // (lag_prev_s_ is the previous value it differences against); the
-  // variance-minimising candidate is the learned effective delay lag_est_.
+  // Σout); out_history_tick_ is the meter sample_id of the last advance, which
+  // collapses the per-consumer calls of one poll into a single sample. The lag
+  // estimator keeps, per candidate lag, the EMA mean/mean-square of the first
+  // difference of (grid_stale + Σout_lagged) (lag_prev_s_ is the previous value
+  // it differences against); the variance-minimising candidate is the learned
+  // effective delay lag_est_.
   std::vector<std::pair<double, double>> out_history_;
-  double out_history_tick_{std::numeric_limits<double>::quiet_NaN()};
+  std::vector<float> out_history_tick_;
   std::vector<double> lag_candidates_;
   std::vector<double> lag_prev_s_;
   std::vector<double> lag_dmean_;
