@@ -201,14 +201,14 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.0
         ),
         cv.Optional(CONF_MAX_TARGET_STEP, default=0.0): cv.float_range(min=0.0),
-        cv.Optional(CONF_PACE_BASE_STEP, default=50.0): cv.float_range(min=0.0),
-        cv.Optional(CONF_PACE_MAX_STEP, default=200.0): cv.float_range(min=0.0),
-        cv.Optional(CONF_OSC_DAMP_MAX, default=0.8): cv.float_range(min=0.0, max=1.0),
-        cv.Optional(CONF_OSC_DAMP_ALPHA, default=0.15): cv.float_range(
+        cv.Optional(CONF_PACE_BASE_STEP, default=30.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_PACE_MAX_STEP, default=100.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_OSC_DAMP_MAX, default=0.95): cv.float_range(min=0.0, max=1.0),
+        cv.Optional(CONF_OSC_DAMP_ALPHA, default=0.3): cv.float_range(min=0.0, max=1.0),
+        cv.Optional(CONF_OSC_DAMP_DECAY, default=0.05): cv.float_range(
             min=0.0, max=1.0
         ),
-        cv.Optional(CONF_OSC_DAMP_DECAY, default=0.1): cv.float_range(min=0.0, max=1.0),
-        cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=450.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=300.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
