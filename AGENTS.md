@@ -44,8 +44,9 @@ improvement or regression is visible without reading every scenario table. A
 second **priority verdict** sits below it: a value-weighted score (`_METRIC_WEIGHTS`
 — import-heavy self-consumption energy, do-no-harm overshoot/hunting guardrails,
 cycle-life battery travel) plus a hard flag when any do-no-harm guardrail
-(`_GUARDRAIL_METRICS`: overshoot, band-crossings, grid p2p) regresses past 5%.
-Read the flat mean for "did most numbers move down?" and the priority verdict
+(`_GUARDRAIL_METRICS`: overshoot, band-crossings, grid p2p, and avoidable grid
+import — the retail-tariff money metric) regresses past 5% (or appears from a
+zero base). Read the flat mean for "did most numbers move down?" and the priority verdict
 for "did it improve *where it matters*, and did it break a guardrail?".
 
 ## Changelog

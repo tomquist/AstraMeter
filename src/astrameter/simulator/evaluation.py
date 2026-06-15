@@ -42,7 +42,8 @@ The roll-up leads with **two** one-line verdicts: an equal-weighted ``Overall``
 verdict that weights metrics by real-world value — import-heavy self-consumption
 energy, do-no-harm overshoot/hunting guardrails, and cycle-life battery travel
 (see :data:`_METRIC_WEIGHTS`) — and hard-flags any do-no-harm guardrail
-regression (:data:`_GUARDRAIL_METRICS`). The flat mean answers "did most numbers
+regression (:data:`_GUARDRAIL_METRICS`: overshoot/hunting plus avoidable grid
+import — the retail-tariff money metric). The flat mean answers "did most numbers
 move down?"; the priority verdict answers "did it get better *where it matters*,
 and did it break a guardrail?".
 """
@@ -1493,10 +1494,27 @@ _METRIC_WEIGHTS: dict[str, float] = {
 
 # Do-no-harm guardrails: regressing one of these makes the system *actively
 # worse than doing nothing* (overshoot flips the grid sign; band crossings /
-# peak-to-peak are sustained hunting).  A regression beyond
-# ``_GUARDRAIL_TOLERANCE`` (5%) is surfaced as a hard warning regardless of how
-# good the weighted score looks — the "hard penalty for sign-flip overshoot".
-_GUARDRAIL_METRICS = ("overshoot_max_w", "band_crossings_per_h", "grid_p2p_w")
+# peak-to-peak are sustained hunting; avoidable import is missed
+# self-consumption — the product's purpose, paid at the retail tariff).  A
+# regression beyond ``_GUARDRAIL_TOLERANCE`` (5%) is surfaced as a hard warning
+# regardless of how good the weighted score looks — the "hard penalty for
+# sign-flip overshoot", plus the money metric so a smoother controller can't
+# silently trade self-consumption for stability.  Avoidable *export* is left
+# off: it earns only the (much lower) feed-in tariff and avoiding it means
+# AC-charging the pack (round-trip losses + cycle wear), so a hard flag there
+# would perversely reward over-charging to chase low-value feed-in — its 1.0
+# soft weight already prices it in.
+#
+# ``avoidable_import_wh`` is also the one guardrail metric that legitimately
+# sits at 0 in the base (a controller already self-consuming perfectly), so a
+# base of 0 going positive is itself the regression — see
+# ``_guardrail_regressions`` for the zero-base handling.
+_GUARDRAIL_METRICS = (
+    "overshoot_max_w",
+    "band_crossings_per_h",
+    "grid_p2p_w",
+    "avoidable_import_wh",
+)
 _GUARDRAIL_TOLERANCE = 0.05
 
 # Short, human-readable description for each metric in `_REPORT_METRICS`,
@@ -1716,17 +1734,28 @@ def _weighted_overall(base_agg: dict, head_agg: dict) -> float | None:
 
 def _guardrail_regressions(base_agg: dict, head_agg: dict) -> list[str]:
     """Do-no-harm guardrail metrics (:data:`_GUARDRAIL_METRICS`) that regressed
-    beyond :data:`_GUARDRAIL_TOLERANCE`, formatted as ``metric +N%``.
+    beyond :data:`_GUARDRAIL_TOLERANCE`, formatted as ``metric +N%`` (or
+    ``metric 0→N`` when the base was zero).
 
     These are surfaced as a hard warning independent of the weighted score: a
-    controller that wins on average but flips the grid sign harder, or hunts
-    more, has made the system worse where it matters most."""
+    controller that wins on average but flips the grid sign harder, hunts more,
+    or imports more from the grid has made the system worse where it matters
+    most.
+
+    A zero base needs explicit handling: a relative change against 0 is
+    undefined, so the old ``bv > 0`` filter silently dropped the worst possible
+    breach — a metric going from *nothing* to *something* (e.g. zero overshoot
+    becoming a real sign flip, or a perfectly self-consuming controller starting
+    to import). That transition is now flagged outright as ``0→N``."""
     out: list[str] = []
     for key in _GUARDRAIL_METRICS:
         if key not in base_agg or key not in head_agg:
             continue
         bv, hv = float(base_agg[key]), float(head_agg[key])
-        if bv > 0 and (hv - bv) / bv > _GUARDRAIL_TOLERANCE:
+        if bv == 0:
+            if hv > 0:
+                out.append(f"{key} 0→{hv:g}")
+        elif (hv - bv) / bv > _GUARDRAIL_TOLERANCE:
             out.append(f"{key} +{(hv - bv) / bv * 100.0:.0f}%")
     return out
 

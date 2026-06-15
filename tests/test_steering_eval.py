@@ -378,6 +378,39 @@ def test_guardrail_regression_is_flagged():
     assert _guardrail_regressions(base, {**base, "overshoot_max_w": 103.0}) == []
 
 
+def test_guardrail_includes_avoidable_import():
+    # Avoidable grid import is the retail-tariff money metric: a regression past
+    # the tolerance is a do-no-harm breach even when the dynamics are flat.
+    base = {"avoidable_import_wh": 100.0, "overshoot_max_w": 100.0}
+    head = {"avoidable_import_wh": 120.0, "overshoot_max_w": 100.0}
+    assert _guardrail_regressions(base, head) == ["avoidable_import_wh +20%"]
+    # Avoidable export is NOT guardrailed (low-value feed-in; avoiding it costs
+    # round-trip losses + wear) — a big export regression alone stays clean.
+    assert (
+        _guardrail_regressions(
+            {"avoidable_export_wh": 100.0}, {"avoidable_export_wh": 200.0}
+        )
+        == []
+    )
+
+
+def test_guardrail_flags_regression_from_zero_base():
+    # The worst do-no-harm breach: a metric going from nothing to something
+    # (zero overshoot becoming a real sign flip, or a perfectly self-consuming
+    # controller starting to import). A relative change against 0 is undefined,
+    # so it's flagged outright as 0→N rather than silently dropped.
+    assert _guardrail_regressions(
+        {"overshoot_max_w": 0.0}, {"overshoot_max_w": 12.0}
+    ) == ["overshoot_max_w 0→12"]
+    assert _guardrail_regressions(
+        {"avoidable_import_wh": 0.0}, {"avoidable_import_wh": 5.0}
+    ) == ["avoidable_import_wh 0→5"]
+    # 0 → 0 is not a regression.
+    assert (
+        _guardrail_regressions({"overshoot_max_w": 0.0}, {"overshoot_max_w": 0.0}) == []
+    )
+
+
 def test_priority_summary_clean_when_no_guardrail_regresses():
     base = {"avoidable_import_wh": 100.0, "overshoot_max_w": 100.0}
     head = {"avoidable_import_wh": 80.0, "overshoot_max_w": 80.0}
