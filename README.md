@@ -312,9 +312,9 @@ All keys in this subsection go under the `[CT002]` or `[CT003]` section (they ar
   down proportionally, producing gentler corrections as batteries approach equilibrium.
 - **MAX_TARGET_STEP** (default 0 = unlimited) — Maximum change in a battery's target
   relative to its current output. A hard clamp on per-cycle change.
-- **PACE_BASE_STEP** / **PACE_MAX_STEP** (defaults 50 W / 200 W) — Ramp pacing for the
+- **PACE_BASE_STEP** / **PACE_MAX_STEP** (defaults 30 W / 100 W) — Ramp pacing for the
   auto control loop: each battery's per-poll command delta is capped, starting at the
-  battery firmware ramp's ~50 W first step and growing toward the max only while the
+  battery firmware ramp's first step and growing toward the max only while the
   battery demonstrably follows the command. Keeps the firmware's accelerating internal
   ramp from overshooting on meter latency. `PACE_BASE_STEP = 0` disables pacing.
 

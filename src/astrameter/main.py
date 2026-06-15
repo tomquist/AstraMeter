@@ -180,13 +180,13 @@ async def run_device(
             ct_section, "MAX_CORRECTION_PER_STEP", fallback=80
         )
         max_target_step = cfg.getint(ct_section, "MAX_TARGET_STEP", fallback=0)
-        pace_base_step = cfg.getint(ct_section, "PACE_BASE_STEP", fallback=50)
-        pace_max_step = cfg.getint(ct_section, "PACE_MAX_STEP", fallback=200)
-        osc_damp_max = cfg.getfloat(ct_section, "OSC_DAMP_MAX", fallback=0.8)
-        osc_damp_alpha = cfg.getfloat(ct_section, "OSC_DAMP_ALPHA", fallback=0.15)
-        osc_damp_decay = cfg.getfloat(ct_section, "OSC_DAMP_DECAY", fallback=0.1)
+        pace_base_step = cfg.getint(ct_section, "PACE_BASE_STEP", fallback=30)
+        pace_max_step = cfg.getint(ct_section, "PACE_MAX_STEP", fallback=100)
+        osc_damp_max = cfg.getfloat(ct_section, "OSC_DAMP_MAX", fallback=0.95)
+        osc_damp_alpha = cfg.getfloat(ct_section, "OSC_DAMP_ALPHA", fallback=0.3)
+        osc_damp_decay = cfg.getfloat(ct_section, "OSC_DAMP_DECAY", fallback=0.05)
         osc_damp_threshold = cfg.getfloat(
-            ct_section, "OSC_DAMP_THRESHOLD", fallback=450
+            ct_section, "OSC_DAMP_THRESHOLD", fallback=300
         )
         grid_predict_trust = cfg.getfloat(
             ct_section, "GRID_PREDICT_TRUST", fallback=0.5

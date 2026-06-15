@@ -715,8 +715,8 @@ class TestGridPredictor:
         lb = self._make(grid_predict_trust=0.5)
         assert self._grid(lb, 0, 0) == 0.0  # init, trust seeded to 0.5
         # Fresh sample: innovation 200, first significant one raises trust to
-        # 0.58, estimate += 0.58 * 200.
-        assert self._grid(lb, 0, 200) == pytest.approx(116.0)
+        # 0.7 (0.5 seed + PRED_TRUST_RAISE_STEP), estimate += 0.7 * 200.
+        assert self._grid(lb, 0, 200) == pytest.approx(140.0)
 
     def test_trust_rises_on_sustained_step_and_collapses_on_reversal(self):
         lb = self._make(grid_predict_trust=0.5)

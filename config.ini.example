@@ -83,12 +83,12 @@ THROTTLE_INTERVAL = 0
 ## Hard clamp on target change relative to current battery output (W). 0 disables.
 # MAX_TARGET_STEP = 0
 ## Ramp pacing: cap each battery's per-poll command delta. The cap starts at
-## PACE_BASE_STEP (matching the battery firmware ramp's ~50 W first step) and
+## PACE_BASE_STEP (matching the battery firmware ramp's first step) and
 ## grows toward PACE_MAX_STEP only while the battery demonstrably follows the
 ## command; it resets when the direction reverses. Keeps the firmware's
 ## accelerating ramp from overshooting on meter latency. 0 disables pacing.
-# PACE_BASE_STEP = 50
-# PACE_MAX_STEP = 200
+# PACE_BASE_STEP = 30
+# PACE_MAX_STEP = 100
 
 ## --- DC battery keep-alive ---
 ## Applies per battery (independent of balancing — also relevant with a single

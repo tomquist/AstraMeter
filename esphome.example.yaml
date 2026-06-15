@@ -151,8 +151,8 @@ ct002:
   #   error_reduce_threshold: 20
   #   max_correction_per_step: 80
   #   max_target_step: 0           # 0 = no per-step target clamp
-  #   pace_base_step: 50           # ramp pacing first step; 0 disables pacing
-  #   pace_max_step: 200           # pacing cap ceiling while tracking
+  #   pace_base_step: 30           # ramp pacing first step; 0 disables pacing
+  #   pace_max_step: 100           # pacing cap ceiling while tracking
   #   min_dc_output: 0             # >0 keeps a DC battery (B2500) inverter awake
   #   min_efficient_power: 0       # >0 enables efficiency rotation
   #   probe_min_power: 80

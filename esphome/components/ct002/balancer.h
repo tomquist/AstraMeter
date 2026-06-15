@@ -34,15 +34,18 @@ inline constexpr double PACE_REFERENCE_DT = 1.0;
 // Adaptive grid-state predictor (see BalancerConfig::grid_predict_trust and
 // LoadBalancer::predict_control_grid_). The meter trust is bounded to
 // [PRED_TRUST_MIN, PRED_TRUST_MAX] and adapted per fresh meter sample whose
-// innovation clears PRED_INNOVATION_GATE_W. The raise is a small additive step
+// innovation clears PRED_INNOVATION_GATE_W. The raise is an additive step
 // (trust climbs only under a sustained same-sign innovation run — a genuine
-// lasting disturbance) while the shrink is a hard multiplicative cut (a single
-// sign flip, the signature of latency-driven hunting, collapses it). Mirrors
-// balancer.py.
+// lasting disturbance) while the shrink is a multiplicative cut (a single
+// sign flip, the signature of latency-driven hunting, collapses it). The band
+// is wide with a brisk raise so a real step is caught in a couple of fresh
+// samples (recovering self-consumption energy a slower ramp leaves on the
+// grid), paired with a softer shrink that still halves trust on a hunt.
+// Mirrors balancer.py.
 inline constexpr float PRED_TRUST_MIN = 0.15f;
-inline constexpr float PRED_TRUST_MAX = 0.6f;
-inline constexpr float PRED_TRUST_RAISE_STEP = 0.08f;
-inline constexpr float PRED_TRUST_SHRINK = 0.4f;
+inline constexpr float PRED_TRUST_MAX = 0.9f;
+inline constexpr float PRED_TRUST_RAISE_STEP = 0.2f;
+inline constexpr float PRED_TRUST_SHRINK = 0.5f;
 inline constexpr float PRED_INNOVATION_GATE_W = 40.0f;
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
@@ -103,19 +106,19 @@ struct BalancerConfig {
   // reading, starting at the firmware ramp's first-step gain and growing
   // toward pace_max_step only while the battery is observed tracking.
   // pace_base_step = 0 disables. See balancer.py for the tuning rationale.
-  float pace_base_step{50.0f};
-  float pace_max_step{200.0f};
+  float pace_base_step{30.0f};
+  float pace_max_step{100.0f};
   // Oscillation-gated damping (issue #473): under meter latency the gain-1
   // grid-following residual limit-cycles. An EMA of how often a consumer's
   // residual reverses sign scales the residual down by up to osc_damp_max; a
   // genuine step holds one sign (score ~0, full gain), only a hunt is damped.
   // osc_damp_max = 0 disables. See balancer.py for the tuning rationale.
-  float osc_damp_max{0.8f};
-  float osc_damp_alpha{0.15f};
-  float osc_damp_decay{0.1f};
+  float osc_damp_max{0.95f};
+  float osc_damp_alpha{0.3f};
+  float osc_damp_decay{0.05f};
   // Only residuals below this magnitude are damped; a larger one is a genuine
   // demand step that reacts at full gain. See balancer.py.
-  float osc_damp_threshold{450.0f};
+  float osc_damp_threshold{300.0f};
   float min_efficient_power{0.0f};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};

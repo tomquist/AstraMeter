@@ -110,17 +110,22 @@ PACE_REFERENCE_DT = 1.0
 # ``[PRED_TRUST_MIN, PRED_TRUST_MAX]`` and adapted per fresh meter sample whose
 # innovation clears ``PRED_INNOVATION_GATE_W`` (above the steady-state
 # meter-noise floor, so random sign flips at the null don't adapt it).  The
-# raise is a small *additive* step so trust only climbs under a *sustained*
+# raise is an *additive* step so trust only climbs under a *sustained*
 # same-sign innovation run — the signature of a genuine lasting disturbance (a
-# cloud, a big load step) — while the shrink is a hard *multiplicative* cut so a
+# cloud, a big load step) — while the shrink is a *multiplicative* cut so a
 # single sign flip (the signature of latency-driven hunting, or an oscillatory
-# external load) collapses it at once.  This asymmetry is what lets one law both
+# external load) collapses it.  This asymmetry is what lets one law both
 # track real steps fast and stay rock-steady against a hunting load, with no
-# per-meter tuning.
+# per-meter tuning.  The band is widened toward a near-fully-trusting ceiling
+# with a brisk raise (so a real step is caught in a couple of fresh samples,
+# recovering the self-consumption energy a slower ramp leaves on the grid),
+# paired with a softer shrink that still halves trust on a hunt — the
+# steering-evaluation suite tunes the pair against the ramp-pacing/oscillation
+# damping defaults below.
 PRED_TRUST_MIN = 0.15
-PRED_TRUST_MAX = 0.6
-PRED_TRUST_RAISE_STEP = 0.08
-PRED_TRUST_SHRINK = 0.4
+PRED_TRUST_MAX = 0.9
+PRED_TRUST_RAISE_STEP = 0.2
+PRED_TRUST_SHRINK = 0.5
 PRED_INNOVATION_GATE_W = 40.0
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
@@ -264,14 +269,15 @@ class BalancerConfig:
     # first-step gain), grows x2 toward ``pace_max_step`` only while the
     # battery is observed tracking the command, follows the error back down,
     # and resets on direction reversal.  ``pace_base_step = 0`` disables.
-    # Defaults (50/200) were tuned with the steering evaluation suite
-    # (``python -m astrameter.simulator.evaluation``): vs the unpaced
-    # baseline they cut overshoot ~80% and battery travel ~33% across the
-    # scenario matrix for ~8% slower settling; growing the cap to the
-    # firmware's full 400 W gain measurably overshoots under one poll of
-    # meter latency, so the cap tops out at 200 W.
-    pace_base_step: float = 50
-    pace_max_step: float = 200
+    # Defaults (30/100) were tuned with the steering evaluation suite
+    # (``python -m astrameter.simulator.evaluation``): the tighter caps trade a
+    # little settling speed for a large drop in worst-case overshoot and battery
+    # travel across the scenario matrix (the faster grid-state predictor below
+    # keeps real-step reaction quick despite the lower cap).  A base step below
+    # ~30 W or a max below ~80 W starts re-introducing near-null hunting (the
+    # grid-p2p guardrail regresses), so the caps are held just above that.
+    pace_base_step: float = 30
+    pace_max_step: float = 100
     # Oscillation-gated damping (issue #473).  Under meter latency the gain-1
     # grid-following residual limit-cycles: the controller keeps reacting to a
     # stale reading that doesn't yet reflect its last command, so it overshoots
@@ -281,14 +287,14 @@ class BalancerConfig:
     # to ``osc_damp_max`` as that score rises.  A clean step keeps full gain
     # (sign constant -> score ~0 -> factor ~1), so step reaction is unchanged;
     # only a hunting loop is damped.  ``osc_damp_max = 0`` disables.
-    osc_damp_max: float = 0.8
-    osc_damp_alpha: float = 0.15
-    osc_damp_decay: float = 0.1
+    osc_damp_max: float = 0.95
+    osc_damp_alpha: float = 0.3
+    osc_damp_decay: float = 0.05
     # Only near-null corrections are damped: a residual above this magnitude is
     # a genuine demand step (kettle, solar ramp), not hunting, so it passes
     # through at full gain and reacts immediately.  Keeps the damper from
     # bleeding a real step response just because the loop was hunting before it.
-    osc_damp_threshold: float = 450
+    osc_damp_threshold: float = 300
     # Adaptive grid-state predictor.  The controller acts on a *predicted* grid
     # rather than the raw meter: every poll the prediction is advanced by the
     # pool's own freshly-reported output change, and on each fresh meter sample
