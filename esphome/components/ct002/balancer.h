@@ -137,6 +137,12 @@ struct BalancerConfig {
   // latency without per-meter tuning. 0 disables (act on the raw meter); any
   // positive value only seeds the self-adapting trust. See balancer.py.
   float grid_predict_trust{0.5f};
+  // Deadband concentration (opt-in): when the absolute (predicted) grid error is
+  // below this and more than one battery is active, hand the whole correction to
+  // the most-active battery instead of splitting it below each battery's firmware
+  // deadband. Cuts steady-state avoidable import/export at the cost of more
+  // setpoint churn. 0 disables. See balancer.py.
+  float concentrate_deadband{60.0f};
 
   void clamp();
 };

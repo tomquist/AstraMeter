@@ -730,6 +730,89 @@ class TestGridPredictor:
         assert lb._pred_trust < PRED_TRUST_MAX * PRED_TRUST_SHRINK + 1e-6
 
 
+class TestConcentrateDeadband:
+    """Opt-in deadband concentration: when the grid error is small enough that a
+    fair-share split would drop each battery below its firmware deadband, the
+    whole correction is handed to the single most-active battery. Mirrored by the
+    C++ port and the differential parity suite."""
+
+    def _lb(self, **cfg):
+        # Disable the grid predictor so the test exercises the raw control grid
+        # directly (concentration acts on the same control grid either way).
+        cfg.setdefault("grid_predict_trust", 0.0)
+        return LoadBalancer(
+            config=BalancerConfig(**cfg),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+            clock=_FakeClock(),
+        )
+
+    def _reports(self):
+        return {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 100},
+        }
+
+    def _target(self, lb, cid, reports, grid):
+        return lb.compute_target(
+            cid, ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), ()
+        )[0]
+
+    def test_disabled_splits_the_correction(self):
+        lb = self._lb(concentrate_deadband=0)  # explicitly off
+        reports = self._reports()
+        a = self._target(lb, "a", reports, 30)
+        b = self._target(lb, "b", reports, 30)
+        assert a > 0 and b > 0
+
+    def test_cross_phase_pool_is_not_concentrated(self):
+        # control_grid sums phases, so concentration must not fire when the
+        # batteries are on different phases (it would over-correct one phase).
+        lb = self._lb(concentrate_deadband=60)
+        reports = {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
+            "b": {"device_type": "HMG-50", "phase": "B", "power": 100},
+        }
+
+        def total(cid):
+            return sum(
+                lb.compute_target(
+                    cid, ConsumerMode("auto"), reports, 30, frozenset(), frozenset(), ()
+                )
+            )
+
+        # Both still take a share (no concentration on a mixed-phase pool); if
+        # concentration had fired, the non-designated battery's total would be 0.
+        assert total("a") != 0 and total("b") != 0
+
+    def test_small_error_concentrated_on_most_active_battery(self):
+        lb = self._lb(concentrate_deadband=60)
+        reports = self._reports()
+        # 30 W error < 60 W threshold: the most-active battery (a, 200 W) takes
+        # the whole correction; the other is left untouched.
+        a = self._target(lb, "a", reports, 30)
+        b = self._target(lb, "b", reports, 30)
+        assert a == pytest.approx(30.0, abs=1.0)
+        assert b == pytest.approx(0.0, abs=1e-6)
+
+    def test_large_error_still_split(self):
+        lb = self._lb(concentrate_deadband=60)
+        reports = self._reports()
+        # 200 W error >= 60 W threshold: normal fair-share split, both react.
+        a = self._target(lb, "a", reports, 200)
+        b = self._target(lb, "b", reports, 200)
+        assert a > 0 and b > 0
+
+    def test_single_battery_unaffected(self):
+        lb = self._lb(concentrate_deadband=60)
+        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 200}}
+        assert self._target(lb, "a", reports, 30) == pytest.approx(30.0, abs=1.0)
+
+
 class TestDampOscillation:
     """Oscillation-gated residual damping (issue #473) — mirrored by the C++
     host test ``LoadBalancer.DampOscillation`` and the differential parity

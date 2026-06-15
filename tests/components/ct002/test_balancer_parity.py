@@ -118,6 +118,10 @@ class PyDriver:
                 if len(parts) > 11
                 else {}
             )
+            # Optional trailing deadband-concentration threshold (after the
+            # pace pair; absent = disabled).
+            if len(parts) > 12:
+                pace_kwargs["concentrate_deadband"] = float(parts[12])
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
@@ -369,9 +373,15 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     min_dc = rng.choice([0, 0, 25, 50])
     # Vary ramp pacing too: off, defaults (omitted), constant cap, tight cap.
     pace = rng.choice(["", "", " 0 0", " 50 200", " 50 50", " 30 120"])
+    # Deadband concentration is the trailing cfg token, so it needs an explicit
+    # pace pair before it; force one when exercising it.
+    conc = rng.choice([0, 0, 40, 60])
+    if conc and not pace:
+        pace = " 50 200"
+    conc_tok = f" {conc}" if conc else ""
     lines = [
         f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} "
-        f"{min_dc}{pace}",
+        f"{min_dc}{pace}{conc_tok}",
         f"clock {rng.randint(1000, 9000)}",
     ]
     n_consumers = rng.randint(1, 3)

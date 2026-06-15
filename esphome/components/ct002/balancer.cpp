@@ -112,6 +112,7 @@ void BalancerConfig::clamp() {
   clamp_v(osc_damp_decay, 0.0f, 1.0f);
   if (osc_damp_threshold < 0.0f) osc_damp_threshold = 0.0f;
   clamp_v(grid_predict_trust, 0.0f, 1.0f);
+  if (concentrate_deadband < 0.0f) concentrate_deadband = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -865,13 +866,62 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     fair_share = control_grid / num_consumers;
   }
 
+  // Deadband concentration (concentrate_deadband): a small grid error split N
+  // ways can drop each battery's share below the firmware's ~20 W input
+  // deadband, so none move and the pool tolerates ~N* the offset. Hand the whole
+  // correction to the most-active battery (deterministic, with an id tiebreak so
+  // it matches balancer.py) so it clears the deadband; bypass balance correction
+  // for this tick. Acts on control_grid like the rest of the residual loop. Only
+  // over participating batteries (not charge-blind / faded-out) and only when
+  // they're all on the same phase (control_grid sums phases, so on a multi-phase
+  // pool concentrating it over-corrects one phase and hunts). Gated on
+  // fair_distribution. Mirrors balancer.py _compute_auto_target.
+  bool concentrate = false;
+  std::vector<const std::string *> conc_ids;
+  bool conc_single_phase = true;
+  bool consumer_in_conc = false;
+  {
+    std::string first_phase;
+    bool have_first = false;
+    for (const auto &kv : reports) {
+      if (charge_blind.count(kv.first)) continue;
+      auto ep = eff_part.find(kv.first);
+      if (ep == eff_part.end() || ep->second <= 0.1f) continue;
+      conc_ids.push_back(&kv.first);
+      if (consumer_id && kv.first == *consumer_id) consumer_in_conc = true;
+      const std::string ph = kv.second.phase.empty() ? "A" : to_upper(kv.second.phase);
+      if (!have_first) {
+        first_phase = ph;
+        have_first = true;
+      } else if (ph != first_phase) {
+        conc_single_phase = false;
+      }
+    }
+  }
+  if (this->cfg_.fair_distribution && this->cfg_.concentrate_deadband > 0.0f &&
+      conc_ids.size() > 1 && conc_single_phase && consumer_in_conc &&
+      std::fabs(control_grid) > 0.0f &&
+      std::fabs(control_grid) < this->cfg_.concentrate_deadband) {
+    const std::string *designated = nullptr;
+    float best_abs = -1.0f;
+    for (const auto *cid : conc_ids) {
+      const float a = std::fabs(reports.at(*cid).power);
+      if (a > best_abs || (a == best_abs && designated && *cid > *designated)) {
+        best_abs = a;
+        designated = cid;
+      }
+    }
+    fair_share = (designated && *consumer_id == *designated) ? control_grid : 0.0f;
+    concentrate = true;
+  }
+
   // fair_share / balance_correction_ produce the residual: this consumer's
   // slice of the grid imbalance to fold into its current output. The absolute
   // net-output target is "what I report now plus my residual" (NetOutputW wrap
   // below).
   float residual;
   if (!this->cfg_.fair_distribution || !consumer_id ||
-      reports.find(*consumer_id) == reports.end()) {
+      reports.find(*consumer_id) == reports.end() || concentrate) {
     residual = fair_share;
   } else if (eff_part.count(*consumer_id)) {
     residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
