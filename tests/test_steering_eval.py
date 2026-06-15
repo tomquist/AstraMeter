@@ -15,18 +15,23 @@ from astrameter.simulator.eval_report import render_html_report
 from astrameter.simulator.evaluation import (
     _METRIC_GLOSSARY,
     _REPORT_METRICS,
+    FEEDIN_CT_PER_KWH,
     GRAPH_POINTS,
+    RETAIL_CT_PER_KWH,
     BatterySpec,
     Event,
     Scenario,
     _aggregate,
     _compare_aggregates,
     _fmt_delta,
+    _grid_cost_ct,
     _guardrail_regressions,
     _merge_seeds,
+    _oracle_cost_ct,
     _overall_summary,
     _priority_summary,
     _run_all,
+    _Sample,
     _seed_label,
     _weighted_overall,
     build_scenarios,
@@ -34,6 +39,57 @@ from astrameter.simulator.evaluation import (
     render_text,
     run_scenario,
 )
+
+
+def _steady_samples(net_w: float, duration_s: float) -> list[_Sample]:
+    """A flat net-load trace at 1 s cadence (grid/powers/socs are unused by the
+    oracle, which reads only ``consumption`` and ``t``)."""
+    n = int(duration_s) + 1
+    return [
+        _Sample(t=float(i), grid=0.0, consumption=net_w, powers=(0.0,), socs=(0.0,))
+        for i in range(n)
+    ]
+
+
+def _one_battery_scenario(spec: BatterySpec, duration_s: float) -> Scenario:
+    return Scenario(
+        name="cost",
+        description="",
+        batteries=[spec],
+        duration_s=duration_s,
+        build_events=lambda _rng: [],
+    )
+
+
+def test_grid_cost_asymmetric_tariff():
+    # 1 kWh imported costs the retail tariff; 1 kWh exported earns the (lower)
+    # feed-in tariff as a credit (negative cost).
+    assert _grid_cost_ct(1000.0, 0.0) == pytest.approx(RETAIL_CT_PER_KWH)
+    assert _grid_cost_ct(0.0, 1000.0) == pytest.approx(-FEEDIN_CT_PER_KWH)
+
+
+def test_oracle_zero_cost_when_battery_covers_load():
+    # A steady 500 W deficit for an hour against a battery with ample energy and
+    # power: the perfect-foresight battery supplies all of it, so the optimal
+    # grid exchange — and its cost — is zero.
+    spec = BatterySpec(max_discharge_power=2500, capacity_wh=5000.0, initial_soc=1.0)
+    cost = _oracle_cost_ct(
+        _one_battery_scenario(spec, 3600.0), _steady_samples(500.0, 3600.0)
+    )
+    assert cost == pytest.approx(0.0, abs=1e-6)
+
+
+def test_oracle_floor_when_battery_too_small():
+    # Only 100 Wh of stored energy but the load asks 500 W for an hour (500 Wh).
+    # The oracle supplies its 100 Wh and the remaining ~400 Wh must import — a
+    # physically irreducible floor no controller can beat.
+    spec = BatterySpec(
+        max_discharge_power=2500, max_charge_power=0, capacity_wh=100.0, initial_soc=1.0
+    )
+    cost = _oracle_cost_ct(
+        _one_battery_scenario(spec, 3600.0), _steady_samples(500.0, 3600.0)
+    )
+    assert cost == pytest.approx(RETAIL_CT_PER_KWH * 400.0 / 1000.0, rel=0.02)
 
 
 def _tiny_scenario() -> Scenario:
@@ -77,14 +133,22 @@ def test_run_scenario_produces_metrics():
         "settle_mean_s",
         "overshoot_max_w",
         "band_crossings_per_h",
+        "grid_rms_w",
         "steady_rms_w",
         "import_wh",
         "export_wh",
         "avoidable_import_wh",
         "avoidable_export_wh",
+        "cost_regret_ct",
         "battery_travel_w_per_h",
     ):
         assert res[key] >= 0, key
+    # Whole-run RMS grid >= mean |grid| (quadratic vs arithmetic mean) on the
+    # same samples — a property that must hold for any run.
+    assert res["grid_rms_w"] >= res["mean_abs_grid_w"]
+    # Regret is the actual bill minus the perfect-foresight floor; the oracle is
+    # optimal, so it never costs more than the controller actually did.
+    assert res["oracle_cost_ct"] <= res["grid_cost_ct"] + 1e-9
     # The battery covers the initial 200 W base load well before the end.
     assert res["settle_mean_s"] < res["duration_h"] * 3600
 

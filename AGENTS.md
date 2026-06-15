@@ -42,12 +42,25 @@ scenarios plus a one-line overall verdict — how many metrics
 improved/regressed and the mean relative change), so an across-the-board
 improvement or regression is visible without reading every scenario table. A
 second **priority verdict** sits below it: a value-weighted score (`_METRIC_WEIGHTS`
-— import-heavy self-consumption energy, do-no-harm overshoot/hunting guardrails,
-cycle-life battery travel) plus a hard flag when any do-no-harm guardrail
-(`_GUARDRAIL_METRICS`: overshoot, band-crossings, grid p2p, and avoidable grid
-import — the retail-tariff money metric) regresses past 5% (or appears from a
-zero base). Read the flat mean for "did most numbers move down?" and the priority verdict
-for "did it improve *where it matters*, and did it break a guardrail?".
+— `cost_regret_ct` money north-star, import-heavy self-consumption energy,
+do-no-harm overshoot/hunting guardrails, cycle-life battery travel) plus a hard
+flag when any do-no-harm guardrail (`_GUARDRAIL_METRICS`: overshoot,
+band-crossings, grid p2p, avoidable grid import, and cost regret) regresses past
+5% (or appears from a zero base). Read the flat mean for "did most numbers move
+down?" and the priority verdict for "did it improve *where it matters*, and did
+it break a guardrail?".
+
+The headline metric is **`cost_regret_ct`**: the controller's electricity bill
+(eurocents, asymmetric tariff — import @ `RETAIL_CT_PER_KWH`, export @
+`FEEDIN_CT_PER_KWH`) minus what a **perfect-foresight optimal battery** would
+have paid on the same load (`_oracle_cost_ct`, a lossless greedy aggregate
+battery — provably optimal under a flat tariff). It is the single ungameable
+"money the controller left on the table" number — 0 means it matched the
+optimum; the irreducible cost when the pack saturates is subtracted out, so
+regret is purely controllable loss. **`grid_rms_w`** is the whole-run L2 tracking
+error (control quality, transients included), pairing with
+`battery_travel_w_per_h` as the effort term (the two LQR terms are kept separate,
+not fused with an arbitrary weight).
 
 ## Changelog
 
