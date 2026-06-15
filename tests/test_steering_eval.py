@@ -27,6 +27,7 @@ from astrameter.simulator.evaluation import (
     _grid_cost_ct,
     _guardrail_regressions,
     _merge_seeds,
+    _metric_ndp,
     _oracle_cost_ct,
     _overall_summary,
     _priority_summary,
@@ -385,10 +386,31 @@ def test_aggregate_is_per_metric_mean_across_scenarios():
     agg = _aggregate(results)
     assert agg["scenario"] == "AGGREGATE"
     assert agg["n_scenarios"] == 2
-    # Every reported metric is the unweighted mean of the two scenarios.
+    # Every reported metric is the unweighted mean of the two scenarios, rounded
+    # at the metric's precision (eurocent costs keep 2 dp, the rest 1 dp).
     for key in _REPORT_METRICS:
         expected = (float(results[0][key]) + float(results[1][key])) / 2
-        assert agg[key] == round(expected, 1), key
+        assert agg[key] == round(expected, _metric_ndp(key)), key
+
+
+def test_cost_keys_keep_two_decimals_through_aggregation():
+    # Regret clusters at fractions of a cent, so the aggregate/seed-merge must
+    # keep 2 dp for *_ct keys (1 dp would quantize the guardrail's 5% test into
+    # noise). A sub-0.1 ct mean must survive, not round to 0.0.
+    base = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
+    a = dict(base, scenario="a", cost_regret_ct=0.03)
+    b = dict(base, scenario="b", cost_regret_ct=0.05)
+    assert _aggregate([a, b])["cost_regret_ct"] == 0.04
+    # Seed-merge of the same scenario keeps 2 dp too.
+    merged = _merge_seeds(
+        [
+            dict(base, seed=1, cost_regret_ct=0.03),
+            dict(base, seed=2, cost_regret_ct=0.06),
+        ]
+    )
+    assert merged["cost_regret_ct"] == 0.04
+    # Non-cost metrics still round to the 1-dp report convention.
+    assert _metric_ndp("grid_rms_w") == 1 and _metric_ndp("cost_regret_ct") == 2
 
 
 def test_aggregate_omits_metrics_absent_from_every_result():

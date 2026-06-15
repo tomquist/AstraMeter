@@ -100,8 +100,10 @@ SOC_FULL = 0.98
 # (much lower) feed-in tariff.  These are the only value judgment in the cost
 # metric; the asymmetry (retail >> feed-in) is what makes a controller that
 # silently exports stored energy show up as money lost.  Costs are reported in
-# *eurocents* (not euros) because the report rounds metrics to one decimal —
-# euros would collapse a real difference to 0.0.
+# *eurocents* (not euros) and the cost keys are rounded to 2 dp everywhere
+# (per-scenario rows, seed-merge and the aggregate — see ``_metric_ndp``);
+# regret clusters at fractions of a cent, so the usual 1-dp metric rounding
+# would quantize the guardrail's 5% test into noise.
 RETAIL_CT_PER_KWH = 30.0
 FEEDIN_CT_PER_KWH = 8.0
 # Number of points each scenario's grid-power trace is downsampled to for the
@@ -488,10 +490,19 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
     empty or power-limited — so ``actual_cost - oracle_cost`` isolates the cost
     the *controller* could have avoided.
 
-    Approximations (documented, not exact): the fleet is treated as one AC
-    battery, so per-phase routing is ignored (slightly optimistic in the
-    three-phase scenario) and a DC-only B2500's PV-passthrough is not modelled
-    (it contributes 0 charge power, its discharge + capacity still count)."""
+    Two aggregation approximations bias the floor in *opposite* directions:
+      * **Phase routing is ignored** (the fleet is one battery): a real per-phase
+        controller can be forced to import on one phase while exporting on
+        another, which the netted aggregate avoids — so the oracle is *optimistic*
+        (a true lower bound) in the three-phase scenario.  Regret stays >= 0.
+      * **A DC-only B2500's PV-passthrough is not modelled** (it contributes 0
+        charge power; only its discharge + capacity count).  The real B2500 self-
+        consumes DC solar the aggregate — fed only by ``consumption`` — never sees
+        as chargeable, so here the oracle is *pessimistic* and a real controller
+        can beat it.  ``cost_regret_ct`` clamps at 0, so in ``mixed_venus_b2500``
+        scenarios regret is a conservative under-estimate of controller skill, not
+        a true lower bound.  (Feeding the DC-input trace into the oracle would fix
+        this; it is not in ``_Sample`` today.)"""
     specs = scenario.batteries
     cap_wh = sum(s.capacity_wh for s in specs)
     max_charge = sum(s.max_charge_power for s in specs)
@@ -505,12 +516,12 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
         h = dt / 3600.0
         net = prev.consumption  # >0 deficit (would import), <0 surplus (export)
         if net > 0:
-            discharge = min(net, max_discharge, energy_wh / h if h > 0 else net)
+            discharge = min(net, max_discharge, energy_wh / h)
             energy_wh -= discharge * h
             grid = net - discharge
         else:
             room_wh = cap_wh - energy_wh
-            charge = min(-net, max_charge, room_wh / h if h > 0 else -net)
+            charge = min(-net, max_charge, room_wh / h)
             energy_wh += charge * h
             grid = net + charge
         if grid > 0:
@@ -575,7 +586,6 @@ def _compute_metrics(
 
     steady = [s.grid for s in samples if not in_transient(s.t)]
     steady_rms = math.sqrt(sum(g * g for g in steady) / len(steady)) if steady else 0.0
-    mean_abs = sum(abs(s.grid) for s in samples) / len(samples) if samples else 0.0
 
     # --- sustained oscillation amplitude ---
     # The robust peak-to-peak grid swing (p95 - p5) over the whole run. Unlike
@@ -587,25 +597,26 @@ def _compute_metrics(
     all_grid = [s.grid for s in samples]
     grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
 
-    # --- whole-run L2 tracking error (control quality) ---
-    # RMS grid power over the *entire* run, transients included (unlike
-    # steady_rms_w, which excludes post-event windows). This is the L2 tracking
-    # term of the classic control objective: squaring punishes large excursions
-    # (overshoot, big swings) far harder than a small steady offset, so it reads
-    # "how cleanly did the loop hold zero?" as one number. Its effort partner is
-    # battery_travel_w_per_h; the two are kept separate rather than fused into a
-    # single weighted scalar so neither needs an arbitrary trade-off constant.
-    grid_rms = (
-        math.sqrt(sum(g * g for g in all_grid) / len(all_grid)) if all_grid else 0.0
-    )
-
-    # --- energy & battery travel ---
+    # --- energy, battery travel & whole-run L2 tracking error ---
+    # grid_rms is RMS grid power over the *entire* run, transients included
+    # (unlike steady_rms_w, which excludes post-event windows). It's the L2
+    # tracking term of the classic control objective: squaring punishes large
+    # excursions (overshoot, big swings) far harder than a small steady offset, so
+    # it reads "how cleanly did the loop hold zero?" as one number. Its effort
+    # partner is battery_travel_w_per_h; the two are kept separate rather than
+    # fused with an arbitrary trade-off constant. Both grid_rms and mean_abs are
+    # *time-weighted* (by dt) so they're true time-averages, not sample-averages
+    # skewed by uneven / staggered poll spacing (slow meters, multi-battery).
     import_wh = export_wh = avoid_import_wh = avoid_export_wh = 0.0
     travel_w = 0.0
+    grid_sq_dt = abs_grid_dt = total_dt = 0.0
     for prev, cur in itertools.pairwise(samples):
         dt = min(cur.t - prev.t, 5.0)
         if dt <= 0:
             continue
+        grid_sq_dt += prev.grid * prev.grid * dt
+        abs_grid_dt += abs(prev.grid) * dt
+        total_dt += dt
         wh = prev.grid * dt / 3600.0
         if wh > 0:
             import_wh += wh
@@ -630,14 +641,19 @@ def _compute_metrics(
                 avoid_export_wh += -wh
         travel_w += sum(abs(cur.powers[i] - prev.powers[i]) for i in range(len(specs)))
 
+    grid_rms = math.sqrt(grid_sq_dt / total_dt) if total_dt > 0 else 0.0
+    mean_abs = abs_grid_dt / total_dt if total_dt > 0 else 0.0
+
     # --- money: cost vs perfect-foresight oracle (the north-star metric) ---
     # The actual electricity bill (eurocents) for the residual grid this
     # controller left, minus what an ideal perfect-foresight battery would have
     # paid on the same load. The difference is the money the *controller* could
     # have saved — ungameable (both import and export cost), 0 = matched perfect
-    # foresight. Clamped at 0: the oracle is optimal by construction, so any
-    # negative is aggregate-model slack (phase routing / DC passthrough), not a
-    # controller beating perfect foresight.
+    # foresight. Clamped at 0 because the aggregate oracle is a true lower bound
+    # in every AC scenario (phase netting only makes it optimistic); the one case
+    # it can be *beaten* is a B2500 self-consuming DC solar the oracle doesn't
+    # model (see ``_oracle_cost_ct``), where the clamp deliberately reports the
+    # conservative 0 rather than a misleading "controller beat the optimum".
     grid_cost = _grid_cost_ct(import_wh, export_wh)
     oracle_cost = _oracle_cost_ct(scenario, samples)
     cost_regret = max(0.0, grid_cost - oracle_cost)
@@ -1718,21 +1734,30 @@ _METRIC_GLOSSARY = [
 ]
 
 
-def _mean_value(values: list):
+def _metric_ndp(key: str) -> int:
+    """Decimal places to round a metric to. Eurocent costs need 2: per-scenario
+    ``cost_regret_ct`` clusters at fractions of a cent, so rounding the
+    aggregate/seed-merge to 1 dp would quantize the guardrail's 5% test into
+    pure noise. Every other metric keeps the 1-dp report convention."""
+    return 2 if key.endswith("_ct") else 1
+
+
+def _mean_value(values: list, ndp: int = 1):
     """Average a homogeneous list of result values across seeds.
 
     Recurses into nested lists (a battery's trace, the list of per-battery
     traces) so traces average element-by-element; string lists (battery
-    labels, identical across seeds) pass through as the first value."""
+    labels, identical across seeds) pass through as the first value. *ndp* is
+    the rounding precision for numeric values (see :func:`_metric_ndp`)."""
     v0 = values[0]
     if isinstance(v0, bool):
         return v0
     if isinstance(v0, (int, float)):
-        return round(sum(float(v) for v in values) / len(values), 1)
+        return round(sum(float(v) for v in values) / len(values), ndp)
     if isinstance(v0, list):
         if v0 and isinstance(v0[0], str):
             return v0  # labels are identical across seeds
-        return [_mean_value([v[i] for v in values]) for i in range(len(v0))]
+        return [_mean_value([v[i] for v in values], ndp) for i in range(len(v0))]
     return v0  # strings / anything else: identical across seeds
 
 
@@ -1754,7 +1779,7 @@ def _merge_seeds(per_seed: list[dict]) -> dict:
     for key in per_seed[0]:
         if key in ("scenario", "seed"):
             continue
-        merged[key] = _mean_value([r[key] for r in per_seed])
+        merged[key] = _mean_value([r[key] for r in per_seed], _metric_ndp(key))
     return merged
 
 
@@ -1775,7 +1800,7 @@ def _aggregate(results: list[dict]) -> dict:
     for key in _REPORT_METRICS:
         vals = [float(r[key]) for r in results if key in r]
         if vals:
-            agg[key] = round(sum(vals) / len(vals), 1)
+            agg[key] = round(sum(vals) / len(vals), _metric_ndp(key))
     return agg
 
 
