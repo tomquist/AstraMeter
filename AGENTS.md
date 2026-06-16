@@ -68,6 +68,8 @@ For user-facing work on a branch, contribute **exactly one bullet under `## Next
 
 Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. If the branch bullet already states the high-level theme, leave it unless the **user-visible** story changes.
 
+Write each bullet for the **user**, not the implementer: describe what changed for them and why it matters, and keep it **compact and clear**. Leave out implementation details — internal symbol/function/class/file names, config knob mechanics, data structures, parity-mirror notes, and the like — unless a user genuinely needs them (e.g. a config option or env var they set). Prefer one tight sentence over an exhaustive list of everything touched.
+
 ## Adding a powermeter
 
 Powermeters are Python-only and have **no** C++/ESPHome counterpart (the ESPHome
