@@ -912,6 +912,61 @@ class TestImportTrim:
         assert r == pytest.approx(60.0, abs=1e-6)
 
 
+class TestEfficiencyDemandSmoothing:
+    """The number of batteries kept active is decided from the household demand
+    read off the (noisy) meter. ``efficiency_demand_alpha`` low-pass filters that
+    estimate so a transient noise dip below ``min_efficient_power`` can't
+    deprioritize a battery (and fire a fade / probe handoff) when sustained demand
+    is comfortably above the floor. Mirrored by the C++ port and the differential
+    parity suite."""
+
+    def _lb(self, alpha):
+        return LoadBalancer(
+            config=BalancerConfig(
+                min_efficient_power=150,
+                efficiency_demand_alpha=alpha,
+                grid_predict_trust=0.0,
+            ),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+            clock=_FakeClock(),
+        )
+
+    def _poll(self, lb, grid, tick):
+        # Two batteries on one phase, 200 W each: demand = |400 + grid|. A fresh
+        # sample_id per poll so the efficiency demand EMA advances each call.
+        reports = {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 200},
+        }
+        lb.compute_target(
+            "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), (tick,)
+        )
+
+    def test_smoothing_absorbs_a_noise_dip(self):
+        # Steady demand 400 W (200 W/unit, above the 150 W floor) keeps both
+        # active; a single-poll dip to 250 W (125 W/unit) would, unsmoothed, drop
+        # below the floor and deprioritize a unit.
+        smoothed = self._lb(alpha=0.1)
+        for t in range(8):
+            self._poll(smoothed, 0.0, t)
+        assert smoothed._deprioritized == set()
+        self._poll(smoothed, -150.0, 8)  # demand 250 for one poll
+        assert smoothed._deprioritized == set()  # EMA ~385 -> still both active
+
+    def test_disabled_thrashes_on_the_same_dip(self):
+        instant = self._lb(alpha=1.0)  # smoothing off: react to every sample
+        for t in range(8):
+            self._poll(instant, 0.0, t)
+        assert instant._deprioritized == set()
+        self._poll(instant, -150.0, 8)  # demand 250 -> 125 W/unit, below floor
+        assert instant._deprioritized == {"b"}
+
+
 class TestDampOscillation:
     """Oscillation-gated residual damping (issue #473) — mirrored by the C++
     host test ``LoadBalancer.DampOscillation`` and the differential parity

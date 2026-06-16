@@ -269,6 +269,18 @@ class BalancerConfig:
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
+    # EMA factor for the household-demand estimate that decides how many
+    # batteries stay active (see ``_compute_efficiency_deprioritized``).  The
+    # demand is read from the noisy meter, so without smoothing a jittery load
+    # crosses the ``min_efficient_power`` threshold every few polls and thrashes
+    # a battery active/deprioritized — a fade transition and probe handoff each
+    # time, huge setpoint churn for no tracking benefit.  Low-pass filtering the
+    # estimate makes the active-set decision follow *sustained* demand instead;
+    # the regulation loop still acts on the raw grid, so tracking is unaffected.
+    # ``0.1`` (default) cuts worst-case battery travel by ~6x in the noisy
+    # multi-battery efficiency scenario; ``1.0`` disables the smoothing (react to
+    # every sample, the pre-#494 behaviour).
+    efficiency_demand_alpha: float = 0.1
     # Minimum net discharge (W) to hold an external-inverter DC battery at so
     # its inverter doesn't switch off at 0 W and sleep.  0 disables.  Only
     # applied to batteries selected by ``_needs_dc_output_floor`` (B2500
@@ -376,6 +388,7 @@ class BalancerConfig:
         _clamp("efficiency_rotation_interval", 1, float("inf"))
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
+        _clamp("efficiency_demand_alpha", 0.01, 1.0)
         _clamp("min_dc_output", 0, float("inf"))
         _clamp("pace_base_step", 0, float("inf"))
         _clamp("pace_max_step", self.pace_base_step, float("inf"))
@@ -668,6 +681,10 @@ class LoadBalancer:
         # frozen) one.
         self._steady_import_dwell: int = 0
         self._trim_sample_id: tuple = ()
+        # Low-pass-filtered household-demand estimate for the efficiency
+        # active-set decision (see ``_compute_efficiency_deprioritized``); keeps
+        # meter noise from thrashing batteries in and out of the active pool.
+        self._demand_ema: float | None = None
 
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
@@ -1902,11 +1919,27 @@ class LoadBalancer:
         if cache_key == self._cache_sample:
             return self._cache_result or {}
 
-        # Estimate demand
+        # Estimate household demand. The active-set size is decided from
+        # ``|total_battery_power + grid_total|`` — which equals the true house
+        # load — but that is computed from the *raw* (noisy) meter, so under a
+        # jittery load it swings across the ``min_efficient_power`` threshold
+        # every few polls, flipping a battery active/deprioritized and dragging
+        # the pool through a fade transition (and probe handoff) each time —
+        # pathological setpoint churn for no tracking benefit (a battery can't
+        # follow meter noise anyway). The active-set decision should follow
+        # *sustained* demand, so the estimate is low-pass filtered by
+        # ``efficiency_demand_alpha`` before the slot math below; the regulation
+        # loop still acts on the unsmoothed grid, so tracking is unaffected.
         total_battery_power = sum(
             parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
         )
-        abs_target = abs(total_battery_power + grid_total)
+        raw_abs_target = abs(total_battery_power + grid_total)
+        alpha = cfg.efficiency_demand_alpha
+        if self._demand_ema is None or alpha >= 1.0:
+            self._demand_ema = raw_abs_target
+        else:
+            self._demand_ema += alpha * (raw_abs_target - self._demand_ema)
+        abs_target = self._demand_ema
         n = len(self._priority)
         per_consumer = abs_target / n
 

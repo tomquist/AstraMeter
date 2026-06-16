@@ -101,7 +101,13 @@ int main() {
           // Optional trailing steady-import trim (absent = keep the struct
           // default).
           float trim = 0.0f;
-          if (in >> trim) cfg.import_trim_w = trim;
+          if (in >> trim) {
+            cfg.import_trim_w = trim;
+            // Optional trailing efficiency demand-smoothing alpha (absent = keep
+            // the struct default).
+            float demand_alpha = 0.0f;
+            if (in >> demand_alpha) cfg.efficiency_demand_alpha = demand_alpha;
+          }
         }
       }
       balancer = std::make_unique<LoadBalancer>(

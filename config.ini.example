@@ -138,6 +138,13 @@ THROTTLE_INTERVAL = 0
 ## powermeters (>10 s updates) accumulate saturation faster per sample; raise
 ## this value (e.g. 0.8) if you see unnecessary swaps with a slow meter.
 # EFFICIENCY_SATURATION_THRESHOLD = 0.4
+## Smooths the household-demand estimate that decides how many batteries stay
+## active, so meter noise can't flip a battery in and out of the active pool
+## every few readings (which wears the setpoints with no benefit — a battery
+## can't track noise anyway). Lower = smoother/slower to react to a sustained
+## load change; 1.0 disables the smoothing (react to every reading). Only
+## relevant with MIN_EFFICIENT_POWER set and two or more batteries.
+# EFFICIENCY_DEMAND_ALPHA = 0.1
 ## How quickly a swapped-out battery becomes eligible again. Applied each cycle
 ## while the battery has no target. 1.0 = never recover, lower = faster recovery.
 # SATURATION_DECAY_FACTOR = 0.995

@@ -160,6 +160,9 @@ ct002:
   #   efficiency_rotation_interval: 15min
   #   efficiency_fade_alpha: 0.15
   #   efficiency_saturation_threshold: 0.4
+  #   # Smooth the demand estimate so meter noise can't thrash batteries in and
+  #   # out of the active pool. Lower = smoother; 1.0 = off.
+  #   efficiency_demand_alpha: 0.1
 
   # Saturation tracker (detects a battery that can't follow its target and
   # backs off). Runs by default with these values; shown at defaults.

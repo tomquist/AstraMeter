@@ -386,6 +386,17 @@ mid-interval failures still trigger a swap.
   batteries with slower powermeters (>10 s update interval) accumulate saturation
   faster per sample — if you see unnecessary swaps with a slow powermeter,
   raise this value (e.g. to 0.8).
+- **EFFICIENCY_DEMAND_ALPHA** (default 0.1) — EMA factor for the household-demand
+  estimate that decides how many batteries stay active. That demand is read off
+  the (noisy) meter, so without smoothing a jittery load crosses the
+  `MIN_EFFICIENT_POWER` threshold every few readings and thrashes a battery in
+  and out of the active pool — a fade transition and probe handoff each time,
+  heavy setpoint wear for no benefit (a battery can't follow meter noise anyway).
+  Low-pass filtering makes the decision follow *sustained* demand instead; the
+  regulation loop still acts on the raw grid, so tracking is unchanged. Lower is
+  smoother (slower to react to a real sustained load change); `1.0` disables the
+  smoothing. Only relevant with `MIN_EFFICIENT_POWER` set and two or more
+  batteries.
 - **SATURATION_DETECTION** (default true) — Track how well each battery follows
   its target. When a battery cannot deliver (full or empty), its share is
   reduced and redistributed to others.

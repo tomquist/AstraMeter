@@ -126,6 +126,10 @@ class PyDriver:
             # disabled so existing fixtures keep their pre-trim behaviour).
             if len(parts) > 13:
                 pace_kwargs["import_trim_w"] = float(parts[13])
+            # Optional trailing efficiency demand-smoothing alpha (after the
+            # trim; absent = BalancerConfig default, matching the C++ harness).
+            if len(parts) > 14:
+                pace_kwargs["efficiency_demand_alpha"] = float(parts[14])
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
@@ -424,9 +428,23 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
         if not conc_tok:
             conc_tok = " 0"
         trim_tok = f" {trim}"
+    # Efficiency demand-smoothing alpha is the next trailing token (after the
+    # trim), so it needs the pace pair, a concentration token and a trim token
+    # present; force them when emitting it. ``None`` omits it (exercises the
+    # default); ``1.0`` exercises the disabled (react-every-sample) path.
+    demand_alpha = rng.choice([None, None, 1.0, 0.1, 0.3])
+    demand_tok = ""
+    if demand_alpha is not None:
+        if not pace:
+            pace = " 50 200"
+        if not conc_tok:
+            conc_tok = " 0"
+        if not trim_tok:
+            trim_tok = " 0"
+        demand_tok = f" {demand_alpha}"
     lines = [
         f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} "
-        f"{min_dc}{pace}{conc_tok}{trim_tok}",
+        f"{min_dc}{pace}{conc_tok}{trim_tok}{demand_tok}",
         f"clock {rng.randint(1000, 9000)}",
     ]
     n_consumers = rng.randint(1, 3)

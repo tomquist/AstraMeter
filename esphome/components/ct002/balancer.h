@@ -140,6 +140,11 @@ struct BalancerConfig {
   // 1e-8 above 0.4 and flips the comparison on a knife-edge score, diverging the
   // deprioritized set from Python.
   double efficiency_saturation_threshold{0.4};
+  // EMA factor for the household-demand estimate that decides the active-set
+  // size. Low-pass filtering it keeps meter noise from thrashing batteries in
+  // and out of the active pool (the regulation loop still acts on the raw grid).
+  // 1.0 disables the smoothing. See balancer.py BalancerConfig.
+  float efficiency_demand_alpha{0.1f};
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
@@ -379,6 +384,9 @@ class LoadBalancer {
   // on, used to tell a fresh reading from a repeated (stale / frozen) one.
   int steady_import_dwell_{0};
   std::vector<float> trim_sample_id_{};
+  // Low-pass-filtered household-demand estimate for the efficiency active-set
+  // decision (see compute_efficiency_deprioritized_). Unset until the first poll.
+  std::optional<float> demand_ema_{};
 };
 
 }  // namespace ct002

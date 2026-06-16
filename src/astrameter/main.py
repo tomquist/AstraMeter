@@ -219,6 +219,9 @@ async def run_device(
         efficiency_saturation_threshold = cfg.getfloat(
             ct_section, "EFFICIENCY_SATURATION_THRESHOLD", fallback=0.4
         )
+        efficiency_demand_alpha = cfg.getfloat(
+            ct_section, "EFFICIENCY_DEMAND_ALPHA", fallback=0.1
+        )
         saturation_decay_factor = cfg.getfloat(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
         )
@@ -295,6 +298,7 @@ async def run_device(
             efficiency_rotation_interval=efficiency_rotation_interval,
             efficiency_fade_alpha=efficiency_fade_alpha,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
+            efficiency_demand_alpha=efficiency_demand_alpha,
             min_dc_output=min_dc_output,
             saturation_decay_factor=saturation_decay_factor,
             device_id=device_id or "",

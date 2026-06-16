@@ -104,6 +104,7 @@ void BalancerConfig::clamp() {
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   efficiency_saturation_threshold =
       std::max(0.0, std::min(1.0, efficiency_saturation_threshold));
+  clamp_v(efficiency_demand_alpha, 0.01f, 1.0f);
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
   if (pace_base_step < 0.0f) pace_base_step = 0.0f;
   if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
@@ -1256,12 +1257,23 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
     return this->cache_result_;
   }
 
+  // Estimate household demand (|total_battery_power + grid_total| == true house
+  // load) and low-pass filter it so meter noise can't thrash the active-set size
+  // across the min_efficient_power threshold. The regulation loop still acts on
+  // the raw grid, so tracking is unaffected. Mirrors balancer.py.
   float total_battery_power = 0.0f;
   for (const auto &cid : this->priority_) {
     auto it = reports.find(cid);
     if (it != reports.end()) total_battery_power += it->second.power;
   }
-  const float abs_target = std::fabs(total_battery_power + grid_total);
+  const float raw_abs_target = std::fabs(total_battery_power + grid_total);
+  const float demand_alpha = cfg.efficiency_demand_alpha;
+  if (!this->demand_ema_.has_value() || demand_alpha >= 1.0f) {
+    this->demand_ema_ = raw_abs_target;
+  } else {
+    this->demand_ema_ = *this->demand_ema_ + demand_alpha * (raw_abs_target - *this->demand_ema_);
+  }
+  const float abs_target = *this->demand_ema_;
   const size_t n = this->priority_.size();
   const float per_consumer = (n > 0) ? abs_target / n : 0.0f;
 

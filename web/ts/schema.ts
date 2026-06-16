@@ -734,6 +734,7 @@ export const CT_EFFICIENCY: Field[] = [
   { key: "PROBE_MIN_POWER", ey: "probe_min_power", label: "Probe min power (W)", help: "Floor sent when probing a newly promoted battery. Default 80.", type: "number", placeholder: "80" },
   { key: "EFFICIENCY_FADE_ALPHA", ey: "efficiency_fade_alpha", label: "Fade alpha", help: "How fast the old battery fades after a successful probe. Default 0.15.", type: "number", placeholder: "0.15" },
   { key: "EFFICIENCY_SATURATION_THRESHOLD", ey: "efficiency_saturation_threshold", label: "Saturation swap threshold", help: "Swap out a battery that can't follow its target. Default 0.4; raise for slow meters.", type: "number", placeholder: "0.4" },
+  { key: "EFFICIENCY_DEMAND_ALPHA", ey: "efficiency_demand_alpha", label: "Demand smoothing", help: "Smooths the household-demand estimate that decides how many batteries stay active, so meter noise can't thrash a battery in and out of the pool (big drop in setpoint wear on a jittery load). Lower = smoother. Default 0.1; 1.0 = off (react to every reading).", type: "number", placeholder: "0.1" },
 ];
 
 export const CT_SATURATION: Field[] = [
