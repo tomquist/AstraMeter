@@ -236,7 +236,11 @@ def test_ct002_consumer_discovery_emits_no_connections_issue_438():
 
 def test_ct002_device_discovery_structure():
     topic, payload = build_ct002_device_discovery(
-        "astrameter", "dev1", "homeassistant", addon_slug="34dea19a_astrameter"
+        "astrameter",
+        "dev1",
+        "homeassistant",
+        addon_slug="34dea19a_astrameter",
+        efficiency_rotation=True,
     )
     _assert_discovery_structure(topic, payload)
     assert "AstraMeter" in payload["device"]["name"]
@@ -265,6 +269,24 @@ def test_ct002_device_discovery_structure():
     assert "command_topic" in btn
     assert "payload_press" in btn
     assert btn["entity_category"] == "config"
+
+
+def test_ct002_device_discovery_omits_force_rotation_without_efficiency():
+    """The Force Rotation button is only surfaced when efficiency rotation is
+    enabled (the default omits it — there's nothing to rotate)."""
+    _, default_payload = build_ct002_device_discovery(
+        "astrameter", "dev1", "homeassistant"
+    )
+    assert "force_rotation" not in default_payload["components"]
+    # The remaining device entities are unaffected.
+    assert "smooth_target" in default_payload["components"]
+    assert "active_control" in default_payload["components"]
+    assert "consumer_count" in default_payload["components"]
+
+    _, enabled_payload = build_ct002_device_discovery(
+        "astrameter", "dev1", "homeassistant", efficiency_rotation=True
+    )
+    assert "force_rotation" in enabled_payload["components"]
 
 
 def test_shelly_battery_discovery_structure():

@@ -631,6 +631,15 @@ class LoadBalancer:
         # meter noise from thrashing batteries in and out of the active pool.
         self._demand_ema: float | None = None
 
+    @property
+    def efficiency_rotation_enabled(self) -> bool:
+        """True when efficiency rotation is active (``min_efficient_power > 0``).
+
+        When disabled the balancer keeps every battery in the active pool, so
+        there is nothing to rotate and the "Force Rotation" control is a no-op.
+        """
+        return self._cfg.min_efficient_power > 0
+
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
         if state is None:

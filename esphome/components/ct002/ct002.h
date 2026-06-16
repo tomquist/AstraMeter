@@ -208,6 +208,13 @@ class CT002Component : public Component {
   void set_consumer_min_dc_output(const std::string &consumer_id, float value);
   void force_balancer_rotation();
 
+  // True when efficiency rotation is enabled (min_efficient_power > 0). Mirrors
+  // LoadBalancer.efficiency_rotation_enabled in the Python stack; used by
+  // mqtt_insights to decide whether to surface the Force Rotation button.
+  bool efficiency_rotation_enabled() const {
+    return this->balancer_cfg_.min_efficient_power > 0.0f;
+  }
+
   // Listener registration — mqtt_insights subscribes once at setup() to
   // be notified after every successful UDP poll-reply round trip. Allows
   // the insights component to push fresh state without polling.
