@@ -89,6 +89,14 @@ THROTTLE_INTERVAL = 0
 ## accelerating ramp from overshooting on meter latency. 0 disables pacing.
 # PACE_BASE_STEP = 30
 # PACE_MAX_STEP = 100
+## Steady-import trim (W): every Marstek firmware parks the grid a few watts to
+## the import side of zero in steady state (its input deadband won't chase a
+## small residual), leaving real load to be imported at the retail tariff. Once
+## the grid has held steady inside a small import band for a few polls (never
+## during a load step, so no added overshoot) this nudges the batteries to cover
+## it, recovering that self-consumption. Stays clear of a full/empty pack. 0
+## disables.
+# IMPORT_TRIM_W = 15
 
 ## --- DC battery keep-alive ---
 ## Applies per battery (independent of balancing — also relevant with a single

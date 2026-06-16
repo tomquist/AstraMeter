@@ -194,6 +194,7 @@ async def run_device(
         concentrate_deadband = cfg.getfloat(
             ct_section, "CONCENTRATE_DEADBAND", fallback=60.0
         )
+        import_trim_w = cfg.getfloat(ct_section, "IMPORT_TRIM_W", fallback=15.0)
         saturation_detection = cfg.getboolean(
             ct_section, "SATURATION_DETECTION", fallback=True
         )
@@ -283,6 +284,7 @@ async def run_device(
             osc_damp_threshold=osc_damp_threshold,
             grid_predict_trust=grid_predict_trust,
             concentrate_deadband=concentrate_deadband,
+            import_trim_w=import_trim_w,
             saturation_detection=saturation_detection,
             saturation_alpha=saturation_alpha,
             min_target_for_saturation=min_target_for_saturation,

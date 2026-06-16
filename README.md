@@ -317,6 +317,12 @@ All keys in this subsection go under the `[CT002]` or `[CT003]` section (they ar
   battery firmware ramp's first step and growing toward the max only while the
   battery demonstrably follows the command. Keeps the firmware's accelerating internal
   ramp from overshooting on meter latency. `PACE_BASE_STEP = 0` disables pacing.
+- **IMPORT_TRIM_W** (default 15 W) — Steady-import trim. Every Marstek firmware parks the
+  grid a few watts to the *import* side of zero in steady state (its input deadband won't
+  chase a small residual), leaving real household load to be imported at the retail tariff.
+  Once the grid has held steady inside a small import band for a few polls — never during a
+  load step, so it adds no overshoot — the batteries are nudged to cover it, recovering that
+  self-consumption; it stays clear of a full/empty pack. `IMPORT_TRIM_W = 0` disables it.
 
 *DC battery keep-alive — applies to each DC-only battery on its own (also with a
 single battery, independent of balancing):*

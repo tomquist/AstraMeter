@@ -122,6 +122,10 @@ class PyDriver:
             # pace pair; absent = BalancerConfig default, matching the C++ harness).
             if len(parts) > 12:
                 pace_kwargs["concentrate_deadband"] = float(parts[12])
+            # Optional trailing steady-import trim (after concentration; absent =
+            # disabled so existing fixtures keep their pre-trim behaviour).
+            if len(parts) > 13:
+                pace_kwargs["import_trim_w"] = float(parts[13])
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
@@ -343,6 +347,34 @@ def _scenario_min_dc_output() -> list[str]:
     return lines
 
 
+def _scenario_import_trim() -> list[str]:
+    """Hold a steady small grid import for many polls so the steady-import trim
+    engages (dwell crosses IMPORT_TRIM_DWELL), then drop into export so the dwell
+    resets — both branches must match between the Python and C++ balancers."""
+    # Single Venus, fair on, pacing on, concentration off (0), trim = 15.
+    lines = ["cfg 1 0 900 0.4 0.15 20 90 1 0 30 100 0 15", "clock 2000"]
+    pool = [_report("a", "A", 0, "HMG-50")]
+    # A small import that jitters every poll (so each reading is a *fresh* sample,
+    # which the trim requires) but stays well inside the trim band, long enough to
+    # cross the dwell threshold and keep firing.
+    for i in range(14):
+        lines.append(_target("a", pool, grid=50 + (i % 5) * 6))
+        lines.append("last a")
+        lines.append("intent a")
+        lines.append("advance 1")
+    # Export resets the dwell; the trim must go silent.
+    for i in range(4):
+        lines.append(_target("a", pool, grid=-200 - i))
+        lines.append("last a")
+        lines.append("advance 1")
+    return lines
+
+
+def test_parity_import_trim(harness: Path) -> None:
+    lines = _scenario_import_trim()
+    _compare("import_trim", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
 def test_parity_min_dc_output(harness: Path) -> None:
     lines = _scenario_min_dc_output()
     _compare("min_dc_output", lines, _run_cpp(harness, lines), _run_py(lines))
@@ -381,9 +413,20 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     if conc is not None and not pace:
         pace = " 50 200"
     conc_tok = f" {conc}" if conc is not None else ""
+    # Steady-import trim is the next trailing token (after concentration), so it
+    # needs both the pace pair and a concentration token present; force them when
+    # exercising it.
+    trim = rng.choice([0, 0, 15, 30])
+    trim_tok = ""
+    if trim:
+        if not pace:
+            pace = " 50 200"
+        if not conc_tok:
+            conc_tok = " 0"
+        trim_tok = f" {trim}"
     lines = [
         f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} "
-        f"{min_dc}{pace}{conc_tok}",
+        f"{min_dc}{pace}{conc_tok}{trim_tok}",
         f"clock {rng.randint(1000, 9000)}",
     ]
     n_consumers = rng.randint(1, 3)

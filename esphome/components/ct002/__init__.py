@@ -111,6 +111,7 @@ CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
 CONF_GRID_PREDICT_TRUST = "grid_predict_trust"
 CONF_CONCENTRATE_DEADBAND = "concentrate_deadband"
+CONF_IMPORT_TRIM_W = "import_trim_w"
 
 # Saturation tracker sub-block
 CONF_SATURATION = "saturation"
@@ -226,6 +227,7 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.0, max=1.0
         ),
         cv.Optional(CONF_CONCENTRATE_DEADBAND, default=60.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_IMPORT_TRIM_W, default=15.0): cv.float_range(min=0.0),
     }
 )
 
@@ -470,6 +472,7 @@ async def to_code(config):
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
         ("grid_predict_trust", bal.get(CONF_GRID_PREDICT_TRUST, 0.5)),
         ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
+        ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
     )
     cg.add(var.set_balancer_config(bcfg))
 
