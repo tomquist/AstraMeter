@@ -812,6 +812,23 @@ class TestConcentrateDeadband:
         reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 200}}
         assert self._target(lb, "a", reports, 30) == pytest.approx(30.0, abs=1.0)
 
+    def test_zero_weight_battery_not_designated(self):
+        lb = self._lb(concentrate_deadband=60)
+        # ``a`` is the most-active (200 W) but configured to take no share
+        # (weight 0). Without excluding it from candidates it would be picked as
+        # designee and swallow the whole correction; instead ``b`` (next most
+        # active among the weighted batteries) takes it and ``a`` stays at 0.
+        # Needs a third battery so the candidate set still has >1 after dropping
+        # ``a`` (otherwise concentration wouldn't fire at all).
+        reports = {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 200, "weight": 0.0},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 100},
+            "c": {"device_type": "HMG-50", "phase": "A", "power": 50},
+        }
+        assert self._target(lb, "a", reports, 30) == pytest.approx(0.0, abs=1e-6)
+        assert self._target(lb, "b", reports, 30) == pytest.approx(30.0, abs=1.0)
+        assert self._target(lb, "c", reports, 30) == pytest.approx(0.0, abs=1e-6)
+
 
 class TestDampOscillation:
     """Oscillation-gated residual damping (issue #473) — mirrored by the C++

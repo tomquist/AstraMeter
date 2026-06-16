@@ -93,7 +93,7 @@ int main() {
         cfg.pace_base_step = pace_base;
         cfg.pace_max_step = pace_max;
         // Optional trailing deadband-concentration threshold (absent = keep
-        // the struct default of 0 = disabled).
+        // the BalancerConfig struct default).
         float conc = 0.0f;
         if (in >> conc) cfg.concentrate_deadband = conc;
       }

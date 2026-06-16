@@ -887,6 +887,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
       if (charge_blind.count(kv.first)) continue;
       auto ep = eff_part.find(kv.first);
       if (ep == eff_part.end() || ep->second <= 0.1f) continue;
+      if (kv.second.weight <= 0.0f) continue;  // explicit zero share takes none
       conc_ids.push_back(&kv.first);
       if (consumer_id && kv.first == *consumer_id) consumer_in_conc = true;
       const std::string ph = kv.second.phase.empty() ? "A" : to_upper(kv.second.phase);

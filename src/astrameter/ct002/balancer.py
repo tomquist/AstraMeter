@@ -1406,15 +1406,18 @@ class LoadBalancer:
         #
         # Only over *participating* batteries (not charge-blind / faded-out — a
         # charge-blind B2500 passing PV through is the most-active unit but can't
-        # absorb), and only when they're all on the *same* phase (``control_grid``
-        # sums phases, so concentrating it on a multi-phase pool over-corrects one
-        # battery's phase and makes it hunt).  Gated on ``fair_distribution``: it
-        # is a fair-share strategy, so a pool that opts out of fair distribution
-        # keeps the plain even split.
+        # absorb — and not explicitly zero-weighted, which the operator has asked
+        # to take no share), and only when they're all on the *same* phase
+        # (``control_grid`` sums phases, so concentrating it on a multi-phase pool
+        # over-corrects one battery's phase and makes it hunt).  Gated on
+        # ``fair_distribution``: it is a fair-share strategy, so a pool that opts
+        # out of fair distribution keeps the plain even split.
         conc_ids = [
             cid
             for cid in reports
-            if cid not in charge_blind and eff_part.get(cid, 0.0) > 0.1
+            if cid not in charge_blind
+            and eff_part.get(cid, 0.0) > 0.1
+            and _report_weight(reports[cid]) > 0.0
         ]
         concentrate = False
         if (

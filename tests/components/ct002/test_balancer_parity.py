@@ -119,7 +119,7 @@ class PyDriver:
                 else {}
             )
             # Optional trailing deadband-concentration threshold (after the
-            # pace pair; absent = disabled).
+            # pace pair; absent = BalancerConfig default, matching the C++ harness).
             if len(parts) > 12:
                 pace_kwargs["concentrate_deadband"] = float(parts[12])
             cfg = BalancerConfig(
@@ -374,11 +374,13 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     # Vary ramp pacing too: off, defaults (omitted), constant cap, tight cap.
     pace = rng.choice(["", "", " 0 0", " 50 200", " 50 50", " 30 120"])
     # Deadband concentration is the trailing cfg token, so it needs an explicit
-    # pace pair before it; force one when exercising it.
-    conc = rng.choice([0, 0, 40, 60])
-    if conc and not pace:
+    # pace pair before it; force one when emitting it. ``None`` omits the token
+    # (exercises the default), while an explicit ``0`` exercises the disabled
+    # (plain-split) path — distinct now that the default is on.
+    conc = rng.choice([None, None, 0, 40, 60])
+    if conc is not None and not pace:
         pace = " 50 200"
-    conc_tok = f" {conc}" if conc else ""
+    conc_tok = f" {conc}" if conc is not None else ""
     lines = [
         f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} "
         f"{min_dc}{pace}{conc_tok}",
