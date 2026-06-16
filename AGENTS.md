@@ -64,7 +64,7 @@ not fused with an arbitrary weight).
 
 ## Changelog
 
-For user-facing work on a branch, keep **one bullet under `## Next`** that summarizes the **overall** outcome of that branch. **Add** it when you first document the change; on **later iterations** on the same branch, **edit that same bullet** if the scope or wording shifts—do **not** append extra bullets for each follow-up. Skip `CHANGELOG.md` entirely when nothing users would notice changes (refactors, tests-only, etc.).
+For user-facing work on a branch, contribute **exactly one bullet under `## Next`** that summarizes the **overall** outcome of *that branch*. This is a *per-branch* rule: `## Next` accumulates **one bullet per branch/PR**, so it normally holds **several** bullets at once (one for each change heading into the next release) — multiple bullets under `## Next` are correct and expected, never a violation. What you must not do is author **more than one** bullet for **your own** branch. **Add** your branch's single bullet when you first document the change; on **later iterations** on the same branch, **edit that same bullet** if the scope or wording shifts—do **not** append extra bullets for each follow-up. Skip `CHANGELOG.md` entirely when nothing users would notice changes (refactors, tests-only, etc.).
 
 Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. If the branch bullet already states the high-level theme, leave it unless the **user-visible** story changes.
 
