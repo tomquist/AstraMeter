@@ -71,57 +71,29 @@ def _report_weight(report: dict) -> float:
     return 1.0 if weight is None else float(weight)
 
 
-# Ramp pacing (issue #458): the battery only grows its own ramp gain while
-# an error persists, and its spike filter ignores reading jumps over 50 W
-# whose own output moved less than 20 W.  We mirror that: the pacing cap
-# doubles per reference second, and only when the battery's reported output
-# moved at least this far in the commanded direction since the previous
-# paced poll (a non-moving battery — startup delay, saturation — keeps the
-# cap at the base step, which also keeps successive readings inside the
-# spike filter).
-#
-# The threshold must sit BELOW the battery firmware's guaranteed minimum
-# step on a *constant* reading (issue #469 follow-up): the HMG ramp law
-# steps ``sqrt(g² - ref²) + 10`` per cycle, and when its internal ``ref``
-# happens to capture the reading itself (a coin flip on the sign of the
-# last pre-step noise sample) the step collapses to exactly 10 W.  With a
-# 20 W threshold that locked the loop at 10 W/poll for an entire step
-# response — the cap never grew because the battery "wasn't tracking", and
-# the battery never accelerated because the paced reading never rose.  5 W
-# still rejects a genuinely stalled battery (startup delay, saturation:
-# 0 W movement) while letting the firmware's worst-case crawl bootstrap
-# the cap.
+# Ramp pacing (issue #458): the pace cap only grows once the battery's reported
+# output has moved at least this far in the commanded direction since the last
+# paced poll; a non-moving battery (startup delay, saturation) keeps the base
+# step. The threshold sits below the firmware's worst-case 10 W step on a
+# constant reading (issue #469) — at 20 W the loop locked at 10 W/poll for a
+# whole step response — while still rejecting a genuinely stalled battery.
 PACE_TRACKING_DELTA_W = 5.0
 PACE_GROWTH_FACTOR = 2.0
-# Reference poll interval the pace caps are defined against: the configured
-# ``pace_base_step`` / ``pace_max_step`` are watts per reference second, and
-# the per-poll clamp scales with the consumer's observed inter-poll time so
-# that fast pollers can't integrate the same per-poll reading into a higher
-# W/s slew (a 0.45 s V3 given 200 W per poll moves ~440 W/s against a meter
-# that refreshes once a second — the dominant overshoot source in the
-# mixed-cadence scenarios).  The scale is clamped at 1.0: slow pollers keep
-# the per-poll cap (their staleness grows with their interval, so widening
-# the clamp proportionally would re-introduce the stale-feedback overshoot
-# pacing exists to bound).
+# Reference poll interval the pace caps are defined against: pace_base_step /
+# pace_max_step are watts per reference second, scaled by the consumer's observed
+# inter-poll time so a fast poller can't integrate the same per-poll reading into
+# a higher slew. Clamped at 1.0 so slow pollers keep the per-poll cap (widening it
+# would re-introduce the stale-feedback overshoot pacing exists to bound).
 PACE_REFERENCE_DT = 1.0
 
 # Adaptive grid-state predictor (see BalancerConfig.grid_predict_trust and
-# LoadBalancer._predict_control_grid).  The meter trust is bounded to
-# ``[PRED_TRUST_MIN, PRED_TRUST_MAX]`` and adapted per fresh meter sample whose
-# innovation clears ``PRED_INNOVATION_GATE_W`` (above the steady-state
-# meter-noise floor, so random sign flips at the null don't adapt it).  The
-# raise is an *additive* step so trust only climbs under a *sustained*
-# same-sign innovation run — the signature of a genuine lasting disturbance (a
-# cloud, a big load step) — while the shrink is a *multiplicative* cut so a
-# single sign flip (the signature of latency-driven hunting, or an oscillatory
-# external load) collapses it.  This asymmetry is what lets one law both
-# track real steps fast and stay rock-steady against a hunting load, with no
-# per-meter tuning.  The band is widened toward a near-fully-trusting ceiling
-# with a brisk raise (so a real step is caught in a couple of fresh samples,
-# recovering the self-consumption energy a slower ramp leaves on the grid),
-# paired with a softer shrink that still halves trust on a hunt — the
-# steering-evaluation suite tunes the pair against the ramp-pacing/oscillation
-# damping defaults below.
+# LoadBalancer._predict_control_grid). Meter trust is bounded to
+# [PRED_TRUST_MIN, PRED_TRUST_MAX] and adapted per fresh sample whose innovation
+# clears PRED_INNOVATION_GATE_W (above the noise floor). The raise is additive, so
+# trust only climbs under a sustained same-sign innovation run (a real step); the
+# shrink is multiplicative, so a single sign flip (latency-driven hunting) collapses
+# it. That asymmetry tracks real steps fast yet stays steady against a hunting load
+# with no per-meter tuning; the steering-evaluation suite tunes the pair.
 PRED_TRUST_MIN = 0.15
 PRED_TRUST_MAX = 0.9
 PRED_TRUST_RAISE_STEP = 0.2
@@ -129,17 +101,13 @@ PRED_TRUST_SHRINK = 0.5
 PRED_INNOVATION_GATE_W = 40.0
 
 # Steady-import trim (see BalancerConfig.import_trim_w and
-# LoadBalancer._apply_import_trim).  The trim only engages once the predicted
-# grid has held inside the small-import band ``(0, IMPORT_TRIM_GATE_W)`` for
-# ``IMPORT_TRIM_DWELL`` consecutive *fresh* meter samples — long enough to be a
-# genuine steady state rather than a load step on its final approach to zero (and
-# requiring fresh feedback, so a stale meter can't wind it), so the trim never
-# deepens post-step overshoot.  The gate sits above the firmware deadband / hold
-# window (so a healthy battery leaving a few watts of residual import is caught)
-# but well below the large-disturbance regime (so a saturated/empty battery,
-# which leaves an import larger than the gate, is left alone).  Tuned with the
-# steering-evaluation suite against the ramp-pacing / oscillation-damping
-# defaults above.
+# LoadBalancer._apply_import_trim). The trim engages only once the predicted grid
+# has held inside the small-import band (0, IMPORT_TRIM_GATE_W) for
+# IMPORT_TRIM_DWELL consecutive fresh samples — long enough to be a genuine steady
+# state, not a load step approaching zero, and never on a stale meter. The gate
+# sits above the firmware deadband/hold window (so a few watts of residual import
+# is caught) but below the large-disturbance regime (so a saturated/empty battery,
+# which leaves a larger import, is left alone).
 IMPORT_TRIM_GATE_W = 120.0
 IMPORT_TRIM_DWELL = 6
 
@@ -269,40 +237,31 @@ class BalancerConfig:
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
-    # EMA factor for the household-demand estimate that decides how many
-    # batteries stay active (see ``_compute_efficiency_deprioritized``).  The
-    # demand is read from the noisy meter, so without smoothing a jittery load
-    # crosses the ``min_efficient_power`` threshold every few polls and thrashes
-    # a battery active/deprioritized — a fade transition and probe handoff each
-    # time, huge setpoint churn for no tracking benefit.  Low-pass filtering the
-    # estimate makes the active-set decision follow *sustained* demand instead;
-    # the regulation loop still acts on the raw grid, so tracking is unaffected.
-    # ``0.1`` (default) cuts worst-case battery travel by ~6x in the noisy
-    # multi-battery efficiency scenario; ``1.0`` disables the smoothing (react to
-    # every sample, the pre-#494 behaviour).
+    # EMA factor for the household-demand estimate that decides how many batteries
+    # stay active (see ``_compute_efficiency_deprioritized``). The demand is read
+    # from the noisy meter, so without smoothing a jittery load crosses the
+    # ``min_efficient_power`` threshold every few polls and thrashes a battery
+    # active/deprioritized — a fade transition and probe handoff each time, for no
+    # tracking benefit. Low-pass filtering makes the active-set decision follow
+    # *sustained* demand; the regulation loop still acts on the raw grid, so
+    # tracking is unaffected. ``1.0`` disables the smoothing (react to every sample).
     efficiency_demand_alpha: float = 0.1
     # Minimum net discharge (W) to hold an external-inverter DC battery at so
     # its inverter doesn't switch off at 0 W and sleep.  0 disables.  Only
     # applied to batteries selected by ``_needs_dc_output_floor`` (B2500
     # family) unless overridden per-device.  See issue #425.
     min_dc_output: float = 0
-    # Ramp pacing for the auto path (issue #458).  The battery firmware runs
-    # its own gain-scheduled ramp on the reading we send, stepping at most
-    # ``min(GAIN[ramp], |reading|)`` per poll, where GAIN accelerates from
-    # ~50 W to ~400 W while an error persists.  With one or two polls of
-    # feedback lag an uncapped reading lets that accelerated ramp overshoot
-    # by hundreds of watts.  Pacing clamps each consumer's sent reading to a
-    # per-consumer cap that starts at ``pace_base_step`` (the firmware's
-    # first-step gain), grows x2 toward ``pace_max_step`` only while the
-    # battery is observed tracking the command, follows the error back down,
-    # and resets on direction reversal.  ``pace_base_step = 0`` disables.
-    # Defaults (30/100) were tuned with the steering evaluation suite
-    # (``python -m astrameter.simulator.evaluation``): the tighter caps trade a
-    # little settling speed for a large drop in worst-case overshoot and battery
-    # travel across the scenario matrix (the faster grid-state predictor below
-    # keeps real-step reaction quick despite the lower cap).  A base step below
-    # ~30 W or a max below ~80 W starts re-introducing near-null hunting (the
-    # grid-p2p guardrail regresses), so the caps are held just above that.
+    # Ramp pacing for the auto path (issue #458). The battery firmware runs its
+    # own gain-scheduled ramp on the reading we send (stepping up to ~400 W/poll
+    # once an error persists); with a poll or two of feedback lag an uncapped
+    # reading lets that ramp overshoot by hundreds of watts. Pacing clamps each
+    # consumer's sent reading to a per-consumer cap that starts at
+    # ``pace_base_step`` (the firmware's first-step gain), grows x2 toward
+    # ``pace_max_step`` only while the battery is observed tracking the command,
+    # follows the error back down, and resets on direction reversal. The defaults
+    # trade a little settling speed for much lower worst-case overshoot/travel (the
+    # grid-state predictor below keeps real-step reaction quick despite the lower
+    # cap). ``pace_base_step = 0`` disables.
     pace_base_step: float = 30
     pace_max_step: float = 100
     # Oscillation-gated damping (issue #473).  Under meter latency the gain-1
@@ -322,51 +281,37 @@ class BalancerConfig:
     # through at full gain and reacts immediately.  Keeps the damper from
     # bleeding a real step response just because the loop was hunting before it.
     osc_damp_threshold: float = 300
-    # Adaptive grid-state predictor.  The controller acts on a *predicted* grid
+    # Adaptive grid-state predictor. The controller acts on a *predicted* grid
     # rather than the raw meter: every poll the prediction is advanced by the
-    # pool's own freshly-reported output change, and on each fresh meter sample
-    # it is pulled toward the reading by an *adaptive* trust.  The battery
-    # reports are fresher than the grid meter (which is delayed by its poll
-    # interval plus transport/measurement latency), so crediting the pool's
-    # just-delivered output reconstructs the grid the meter has not yet shown —
-    # the controller stops re-issuing a correction already in flight, the
-    # dominant source of overshoot and latency-driven limit-cycling.  Because it
-    # advances by the *reported* (actual) output, battery non-ideality (ramp,
-    # deadband, saturation) is captured for free.  The trust is learned online
-    # from the innovation's sign pattern (see ``_predict_control_grid``), so the
-    # loop self-tunes to each meter's latency instead of the user configuring a
-    # throttle/pacing per powermeter.  ``0`` disables it (act on the raw meter);
-    # any positive value only *seeds* the self-adapting trust, so the exact
-    # value barely matters — ``0.5`` is a neutral default.
+    # pool's own freshly-reported output change, and on each fresh meter sample it
+    # is pulled toward the reading by an *adaptive* trust. Battery reports are
+    # fresher than the (poll- and latency-delayed) grid meter, so crediting the
+    # pool's just-delivered output reconstructs the grid the meter has not yet
+    # shown — the controller stops re-issuing a correction already in flight, the
+    # dominant source of overshoot and latency-driven limit-cycling. The trust is
+    # learned online from the innovation's sign pattern (see
+    # ``_predict_control_grid``), so the loop self-tunes to each meter's latency.
+    # ``0`` disables it (act on the raw meter); a positive value only *seeds* the
+    # self-adapting trust, so ``0.5`` is a neutral default.
     grid_predict_trust: float = 0.5
-    # Deadband concentration (opt-in).  Near steady state a small grid error
-    # split N ways can leave each battery's share below the firmware's ~20 W
-    # input deadband, so none of them correct and the pool tolerates ~Nx the
-    # residual offset a single battery would.  When the absolute (predicted) grid
-    # error is below this threshold and more than one battery is active, the whole
+    # Deadband concentration (opt-in). Near steady state a small grid error split
+    # N ways can leave each battery's share below the firmware's ~20 W input
+    # deadband, so none of them correct and the pool tolerates ~Nx the residual a
+    # single battery would. When the absolute (predicted) grid error is below this
+    # threshold and more than one battery is active on the same phase, the whole
     # correction is handed to the single most-active battery so it clears its
-    # deadband — cutting steady-state avoidable grid import/export at the cost of
-    # more setpoint churn / oscillation on that battery.  Only fires when every
-    # active battery is on the same phase (see ``_compute_auto_target``).  ``60``
-    # (default) cuts steady-state avoidable import/export ~4% across the
-    # evaluation suite (up to ~18% in mixed-cadence / solar / B2500 scenarios)
-    # while *also* lowering oscillation and battery travel in the aggregate; set
-    # ``0`` to disable.
+    # deadband — cutting steady-state avoidable import/export at the cost of more
+    # setpoint churn on that battery (see ``_compute_auto_target``). ``0`` disables.
     concentrate_deadband: float = 60.0
-    # Steady-import trim (W).  Every Marstek firmware parks the grid a few watts
-    # to the *import* side of zero in steady state (deadband + small-import
-    # hold), leaving real household load the battery could have supplied to be
-    # imported at the retail tariff — missed self-consumption, every hour near
-    # steady state.  When the predicted grid has held inside a small-import band
-    # for a few consecutive polls (a genuine steady state, not a transient), the
-    # control grid is nudged up by this many watts so the firmware discharges to
-    # cover that residual; the dwell requirement keeps it inert during load steps
-    # (so it never deepens overshoot), and the band gate keeps it clear of a
-    # saturated/empty pack (which leaves a larger import).  ``15`` (default) cuts
-    # the headline cost-regret metric ~6% across the evaluation suite (most of it
-    # on the steady-tracking solar / real-load scenarios) with no do-no-harm
-    # guardrail regressions; set ``0`` to disable.  See
-    # ``LoadBalancer._apply_import_trim``.
+    # Steady-import trim (W). Every Marstek firmware parks the grid a few watts to
+    # the *import* side of zero in steady state (deadband + small-import hold),
+    # leaving load the battery could have supplied to be imported at the retail
+    # tariff. When the predicted grid has held inside a small-import band for a few
+    # consecutive polls (a genuine steady state, not a transient), the control grid
+    # is nudged up by this many watts so the firmware discharges to cover that
+    # residual. The dwell keeps it inert during load steps (never deepening
+    # overshoot) and the band gate keeps it clear of a saturated/empty pack. ``0``
+    # disables. See ``LoadBalancer._apply_import_trim``.
     import_trim_w: float = 15.0
 
     def __post_init__(self) -> None:
@@ -1457,23 +1402,15 @@ class LoadBalancer:
         )
 
         cfg = self._cfg
-        # Deadband concentration (``concentrate_deadband``): a small grid error
-        # split N ways can drop each battery's share below the firmware's ~20 W
-        # input deadband, so none move and the pool tolerates ~Nx the offset.
-        # Hand the whole correction to the most-active battery (deterministic,
-        # with an id tiebreak so it matches the C++ port) so it clears the
-        # deadband; bypass balance correction for this tick (the standing balance
-        # loop re-levels share once the error grows past the threshold).  Acts on
-        # ``control_grid`` like the rest of the residual loop.
-        #
-        # Only over *participating* batteries (not charge-blind / faded-out — a
-        # charge-blind B2500 passing PV through is the most-active unit but can't
-        # absorb — and not explicitly zero-weighted, which the operator has asked
-        # to take no share), and only when they're all on the *same* phase
-        # (``control_grid`` sums phases, so concentrating it on a multi-phase pool
-        # over-corrects one battery's phase and makes it hunt).  Gated on
-        # ``fair_distribution``: it is a fair-share strategy, so a pool that opts
-        # out of fair distribution keeps the plain even split.
+        # Deadband concentration (``concentrate_deadband``): hand the whole small
+        # correction to the most-active battery (deterministic id tiebreak, to
+        # match the C++ port) so it clears the firmware deadband, and bypass
+        # balance correction for this tick. Restricted to *participating*
+        # batteries (a charge-blind B2500 passing PV is most-active but can't
+        # absorb; zero-weight units were asked to take no share) all on the *same*
+        # phase (``control_grid`` sums phases, so concentrating across phases makes
+        # one battery hunt). Gated on ``fair_distribution``, being a fair-share
+        # strategy.
         conc_ids = [
             cid
             for cid in reports
@@ -1543,58 +1480,27 @@ class LoadBalancer:
     ) -> float:
         """Return the grid power the control path should act on.
 
-        An online grid-state observer that compensates for meter latency
-        *without* per-meter tuning — the whole point, since the same setting
-        then works whether the meter refreshes once a second or pushes a
-        reading delayed by several seconds, and the user no longer has to hunt
-        for the right throttle/pacing for their powermeter.
-
-        Two signals observe the same physical grid at different delays: the
-        batteries' self-reported output (fresh — as fresh as each battery's
-        poll) and the grid meter (latent — its refresh interval plus
-        transport/measurement delay).  The observer fuses them:
+        An online grid-state observer that compensates for meter latency without
+        per-meter tuning. It fuses two views of the same grid at different delays:
 
         * **Output crediting** — every call, advance the estimate by the pool's
-          actual reported output change ``Δu`` (grid moves opposite to net
-          output: more discharge ⇒ less import).  A correction is credited the
-          moment the battery delivers it, long before the meter shows it, so the
-          loop never re-issues (and winds up) a correction that is already in
-          flight — the double-count that makes a latent loop overshoot and
-          limit-cycle.  Between two meter refreshes the estimate falls as the
-          battery ramps, so each poll commands only the *remaining* error.
-        * **Meter correction** — on a genuinely fresh reading, pull the estimate
-          toward the meter by the *adaptive* trust.  This is the only channel by
-          which disturbances the pool did not cause (load steps, clouds, PV
-          ramps) enter the estimate.
+          reported output change (grid moves opposite to net output). A correction
+          is credited the moment the battery delivers it, before the meter shows
+          it, so the loop never re-issues a correction already in flight — the
+          double-count that makes a latent loop overshoot and limit-cycle.
+        * **Meter correction** — on a fresh reading, pull the estimate toward the
+          meter by the *adaptive* trust. This is the only channel by which
+          disturbances the pool did not cause (load steps, clouds) enter.
 
-        The trust is the adaptive element, and it resolves the one real tension:
-        a high trust tracks disturbance steps fast but lets meter latency drive
-        overshoot/hunting back in; a low trust is rock-steady but lags real
-        steps.  The right value is not a property of the install to be
-        configured — it depends on what the grid is doing *right now*, so the
-        loop learns it from the **innovation** ``meter - estimate`` on each
-        fresh sample:
+        The trust is learned from the **innovation** ``meter - estimate``: same-sign
+        runs (the estimate lagging a real, sustained disturbance) raise it; sign
+        flips (hunting on stale feedback) shrink it hard. Only innovations above
+        ``PRED_INNOVATION_GATE_W`` adapt it, so steady-state noise doesn't.
 
-        * Consecutive innovations of the *same* sign mean the estimate is
-          lagging a genuine, sustained disturbance — raise the trust to catch up
-          (a single big step ramps the trust up over a few samples, then the
-          innovation collapses and the trust stops rising).
-        * Innovations that *flip* sign mean the loop is overshooting / hunting
-          on stale feedback — shrink the trust hard so the fast output-credited
-          prediction dominates and the hunt is starved of the gain that sustains
-          it.
-
-        Only innovations above a small magnitude gate adapt the trust, so
-        steady-state meter noise (whose sign flips at random) neither collapses
-        nor inflates it.
-
-        Returns the raw meter total unchanged when disabled
-        (``grid_predict_trust <= 0``).  ``grid_predict_trust`` seeds the initial
-        trust; the loop adapts away from it within
-        ``[PRED_TRUST_MIN, PRED_TRUST_MAX]``, so its exact value barely matters
-        — that insensitivity is the point.  The prediction uses the auto-pool
-        reports, so manual/inactive batteries and the house load enter only via
-        the innovation, like any other disturbance the pool did not command.
+        Returns the raw total when disabled (``grid_predict_trust <= 0``); a
+        positive value only seeds the trust within
+        ``[PRED_TRUST_MIN, PRED_TRUST_MAX]``. Uses the auto-pool reports, so
+        manual/inactive batteries and house load enter only via the innovation.
         """
         if self._cfg.grid_predict_trust <= 0.0:
             return grid_total
@@ -1629,36 +1535,19 @@ class LoadBalancer:
     def _apply_import_trim(self, control_grid: float, fresh: bool) -> float:
         """Cover the small residual grid *import* the battery firmware leaves.
 
-        Every Marstek firmware steering law parks the grid a few watts to the
-        *import* side of zero in steady state: the HMG ramp holds any residual
-        ``0 <= g < 10`` (the small-import hold) and won't act inside its ±20 W
-        deadband, while the Venus-D integrator carries a ``-5 W`` bias.  The pool
-        therefore settles importing a handful of watts of *real* household load
-        the battery had the headroom and charge to supply — missed
-        self-consumption, paid at the retail tariff (~4x the feed-in tariff the
-        export side earns), every hour the house sits near steady state.
+        Every Marstek firmware parks the grid a few watts to the *import* side of
+        zero in steady state (the HMG ramp's small-import hold and ±20 W deadband,
+        the Venus-D integrator's -5 W bias), so the pool settles importing real
+        load it had the headroom to supply — missed self-consumption at the retail
+        tariff. Once the predicted grid has sat inside ``(0, IMPORT_TRIM_GATE_W)``
+        for :data:`IMPORT_TRIM_DWELL` consecutive fresh samples (a genuine steady
+        state, not a step approaching zero), add ``import_trim_w`` so the firmware
+        discharges to cover it. The dwell keeps it inert during transients; the
+        gate keeps it clear of a saturated/empty pack (whose import exceeds it).
 
-        Once the predicted grid has sat inside the small-import band
-        ``(0, IMPORT_TRIM_GATE_W)`` for :data:`IMPORT_TRIM_DWELL` consecutive
-        *fresh* meter samples — a *genuine* steady state, not a load step passing
-        through on its way to zero — add ``import_trim_w`` to the control grid so
-        the firmware
-        discharges enough to cover that residual.  The dwell requirement is what
-        keeps the trim inert during transients: a step's final approach crosses
-        the band in one or two polls and never accumulates the dwell, so the trim
-        never deepens post-step overshoot (the firmware's deadband, not the trim,
-        bounds the steady state it settles into).  The magnitude gate keeps it out
-        of large-disturbance handling, and — because a saturated/empty battery
-        leaves an import *larger* than the gate — out of the way of genuine
-        power/charge limits, so it never pushes a depleting pack harder.
-
-        Because the trim integrates a steady-state bias, it acts only on a *fresh*
-        meter sample (``fresh``): a frozen / stale meter offers no feedback to
-        bound it, so the dwell neither advances nor fires until a new reading
-        arrives — the grid-state predictor keeps the loop balanced in the
-        meantime (e.g. through a blind probe handoff).
-
-        ``import_trim_w = 0`` disables it (returns the grid unchanged).
+        Acts only on a *fresh* sample — a stale meter offers no feedback to bound
+        it, so the dwell neither advances nor fires until a new reading arrives.
+        ``import_trim_w = 0`` disables it.
         """
         trim = self._cfg.import_trim_w
         if trim <= 0 or not fresh:
@@ -1919,17 +1808,11 @@ class LoadBalancer:
         if cache_key == self._cache_sample:
             return self._cache_result or {}
 
-        # Estimate household demand. The active-set size is decided from
-        # ``|total_battery_power + grid_total|`` — which equals the true house
-        # load — but that is computed from the *raw* (noisy) meter, so under a
-        # jittery load it swings across the ``min_efficient_power`` threshold
-        # every few polls, flipping a battery active/deprioritized and dragging
-        # the pool through a fade transition (and probe handoff) each time —
-        # pathological setpoint churn for no tracking benefit (a battery can't
-        # follow meter noise anyway). The active-set decision should follow
-        # *sustained* demand, so the estimate is low-pass filtered by
-        # ``efficiency_demand_alpha`` before the slot math below; the regulation
-        # loop still acts on the unsmoothed grid, so tracking is unaffected.
+        # Estimate household demand (``|total_battery_power + grid_total|`` == the
+        # true house load) and low-pass filter it by ``efficiency_demand_alpha`` so
+        # the active-set decision below follows *sustained* demand rather than meter
+        # noise (see the config field). The regulation loop still acts on the
+        # unsmoothed grid, so tracking is unaffected.
         total_battery_power = sum(
             parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
         )

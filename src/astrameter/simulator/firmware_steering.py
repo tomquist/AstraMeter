@@ -157,24 +157,13 @@ class FirmwareSteeringController:
     def _gate(self, g: int, out: float) -> bool:
         """The firmware's pre-ramp conditioning gate; ``True`` ⇒ run the ramp.
 
-        Mirrors the HMG-50 firmware's pre-ramp conditioning bit-for-bit. Three
-        conditions hold the setpoint, in this order:
-
-        - **>50 W spike filter** — a grid jump over 50 W from the previous
-          sample that the battery's own output change (< 20 W) does not explain
-          is treated as a transient and skipped. There is **no** one-shot: the
-          baseline advances every cycle, so a *sustained* drift whose own
-          output never moves keeps being skipped, while a real load step is
-          picked up on the next sample once the jump is in the baseline.
-        - **±20 W deadband** — ``abs(g) < 20`` with the battery's own output
-          below 1 W (a **signed** test: a charging battery reads negative and
-          is also held) parks the setpoint.
-        - **small-import hold** — a residual import of ``0 <= g < 10`` is held
-          even while the battery is producing, so it doesn't chase the last
-          few watts of import.
-
-        ``prev_g`` / ``prev_out`` are updated on every call, matching the
-        firmware (which stores them before any of the hold branches).
+        Mirrors the HMG-50 firmware bit-for-bit. Three conditions hold the
+        setpoint: a >50 W spike filter, a ±20 W deadband, and a small-import hold
+        (``0 <= g < 10``). The spike filter has **no** one-shot — the baseline
+        advances every cycle, so a sustained drift whose own output never moves
+        keeps being skipped, while a real step is picked up once it's in the
+        baseline. ``prev_g`` / ``prev_out`` are stored before any hold branch,
+        matching the firmware.
         """
         out_i = int(out)
         is_spike = (

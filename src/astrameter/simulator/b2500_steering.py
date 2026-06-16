@@ -9,18 +9,12 @@ Venus float gain table, ``sqrt`` step, or spike filter apply. It is documented i
 
 ``cmd`` is an internal command unit, not watts: the output the device drives is
 ``(cmd - 5) * 10 / 59``, so a ±100 ``cmd`` step moves the output by only ~17 W per
-cycle. The loop holds while the measured output power is within a ±10 W deadband
-of the setpoint, and otherwise nudges ``cmd`` by ±100 — a plain bounded
-integrator toward the setpoint.
+cycle. The loop holds while the measured output is within a ±10 W deadband of the
+setpoint, otherwise nudges ``cmd`` by ±100 — a bounded integrator.
 
-The setpoint is **incremental**: each cycle it is the current output plus 90% of
-the residual grid (``setpoint = output + 0.9 * grid``), so the loop integrates
-the grid toward zero (fixed point ``output = load``). A purely *proportional*
-``setpoint = 0.9 * grid`` would droop to ~47% of load and never null the grid;
-the device reaches full self-consumption because the firmware drives its output
-off an *accumulated* meter value. The ``0.9`` per-step gain and the regulator
-constants are firmware-extracted; the integral structure reproduces the device's
-observed grid-nulling behavior.
+The setpoint is **incremental** (``setpoint = output + 0.9 * grid``), so the loop
+integrates the grid toward zero (fixed point ``output = load``); a proportional
+``0.9 * grid`` would droop and never null it. The constants are firmware-extracted.
 
 SOC and temperature are handled by a *separate* BMS (charge-current derating,
 cell-voltage limits) and are **not** part of this steering loop.

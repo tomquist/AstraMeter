@@ -93,12 +93,9 @@ class BatterySimulator:
         self._steer_hi = float(self.max_charge_power)
         self._steer_lo = -float(self.max_discharge_power)
 
-        # The B2500 family (HMA/HMJ/HMK) is DC-coupled with no built-in inverter
-        # and no AC input: it steers its DC output into an external microinverter
-        # with a different integer hysteresis law instead of the Venus ramp. The
-        # unit has two DC output channels, each its own regulator running every
-        # cycle; the grid-derived demand is split between them, so the combined
-        # output slews at twice a single channel's rate (~34 vs ~17 W/cycle).
+        # The B2500 family (HMA/HMJ/HMK) is DC-coupled (see :mod:`b2500_steering`):
+        # two DC output channels, each its own regulator running every cycle, so
+        # the combined output slews at twice a single channel's rate.
         caps = device_capabilities(self.meter_dev_type)
         self._is_dc_output = (
             caps.has_dc_input
@@ -367,16 +364,10 @@ class BatterySimulator:
     def _steer_b2500_output(self, grid_reading: int) -> None:
         """Steer a DC-coupled B2500's two output channels toward nulling the grid.
 
-        The B2500 can only discharge its DC output into an external microinverter
-        to offset the grid — it has no AC input and never charges from AC. The
-        setpoint is **incremental** (current output plus 90% of the residual
-        grid), so the loop integrates the grid toward zero rather than parking at
-        a fraction of the load; it is floored at 0 (a surplus winds the output
-        down to idle), capped at the discharge envelope, follows the B2500's
-        integer hysteresis regulator rather than the Venus ramp, and is split
-        evenly across the two output channels (each regulating against its own
-        ~half of the measured output), so the combined output slews at ~twice a
-        single channel's rate.
+        The B2500 only discharges its DC output (no AC input, never charges from
+        AC). The setpoint is incremental (``output + 0.9 * grid``; see
+        :mod:`b2500_steering`), floored at 0, capped at the discharge envelope, and
+        split evenly across the two channels.
         """
         cur = max(0, round(self._current_power))
         target = cur + grid_reading * 9 // 10  # incremental: 90% of the residual

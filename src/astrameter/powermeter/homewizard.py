@@ -236,10 +236,9 @@ class HomeWizardPowermeter(Powermeter):
             # Staleness check disabled: treat every sample as a live stream.
             self._stream_healthy = True
         else:
-            # Healthy only if this sample arrived before the previous one went
-            # stale.  A lone sample after a longer gap (e.g. the single cached
-            # value a broken dongle replays on each reconnect) is not a live
-            # stream, so it must not flip stream_online() back on.
+            # Healthy only if this sample arrived before the previous went stale;
+            # a lone sample after a gap (a broken dongle's replayed cache) is not a
+            # live stream and must not flip stream_online() back on.
             self._stream_healthy = prev is not None and (now - prev) <= max_age
 
         self.values = values

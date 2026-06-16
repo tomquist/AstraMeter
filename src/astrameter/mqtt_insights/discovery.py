@@ -245,16 +245,11 @@ def build_ct002_consumer_discovery(
         "manufacturer": "Marstek",
         "via_device": meter_identifier,
     }
-    # No device ``connections`` are advertised. In HA's device registry a
-    # ``connection`` is a *global*, cross-integration identity for a physical
-    # device, and a single matching connection is enough for HA to merge two
-    # devices into one. The battery is already owned by a separate bridge
-    # (e.g. hm2mqtt, which publishes ``["bluetooth", MAC]``), so advertising the
-    # battery's own MAC made HA fold this standalone "AstraMeter Consumer"
-    # device into the battery device — non-deterministically, depending on MQTT
-    # registration order (issue #438). We instead identify this device solely by
-    # its own namespaced ``identifiers`` and link it to the meter via
-    # ``via_device`` (the same self-contained pattern Zigbee2MQTT uses).
+    # No device ``connections`` are advertised: HA treats a connection as a
+    # global cross-integration identity and merges devices that share one, so
+    # advertising the battery's MAC folded this consumer into the battery device
+    # (owned by e.g. hm2mqtt) depending on MQTT registration order (issue #438).
+    # Identify solely via the namespaced ``identifiers`` + ``via_device``.
     if device_type:
         device_info["model_id"] = device_type
 
@@ -377,13 +372,10 @@ def build_ct002_device_discovery(
             "state_topic": state_topic,
             "value_template": "{{ value_json.smooth_target }}",
         },
-        # Active Control switch — on (default) lets the emulator compute
-        # per-battery targets; off falls back to relay mode (forwarding the
-        # consumer aggregates untouched). The command is published retained to
-        # the device-level command topic so an "off" choice survives an
-        # AstraMeter restart: on reconnect the broker redelivers it and the
-        # setting restores itself (the same retained-restore pattern the
-        # per-consumer settings use).
+        # Active Control switch — on (default) computes per-battery targets; off
+        # falls back to relay mode. The command is published retained so an "off"
+        # choice survives an AstraMeter restart (the broker redelivers it on
+        # reconnect, like the per-consumer settings).
         "active_control": {
             "platform": "switch",
             "unique_id": f"{uid_prefix}_active_control",

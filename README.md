@@ -317,12 +317,11 @@ All keys in this subsection go under the `[CT002]` or `[CT003]` section (they ar
   battery firmware ramp's first step and growing toward the max only while the
   battery demonstrably follows the command. Keeps the firmware's accelerating internal
   ramp from overshooting on meter latency. `PACE_BASE_STEP = 0` disables pacing.
-- **IMPORT_TRIM_W** (default 15 W) — Steady-import trim. Every Marstek firmware parks the
-  grid a few watts to the *import* side of zero in steady state (its input deadband won't
-  chase a small residual), leaving real household load to be imported at the retail tariff.
-  Once the grid has held steady inside a small import band for a few polls — never during a
-  load step, so it adds no overshoot — the batteries are nudged to cover it, recovering that
-  self-consumption; it stays clear of a full/empty pack. `IMPORT_TRIM_W = 0` disables it.
+- **IMPORT_TRIM_W** (default 15 W) — Steady-import trim. Every Marstek firmware leaves the
+  grid a few watts on the *import* side of zero in steady state, so real household load the
+  battery could supply keeps being bought at the retail tariff. Once the grid has held
+  steady for a few polls (never during a load step, so it adds no overshoot), the batteries
+  are nudged to cover it, staying clear of a full/empty pack. `0` disables it.
 
 *DC battery keep-alive — applies to each DC-only battery on its own (also with a
 single battery, independent of balancing):*
@@ -386,17 +385,12 @@ mid-interval failures still trigger a swap.
   batteries with slower powermeters (>10 s update interval) accumulate saturation
   faster per sample — if you see unnecessary swaps with a slow powermeter,
   raise this value (e.g. to 0.8).
-- **EFFICIENCY_DEMAND_ALPHA** (default 0.1) — EMA factor for the household-demand
-  estimate that decides how many batteries stay active. That demand is read off
-  the (noisy) meter, so without smoothing a jittery load crosses the
-  `MIN_EFFICIENT_POWER` threshold every few readings and thrashes a battery in
-  and out of the active pool — a fade transition and probe handoff each time,
-  heavy setpoint wear for no benefit (a battery can't follow meter noise anyway).
-  Low-pass filtering makes the decision follow *sustained* demand instead; the
+- **EFFICIENCY_DEMAND_ALPHA** (default 0.1) — EMA factor that smooths the
+  household-demand estimate deciding how many batteries stay active, so meter
+  noise can't thrash a battery in and out of the pool every few readings. The
   regulation loop still acts on the raw grid, so tracking is unchanged. Lower is
-  smoother (slower to react to a real sustained load change); `1.0` disables the
-  smoothing. Only relevant with `MIN_EFFICIENT_POWER` set and two or more
-  batteries.
+  smoother (slower to react to a real sustained load change); `1.0` disables it.
+  Only relevant with `MIN_EFFICIENT_POWER` set and two or more batteries.
 - **SATURATION_DETECTION** (default true) — Track how well each battery follows
   its target. When a battery cannot deliver (full or empty), its share is
   reduced and redistributed to others.
