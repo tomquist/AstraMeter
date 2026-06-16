@@ -228,6 +228,10 @@ struct ConsumerReport {
   // Relative fair-share weight (1.0 = neutral). Mirrors the Python reports
   // dict's "weight" key, set live via the MQTT "Distribution Weight" entity.
   float weight{1.0f};
+  // Efficiency-rotation window weight ([0, 1], 1.0 = neutral). Mirrors the
+  // Python reports dict's "efficiency_window_weight" key, set live via the MQTT
+  // "Efficiency Window Weight" entity.
+  float efficiency_window_weight{1.0f};
   // Per-device MIN_DC_OUTPUT override (W); unset = inherit the global setting.
   // Mirrors the Python reports dict's "min_dc_output" key. Default-initialized
   // so aggregate ``ConsumerReport{...}`` init stays warning-clean.

@@ -65,6 +65,11 @@ struct Consumer {
   // Relative fair-share weight (1.0 = neutral). Tuned live via the MQTT
   // "Distribution Weight" entity; mirrors Python's Consumer.distribution_weight.
   float distribution_weight{1.0f};
+  // Efficiency-rotation window weight ([0, 1], 1.0 = neutral / full
+  // participation, 0.0 = skipped while limiting). Tuned live via the MQTT
+  // "Efficiency Window Weight" entity; mirrors Python's
+  // Consumer.efficiency_window_weight.
+  float efficiency_window_weight{1.0f};
   // Per-device MIN_DC_OUTPUT override (W); unset = inherit global. Tuned live
   // via the MQTT "Min DC Output" entity; mirrors Python's Consumer.min_dc_output.
   std::optional<float> min_dc_output;
@@ -143,6 +148,7 @@ class CT002Component : public Component {
     bool auto_target{true};
     std::optional<float> manual_target;
     float distribution_weight{1.0f};
+    float efficiency_window_weight{1.0f};
     std::optional<float> min_dc_output;
     std::optional<float> poll_interval;
     double timestamp{0.0};
@@ -205,6 +211,7 @@ class CT002Component : public Component {
   void set_consumer_manual_target(const std::string &consumer_id, float target);
   void set_consumer_auto_target(const std::string &consumer_id, bool auto_target);
   void set_consumer_distribution_weight(const std::string &consumer_id, float weight);
+  void set_consumer_efficiency_window_weight(const std::string &consumer_id, float weight);
   void set_consumer_min_dc_output(const std::string &consumer_id, float value);
   void force_balancer_rotation();
 

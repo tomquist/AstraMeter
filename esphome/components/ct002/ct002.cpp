@@ -440,6 +440,7 @@ ReportMap CT002Component::collect_reports_for_balancer_() const {
       r.phase = kv.second.phase;
       r.power = kv.second.power;
       r.weight = kv.second.distribution_weight;
+      r.efficiency_window_weight = kv.second.efficiency_window_weight;
       r.min_dc_output = kv.second.min_dc_output;
       out[kv.first] = std::move(r);
     }
@@ -673,6 +674,7 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.auto_target = !c.manual_enabled;
   if (c.manual_enabled) snap.manual_target = c.manual_target;
   snap.distribution_weight = c.distribution_weight;
+  snap.efficiency_window_weight = c.efficiency_window_weight;
   snap.min_dc_output = c.min_dc_output;
   snap.poll_interval = c.poll_interval;
   snap.timestamp = c.timestamp;
@@ -757,6 +759,14 @@ void CT002Component::set_consumer_distribution_weight(const std::string &consume
   // non-finite or out-of-range values rather than corrupting the split.
   if (!std::isfinite(weight) || weight < 0.0f || weight > 10.0f) return;
   this->get_consumer_(consumer_id).distribution_weight = weight;
+}
+
+void CT002Component::set_consumer_efficiency_window_weight(const std::string &consumer_id,
+                                                           float weight) {
+  // Same [0, 1] range the Python setter enforces (1 = full participation,
+  // 0 = skipped while limiting); ignore non-finite or out-of-range values.
+  if (!std::isfinite(weight) || weight < 0.0f || weight > 1.0f) return;
+  this->get_consumer_(consumer_id).efficiency_window_weight = weight;
 }
 
 void CT002Component::set_consumer_min_dc_output(const std::string &consumer_id,

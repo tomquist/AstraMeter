@@ -71,6 +71,23 @@ def _report_weight(report: dict) -> float:
     return 1.0 if weight is None else float(weight)
 
 
+def _efficiency_window_weight(report: dict) -> float:
+    """Per-battery efficiency-rotation weight from a report dict (default 1.0).
+
+    Scales how much of the efficiency rotation window a battery participates in:
+    ``1.0`` = full participation (holds an active efficiency slot for the whole
+    ``efficiency_rotation_interval``), ``0.0`` = skipped while efficiency
+    limiting is active (parked, as long as enough non-zero-weight batteries can
+    fill the active slots), intermediate = proportionally less active time. A
+    missing key (or an explicit ``None``) means "neutral" and maps to 1.0; the
+    value is clamped to ``[0, 1]``.
+    """
+    weight = report.get("efficiency_window_weight", 1.0)
+    if weight is None:
+        return 1.0
+    return max(0.0, min(1.0, float(weight)))
+
+
 # Ramp pacing (issue #458): the pace cap only grows once the battery's reported
 # output has moved at least this far in the commanded direction since the last
 # paced poll; a non-moving battery (startup delay, saturation) keeps the base
@@ -1778,6 +1795,17 @@ class LoadBalancer:
                 self._priority.append(cid)
                 self._set_consumer_grace(cid, grace)
 
+        # Sink low/zero efficiency-window-weight batteries to the back of the
+        # priority order so they fall into the deprioritized tail first while
+        # limiting (active set is ``self._priority[:slots]`` and ``slots`` never
+        # exceeds ``n - 1`` while limiting). A *stable* descending sort preserves
+        # the fair-wear rotation cycle within each weight tier. When all
+        # consumers are needed (``slots == n``) every battery still runs.
+        self._priority.sort(
+            key=lambda cid: _efficiency_window_weight(reports.get(cid, {})),
+            reverse=True,
+        )
+
         prev_slots = max(
             0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
         )
@@ -1785,16 +1813,19 @@ class LoadBalancer:
         probe_resolved = self._resolve_probe_state(reports, now, grid_total)
         probe_active = self._probe_state is not None
 
-        # Rotation check BEFORE cache
-        if (
-            not probe_active
-            and not probe_resolved
-            and self._priority
-            and now - self._last_rotation >= cfg.efficiency_rotation_interval
-        ):
-            self._last_rotation = now
-            self._priority.append(self._priority.pop(0))
-            self._invalidate_efficiency_cache()
+        # Rotation check BEFORE cache. The active head holds its slot for
+        # ``efficiency_rotation_interval`` scaled by its efficiency window weight,
+        # so a lower-weight battery rotates out sooner (weight 0 → threshold 0 →
+        # it rotates out on the next tick).
+        if not probe_active and not probe_resolved and self._priority:
+            head_weight = _efficiency_window_weight(reports.get(self._priority[0], {}))
+            if (
+                now - self._last_rotation
+                >= cfg.efficiency_rotation_interval * head_weight
+            ):
+                self._last_rotation = now
+                self._priority.append(self._priority.pop(0))
+                self._invalidate_efficiency_cache()
 
         # Saturation swap check BEFORE cache
         if (

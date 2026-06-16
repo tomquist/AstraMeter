@@ -402,6 +402,9 @@ async def run_device(
         insights.register_distribution_weight_handler(
             device_id or "", device.set_consumer_distribution_weight
         )
+        insights.register_efficiency_window_weight_handler(
+            device_id or "", device.set_consumer_efficiency_window_weight
+        )
         insights.register_min_dc_output_handler(
             device_id or "", device.set_consumer_min_dc_output
         )

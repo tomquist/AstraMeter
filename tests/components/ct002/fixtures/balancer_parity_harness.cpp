@@ -19,9 +19,10 @@
 //        Saturation grace defaults are applied per consumer lazily.
 //   clock <seconds>           Set the mock clock to an absolute value.
 //   advance <seconds>         Advance the mock clock.
-//   target <cid> <mode> <manual> <grid> <n> [<cid> <dev> <phase> <power> <md>]xN
+//   target <cid> <mode> <manual> <grid> <n> [<cid> <dev> <phase> <power> <md> <eww>]xN
 //        Each report carries a per-consumer min_dc_output token <md> (always
-//        emitted; < 0 means "unset" / inherit the global).
+//        emitted; < 0 means "unset" / inherit the global) and an
+//        efficiency-window weight token <eww> (always emitted; 1.0 = neutral).
 //        Call compute_target for <cid> and print the resulting three phase
 //        targets. <mode> is auto|manual|inactive. The N reports describe the
 //        whole pool for this tick (inactive/manual sets are derived from each
@@ -127,10 +128,11 @@ int main() {
       ReportMap reports;
       for (int i = 0; i < n; ++i) {
         std::string rc, dev, phase;
-        float power = 0.0f, md = -1.0f;
-        in >> rc >> dev >> phase >> power >> md;
+        float power = 0.0f, md = -1.0f, eww = 1.0f;
+        in >> rc >> dev >> phase >> power >> md >> eww;
         ConsumerReport r{dev, phase, power};
         if (md >= 0.0f) r.min_dc_output = md;
+        r.efficiency_window_weight = eww;
         reports[rc] = r;
       }
       // sample_id mirrors the meter reading (as in production, where it is the

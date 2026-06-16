@@ -24,6 +24,14 @@ bool starts_with(const std::string &s, const char *prefix) {
   return s.size() >= plen && s.compare(0, plen, prefix) == 0;
 }
 
+// Clamp a report's efficiency-rotation window weight to [0, 1] (mirrors
+// Python's _efficiency_window_weight). Missing reports map to neutral 1.0.
+float efficiency_window_weight_of(const ReportMap &reports, const std::string &cid) {
+  auto it = reports.find(cid);
+  if (it == reports.end()) return 1.0f;
+  return std::max(0.0f, std::min(1.0f, it->second.efficiency_window_weight));
+}
+
 template <typename Set>
 Set set_difference(const Set &a, const Set &b) {
   Set out;
@@ -1220,6 +1228,16 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
     }
   }
 
+  // Sink low/zero efficiency-window-weight batteries to the back of the priority
+  // order so they fall into the deprioritized tail first while limiting. A
+  // *stable* descending sort preserves the fair-wear rotation cycle within each
+  // weight tier. Mirrors Python's self._priority.sort(...).
+  std::stable_sort(this->priority_.begin(), this->priority_.end(),
+                   [&](const std::string &a, const std::string &b) {
+                     return efficiency_window_weight_of(reports, a) >
+                            efficiency_window_weight_of(reports, b);
+                   });
+
   const size_t prev_slots = std::max<size_t>(
       0, std::min(this->priority_.size(),
                   this->priority_.size() >= this->deprioritized_.size()
@@ -1230,13 +1248,20 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
   const bool probe_resolved = this->resolve_probe_state_(reports, now, grid_total);
   const bool probe_active = this->probe_state_.has_value();
 
-  if (!probe_active && !probe_resolved && !this->priority_.empty() &&
-      (now - this->last_rotation_) >= cfg.efficiency_rotation_interval) {
-    this->last_rotation_ = now;
-    const std::string first = this->priority_.front();
-    this->priority_.erase(this->priority_.begin());
-    this->priority_.push_back(first);
-    this->invalidate_efficiency_cache_();
+  // The active head holds its slot for efficiency_rotation_interval scaled by
+  // its efficiency window weight, so a lower-weight battery rotates out sooner
+  // (weight 0 -> threshold 0 -> rotates out on the next tick).
+  if (!probe_active && !probe_resolved && !this->priority_.empty()) {
+    const float head_weight =
+        efficiency_window_weight_of(reports, this->priority_.front());
+    if ((now - this->last_rotation_) >=
+        cfg.efficiency_rotation_interval * head_weight) {
+      this->last_rotation_ = now;
+      const std::string first = this->priority_.front();
+      this->priority_.erase(this->priority_.begin());
+      this->priority_.push_back(first);
+      this->invalidate_efficiency_cache_();
+    }
   }
 
   if (!probe_active && !probe_resolved && cfg.efficiency_saturation_threshold > 0.0f &&

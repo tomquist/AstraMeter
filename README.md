@@ -631,6 +631,17 @@ live from Home Assistant:
   proportion between batteries matters; `0` parks a battery at 0 W while
   leaving it in the pool. Tune it while watching the batteries — the change
   takes effect on the next control cycle.
+- **Efficiency Window Weight** — how much of the **efficiency rotation** window
+  this battery takes, as a percentage. When household demand is low the balancer
+  keeps only some batteries active (so they stay above their efficient power) and
+  rotates which one runs for fair wear; this knob biases that rotation, separate
+  from **Distribution Weight** (which biases the *split* among whichever batteries
+  are active). `100 %` is neutral (full participation — holds an active slot for
+  the whole rotation interval); `0 %` skips the battery for efficiency, parking it
+  while limiting is active as long as enough other batteries can carry the load
+  (it still runs when *all* batteries are genuinely needed); intermediate values
+  give it proportionally less active time and wear. Takes effect on the next
+  control cycle.
 - **Min DC Output** — minimum discharge in watts to keep this battery's inverter
   from switching off at 0 W and falling asleep (see **MIN_DC_OUTPUT** above). Only
   shown for DC batteries where it has an effect (e.g. the Marstek B2500); overrides

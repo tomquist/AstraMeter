@@ -117,6 +117,12 @@ class Consumer:
     # neutral; a battery with weight 2.0 takes roughly twice the share of a
     # weight-1.0 battery.  Tuned live via the MQTT "Distribution Weight" entity.
     distribution_weight: float = 1.0
+    # Per-battery weight ([0, 1], neutral 1.0) scaling how much of the efficiency
+    # rotation window this battery participates in: 1.0 = full participation,
+    # 0.0 = skipped for efficiency (parked while limiting), intermediate =
+    # proportionally less active time / wear.  Tuned live via the MQTT
+    # "Efficiency Window Weight" entity.
+    efficiency_window_weight: float = 1.0
     # Per-device override (W) for the MIN_DC_OUTPUT wake floor; ``None`` inherits
     # the global setting.  Tuned live via the MQTT "Min DC Output" entity.
     min_dc_output: float | None = None
@@ -316,6 +322,23 @@ class CT002:
             raise ValueError(msg)
         self._get_consumer(consumer_id).distribution_weight = value
 
+    def set_consumer_efficiency_window_weight(
+        self, consumer_id: str, weight: float
+    ) -> None:
+        """Set the efficiency-rotation window weight for a battery.
+
+        Must be finite and within ``0 <= weight <= 1``.  1.0 is neutral (full
+        participation in efficiency rotation); 0.0 skips the battery for
+        efficiency (parked while limiting, as long as enough non-zero-weight
+        batteries can fill the active slots); intermediate values give it
+        proportionally less active time.
+        """
+        value = float(weight)
+        if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+            msg = f"efficiency window weight must be in [0, 1], got {weight!r}"
+            raise ValueError(msg)
+        self._get_consumer(consumer_id).efficiency_window_weight = value
+
     def set_consumer_min_dc_output(self, consumer_id: str, value: float) -> None:
         """Set the per-device MIN_DC_OUTPUT floor (W) for a battery.
 
@@ -514,6 +537,7 @@ class CT002:
                 "power": c.power,
                 "device_type": c.device_type,
                 "weight": c.distribution_weight,
+                "efficiency_window_weight": c.efficiency_window_weight,
                 "min_dc_output": c.min_dc_output,
             }
             for cid, c in self._consumers.items()
@@ -1005,6 +1029,9 @@ class CT002:
                     "auto_target": not consumer.manual_enabled if consumer else True,
                     "distribution_weight": (
                         consumer.distribution_weight if consumer else 1.0
+                    ),
+                    "efficiency_window_weight": (
+                        consumer.efficiency_window_weight if consumer else 1.0
                     ),
                     "min_dc_output": consumer.min_dc_output if consumer else None,
                     "active_control": self.active_control,

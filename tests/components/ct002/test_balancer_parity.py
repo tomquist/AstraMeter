@@ -164,14 +164,15 @@ class PyDriver:
             reports = {}
             i = 6
             for _ in range(n):
-                rc, dev, phase, power, md = parts[i : i + 5]
+                rc, dev, phase, power, md, eww = parts[i : i + 6]
                 reports[rc] = {
                     "device_type": dev,
                     "phase": phase,
                     "power": int(power),
                     "min_dc_output": None if float(md) < 0 else float(md),
+                    "efficiency_window_weight": float(eww),
                 }
-                i += 5
+                i += 6
             res = self.balancer.compute_target(
                 cid,
                 ConsumerMode(mode, float(manual)),
@@ -255,10 +256,16 @@ _CFG_EFFICIENCY = "cfg 1 100 900 0.4 0.15 20 90 1"
 
 
 def _report(
-    cid: str, phase: str, power: int, dev: str = "HMA-2", min_dc: float = -1.0
+    cid: str,
+    phase: str,
+    power: int,
+    dev: str = "HMA-2",
+    min_dc: float = -1.0,
+    eff_weight: float = 1.0,
 ) -> str:
-    # min_dc < 0 encodes "unset" (inherit global / None).
-    return f"{cid} {dev} {phase} {power} {min_dc}"
+    # min_dc < 0 encodes "unset" (inherit global / None). The efficiency-window
+    # weight token is always emitted (default 1.0 = neutral).
+    return f"{cid} {dev} {phase} {power} {min_dc} {eff_weight}"
 
 
 def _target(
@@ -331,6 +338,40 @@ def _scenario_efficiency_lifecycle() -> list[str]:
     return lines
 
 
+def _scenario_efficiency_window_weight() -> list[str]:
+    """Per-battery efficiency-window weight: a parked unit (0) stays
+    deprioritized while limiting, and a half-weight head rotates out at half the
+    interval. Both stacks must agree poll-by-poll on the resulting targets."""
+    lines = [_CFG_EFFICIENCY, "clock 5000"]
+    # "y" is parked for efficiency (weight 0); under low demand it must stay
+    # deprioritized while "x" carries the load.
+    parked = [
+        _report("x", "A", 0, eff_weight=1.0),
+        _report("y", "A", 0, eff_weight=0.0),
+    ]
+    for _ in range(6):
+        lines.append(_target("x", parked, grid=120))
+        lines.append(_target("y", parked, grid=120))
+        lines.append("advance 1")
+        lines.append("last x")
+        lines.append("last y")
+    # Two half-weight units: the active head should rotate out after ~half the
+    # rotation interval (900 * 0.5 = 450). Cross that boundary and keep polling.
+    half = [_report("x", "A", 0, eff_weight=0.5), _report("y", "A", 0, eff_weight=0.5)]
+    for _ in range(3):
+        lines.append(_target("x", half, grid=120))
+        lines.append(_target("y", half, grid=120))
+        lines.append("advance 1")
+    lines.append("advance 460")
+    for _ in range(4):
+        lines.append(_target("x", half, grid=120))
+        lines.append(_target("y", half, grid=120))
+        lines.append("advance 1")
+        lines.append("last x")
+        lines.append("last y")
+    return lines
+
+
 def _scenario_min_dc_output() -> list[str]:
     """Exercise the MIN_DC_OUTPUT floor: global on a DC battery + Venus, and a
     per-device override on the Venus, across surplus/discharge."""
@@ -394,6 +435,13 @@ def test_parity_efficiency_lifecycle(harness: Path) -> None:
     _compare("efficiency", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
+def test_parity_efficiency_window_weight(harness: Path) -> None:
+    lines = _scenario_efficiency_window_weight()
+    _compare(
+        "efficiency_window_weight", lines, _run_cpp(harness, lines), _run_py(lines)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Randomized differential fuzzing.
 # ---------------------------------------------------------------------------
@@ -454,11 +502,21 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
         cid: rng.choice(["HMA-2", "HME-4", "HMG-50", "HMN-1", "VNSD"]) for cid in cids
     }
     overrides = {cid: rng.choice([-1, -1, -1, 25, 80]) for cid in cids}
+    # Per-consumer efficiency-window weight: mostly neutral, sometimes parked (0)
+    # or partial, to exercise the weight-driven sink/rotation across stacks.
+    eff_weights = {cid: rng.choice([1.0, 1.0, 1.0, 0.0, 0.5, 0.25]) for cid in cids}
     for _ in range(n_polls):
         grid = rng.choice([-901, -300, -150, -1, 0, 1, 100, 300, 450, 901, 1500])
         powers = {cid: rng.choice([-200, -50, 0, 0, 50, 200]) for cid in cids}
         pool = [
-            _report(cid, phases[cid], powers[cid], devs[cid], overrides[cid])
+            _report(
+                cid,
+                phases[cid],
+                powers[cid],
+                devs[cid],
+                overrides[cid],
+                eff_weights[cid],
+            )
             for cid in cids
         ]
         target_cid = rng.choice(cids)

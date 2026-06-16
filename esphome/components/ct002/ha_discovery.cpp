@@ -266,6 +266,26 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     dw["retain"] = true;
     dw["entity_category"] = "config";
 
+    // Efficiency window weight number — how much of the efficiency rotation
+    // window this battery participates in, as a percentage. 100 % neutral (full
+    // participation); 0 % skips the battery for efficiency (parked while
+    // limiting). Surfaced as a percentage; the internal value is a 0-1 fraction.
+    JsonObject eww = components["efficiency_window_weight"].to<JsonObject>();
+    eww["platform"] = "number";
+    eww["unique_id"] = uid_prefix + "_efficiency_window_weight";
+    eww["name"] = "Efficiency Window Weight";
+    eww["unit_of_measurement"] = "%";
+    eww["min"] = 0;
+    eww["max"] = 100;
+    eww["step"] = 5;
+    eww["mode"] = "slider";
+    eww["state_topic"] = state_topic;
+    eww["value_template"] =
+        "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}";
+    eww["command_topic"] = state_topic + "/efficiency_window_weight/set";
+    eww["retain"] = true;
+    eww["entity_category"] = "config";
+
     // Min DC Output number — minimum discharge (W) to keep a DC battery's
     // external inverter from switching off at 0 W. Only surfaced for batteries
     // where it has an effect (B2500 family); Venus/Jupiter/unknown don't get it.

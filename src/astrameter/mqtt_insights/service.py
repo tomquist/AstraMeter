@@ -101,6 +101,9 @@ class MqttInsightsService:
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
+        self._efficiency_window_weight_handlers: dict[
+            str, Callable[[str, float], None]
+        ] = {}
         self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
         self._active_control_handlers: dict[str, Callable[[bool], None]] = {}
@@ -168,6 +171,11 @@ class MqttInsightsService:
     ) -> None:
         self._distribution_weight_handlers[device_id] = handler
 
+    def register_efficiency_window_weight_handler(
+        self, device_id: str, handler: Callable[[str, float], None]
+    ) -> None:
+        self._efficiency_window_weight_handlers[device_id] = handler
+
     def register_min_dc_output_handler(
         self, device_id: str, handler: Callable[[str, float], None]
     ) -> None:
@@ -189,6 +197,7 @@ class MqttInsightsService:
         self._manual_target_handlers.pop(device_id, None)
         self._auto_target_handlers.pop(device_id, None)
         self._distribution_weight_handlers.pop(device_id, None)
+        self._efficiency_window_weight_handlers.pop(device_id, None)
         self._min_dc_output_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
         self._active_control_handlers.pop(device_id, None)
@@ -492,6 +501,7 @@ class MqttInsightsService:
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),
             "distribution_weight": data.get("distribution_weight", 1.0),
+            "efficiency_window_weight": data.get("efficiency_window_weight", 1.0),
             "min_dc_output": data.get("min_dc_output"),
         }
 
@@ -809,6 +819,34 @@ class MqttInsightsService:
                 device_id,
                 consumer_id,
                 weight,
+            )
+        elif field == "efficiency_window_weight":
+            # HA surfaces this as a percentage (0-100 %); convert to the internal
+            # 0-1 fraction before dispatching.
+            try:
+                pct = float(payload)
+            except ValueError:
+                logger.warning(
+                    "Invalid efficiency_window_weight value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            if not math.isfinite(pct) or not 0.0 <= pct <= 100.0:
+                logger.warning(
+                    "Out-of-range efficiency_window_weight for %s/%s: %s",
+                    device_id,
+                    consumer_id,
+                    pct,
+                )
+                return
+            self._dispatch(
+                self._efficiency_window_weight_handlers,
+                "efficiency_window_weight",
+                device_id,
+                consumer_id,
+                pct / 100.0,
             )
         elif field == "min_dc_output":
             try:
