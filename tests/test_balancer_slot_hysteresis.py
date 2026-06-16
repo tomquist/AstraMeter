@@ -54,6 +54,11 @@ def _make_balancer(clock: _FakeClock) -> LoadBalancer:
             # test isolates the slot-count arithmetic.
             efficiency_rotation_interval=1_000_000,
             efficiency_saturation_threshold=0.0,
+            # Disable demand smoothing so a single reading moves the slot
+            # decision: this test isolates the slot-count hysteresis margin (the
+            # demand EMA is a separate noise-rejection layer, covered by
+            # TestEfficiencyDemandSmoothing in test_balancer.py).
+            efficiency_demand_alpha=1.0,
         ),
         saturation_alpha=0.15,
         saturation_min_target=20,

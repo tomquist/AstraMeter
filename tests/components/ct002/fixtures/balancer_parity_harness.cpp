@@ -10,7 +10,8 @@
 // Commands (one per line, whitespace separated):
 //   cfg <fair> <min_eff> <rot_interval> <sat_threshold> <sat_alpha> \
 //       <sat_min_target> <sat_grace> <sat_enabled> [<min_dc_output> \
-//       [<pace_base_step> <pace_max_step> [<concentrate_deadband>]]]
+//       [<pace_base_step> <pace_max_step> \
+//       [<concentrate_deadband> [<import_trim_w>]]]]
 //        (Re)create the balancer with the given config. Must be the first
 //        command. The trailing global MIN_DC_OUTPUT is optional (absent = 0);
 //        the trailing ramp-pacing pair is optional too (absent = the struct
@@ -95,7 +96,19 @@ int main() {
         // Optional trailing deadband-concentration threshold (absent = keep
         // the BalancerConfig struct default).
         float conc = 0.0f;
-        if (in >> conc) cfg.concentrate_deadband = conc;
+        if (in >> conc) {
+          cfg.concentrate_deadband = conc;
+          // Optional trailing steady-import trim (absent = keep the struct
+          // default).
+          float trim = 0.0f;
+          if (in >> trim) {
+            cfg.import_trim_w = trim;
+            // Optional trailing efficiency demand-smoothing alpha (absent = keep
+            // the struct default).
+            float demand_alpha = 0.0f;
+            if (in >> demand_alpha) cfg.efficiency_demand_alpha = demand_alpha;
+          }
+        }
       }
       balancer = std::make_unique<LoadBalancer>(
           cfg, sat_alpha, sat_min_target, /*sat_decay=*/0.995f, sat_grace,

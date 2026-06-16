@@ -5,6 +5,8 @@ import time
 import pytest
 
 from astrameter.ct002.balancer import (
+    IMPORT_TRIM_DWELL,
+    IMPORT_TRIM_GATE_W,
     PRED_TRUST_MAX,
     PRED_TRUST_SHRINK,
     BalancerConfig,
@@ -828,6 +830,141 @@ class TestConcentrateDeadband:
         assert self._target(lb, "a", reports, 30) == pytest.approx(0.0, abs=1e-6)
         assert self._target(lb, "b", reports, 30) == pytest.approx(30.0, abs=1.0)
         assert self._target(lb, "c", reports, 30) == pytest.approx(0.0, abs=1e-6)
+
+
+class TestImportTrim:
+    """Steady-import trim: once the predicted grid has held inside the small
+    import band ``(0, IMPORT_TRIM_GATE_W)`` for ``IMPORT_TRIM_DWELL`` consecutive
+    polls, the control grid is nudged up by ``import_trim_w`` so the firmware
+    covers the few watts of real load its deadband would otherwise leave
+    importing. Mirrored by the C++ port and the differential parity suite."""
+
+    def _lb(self, **cfg):
+        # Raw control grid (predictor off), no pacing / damping, so the returned
+        # reading equals the (possibly trimmed) control grid directly.
+        cfg.setdefault("grid_predict_trust", 0.0)
+        cfg.setdefault("pace_base_step", 0.0)
+        cfg.setdefault("osc_damp_max", 0.0)
+        cfg.setdefault("concentrate_deadband", 0.0)
+        return LoadBalancer(
+            config=BalancerConfig(**cfg),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+            clock=_FakeClock(),
+        )
+
+    def _reading(self, lb, grid, sample=None):
+        # Each call is a fresh meter sample by default (a distinct sample_id),
+        # which the trim requires; pass an explicit ``sample`` to repeat a reading
+        # (a stale / frozen meter).
+        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 200}}
+        if sample is None:
+            self._tick = getattr(self, "_tick", 0) + 1
+            sample = (float(self._tick), grid)
+        return lb.compute_target(
+            "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), sample
+        )[0]
+
+    def test_disabled_never_trims(self):
+        lb = self._lb(import_trim_w=0)
+        r = 0.0
+        for _ in range(IMPORT_TRIM_DWELL + 4):
+            r = self._reading(lb, 60)
+        assert r == pytest.approx(60.0, abs=1e-6)
+
+    def test_engages_only_after_dwell(self):
+        lb = self._lb(import_trim_w=15)
+        readings = [self._reading(lb, 60) for _ in range(IMPORT_TRIM_DWELL + 2)]
+        # Below the dwell threshold the residual is untrimmed; the trim only
+        # engages on the IMPORT_TRIM_DWELL-th consecutive steady-import poll.
+        assert readings[IMPORT_TRIM_DWELL - 2] == pytest.approx(60.0, abs=1e-6)
+        assert readings[-1] == pytest.approx(75.0, abs=1e-6)
+
+    def test_large_import_above_gate_not_trimmed(self):
+        lb = self._lb(import_trim_w=15)
+        grid = IMPORT_TRIM_GATE_W + 80.0  # a real disturbance, above the band
+        r = 0.0
+        for _ in range(IMPORT_TRIM_DWELL + 4):
+            r = self._reading(lb, grid)
+        assert r == pytest.approx(grid, abs=1e-6)
+
+    def test_export_resets_the_dwell(self):
+        lb = self._lb(import_trim_w=15)
+        for _ in range(IMPORT_TRIM_DWELL + 2):
+            self._reading(lb, 60)  # trimming now
+        self._reading(lb, -200)  # export breaks the steady-import run
+        # Dwell restarts from zero, so the next steady-import poll is untrimmed.
+        assert self._reading(lb, 60) == pytest.approx(60.0, abs=1e-6)
+
+    def test_frozen_meter_never_trims(self):
+        # A repeated (stale / frozen) sample_id carries no fresh feedback, so the
+        # trim must stay silent however long the import persists — otherwise it
+        # would wind a blind bias the meter can never correct.
+        lb = self._lb(import_trim_w=15)
+        frozen = (1.0, 60.0)
+        r = 0.0
+        for _ in range(IMPORT_TRIM_DWELL + 6):
+            r = self._reading(lb, 60, sample=frozen)
+        assert r == pytest.approx(60.0, abs=1e-6)
+
+
+class TestEfficiencyDemandSmoothing:
+    """The number of batteries kept active is decided from the household demand
+    read off the (noisy) meter. ``efficiency_demand_alpha`` low-pass filters that
+    estimate so a transient noise dip below ``min_efficient_power`` can't
+    deprioritize a battery (and fire a fade / probe handoff) when sustained demand
+    is comfortably above the floor. Mirrored by the C++ port and the differential
+    parity suite."""
+
+    def _lb(self, alpha):
+        return LoadBalancer(
+            config=BalancerConfig(
+                min_efficient_power=150,
+                efficiency_demand_alpha=alpha,
+                grid_predict_trust=0.0,
+            ),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+            clock=_FakeClock(),
+        )
+
+    def _poll(self, lb, grid, tick):
+        # Two batteries on one phase, 200 W each: demand = |400 + grid|. A fresh
+        # sample_id per poll so the efficiency demand EMA advances each call.
+        reports = {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 200},
+        }
+        lb.compute_target(
+            "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), (tick,)
+        )
+
+    def test_smoothing_absorbs_a_noise_dip(self):
+        # Steady demand 400 W (200 W/unit, above the 150 W floor) keeps both
+        # active; a single-poll dip to 250 W (125 W/unit) would, unsmoothed, drop
+        # below the floor and deprioritize a unit.
+        smoothed = self._lb(alpha=0.1)
+        for t in range(8):
+            self._poll(smoothed, 0.0, t)
+        assert smoothed._deprioritized == set()
+        self._poll(smoothed, -150.0, 8)  # demand 250 for one poll
+        assert smoothed._deprioritized == set()  # EMA ~385 -> still both active
+
+    def test_disabled_thrashes_on_the_same_dip(self):
+        instant = self._lb(alpha=1.0)  # smoothing off: react to every sample
+        for t in range(8):
+            self._poll(instant, 0.0, t)
+        assert instant._deprioritized == set()
+        self._poll(instant, -150.0, 8)  # demand 250 -> 125 W/unit, below floor
+        assert instant._deprioritized == {"b"}
 
 
 class TestDampOscillation:

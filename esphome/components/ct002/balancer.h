@@ -48,6 +48,18 @@ inline constexpr float PRED_TRUST_RAISE_STEP = 0.2f;
 inline constexpr float PRED_TRUST_SHRINK = 0.5f;
 inline constexpr float PRED_INNOVATION_GATE_W = 40.0f;
 
+// Steady-import trim (see BalancerConfig::import_trim_w and
+// LoadBalancer::apply_import_trim_). The trim engages only once the predicted
+// grid has held inside the small-import band (0, IMPORT_TRIM_GATE_W) for
+// IMPORT_TRIM_DWELL consecutive fresh meter samples (a genuine steady state, not
+// a load step on its final approach to zero, so the trim never deepens
+// overshoot). The gate
+// sits above the firmware deadband / hold window but below the large-disturbance
+// regime, so a saturated/empty pack (which leaves an import larger than the
+// gate) is left alone. Mirrors balancer.py.
+inline constexpr float IMPORT_TRIM_GATE_W = 120.0f;
+inline constexpr int IMPORT_TRIM_DWELL = 6;
+
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
@@ -128,6 +140,11 @@ struct BalancerConfig {
   // 1e-8 above 0.4 and flips the comparison on a knife-edge score, diverging the
   // deprioritized set from Python.
   double efficiency_saturation_threshold{0.4};
+  // EMA factor for the household-demand estimate that decides the active-set
+  // size. Low-pass filtering it keeps meter noise from thrashing batteries in
+  // and out of the active pool (the regulation loop still acts on the raw grid).
+  // 1.0 disables the smoothing. See balancer.py BalancerConfig.
+  float efficiency_demand_alpha{0.1f};
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
@@ -143,6 +160,15 @@ struct BalancerConfig {
   // deadband. Cuts steady-state avoidable import/export at the cost of more
   // setpoint churn. 0 disables. See balancer.py.
   float concentrate_deadband{60.0f};
+  // Steady-import trim (W): once the predicted grid has held inside a small
+  // import band for a few consecutive polls (a genuine steady state, not a
+  // transient), nudge the control grid up by this much so the firmware covers
+  // the few watts of real load its deadband / small-import hold would otherwise
+  // leave importing at the retail tariff — missed self-consumption. The dwell
+  // requirement keeps it inert during load steps (no added overshoot) and the
+  // band gate keeps it clear of a saturated/empty pack. 0 disables. See
+  // balancer.py.
+  float import_trim_w{15.0f};
 
   void clamp();
 };
@@ -308,6 +334,7 @@ class LoadBalancer {
   float damp_oscillation_(const std::string &consumer_id, float residual);
   float predict_control_grid_(const ReportMap &reports, float grid_total,
                               const std::vector<float> &sample_id);
+  float apply_import_trim_(float control_grid, bool fresh);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
@@ -351,6 +378,15 @@ class LoadBalancer {
   std::optional<std::vector<float>> pred_sample_id_{};
   float pred_trust_{0.0f};
   int pred_innov_sign_{0};
+  // Count of consecutive *fresh* meter samples the predicted grid has held
+  // inside the small-import band; gates the steady-import trim (see
+  // apply_import_trim_). trim_sample_id_ is the last meter sample the trim acted
+  // on, used to tell a fresh reading from a repeated (stale / frozen) one.
+  int steady_import_dwell_{0};
+  std::vector<float> trim_sample_id_{};
+  // Low-pass-filtered household-demand estimate for the efficiency active-set
+  // decision (see compute_efficiency_deprioritized_). Unset until the first poll.
+  std::optional<float> demand_ema_{};
 };
 
 }  // namespace ct002

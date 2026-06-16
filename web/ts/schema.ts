@@ -719,6 +719,7 @@ export const CT_BALANCER: Field[] = [
   { key: "OSC_DAMP_THRESHOLD", ey: "osc_damp_threshold", label: "Oscillation damping threshold (W)", help: "Corrections larger than this are a genuine demand step (kettle, solar ramp) and are never damped. Default 300.", type: "number", placeholder: "300" },
   { key: "GRID_PREDICT_TRUST", ey: "grid_predict_trust", label: "Grid prediction", help: "Keeps the grid closer to zero (less import/export, less overshoot and hunting) by adapting automatically to your power meter, including meters that report with a delay. 0.5 (default) needs no tuning; lower reacts more cautiously, 0 = off.", type: "number", placeholder: "0.5" },
   { key: "CONCENTRATE_DEADBAND", ey: "concentrate_deadband", label: "Deadband concentration (W)", help: "Multiple batteries only: when the grid is within this many watts of zero, hand the whole correction to one battery instead of splitting it below each battery's ~20 W deadband. Reduces small steady import/export (better self-consumption) at the cost of slightly more setpoint changes. Default 60; 0 = off.", type: "number", placeholder: "60" },
+  { key: "IMPORT_TRIM_W", ey: "import_trim_w", label: "Steady-import trim (W)", help: "Covers the few watts of real load your battery's firmware leaves importing in steady state (its deadband won't chase a small residual), recovering that self-consumption at the retail price. Only nudges once the grid has sat steady (never during load steps, so no extra overshoot) and stays clear of a full/empty battery. 15 (default) is a good value; 0 = off.", type: "number", placeholder: "15" },
 ];
 
 // Applies to each DC-only battery individually (also with a single battery,
@@ -733,6 +734,7 @@ export const CT_EFFICIENCY: Field[] = [
   { key: "PROBE_MIN_POWER", ey: "probe_min_power", label: "Probe min power (W)", help: "Floor sent when probing a newly promoted battery. Default 80.", type: "number", placeholder: "80" },
   { key: "EFFICIENCY_FADE_ALPHA", ey: "efficiency_fade_alpha", label: "Fade alpha", help: "How fast the old battery fades after a successful probe. Default 0.15.", type: "number", placeholder: "0.15" },
   { key: "EFFICIENCY_SATURATION_THRESHOLD", ey: "efficiency_saturation_threshold", label: "Saturation swap threshold", help: "Swap out a battery that can't follow its target. Default 0.4; raise for slow meters.", type: "number", placeholder: "0.4" },
+  { key: "EFFICIENCY_DEMAND_ALPHA", ey: "efficiency_demand_alpha", label: "Demand smoothing", help: "Smooths the household-demand estimate that decides how many batteries stay active, so meter noise can't thrash a battery in and out of the pool (big drop in setpoint wear on a jittery load). Lower = smoother. Default 0.1; 1.0 = off (react to every reading).", type: "number", placeholder: "0.1" },
 ];
 
 export const CT_SATURATION: Field[] = [

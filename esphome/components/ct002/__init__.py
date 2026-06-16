@@ -108,9 +108,11 @@ CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
 CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
+CONF_EFFICIENCY_DEMAND_ALPHA = "efficiency_demand_alpha"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
 CONF_GRID_PREDICT_TRUST = "grid_predict_trust"
 CONF_CONCENTRATE_DEADBAND = "concentrate_deadband"
+CONF_IMPORT_TRIM_W = "import_trim_w"
 
 # Saturation tracker sub-block
 CONF_SATURATION = "saturation"
@@ -221,11 +223,15 @@ BALANCER_SCHEMA = cv.Schema(
         cv.Optional(CONF_EFFICIENCY_SATURATION_THRESHOLD, default=0.4): cv.float_range(
             min=0.0, max=1.0
         ),
+        cv.Optional(CONF_EFFICIENCY_DEMAND_ALPHA, default=0.1): cv.float_range(
+            min=0.01, max=1.0
+        ),
         cv.Optional(CONF_MIN_DC_OUTPUT, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_GRID_PREDICT_TRUST, default=0.5): cv.float_range(
             min=0.0, max=1.0
         ),
         cv.Optional(CONF_CONCENTRATE_DEADBAND, default=60.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_IMPORT_TRIM_W, default=15.0): cv.float_range(min=0.0),
     }
 )
 
@@ -467,9 +473,11 @@ async def to_code(config):
             "efficiency_saturation_threshold",
             bal.get(CONF_EFFICIENCY_SATURATION_THRESHOLD, 0.4),
         ),
+        ("efficiency_demand_alpha", bal.get(CONF_EFFICIENCY_DEMAND_ALPHA, 0.1)),
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
         ("grid_predict_trust", bal.get(CONF_GRID_PREDICT_TRUST, 0.5)),
         ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
+        ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
     )
     cg.add(var.set_balancer_config(bcfg))
 

@@ -104,6 +104,7 @@ void BalancerConfig::clamp() {
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
   efficiency_saturation_threshold =
       std::max(0.0, std::min(1.0, efficiency_saturation_threshold));
+  clamp_v(efficiency_demand_alpha, 0.01f, 1.0f);
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
   if (pace_base_step < 0.0f) pace_base_step = 0.0f;
   if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
@@ -113,6 +114,7 @@ void BalancerConfig::clamp() {
   if (osc_damp_threshold < 0.0f) osc_damp_threshold = 0.0f;
   clamp_v(grid_predict_trust, 0.0f, 1.0f);
   if (concentrate_deadband < 0.0f) concentrate_deadband = 0.0f;
+  if (import_trim_w < 0.0f) import_trim_w = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -758,7 +760,14 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   // estimate stays continuous across the probe / fading / charge-blind early
   // returns, which keep using the raw meter for their categorical decisions;
   // only the steady residual loop below acts on the prediction.
-  const float control_grid = this->predict_control_grid_(reports, grid_total, sample_id);
+  // The trim integrates a steady-state bias, so it must only act on genuinely
+  // fresh meter samples (closed-loop feedback). A frozen / stale meter repeats
+  // its sample_id; without this gate the trim would wind a blind bias the meter
+  // can never correct (e.g. through a probe handoff).
+  const bool trim_fresh = sample_id != this->trim_sample_id_;
+  this->trim_sample_id_ = sample_id;
+  const float control_grid = this->apply_import_trim_(
+      this->predict_control_grid_(reports, grid_total, sample_id), trim_fresh);
 
   std::unordered_map<std::string, float> saturation;
   for (const auto &c : this->consumers_)
@@ -1024,6 +1033,31 @@ float LoadBalancer::predict_control_grid_(const ReportMap &reports, float grid_t
   return *this->pred_grid_;
 }
 
+// Cover the small residual grid import the battery firmware leaves in steady
+// state (deadband + small-import hold), recovering retail-priced
+// self-consumption. Once the predicted grid has held inside the small-import
+// band (0, IMPORT_TRIM_GATE_W) for IMPORT_TRIM_DWELL consecutive fresh samples — a
+// genuine steady state, not a load step on its final approach to zero — add
+// import_trim_w so the firmware discharges to cover it. The dwell requirement
+// keeps the trim inert during transients (no added overshoot); the band gate
+// keeps it clear of a saturated/empty pack (which leaves a larger import).
+// Because the trim integrates a steady-state bias, it acts only on a fresh meter
+// sample: a frozen / stale meter offers no feedback to bound it, so the dwell
+// neither advances nor fires until a new reading arrives (the grid-state
+// predictor keeps the loop balanced meanwhile). import_trim_w = 0 disables it.
+// Mirrors balancer.py LoadBalancer::_apply_import_trim.
+float LoadBalancer::apply_import_trim_(float control_grid, bool fresh) {
+  const float trim = this->cfg_.import_trim_w;
+  if (trim <= 0.0f || !fresh) return control_grid;
+  if (control_grid > 0.0f && control_grid < IMPORT_TRIM_GATE_W) {
+    this->steady_import_dwell_++;
+  } else {
+    this->steady_import_dwell_ = 0;
+  }
+  if (this->steady_import_dwell_ >= IMPORT_TRIM_DWELL) return control_grid + trim;
+  return control_grid;
+}
+
 // Clamp the auto-path reading to the consumer's ramp-pacing cap (issue #458).
 // The battery integrates the reading with its own accelerating ramp, stepping
 // by at most min(GAIN[ramp], |reading|) per poll — so the reading we send is
@@ -1223,12 +1257,23 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
     return this->cache_result_;
   }
 
+  // Estimate household demand (|total_battery_power + grid_total| == true house
+  // load) and low-pass filter it so meter noise can't thrash the active-set size
+  // across the min_efficient_power threshold. The regulation loop still acts on
+  // the raw grid, so tracking is unaffected. Mirrors balancer.py.
   float total_battery_power = 0.0f;
   for (const auto &cid : this->priority_) {
     auto it = reports.find(cid);
     if (it != reports.end()) total_battery_power += it->second.power;
   }
-  const float abs_target = std::fabs(total_battery_power + grid_total);
+  const float raw_abs_target = std::fabs(total_battery_power + grid_total);
+  const float demand_alpha = cfg.efficiency_demand_alpha;
+  if (!this->demand_ema_.has_value() || demand_alpha >= 1.0f) {
+    this->demand_ema_ = raw_abs_target;
+  } else {
+    this->demand_ema_ = *this->demand_ema_ + demand_alpha * (raw_abs_target - *this->demand_ema_);
+  }
+  const float abs_target = *this->demand_ema_;
   const size_t n = this->priority_.size();
   const float per_consumer = (n > 0) ? abs_target / n : 0.0f;
 

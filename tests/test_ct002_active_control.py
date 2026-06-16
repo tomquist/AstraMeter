@@ -476,6 +476,9 @@ class TestEfficiencyOptimization:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
+            # Disable demand smoothing so each demand reading moves the active-set
+            # decision immediately — this test exercises the hysteresis band.
+            efficiency_demand_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -624,6 +627,9 @@ class TestEfficiencyFade:
             fair_distribution=False,
             min_efficient_power=150,
             efficiency_fade_alpha=1.0,
+            # Disable demand smoothing so each demand reading flips the active
+            # set immediately (this test exercises the fade-down blend).
+            efficiency_demand_alpha=1.0,
         )
         # Get consumer "b" fully deprioritized (instant with alpha=1.0).
         device._update_consumer_report("a", "A", 0)
@@ -663,6 +669,9 @@ class TestEfficiencyFade:
             fair_distribution=False,
             min_efficient_power=150,
             efficiency_fade_alpha=1.0,
+            # Disable demand smoothing so a single demand reading flips the
+            # active set immediately — this exercises the fade EMA in isolation.
+            efficiency_demand_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -755,6 +764,9 @@ class TestEfficiencyFade:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
+            # Disable demand smoothing so each demand reading flips the active
+            # set immediately (this test exercises fade, not demand response).
+            efficiency_demand_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
@@ -775,6 +787,9 @@ class TestEfficiencyFade:
             active_control=True,
             fair_distribution=False,
             min_efficient_power=150,
+            # Disable demand smoothing so each demand reading flips the active
+            # set immediately (this test exercises fade, not demand response).
+            efficiency_demand_alpha=1.0,
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
