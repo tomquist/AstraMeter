@@ -1008,6 +1008,7 @@ class CT002:
                     ),
                     "min_dc_output": consumer.min_dc_output if consumer else None,
                     "active_control": self.active_control,
+                    "efficiency_rotation": self._balancer.efficiency_rotation_enabled,
                     "consumer_count": sum(
                         1 for c in self._consumers.values() if c.timestamp > 0
                     ),

@@ -523,6 +523,7 @@ class MqttInsightsService:
                     did,
                     cfg.ha_discovery_prefix,
                     addon_slug=self._hub_identifier(),
+                    efficiency_rotation=bool(data.get("efficiency_rotation", False)),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True

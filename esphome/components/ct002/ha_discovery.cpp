@@ -323,7 +323,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix) {
+    const std::string &ha_prefix, bool efficiency_rotation) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev;
   const std::string state_topic = base_topic + "/ct002/" + device_id + "/status";
@@ -369,13 +369,19 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     cc["value_template"] = "{{ value_json.consumer_count }}";
     cc["entity_category"] = "diagnostic";
 
-    JsonObject fr = components["force_rotation"].to<JsonObject>();
-    fr["platform"] = "button";
-    fr["unique_id"] = uid_prefix + "_force_rotation";
-    fr["name"] = "Force Rotation";
-    fr["command_topic"] = base_topic + "/ct002/" + device_id + "/set";
-    fr["payload_press"] = "{\"force_rotation\": true}";
-    fr["entity_category"] = "config";
+    // The Force Rotation button only does anything when efficiency rotation is
+    // enabled (min_efficient_power > 0); without it every battery stays active
+    // and there's nothing to rotate, so don't surface the button (mirrors
+    // discovery.py).
+    if (efficiency_rotation) {
+      JsonObject fr = components["force_rotation"].to<JsonObject>();
+      fr["platform"] = "button";
+      fr["unique_id"] = uid_prefix + "_force_rotation";
+      fr["name"] = "Force Rotation";
+      fr["command_topic"] = base_topic + "/ct002/" + device_id + "/set";
+      fr["payload_press"] = "{\"force_rotation\": true}";
+      fr["entity_category"] = "config";
+    }
 
     JsonObject device = root["device"].to<JsonObject>();
     device["identifiers"] = node_id;

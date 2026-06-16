@@ -33,11 +33,11 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &device_type = "");
 
 // CT002 device-level HA Discovery payload (parent device, smooth_target
-// sensor, active_control binary_sensor, consumer_count diagnostic,
-// force_rotation button).
+// sensor, active_control binary_sensor, consumer_count diagnostic, and —
+// only when efficiency rotation is enabled — the force_rotation button).
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix);
+    const std::string &ha_prefix, bool efficiency_rotation = false);
 
 }  // namespace mqtt_insights
 }  // namespace ct002

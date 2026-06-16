@@ -355,6 +355,7 @@ def build_ct002_device_discovery(
     device_id: str,
     ha_prefix: str,
     addon_slug: str | None = None,
+    efficiency_rotation: bool = False,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_ct002_{safe_dev}"
@@ -401,15 +402,20 @@ def build_ct002_device_discovery(
             "value_template": "{{ value_json.consumer_count }}",
             "entity_category": "diagnostic",
         },
-        "force_rotation": {
+    }
+
+    # The Force Rotation button only does anything when efficiency rotation is
+    # enabled (``min_efficient_power > 0``); without it the balancer keeps every
+    # battery active and there's nothing to rotate, so don't surface the button.
+    if efficiency_rotation:
+        components["force_rotation"] = {
             "platform": "button",
             "unique_id": f"{uid_prefix}_force_rotation",
             "name": "Force Rotation",
             "command_topic": f"{base_topic}/ct002/{device_id}/set",
             "payload_press": '{"force_rotation": true}',
             "entity_category": "config",
-        },
-    }
+        }
 
     device_info: dict = {
         "identifiers": node_id,
