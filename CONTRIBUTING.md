@@ -80,4 +80,4 @@ The `esphome` backend uses a "test-hooks" binary (`test.e2e.host.yaml`) that com
 
 ## Changelog
 
-For user-visible changes, add or update the single bullet under **`## Next`** in [CHANGELOG.md](CHANGELOG.md) (see [AGENTS.md](AGENTS.md) — Changelog).
+For user-visible changes, add or update **the bullet for your change** under **`## Next`** in [CHANGELOG.md](CHANGELOG.md). The unit is the **change, not the branch or PR** — a change that spans several branches or PRs edits the *same* bullet rather than adding one each. `## Next` accumulates **one bullet per change** (so it normally holds several at once); add yours once, edit it on later iterations, and never consolidate or remove a bullet belonging to a *different* change (see [AGENTS.md](AGENTS.md) — Changelog).
