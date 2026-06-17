@@ -89,7 +89,7 @@ void add_power_sensor(JsonObject components, const std::string &key, const std::
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type) {
+    const std::string &device_type, bool efficiency_rotation) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string safe_cid = sanitize_id(consumer_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev + "_" + safe_cid;
@@ -270,21 +270,26 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     // window this battery participates in, as a percentage. 100 % neutral (full
     // participation); 0 % skips the battery for efficiency (parked while
     // limiting). Surfaced as a percentage; the internal value is a 0-1 fraction.
-    JsonObject eww = components["efficiency_window_weight"].to<JsonObject>();
-    eww["platform"] = "number";
-    eww["unique_id"] = uid_prefix + "_efficiency_window_weight";
-    eww["name"] = "Efficiency Window Weight";
-    eww["unit_of_measurement"] = "%";
-    eww["min"] = 0;
-    eww["max"] = 100;
-    eww["step"] = 5;
-    eww["mode"] = "slider";
-    eww["state_topic"] = state_topic;
-    eww["value_template"] =
-        "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}";
-    eww["command_topic"] = state_topic + "/efficiency_window_weight/set";
-    eww["retain"] = true;
-    eww["entity_category"] = "config";
+    // Only meaningful when efficiency rotation is enabled (min_efficient_power >
+    // 0); without it every battery stays active, so don't surface the entity
+    // (mirrors discovery.py).
+    if (efficiency_rotation) {
+      JsonObject eww = components["efficiency_window_weight"].to<JsonObject>();
+      eww["platform"] = "number";
+      eww["unique_id"] = uid_prefix + "_efficiency_window_weight";
+      eww["name"] = "Efficiency Window Weight";
+      eww["unit_of_measurement"] = "%";
+      eww["min"] = 0;
+      eww["max"] = 100;
+      eww["step"] = 5;
+      eww["mode"] = "slider";
+      eww["state_topic"] = state_topic;
+      eww["value_template"] =
+          "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}";
+      eww["command_topic"] = state_topic + "/efficiency_window_weight/set";
+      eww["retain"] = true;
+      eww["entity_category"] = "config";
+    }
 
     // Min DC Output number — minimum discharge (W) to keep a DC battery's
     // external inverter from switching off at 0 W. Only surfaced for batteries

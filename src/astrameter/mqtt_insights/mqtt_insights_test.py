@@ -160,16 +160,9 @@ def test_ct002_consumer_discovery_structure():
     assert weight["max"] == 10
     assert weight["entity_category"] == "config"
 
-    # Efficiency window weight number entity — surfaced as a percentage.
-    eww = comps["efficiency_window_weight"]
-    assert eww["platform"] == "number"
-    assert eww["command_topic"].endswith("/efficiency_window_weight/set")
-    assert eww["retain"] is True
-    assert eww["unit_of_measurement"] == "%"
-    assert eww["min"] == 0
-    assert eww["max"] == 100
-    assert eww["entity_category"] == "config"
-    assert "* 100" in eww["value_template"]
+    # Efficiency Window Weight is gated on efficiency rotation (covered by its
+    # own test); the default structure here has rotation off, so it's absent.
+    assert "efficiency_window_weight" not in comps
 
     # Min DC Output number entity — present for the B2500 family (HMJ-2).
     min_dc = comps["min_dc_output"]
@@ -298,6 +291,37 @@ def test_ct002_device_discovery_omits_force_rotation_without_efficiency():
         "astrameter", "dev1", "homeassistant", efficiency_rotation=True
     )
     assert "force_rotation" in enabled_payload["components"]
+
+
+def test_ct002_consumer_discovery_gates_efficiency_window_weight():
+    """The Efficiency Window Weight number is only surfaced when efficiency
+    rotation is enabled (the default omits it — every battery stays active)."""
+    _, default_payload = build_ct002_consumer_discovery(
+        "astrameter", "dev1", "aabbccddeeff", "homeassistant", device_type="HMJ-2"
+    )
+    comps = default_payload["components"]
+    assert "efficiency_window_weight" not in comps
+    # The remaining per-consumer entities are unaffected.
+    assert "distribution_weight" in comps
+    assert "min_dc_output" in comps
+
+    _, enabled_payload = build_ct002_consumer_discovery(
+        "astrameter",
+        "dev1",
+        "aabbccddeeff",
+        "homeassistant",
+        device_type="HMJ-2",
+        efficiency_rotation=True,
+    )
+    eww = enabled_payload["components"]["efficiency_window_weight"]
+    assert eww["platform"] == "number"
+    assert eww["command_topic"].endswith("/efficiency_window_weight/set")
+    assert eww["retain"] is True
+    assert eww["unit_of_measurement"] == "%"
+    assert eww["min"] == 0
+    assert eww["max"] == 100
+    assert eww["entity_category"] == "config"
+    assert "* 100" in eww["value_template"]
 
 
 def test_shelly_battery_discovery_structure():

@@ -40,6 +40,7 @@ def build_ct002_consumer_discovery(
     consumer_id: str,
     ha_prefix: str,
     device_type: str = "",
+    efficiency_rotation: bool = False,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     safe_cid = _sanitize_id(consumer_id)
@@ -217,24 +218,27 @@ def build_ct002_consumer_discovery(
     # window this battery participates in, as a percentage.  100 % is neutral
     # (full participation); 0 % skips the battery for efficiency (parked while
     # limiting); intermediate values give it proportionally less active time.
-    # Surfaced as a percentage; the internal value is a 0-1 fraction.
-    components["efficiency_window_weight"] = {
-        "platform": "number",
-        "unique_id": f"{uid_prefix}_efficiency_window_weight",
-        "name": "Efficiency Window Weight",
-        "unit_of_measurement": "%",
-        "min": 0,
-        "max": 100,
-        "step": 5,
-        "mode": "slider",
-        "state_topic": state_topic,
-        "value_template": (
-            "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}"
-        ),
-        "command_topic": f"{state_topic}/efficiency_window_weight/set",
-        "retain": True,
-        "entity_category": "config",
-    }
+    # Surfaced as a percentage; the internal value is a 0-1 fraction.  Only
+    # meaningful when efficiency rotation is enabled (``min_efficient_power >
+    # 0``); without it every battery stays active, so don't surface the entity.
+    if efficiency_rotation:
+        components["efficiency_window_weight"] = {
+            "platform": "number",
+            "unique_id": f"{uid_prefix}_efficiency_window_weight",
+            "name": "Efficiency Window Weight",
+            "unit_of_measurement": "%",
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "mode": "slider",
+            "state_topic": state_topic,
+            "value_template": (
+                "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}"
+            ),
+            "command_topic": f"{state_topic}/efficiency_window_weight/set",
+            "retain": True,
+            "entity_category": "config",
+        }
 
     # Min DC Output number — minimum discharge (W) to keep a DC battery's
     # external inverter from switching off at 0 W.  Only surfaced for batteries

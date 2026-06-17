@@ -30,7 +30,7 @@ std::string sanitize_id(const std::string &value);
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type = "");
+    const std::string &device_type = "", bool efficiency_rotation = false);
 
 // CT002 device-level HA Discovery payload (parent device, smooth_target
 // sensor, active_control binary_sensor, consumer_count diagnostic, and —

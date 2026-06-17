@@ -548,6 +548,7 @@ class MqttInsightsService:
                     cid,
                     cfg.ha_discovery_prefix,
                     device_type=data.get("device_type", ""),
+                    efficiency_rotation=bool(data.get("efficiency_rotation", False)),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True

@@ -277,7 +277,8 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
       this->discovered_consumers_.insert(consumer_id);
       auto [topic, payload] = build_ct002_consumer_discovery(
           this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-          snap.device_type);
+          snap.device_type,
+          this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled());
       this->mqtt_->publish(topic, payload, 0, true);
     }
   }
