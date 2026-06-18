@@ -38,6 +38,11 @@ options:
   marstek_auto_register_ct_device: false
   marstek_mailbox: ""
   marstek_password: ""
+  cloud_reporting: false
+  cloud_reporting_host: ""
+  cloud_reporting_id: ""
+  cloud_reporting_aid: ""
+  cloud_reporting_interval: 60
   active_control: true
   min_efficient_power: 0
   efficiency_rotation_interval: 900
@@ -54,6 +59,11 @@ schema:
   marstek_auto_register_ct_device: bool?
   marstek_mailbox: str?
   marstek_password: password?
+  cloud_reporting: bool?
+  cloud_reporting_host: str?
+  cloud_reporting_id: str?
+  cloud_reporting_aid: str?
+  cloud_reporting_interval: float(1,)?
   active_control: bool?
   min_efficient_power: int(0,)?
   efficiency_rotation_interval: int(1,)?
