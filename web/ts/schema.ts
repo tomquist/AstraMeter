@@ -643,6 +643,25 @@ export const POWERMETERS: Powermeter[] = [
     },
   },
   {
+    id: "fronius",
+    label: "Fronius Smart Meter",
+    section: "FRONIUS",
+    blurb:
+      "A Fronius Smart Meter read through a Fronius inverter's local Solar API.",
+    docPython: "docs/powermeters.md#fronius-smart-meter",
+    fields: [
+      { key: "IP", label: "Inverter IP", type: "text", placeholder: "192.168.1.130", required: true, help: "The Fronius inverter's local IP (the meter is read through it)." },
+      { key: "DEVICE_ID", label: "Meter device id", type: "number", default: "0", placeholder: "0", advanced: true, help: "Solar API meter DeviceId. 0 is the first/only meter." },
+    ],
+    esphome: {
+      kind: "http",
+      tier: "generic",
+      note: "Polls the inverter's Solar API and reads the signed PowerReal_P_Sum (positive = import). Flip with a multiply: -1 filter if reversed.",
+      url1: (f) => `http://${f.IP || "192.168.1.130"}/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=${f.DEVICE_ID || "0"}`,
+      lambda1: 'id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Sum"]);',
+    },
+  },
+  {
     id: "script",
     label: "Custom script",
     section: "SCRIPT",

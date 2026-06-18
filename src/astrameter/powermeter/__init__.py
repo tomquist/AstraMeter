@@ -4,6 +4,7 @@ from .emlog import Emlog
 from .envoy import Envoy
 from .esphome import ESPHome
 from .fritz import FritzSmartEnergy
+from .fronius import Fronius
 from .homeassistant import HomeAssistant
 from .homewizard import HomeWizardPowermeter
 from .iobroker import IoBroker
@@ -35,6 +36,7 @@ __all__ = [
     "Emlog",
     "Envoy",
     "FritzSmartEnergy",
+    "Fronius",
     "HampelPowermeter",
     "HomeAssistant",
     "HomeWizardPowermeter",
