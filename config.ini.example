@@ -405,6 +405,10 @@ THROTTLE_INTERVAL = 0
 # IP = 192.168.1.130
 ## Solar API meter device id; 0 is the first/only meter (default).
 # DEVICE_ID = 0
+## Report per-phase power (PowerReal_P_Phase_1..3) as L1/L2/L3 instead of the
+## aggregate sum. Only enable if your meter reports SIGNED per-phase power;
+## some firmwares report it unsigned, which breaks export readings.
+# PER_PHASE = True
 ## If readings are reversed, flip the sign:
 # POWER_MULTIPLIER = -1
 

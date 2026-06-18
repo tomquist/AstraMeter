@@ -913,3 +913,20 @@ ct002:
 ```
 
 If your readings have the wrong sign, add a `multiply: -1` filter on the sensor.
+
+For three-phase, add `grid_l2` / `grid_l3` template sensors and publish the
+per-phase fields from the same poll (only if your meter reports **signed**
+per-phase power — some firmwares report it unsigned, which breaks export):
+
+```yaml
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    JsonObject data = root["Body"]["Data"];
+                    id(grid_l1).publish_state(data["PowerReal_P_Phase_1"]);
+                    id(grid_l2).publish_state(data["PowerReal_P_Phase_2"]);
+                    id(grid_l3).publish_state(data["PowerReal_P_Phase_3"]);
+                    return true;
+                  });
+```
+
+…and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`.

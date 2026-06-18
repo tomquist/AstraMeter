@@ -722,6 +722,7 @@ def create_fronius_powermeter(
     return Fronius(
         config.get(section, "IP", fallback=""),
         config.get(section, "DEVICE_ID", fallback="0"),
+        per_phase=config.getboolean(section, "PER_PHASE", fallback=False),
     )
 
 

@@ -459,9 +459,20 @@ IP = 192.168.1.130
 the grid. If your readings come out reversed, flip them with the global
 `POWER_MULTIPLIER = -1`.
 
-**Per-phase.** The single signed sum is used rather than the per-phase
-`PowerReal_P_Phase_*` fields, because several meter firmwares report those phase
-values unsigned (which would break export readings).
+**Per-phase.** By default the single signed sum is used. Set `PER_PHASE = True`
+to report the three per-phase real powers (`PowerReal_P_Phase_1..3`) as L1/L2/L3
+instead:
+
+```ini
+[FRONIUS]
+IP = 192.168.1.130
+PER_PHASE = True
+```
+
+> ⚠️ Only enable `PER_PHASE` if your meter reports **signed** per-phase power.
+> Several meter firmwares report `PowerReal_P_Phase_*` *unsigned* (always
+> positive), which would make exported power read as imported on each phase. If
+> in doubt, leave it off and use the always-signed sum.
 
 ## Script
 

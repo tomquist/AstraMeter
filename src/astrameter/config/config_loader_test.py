@@ -489,10 +489,12 @@ def test_create_fronius_powermeter():
     pm = create_fronius_powermeter("FRONIUS", config)
     assert pm.ip == "127.0.0.1"
     assert pm.device_id == "0"
+    assert pm.per_phase is False
 
-    config["FRONIUS_2"] = {"IP": "127.0.0.1", "DEVICE_ID": "1"}
+    config["FRONIUS_2"] = {"IP": "127.0.0.1", "DEVICE_ID": "1", "PER_PHASE": "True"}
     pm = create_fronius_powermeter("FRONIUS_2", config)
     assert pm.device_id == "1"
+    assert pm.per_phase is True
 
 
 def test_create_sml_powermeter():
