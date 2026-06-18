@@ -280,6 +280,8 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
     "CT002": {
         "UDP_PORT": {"type": "integer"},
         "WIFI_RSSI": {"type": "integer"},
+        "CLOUD_REPORTING": {"type": "boolean"},
+        "CLOUD_REPORTING_INTERVAL": {"type": "float", "min": 1},
         "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
         "CONSUMER_TTL": {"type": "integer"},
         "DEBUG_STATUS": {"type": "boolean"},

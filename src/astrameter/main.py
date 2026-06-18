@@ -7,6 +7,11 @@ import signal
 from collections import OrderedDict
 from collections.abc import Sequence
 
+from astrameter.cloud_reporting import (
+    CloudReporter,
+    CloudReporterConfig,
+    CtMeasurement,
+)
 from astrameter.config.config_loader import (
     ClientFilter,
     read_all_powermeter_configs,
@@ -154,6 +159,22 @@ async def run_device(
         ct_mac = cfg.get(ct_section, "CT_MAC", fallback="")
         ct_udp_port = cfg.getint(ct_section, "UDP_PORT", fallback=UDP_PORT)
         wifi_rssi = cfg.getint(ct_section, "WIFI_RSSI", fallback=-50)
+        # Opt-in Marstek HTTP cloud reporting (hamedata.com). Disabled by default;
+        # see docs/marstek-mqtt-http.md (§6) for what it sends and its limits.
+        cloud_reporting = cfg.getboolean(ct_section, "CLOUD_REPORTING", fallback=False)
+        cloud_reporting_host = (
+            cfg.get(ct_section, "CLOUD_REPORTING_HOST", fallback="").strip()
+            or "eu.hamedata.com"
+        )
+        cloud_reporting_id = cfg.get(
+            ct_section, "CLOUD_REPORTING_ID", fallback=""
+        ).strip()
+        cloud_reporting_aid = cfg.get(
+            ct_section, "CLOUD_REPORTING_AID", fallback=""
+        ).strip()
+        cloud_reporting_interval = cfg.getfloat(
+            ct_section, "CLOUD_REPORTING_INTERVAL", fallback=60.0
+        )
         dedupe_time_window = cfg.getfloat(
             ct_section, "DEDUPE_TIME_WINDOW", fallback=global_dedupe_time_window
         )
@@ -467,9 +488,88 @@ async def run_device(
                 device_id,
             )
 
+    # Opt-in HTTP cloud reporting (hamedata.com), mimicking what a real CT does:
+    # a handshake then a periodic setCtReporting GET with live grid/bucket data.
+    cloud_task: asyncio.Task[None] | None = None
+    if isinstance(device, CT002) and cloud_reporting:
+        report_id = cloud_reporting_id or ct_mac or marstek_mac
+        if not report_id:
+            logger.warning(
+                "CLOUD_REPORTING enabled for %s but no device id is available; "
+                "set CLOUD_REPORTING_ID (or CT_MAC). Cloud reporting disabled.",
+                device_id,
+            )
+        else:
+            ct_device: CT002 = device
+
+            async def _cloud_gather(
+                _pms: list[tuple[Powermeter, ClientFilter, bool]] = powermeters,
+                _dev: CT002 = ct_device,
+                _insights: MqttInsightsService | None = insights,
+            ) -> CtMeasurement:
+                chosen: Powermeter | None = next(
+                    (pm for pm, cf, _ in _pms if cf.matches("0.0.0.0")), None
+                )
+                if chosen is None and _pms:
+                    chosen = _pms[0][0]
+                phases = [0.0, 0.0, 0.0]
+                if chosen is not None:
+                    with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+                        await asyncio.wait_for(
+                            chosen.wait_for_next_message(), timeout=2.0
+                        )
+                    vs = await chosen.get_powermeter_watts_raw()
+                    phases = [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
+                ap, bp, cp = (round(p) for p in phases)
+                buckets = _dev.reporting_phase_buckets()
+
+                def _chrg(b: str) -> int:
+                    return int(buckets.get(b, {}).get("chrg_power", 0))
+
+                def _dchrg(b: str) -> int:
+                    return int(buckets.get(b, {}).get("dchrg_power", 0))
+
+                return CtMeasurement(
+                    ap=ap,
+                    bp=bp,
+                    cp=cp,
+                    dp=ap + bp + cp,
+                    rssi=_dev.wifi_rssi,
+                    slv=_dev.reporting_consumer_count(),
+                    udp=1,
+                    mqtt=1 if _insights is not None else 0,
+                    cz=_chrg("x"),
+                    ca=_chrg("A"),
+                    cb=_chrg("B"),
+                    cc=_chrg("C"),
+                    cd=_chrg("ABC"),
+                    dz=_dchrg("x"),
+                    da=_dchrg("A"),
+                    db=_dchrg("B"),
+                    dc=_dchrg("C"),
+                    dd=_dchrg("ABC"),
+                )
+
+            cloud_task = asyncio.create_task(
+                CloudReporter(
+                    CloudReporterConfig(
+                        ct_type=device.ct_type,
+                        device_id=report_id,
+                        aid=cloud_reporting_aid,
+                        host=cloud_reporting_host,
+                        interval_seconds=cloud_reporting_interval,
+                    ),
+                    _cloud_gather,
+                ).run()
+            )
+
     try:
         await device.wait()
     finally:
+        if cloud_task is not None:
+            cloud_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cloud_task
         if insights and isinstance(device, CT002):
             insights.unregister_handlers(device_id or "")
             with contextlib.suppress(Exception):

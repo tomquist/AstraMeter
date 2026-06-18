@@ -632,6 +632,16 @@ class CT002:
         """Number of consumers that have reported at least once over UDP."""
         return sum(1 for c in self._consumers.values() if c.timestamp > 0)
 
+    def reporting_phase_buckets(self) -> dict[str, dict[str, int]]:
+        """Per-bucket charge/discharge power (W) and counts for integrations.
+
+        Keys are :data:`PHASE_BUCKETS` (``x``/``A``/``B``/``C``/``ABC``); each
+        value has ``chrg_power`` (≤0), ``dchrg_power`` (≥0), ``count`` and
+        ``active`` — the same sign-split the UDP response carries. Used by the
+        opt-in HTTP cloud reporter for its ``cz…cd`` / ``dz…dd`` fields.
+        """
+        return self._collect_reports_by_phase()
+
     def reporting_consumer_rows(self) -> tuple[ReportingConsumerRow, ...]:
         """Stable-ordered view of reporting consumers for integrations.
 
