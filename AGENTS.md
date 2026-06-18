@@ -70,7 +70,7 @@ Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. 
 
 Write each bullet for the **user**, not the implementer: describe what changed for them and why it matters, and keep it **compact and clear**. Leave out implementation details — internal symbol/function/class/file names, config knob mechanics, data structures, parity-mirror notes, and the like — unless a user genuinely needs them (e.g. a config option or env var they set). Prefer one tight sentence over an exhaustive list of everything touched.
 
-**Link the bullet to its PR once the number is known** — append a `([#<pr>](https://github.com/tomquist/astrameter/pull/<pr>))` reference (alongside any issue links already cited) so the changelog points back to the change. The PR number usually isn't known when you first write the bullet, so add the link on the follow-up iteration after the PR exists.
+**Link the bullet to its PR once the number is known** — append a `([#<pr>](https://github.com/tomquist/astrameter/pull/<pr>))` reference (alongside any issue links already cited) so the changelog points back to the change. The PR number usually isn't known when you first write the bullet, so add the link on the follow-up iteration after the PR exists. **Always do this as soon as you learn the PR number** (e.g. the moment a PR is opened for the branch, or a number is shared with you) — don't wait to be asked: add the reference and push it in your next commit.
 
 ## Adding a powermeter
 
