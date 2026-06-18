@@ -54,6 +54,10 @@ marstek_registration_ns = ct002_ns.namespace("marstek_registration")
 MarstekRegistrationComponent = marstek_registration_ns.class_(
     "MarstekRegistrationComponent", cg.Component
 )
+cloud_reporting_ns = ct002_ns.namespace("cloud_reporting")
+CloudReportingComponent = cloud_reporting_ns.class_(
+    "CloudReportingComponent", cg.Component
+)
 
 # Parent fields
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
@@ -341,6 +345,39 @@ MARSTEK_REGISTRATION_SCHEMA = cv.All(
     cv.requires_component("http_request"),
 )
 
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: cloud_reporting (opt-in HTTP status reporting to hamedata.com)
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_CLOUD_REPORTING = "cloud_reporting"
+CONF_HOST = "host"
+CONF_ACCOUNT_ID = "account_id"
+CONF_FCV = "fcv"
+CONF_SV = "sv"
+CONF_INTERVAL = "interval"
+
+CLOUD_REPORTING_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(CloudReportingComponent),
+            cv.GenerateID(CONF_HTTP_REQUEST_ID): cv.use_id(
+                http_request.HttpRequestComponent
+            ),
+            cv.Optional(CONF_HOST, default="eu.hamedata.com"): cv.string_strict,
+            # Device id sent as id/uid. Defaults to the CT MAC at runtime.
+            cv.Optional(CONF_DEVICE_ID, default=""): cv.string,
+            cv.Optional(CONF_ACCOUNT_ID, default=""): cv.string,
+            cv.Optional(CONF_FCV, default="202409090159"): cv.string_strict,
+            cv.Optional(CONF_SV, default=0): cv.int_,
+            cv.Optional(
+                CONF_INTERVAL, default="60s"
+            ): cv.positive_time_period_milliseconds,
+        }
+    ),
+    # Plain-HTTP GETs go through the http_request component.
+    cv.requires_component("http_request"),
+)
+
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -381,6 +418,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_SATURATION): SATURATION_SCHEMA,
             cv.Optional(CONF_MQTT_INSIGHTS): MQTT_INSIGHTS_SCHEMA,
             cv.Optional(CONF_MARSTEK_REGISTRATION): MARSTEK_REGISTRATION_SCHEMA,
+            cv.Optional(CONF_CLOUD_REPORTING): CLOUD_REPORTING_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_three_phase_sensors,
@@ -497,6 +535,8 @@ async def to_code(config):
         await _to_code_mqtt_insights(config, var)
     if CONF_MARSTEK_REGISTRATION in config:
         await _to_code_marstek_registration(config, var)
+    if CONF_CLOUD_REPORTING in config:
+        await _to_code_cloud_reporting(config, var)
 
 
 async def _to_code_mqtt_insights(config, ct002_var):
@@ -551,3 +591,31 @@ async def _to_code_marstek_registration(config, ct002_var):
     cg.add(var.set_device_type(sub[CONF_DEVICE_TYPE]))
     cg.add(var.set_retry_interval_ms(int(sub[CONF_RETRY_INTERVAL].total_milliseconds)))
     cg.add(var.set_force_reregister(sub[CONF_FORCE_REREGISTER]))
+
+
+async def _to_code_cloud_reporting(config, ct002_var):
+    """Codegen for the optional `cloud_reporting:` sub-block.
+
+    Mirrors src/astrameter/cloud_reporting.py: a loop()-driven state machine
+    that runs the getDateInfo handshake once, then periodically GETs
+    setCtReporting with live CT data. Plain HTTP via the http_request
+    component; reads grid/bucket data from the parent ct002 via set_ct002().
+    """
+    sub = config[CONF_CLOUD_REPORTING]
+    # Gate the cloud_reporting runtime .cpp on this define — the URL builders
+    # compile unconditionally (for the host test), but the http_request-using
+    # component body only when this sub-block is present.
+    cg.add_define("USE_CT002_CLOUD_REPORTING")
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+
+    http_var = await cg.get_variable(sub[CONF_HTTP_REQUEST_ID])
+    cg.add(var.set_http(http_var))
+
+    cg.add(var.set_host(sub[CONF_HOST]))
+    cg.add(var.set_device_id(sub[CONF_DEVICE_ID]))
+    cg.add(var.set_account_id(sub[CONF_ACCOUNT_ID]))
+    cg.add(var.set_fcv(sub[CONF_FCV]))
+    cg.add(var.set_sv(sub[CONF_SV]))
+    cg.add(var.set_interval_ms(int(sub[CONF_INTERVAL].total_milliseconds)))

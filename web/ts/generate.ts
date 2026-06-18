@@ -460,6 +460,7 @@ export function generateEsphome(state: State): string {
   // — Insights reuses whatever broker this YAML connects to.
   const wantInsights = state.mqttInsights && state.mqttInsights.enabled;
   const wantMarstek = state.marstek && state.marstek.enabled;
+  const wantCloud = ((state.ct && state.ct.fields) || {}).CLOUD_REPORTING === "True";
   const pm0 = getPowermeter(meter.type);
   if (wantInsights && pm0 && pm0.esphome && pm0.esphome.kind === "mqtt") {
     const mf0 = state.mqttInsights.fields || {};
@@ -513,7 +514,8 @@ export function generateEsphome(state: State): string {
     const port = (useMeter && mFields.PORT) || mf.PORT || "1883";
     out.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
   }
-  if (wantMarstek) {
+  // Both marstek_registration and cloud_reporting need a single http_request:.
+  if (wantMarstek || wantCloud) {
     out.push(`http_request:\n${IND}timeout: 20s`);
   }
 
@@ -565,6 +567,15 @@ export function generateEsphome(state: State): string {
     sub.push(`${IND}${IND}password: !secret marstek_password`);
     sub.push(`${IND}${IND}device_type: ${(esp.ctType || "HME-4") === "HME-3" ? "ct003" : "ct002"}`);
     if (!isBlank(rf.TIMEZONE)) sub.push(`${IND}${IND}timezone: ${rf.TIMEZONE}`);
+    ctLines.push(sub.join("\n"));
+  }
+
+  if (wantCloud) {
+    const sub = [`${IND}cloud_reporting:`];
+    if (!isBlank(ctf.CLOUD_REPORTING_HOST)) sub.push(`${IND}${IND}host: ${ctf.CLOUD_REPORTING_HOST}`);
+    if (!isBlank(ctf.CLOUD_REPORTING_ID)) sub.push(`${IND}${IND}device_id: "${String(ctf.CLOUD_REPORTING_ID).trim()}"`);
+    if (!isBlank(ctf.CLOUD_REPORTING_AID)) sub.push(`${IND}${IND}account_id: "${String(ctf.CLOUD_REPORTING_AID).trim()}"`);
+    if (!isBlank(ctf.CLOUD_REPORTING_INTERVAL)) sub.push(`${IND}${IND}interval: ${ctf.CLOUD_REPORTING_INTERVAL}s`);
     ctLines.push(sub.join("\n"));
   }
 

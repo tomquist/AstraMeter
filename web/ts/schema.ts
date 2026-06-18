@@ -748,8 +748,9 @@ export const CT_SATURATION: Field[] = [
   { key: "SATURATION_DECAY_FACTOR", ey: "decay_factor", label: "Saturation decay factor", help: "How fast a swapped-out battery becomes eligible again. Default 0.995.", type: "number", placeholder: "0.995" },
 ];
 
-// Opt-in HTTP cloud reporting (hamedata.com). Python-only — no ESPHome key, so
-// these never appear in the ct002: block.
+// Opt-in HTTP cloud reporting (hamedata.com). Emitted to config.ini, the HA
+// add-on options, and the ESPHome `cloud_reporting:` sub-block (which also pulls
+// in an http_request: block). Generator handles the mapping by key, so no `ey`.
 export const CT_CLOUD: Field[] = [
   { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for an id/account it already knows from app pairing, so set the two ids below.", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "CLOUD_REPORTING_ID", label: "Reporting device ID", help: "Sent as the report's id/uid. Leave blank to use the CT MAC. Use a real paired device's id if you want Marstek's cloud to store the reports.", type: "text", placeholder: "(CT MAC)" },

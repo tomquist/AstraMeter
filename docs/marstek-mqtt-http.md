@@ -283,13 +283,16 @@ tolerant superset rather than a byte‑exact copy (different key order, extra
 MQTT connection — those are documented here for completeness and for anyone aiming
 to fully replicate a real CT.
 
-**HTTP cloud reporting is implemented as an opt‑in feature** (§6). Set
-`CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]` section to make AstraMeter run
-the same handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing
-the `HME-4`/`HME-3` field layout from the emulated `ct_type`. It fills the fields
+**HTTP cloud reporting is implemented as an opt‑in feature** (§6) on **both**
+stacks. In Python set `CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]` section;
+on ESPHome add a `cloud_reporting:` sub‑block under `ct002:` (it needs an
+`http_request:` block). Either way AstraMeter runs the same
+handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing the
+`HME-4`/`HME-3` field layout from the emulated `ct_type`. It fills the fields
 AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
 count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
 V/I on `HME-4`). Because the cloud accepts a report only for an `id`/`aid` it
-already knows, set `CLOUD_REPORTING_ID` (and `CLOUD_REPORTING_AID`) to a real
-paired device's identifiers; tune `CLOUD_REPORTING_INTERVAL` to the cadence you
-measure. See `config.ini.example`.
+already knows, set the device id (and account id) to a real paired device's
+identifiers; tune the interval to the cadence you measure. The web config
+generator produces all three forms (config.ini, the add‑on options, the ESPHome
+sub‑block). See `config.ini.example`.

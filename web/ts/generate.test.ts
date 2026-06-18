@@ -144,12 +144,21 @@ const eyHa = generateEsphome({
       tuning: { POWER_OFFSET: "-20" },
     },
   ],
-  ct: { fields: { BALANCE_GAIN: "0.3", CLOUD_REPORTING: "True" } },
+  ct: {
+    fields: {
+      BALANCE_GAIN: "0.3",
+      CLOUD_REPORTING: "True",
+      CLOUD_REPORTING_ID: "02b25012abcd",
+      CLOUD_REPORTING_INTERVAL: "30",
+    },
+  },
 });
 has(eyHa, "name: my-ct002", "esp/ha: name");
-// Cloud reporting is Python-only — it must never leak into the ESPHome block.
-lacks(eyHa, "cloud_reporting", "esp/ha: no cloud reporting in esphome");
-lacks(eyHa, "CLOUD_REPORTING", "esp/ha: no cloud reporting key in esphome");
+// Cloud reporting emits a single http_request + a cloud_reporting: sub-block.
+has(eyHa, "http_request:", "esp/ha: http_request for cloud reporting");
+has(eyHa, "cloud_reporting:", "esp/ha: cloud_reporting sub-block");
+has(eyHa, 'device_id: "02b25012abcd"', "esp/ha: cloud device id quoted");
+has(eyHa, "interval: 30s", "esp/ha: cloud interval");
 has(eyHa, "external_components:", "esp/ha: external component");
 has(eyHa, "platform: homeassistant", "esp/ha: native sensor");
 has(eyHa, "entity_id: sensor.l1", "esp/ha: l1 entity");
