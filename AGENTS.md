@@ -72,6 +72,19 @@ Write each bullet for the **user**, not the implementer: describe what changed f
 
 **Link the bullet to its PR once the number is known** — append a `([#<pr>](https://github.com/tomquist/astrameter/pull/<pr>))` reference (alongside any issue links already cited) so the changelog points back to the change. The PR number usually isn't known when you first write the bullet, so add the link on the follow-up iteration after the PR exists.
 
+## Config options (surface everywhere)
+
+Any **user-facing config option** must be wired into **every** config surface, not just the loader — a setting that only one entry point understands is a bug. When you add or rename a `[SECTION]` key, update **all** of:
+
+1. **Loader** — read it in `src/astrameter/config/config_loader.py` (or the relevant `run_device` block in `main.py`).
+2. **`config.ini.example`** — a commented example with a short rationale.
+3. **Web config editor** — register typed keys in `SECTION_KEY_TYPES` in `src/astrameter/web_config.py`.
+4. **Web config generator (ALWAYS)** — add the field to the matching group in `web/ts/schema.ts` (e.g. a `CT_*` group or a `POWERMETERS` entry), emit it from `web/ts/generate.ts` for **every** target it applies to (`config.ini`, the Home Assistant add-on options, and ESPHome **only if** it has an ESPHome counterpart — Python-only options carry no `ey` key and must be excluded from the `ct002:` block), surface it in `web/ts/app.ts`, and add `web/ts/generate.test.ts` assertions. Run `cd web && npm run check`.
+5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it to the generated `config.ini` in `ha_addon/run.sh`, and describe it in `ha_addon/translations/en.yaml`.
+6. **Docs** — the relevant `docs/*.md` (and `README.md` if it belongs in the quick reference).
+
+The web config generator is **not optional** — a new option that the generator can't produce is incomplete.
+
 ## Adding a powermeter
 
 Powermeters are Python-only and have **no** C++/ESPHome counterpart (the ESPHome

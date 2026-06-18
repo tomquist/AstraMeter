@@ -48,7 +48,16 @@ const ha = generateConfigIni({
       tuning: { THROTTLE_INTERVAL: "3", POWER_MULTIPLIER: "-1", PID_KP: "0.5" },
     },
   ],
-  ct: { fields: { CT_MAC: "001122334455", BALANCE_GAIN: "0.3", ACTIVE_CONTROL: "True" } },
+  ct: {
+    fields: {
+      CT_MAC: "001122334455",
+      BALANCE_GAIN: "0.3",
+      ACTIVE_CONTROL: "True",
+      CLOUD_REPORTING: "True",
+      CLOUD_REPORTING_ID: "aabbccddeeff",
+      CLOUD_REPORTING_INTERVAL: "30",
+    },
+  },
 });
 has(ha, "[HOMEASSISTANT]", "ha: section");
 has(ha, "HTTPS = True", "ha: https bool");
@@ -59,6 +68,9 @@ has(ha, "PID_KP = 0.5", "ha: pid");
 has(ha, "[CT002]", "ha: CT002 section emitted");
 has(ha, "CT_MAC = 001122334455", "ha: ct mac");
 has(ha, "BALANCE_GAIN = 0.3", "ha: balancer option");
+has(ha, "CLOUD_REPORTING = True", "ha: cloud reporting on");
+has(ha, "CLOUD_REPORTING_ID = aabbccddeeff", "ha: cloud reporting id");
+has(ha, "CLOUD_REPORTING_INTERVAL = 30", "ha: cloud reporting interval");
 
 // ── config.ini: EmLog calculate defaults to True (schema default) ────────────
 const emlog = generateConfigIni({
@@ -132,9 +144,12 @@ const eyHa = generateEsphome({
       tuning: { POWER_OFFSET: "-20" },
     },
   ],
-  ct: { fields: { BALANCE_GAIN: "0.3" } },
+  ct: { fields: { BALANCE_GAIN: "0.3", CLOUD_REPORTING: "True" } },
 });
 has(eyHa, "name: my-ct002", "esp/ha: name");
+// Cloud reporting is Python-only — it must never leak into the ESPHome block.
+lacks(eyHa, "cloud_reporting", "esp/ha: no cloud reporting in esphome");
+lacks(eyHa, "CLOUD_REPORTING", "esp/ha: no cloud reporting key in esphome");
 has(eyHa, "external_components:", "esp/ha: external component");
 has(eyHa, "platform: homeassistant", "esp/ha: native sensor");
 has(eyHa, "entity_id: sensor.l1", "esp/ha: l1 entity");
@@ -265,9 +280,23 @@ const haOpts = generateHomeAssistant({
       },
     },
   ],
-  ct: { fields: { CT_MAC: "abc123", MIN_DC_OUTPUT: "30", ACTIVE_CONTROL: "False" } },
+  ct: {
+    fields: {
+      CT_MAC: "abc123",
+      MIN_DC_OUTPUT: "30",
+      ACTIVE_CONTROL: "False",
+      CLOUD_REPORTING: "True",
+      CLOUD_REPORTING_ID: "001122334455",
+      CLOUD_REPORTING_AID: "acct-1",
+      CLOUD_REPORTING_INTERVAL: "30",
+    },
+  },
 });
 has(haOpts, "power_input_alias: \"sensor.grid_power\"", "ha-opts: power input alias");
+has(haOpts, "cloud_reporting: true", "ha-opts: cloud reporting on");
+has(haOpts, "cloud_reporting_id: \"001122334455\"", "ha-opts: cloud id quoted (keeps leading zeros)");
+has(haOpts, "cloud_reporting_aid: \"acct-1\"", "ha-opts: cloud account id");
+has(haOpts, "cloud_reporting_interval: 30", "ha-opts: cloud interval");
 has(haOpts, "device_types: \"ct002\"", "ha-opts: device types");
 has(haOpts, "throttle_interval: 2", "ha-opts: throttle interval");
 has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");

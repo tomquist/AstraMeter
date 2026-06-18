@@ -11,6 +11,7 @@ import {
   CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
+  CT_CLOUD,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   type Field,
@@ -118,6 +119,7 @@ function ctSection(state: State, sectionName: string): string {
     CT_DC_KEEPALIVE,
     CT_EFFICIENCY,
     CT_SATURATION,
+    CT_CLOUD,
   ];
   for (const group of groups) {
     for (const field of group) {
@@ -593,6 +595,10 @@ const QUOTED_OPTION_KEYS = new Set([
   "marstek_mailbox",
   "marstek_password",
   "mqtt_uri",
+  // id can be an all-digit MAC — quote so leading zeros survive.
+  "cloud_reporting_id",
+  "cloud_reporting_aid",
+  "cloud_reporting_host",
 ]);
 
 function quoteYaml(s: string): string {
@@ -649,6 +655,14 @@ export function generateHomeAssistant(state: State): string {
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  // Opt-in cloud reporting. The toggle is a tri-state select ("" = default off);
+  // the add-on option is a plain bool, so only an explicit On/Off is emitted.
+  if (ctf.CLOUD_REPORTING === "True") add("cloud_reporting", true);
+  else if (ctf.CLOUD_REPORTING === "False") add("cloud_reporting", false);
+  add("cloud_reporting_host", ctf.CLOUD_REPORTING_HOST);
+  add("cloud_reporting_id", ctf.CLOUD_REPORTING_ID);
+  add("cloud_reporting_aid", ctf.CLOUD_REPORTING_AID);
+  add("cloud_reporting_interval", ctf.CLOUD_REPORTING_INTERVAL);
 
   // Signal-conditioning filters (transform, smoothing, deadband, hampel, pid).
   // Option names are the lower-cased INI keys; throttle/wait handled above.
