@@ -83,6 +83,21 @@ const mqtt = generateConfigIni({
 has(mqtt, "TOPICS = p/l1, p/l2, p/l3", "mqtt: TOPIC promoted to TOPICS in 3-phase");
 lacks(mqtt, "\nTOPIC =", "mqtt: no singular TOPIC");
 
+// ── config.ini: Fronius single- vs three-phase (PER_PHASE flag) ──────────────
+const fronius1 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "fronius", phases: 1, fields: { IP: "10.0.0.9" }, tuning: {} }],
+});
+has(fronius1, "[FRONIUS]", "fronius: section header");
+lacks(fronius1, "PER_PHASE", "fronius: no PER_PHASE in single-phase");
+const fronius3 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "fronius", phases: 3, fields: { IP: "10.0.0.9" }, tuning: {} }],
+});
+has(fronius3, "PER_PHASE = True", "fronius: PER_PHASE emitted in three-phase");
+
 // ── config.ini: multi-meter NETMASK ──────────────────────────────────────────
 const multi = generateConfigIni({
   target: "python",

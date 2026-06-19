@@ -60,6 +60,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway) — 🔴 Not yet available
 - [SMA Energy Meter](#sma-energy-meter) — 🔴 Not yet available
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
+- [Fronius Smart Meter](#fronius-smart-meter) — 🔵 Generic
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
 > an ESP32 can't run a host shell command — so it is intentionally omitted here.
@@ -870,3 +871,62 @@ challenge-response (PBKDF2/MD5) against the FRITZ!Box, GETs
 (mW, signed) from the XML — re-authenticating on the 403 the box returns for an
 expired SID. Reference: the AstraMeter Python implementation in
 `src/astrameter/powermeter/fritz.py`.
+
+## Fronius Smart Meter
+
+**Tier: 🔵 Generic.** A Fronius inverter exposes its attached smart meter over
+the local Solar API. Poll `GET /solar_api/v1/GetMeterRealtimeData.cgi` and read
+the signed `PowerReal_P_Sum` (positive = grid import, negative = feed-in):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.130/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=0
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Sum"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+If your readings have the wrong sign, add a `multiply: -1` filter on the sensor.
+
+For three-phase, add `grid_l2` / `grid_l3` template sensors and publish the
+per-phase fields from the same poll (only if your meter reports **signed**
+per-phase power — some firmwares report it unsigned, which breaks export):
+
+```yaml
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    JsonObject data = root["Body"]["Data"];
+                    id(grid_l1).publish_state(data["PowerReal_P_Phase_1"]);
+                    id(grid_l2).publish_state(data["PowerReal_P_Phase_2"]);
+                    id(grid_l3).publish_state(data["PowerReal_P_Phase_3"]);
+                    return true;
+                  });
+```
+
+…and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`.

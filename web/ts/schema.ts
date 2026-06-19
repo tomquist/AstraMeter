@@ -59,6 +59,8 @@ export interface Powermeter {
   fields: Field[];
   esphome: EsphomeSpec;
   phaseListKeys?: { topic: string; jsonPath: string };
+  /** Boolean key set to True when three-phase is selected (e.g. Fronius PER_PHASE). */
+  phaseFlagKey?: string;
 }
 
 export interface DeviceType {
@@ -643,6 +645,32 @@ export const POWERMETERS: Powermeter[] = [
     },
   },
   {
+    id: "fronius",
+    label: "Fronius Smart Meter",
+    section: "FRONIUS",
+    blurb:
+      "A Fronius Smart Meter read through a Fronius inverter's local Solar API.",
+    docPython: "docs/powermeters.md#fronius-smart-meter",
+    fields: [
+      { key: "IP", label: "Inverter IP", type: "text", placeholder: "192.168.1.130", required: true, help: "The Fronius inverter's local IP (the meter is read through it)." },
+      { key: "DEVICE_ID", label: "Meter device id", type: "number", default: "0", placeholder: "0", advanced: true, help: "Solar API meter DeviceId. 0 is the first/only meter." },
+    ],
+    // Three-phase emits PER_PHASE = True (read PowerReal_P_Phase_1..3). Only
+    // works if your meter reports signed per-phase power — some firmwares report
+    // it unsigned, which breaks export; otherwise keep single-phase (the sum).
+    phaseFlagKey: "PER_PHASE",
+    esphome: {
+      kind: "http",
+      tier: "generic",
+      note: "Polls the inverter's Solar API and reads the signed PowerReal_P_Sum (positive = import). Flip with a multiply: -1 filter if reversed.",
+      url1: (f) => `http://${f.IP || "192.168.1.130"}/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=${f.DEVICE_ID || "0"}`,
+      url3: (f) => `http://${f.IP || "192.168.1.130"}/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=${f.DEVICE_ID || "0"}`,
+      lambda1: 'id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Sum"]);',
+      lambda3:
+        'id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Phase_1"]);\n                    id(grid_l2).publish_state(root["Body"]["Data"]["PowerReal_P_Phase_2"]);\n                    id(grid_l3).publish_state(root["Body"]["Data"]["PowerReal_P_Phase_3"]);',
+    },
+  },
+  {
     id: "script",
     label: "Custom script",
     section: "SCRIPT",
@@ -687,6 +715,7 @@ export const PHASE_CAPABLE: Set<string> = new Set([
   "mqtt",
   "json_http",
   "sml",
+  "fronius",
 ]);
 
 // CT002/CT003 active-steering options. Grouped for the form. These live in the

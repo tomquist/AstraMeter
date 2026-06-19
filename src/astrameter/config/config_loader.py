@@ -16,6 +16,7 @@ from astrameter.powermeter import (
     Envoy,
     ESPHome,
     FritzSmartEnergy,
+    Fronius,
     HomeAssistant,
     HomeWizardPowermeter,
     IoBroker,
@@ -64,6 +65,7 @@ HOMEWIZARD_SECTION = "HOMEWIZARD"
 ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
 FRITZ_SECTION = "FRITZ"
+FRONIUS_SECTION = "FRONIUS"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
 
@@ -393,6 +395,8 @@ def create_powermeter(
         return create_sma_energy_meter_powermeter(section, config)
     elif section.startswith(FRITZ_SECTION):
         return create_fritz_powermeter(section, config)
+    elif section.startswith(FRONIUS_SECTION):
+        return create_fronius_powermeter(section, config)
     elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
         return create_mqtt_powermeter(section, config)
     else:
@@ -709,6 +713,16 @@ def create_fritz_powermeter(
         use_tls=config.getboolean(section, "HTTPS", fallback=False),
         verify_ssl=config.getboolean(section, "VERIFY_SSL", fallback=True),
         timeout=config.getfloat(section, "TIMEOUT", fallback=10.0),
+    )
+
+
+def create_fronius_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    return Fronius(
+        config.get(section, "IP", fallback=""),
+        config.get(section, "DEVICE_ID", fallback="0"),
+        per_phase=config.getboolean(section, "PER_PHASE", fallback=False),
     )
 
 

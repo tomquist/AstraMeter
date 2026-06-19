@@ -381,6 +381,10 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         VERIFY_SSL={"type": "boolean"},
         TIMEOUT={"type": "float"},
     ),
+    "FRONIUS": _pm(
+        DEVICE_ID={"type": "integer"},
+        PER_PHASE={"type": "boolean"},
+    ),
     "SCRIPT": _pm(),
     "SML": _pm(),
     "MQTT_INSIGHTS": {

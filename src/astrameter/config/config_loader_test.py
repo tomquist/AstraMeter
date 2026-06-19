@@ -11,6 +11,7 @@ from astrameter.config.config_loader import (
     create_emlog_powermeter,
     create_esphome_powermeter,
     create_fritz_powermeter,
+    create_fronius_powermeter,
     create_homeassistant_powermeter,
     create_homewizard_powermeter,
     create_iobroker_powermeter,
@@ -481,6 +482,21 @@ def test_create_fritz_powermeter():
     assert pm._ain == "123450123456-1"
 
 
+def test_create_fronius_powermeter():
+    """Test Fronius powermeter creation and DeviceId defaulting."""
+    config = configparser.ConfigParser()
+    config["FRONIUS"] = {"IP": "127.0.0.1"}
+    pm = create_fronius_powermeter("FRONIUS", config)
+    assert pm.ip == "127.0.0.1"
+    assert pm.device_id == "0"
+    assert pm.per_phase is False
+
+    config["FRONIUS_2"] = {"IP": "127.0.0.1", "DEVICE_ID": "1", "PER_PHASE": "True"}
+    pm = create_fronius_powermeter("FRONIUS_2", config)
+    assert pm.device_id == "1"
+    assert pm.per_phase is True
+
+
 def test_create_sml_powermeter():
     """Test SML powermeter creation: SERIAL required, OBIS overrides applied."""
     config = configparser.ConfigParser()
@@ -541,6 +557,7 @@ def test_create_powermeter():
         "PASSWORD": "secret",
         "AIN": "12345 0123456",
     }
+    config["FRONIUS_TEST"] = {"IP": "127.0.0.1"}
     config["UNKNOWN_TEST"] = {"SOME_KEY": "some_value"}
 
     # Test each powermeter type

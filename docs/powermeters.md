@@ -35,6 +35,7 @@ Powermeters](../README.md#multiple-powermeters) are documented in the main
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway)
 - [SMA Energy Meter](#sma-energy-meter)
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
+- [Fronius Smart Meter](#fronius-smart-meter)
 - [Script](#script)
 - [SML](#sml)
 
@@ -439,6 +440,39 @@ THROTTLE_INTERVAL = 10
 **AIN.** Find the AIN under *Home Network → SmartHome* (open the device's detail/edit view). The read head exposes two sub-units under that base AIN: `-1` (*Strombezug* / grid import) and `-2` (*Einspeisung* / feed-in). Both report the **signed** instantaneous power (positive = import, negative = feed-in), so AstraMeter reads the `-1` branch as net grid power and appends `-1` automatically when no suffix is given. Spaces in the AIN are optional.
 
 **Update rate.** USB power is effectively required (see the warning above): the ~2 min battery cadence is too slow for battery control, while USB raises it to ~10 s. `THROTTLE_INTERVAL = 10` then matches that USB cadence so AstraMeter doesn't hammer the box between fresh readings.
+
+## Fronius Smart Meter
+
+Reads a [Fronius Smart Meter](https://www.fronius.com/) through a Fronius
+inverter's local [Solar API](https://www.fronius.com/en/solar-energy/installers-partners/technical-data/all-products/system-monitoring/open-interfaces/fronius-solar-api-json-). AstraMeter polls `GetMeterRealtimeData.cgi` and reads the signed
+`PowerReal_P_Sum` (positive = grid import, negative = feed-in) — no token or
+login is required on the local network.
+
+```ini
+[FRONIUS]
+IP = 192.168.1.130
+# Solar API meter device id; 0 is the first/only meter (default)
+# DEVICE_ID = 0
+```
+
+**Sign.** `PowerReal_P_Sum` is reported signed, with positive = consumption from
+the grid. If your readings come out reversed, flip them with the global
+`POWER_MULTIPLIER = -1`.
+
+**Per-phase.** By default the single signed sum is used. Set `PER_PHASE = True`
+to report the three per-phase real powers (`PowerReal_P_Phase_1..3`) as L1/L2/L3
+instead:
+
+```ini
+[FRONIUS]
+IP = 192.168.1.130
+PER_PHASE = True
+```
+
+> ⚠️ Only enable `PER_PHASE` if your meter reports **signed** per-phase power.
+> Several meter firmwares report `PowerReal_P_Phase_*` *unsigned* (always
+> positive), which would make exported power read as imported on each phase. If
+> in doubt, leave it off and use the always-signed sum.
 
 ## Script
 

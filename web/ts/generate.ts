@@ -92,6 +92,12 @@ function meterSection(meter: Meter, opts: { multi: boolean }): string {
     if (line) lines.push(line);
   }
 
+  // Meters that signal per-phase reads with a boolean flag (e.g. Fronius
+  // PER_PHASE) rather than per-phase field lists.
+  if (pm.phaseFlagKey && meter.phases === 3) {
+    lines.push(`${pm.phaseFlagKey} = True`);
+  }
+
   // Per-meter tuning (throttle, smoothing, transform, hampel, PID …)
   const tuning = meter.tuning || {};
   for (const field of PER_METER_TUNING) {

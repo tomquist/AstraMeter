@@ -398,6 +398,20 @@ THROTTLE_INTERVAL = 0
 ## so AstraMeter doesn't hammer the box between fresh readings.
 # THROTTLE_INTERVAL = 10
 
+# [FRONIUS]
+## Fronius Smart Meter via a Fronius inverter's local Solar API.
+## Reads the signed PowerReal_P_Sum (positive = grid import, negative = feed-in)
+## from GetMeterRealtimeData.cgi. No token/login needed on the local network.
+# IP = 192.168.1.130
+## Solar API meter device id; 0 is the first/only meter (default).
+# DEVICE_ID = 0
+## Report per-phase power (PowerReal_P_Phase_1..3) as L1/L2/L3 instead of the
+## aggregate sum. Only enable if your meter reports SIGNED per-phase power;
+## some firmwares report it unsigned, which breaks export readings.
+# PER_PHASE = True
+## If readings are reversed, flip the sign:
+# POWER_MULTIPLIER = -1
+
 # [SCRIPT]
 # COMMAND = /path/to/your/script.sh
 ## Per-powermeter throttling override (optional)
