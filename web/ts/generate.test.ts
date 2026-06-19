@@ -149,6 +149,7 @@ const eyHa = generateEsphome({
       BALANCE_GAIN: "0.3",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_ID: "02b25012abcd",
+      CLOUD_REPORTING_HOST: "eu.hamedata.com",
       CLOUD_REPORTING_INTERVAL: "30",
     },
   },
@@ -158,6 +159,7 @@ has(eyHa, "name: my-ct002", "esp/ha: name");
 has(eyHa, "http_request:", "esp/ha: http_request for cloud reporting");
 has(eyHa, "cloud_reporting:", "esp/ha: cloud_reporting sub-block");
 has(eyHa, 'device_id: "02b25012abcd"', "esp/ha: cloud device id quoted");
+has(eyHa, 'host: "eu.hamedata.com"', "esp/ha: cloud host quoted");
 has(eyHa, "interval: 30s", "esp/ha: cloud interval");
 has(eyHa, "external_components:", "esp/ha: external component");
 has(eyHa, "platform: homeassistant", "esp/ha: native sensor");

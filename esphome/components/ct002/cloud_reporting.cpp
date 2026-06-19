@@ -86,13 +86,16 @@ CtMeasurement CloudReportingComponent::gather_() const {
 }
 
 void CloudReportingComponent::http_get_(const std::string &url) {
+  // Log only the endpoint (path before '?') — the query string carries the
+  // device id/account id and telemetry, which shouldn't land in device logs.
+  const std::string endpoint = url.substr(0, url.find('?'));
   std::vector<http_request::Header> headers = {{"User-Agent", "Dart/2.19 (dart:io)"}};
   auto container = this->http_->get(url, headers);
   if (container == nullptr) {
-    ESP_LOGW(TAG, "HTTP GET failed: %s", url.c_str());
+    ESP_LOGW(TAG, "HTTP GET failed: %s", endpoint.c_str());
     return;
   }
-  ESP_LOGD(TAG, "HTTP %d from %s", container->status_code, url.c_str());
+  ESP_LOGD(TAG, "HTTP %d from %s", container->status_code, endpoint.c_str());
   container->end();
 }
 

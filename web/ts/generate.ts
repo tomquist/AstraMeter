@@ -572,7 +572,7 @@ export function generateEsphome(state: State): string {
 
   if (wantCloud) {
     const sub = [`${IND}cloud_reporting:`];
-    if (!isBlank(ctf.CLOUD_REPORTING_HOST)) sub.push(`${IND}${IND}host: ${ctf.CLOUD_REPORTING_HOST}`);
+    if (!isBlank(ctf.CLOUD_REPORTING_HOST)) sub.push(`${IND}${IND}host: ${quoteYaml(String(ctf.CLOUD_REPORTING_HOST).trim())}`);
     if (!isBlank(ctf.CLOUD_REPORTING_ID)) sub.push(`${IND}${IND}device_id: "${String(ctf.CLOUD_REPORTING_ID).trim()}"`);
     if (!isBlank(ctf.CLOUD_REPORTING_AID)) sub.push(`${IND}${IND}account_id: "${String(ctf.CLOUD_REPORTING_AID).trim()}"`);
     if (!isBlank(ctf.CLOUD_REPORTING_INTERVAL)) sub.push(`${IND}${IND}interval: ${ctf.CLOUD_REPORTING_INTERVAL}s`);

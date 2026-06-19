@@ -632,7 +632,7 @@ class CT002:
         """Number of consumers that have reported at least once over UDP."""
         return sum(1 for c in self._consumers.values() if c.timestamp > 0)
 
-    def reporting_phase_buckets(self) -> dict[str, dict[str, int]]:
+    def reporting_phase_buckets(self) -> dict[str, dict[str, int | bool]]:
         """Per-bucket charge/discharge power (W) and counts for integrations.
 
         Keys are :data:`PHASE_BUCKETS` (``x``/``A``/``B``/``C``/``ABC``); each
