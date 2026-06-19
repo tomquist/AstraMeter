@@ -61,6 +61,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [SMA Energy Meter](#sma-energy-meter) — 🔴 Not yet available
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
 - [Fronius Smart Meter](#fronius-smart-meter) — 🔵 Generic
+- [Tibber Pulse](#tibber-pulse) — 🟠 Alternate (native SML / community component)
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
 > an ESP32 can't run a host shell command — so it is intentionally omitted here.
@@ -930,3 +931,49 @@ per-phase power — some firmwares report it unsigned, which breaks export):
 ```
 
 …and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`.
+
+## Tibber Pulse
+
+**Tier: 🟠 Alternate.** The Python `[TIBBER_PULSE]` source fetches a **binary SML
+telegram** from the Pulse Bridge's `/data.json` over HTTP basic auth, then decodes
+it. Stock ESPHome's `http_request`/`json` can't decode binary SML, so there is no
+direct port of the bridge API.
+
+The Pulse IR head just reads your meter's SML output, so the clean ESP path is to
+**read the meter directly** with the native
+[`sml`](https://esphome.io/components/sml/) component via your own IR head —
+skipping the bridge entirely (the same approach as the [SML](#sml) source):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+uart:
+  id: uart_bus
+  rx_pin: GPIO16
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+sml:
+  id: mysml
+  uart_id: uart_bus
+
+sensor:
+  - platform: sml
+    id: grid_l1
+    sml_id: mysml
+    obis_code: "1-0:16.7.0"     # aggregate active power
+    unit_of_measurement: W
+    # per-phase instead: 1-0:36.7.0 (L1), 1-0:56.7.0 (L2), 1-0:76.7.0 (L3)
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+**Bridge alternative:** if you'd rather keep the Pulse Bridge, a community
+external component (e.g. `tibber_pulse_local_esphome`) can query it on the ESP
+and decode the SML; point its resulting power sensor at `grid_l1`.

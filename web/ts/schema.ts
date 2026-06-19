@@ -671,6 +671,29 @@ export const POWERMETERS: Powermeter[] = [
     },
   },
   {
+    id: "tibber_pulse",
+    label: "Tibber Pulse (local Bridge)",
+    section: "TIBBER_PULSE",
+    blurb:
+      "A Tibber Pulse read locally through the Pulse Bridge HTTP API (no Tibber cloud). The bridge decodes your meter's SML telegram; enable its local webserver first.",
+    docPython: "docs/powermeters.md#tibber-pulse",
+    fields: [
+      { key: "IP", label: "Bridge IP", type: "text", placeholder: "192.168.1.140", required: true, help: "The Pulse Bridge's local IP." },
+      { key: "PASSWORD", label: "Bridge password", type: "password", placeholder: "AD56-54BA", required: true, help: "The nine-character code printed on the bridge (with the dash)." },
+      { key: "USER", label: "Username", type: "text", default: "admin", placeholder: "admin", advanced: true, help: "HTTP Basic-auth user; the bridge uses 'admin'." },
+      { key: "NODE_ID", label: "Node id", type: "text", default: "1", placeholder: "1", advanced: true, help: "Pulse node id (see http://<bridge>/nodes/). Usually 1." },
+      { key: "OBIS_POWER_CURRENT", label: "OBIS: aggregate power", type: "text", placeholder: "0100100700ff", advanced: true, help: "12-hex OBIS code. Leave blank for the common eHZ default." },
+      { key: "OBIS_POWER_L1", label: "OBIS: L1", type: "text", placeholder: "0100240700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
+      { key: "OBIS_POWER_L2", label: "OBIS: L2", type: "text", placeholder: "0100380700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
+      { key: "OBIS_POWER_L3", label: "OBIS: L3", type: "text", placeholder: "01004c0700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
+    ],
+    esphome: {
+      kind: "sml",
+      tier: "alternate",
+      note: "The bridge serves a binary SML telegram over HTTP basic auth, which stock ESPHome can't decode. Instead read the meter directly with the native sml component via your own IR head (the config below), or use a community external component for the bridge.",
+    },
+  },
+  {
     id: "script",
     label: "Custom script",
     section: "SCRIPT",
@@ -716,6 +739,7 @@ export const PHASE_CAPABLE: Set<string> = new Set([
   "json_http",
   "sml",
   "fronius",
+  "tibber_pulse",
 ]);
 
 // CT002/CT003 active-steering options. Grouped for the form. These live in the

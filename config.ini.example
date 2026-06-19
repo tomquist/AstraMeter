@@ -412,6 +412,28 @@ THROTTLE_INTERVAL = 0
 ## If readings are reversed, flip the sign:
 # POWER_MULTIPLIER = -1
 
+# [TIBBER_PULSE]
+## Tibber Pulse read locally via the Pulse Bridge HTTP API (no Tibber cloud).
+## Decodes the meter's SML telegram from /data.json. Enable the bridge's local
+## webserver first: params page > webserver-force-enable = true > Store params.
+# IP = 192.168.1.140
+## Username is always "admin"; password is the nine-character code printed on the
+## bridge (with the dash), e.g. AD56-54BA.
+# PASSWORD = AD56-54BA
+## Optional: node id (see http://<bridge>/nodes/), defaults to 1.
+# NODE_ID = 1
+## Optional: override the Basic-auth user (defaults to "admin").
+# USER = admin
+## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
+# OBIS_POWER_CURRENT = 0100100700ff
+# OBIS_POWER_L1 = 0100240700ff
+# OBIS_POWER_L2 = 0100380700ff
+# OBIS_POWER_L3 = 01004c0700ff
+## SML meters refresh every few seconds; throttle to avoid hammering the bridge.
+# THROTTLE_INTERVAL = 2
+## If readings are reversed, flip the sign:
+# POWER_MULTIPLIER = -1
+
 # [SCRIPT]
 # COMMAND = /path/to/your/script.sh
 ## Per-powermeter throttling override (optional)

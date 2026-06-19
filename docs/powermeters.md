@@ -36,6 +36,7 @@ Powermeters](../README.md#multiple-powermeters) are documented in the main
 - [SMA Energy Meter](#sma-energy-meter)
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
 - [Fronius Smart Meter](#fronius-smart-meter)
+- [Tibber Pulse](#tibber-pulse)
 - [Script](#script)
 - [SML](#sml)
 
@@ -473,6 +474,47 @@ PER_PHASE = True
 > Several meter firmwares report `PowerReal_P_Phase_*` *unsigned* (always
 > positive), which would make exported power read as imported on each phase. If
 > in doubt, leave it off and use the always-signed sum.
+
+## Tibber Pulse
+
+Reads a [Tibber Pulse](https://tibber.com/) locally through the **Pulse Bridge**,
+with no dependency on the Tibber cloud. AstraMeter polls the bridge's
+`/data.json` endpoint (HTTP Basic auth) and decodes the meter's SML telegram on
+the fly, so this works with the SML smart meters the Pulse IR head is attached
+to.
+
+```ini
+[TIBBER_PULSE]
+IP = 192.168.1.140
+# Username is always "admin"; the password is the nine-character code printed on
+# the bridge (with the dash), e.g. AD56-54BA
+PASSWORD = AD56-54BA
+# Optional: node id (see http://<bridge>/nodes/); defaults to 1
+# NODE_ID = 1
+# Optional: override the Basic-auth user (defaults to "admin")
+# USER = admin
+## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
+# OBIS_POWER_CURRENT = 0100100700ff
+# OBIS_POWER_L1 = 0100240700ff
+# OBIS_POWER_L2 = 0100380700ff
+# OBIS_POWER_L3 = 01004c0700ff
+```
+
+**Enable the local API first.** In the bridge's web UI open the *params* page, set
+`webserver-force-enable` to `true`, save, and **Store params to flash**. Without
+this the `/data.json` endpoint is not served.
+
+**Multi-phase.** Like the [SML](#sml) source, if the meter reports per-phase
+active power for L1–L3 those three values are used; otherwise the aggregate
+register is used as a single reading. Override the OBIS codes only if your meter
+uses different registers.
+
+**Update rate.** SML meters refresh roughly every few seconds, so a
+`THROTTLE_INTERVAL` of `2`–`3` avoids hammering the bridge between fresh
+telegrams.
+
+**Sign.** Power is signed (positive = import, negative = feed-in). If your
+readings are reversed, flip them with the global `POWER_MULTIPLIER = -1`.
 
 ## Script
 

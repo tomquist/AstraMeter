@@ -35,6 +35,7 @@ from astrameter.powermeter import (
     Sml,
     Tasmota,
     ThrottledPowermeter,
+    TibberPulse,
     TQEnergyManager,
     TransformedPowermeter,
     VZLogger,
@@ -66,6 +67,7 @@ ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
 FRITZ_SECTION = "FRITZ"
 FRONIUS_SECTION = "FRONIUS"
+TIBBER_PULSE_SECTION = "TIBBER_PULSE"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
 
@@ -397,6 +399,8 @@ def create_powermeter(
         return create_fritz_powermeter(section, config)
     elif section.startswith(FRONIUS_SECTION):
         return create_fronius_powermeter(section, config)
+    elif section.startswith(TIBBER_PULSE_SECTION):
+        return create_tibber_pulse_powermeter(section, config)
     elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
         return create_mqtt_powermeter(section, config)
     else:
@@ -723,6 +727,22 @@ def create_fronius_powermeter(
         config.get(section, "IP", fallback=""),
         config.get(section, "DEVICE_ID", fallback="0"),
         per_phase=config.getboolean(section, "PER_PHASE", fallback=False),
+    )
+
+
+def create_tibber_pulse_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    oc, o1, o2, o3 = parse_sml_obis_config(section, config)
+    return TibberPulse(
+        config.get(section, "IP", fallback=""),
+        config.get(section, "PASSWORD", fallback=""),
+        config.get(section, "NODE_ID", fallback="1"),
+        config.get(section, "USER", fallback="admin"),
+        obis_power_current=oc,
+        obis_power_l1=o1,
+        obis_power_l2=o2,
+        obis_power_l3=o3,
     )
 
 

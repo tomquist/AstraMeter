@@ -17,6 +17,7 @@ from .shrdzm import Shrdzm
 from .sma_energy_meter import SmaEnergyMeter
 from .sml import Sml, parse_sml_obis_config
 from .tasmota import Tasmota
+from .tibber_pulse import TibberPulse
 from .tq_em import TQEnergyManager
 from .vzlogger import VZLogger
 from .wrappers import (
@@ -61,6 +62,7 @@ __all__ = [
     "TQEnergyManager",
     "Tasmota",
     "ThrottledPowermeter",
+    "TibberPulse",
     "TransformedPowermeter",
     "VZLogger",
     "parse_sml_obis_config",

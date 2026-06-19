@@ -24,6 +24,7 @@ from astrameter.config.config_loader import (
     create_shrdzm_powermeter,
     create_sml_powermeter,
     create_tasmota_powermeter,
+    create_tibber_pulse_powermeter,
     create_tq_em_powermeter,
     create_vzlogger_powermeter,
     parse_float_list,
@@ -497,6 +498,29 @@ def test_create_fronius_powermeter():
     assert pm.per_phase is True
 
 
+def test_create_tibber_pulse_powermeter():
+    """Test Tibber Pulse powermeter creation, defaults, and OBIS overrides."""
+    config = configparser.ConfigParser()
+    config["TIBBER_PULSE"] = {"IP": "127.0.0.1", "PASSWORD": "AD56-54BA"}
+    pm = create_tibber_pulse_powermeter("TIBBER_PULSE", config)
+    assert pm.ip == "127.0.0.1"
+    assert pm.password == "AD56-54BA"
+    assert pm.node_id == "1"
+    assert pm.user == "admin"
+
+    config["TIBBER_PULSE_2"] = {
+        "IP": "127.0.0.1",
+        "PASSWORD": "pw",
+        "NODE_ID": "2",
+        "USER": "root",
+        "OBIS_POWER_CURRENT": "0100100700ff",
+    }
+    pm = create_tibber_pulse_powermeter("TIBBER_PULSE_2", config)
+    assert pm.node_id == "2"
+    assert pm.user == "root"
+    assert pm._obis_current == "0100100700ff"
+
+
 def test_create_sml_powermeter():
     """Test SML powermeter creation: SERIAL required, OBIS overrides applied."""
     config = configparser.ConfigParser()
@@ -558,6 +582,7 @@ def test_create_powermeter():
         "AIN": "12345 0123456",
     }
     config["FRONIUS_TEST"] = {"IP": "127.0.0.1"}
+    config["TIBBER_PULSE_TEST"] = {"IP": "127.0.0.1", "PASSWORD": "pw"}
     config["UNKNOWN_TEST"] = {"SOME_KEY": "some_value"}
 
     # Test each powermeter type

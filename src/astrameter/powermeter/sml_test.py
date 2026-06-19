@@ -19,6 +19,7 @@ from astrameter.powermeter.sml import (
     EnergyStats,
     Sml,
     parse_sml_obis_config,
+    parse_sml_powers,
 )
 
 
@@ -328,6 +329,18 @@ def _build_sml_frame(
     frame_no_crc = start + payload + b"\x00" * padding + end_marker + bytes([padding])
     crc = get_crc(frame_no_crc)
     return frame_no_crc + struct.pack(">H", crc)
+
+
+def test_parse_sml_powers_decodes_full_telegram():
+    """parse_sml_powers decodes a complete SML telegram (bytes) into watts."""
+    frame = _build_sml_frame(power_agg=1234, power_l1=400, power_l2=500, power_l3=334)
+    # All three phases present → per-phase preferred over the aggregate.
+    assert parse_sml_powers(frame) == [400, 500, 334]
+
+
+def test_parse_sml_powers_returns_none_on_garbage():
+    """parse_sml_powers returns None when no valid frame can be parsed."""
+    assert parse_sml_powers(b"not an sml telegram") is None
 
 
 async def test_e2e_pty_serial_read():
