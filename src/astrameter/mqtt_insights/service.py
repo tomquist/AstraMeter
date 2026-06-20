@@ -49,27 +49,6 @@ POWERMETER_IDLE_THRESHOLD = 2.0
 POWERMETER_PROBE_TIMEOUT = 5.0
 
 
-async def _arp_lookup(ip: str) -> str:
-    """Best-effort ARP lookup via /proc/net/arp. Returns 'AA:BB:CC:DD:EE:FF' or ''."""
-
-    def _sync_lookup() -> str:
-        try:
-            with open("/proc/net/arp") as f:
-                for line in f:
-                    parts = line.split()
-                    if (
-                        len(parts) >= 4
-                        and parts[0] == ip
-                        and parts[3] != "00:00:00:00:00:00"
-                    ):
-                        return parts[3].upper()
-        except OSError:
-            pass
-        return ""
-
-    return await asyncio.to_thread(_sync_lookup)
-
-
 @dataclass
 class MqttInsightsConfig:
     broker: str
@@ -118,7 +97,6 @@ class MqttInsightsService:
         self._discovered_shelly_batteries: set[str] = set()
         self._discovered_shelly_devices: set[str] = set()
         self._discovered_powermeters: set[str] = set()
-        self._pending_arp: set[str] = set()
         self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
@@ -543,37 +521,19 @@ class MqttInsightsService:
                     topic, payload=json.dumps(payload).encode(), retain=True
                 )
 
-            need_discovery = consumer_key not in self._discovered_ct002_consumers
-            need_arp_retry = consumer_key in self._pending_arp
-
-            if need_discovery or need_arp_retry:
-                network_mac = ""
-                battery_ip = data.get("battery_ip", "")
-                if battery_ip:
-                    network_mac = await _arp_lookup(battery_ip)
-
-                if need_discovery:
-                    self._discovered_ct002_consumers.add(consumer_key)
-                    if battery_ip and not network_mac:
-                        self._pending_arp.add(consumer_key)
-                    await self._publish_bridge(client, cfg)
-
-                if network_mac:
-                    self._pending_arp.discard(consumer_key)
-
-                if need_discovery or network_mac:
-                    topic, payload = build_ct002_consumer_discovery(
-                        base,
-                        did,
-                        cid,
-                        cfg.ha_discovery_prefix,
-                        device_type=data.get("device_type", ""),
-                        network_mac=network_mac,
-                        battery_ip=battery_ip,
-                    )
-                    await client.publish(
-                        topic, payload=json.dumps(payload).encode(), retain=True
-                    )
+            if consumer_key not in self._discovered_ct002_consumers:
+                self._discovered_ct002_consumers.add(consumer_key)
+                await self._publish_bridge(client, cfg)
+                topic, payload = build_ct002_consumer_discovery(
+                    base,
+                    did,
+                    cid,
+                    cfg.ha_discovery_prefix,
+                    device_type=data.get("device_type", ""),
+                )
+                await client.publish(
+                    topic, payload=json.dumps(payload).encode(), retain=True
+                )
 
     async def _handle_ct002_remove(
         self,
@@ -588,7 +548,6 @@ class MqttInsightsService:
         avail_topic = f"{base}/ct002/{did}/consumer/{cid}/availability"
         await client.publish(avail_topic, payload=b"offline", retain=True)
         self._discovered_ct002_consumers.discard(consumer_key)
-        self._pending_arp.discard(consumer_key)
         await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_event(
