@@ -1,7 +1,7 @@
 # Powermeter Configuration Reference (ESPHome external component)
 
 When you run AstraMeter as the [ESPHome external
-component](../README.md#esphome-external-component-run-on-an-esp32) on an ESP32,
+component](installation/esphome.md) on an ESP32,
 the `ct002:` block does **not** talk to your meter directly. Instead it consumes
 **any ESPHome `sensor`** that reports grid power in watts. So "configuring a
 powermeter" here means: *give ESPHome a sensor that reads your meter, then point
@@ -24,7 +24,7 @@ full board config). What's shown is complete for the meter → emulator wiring.
 
 Per-phase calibration/throttling (`offset:`, `multiply:`, `throttle:`) goes in
 `filters:` **on the sensor**, not in `ct002:` — see the
-[main README note](../README.md#esphome-external-component-run-on-an-esp32).
+[ESPHome installation note](installation/esphome.md#one-important-divergence-from-the-python-emulator).
 Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 > The polling/lambda examples are **illustrative**. ESPHome's `http_request`,

@@ -449,7 +449,7 @@ function meterCard(): HTMLElement {
         : "Tell us where AstraMeter should read your real grid power. Add more than one only for advanced multi-network setups.";
   const customConfigNote =
     state.target === "homeassistant"
-      ? el("p", { class: "note", html: "The add-on supports a single Home Assistant power source. For other meter types, multiple meters, or options the add-on UI doesn't expose, switch to the <strong>config.ini</strong> target above, save the file to <code>/addon_configs/a0ef98c5_b2500_meter/</code>, and set the add-on's <em>Custom Config</em> option to its filename. See the <a href='" + ghDoc("README.md#home-assistant-app-installation") + "' target='_blank' rel='noopener'>custom configuration docs ↗</a>." })
+      ? el("p", { class: "note", html: "The add-on supports a single Home Assistant power source. For other meter types, multiple meters, or options the add-on UI doesn't expose, switch to the <strong>config.ini</strong> target above, save the file to <code>/addon_configs/a0ef98c5_b2500_meter/</code>, and set the add-on's <em>Custom Config</em> option to its filename. See the <a href='" + ghDoc("docs/installation/home-assistant.md#b-using-a-custom-configuration-file-advanced") + "' target='_blank' rel='noopener'>custom configuration docs ↗</a>." })
       : null;
   return card(3, "Your power meter", intro, [...meters, addBtn, customConfigNote]);
 }
@@ -538,7 +538,7 @@ function esphomeStepsCard(): HTMLElement | null {
       li("<strong>Install / flash.</strong> Click <em>Install → Plug into this computer</em> for the first flash (USB). After that you can update it wirelessly over WiFi. Flashing takes a few minutes."),
       li("<strong>Point your battery at it.</strong> In the Marstek app, set the battery to use a CT002/CT003 meter (matching the CT type you chose). The ESP32 answers on your network automatically — power it from any USB charger near the battery."),
     ]),
-    el("p", { class: "note", html: "Full reference: <a href='" + ghDoc("README.md#esphome-external-component-run-on-an-esp32") + "' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
+    el("p", { class: "note", html: "Full reference: <a href='" + ghDoc("docs/installation/esphome.md") + "' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
   ]);
 }
 

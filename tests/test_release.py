@@ -90,6 +90,14 @@ def _make_stub_bin(tmp_path: Path) -> tuple[Path, Path]:
 _README = """\
 # Project
 
+No external_components snippet lives here anymore — see docs/installation/esphome.md.
+"""
+
+# ESPHome installation doc: carries the canonical copy-paste external_components
+# snippet (moved out of the README), so it must be pinned/reset on release.
+_DOCS_INSTALL_ESPHOME = """\
+# ESPHome installation
+
 ```yaml
 external_components:
   - source: github://tomquist/astrameter@develop
@@ -104,8 +112,8 @@ external_components:
 """
 
 # Per-meter ESPHome reference doc: carries *several* copy-paste snippets, each
-# with its own @develop ref. All of them must be pinned/reset alongside README,
-# so the fixture deliberately has more than one.
+# with its own @develop ref. All of them must be pinned/reset alongside the
+# other snippet files, so the fixture deliberately has more than one.
 _DOCS_ESPHOME = """\
 # ESPHome power meters
 
@@ -172,6 +180,8 @@ def _init_sandbox(tmp_path: Path) -> Path:
     (work / "esphome.example.yaml").write_text(_EXAMPLE)
     (work / "docs").mkdir()
     (work / "docs" / "esphome-powermeters.md").write_text(_DOCS_ESPHOME)
+    (work / "docs" / "installation").mkdir()
+    (work / "docs" / "installation" / "esphome.md").write_text(_DOCS_INSTALL_ESPHOME)
     (work / "CHANGELOG.md").write_text(_CHANGELOG)
     (work / "pyproject.toml").write_text(_PYPROJECT)
     (work / "uv.lock").write_text(_UVLOCK)
@@ -206,7 +216,7 @@ def test_release_happy_path(tmp_path: Path) -> None:
     main_changelog = _show(work, "main", "CHANGELOG.md")
     assert "## 9.9.9" in main_changelog
     assert "## Next" not in main_changelog
-    assert "astrameter@9.9.9" in _show(work, "main", "README.md")
+    assert "astrameter@9.9.9" in _show(work, "main", "docs/installation/esphome.md")
     assert "astrameter@9.9.9" in _show(work, "main", "esphome.example.yaml")
     # Every snippet in the per-meter doc must be pinned — no stray @develop left.
     main_docs = _show(work, "main", "docs/esphome-powermeters.md")
@@ -220,7 +230,9 @@ def test_release_happy_path(tmp_path: Path) -> None:
     # --- develop: prepped for next dev cycle ---------------------------
     assert 'version: "next"' in _show(work, "develop", "ha_addon/config.yaml")
     assert "## Next" in _show(work, "develop", "CHANGELOG.md")
-    assert "astrameter@develop" in _show(work, "develop", "README.md")
+    assert "astrameter@develop" in _show(
+        work, "develop", "docs/installation/esphome.md"
+    )
     assert "astrameter@develop" in _show(work, "develop", "esphome.example.yaml")
     develop_docs = _show(work, "develop", "docs/esphome-powermeters.md")
     assert "astrameter@develop" in develop_docs
