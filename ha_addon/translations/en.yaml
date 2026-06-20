@@ -58,7 +58,7 @@ configuration:
     description: "Host to report to. Leave empty for the default eu.hamedata.com (other regions swap the host)."
   cloud_reporting_aid:
     name: Cloud Reporting Account ID
-    description: "Account/app id sent in the handshake (the aid value from the Marstek app pairing flow)."
+    description: "Account/app id sent in the handshake (the aid value). Leave empty to use your Marstek account id automatically when the Marstek account is configured."
   cloud_reporting_interval:
     name: Cloud Reporting Interval
     description: "Seconds between reports (default 60). Tune to match a real device's cadence."

@@ -144,6 +144,7 @@ async def run_device(
     insights: MqttInsightsService | None = None,
     marstek_mac: str = "",
     marstek_ver_v: int | None = None,
+    marstek_aid: str = "",
 ):
     logger.debug(f"Starting device: {device_type}")
 
@@ -491,8 +492,10 @@ async def run_device(
     if isinstance(device, CT002) and cloud_reporting:
         # The reported id is the CT's MAC: the one AstraMeter registered in the
         # Marstek account (the id the cloud actually knows) when configured, else
-        # the locally set CT_MAC.
+        # the locally set CT_MAC. The account id (`aid`) defaults to the login
+        # uid from that same account when not set explicitly.
         report_id = marstek_mac or ct_mac
+        report_aid = cloud_reporting_aid or marstek_aid
         if not report_id:
             logger.warning(
                 "CLOUD_REPORTING enabled for %s but no device id is available; "
@@ -556,7 +559,7 @@ async def run_device(
                     CloudReporterConfig(
                         ct_type=device.ct_type,
                         device_id=report_id,
-                        aid=cloud_reporting_aid,
+                        aid=report_aid,
                         host=cloud_reporting_host,
                         interval_seconds=cloud_reporting_interval,
                     ),
@@ -587,7 +590,7 @@ async def async_main(
     device_types: list[str],
     device_ids: list[str],
     skip_test: bool,
-    managed_marstek: dict[str, tuple[str, int]] | None = None,
+    managed_marstek: dict[str, tuple[str, int, str]] | None = None,
 ):
     managed_marstek = managed_marstek or {}
     web_server = None
@@ -651,7 +654,7 @@ async def async_main(
                     powermeters,
                     device_id,
                     insights,
-                    *managed_marstek.get(device_type, ("", None)),
+                    *managed_marstek.get(device_type, ("", None, "")),
                 )
                 for device_type, device_id in zip(
                     device_types, device_ids, strict=False
@@ -684,13 +687,15 @@ async def async_main(
 
 def _build_managed_marstek(
     cfg: configparser.ConfigParser, device_types: Sequence[str]
-) -> dict[str, tuple[str, int]]:
-    """Register managed fake CT devices with Marstek and return the MAC/ver map.
+) -> dict[str, tuple[str, int, str]]:
+    """Register managed fake CT devices with Marstek and return the MAC/ver/aid map.
 
     Called both at startup and after a config-driven restart so the MAC/version
     wiring stays in sync with the (possibly reloaded) config and device_types.
+    The third tuple element is the account id (the login `uid`), used as the
+    cloud-reporting `aid` fallback.
     """
-    managed_marstek: dict[str, tuple[str, int]] = {}
+    managed_marstek: dict[str, tuple[str, int, str]] = {}
     if not cfg.getboolean("MARSTEK", "ENABLE", fallback=False):
         return managed_marstek
 
@@ -723,6 +728,7 @@ def _build_managed_marstek(
                         managed_marstek[dt] = (
                             normalized,
                             ver_v_from_marstek_api_version(created.get("version")),
+                            str(created.get("account_uid") or ""),
                         )
         if any_ct:
             logger.info(

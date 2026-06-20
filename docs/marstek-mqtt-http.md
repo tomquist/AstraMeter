@@ -292,10 +292,14 @@ handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing the
 AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
 count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
 V/I on `HME-4`). Because the cloud accepts a report only for an `id`/`aid` it
-already knows, set the account id to a real paired device's; tune the interval
-to the cadence you measure. The reported `id` is the CT's MAC — when a Marstek
-account is configured (the `[MARSTEK]` section, or the ESPHome
-`marstek_registration:` block), the MAC of the device AstraMeter registers there
-is used (the id the cloud already knows), otherwise the configured `CT_MAC` /
-`ct_mac`. The web config generator produces all three forms (config.ini, the add‑on
+already knows, tune the interval to the cadence you measure. Both identifiers are
+derived from your Marstek account when configured: the reported `id` is the CT's
+MAC — when a Marstek account is configured (the `[MARSTEK]` section, or the
+ESPHome `marstek_registration:` block), the MAC of the device AstraMeter
+registers there is used (the id the cloud already knows), otherwise the
+configured `CT_MAC` / `ct_mac`. On the Python side the `aid` likewise defaults to
+your Marstek account id (the login `uid`) when not set; on ESPHome set
+`account_id` in the `cloud_reporting:` block. (Note: `aid` is only sent in the
+handshake — `setCtReporting` carries no `aid` — so reports bind by the registered
+`id`.) The web config generator produces all three forms (config.ini, the add‑on
 options, the ESPHome sub‑block). See `config.ini.example`.
