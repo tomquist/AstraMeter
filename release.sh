@@ -18,7 +18,7 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Files carrying a copy-paste `github://tomquist/astrameter@<ref>` external_components
 # snippet that must track the release (tag at release time, "develop" in between).
-COMPONENT_REF_FILES=(README.md esphome.example.yaml docs/esphome-powermeters.md)
+COMPONENT_REF_FILES=(esphome.example.yaml docs/esphome-powermeters.md docs/installation/esphome.md)
 
 # Point the ESPHome external_components ref in the docs/examples above at the
 # given git ref (a tag at release time, "develop" between releases).

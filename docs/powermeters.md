@@ -7,10 +7,10 @@ the matching `config.ini` section.**
 These sections only cover the *source* of the grid-power reading. Options that
 apply to **any** powermeter — throttling, wait-for-fresh-push, EMA smoothing,
 deadband, Hampel outlier rejection — plus [Value
-Transformation](../README.md#value-transformation), the [PID
-Controller](../README.md#pid-controller), and running [Multiple
-Powermeters](../README.md#multiple-powermeters) are documented in the main
-[README](../README.md#configuration).
+Transformation](configuration.md#value-transformation), the [PID
+Controller](configuration.md#pid-controller), and running [Multiple
+Powermeters](configuration.md#multiple-powermeters) are documented in the
+[Configuration reference](configuration.md).
 
 > **Running on an ESP32 instead of the Python add-on?** See
 > [esphome-powermeters.md](esphome-powermeters.md) for the equivalent
