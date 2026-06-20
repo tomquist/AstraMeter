@@ -57,7 +57,6 @@ schema:
   marstek_password: password?
   cloud_reporting: bool?
   cloud_reporting_host: str?
-  cloud_reporting_aid: str?
   cloud_reporting_interval: float(1,)?
   active_control: bool?
   min_efficient_power: int(0,)?

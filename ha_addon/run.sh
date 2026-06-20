@@ -104,10 +104,6 @@ else
     if bashio::config.has_value 'cloud_reporting_host'; then
         cloud_reporting_host="$(bashio::config 'cloud_reporting_host')"
     fi
-    cloud_reporting_aid=""
-    if bashio::config.has_value 'cloud_reporting_aid'; then
-        cloud_reporting_aid="$(bashio::config 'cloud_reporting_aid')"
-    fi
     cloud_reporting_interval=""
     if bashio::config.has_value 'cloud_reporting_interval'; then
         cloud_reporting_interval="$(bashio::config 'cloud_reporting_interval')"
@@ -117,7 +113,6 @@ else
     emit_cloud_reporting() {
         [ -n "$cloud_reporting" ] && echo "CLOUD_REPORTING=$cloud_reporting"
         [ -n "$cloud_reporting_host" ] && echo "CLOUD_REPORTING_HOST=$cloud_reporting_host"
-        [ -n "$cloud_reporting_aid" ] && echo "CLOUD_REPORTING_AID=$cloud_reporting_aid"
         [ -n "$cloud_reporting_interval" ] && echo "CLOUD_REPORTING_INTERVAL=$cloud_reporting_interval"
     }
 

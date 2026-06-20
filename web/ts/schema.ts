@@ -806,7 +806,6 @@ export const CT_SATURATION: Field[] = [
 // in an http_request: block). Generator handles the mapping by key, so no `ey`.
 export const CT_CLOUD: Field[] = [
   { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for an id/account it already knows from app pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured).", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
-  { key: "CLOUD_REPORTING_AID", label: "Reporting account ID", help: "Sent as aid in the handshake. Leave blank to use your Marstek account id automatically when the Marstek account is configured.", type: "text", placeholder: "(Marstek account id)" },
   { key: "CLOUD_REPORTING_HOST", label: "Reporting host", help: "Host to report to. Blank uses the default eu.hamedata.com (other regions swap the host).", type: "text", placeholder: "eu.hamedata.com" },
   { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds between reports. Default 60; tune to match a real device's cadence.", type: "number", placeholder: "60" },
 ];

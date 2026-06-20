@@ -90,9 +90,7 @@ def _is_managed_prefix(value: str) -> bool:
     return isinstance(value, str) and value.lower().startswith(MANAGED_MAC_PREFIX)
 
 
-def _fetch_token_and_devices(
-    cfg: MarstekConfig,
-) -> tuple[str, list[dict[str, Any]], str]:
+def _fetch_token_and_devices(cfg: MarstekConfig) -> tuple[str, list[dict[str, Any]]]:
     pwd_md5 = hashlib.md5(cfg.password.encode("utf-8")).hexdigest()
     token_url = f"{cfg.base_url.rstrip('/')}/app/Solar/v2_get_device.php"
     token_resp = _http_get_json(token_url, {"mailbox": cfg.mailbox, "pwd": pwd_md5})
@@ -108,9 +106,6 @@ def _fetch_token_and_devices(
         raise MarstekApiError(f"Token fetch failed (code={code}): {raw_msg}")
 
     token = token_resp["token"]
-    # The login response carries the account id as a top-level `uid`. The real CT
-    # sends it as `aid` in the cloud handshake, so surface it for cloud reporting.
-    account_uid = str(token_resp.get("uid") or "").strip()
     solar_devices = (
         token_resp.get("data") if isinstance(token_resp.get("data"), list) else []
     )
@@ -151,7 +146,7 @@ def _fetch_token_and_devices(
             }
         )
 
-    return token, merged, account_uid
+    return token, merged
 
 
 def _find_existing_managed_device(
@@ -233,12 +228,11 @@ def ensure_managed_fake_device(
     if device_type not in ("ct002", "ct003"):
         return None
 
-    token, devices, account_uid = _fetch_token_and_devices(cfg)
+    token, devices = _fetch_token_and_devices(cfg)
     expected_type = _desired_type(device_type)
 
     existing = _find_existing_managed_device(devices, expected_type)
     if existing:
-        existing["account_uid"] = account_uid
         logger.info(
             "Marstek managed %s already exists (devid=%s, mac=%s, type=%s)",
             device_type,
@@ -258,12 +252,11 @@ def ensure_managed_fake_device(
     _add_device(cfg, token, device_type, new_id)
 
     # Re-fetch once for confirmation and return created record
-    _, refreshed_devices, account_uid = _fetch_token_and_devices(cfg)
+    _, refreshed_devices = _fetch_token_and_devices(cfg)
     created = _find_existing_managed_device(refreshed_devices, expected_type)
     if not created:
         logger.warning(
             "Created %s device but could not confirm it in refreshed list", device_type
         )
         return None
-    created["account_uid"] = account_uid
     return created

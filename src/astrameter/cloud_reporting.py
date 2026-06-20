@@ -5,7 +5,9 @@ cloud over **plain HTTP GET** (no TLS, no token/signature — the device is
 identified only by the cleartext ``id``/``aid`` query params). It:
 
 1. runs a one-shot **handshake** ``getDateInfoeu.php`` (``uid``/``fcv``/``aid``/
-   ``sv``), then
+   ``sv``) — really a device upsert that writes ``aid``→the record's ``type``
+   and ``sv``→its ``version``, so we send the CT model and firmware version,
+   then
 2. sends a **timer-driven** ``setCtReporting`` GET carrying the live grid power,
    the per-bucket charge/discharge split, link state and an incrementing
    ``timeNo``.
@@ -39,6 +41,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "eu.hamedata.com"
 # Default build stamp sent as ``fcv`` in the handshake (matches DEFAULT_FC4_V).
 DEFAULT_FCV = "202409090159"
+# Firmware version sent as ``sv`` in the handshake. ``getDateInfoeu.php`` is a
+# device check-in that **writes** its ``sv`` into the cloud record's ``version``
+# field (and its ``aid`` into ``type``), so we send the same version AstraMeter
+# registers managed devices with (``marstek_api._add_device``'s ``version=121``)
+# to *re-assert* the record rather than clobber it with a bogus value.
+DEFAULT_REPORTING_VERSION = 121
 # No real-world cadence is documented; default to a conservative 60 s and let the
 # operator tune it (a capture of a real device is the ground truth — see docs).
 DEFAULT_INTERVAL_SECONDS = 60.0
@@ -85,11 +93,17 @@ class CtMeasurement:
 
 
 def build_get_date_info_url(host: str, *, uid: str, fcv: str, aid: str, sv: int) -> str:
-    """Build the handshake/time-sync GET (``getDateInfoeu.php``).
+    """Build the handshake/check-in GET (``getDateInfoeu.php``).
 
     Matches ``…/app/neng/getDateInfoeu.php?uid=%s&fcv=%s&aid=%s&sv=%d`` on both
     models. Identity params are percent-encoded for safety (a real device sends
     plain hex MACs, which are unaffected).
+
+    Despite the param names, this endpoint is a **device upsert**: empirically
+    the server stores ``aid``→the device record's ``type`` and ``sv``→its
+    ``version`` (the response body is just server time). Callers therefore pass
+    the CT model as ``aid`` and the firmware version as ``sv`` so the record is
+    re-asserted, not corrupted — see ``CloudReporter._handshake``.
     """
     return (
         f"http://{host}/app/neng/getDateInfoeu.php"
@@ -166,10 +180,9 @@ class CloudReporterConfig:
 
     ct_type: str
     device_id: str
-    aid: str = ""
     host: str = DEFAULT_HOST
     fcv: str = DEFAULT_FCV
-    sv: int = 0
+    sv: int = DEFAULT_REPORTING_VERSION
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
 
 
@@ -190,11 +203,15 @@ class CloudReporter:
         self._clock = clock or (lambda: datetime.datetime.now())
 
     async def _handshake(self) -> None:
+        # The handshake's `aid`/`sv` params are not an account id / settings
+        # version (the names mislead): the server writes `aid`→the device's
+        # `type` and `sv`→its `version`. So we send the CT model and the managed
+        # firmware version to keep the cloud record correct.
         url = build_get_date_info_url(
             self._cfg.host,
             uid=self._cfg.device_id,
             fcv=self._cfg.fcv,
-            aid=self._cfg.aid,
+            aid=self._cfg.ct_type,
             sv=self._cfg.sv,
         )
         status = await self._http_get(url)

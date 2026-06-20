@@ -351,7 +351,6 @@ MARSTEK_REGISTRATION_SCHEMA = cv.All(
 
 CONF_CLOUD_REPORTING = "cloud_reporting"
 CONF_HOST = "host"
-CONF_ACCOUNT_ID = "account_id"
 CONF_FCV = "fcv"
 CONF_SV = "sv"
 CONF_INTERVAL = "interval"
@@ -364,9 +363,10 @@ CLOUD_REPORTING_SCHEMA = cv.All(
                 http_request.HttpRequestComponent
             ),
             cv.Optional(CONF_HOST, default="eu.hamedata.com"): cv.string_strict,
-            cv.Optional(CONF_ACCOUNT_ID, default=""): cv.string,
             cv.Optional(CONF_FCV, default="202409090159"): cv.string_strict,
-            cv.Optional(CONF_SV, default=0): cv.int_,
+            # getDateInfo writes sv -> the cloud record's version field, so it
+            # defaults to the version managed devices are registered with (121).
+            cv.Optional(CONF_SV, default=121): cv.int_,
             cv.Optional(
                 CONF_INTERVAL, default="60s"
             ): cv.positive_time_period_milliseconds,
@@ -612,7 +612,6 @@ async def _to_code_cloud_reporting(config, ct002_var):
     cg.add(var.set_http(http_var))
 
     cg.add(var.set_host(sub[CONF_HOST]))
-    cg.add(var.set_account_id(sub[CONF_ACCOUNT_ID]))
     cg.add(var.set_fcv(sub[CONF_FCV]))
     cg.add(var.set_sv(sub[CONF_SV]))
     cg.add(var.set_interval_ms(int(sub[CONF_INTERVAL].total_milliseconds)))

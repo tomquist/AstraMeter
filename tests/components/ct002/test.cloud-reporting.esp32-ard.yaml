@@ -37,5 +37,4 @@ ct002:
   udp_port: 12345
   cloud_reporting:
     host: eu.hamedata.com
-    account_id: "test-account"
     interval: 60s

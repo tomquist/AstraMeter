@@ -211,10 +211,9 @@ ct002:
   # plain HTTP, like a real CT — live grid power, the charge/discharge
   # split, signal, battery count and link state. Uncomment together with
   # the top-level `http_request:` block above. The cloud only stores
-  # reports for an id/account_id it already knows from app pairing; the
-  # reported id is the CT's MAC (ct_mac — the registered device's MAC when
-  # marstek_registration is configured).
+  # reports for a device id it already knows; the reported id is the CT's
+  # MAC (ct_mac — the registered device's MAC when marstek_registration is
+  # configured). The model and firmware version are sent automatically.
   # cloud_reporting:
   #   host: eu.hamedata.com
-  #   account_id: "your-account-id"        # the `aid` from app pairing
   #   interval: 60s
