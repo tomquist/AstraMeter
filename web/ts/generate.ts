@@ -579,8 +579,6 @@ export function generateEsphome(state: State): string {
   if (wantCloud) {
     const sub = [`${IND}cloud_reporting:`];
     if (!isBlank(ctf.CLOUD_REPORTING_HOST)) sub.push(`${IND}${IND}host: ${quoteYaml(String(ctf.CLOUD_REPORTING_HOST).trim())}`);
-    if (!isBlank(ctf.CLOUD_REPORTING_ID)) sub.push(`${IND}${IND}device_id: "${String(ctf.CLOUD_REPORTING_ID).trim()}"`);
-    if (!isBlank(ctf.CLOUD_REPORTING_AID)) sub.push(`${IND}${IND}account_id: "${String(ctf.CLOUD_REPORTING_AID).trim()}"`);
     if (!isBlank(ctf.CLOUD_REPORTING_INTERVAL)) sub.push(`${IND}${IND}interval: ${ctf.CLOUD_REPORTING_INTERVAL}s`);
     ctLines.push(sub.join("\n"));
   }
@@ -612,9 +610,6 @@ const QUOTED_OPTION_KEYS = new Set([
   "marstek_mailbox",
   "marstek_password",
   "mqtt_uri",
-  // id can be an all-digit MAC — quote so leading zeros survive.
-  "cloud_reporting_id",
-  "cloud_reporting_aid",
   "cloud_reporting_host",
 ]);
 
@@ -677,8 +672,6 @@ export function generateHomeAssistant(state: State): string {
   if (ctf.CLOUD_REPORTING === "True") add("cloud_reporting", true);
   else if (ctf.CLOUD_REPORTING === "False") add("cloud_reporting", false);
   add("cloud_reporting_host", ctf.CLOUD_REPORTING_HOST);
-  add("cloud_reporting_id", ctf.CLOUD_REPORTING_ID);
-  add("cloud_reporting_aid", ctf.CLOUD_REPORTING_AID);
   add("cloud_reporting_interval", ctf.CLOUD_REPORTING_INTERVAL);
 
   // Signal-conditioning filters (transform, smoothing, deadband, hampel, pid).

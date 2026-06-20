@@ -240,13 +240,19 @@ truth.
 ```text
 GET http://eu.hamedata.com/app/neng/getDateInfoeu.php?uid=%s&fcv=%s&aid=%s&sv=%d
 ```
-A one‑shot handshake the device runs before reporting, to fetch date / config /
-OTA info: `uid` = device id (MAC), `fcv` = firmware version, `aid` = an
-account/app id, `sv` = a settings/schema version. (`hamedata.com` is also the OTA
-download host.) **The server's response format is not documented here**; the
-device reads the body but what it does with it (server time, an enable flag, a
-reporting interval, account binding) is unconfirmed — another reason a live
-capture is needed to fully replicate the round trip.
+A one‑shot handshake the device runs before reporting. The response body is just
+the server's wall‑clock time (`_YYYY_MM_DD_HH_MM_SS_…`), but **the call is also a
+device upsert**: empirically the server writes `aid`→the device record's **`type`**
+and `sv`→its **`version`** (the param names mislead — `aid` is the model, `sv` the
+firmware version, not an account id / settings version). `uid` = device id (MAC),
+`fcv` = a firmware build stamp. (`hamedata.com` is also the OTA download host.)
+
+> ⚠️ Because this endpoint **overwrites `type`/`version`**, sending wrong values
+> corrupts the device record — e.g. a non‑model `type` makes the Marstek app fall
+> back to a generic, default‑locale device card. AstraMeter therefore sends the
+> CT model (`HME-4`/`HME-3`) as `aid` and the managed firmware version (`121`, the
+> value [§6.1] registration uses) as `sv`, so the handshake *re‑asserts* the
+> record rather than clobbering it.
 
 ### 6.3 What's needed to replicate, and the open unknowns
 
@@ -254,13 +260,11 @@ Because it's plaintext GET with no signing, reproducing the requests is
 mechanical. The blockers for a cloud the real backend will *accept* are identity
 and semantics, not crypto:
 
-- **`aid` (account id)** is **not something the device generates** — it comes
-  from the app pairing flow. The cloud only associates reports for an `id`/`aid`
-  pair it already knows, so pushing into a real account needs a paired device's
-  identifiers.
-- **Field units/scaling/sign**, the **report cadence**, and the **handshake
-  response contract** are not documented here. A single DNS‑redirect +
-  HTTP‑proxy capture of a real CT yields all of them at once.
+- **The report `id` (MAC)** must be a device the cloud already knows. The
+  associated‑account binding comes from having registered/paired that device;
+  `setCtReporting` itself carries no account id.
+- **Field units/scaling/sign** and the **report cadence** are not documented
+  here. A single DNS‑redirect + HTTP‑proxy capture of a real CT yields them.
 
 ## 7. CT002 vs CT003 summary
 
@@ -291,8 +295,11 @@ handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing the
 `HME-4`/`HME-3` field layout from the emulated `ct_type`. It fills the fields
 AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
 count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
-V/I on `HME-4`). Because the cloud accepts a report only for an `id`/`aid` it
-already knows, set the device id (and account id) to a real paired device's
-identifiers; tune the interval to the cadence you measure. The web config
-generator produces all three forms (config.ini, the add‑on options, the ESPHome
-sub‑block). See `config.ini.example`.
+V/I on `HME-4`). The reported `id` is the CT's MAC — when a Marstek account is
+configured (the `[MARSTEK]` section, or the ESPHome `marstek_registration:`
+block), the MAC of the device AstraMeter registers there is used (the id the
+cloud already knows), otherwise the configured `CT_MAC` / `ct_mac`. The model and
+firmware version the handshake re‑asserts (§6.2) are derived automatically, so
+there is no account‑id knob to set; just tune the interval to the cadence you
+measure. The web config generator produces all three forms (config.ini, the add‑on
+options, the ESPHome sub‑block). See `config.ini.example`.

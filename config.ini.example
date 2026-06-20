@@ -60,12 +60,10 @@ THROTTLE_INTERVAL = 0
 # CLOUD_REPORTING = False
 ## Host to report to (default eu.hamedata.com; other regions swap the host).
 # CLOUD_REPORTING_HOST = eu.hamedata.com
-## Device id sent as `id`/`uid`. Defaults to CT_MAC. The Marstek cloud only
-## accepts reports for an id/aid pair it already knows from app pairing — use a
-## real paired device's identifiers if you want the cloud to store them.
-# CLOUD_REPORTING_ID =
-## Account/app id sent as `aid` in the handshake (from the app pairing flow).
-# CLOUD_REPORTING_AID =
+## The id sent as `id`/`uid` is the CT MAC: the device AstraMeter registers in
+## your Marstek account (the [MARSTEK] section) if available, otherwise CT_MAC.
+## The cloud accepts reports only for a device id it already knows. (The model
+## and firmware version are sent automatically as part of the handshake.)
 ## Seconds between reports. The real cadence isn't documented — measure it from a
 ## device and set it here (default 60).
 # CLOUD_REPORTING_INTERVAL = 60

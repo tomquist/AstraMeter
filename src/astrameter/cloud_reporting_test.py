@@ -111,7 +111,6 @@ async def test_reporter_handshakes_then_reports() -> None:
         CloudReporterConfig(
             ct_type="HME-4",
             device_id="aabbccddeeff",
-            aid="acct1",
             interval_seconds=0.01,
         ),
         gather=gather,
@@ -124,6 +123,9 @@ async def test_reporter_handshakes_then_reports() -> None:
     await reporter._report_once()
 
     assert "getDateInfoeu.php" in seen[0]
+    # The handshake re-asserts the device record: aid=model, sv=managed version.
+    assert "aid=HME-4" in seen[0]
+    assert "sv=121" in seen[0]
     assert "setCtReporting" in seen[1]
     assert "id=aabbccddeeff" in seen[1]
 

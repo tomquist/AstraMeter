@@ -31,20 +31,17 @@ void CloudReportingComponent::setup() {
     this->mark_failed();
     return;
   }
-  // Fall back to the configured CT MAC when no explicit id was given.
-  if (this->device_id_.empty()) this->device_id_ = this->ct002_->ct_mac();
-  if (this->device_id_.empty()) {
-    ESP_LOGE(TAG, "no device id — set cloud_reporting.device_id or ct002.ct_mac");
-    this->mark_failed();
-    return;
-  }
+  // The reported id is the CT MAC. It's resolved lazily in loop() rather than
+  // here: marstek_registration may set ct002.ct_mac after our setup() completes,
+  // so we wait for a MAC instead of failing if it isn't ready yet.
   this->state_ = State::WAIT_FOR_NETWORK;
 }
 
 void CloudReportingComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "CT002 cloud reporting:");
   ESP_LOGCONFIG(TAG, "  host: %s", this->host_.c_str());
-  ESP_LOGCONFIG(TAG, "  id: %s", this->device_id_.c_str());
+  ESP_LOGCONFIG(TAG, "  id: %s",
+                this->device_id_.empty() ? "(pending — from ct_mac)" : this->device_id_.c_str());
   ESP_LOGCONFIG(TAG, "  interval: %u ms", this->interval_ms_);
 }
 
@@ -101,13 +98,22 @@ void CloudReportingComponent::http_get_(const std::string &url) {
 
 void CloudReportingComponent::loop() {
   if (this->state_ == State::FATAL) return;
+  // Resolve the reporting id lazily — ct002.ct_mac may be populated by
+  // marstek_registration after our setup(). Wait until a MAC is available.
+  if (this->device_id_.empty()) {
+    this->device_id_ = this->ct002_->ct_mac();
+    if (this->device_id_.empty()) return;
+  }
   if (this->state_ == State::WAIT_FOR_NETWORK) {
     if (!this->network_ready_()) return;
     this->state_ = State::HANDSHAKE;
   }
   if (this->state_ == State::HANDSHAKE) {
+    // getDateInfo is a device upsert: the server writes `aid`->the record's
+    // `type` and `sv`->its `version`. Send the CT model and managed firmware
+    // version so the handshake re-asserts the record instead of corrupting it.
     this->http_get_(build_get_date_info_url(this->host_, this->device_id_, this->fcv_,
-                                            this->account_id_, this->sv_));
+                                            this->ct002_->ct_type(), this->sv_));
     this->state_ = State::REPORT;
     this->next_report_ms_ = millis();  // first report right away.
   }

@@ -281,8 +281,6 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "UDP_PORT": {"type": "integer"},
         "WIFI_RSSI": {"type": "integer"},
         "CLOUD_REPORTING": {"type": "boolean"},
-        "CLOUD_REPORTING_ID": {"type": "string"},
-        "CLOUD_REPORTING_AID": {"type": "string"},
         "CLOUD_REPORTING_HOST": {"type": "string"},
         "CLOUD_REPORTING_INTERVAL": {"type": "float", "min": 1},
         "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
