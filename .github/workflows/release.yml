@@ -39,6 +39,10 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          # Privileged job (RELEASE_TOKEN); don't share a cache that a PR run
+          # could poison via crafted dependency files.
+          enable-cache: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
