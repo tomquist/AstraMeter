@@ -30,8 +30,8 @@ jobs:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm
@@ -46,7 +46,7 @@ jobs:
           npm test
           npm run build
       - name: Upload built site
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pr-preview-dist
           path: web/dist
@@ -62,10 +62,10 @@ jobs:
       group: gh-pages
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download built site
         if: github.event.action != 'closed'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: pr-preview-dist
           path: web/dist

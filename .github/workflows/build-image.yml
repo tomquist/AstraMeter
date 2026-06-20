@@ -45,7 +45,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - id: lower-repo
@@ -120,7 +120,7 @@ jobs:
           echo "name=$SAFE_PLATFORM" >> $GITHUB_OUTPUT
       - name: Upload digest
         if: inputs.push
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.digest-prefix }}${{ steps.platform.outputs.name }}
           path: /tmp/digests/*
