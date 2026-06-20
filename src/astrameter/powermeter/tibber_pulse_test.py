@@ -48,3 +48,19 @@ async def test_get_powermeter_watts_raises_on_undecodable_telegram(
         with pytest.raises(ValueError, match="decode SML"):
             await pm.get_powermeter_watts()
         await pm.stop()
+
+
+async def test_get_powermeter_watts_raises_when_decoder_returns_no_powers(
+    mock_aiohttp_session,
+):
+    # Defensive: an empty decode result is treated as a failed read, not 0 W.
+    mock_aiohttp_session.set_read(b"frame-bytes-ignored-by-mock")
+    with (
+        patch("aiohttp.ClientSession", return_value=mock_aiohttp_session),
+        patch("astrameter.powermeter.tibber_pulse.parse_sml_powers", return_value=[]),
+    ):
+        pm = TibberPulse("127.0.0.1", "pw")
+        await pm.start()
+        with pytest.raises(ValueError, match="decode SML"):
+            await pm.get_powermeter_watts()
+        await pm.stop()

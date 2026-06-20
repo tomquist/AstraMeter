@@ -76,6 +76,6 @@ class TibberPulse(Powermeter):
             self._obis_l2,
             self._obis_l3,
         )
-        if powers is None:
+        if not powers:
             raise ValueError("Could not decode SML telegram from Tibber Pulse")
         return [float(x) for x in powers]
