@@ -69,9 +69,49 @@ jobs:
         with:
           name: pr-preview-dist
           path: web/dist
-      - name: Deploy preview
-        uses: rossjrw/pr-preview-action@v1
+      # Inlined in place of rossjrw/pr-preview-action@v1, whose pinned
+      # github-pages-deploy-action / sticky-pull-request-comment are still on
+      # the deprecated Node.js 20 runtime. We call the Node.js 24 releases
+      # directly. `clean` only touches this PR's own target-folder, so other
+      # PRs' previews on the shared gh-pages branch are left intact.
+      - name: Publish preview
+        if: github.event.action != 'closed'
+        uses: JamesIves/github-pages-deploy-action@v4.8.0
         with:
-          source-dir: ./web/dist
-          preview-branch: gh-pages
-          umbrella-dir: pr-preview
+          folder: web/dist
+          target-folder: pr-preview/pr-${{ github.event.number }}
+          branch: gh-pages
+          commit-message: "Deploy preview for PR ${{ github.event.number }}"
+      - name: Comment preview link
+        if: github.event.action != 'closed'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: pr-preview
+          number: ${{ github.event.number }}
+          message: |
+            🚀 Preview for this PR is deployed at
+            https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.number }}/
+
+            It will be live once the GitHub Pages deployment finishes.
+
+      # Teardown on close: deploy an empty folder over the PR's target-folder so
+      # `clean` removes the now-stale preview, then update the sticky comment.
+      - name: Remove preview (PR closed)
+        if: github.event.action == 'closed'
+        run: mkdir -p empty-preview
+      - name: Tear down preview
+        if: github.event.action == 'closed'
+        uses: JamesIves/github-pages-deploy-action@v4.8.0
+        with:
+          folder: empty-preview
+          target-folder: pr-preview/pr-${{ github.event.number }}
+          branch: gh-pages
+          commit-message: "Remove preview for PR ${{ github.event.number }}"
+      - name: Comment preview removed
+        if: github.event.action == 'closed'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: pr-preview
+          number: ${{ github.event.number }}
+          message: |
+            🧹 The preview for this PR has been removed now that it is closed.
