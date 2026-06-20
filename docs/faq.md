@@ -174,7 +174,7 @@ nudges the reading toward zero and calms down a battery that tends to over- or
 under-react. To get started, just set `PID_KP = 0.5` and `PID_MODE = bias`, and
 leave the other `PID_*` settings alone. There are a few more optional filters
 (including one that throws out occasional bad spikes) described under
-[General Configuration](configuration.md#per-powermeter-options) if you want to
+[Per-powermeter options](configuration.md#per-powermeter-options) if you want to
 fine-tune further.
 
 ### My second battery never kicks in, or my batteries won't settle near zero.

@@ -16,7 +16,7 @@ the environment consistent across platforms.
    file bind-mounts `config.ini` as a single file, and Docker will create an
    empty **directory** named `config.ini` if the file doesn't exist yet. (If you
    prefer a directory mount, mount a folder to `/app/config` and point the
-   container at it with `command: ["astrameter", "-c", "config/config.ini"]`.)
+   container at it with `command: ["astrameter", "-c", "/app/config/config.ini"]`.)
    See the [Configuration reference](../configuration.md) for what to put in it.
 3. Use the provided `docker-compose.yaml` to start the container:
    ```bash
