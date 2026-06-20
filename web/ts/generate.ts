@@ -11,6 +11,7 @@ import {
   CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
+  CT_CLOUD,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   type Field,
@@ -124,6 +125,7 @@ function ctSection(state: State, sectionName: string): string {
     CT_DC_KEEPALIVE,
     CT_EFFICIENCY,
     CT_SATURATION,
+    CT_CLOUD,
   ];
   for (const group of groups) {
     for (const field of group) {
@@ -464,6 +466,7 @@ export function generateEsphome(state: State): string {
   // — Insights reuses whatever broker this YAML connects to.
   const wantInsights = state.mqttInsights && state.mqttInsights.enabled;
   const wantMarstek = state.marstek && state.marstek.enabled;
+  const wantCloud = ((state.ct && state.ct.fields) || {}).CLOUD_REPORTING === "True";
   const pm0 = getPowermeter(meter.type);
   if (wantInsights && pm0 && pm0.esphome && pm0.esphome.kind === "mqtt") {
     const mf0 = state.mqttInsights.fields || {};
@@ -517,7 +520,8 @@ export function generateEsphome(state: State): string {
     const port = (useMeter && mFields.PORT) || mf.PORT || "1883";
     out.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
   }
-  if (wantMarstek) {
+  // Both marstek_registration and cloud_reporting need a single http_request:.
+  if (wantMarstek || wantCloud) {
     out.push(`http_request:\n${IND}timeout: 20s`);
   }
 
@@ -572,6 +576,15 @@ export function generateEsphome(state: State): string {
     ctLines.push(sub.join("\n"));
   }
 
+  if (wantCloud) {
+    const sub = [`${IND}cloud_reporting:`];
+    if (!isBlank(ctf.CLOUD_REPORTING_HOST)) sub.push(`${IND}${IND}host: ${quoteYaml(String(ctf.CLOUD_REPORTING_HOST).trim())}`);
+    if (!isBlank(ctf.CLOUD_REPORTING_ID)) sub.push(`${IND}${IND}device_id: "${String(ctf.CLOUD_REPORTING_ID).trim()}"`);
+    if (!isBlank(ctf.CLOUD_REPORTING_AID)) sub.push(`${IND}${IND}account_id: "${String(ctf.CLOUD_REPORTING_AID).trim()}"`);
+    if (!isBlank(ctf.CLOUD_REPORTING_INTERVAL)) sub.push(`${IND}${IND}interval: ${ctf.CLOUD_REPORTING_INTERVAL}s`);
+    ctLines.push(sub.join("\n"));
+  }
+
   out.push(ctLines.join("\n"));
 
   return out.join("\n\n") + "\n";
@@ -599,6 +612,10 @@ const QUOTED_OPTION_KEYS = new Set([
   "marstek_mailbox",
   "marstek_password",
   "mqtt_uri",
+  // id can be an all-digit MAC — quote so leading zeros survive.
+  "cloud_reporting_id",
+  "cloud_reporting_aid",
+  "cloud_reporting_host",
 ]);
 
 function quoteYaml(s: string): string {
@@ -655,6 +672,14 @@ export function generateHomeAssistant(state: State): string {
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  // Opt-in cloud reporting. The toggle is a tri-state select ("" = default off);
+  // the add-on option is a plain bool, so only an explicit On/Off is emitted.
+  if (ctf.CLOUD_REPORTING === "True") add("cloud_reporting", true);
+  else if (ctf.CLOUD_REPORTING === "False") add("cloud_reporting", false);
+  add("cloud_reporting_host", ctf.CLOUD_REPORTING_HOST);
+  add("cloud_reporting_id", ctf.CLOUD_REPORTING_ID);
+  add("cloud_reporting_aid", ctf.CLOUD_REPORTING_AID);
+  add("cloud_reporting_interval", ctf.CLOUD_REPORTING_INTERVAL);
 
   // Signal-conditioning filters (transform, smoothing, deadband, hampel, pid).
   // Option names are the lower-cased INI keys; throttle/wait handled above.

@@ -801,6 +801,17 @@ export const CT_SATURATION: Field[] = [
   { key: "SATURATION_DECAY_FACTOR", ey: "decay_factor", label: "Saturation decay factor", help: "How fast a swapped-out battery becomes eligible again. Default 0.995.", type: "number", placeholder: "0.995" },
 ];
 
+// Opt-in HTTP cloud reporting (hamedata.com). Emitted to config.ini, the HA
+// add-on options, and the ESPHome `cloud_reporting:` sub-block (which also pulls
+// in an http_request: block). Generator handles the mapping by key, so no `ey`.
+export const CT_CLOUD: Field[] = [
+  { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for an id/account it already knows from app pairing, so set the two ids below.", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "CLOUD_REPORTING_ID", label: "Reporting device ID", help: "Sent as the report's id/uid. Leave blank to use the CT MAC. Use a real paired device's id if you want Marstek's cloud to store the reports.", type: "text", placeholder: "(CT MAC)" },
+  { key: "CLOUD_REPORTING_AID", label: "Reporting account ID", help: "Sent as aid in the handshake — the account/app id from the Marstek app pairing flow.", type: "text", placeholder: "(from app pairing)" },
+  { key: "CLOUD_REPORTING_HOST", label: "Reporting host", help: "Host to report to. Blank uses the default eu.hamedata.com (other regions swap the host).", type: "text", placeholder: "eu.hamedata.com" },
+  { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds between reports. Default 60; tune to match a real device's cadence.", type: "number", placeholder: "60" },
+];
+
 export const MARSTEK_FIELDS: Field[] = [
   { key: "MAILBOX", ey: "mailbox", label: "Marstek account email", help: "Used once to register a managed CT device in the Marstek cloud.", type: "text", placeholder: "you@example.com" },
   { key: "PASSWORD", ey: "password", label: "Marstek account password", help: "Only needed for the one-time registration; you can remove it after.", type: "password", placeholder: "your_password" },

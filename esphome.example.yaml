@@ -205,3 +205,15 @@ ct002:
   #   timezone: Europe/Berlin
   #   retry_interval: 60s
   #   force_reregister: false             # set true to redo the cloud flow
+
+  # ── Optional sub-block: cloud_reporting ──────────────────────────────
+  # Opt-in: periodically report to the Marstek cloud (hamedata.com) over
+  # plain HTTP, like a real CT — live grid power, the charge/discharge
+  # split, signal, battery count and link state. Uncomment together with
+  # the top-level `http_request:` block above. The cloud only stores
+  # reports for a device_id/account_id it already knows from app pairing.
+  # cloud_reporting:
+  #   host: eu.hamedata.com
+  #   device_id: "02b25012abcd"           # blank → uses ct_mac
+  #   account_id: "your-account-id"        # the `aid` from app pairing
+  #   interval: 60s

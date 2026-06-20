@@ -6,9 +6,11 @@ mobile app over MQTT and to the Marstek cloud over HTTP. It is a reference for
 of it). The UDP control protocol between the CT and the batteries is separate —
 see [ct002-ct003-protocol.md](ct002-ct003-protocol.md).
 
-Both models speak the same MQTT protocol. **Only the CT003 (`HME-4` = CT002 does
-not) reports to the HTTP cloud**, because only the CT003 reads a P1/SML smart
-meter with energy data worth reporting.
+Both models speak the same MQTT protocol **and both report to the HTTP cloud**
+(`setCtReporting` + `getDateInfoeu.php`). The report **field set differs by
+model** (see §6): the `HME-4` clamp adds instantaneous voltage/current and uses
+32-bit energy; the `HME-3` smart-meter reader uses 64-bit energy and omits
+voltage/current.
 
 ## 1. MQTT connection
 
@@ -169,63 +171,96 @@ sm_t=%d,sm_b=%d,sm_p=%d,sm_n=%d,rec_l=%d,sm_dctn=%d,sm_p1iscon=%d,sm_p=%d,sm_wl=
 smart‑meter diagnostics (type, baud, protocol, count, record length, direction,
 phase‑1 connected, wiring, etc.).
 
-## 6. HTTP cloud reporting (CT003 only)
+## 6. HTTP cloud reporting (both models)
 
-The CT003 also reports to the Marstek cloud over plain **HTTP GET** (via the
-Wi‑Fi module: configure URL → GET → read response). Two endpoints, both under
-`eu.hamedata.com` (EU region host):
+**Both** the CT002 (`HME-4`) and CT003 (`HME-3`) report to the Marstek cloud over
+plain **HTTP GET** — no TLS, no token/signature; the device is identified only by
+the cleartext `id`/`aid` query params. The Wi‑Fi module does it in three AT steps
+(`AT+QHTTPCFG="url",…` → `AT+QHTTPGET=60` → `AT+QHTTPREAD=60`). Two endpoints,
+both under `eu.hamedata.com` (the EU‑region host; other regions presumably swap
+the host).
 
 ### 6.1 Status report — `setCtReporting`
 
+The query string is **model‑dependent**. The exact templates:
+
+**CT002 (`HME-4`)** — 32‑bit energy, **plus** instantaneous voltage/current:
 ```text
 GET http://eu.hamedata.com/prod/api/v1/setCtReporting
-    ?id=<mac>&eled=<lld>&elet=<lld>
-    &ap=<d>&bp=<d>&cp=<d>&dp=<d>
-    &rssi=<d>&slv=<d>&udp=<d>&mqtt=<d>
-    &timeNo=<d>&date=<YYYY>-<MM>-<DD>
-    &cz=<d>&ca=<d>&cb=<d>&cc=<d>&cd=<d>
-    &dz=<d>&da=<d>&db=<d>&dc=<d>&dd=<d>
+    ?id=%s&eled=%d&elet=%d&ap=%d&bp=%d&cp=%d&dp=%d&rssi=%d&slv=%d&udp=%d&mqtt=%d
+    &timeNo=%d&date=%d-%02d-%02d
+    &va=%d&vb=%d&vc=%d&ia=%.2f&ib=%.2f&ic=%.2f
+    &cz=%d&ca=%d&cb=%d&cc=%d&cd=%d&dz=%d&da=%d&db=%d&dc=%d&dd=%d
+```
+
+**CT003 (`HME-3`)** — 64‑bit energy, **no** voltage/current:
+```text
+GET http://eu.hamedata.com/prod/api/v1/setCtReporting
+    ?id=%s&eled=%lld&elet=%lld&ap=%d&bp=%d&cp=%d&dp=%d&rssi=%d&slv=%dudp=%d&mqtt=%d
+    &timeNo=%d&date=%d-%02d-%02d
+    &cz=%d&ca=%d&cb=%d&cc=%d&cd=%d&dz=%d&da=%d&db=%d&dc=%d&dd=%d
 ```
 
 | field | meaning |
 |-------|---------|
-| `id` | device MAC |
-| `eled`, `elet` | cumulative energy values (64‑bit) — import/export style totals |
+| `id` | device id (MAC) |
+| `eled`, `elet` | cumulative energy registers — import/export style totals (`HME-4`: 32‑bit; `HME-3`: 64‑bit) |
 | `ap`, `bp`, `cp`, `dp` | per‑phase power for phases A/B/C and **D** (the combined/合相 bucket) |
 | `rssi` | Wi‑Fi RSSI |
 | `slv` | connected battery count |
 | `udp`, `mqtt` | UDP / MQTT link state flags |
 | `timeNo` | monotonic sequence / time number |
 | `date` | `Y-M-D` |
+| `va,vb,vc` | *(HME-4 only)* per‑phase voltage |
+| `ia,ib,ic` | *(HME-4 only)* per‑phase current (2 decimals, A) |
 | `cz,ca,cb,cc,cd` | charge power: combined‑unassigned (`z`) + phases A/B/C/D |
 | `dz,da,db,dc,dd` | discharge power: combined‑unassigned (`z`) + phases A/B/C/D |
 
 The `cz/ca/cb/cc/cd` and `dz/da/db/dc/dd` groups mirror the UDP response's
-`x`/`A`/`B`/`C`/`ABC` charge/discharge buckets (`z`↔`x`, `d`↔`ABC`). It is the
-cloud's source of the per‑phase power and energy history shown in the app.
+`x`/`A`/`B`/`C`/`ABC` charge/discharge buckets (`z`↔`x`, `d`↔`ABC`). This is the
+cloud's source of the per‑phase power and energy history shown in the app. The
+`HME-4` additionally feeds the cloud its clamp‑measured voltage/current; the
+`HME-3` (which reads a smart meter, not a clamp) sends only the energy registers.
+
+> **`HME-3` quirk:** the on‑wire URL has a **missing `&`** between
+> `slv=%d` and `udp=%d` (`…&slv=%dudp=%d…`), so the slave count and udp flag run
+> together as one token. The `HME-4` template has the `&`. Replicas mimicking
+> the `HME-3` byte‑for‑byte should reproduce the quirk; a tolerant server should
+> parse `slv` as everything up to `udp=`.
 
 **Cadence.** This is a **timer‑driven, repeating** push — each report carries an
 incrementing `timeNo` and a `date`, i.e. it is scheduled, not event‑driven. The
-exact interval between reports is **not documented here** — the known timers are
-per‑operation, not the report period: the HTTP GET steps time out at **5 s**
-(config/read) and **65 s** (response wait), and the MQTT reconnect backoffs are
-30 s / 50 s. To get the real cadence, **measure it from the device** — the gap
-between successive `setCtReporting` GETs to `eu.hamedata.com` in a DNS/HTTP
-capture is the ground truth.
-
-> Note: the on‑wire URL has a missing `&` between `slv=%d` and `udp=%d`
-> (`…&slv=%dudp=%d…`), so on the wire the slave count and udp flag run together as
-> one token. Replicas mimicking it byte‑for‑byte should reproduce that quirk;
-> a tolerant server should parse `slv` as everything up to `udp=`.
+exact interval between reports is **not documented** here. To get the real
+cadence, **measure it from the device** — the gap between successive
+`setCtReporting` GETs to `eu.hamedata.com` in a DNS/HTTP capture is the ground
+truth.
 
 ### 6.2 Config / time fetch — `getDateInfoeu.php`
 
 ```text
-GET http://eu.hamedata.com/app/neng/getDateInfoeu.php?uid=<mac>&fcv=<fw>&aid=<id>&sv=<d>
+GET http://eu.hamedata.com/app/neng/getDateInfoeu.php?uid=%s&fcv=%s&aid=%s&sv=%d
 ```
-Used to fetch date / config / OTA info: `uid` = MAC, `fcv` = firmware version,
-`aid` = an account/app id, `sv` = a settings/schema version. (`hamedata.com` is
-also the OTA download host.)
+A one‑shot handshake the device runs before reporting, to fetch date / config /
+OTA info: `uid` = device id (MAC), `fcv` = firmware version, `aid` = an
+account/app id, `sv` = a settings/schema version. (`hamedata.com` is also the OTA
+download host.) **The server's response format is not documented here**; the
+device reads the body but what it does with it (server time, an enable flag, a
+reporting interval, account binding) is unconfirmed — another reason a live
+capture is needed to fully replicate the round trip.
+
+### 6.3 What's needed to replicate, and the open unknowns
+
+Because it's plaintext GET with no signing, reproducing the requests is
+mechanical. The blockers for a cloud the real backend will *accept* are identity
+and semantics, not crypto:
+
+- **`aid` (account id)** is **not something the device generates** — it comes
+  from the app pairing flow. The cloud only associates reports for an `id`/`aid`
+  pair it already knows, so pushing into a real account needs a paired device's
+  identifiers.
+- **Field units/scaling/sign**, the **report cadence**, and the **handshake
+  response contract** are not documented here. A single DNS‑redirect +
+  HTTP‑proxy capture of a real CT yields all of them at once.
 
 ## 7. CT002 vs CT003 summary
 
@@ -234,7 +269,7 @@ also the OTA download host.)
 | MQTT (8883, mutual TLS, both topic prefixes) | yes | yes |
 | `cd` command set | yes | yes |
 | runtime‑info frame | shorter, ends `…slv_n,cur_d` | longer, `eng_t` + `com_t…udp_v` diagnostics |
-| HTTP cloud reporting | **no** | **yes** (`setCtReporting`, `getDateInfoeu`) |
+| HTTP cloud reporting | **yes** — `setCtReporting` **with** `va/vb/vc`+`ia/ib/ic`, 32‑bit energy | **yes** — `setCtReporting` 64‑bit energy, no V/I, missing‑`&` quirk |
 
 ## 8. Relation to AstraMeter
 
@@ -244,6 +279,20 @@ frame and the **`cd=4`** slave list against a local broker so the app shows live
 grid power via [hame‑relay](https://github.com/tomquist/hame-relay). It emits a
 tolerant superset rather than a byte‑exact copy (different key order, extra
 `kwh/...` keys, comma‑joined `cd=4` rows); see that module's note. AstraMeter does
-**not** implement the auxiliary `cd` frames (§5.3–§5.6), the mutual‑TLS cloud
-connection, or the HTTP cloud reporting in §6 — those are documented here for
-completeness and for anyone aiming to fully replicate a real CT.
+**not** implement the auxiliary `cd` frames (§5.3–§5.6) or the mutual‑TLS cloud
+MQTT connection — those are documented here for completeness and for anyone aiming
+to fully replicate a real CT.
+
+**HTTP cloud reporting is implemented as an opt‑in feature** (§6) on **both**
+stacks. In Python set `CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]` section;
+on ESPHome add a `cloud_reporting:` sub‑block under `ct002:` (it needs an
+`http_request:` block). Either way AstraMeter runs the same
+handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing the
+`HME-4`/`HME-3` field layout from the emulated `ct_type`. It fills the fields
+AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
+count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
+V/I on `HME-4`). Because the cloud accepts a report only for an `id`/`aid` it
+already knows, set the device id (and account id) to a real paired device's
+identifiers; tune the interval to the cadence you measure. The web config
+generator produces all three forms (config.ini, the add‑on options, the ESPHome
+sub‑block). See `config.ini.example`.

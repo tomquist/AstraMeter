@@ -95,6 +95,37 @@ else
         grid_predict_trust="$(bashio::config 'grid_predict_trust')"
     fi
 
+    # Opt-in HTTP cloud reporting (hamedata.com). Only emit keys the user set.
+    cloud_reporting=""
+    if bashio::config.has_value 'cloud_reporting'; then
+        cloud_reporting="$(bashio::config 'cloud_reporting')"
+    fi
+    cloud_reporting_host=""
+    if bashio::config.has_value 'cloud_reporting_host'; then
+        cloud_reporting_host="$(bashio::config 'cloud_reporting_host')"
+    fi
+    cloud_reporting_id=""
+    if bashio::config.has_value 'cloud_reporting_id'; then
+        cloud_reporting_id="$(bashio::config 'cloud_reporting_id')"
+    fi
+    cloud_reporting_aid=""
+    if bashio::config.has_value 'cloud_reporting_aid'; then
+        cloud_reporting_aid="$(bashio::config 'cloud_reporting_aid')"
+    fi
+    cloud_reporting_interval=""
+    if bashio::config.has_value 'cloud_reporting_interval'; then
+        cloud_reporting_interval="$(bashio::config 'cloud_reporting_interval')"
+    fi
+
+    # Emit the cloud-reporting keys (if any) into the current [CT00x] section.
+    emit_cloud_reporting() {
+        [ -n "$cloud_reporting" ] && echo "CLOUD_REPORTING=$cloud_reporting"
+        [ -n "$cloud_reporting_host" ] && echo "CLOUD_REPORTING_HOST=$cloud_reporting_host"
+        [ -n "$cloud_reporting_id" ] && echo "CLOUD_REPORTING_ID=$cloud_reporting_id"
+        [ -n "$cloud_reporting_aid" ] && echo "CLOUD_REPORTING_AID=$cloud_reporting_aid"
+        [ -n "$cloud_reporting_interval" ] && echo "CLOUD_REPORTING_INTERVAL=$cloud_reporting_interval"
+    }
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -113,6 +144,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_cloud_reporting
             echo ""
             echo "[CT003]"
             echo "CT_MAC=$ct_mac"
@@ -121,6 +153,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_cloud_reporting
             echo ""
         else
             echo "[$ct_section]"
@@ -130,6 +163,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_cloud_reporting
             echo ""
         fi
 

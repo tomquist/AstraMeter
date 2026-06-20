@@ -14,6 +14,7 @@ import {
   CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
+  CT_CLOUD,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   ESP_BOARDS,
@@ -199,7 +200,16 @@ const HA_ADDON_METER_FIELDS = new Set([
 // (active control, balancer, saturation, Marstek base URL / timezone, …) is set
 // automatically or only reachable via a custom config.ini, so it's hidden for
 // the Home Assistant target.
-const HA_ADDON_CT_FIELDS = new Set(["CT_MAC", "MIN_EFFICIENT_POWER", "EFFICIENCY_ROTATION_INTERVAL"]);
+const HA_ADDON_CT_FIELDS = new Set([
+  "CT_MAC",
+  "MIN_EFFICIENT_POWER",
+  "EFFICIENCY_ROTATION_INTERVAL",
+  "CLOUD_REPORTING",
+  "CLOUD_REPORTING_ID",
+  "CLOUD_REPORTING_AID",
+  "CLOUD_REPORTING_HOST",
+  "CLOUD_REPORTING_INTERVAL",
+]);
 
 function hasCtType(types: string[]): boolean {
   return types.includes("ct002") || types.includes("ct003");
@@ -463,7 +473,7 @@ function ctCard(): HTMLElement | null {
   // The add-on only exposes a handful of CT options; show just those for the HA
   // target (the rest need a custom config.ini).
   if (isHa) {
-    const haFields = [...CT_BASIC, ...CT_EFFICIENCY].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
+    const haFields = [...CT_BASIC, ...CT_EFFICIENCY, ...CT_CLOUD].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
     return card(4, "Battery steering (CT002 / CT003)", "Optional CT options exposed by the add-on. Leave them blank to use the defaults.", [
       el("div", { class: "field-grid" }, haFields.map((fl) => fieldControl(fl, f, {}))),
     ]);
@@ -480,6 +490,7 @@ function ctCard(): HTMLElement | null {
     group("DC battery keep-alive", CT_DC_KEEPALIVE),
     group("Efficiency optimization (AC batteries only)", CT_EFFICIENCY),
     group("Saturation handling", CT_SATURATION),
+    group("Cloud reporting (advanced)", CT_CLOUD),
   ]);
 }
 

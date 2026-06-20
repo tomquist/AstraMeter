@@ -51,6 +51,24 @@ THROTTLE_INTERVAL = 0
 # CONSUMER_TTL = 120
 ## Log concise status (phase consumption + consumer charge/discharge) on each request when enabled
 # DEBUG_STATUS = False
+## --- HTTP cloud reporting (opt-in, advanced) ---
+## Mimic what a real CT does: periodically GET hamedata.com's setCtReporting with
+## live grid power, the charge/discharge buckets, RSSI, slave count and link
+## flags (the HME-4/HME-3 field layout follows the emulated device type). Plain
+## HTTP, no TLS. OFF by default. See docs/marstek-mqtt-http.md (§6) for the field
+## meanings and the open unknowns (cadence, energy/V-I values, account binding).
+# CLOUD_REPORTING = False
+## Host to report to (default eu.hamedata.com; other regions swap the host).
+# CLOUD_REPORTING_HOST = eu.hamedata.com
+## Device id sent as `id`/`uid`. Defaults to CT_MAC. The Marstek cloud only
+## accepts reports for an id/aid pair it already knows from app pairing — use a
+## real paired device's identifiers if you want the cloud to store them.
+# CLOUD_REPORTING_ID =
+## Account/app id sent as `aid` in the handshake (from the app pairing flow).
+# CLOUD_REPORTING_AID =
+## Seconds between reports. The real cadence isn't documented — measure it from a
+## device and set it here (default 60).
+# CLOUD_REPORTING_INTERVAL = 60
 ## --- Active control ---
 ## When True (default), the emulator smooths the grid reading, splits the target
 ## across batteries, and balances their load. When False, raw meter values are

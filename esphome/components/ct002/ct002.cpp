@@ -510,6 +510,14 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
   return out;
 }
 
+CT002Component::PhaseBucketPowers CT002Component::reporting_phase_buckets() const {
+  const PhaseReports r = this->collect_reports_by_phase_();
+  PhaseBucketPowers out;
+  out.chrg_power = r.chrg_power;
+  out.dchrg_power = r.dchrg_power;
+  return out;
+}
+
 std::vector<float> CT002Component::compute_smooth_target_(const std::vector<float> &values,
                                                           const std::string &consumer_id) {
   // Cache the pre-balancer grid power for snapshot_consumer / Marstek

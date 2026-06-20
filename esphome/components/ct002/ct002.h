@@ -176,6 +176,16 @@ class CT002Component : public Component {
   std::vector<float> latest_grid_power() const;
   size_t connected_slave_count() const;
 
+  // Per-bucket charge/discharge power (W) in x/A/B/C/ABC order — the source for
+  // the HTTP cloud reporter's cz../dz.. fields. Mirrors Python's
+  // CT002.reporting_phase_buckets() (the same sign-split the UDP response uses:
+  // chrg_power <= 0, dchrg_power >= 0).
+  struct PhaseBucketPowers {
+    std::array<float, BUCKET_COUNT> chrg_power{};
+    std::array<float, BUCKET_COUNT> dchrg_power{};
+  };
+  PhaseBucketPowers reporting_phase_buckets() const;
+
   // Configured ct_type/ct_mac forwarded to the Marstek MQTT topics.
   const std::string &ct_type() const { return this->ct_type_; }
   const std::string &ct_mac() const { return this->ct_mac_; }
