@@ -292,7 +292,10 @@ handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing the
 AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
 count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
 V/I on `HME-4`). Because the cloud accepts a report only for an `id`/`aid` it
-already knows, set the device id (and account id) to a real paired device's
-identifiers; tune the interval to the cadence you measure. The web config
-generator produces all three forms (config.ini, the add‑on options, the ESPHome
-sub‑block). See `config.ini.example`.
+already knows, set the account id to a real paired device's; tune the interval
+to the cadence you measure. The reported `id` is the CT's MAC — when a Marstek
+account is configured (the `[MARSTEK]` section, or the ESPHome
+`marstek_registration:` block), the MAC of the device AstraMeter registers there
+is used (the id the cloud already knows), otherwise the configured `CT_MAC` /
+`ct_mac`. The web config generator produces all three forms (config.ini, the add‑on
+options, the ESPHome sub‑block). See `config.ini.example`.

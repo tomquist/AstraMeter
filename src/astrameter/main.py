@@ -166,9 +166,6 @@ async def run_device(
             cfg.get(ct_section, "CLOUD_REPORTING_HOST", fallback="").strip()
             or "eu.hamedata.com"
         )
-        cloud_reporting_id = cfg.get(
-            ct_section, "CLOUD_REPORTING_ID", fallback=""
-        ).strip()
         cloud_reporting_aid = cfg.get(
             ct_section, "CLOUD_REPORTING_AID", fallback=""
         ).strip()
@@ -492,11 +489,15 @@ async def run_device(
     # a handshake then a periodic setCtReporting GET with live grid/bucket data.
     cloud_task: asyncio.Task[None] | None = None
     if isinstance(device, CT002) and cloud_reporting:
-        report_id = cloud_reporting_id or ct_mac or marstek_mac
+        # The reported id is the CT's MAC: the one AstraMeter registered in the
+        # Marstek account (the id the cloud actually knows) when configured, else
+        # the locally set CT_MAC.
+        report_id = marstek_mac or ct_mac
         if not report_id:
             logger.warning(
                 "CLOUD_REPORTING enabled for %s but no device id is available; "
-                "set CLOUD_REPORTING_ID (or CT_MAC). Cloud reporting disabled.",
+                "set CT_MAC, or enable the Marstek account so the registered "
+                "device id is used. Cloud reporting disabled.",
                 device_id,
             )
         else:

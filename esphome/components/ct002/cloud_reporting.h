@@ -50,7 +50,6 @@ class CloudReportingComponent : public Component {
   void set_ct002(ct002::CT002Component *c) { this->ct002_ = c; }
   void set_http(http_request::HttpRequestComponent *h) { this->http_ = h; }
   void set_host(const std::string &v) { this->host_ = v; }
-  void set_device_id(const std::string &v) { this->device_id_ = v; }
   void set_account_id(const std::string &v) { this->account_id_ = v; }
   void set_fcv(const std::string &v) { this->fcv_ = v; }
   void set_sv(int v) { this->sv_ = v; }
@@ -77,6 +76,7 @@ class CloudReportingComponent : public Component {
   ct002::CT002Component *ct002_{nullptr};
   http_request::HttpRequestComponent *http_{nullptr};
   std::string host_{"eu.hamedata.com"};
+  // The reported id is the CT MAC (set from ct002_->ct_mac() at setup).
   std::string device_id_;
   std::string account_id_;
   std::string fcv_{"202409090159"};

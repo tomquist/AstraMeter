@@ -31,10 +31,11 @@ void CloudReportingComponent::setup() {
     this->mark_failed();
     return;
   }
-  // Fall back to the configured CT MAC when no explicit id was given.
-  if (this->device_id_.empty()) this->device_id_ = this->ct002_->ct_mac();
+  // The reported id is the CT MAC (the ct002.ct_mac, which marstek_registration
+  // populates from the registered device when configured).
+  this->device_id_ = this->ct002_->ct_mac();
   if (this->device_id_.empty()) {
-    ESP_LOGE(TAG, "no device id — set cloud_reporting.device_id or ct002.ct_mac");
+    ESP_LOGE(TAG, "no device id — set ct002.ct_mac");
     this->mark_failed();
     return;
   }
