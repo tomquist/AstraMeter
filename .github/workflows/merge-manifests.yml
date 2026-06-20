@@ -48,6 +48,10 @@ jobs:
           fi
           printf 'IMAGE_NAME=%s%s\n' "${GITHUB_REPOSITORY@L}" "$IMAGE_SUFFIX" >> "$GITHUB_OUTPUT"
           if [ -n "$LEGACY_IMAGE_NAME" ]; then
+            if printf '%s' "$LEGACY_IMAGE_NAME" | grep -q '[[:cntrl:]]'; then
+              echo "Invalid legacy-image-name: control characters are not allowed" >&2
+              exit 1
+            fi
             LEGACY_LOWER=$(printf '%s' "$LEGACY_IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
             printf 'LEGACY_IMAGE_NAME=%s%s\n' "$LEGACY_LOWER" "$IMAGE_SUFFIX" >> "$GITHUB_OUTPUT"
           fi
