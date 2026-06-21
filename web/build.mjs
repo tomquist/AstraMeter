@@ -24,7 +24,7 @@ for (const item of ["css", "assets", "CNAME", "robots.txt"]) {
 }
 
 // HTML pages: inject a noindex meta into non-production builds.
-for (const item of ["index.html", "generator.html"]) {
+for (const item of ["index.html", "generator.html", "how-balancing-works.html"]) {
   let html = await readFile(item, "utf8");
   if (noindex) {
     html = html.replace(
@@ -36,7 +36,7 @@ for (const item of ["index.html", "generator.html"]) {
 }
 
 await build({
-  entryPoints: ["ts/app.ts", "ts/site.ts"],
+  entryPoints: ["ts/app.ts", "ts/site.ts", "ts/balancing.ts"],
   outdir: `${outdir}/js`,
   bundle: true,
   format: "esm",

@@ -1,13 +1,17 @@
 # AstraMeter project website
 
 The public website for AstraMeter, a static site (TypeScript + esbuild) for
-GitHub Pages. It has two parts:
+GitHub Pages. It has three parts:
 
 1. **Landing page** (`index.html`) — what AstraMeter is, features, supported
    devices and power meters, installation options, and an FAQ.
 2. **Config generator** (`generator.html`) — a beginner-friendly tool that
    generates an AstraMeter configuration: a Python `config.ini` (Home Assistant
    add-on / Docker / direct install) or an ESPHome YAML (run on an ESP32).
+3. **How balancing works** (`how-balancing-works.html`) — a plain-language,
+   interactive canvas simulation of the grid-balancing control loop, with
+   toggles for latency compensation, ramp pacing, and anti-oscillation so a
+   visitor can see why each exists.
 
 Everything runs in the browser — nothing is uploaded. The generator form is
 data-driven from `ts/schema.ts`, and the landing page renders its supported-meter
@@ -24,8 +28,8 @@ GitHub ref the site links to is injected at build time (see *Deploying*).
 
 | File | Purpose |
 |------|---------|
-| `index.html`, `generator.html` | Landing page and generator page (static shells). |
-| `css/styles.css` | Styling for both pages. |
+| `index.html`, `generator.html`, `how-balancing-works.html` | Landing, generator, and balancing-explainer pages (static shells). |
+| `css/styles.css` | Styling for all pages. |
 | `assets/` | Logo (SVG + PNG), favicon, og:image. |
 | `CNAME` | Custom domain (`astrameter.com`) published to the `gh-pages` root by the build. |
 | `robots.txt` | Allows crawling; staging/preview de-indexing is done per page (see below). |
@@ -35,6 +39,8 @@ GitHub ref the site links to is injected at build time (see *Deploying*).
 | `ts/generate.ts` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
 | `ts/app.ts` | Renders the generator form from the schema; state, live preview, save/load. Entry point → `dist/js/app.js`. |
 | `ts/site.ts` | Shared site behaviour: mobile nav, scroll state, `data-gh` link resolution, landing-page grids. Entry point → `dist/js/site.js`. |
+| `ts/balancing.ts` | Pure control-loop toy model + the canvas demo for `how-balancing-works.html`. Entry point → `dist/js/balancing.js`. |
+| `ts/balancing.test.ts` | Behavioural checks that each toggle actually steadies the simulated grid. |
 | `ts/schema.test.ts` | Structural validation of the schema (typo guard). |
 | `ts/state.test.ts` | Tests for the state model + untrusted-input sanitisation. |
 | `ts/generate.test.ts` | Assertions for the generators. |
@@ -58,7 +64,7 @@ To preview the links for another ref: `GH_REF=main npm run build`.
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm test             # schema, state, and generate suites via tsx
+npm test             # schema, state, generate, and balancing suites via tsx
 ```
 
 CI runs `typecheck` + `test` + `build` before every deploy (see

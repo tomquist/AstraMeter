@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** a "How balancing works" page to the project website: a plain-language, interactive simulation that shows AstraMeter steering your grid power to zero in real time, with toggles to switch off latency compensation, smooth ramping, and anti-oscillation so you can see what each one does.
+
 
 ## 2.2.1
 
