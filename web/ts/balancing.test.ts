@@ -9,6 +9,8 @@ import {
   stepSim,
   makeNaive,
   stepNaive,
+  lagSignal,
+  LAG_SAMPLES,
   METER_LATENCY,
   SMART,
   type SimToggles,
@@ -129,6 +131,24 @@ for (let t = 0; t < 300; t++) {
 ok(nFlips >= 5, `plain meter-follower hunts at steady state (${nFlips} sign reversals over 100 ticks)`);
 
 ok(METER_LATENCY > 0, "meter latency is a positive lag");
+
+// The lag explainer's scripted bump: bounded to 0..1, periodic, and the delayed
+// copy actually trails reality on the rising edge (so the offset is visible).
+let lagMin = Infinity;
+let lagMax = -Infinity;
+for (let p = 0; p < 260; p++) {
+  const v = lagSignal(p);
+  lagMin = Math.min(lagMin, v);
+  lagMax = Math.max(lagMax, v);
+}
+ok(lagMin >= 0 && lagMax <= 1 && lagMax > 0.99, `lag signal is a 0..1 bump (min ${lagMin}, max ${lagMax})`);
+ok(lagSignal(5) === lagSignal(5 + 260), "lag signal repeats each cycle");
+// On the rising edge, the delayed meter copy is still below reality.
+const edge = 95;
+ok(
+  lagSignal(edge) > lagSignal(edge - LAG_SAMPLES),
+  `delayed meter trails reality on the rising edge (${lagSignal(edge).toFixed(2)} > ${lagSignal(edge - LAG_SAMPLES).toFixed(2)})`,
+);
 
 console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));
 process.exit(failures ? 1 : 0);

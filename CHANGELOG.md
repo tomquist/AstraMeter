@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** a "How balancing works" page to the project website: a plain-language, interactive simulation that races AstraMeter against a plain meter-follower on the same household load, so you can watch AstraMeter hold the grid at zero in real time while the naive controller overshoots and hunts.
+- **Added** a "How balancing works" page to the project website: a plain-language, animated explainer of *why* batteries overshoot (the meter always reports a moment late) and how AstraMeter predicts past that delay, followed by a live side-by-side race against a plain meter-follower so you can watch AstraMeter hold the grid at zero while the naive controller hunts.
 
 
 ## 2.2.1

@@ -8,10 +8,10 @@ GitHub Pages. It has three parts:
 2. **Config generator** (`generator.html`) — a beginner-friendly tool that
    generates an AstraMeter configuration: a Python `config.ini` (Home Assistant
    add-on / Docker / direct install) or an ESPHome YAML (run on an ESP32).
-3. **How balancing works** (`how-balancing-works.html`) — a plain-language,
-   interactive canvas simulation that races AstraMeter against a plain
-   meter-follower on the same household load, so a visitor can see AstraMeter
-   hold the grid at zero while the naive controller overshoots and hunts.
+3. **How balancing works** (`how-balancing-works.html`) — a plain-language
+   explainer: an animated meter-lag visualisation showing *why* batteries
+   overshoot and how AstraMeter predicts past the delay, then a live
+   side-by-side race against a plain meter-follower that hunts.
 
 Everything runs in the browser — nothing is uploaded. The generator form is
 data-driven from `ts/schema.ts`, and the landing page renders its supported-meter

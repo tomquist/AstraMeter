@@ -48,9 +48,44 @@
     </header>
 
     <main>
-      <!-- the interactive simulation -->
+      <!-- the core mechanism: meter lag + prediction -->
       <section class="band">
         <div class="container">
+          <div class="section-head center">
+            <h2>The trick: your meter is always a little late</h2>
+            <p class="muted-lg">A meter reports what <em>just</em> happened — not what's happening right now. That tiny delay is the whole reason batteries overshoot.</p>
+          </div>
+          <div class="lag-frame sim-canvas-frame">
+            <canvas id="lag-canvas" aria-label="Animation: the meter reports changes a moment after they happen"></canvas>
+          </div>
+          <div class="sim-legend lag-legend">
+            <span><i class="key key-smart"></i> What's actually happening <small>— and what AstraMeter acts on</small></span>
+            <span><i class="key key-meter"></i> What the meter reports <small>— a moment later</small></span>
+          </div>
+          <div class="two-col lag-explain">
+            <div class="panel">
+              <h3>😵 A basic battery trusts the meter</h3>
+              <p>It steers by the grey line — old news. By the time the meter says “you're importing 200&nbsp;W,” the
+                battery has often already covered it, so it pushes again and shoots past. Repeat that and the grid
+                swings back and forth: <strong>hunting</strong>.</p>
+            </div>
+            <div class="panel">
+              <h3>🔮 AstraMeter sees through the delay</h3>
+              <p>It remembers what it just told the battery to do and adds that back in — so it works from the
+                <strong>green</strong> line, where the grid really is <em>now</em>, instead of the meter's late
+                reading. No double-correcting, no overshoot.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- the payoff: live side-by-side race -->
+      <section class="band alt">
+        <div class="container">
+          <div class="section-head center">
+            <h2>The difference it makes, live</h2>
+            <p class="muted-lg">The same home, driving two batteries at once — one plain meter-follower, one running AstraMeter.</p>
+          </div>
           <div class="sim-wrap">
             <div class="sim-stage">
               <div class="sim-canvas-frame">
@@ -94,11 +129,11 @@
       </section>
 
       <!-- plain-language recap of the mechanisms -->
-      <section class="band alt">
+      <section class="band">
         <div class="container">
           <div class="section-head center">
-            <h2>The tricks that keep it smooth</h2>
-            <p class="muted-lg">The same ideas, in plain words.</p>
+            <h2>Everything AstraMeter does to stay smooth</h2>
+            <p class="muted-lg">Predicting past the meter's delay is the big one — here it is alongside the rest, in plain words.</p>
           </div>
           <div class="grid-cards">
             <div class="feature">
@@ -135,7 +170,7 @@
       </section>
 
       <!-- CTA -->
-      <section class="band">
+      <section class="band alt">
         <div class="container">
           <div class="cta-box">
             <div>

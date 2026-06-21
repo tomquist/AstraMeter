@@ -169,6 +169,29 @@ export function stepNaive(state: NaiveState, load: number): number {
   return state.grid;
 }
 
+/** Sample count the meter lags by in the "why it overshoots" explainer. */
+export const LAG_SAMPLES = 18;
+
+/**
+ * A scripted, repeating disturbance (0..1) for the meter-lag explainer: a
+ * smooth trapezoid "bump" — think the kettle switching on, holding, then off.
+ * Plotting this against a copy delayed by {@link LAG_SAMPLES} makes the meter's
+ * lag visible as a horizontal offset between the two lines.
+ */
+export function lagSignal(phase: number): number {
+  const cycle = 260;
+  const p = ((phase % cycle) + cycle) % cycle;
+  const rampUpEnd = 80;
+  const plateauEnd = 150;
+  const rampDownEnd = 195;
+  if (p < 60) return 0; // calm before
+  if (p < rampUpEnd) return 0.5 - 0.5 * Math.cos((Math.PI * (p - 60)) / (rampUpEnd - 60));
+  if (p < plateauEnd) return 1;
+  if (p < rampDownEnd)
+    return 0.5 + 0.5 * Math.cos((Math.PI * (p - plateauEnd)) / (rampDownEnd - plateauEnd));
+  return 0; // calm after
+}
+
 // ── DOM / canvas demo (browser only) ────────────────────────────────────────
 
 interface LoadGen {
@@ -353,10 +376,97 @@ function initBalancingDemo(): void {
   requestAnimationFrame(frame);
 }
 
+// ── Meter-lag explainer (the "how it works" mechanism viz) ──────────────────
+
+function initLagDemo(): void {
+  const canvasEl = document.getElementById("lag-canvas") as HTMLCanvasElement | null;
+  if (!canvasEl) return;
+  const context = canvasEl.getContext("2d");
+  if (!context) return;
+  const canvas: HTMLCanvasElement = canvasEl;
+  const ctx: CanvasRenderingContext2D = context;
+
+  let phase = 0;
+  let lastFrame = 0;
+
+  function resize(): void {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = canvas.clientWidth || 640;
+    const cssH = canvas.clientHeight || 200;
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function plot(
+    sampleAt: (i: number) => number,
+    color: string,
+    width: number,
+    dash: number[],
+    w: number,
+    h: number,
+    n: number,
+  ): void {
+    const dx = w / (n - 1);
+    const top = 24;
+    const bot = h - 22;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const y = bot - sampleAt(i) * (bot - top);
+      if (i === 0) ctx.moveTo(0, y);
+      else ctx.lineTo(i * dx, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function draw(): void {
+    const w = canvas.clientWidth || 640;
+    const h = canvas.clientHeight || 200;
+    ctx.clearRect(0, 0, w, h);
+    const n = Math.max(120, Math.floor(w));
+    // Oldest sample on the left, newest on the right (scrolling left).
+    const realAt = (i: number) => lagSignal(phase - (n - 1 - i));
+    const meterAt = (i: number) => lagSignal(phase - (n - 1 - i) - LAG_SAMPLES);
+
+    // What the meter reports — a moment late (grey, dashed, behind).
+    plot(meterAt, "rgba(148,163,184,0.9)", 2, [5, 4], w, h, n);
+    // Reality, and what AstraMeter acts on (emerald, on time).
+    plot(realAt, "#10b981", 2.5, [], w, h, n);
+
+    // Call out the horizontal gap between the two rising edges near the middle.
+    ctx.fillStyle = "rgba(148,163,184,0.9)";
+    ctx.font = "11px -apple-system, system-ui, sans-serif";
+    const dx = w / (n - 1);
+    ctx.fillText("→ the meter is a moment behind", LAG_SAMPLES * dx + w * 0.18, 16);
+  }
+
+  function frame(now: number): void {
+    if (now - lastFrame > 38) {
+      lastFrame = now;
+      phase += 1;
+    }
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  const ro = new ResizeObserver(() => resize());
+  ro.observe(canvas);
+  resize();
+  requestAnimationFrame(frame);
+}
+
 if (typeof document !== "undefined") {
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initBalancingDemo);
-  } else {
+  const boot = () => {
+    initLagDemo();
     initBalancingDemo();
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
   }
 }
