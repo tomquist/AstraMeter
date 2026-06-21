@@ -6,7 +6,8 @@ name: Deploy config generator to GitHub Pages
 #   push to main    -> published to the site ROOT (production)
 #                      https://astrameter.com/ (custom domain via web/CNAME)
 #   push to develop -> published under /develop/ (staging)
-#                      https://astrameter.com/develop/
+#                      https://<user>.github.io/<repo>/develop/ (staging is kept
+#                      off the production domain by the guard in the HTML pages)
 #
 # The GitHub ref the site links to is baked into the bundle at build time via
 # GH_REF (see web/ts/links.ts), so a main build links to @main, develop to
