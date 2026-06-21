@@ -3,16 +3,6 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script>
-      // Staging (/develop/) and PR previews (/pr-preview/) must not be served on
-      // the production custom domain — they belong on the GitHub Pages host only.
-      // Runs before render to avoid flashing staging content on astrameter.com.
-      (function () {
-        var h = location.hostname;
-        if (/\.github\.io$/.test(h) || h === "localhost" || h === "127.0.0.1") return;
-        if (/^\/(develop|pr-preview)\//.test(location.pathname)) location.replace("/");
-      })();
-    </script>
     <title>AstraMeter — Smart power-meter emulator for Marstek batteries</title>
     <meta
       name="description"
