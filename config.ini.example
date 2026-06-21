@@ -113,6 +113,15 @@ THROTTLE_INTERVAL = 0
 ## it, recovering that self-consumption. Stays clear of a full/empty pack. 0
 ## disables.
 # IMPORT_TRIM_W = 15
+## Hunting deadband (W): while a battery is hunting (its correction keeps
+## reversing sign because it is chasing meter noise or a sub-deadband
+## fluctuation it cannot actually cancel), drop tiny corrections to zero instead
+## of issuing them every poll. This cuts wasted battery travel/wear and grid
+## swings — and, because chasing noise was itself pushing the grid back and
+## forth, recovers self-consumption rather than trading it away. A genuine
+## load/solar step holds one sign, so the band collapses and the step reacts
+## immediately. 0 disables.
+# HUNT_DEADBAND_EXTRA = 35
 
 ## --- DC battery keep-alive ---
 ## Applies per battery (independent of balancing — also relevant with a single
