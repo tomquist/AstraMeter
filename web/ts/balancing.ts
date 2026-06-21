@@ -34,8 +34,9 @@ export interface SimState {
   battOut: number;
   /** Ring buffer of recent true grid values, used to model meter latency. */
   meterHistory: number[];
-  /** Predictor estimate of the *current* grid (see _predict_control_grid). */
-  pred: number;
+  /** Battery output as it was when each delayed meter sample was taken, so the
+   *  predictor can add back the corrections the meter has not yet "seen". */
+  battHistory: number[];
   /** Sign of the last correction and the running "is it hunting?" score. */
   lastSign: number;
   oscScore: number;
@@ -45,20 +46,24 @@ export interface SimState {
 
 /** Steps the meter lags reality by — the root cause of overshoot/hunting. */
 export const METER_LATENCY = 7;
-/** How hard the predictor pulls its estimate toward a fresh meter reading. */
-const PREDICTOR_TRUST = 0.3;
+/** Fraction of the grid error folded into battery output each tick. Below 1 so
+ *  the approach is a smooth ramp rather than a single deadbeat jump. */
+const CONTROL_GAIN = 0.6;
 /** Max output change per tick when ramp pacing is on (watts). */
 const PACE_STEP = 55;
+/** Plausible ceiling on a battery's discharge, so the un-compensated loop's
+ *  oscillation stays bounded (and on-screen) instead of running away. */
+const BATT_MAX = 3500;
 /** Strongest damping applied to a fully-hunting loop (fraction of gain removed). */
-const DAMP_MAX = 0.85;
-const DAMP_ALPHA = 0.35;
-const DAMP_DECAY = 0.12;
+const DAMP_MAX = 0.95;
+const DAMP_ALPHA = 0.6;
+const DAMP_DECAY = 0.05;
 
 export function makeSim(initialLoad = 250): SimState {
   return {
     battOut: initialLoad,
-    meterHistory: new Array<number>(METER_LATENCY + 1).fill(0),
-    pred: 0,
+    meterHistory: new Array<number>(METER_LATENCY).fill(0),
+    battHistory: new Array<number>(METER_LATENCY).fill(initialLoad),
     lastSign: 0,
     oscScore: 0,
     grid: 0,
@@ -78,21 +83,24 @@ export function stepSim(state: SimState, load: number, cfg: SimToggles): number 
   // does not get to see it directly.
   const trueGrid = load - state.battOut;
 
-  // The meter only reports this after a delay.  Push the truth in, read the
-  // value from METER_LATENCY ticks ago back out.
+  // The meter only reports this after a delay.  Push the truth (and the output
+  // active at this instant) in, read the values from METER_LATENCY ticks ago.
   state.meterHistory.push(trueGrid);
+  state.battHistory.push(state.battOut);
   const meter = state.meterHistory.shift() ?? trueGrid;
+  const battWhenMeasured = state.battHistory.shift() ?? state.battOut;
 
-  // Advance the predictor by the pool's own last output change (grid moves
-  // opposite to battery output) and nudge it toward the delayed meter.  This
-  // reconstructs the grid the meter has not caught up to yet — without it the
-  // controller keeps re-issuing a correction already in flight.
-  state.pred += PREDICTOR_TRUST * (meter - state.pred);
-  const controlGrid = cfg.predictor ? state.pred : meter;
+  // Latency compensation: the meter reflects the grid as it was before our
+  // recent corrections.  Add back the output we have committed since then, so
+  // the estimate tracks where the grid really is *now* — and the controller
+  // stops re-issuing a correction already on its way (the cause of the
+  // overshoot/hunting when this is off).
+  const estimated = meter - (state.battOut - battWhenMeasured);
+  const controlGrid = cfg.predictor ? estimated : meter;
 
   // The correction we want to fold into battery output: if we are importing
   // (grid > 0) we need to discharge more, so raise output by the grid error.
-  let correction = controlGrid;
+  let correction = CONTROL_GAIN * controlGrid;
 
   if (cfg.damping) {
     const sign = correction > 0 ? 1 : correction < 0 ? -1 : 0;
@@ -111,12 +119,8 @@ export function stepSim(state: SimState, load: number, cfg: SimToggles): number 
     desired = state.battOut + delta;
   }
   // The battery never charges below zero output in this toy (homeowners just
-  // see "the battery covers the house"); clamp so the picture stays simple.
-  state.battOut = Math.max(0, desired);
-
-  // Account for the output we just changed inside the predictor's estimate so
-  // next tick's crediting starts from the right place.
-  state.pred -= state.battOut - (load - trueGrid);
+  // see "the battery covers the house"); clamp to a sane discharge range.
+  state.battOut = Math.max(0, Math.min(BATT_MAX, desired));
 
   state.grid = load - state.battOut;
   return state.grid;
