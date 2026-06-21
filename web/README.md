@@ -27,6 +27,8 @@ GitHub ref the site links to is injected at build time (see *Deploying*).
 | `index.html`, `generator.html` | Landing page and generator page (static shells). |
 | `css/styles.css` | Styling for both pages. |
 | `assets/` | Logo (SVG + PNG), favicon, og:image. |
+| `CNAME` | Custom domain (`astrameter.com`) published to the `gh-pages` root by the build. |
+| `robots.txt` | Keeps `/develop/` and `/pr-preview/` out of search indexes. |
 | `ts/schema.ts` | Single source of truth: every powermeter, field, and tuning option, fully typed. Pure data. |
 | `ts/links.ts` | Builds every GitHub URL from the build-injected ref (`__GH_REF__`). |
 | `ts/state.ts` | State model + persistence helpers (defaults, `migrate`, sanitisation of untrusted restored input). Pure, no DOM. |
@@ -95,6 +97,13 @@ every push that touches `web/`:
 
 Root, `/develop/`, and `/pr-preview/` all coexist on `gh-pages` (`keep_files:
 true`). The site uses only relative URLs, so it works under any subpath.
+
+**Production domain is for production only.** Both HTML pages carry a tiny inline
+guard that, when served on a non-`github.io` host (i.e. `astrameter.com`),
+redirects any `/develop/` or `/pr-preview/` path back to the production root — so
+staging and PR previews don't open on the public domain. `robots.txt` also
+disallows those paths. (Note: GitHub redirects the `*.github.io` URLs to the
+custom domain, so staging/previews are not independently browsable there either.)
 
 ### GitHub links track the deployed ref
 

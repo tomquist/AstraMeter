@@ -1,0 +1,4 @@
+User-agent: *
+# Staging and PR previews live under these paths; keep them out of search indexes.
+Disallow: /develop/
+Disallow: /pr-preview/
