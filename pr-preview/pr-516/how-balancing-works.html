@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How balancing works — AstraMeter</title>
+    <meta
+      name="description"
+      content="An interactive, plain-language look at how AstraMeter steers one or more Marstek batteries to keep your grid power at zero — and the tricks that keep the chase smooth."
+    />
+    <meta property="og:title" content="How AstraMeter balances your batteries" />
+    <meta property="og:description" content="Watch AstraMeter chase your grid power to zero in real time — and flip off the tricks that keep it smooth to see why they matter." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://astrameter.com/assets/astrameter-logo.png" />
+    <meta name="theme-color" content="#020617" />
+    <link rel="icon" type="image/svg+xml" href="assets/astrameter-icon.svg" />
+    <link rel="apple-touch-icon" href="assets/astrameter-icon.png" />
+    <link rel="stylesheet" href="css/styles.css" />
+    <meta name="robots" content="noindex" />
+  </head>
+  <body>
+    <!-- nav -->
+    <header class="site-nav" id="nav">
+      <div class="nav-inner">
+        <a class="brand" href="index.html"><img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter</a>
+        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
+        <nav class="nav-links" id="nav-links">
+          <a href="index.html#features">Features</a>
+          <a href="index.html#devices">Devices</a>
+          <a href="index.html#meters">Power meters</a>
+          <a class="active" href="how-balancing-works.html">How balancing works</a>
+          <a href="index.html#install">Install</a>
+          <a class="nav-cta" href="generator.html">Config Generator</a>
+          <a class="nav-gh" data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub ★</a>
+        </nav>
+      </div>
+    </header>
+
+    <header class="gen-head">
+      <div class="container">
+        <p class="eyebrow"><a href="index.html">← Back to AstraMeter</a></p>
+        <h1>How AstraMeter balances your batteries</h1>
+        <p class="lead">
+          Your battery has one job: cover whatever the house is using so <strong>no power flows to or from the
+          grid</strong>. That sounds easy — until the meter reports a moment late, the kettle switches on, or you
+          run several batteries at once. Here's how AstraMeter keeps the grid pinned to zero, live.
+        </p>
+      </div>
+    </header>
+
+    <main>
+      <!-- the interactive simulation -->
+      <section class="band">
+        <div class="container">
+          <div class="sim-wrap">
+            <div class="sim-stage">
+              <div class="sim-canvas-frame">
+                <canvas id="sim-canvas" aria-label="Live grid-balancing simulation"></canvas>
+              </div>
+              <div class="sim-legend">
+                <span><i class="key key-grid"></i> Grid power <small>(the line we want at zero)</small></span>
+                <span><i class="key key-load"></i> House load</span>
+                <span><i class="key key-batt"></i> Battery output</span>
+              </div>
+              <div class="sim-readouts">
+                <div class="sim-readout"><span class="sim-r-label">House is using</span><strong id="r-load">— W</strong></div>
+                <div class="sim-readout"><span class="sim-r-label">Battery gives</span><strong id="r-batt">— W</strong></div>
+                <div class="sim-readout"><span class="sim-r-label">Grid (goal: 0)</span><strong id="r-grid">— W</strong></div>
+              </div>
+              <div class="sim-score">
+                <div class="sim-score-head">
+                  <span>Steadiness</span><span id="sim-score-label">—</span>
+                </div>
+                <div class="sim-score-track"><div id="sim-score-bar" class="sim-score-bar"></div></div>
+              </div>
+            </div>
+
+            <aside class="sim-panel">
+              <h3>Try switching off the tricks</h3>
+              <p class="help">Each one keeps the chase smooth. Turn them off and watch the grid line start to
+                overshoot and hunt — that's the problem each trick exists to solve.</p>
+
+              <label class="sim-toggle">
+                <input type="checkbox" id="t-predictor" checked />
+                <span class="sim-toggle-box"></span>
+                <span class="sim-toggle-text">
+                  <strong>Latency compensation</strong>
+                  <small>The meter reports a moment late. AstraMeter predicts where the grid really is right now, so it stops re-issuing corrections already on their way.</small>
+                </span>
+              </label>
+
+              <label class="sim-toggle">
+                <input type="checkbox" id="t-pacing" checked />
+                <span class="sim-toggle-box"></span>
+                <span class="sim-toggle-text">
+                  <strong>Smooth ramping</strong>
+                  <small>Eases the battery toward its new target instead of slamming the full change in one step — so a sudden load change doesn't fling the grid the other way.</small>
+                </span>
+              </label>
+
+              <label class="sim-toggle">
+                <input type="checkbox" id="t-damping" checked />
+                <span class="sim-toggle-box"></span>
+                <span class="sim-toggle-text">
+                  <strong>Anti-oscillation</strong>
+                  <small>If corrections keep flip-flopping, it's a sign of hunting — so AstraMeter gently backs off the gain until things settle, without slowing real changes.</small>
+                </span>
+              </label>
+
+              <div class="sim-buttons">
+                <button id="sim-kettle" class="btn btn-ghost" type="button">☕ Switch on the kettle</button>
+                <button id="sim-pause" class="btn btn-ghost" type="button" aria-pressed="false">⏸ Pause</button>
+              </div>
+              <noscript><p class="note">This simulation needs JavaScript enabled.</p></noscript>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- plain-language recap of the mechanisms -->
+      <section class="band alt">
+        <div class="container">
+          <div class="section-head center">
+            <h2>The tricks that keep it smooth</h2>
+            <p class="muted-lg">The same ideas, in plain words.</p>
+          </div>
+          <div class="grid-cards">
+            <div class="feature">
+              <div class="feature-icon">🔮</div>
+              <h3>It predicts, not just reacts</h3>
+              <p>Power meters report with a small delay. Instead of chasing an out-of-date reading, AstraMeter
+                accounts for the change it just asked the battery to make — so it doesn't double-correct and
+                overshoot.</p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">📉</div>
+              <h3>It eases in</h3>
+              <p>Rather than jumping the battery straight to a new target, it ramps there at a pace the battery can
+                actually follow, then approaches gently — no big swings past zero.</p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">🌊</div>
+              <h3>It calms hunting</h3>
+              <p>If the grid starts oscillating, it recognises the back-and-forth and quietly reduces how hard it
+                pushes — while still reacting at full strength to a genuine change like the kettle.</p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">⚖️</div>
+              <h3>It shares fairly</h3>
+              <p>With several batteries, AstraMeter splits the load between them, rotates which ones work to spread
+                wear, and steps around any that are full or empty.</p>
+            </div>
+          </div>
+          <p class="center" style="margin-top: 22px">
+            Want the engineering detail? See the
+            <a data-gh="doc:docs/ct002.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/ct002.md" target="_blank" rel="noopener">multi-battery balancing docs ↗</a>.
+          </p>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section class="band">
+        <div class="container">
+          <div class="cta-box">
+            <div>
+              <h2>Ready to try it on your own batteries?</h2>
+              <p class="muted-lg">Build a ready-to-use configuration in your browser — every option explained, with a live preview.</p>
+            </div>
+            <a class="btn btn-primary btn-lg" href="generator.html">Open the Config Generator →</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-grid">
+        <div>
+          <a class="brand" href="index.html"><img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter</a>
+          <p class="help">The simulation runs entirely in your browser — it's a simplified illustration, not the real firmware.</p>
+        </div>
+        <div>
+          <h4>Project</h4>
+          <a data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub</a>
+          <a data-gh="readme" href="https://github.com/tomquist/astrameter#readme" target="_blank" rel="noopener">Documentation</a>
+          <a data-gh="doc:CHANGELOG.md" href="https://github.com/tomquist/astrameter/blob/develop/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+        </div>
+        <div>
+          <h4>Tools & docs</h4>
+          <a href="generator.html">Config Generator</a>
+          <a data-gh="doc:docs/ct002.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/ct002.md" target="_blank" rel="noopener">Multi-battery balancing</a>
+          <a data-gh="issues" href="https://github.com/tomquist/astrameter/issues" target="_blank" rel="noopener">Report an issue</a>
+        </div>
+      </div>
+      <div class="container footer-bottom">
+        <span>Community project — not affiliated with Marstek.</span>
+      </div>
+    </footer>
+
+    <script type="module" src="js/site.js"></script>
+    <script type="module" src="js/balancing.js"></script>
+  </body>
+</html>
