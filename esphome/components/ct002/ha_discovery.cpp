@@ -89,8 +89,7 @@ void add_power_sensor(JsonObject components, const std::string &key, const std::
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type, const std::string &network_mac,
-    const std::string &battery_ip) {
+    const std::string &device_type, bool efficiency_rotation) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string safe_cid = sanitize_id(consumer_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev + "_" + safe_cid;
@@ -267,6 +266,31 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     dw["retain"] = true;
     dw["entity_category"] = "config";
 
+    // Efficiency window weight number — how much of the efficiency rotation
+    // window this battery participates in, as a percentage. 100 % neutral (full
+    // participation); 0 % skips the battery for efficiency (parked while
+    // limiting). Surfaced as a percentage; the internal value is a 0-1 fraction.
+    // Only meaningful when efficiency rotation is enabled (min_efficient_power >
+    // 0); without it every battery stays active, so don't surface the entity
+    // (mirrors discovery.py).
+    if (efficiency_rotation) {
+      JsonObject eww = components["efficiency_window_weight"].to<JsonObject>();
+      eww["platform"] = "number";
+      eww["unique_id"] = uid_prefix + "_efficiency_window_weight";
+      eww["name"] = "Efficiency Window Weight";
+      eww["unit_of_measurement"] = "%";
+      eww["min"] = 0;
+      eww["max"] = 100;
+      eww["step"] = 5;
+      eww["mode"] = "slider";
+      eww["state_topic"] = state_topic;
+      eww["value_template"] =
+          "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}";
+      eww["command_topic"] = state_topic + "/efficiency_window_weight/set";
+      eww["retain"] = true;
+      eww["entity_category"] = "config";
+    }
+
     // Min DC Output number — minimum discharge (W) to keep a DC battery's
     // external inverter from switching off at 0 W. Only surfaced for batteries
     // where it has an effect (B2500 family); Venus/Jupiter/unknown don't get it.
@@ -299,44 +323,11 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     }
     device["manufacturer"] = "Marstek";
     device["via_device"] = meter_identifier;
-    // Connections array
-    bool is_hex12 = mac_slug.size() == 12;
-    if (is_hex12) {
-      for (char c : mac_slug) {
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
-          is_hex12 = false;
-          break;
-        }
-      }
-    }
-    JsonArray conns = device["connections"].to<JsonArray>();
-    bool any_conn = false;
-    if (is_hex12) {
-      std::string bt;
-      bt.reserve(17);
-      for (size_t i = 0; i < 12; i += 2) {
-        if (i) bt.push_back(':');
-        bt.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(mac_slug[i]))));
-        bt.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(mac_slug[i + 1]))));
-      }
-      JsonArray e = conns.add<JsonArray>();
-      e.add("bluetooth");
-      e.add(bt);
-      any_conn = true;
-    }
-    if (!network_mac.empty()) {
-      JsonArray e = conns.add<JsonArray>();
-      e.add("mac");
-      e.add(network_mac);
-      any_conn = true;
-    }
-    if (!battery_ip.empty()) {
-      JsonArray e = conns.add<JsonArray>();
-      e.add("ip");
-      e.add(battery_ip);
-      any_conn = true;
-    }
-    if (!any_conn) device.remove("connections");
+    // No device `connections`: in HA a `connection` is a global cross-
+    // integration identity, so advertising the battery's own MAC merges this
+    // device into the battery device owned by another bridge (e.g. hm2mqtt).
+    // See discovery.py and issue #438. The device is identified by its own
+    // namespaced `identifiers` and linked to the meter via `via_device`.
     if (!device_type.empty()) device["model_id"] = device_type;
 
     add_origin(root);
@@ -357,7 +348,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix) {
+    const std::string &ha_prefix, bool efficiency_rotation) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev;
   const std::string state_topic = base_topic + "/ct002/" + device_id + "/status";
@@ -376,15 +367,24 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     st["state_topic"] = state_topic;
     st["value_template"] = "{{ value_json.smooth_target }}";
 
+    // Active Control switch — on (default) lets the emulator compute per-battery
+    // targets; off falls back to relay mode. The command is published retained
+    // to the device-level command topic so an "off" choice survives a restart
+    // (mirrors discovery.py).
     JsonObject ac = components["active_control"].to<JsonObject>();
-    ac["platform"] = "binary_sensor";
+    ac["platform"] = "switch";
     ac["unique_id"] = uid_prefix + "_active_control";
     ac["name"] = "Active Control";
-    ac["device_class"] = "running";
     ac["state_topic"] = state_topic;
     ac["value_template"] = "{{ value_json.active_control }}";
-    ac["payload_on"] = "True";
-    ac["payload_off"] = "False";
+    ac["command_topic"] = base_topic + "/ct002/" + device_id + "/set";
+    ac["command_template"] = "{\"active_control\": {{ \"true\" if value == \"ON\" else \"false\" }}}";
+    ac["payload_on"] = "ON";
+    ac["payload_off"] = "OFF";
+    ac["state_on"] = "True";
+    ac["state_off"] = "False";
+    ac["retain"] = true;
+    ac["entity_category"] = "config";
 
     JsonObject cc = components["consumer_count"].to<JsonObject>();
     cc["platform"] = "sensor";
@@ -394,13 +394,19 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     cc["value_template"] = "{{ value_json.consumer_count }}";
     cc["entity_category"] = "diagnostic";
 
-    JsonObject fr = components["force_rotation"].to<JsonObject>();
-    fr["platform"] = "button";
-    fr["unique_id"] = uid_prefix + "_force_rotation";
-    fr["name"] = "Force Rotation";
-    fr["command_topic"] = base_topic + "/ct002/" + device_id + "/set";
-    fr["payload_press"] = "{\"force_rotation\": true}";
-    fr["entity_category"] = "config";
+    // The Force Rotation button only does anything when efficiency rotation is
+    // enabled (min_efficient_power > 0); without it every battery stays active
+    // and there's nothing to rotate, so don't surface the button (mirrors
+    // discovery.py).
+    if (efficiency_rotation) {
+      JsonObject fr = components["force_rotation"].to<JsonObject>();
+      fr["platform"] = "button";
+      fr["unique_id"] = uid_prefix + "_force_rotation";
+      fr["name"] = "Force Rotation";
+      fr["command_topic"] = base_topic + "/ct002/" + device_id + "/set";
+      fr["payload_press"] = "{\"force_rotation\": true}";
+      fr["entity_category"] = "config";
+    }
 
     JsonObject device = root["device"].to<JsonObject>();
     device["identifiers"] = node_id;

@@ -27,6 +27,8 @@ GitHub ref the site links to is injected at build time (see *Deploying*).
 | `index.html`, `generator.html` | Landing page and generator page (static shells). |
 | `css/styles.css` | Styling for both pages. |
 | `assets/` | Logo (SVG + PNG), favicon, og:image. |
+| `CNAME` | Custom domain (`astrameter.com`) published to the `gh-pages` root by the build. |
+| `robots.txt` | Allows crawling; staging/preview de-indexing is done per page (see below). |
 | `ts/schema.ts` | Single source of truth: every powermeter, field, and tuning option, fully typed. Pure data. |
 | `ts/links.ts` | Builds every GitHub URL from the build-injected ref (`__GH_REF__`). |
 | `ts/state.ts` | State model + persistence helpers (defaults, `migrate`, sanitisation of untrusted restored input). Pure, no DOM. |
@@ -83,17 +85,24 @@ can push to `gh-pages`).
 The *Deploy config generator to GitHub Pages* workflow builds and publishes on
 every push that touches `web/`:
 
-- **Production** — pushes to **`main`** publish to the site **root**:
-  `https://<user>.github.io/<repo>/`
+- **Production** — pushes to **`main`** publish to the site **root**, served at
+  the custom domain [`https://astrameter.com/`](https://astrameter.com/) (the
+  `CNAME` file in `web/` is published to the `gh-pages` root by the build).
 - **Staging** — pushes to **`develop`** publish under **`/develop/`**:
-  `https://<user>.github.io/<repo>/develop/`
+  `https://astrameter.com/develop/`
 - **Per-PR previews** — the *Deploy PR preview* workflow deploys each pull
   request to `pr-preview/pr-<number>/` and comments the live URL on the PR; it's
   removed when the PR closes. (Same-repo branches only; forks can't write
   `gh-pages`.)
 
 Root, `/develop/`, and `/pr-preview/` all coexist on `gh-pages` (`keep_files:
-true`). The site uses only relative URLs, so it works under any subpath.
+true`). The site uses only relative URLs, so it works under any subpath. They all
+serve under the custom domain, so only the **production** build (`GH_REF=main`)
+is indexable: every other build (develop, PR previews — and local builds, which
+default to `develop`) has the build inject a `<meta name="robots" content="noindex">`
+into each HTML page. `robots.txt` deliberately allows crawling so search engines
+can fetch those pages and honor the noindex (a `Disallow` would block the crawl
+and leave the URLs indexable from external links instead).
 
 ### GitHub links track the deployed ref
 

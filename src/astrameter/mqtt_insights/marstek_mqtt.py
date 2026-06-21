@@ -8,6 +8,12 @@ Wire format (UTF-8): the Marstek app typically parses payloads with
 expecting **exactly one** ``=`` per token. Replies to ``cd=1`` / ``cd=4`` polls
 omit a ``cd=`` echo; ``cd=4`` slave lists use flat ``slv_t/…/slv_p`` tokens only.
 Aggregate replies include power, ``slv_n``, optional extras, and kWh placeholders.
+
+This emulates — but does not byte-for-byte reproduce — what a real CT sends; a
+real CT's ``cd=1``/``cd=4`` layout differs by model and key order. The app's
+tolerant, order-independent parser accepts our superset. See
+``docs/ct002-ct003-protocol.md`` ("MQTT runtime-info frame") for the reference
+layouts.
 """
 
 from __future__ import annotations

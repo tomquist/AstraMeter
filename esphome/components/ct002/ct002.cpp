@@ -55,6 +55,16 @@ int parse_int_strict(const std::string &s, int default_value) {
   return static_cast<int>(parsed);
 }
 
+// Mirror of Python's _bucket_for_phase: A/B/C → their buckets, "D" → the
+// combined ABC bucket, anything else (the normalized "0") → x.
+size_t bucket_index_for_phase(const std::string &phase) {
+  if (phase == "A") return BUCKET_A;
+  if (phase == "B") return BUCKET_B;
+  if (phase == "C") return BUCKET_C;
+  if (phase == "D") return BUCKET_ABC;
+  return BUCKET_X;
+}
+
 }  // namespace
 
 // Wall-clock seconds for balancer/saturation accounting. Uses ESPHome's
@@ -62,7 +72,7 @@ int parse_int_strict(const std::string &s, int default_value) {
 // metal at boot; the balancer only cares about deltas, so a monotonic
 // reference is fine. Under the test-hooks build the e2e harness can engage
 // a mock clock for deterministic time-gated behaviour.
-double CT002Component::now_seconds_() {
+double CT002Component::now_seconds_() const {
 #ifdef USE_CT002_TEST_HOOKS
   if (this->mock_clock_enabled_) return this->mock_clock_seconds_;
 #endif
@@ -150,11 +160,11 @@ void CT002Component::setup() {
   this->start_control_server_();
 #endif
 
-  // Consumer eviction — fires every 5 s and evicts anything older than
-  // consumer_ttl_seconds_ (default 120 s). Mirrors Python's
-  // _cleanup_consumers loop (ct002.py:330-341). Without this the
-  // consumers_ map grows unbounded across battery turnover and the
-  // mqtt_insights "offline" availability is never published.
+  // Consumer eviction — fires every 5 s and evicts anything older than its
+  // TTL (the configured consumer_ttl, or by default ~2 missed poll cycles —
+  // see consumer_ttl_for_). Mirrors Python's _cleanup_consumers loop.
+  // Without this the consumers_ map grows unbounded across battery turnover
+  // and the mqtt_insights "offline" availability is never published.
   this->set_interval("ct002_evict", 5000, [this]() { this->evict_stale_consumers_(); });
 
   ESP_LOGCONFIG(TAG, "CT002 setup: %u phase(s), ct_type=%s, udp_port=%u",
@@ -249,6 +259,15 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     // syntax instead of strtol's lenient prefix parse.
     reported_power = parse_int_strict(fields[5], 0);
   }
+  // Optional 7th field: "participate" flag (newer senders, e.g. B2500).
+  // Absent/empty defaults to participating; an explicit 0 opts out.
+  bool participates = true;
+  if (fields.size() > 6) {
+    std::string p = fields[6];
+    while (!p.empty() && std::isspace(static_cast<unsigned char>(p.front()))) p.erase(p.begin());
+    while (!p.empty() && std::isspace(static_cast<unsigned char>(p.back()))) p.pop_back();
+    participates = p.empty() || parse_int_strict(p, 1) != 0;
+  }
 
   // Deduplication — drop repeat polls from the same consumer inside the
   // configured window (keyed by consumer_id so retransmits are suppressed
@@ -261,17 +280,30 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   }
 
   const std::string meter_dev_type = fields[0];
-  this->update_consumer_report_(consumer_id, in_inspection_mode ? "A" : reported_phase,
-                                static_cast<float>(reported_power), meter_dev_type, addr_ip);
+  // Store the phase exactly as reported: "D" selects the combined ABC bucket
+  // and any inspection marker is normalized to "0" (the x bucket) inside
+  // update_consumer_report_ — forcing "A" here would mis-count inspection
+  // and combined reporters into phase A (issue #460).
+  this->update_consumer_report_(consumer_id, reported_phase,
+                                static_cast<float>(reported_power), meter_dev_type, addr_ip,
+                                participates);
 
   // Read the filter pipeline → balancer.
   std::vector<float> values;
   if (this->pipeline_head_) values = this->pipeline_head_->get_powermeter_watts();
+  // An empty reading means the powermeter is unavailable (sensor aged out /
+  // outage). The {0,0,0} below is then a *sentinel*, not a real reading: skip
+  // active control so the stateful controller (grid-state predictor, saturation
+  // EMA, ...) never treats a fabricated zero grid as a fresh sample and emits a
+  // non-zero delta from its internal state — the wind-up issue #403 guards
+  // against. The battery holds on the literal zero adjustment instead. Mirrors
+  // ct002.py _handle_request.
+  const bool meter_ok = !values.empty();
   if (values.empty()) values = {0.0f, 0.0f, 0.0f};
   while (values.size() < 3) values.push_back(0.0f);
   values.resize(3);
 
-  if (this->active_control_ && !in_inspection_mode) {
+  if (this->active_control_ && !in_inspection_mode && meter_ok) {
     values = this->compute_smooth_target_(values, consumer_id);
   }
   while (values.size() < 3) values.push_back(0.0f);
@@ -329,9 +361,16 @@ Consumer &CT002Component::get_consumer_(const std::string &consumer_id) {
 void CT002Component::update_consumer_report_(const std::string &consumer_id,
                                             const std::string &phase, float power,
                                             const std::string &device_type,
-                                            const std::string &source_ip) {
-  std::string normalized_phase = phase.empty() ? std::string("A") : phase;
+                                            const std::string &source_ip, bool participates) {
+  std::string normalized_phase = phase;
   for (auto &c : normalized_phase) c = static_cast<char>(std::toupper(c));
+  if (normalized_phase != "A" && normalized_phase != "B" && normalized_phase != "C" &&
+      normalized_phase != "D") {
+    // Anything else ("0", empty, future markers) is the unassigned/
+    // inspection state; store the wire's canonical "0" so aggregation
+    // routes it to the x bucket instead of inventing a phase (issue #460).
+    normalized_phase = "0";
+  }
   auto &consumer = this->get_consumer_(consumer_id);
   const double now = now_seconds_();
   // Capture the prior phase BEFORE the update. Python keys "is there a
@@ -360,18 +399,18 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   consumer.power = power;
   consumer.timestamp = now;
   consumer.device_type = device_type;
+  consumer.participates = participates;
   if (!source_ip.empty()) consumer.last_ip = source_ip;
 
   // Phase detected (new battery) / phase changed (re-detected on a
-  // different leg) — mirrors ct002.py:315-328. Only fires for a real
-  // A/B/C phase that differs from the prior one; inspection-mode polls
-  // (phase "A" forced) don't spuriously trigger because their phase is
-  // normalized to "A" and an actual A reporter wouldn't change.
-  const bool valid_phase =
-      normalized_phase == "A" || normalized_phase == "B" || normalized_phase == "C";
-  if (valid_phase && previous_phase != normalized_phase) {
-    const bool prior_valid =
-        previous_phase == "A" || previous_phase == "B" || previous_phase == "C";
+  // different leg) — mirrors Python's _update_consumer_report. Only fires
+  // for a declared A/B/C/D phase that differs from the prior one;
+  // inspection-mode polls (normalized to "0") never trigger it.
+  const auto is_declared = [](const std::string &p) {
+    return p == "A" || p == "B" || p == "C" || p == "D";
+  };
+  if (is_declared(normalized_phase) && previous_phase != normalized_phase) {
+    const bool prior_valid = is_declared(previous_phase);
     if (prior_valid) {
       ESP_LOGI(TAG, "CT002 consumer %s phase changed: %s -> %s", consumer_id.c_str(),
                previous_phase.c_str(), normalized_phase.c_str());
@@ -401,6 +440,7 @@ ReportMap CT002Component::collect_reports_for_balancer_() const {
       r.phase = kv.second.phase;
       r.power = kv.second.power;
       r.weight = kv.second.distribution_weight;
+      r.efficiency_window_weight = kv.second.efficiency_window_weight;
       r.min_dc_output = kv.second.min_dc_output;
       out[kv.first] = std::move(r);
     }
@@ -408,24 +448,73 @@ ReportMap CT002Component::collect_reports_for_balancer_() const {
   return out;
 }
 
+double CT002Component::consumer_ttl_for_(const Consumer &c) const {
+  if (this->consumer_ttl_seconds_.has_value())
+    return static_cast<double>(*this->consumer_ttl_seconds_);
+  if (!c.poll_interval.has_value()) return ADAPTIVE_TTL_FALLBACK_SECONDS;
+  return std::max(ADAPTIVE_TTL_MIN_SECONDS,
+                  ADAPTIVE_TTL_POLL_MULTIPLIER * static_cast<double>(*c.poll_interval));
+}
+
+bool CT002Component::consumer_expired_(const Consumer &c, double now) const {
+  return c.timestamp > 0.0 && now - c.timestamp > this->consumer_ttl_for_(c);
+}
+
 CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
   PhaseReports out;
+  const double now = this->now_seconds_();
   for (const auto &kv : this->consumers_) {
     const auto &c = kv.second;
     if (c.timestamp <= 0.0) continue;
-    std::string phase = c.phase;
-    for (auto &ch : phase) ch = static_cast<char>(std::toupper(ch));
-    size_t idx = 0;
-    if (phase == "A") idx = 0;
-    else if (phase == "B") idx = 1;
-    else if (phase == "C") idx = 2;
-    else idx = 0;
-    const float power = static_cast<float>(round_half_even(c.last_instructed_power));
+    // Respect the request's "participate" flag: a battery that opted out (7th
+    // field == 0) is not aggregated into the per-phase buckets or the count.
+    if (!c.participates) continue;
+    // The real CT clears a slot that missed ~1-2 poll cycles before
+    // aggregating, so a battery that drops off the network stops being
+    // counted almost immediately. Mirror that per response here; the cleanup
+    // interval removes the entry shortly after (issue #462).
+    if (this->consumer_expired_(c, now)) continue;
+    const size_t idx = bucket_index_for_phase(c.phase);
+    // Count every battery reporting into the bucket (regardless of power) so
+    // relay mode can forward the real per-phase battery count (each battery
+    // divides the forwarded aggregate by it to take its 1/N share).
+    out.count[idx] += 1;
+    float power;
+    if (this->active_control_ && idx >= BUCKET_A && idx <= BUCKET_C) {
+      // Active control: aggregate the net power we *instructed* this
+      // consumer to be at, so PV passthrough doesn't masquerade as
+      // discharge (issue #376).
+      power = static_cast<float>(round_half_even(c.last_instructed_power));
+      // With ramp pacing the per-poll delta is capped, so the instructed
+      // net power can keep the sign of the battery's involuntary output
+      // while the control *intent* points the other way (the issue #376
+      // scenario). Filter by the balancer's recorded unpaced intent.
+      const auto intent = this->balancer_ ? this->balancer_->get_last_intent(kv.first)
+                                          : std::optional<float>{};
+      if (intent.has_value() &&
+          ((*intent <= 0.0f && power > 0.0f) || (*intent >= 0.0f && power < 0.0f))) {
+        power = 0.0f;
+      }
+    } else {
+      // Relay mode forwards each battery's *reported* power, exactly like
+      // the real CT (issue #457). x/ABC consumers are never actively
+      // instructed, so their reported power is the only truthful signal in
+      // either mode.
+      power = static_cast<float>(round_half_even(static_cast<double>(c.power)));
+    }
     if (power == 0.0f) continue;
     out.active[idx] = true;
     if (power < 0.0f) out.chrg_power[idx] += power;
     else out.dchrg_power[idx] += power;
   }
+  return out;
+}
+
+CT002Component::PhaseBucketPowers CT002Component::reporting_phase_buckets() const {
+  const PhaseReports r = this->collect_reports_by_phase_();
+  PhaseBucketPowers out;
+  out.chrg_power = r.chrg_power;
+  out.dchrg_power = r.dchrg_power;
   return out;
 }
 
@@ -446,13 +535,16 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   std::unordered_set<std::string> inactive;
   std::unordered_set<std::string> manual;
   for (const auto &kv : this->consumers_) {
-    if (!kv.second.active) inactive.insert(kv.first);
+    // A consumer that opted out via the "participate" flag is treated as
+    // inactive: active control excludes it from the distribution pool.
+    if (!kv.second.active || !kv.second.participates) inactive.insert(kv.first);
     if (kv.second.manual_enabled) manual.insert(kv.first);
   }
   ConsumerMode mode{ConsumerModeKind::AUTO};
   auto it = this->consumers_.find(consumer_id);
   if (it != this->consumers_.end()) {
-    if (!it->second.active) mode = ConsumerMode{ConsumerModeKind::INACTIVE};
+    if (!it->second.active || !it->second.participates)
+      mode = ConsumerMode{ConsumerModeKind::INACTIVE};
     else if (it->second.manual_enabled)
       mode = ConsumerMode{ConsumerModeKind::MANUAL, it->second.manual_target};
   }
@@ -520,12 +612,36 @@ std::vector<std::string> CT002Component::build_response_fields_(
   const auto phase_reports = this->collect_reports_by_phase_();
   const float phase_power[3] = {phase_a, phase_b, phase_c};
   for (size_t i = 0; i < 3; ++i) {
-    if (phase_reports.active[i] || phase_power[i] != 0.0f) {
-      fields[8 + i] = "1";
+    const size_t bucket = BUCKET_A + i;
+    if (this->active_control_) {
+      // Active control distributes a per-consumer target, so each battery
+      // applies it as-is: report a count of 1 when the phase is active.
+      // Deliberately NOT the real per-phase count (issue #459): the battery
+      // divides the grid value by this count (relay share-split, g / nb);
+      // our value is already this battery's individual target, so a real
+      // count N would make every battery under-respond by a factor of N.
+      // The issue #455 relay-count fix applies to the relay branch only.
+      if (phase_reports.active[bucket] || phase_power[i] != 0.0f) {
+        fields[8 + i] = "1";
+      }
+    } else {
+      // Relay mode forwards the per-phase aggregate; report the real battery
+      // count so each battery takes its 1/N share.
+      fields[8 + i] = std::to_string(phase_reports.count[bucket]);
     }
-    fields[15 + i] = to_int_str(phase_reports.chrg_power[i]);
-    fields[20 + i] = to_int_str(phase_reports.dchrg_power[i]);
+    fields[15 + i] = to_int_str(phase_reports.chrg_power[bucket]);
+    fields[20 + i] = to_int_str(phase_reports.dchrg_power[bucket]);
   }
+  // x (unassigned/inspection) bucket — chrg/dchrg only; the response carries
+  // no x count field.
+  fields[14] = to_int_str(phase_reports.chrg_power[BUCKET_X]);
+  fields[19] = to_int_str(phase_reports.dchrg_power[BUCKET_X]);
+  // ABC (combined, phase "D") bucket. Combined-mode consumers are never
+  // actively instructed (the emulator has no combined control mode), so they
+  // are effectively relayed in both modes: forward the real count.
+  fields[11] = std::to_string(phase_reports.count[BUCKET_ABC]);
+  fields[18] = to_int_str(phase_reports.chrg_power[BUCKET_ABC]);
+  fields[23] = to_int_str(phase_reports.dchrg_power[BUCKET_ABC]);
 
   while (fields.size() < RESPONSE_LABEL_COUNT) fields.push_back("0");
   this->info_idx_counter_ = (this->info_idx_counter_ + 1) % 256;
@@ -566,6 +682,7 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.auto_target = !c.manual_enabled;
   if (c.manual_enabled) snap.manual_target = c.manual_target;
   snap.distribution_weight = c.distribution_weight;
+  snap.efficiency_window_weight = c.efficiency_window_weight;
   snap.min_dc_output = c.min_dc_output;
   snap.poll_interval = c.poll_interval;
   snap.timestamp = c.timestamp;
@@ -652,6 +769,14 @@ void CT002Component::set_consumer_distribution_weight(const std::string &consume
   this->get_consumer_(consumer_id).distribution_weight = weight;
 }
 
+void CT002Component::set_consumer_efficiency_window_weight(const std::string &consumer_id,
+                                                           float weight) {
+  // Same [0, 1] range the Python setter enforces (1 = full participation,
+  // 0 = skipped while limiting); ignore non-finite or out-of-range values.
+  if (!std::isfinite(weight) || weight < 0.0f || weight > 1.0f) return;
+  this->get_consumer_(consumer_id).efficiency_window_weight = weight;
+}
+
 void CT002Component::set_consumer_min_dc_output(const std::string &consumer_id,
                                                 float value) {
   // Per-device MIN_DC_OUTPUT override (W); validation aligned with the Python
@@ -682,10 +807,9 @@ void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bo
 
 void CT002Component::evict_stale_consumers_() {
   const double now = now_seconds_();
-  const double ttl = static_cast<double>(this->consumer_ttl_seconds_);
   std::vector<std::string> stale;
   for (const auto &kv : this->consumers_) {
-    if (kv.second.timestamp > 0.0 && now - kv.second.timestamp > ttl) {
+    if (this->consumer_expired_(kv.second, now)) {
       stale.push_back(kv.first);
     }
   }
@@ -698,13 +822,19 @@ void CT002Component::evict_stale_consumers_() {
     if (this->balancer_) this->balancer_->remove_consumer(id);
   }
   if (!stale.empty()) {
-    ESP_LOGD(TAG, "Evicted %u stale consumer(s) (ttl=%us)",
-             static_cast<unsigned>(stale.size()), this->consumer_ttl_seconds_);
+    ESP_LOGD(TAG, "Evicted %u stale consumer(s)", static_cast<unsigned>(stale.size()));
   }
-  // Purge dedup timestamps older than the TTL (Python: ct002.py:341
-  // _dedup.purge_older_than(self.consumer_ttl)).
+  // Purge dedup timestamps — entries only matter within the dedupe window;
+  // with an adaptive TTL there is no single number, so purge on a horizon
+  // safely past any per-consumer TTL and the dedupe window itself (mirrors
+  // Python's _cleanup_consumers purge).
   if (!this->dedup_last_.empty()) {
-    const double cutoff = now - ttl;
+    const double horizon =
+        this->consumer_ttl_seconds_.has_value()
+            ? static_cast<double>(*this->consumer_ttl_seconds_)
+            : std::max(ADAPTIVE_TTL_FALLBACK_SECONDS,
+                       static_cast<double>(this->dedupe_window_ms_) / 1000.0);
+    const double cutoff = now - horizon;
     for (auto it = this->dedup_last_.begin(); it != this->dedup_last_.end();) {
       if (it->second < cutoff) it = this->dedup_last_.erase(it);
       else ++it;

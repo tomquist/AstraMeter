@@ -7,7 +7,9 @@ from unittest.mock import patch
 import pytest
 
 from astrameter.simulator.battery import BatterySimulator
+from astrameter.simulator.firmware_steering import FirmwareSteeringController
 from astrameter.simulator.runner import parse_config, validate_config
+from astrameter.simulator.venus_d_steering import VenusDSteeringController
 
 
 def _battery(delay: int = 0, **kwargs) -> BatterySimulator:
@@ -151,44 +153,125 @@ def _response_fields(
     ]
 
 
-def test_idle_on_cross_phase_discharge_when_flag_on() -> None:
-    """A charging battery sees another phase's dchrg>0 → target snaps to 0."""
-    b = _battery(idle_on_cross_phase_discharge=True)  # phase A
+def test_cross_phase_dchrg_does_not_idle_battery() -> None:
+    """Another phase's dchrg>0 has no effect — real firmware only reads its
+    own phase bucket, never other phases' charge/discharge fields (see
+    docs/ct002-ct003-protocol.md, "Phase selection")."""
+    b = _battery()  # phase A
     b._current_power = -500.0  # currently charging
 
-    # phase_C grid = -500 (charge signal); B_dchrg = 400 (cross-phase
-    # discharge instruction from another battery on phase B).
+    # phase_C grid = -500 (charge signal); B_dchrg = 400 (a battery on phase B
+    # is being instructed to discharge).
     fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
     b._handle_ct_response(fields)
 
-    assert b.target_power == 0.0, (
-        f"Expected target forced to 0 by cross-phase dchrg signal, got {b.target_power}"
-    )
+    # grid_reading=-500 (export): the controller's first step drives its setpoint
+    # to +500 (charge), i.e. simulator target -500 — undisturbed by B_dchrg.
+    assert b.target_power == -500.0
 
 
-def test_no_idle_when_flag_off() -> None:
-    """Flag off → cross-phase dchrg ignored, integral target rule applies."""
-    b = _battery(idle_on_cross_phase_discharge=False)  # phase A
-    b._current_power = -500.0
+def test_steering_deadband_uses_own_output() -> None:
+    """A <20 W grid residual is ignored while the battery is idle, but acted
+    on once its own output is above ~1 W (the firmware deadband condition)."""
+    b = _battery()  # phase A
+    b._current_power = 0.0
+    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    assert b.target_power == 0.0
 
-    fields = _response_fields(phase_targets=(0, 0, -500), dchrg=(0, 400, 0))
+    b._current_power = 100.0
+    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    assert b.target_power != 0.0
+
+
+def test_steering_spike_debounced_for_one_response() -> None:
+    """An idle battery reacts to a >50 W grid jump only on the second sample."""
+    b = _battery()  # phase A
+    b._current_power = 0.0
+    fields = _response_fields(phase_targets=(200, 0, 0))
+
     b._handle_ct_response(fields)
+    assert b.target_power == 0.0  # first sample debounced
 
-    # current_power=-500 + grid_reading=-500 → -1000
-    assert b.target_power == -1000.0
-
-
-def test_idle_ignores_own_phase_dchrg() -> None:
-    """A_dchrg on the battery's own phase doesn't trigger the idle rule."""
-    b = _battery(idle_on_cross_phase_discharge=True)  # phase A
-    b._current_power = -500.0
-
-    # Same-phase (A) dchrg should NOT trigger idle.  Use grid -500 so
-    # the integral rule wants new_target = -1000.
-    fields = _response_fields(phase_targets=(-500, 0, 0), dchrg=(400, 0, 0))
     b._handle_ct_response(fields)
+    # Discharge begins, exactly the bare ramp law's first response to g=200.
+    expected = -FirmwareSteeringController().step_raw(200, 800.0, -800.0)
+    assert b.target_power == expected
 
-    assert b.target_power == -1000.0
+
+def test_b2500_device_type_selects_dc_output_steering() -> None:
+    """A B2500-family device type (HMA/HMJ/HMK) steers its DC output via two
+    channels; a Venus device type uses the ramp controller."""
+    assert len(_battery(meter_dev_type="HMJ-2")._b2500_channels) == 2
+    assert _battery(meter_dev_type="HMG-50")._b2500_channels == []
+
+
+def _drive_b2500(b: BatterySimulator, load: float, cycles: int) -> None:
+    """Step a B2500 against a phase-A *load* with a closed grid loop
+    (``grid = load - output``), the way the real meter sees it."""
+    for _ in range(cycles):
+        b._update_power(1.0)
+        grid = round(load - b.current_power)
+        b._handle_ct_response(_response_fields(phase_targets=(grid, 0, 0)))
+
+
+def test_b2500_steers_dc_output_to_null_grid() -> None:
+    """A B2500 integrates its DC output to null the grid: in a closed loop the
+    combined output converges to the load (grid → ~0), discharging."""
+    b = _battery(meter_dev_type="HMJ-2", max_discharge_power=800)
+    _drive_b2500(b, load=300.0, cycles=40)
+    assert b.target_power > 0  # discharging
+    assert abs(b.current_power - 300) <= 20  # grid nulled (within deadband)
+
+
+def test_b2500_does_not_charge_from_ac_on_surplus() -> None:
+    """With no AC input, a B2500 winds its output down to idle on a grid surplus
+    instead of charging (unlike a Venus, which would go negative)."""
+    b = _battery(meter_dev_type="HMJ-2")
+    _drive_b2500(b, load=300.0, cycles=40)
+    assert b.current_power > 100  # discharging to offset import
+
+    surplus = _response_fields(phase_targets=(-300, 0, 0))  # sustained export
+    for _ in range(40):
+        b._update_power(1.0)
+        b._handle_ct_response(surplus)
+    assert 0 <= b.current_power <= 20  # idle (two channels), never charges from AC
+
+
+def test_non_participating_battery_appends_seventh_field() -> None:
+    """A non-participating battery appends the 7th 'participate' field as 0."""
+    b = _battery(participates=False)
+    b._current_power = -100.0
+    fields = b._request_fields()
+    assert len(fields) == 7
+    assert fields[6] == "0"
+
+
+def test_participating_battery_omits_seventh_field() -> None:
+    """A participating battery sends only the 6 base fields (Venus-style)."""
+    b = _battery(participates=True)
+    b._current_power = -100.0
+    assert len(b._request_fields()) == 6
+
+
+def test_parse_config_meter_dev_type() -> None:
+    data = {
+        "batteries": [
+            {"mac": "02B250000001", "phase": "A", "meter_dev_type": "HMJ-2"},
+            {"mac": "02B250000002", "phase": "B"},
+        ],
+    }
+    cfg = parse_config(data)
+    validate_config(cfg)
+    assert cfg.batteries[0].meter_dev_type == "HMJ-2"
+    assert cfg.batteries[1].meter_dev_type == "HMG-50"  # default
+
+
+@pytest.mark.parametrize("bad", [None, 2, ["HMJ-2"]])
+def test_parse_config_rejects_non_string_meter_dev_type(bad: object) -> None:
+    """Non-string values fail at parse time instead of coercing to e.g. "None"."""
+    data = {"batteries": [{"mac": "02B250000001", "phase": "A", "meter_dev_type": bad}]}
+    with pytest.raises(ValueError, match="meter_dev_type must be a string"):
+        parse_config(data)
 
 
 def test_parse_config_power_update_delay_ticks() -> None:
@@ -214,7 +297,6 @@ def test_parse_config_venus_d_fields() -> None:
                 "phase": "A",
                 "max_dc_input": 800,
                 "dc_input_power": 500,
-                "idle_on_cross_phase_discharge": True,
             },
         ],
     }
@@ -223,4 +305,179 @@ def test_parse_config_venus_d_fields() -> None:
     bc = cfg.batteries[0]
     assert bc.max_dc_input == 800
     assert bc.dc_input_power == 500.0
-    assert bc.idle_on_cross_phase_discharge is True
+
+
+# ---------------------------------------------------------------------------
+# Venus D (VNSD-0) integer steering law
+# ---------------------------------------------------------------------------
+
+# ``VENUS_D_GOLDEN`` pins :class:`VenusDSteeringController` to the Venus D's
+# observed CT-following behaviour. Each trajectory fixes the loop gain
+# (``ctrl_ratio`` %) and the discharge/charge limits (``hi``/``lo``) and lists
+# ``(error, measured_grid, phase_count, setpoint)`` steps the controller must
+# reproduce exactly (single precision, +setpoint = discharge).
+VENUS_D_GOLDEN = [
+    # Sustained 500 W import integrates ~495 W/cycle to the discharge clamp —
+    # no near-zero step-size shaping, unlike the HMG-50 ramp.
+    {
+        "name": "import_ramp",
+        "ratio": 100,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (500, 500, 1, 495),
+            (500, 500, 1, 990),
+            (500, 500, 1, 1485),
+            (500, 500, 1, 1980),
+            (500, 500, 1, 2475),
+            (500, 500, 1, 2500),
+        ],
+    },
+    # Sustained export integrates the other way (charge), no -5 W bias branch.
+    {
+        "name": "export_ramp",
+        "ratio": 100,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (-500, -500, 1, -500),
+            (-500, -500, 1, -1000),
+            (-500, -500, 1, -1500),
+            (-500, -500, 1, -2000),
+            (-500, -500, 1, -2500),
+            (-500, -500, 1, -2500),
+        ],
+    },
+    # ctrl_ratio scales the step: 50 % ⇒ ~245 W/cycle on a 500 W import.
+    {
+        "name": "gain_50_import",
+        "ratio": 50,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (500, 500, 1, 245),
+            (500, 500, 1, 490),
+            (500, 500, 1, 735),
+            (500, 500, 1, 980),
+        ],
+    },
+    # 30 % gain on export, truncated toward zero (-149, not -150).
+    {
+        "name": "gain_30_export",
+        "ratio": 30,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (-500, -500, 1, -149),
+            (-500, -500, 1, -299),
+            (-500, -500, 1, -449),
+            (-500, -500, 1, -599),
+        ],
+    },
+    # Single-phase ±11 W deadband: a 12 W import acts (→7), 10/8 W hold at 0.
+    {
+        "name": "deadband_single",
+        "ratio": 100,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (10, 10, 1, 0),
+            (8, 8, 1, 0),
+            (12, 12, 1, 7),
+            (-8, -8, 1, 0),
+        ],
+    },
+    # Combined (phase D) widens the deadband to ±15 W: 16 W acts (→11).
+    {
+        "name": "deadband_combined",
+        "ratio": 100,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (12, 12, 2, 0),
+            (14, 14, 2, 0),
+            (16, 16, 2, 11),
+            (-14, -14, 2, 0),
+        ],
+    },
+    # Discharge clamp at hi=800; charge clamp at lo=-2200.
+    {
+        "name": "clamp_discharge",
+        "ratio": 100,
+        "hi": 800,
+        "lo": -2200,
+        "steps": [(3000, 3000, 1, 800)] * 4,
+    },
+    {
+        "name": "clamp_charge",
+        "ratio": 100,
+        "hi": 800,
+        "lo": -2200,
+        "steps": [(-3000, -3000, 1, -2200)] * 4,
+    },
+    # When the device's own grid reading disagrees in sign with the error, the
+    # step is the full error (gain-1 branch), no -5 W bias.
+    {
+        "name": "signflip",
+        "ratio": 100,
+        "hi": 2500,
+        "lo": -2500,
+        "steps": [
+            (50, -50, 1, 50),
+            (-50, 50, 1, 0),
+            (300, 300, 1, 295),
+        ],
+    },
+]
+
+
+@pytest.mark.parametrize("case", VENUS_D_GOLDEN, ids=lambda c: c["name"])
+def test_venus_d_steering_golden(case: dict) -> None:
+    """The Venus D controller reproduces its reference trajectories exactly."""
+    ctl = VenusDSteeringController(ctrl_ratio=case["ratio"])
+    for error, measured_grid, phase_count, expected in case["steps"]:
+        got = ctl.step(
+            error,
+            case["hi"],
+            case["lo"],
+            measured_grid=measured_grid,
+            phase_count=phase_count,
+        )
+        assert got == expected, (
+            f"{case['name']}: error={error} -> {got}, expected {expected}"
+        )
+        assert ctl.setpoint == got
+
+
+def test_venus_d_invalid_ctrl_ratio_falls_back_to_unity() -> None:
+    """ctrl_ratio outside 30-100 % falls back to 100 % (unity), like the device."""
+    unity = VenusDSteeringController(ctrl_ratio=100).step(500, 2500, -2500)
+    for bad in (0, 29, 101, 255):
+        assert VenusDSteeringController(ctrl_ratio=bad).step(500, 2500, -2500) == unity
+
+
+def test_venus_d_device_type_selects_integer_steering() -> None:
+    """A VNSD-0 device type uses the integer integrator, not the float ramp or
+    the B2500 DC-output controller."""
+    b = _battery(meter_dev_type="VNSD-0")
+    assert b._venus_d_steering is not None
+    assert b._b2500_channels == []
+    assert _battery(meter_dev_type="HMG-50")._venus_d_steering is None
+
+
+def test_venus_d_battery_discharges_on_import_charges_on_export() -> None:
+    """A VNSD-0 battery integrates toward nulling the grid: it discharges
+    (target > 0) under a sustained import and charges (target < 0) on export."""
+    b = _battery(
+        meter_dev_type="VNSD-0", max_charge_power=2200, max_discharge_power=2500
+    )
+    for _ in range(6):
+        b._handle_ct_response(_response_fields(phase_targets=(500, 0, 0)))
+    assert b.target_power > 0  # discharging to cover the import
+
+    b = _battery(
+        meter_dev_type="VNSD-0", max_charge_power=2200, max_discharge_power=2500
+    )
+    for _ in range(6):
+        b._handle_ct_response(_response_fields(phase_targets=(-500, 0, 0)))
+    assert b.target_power < 0  # charging to absorb the export

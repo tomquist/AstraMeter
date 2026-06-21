@@ -317,10 +317,12 @@ class TestProbeHandoffLockup:
 
             # After a handful of ticks (let the fade + smoother settle),
             # the active battery *must* be commanded to cover the real
-            # demand.  Allow wide slack so the assertion only catches a
-            # genuine lockup, not sub-watt oscillation.
+            # demand.  The battery is pinned at 22 W (never tracks), so ramp
+            # pacing holds the command at the base step — the threshold only
+            # needs to sit below that paced first step to catch a genuine
+            # lockup (target collapsed toward zero), not sub-watt oscillation.
             if tick_index >= 10:
-                assert b_target > 40.0, (
+                assert b_target > 20.0, (
                     f"Active battery is stuck at target={b_target:.1f} W on "
                     f"phase B after {tick_index} post-probe ticks, even "
                     f"though grid reads {grid:.1f} W import.  "

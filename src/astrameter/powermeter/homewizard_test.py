@@ -250,19 +250,95 @@ async def test_stream_online_true_when_connected_and_fresh():
     clock = _FakeClock()
     pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
     pm._connected = True
+    # A single sample is not yet a live stream; a second one arriving before
+    # the first goes stale establishes continuous flow.
     pm._handle_measurement({"power_w": 100})
+    clock.advance(1.0)
+    pm._handle_measurement({"power_w": 110})
     assert pm.stream_online() is True
     clock.advance(29.0)
     assert pm.stream_online() is True
+
+
+async def test_stream_online_false_after_single_sample():
+    """One sample alone is not a continuous stream — a broken dongle that
+    replays a single cached value on reconnect must not read as online."""
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
+    pm._connected = True
+    pm._handle_measurement({"power_w": 100})
+    assert pm.stream_online() is False
 
 
 async def test_stream_online_false_when_connected_but_stale():
     clock = _FakeClock()
     pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
     pm._connected = True
+    # Establish a live stream, then let it go stale.
     pm._handle_measurement({"power_w": 100})
+    clock.advance(1.0)
+    pm._handle_measurement({"power_w": 110})
     clock.advance(31.0)
     assert pm.stream_online() is False
+
+
+async def test_stream_online_does_not_flap_on_reconnect_replay():
+    """Regression for the flapping "Online" sensor (#427): a broken P1 dongle
+    keeps accepting the WebSocket and replays one cached value on every
+    watchdog-triggered reconnect.  Each lone sample resets the freshness
+    window, but it is not a live stream, so stream_online() must stay False
+    instead of flapping on/off — and recover only once samples flow again.
+    """
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
+    pm._connected = True
+
+    # Healthy stream, then it stalls and goes stale → offline.
+    pm._handle_measurement({"power_w": 100})
+    clock.advance(1.0)
+    pm._handle_measurement({"power_w": 110})
+    assert pm.stream_online() is True
+
+    # Simulate three reconnect cycles, each delivering a single cached sample
+    # ~50s apart (watchdog 45s + reconnect).  Freshness resets each time, but
+    # the lone sample must never read as online.
+    for _ in range(3):
+        clock.advance(50.0)
+        pm._handle_measurement({"power_w": 110})
+        assert pm.stream_online() is False
+
+    # P1 recovers: samples resume at the normal ~1s cadence.  The first
+    # resumed sample still follows a long gap, the next establishes flow.
+    clock.advance(1.0)
+    pm._handle_measurement({"power_w": 120})
+    assert pm.stream_online() is True
+
+
+async def test_stream_online_stays_online_across_brief_reconnect():
+    """A short blip (reconnect well within the freshness window) keeps the
+    stream healthy — only gaps longer than max age break continuity."""
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=30.0, clock=clock)
+    pm._connected = True
+    pm._handle_measurement({"power_w": 100})
+    clock.advance(1.0)
+    pm._handle_measurement({"power_w": 110})
+    # ~6s gap (ws close + reconnect), still inside the 30s window.
+    clock.advance(6.0)
+    pm._handle_measurement({"power_w": 120})
+    assert pm.stream_online() is True
+
+
+async def test_stream_online_healthy_when_staleness_disabled():
+    """With max_age=0 the staleness check is disabled, so any sample on a
+    connected stream counts as online."""
+    clock = _FakeClock()
+    pm = _create_powermeter(max_measurement_age_seconds=0.0, clock=clock)
+    pm._connected = True
+    pm._handle_measurement({"power_w": 100})
+    assert pm.stream_online() is True
+    clock.advance(100000.0)
+    assert pm.stream_online() is True
 
 
 def test_stream_online_false_when_disconnected_even_if_fresh():

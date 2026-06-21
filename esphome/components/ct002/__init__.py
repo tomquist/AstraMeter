@@ -54,6 +54,10 @@ marstek_registration_ns = ct002_ns.namespace("marstek_registration")
 MarstekRegistrationComponent = marstek_registration_ns.class_(
     "MarstekRegistrationComponent", cg.Component
 )
+cloud_reporting_ns = ct002_ns.namespace("cloud_reporting")
+CloudReportingComponent = cloud_reporting_ns.class_(
+    "CloudReportingComponent", cg.Component
+)
 
 # Parent fields
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
@@ -97,12 +101,22 @@ CONF_ERROR_BOOST_MAX = "error_boost_max"
 CONF_ERROR_REDUCE_THRESHOLD = "error_reduce_threshold"
 CONF_MAX_CORRECTION_PER_STEP = "max_correction_per_step"
 CONF_MAX_TARGET_STEP = "max_target_step"
+CONF_PACE_BASE_STEP = "pace_base_step"
+CONF_PACE_MAX_STEP = "pace_max_step"
+CONF_OSC_DAMP_MAX = "osc_damp_max"
+CONF_OSC_DAMP_ALPHA = "osc_damp_alpha"
+CONF_OSC_DAMP_DECAY = "osc_damp_decay"
+CONF_OSC_DAMP_THRESHOLD = "osc_damp_threshold"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
 CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
+CONF_EFFICIENCY_DEMAND_ALPHA = "efficiency_demand_alpha"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
+CONF_GRID_PREDICT_TRUST = "grid_predict_trust"
+CONF_CONCENTRATE_DEADBAND = "concentrate_deadband"
+CONF_IMPORT_TRIM_W = "import_trim_w"
 
 # Saturation tracker sub-block
 CONF_SATURATION = "saturation"
@@ -186,7 +200,7 @@ BALANCER_SCHEMA = cv.Schema(
     {
         cv.Optional(CONF_FAIR_DISTRIBUTION, default=True): cv.boolean,
         cv.Optional(CONF_BALANCE_GAIN, default=0.2): cv.float_range(min=0.0, max=1.0),
-        cv.Optional(CONF_BALANCE_DEADBAND, default=15.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_BALANCE_DEADBAND, default=25.0): cv.float_range(min=0.0),
         cv.Optional(CONF_ERROR_BOOST_THRESHOLD, default=150.0): cv.float_range(min=0.0),
         cv.Optional(CONF_ERROR_BOOST_MAX, default=0.5): cv.float_range(min=0.0),
         cv.Optional(CONF_ERROR_REDUCE_THRESHOLD, default=20.0): cv.float_range(min=0.0),
@@ -194,6 +208,14 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.0
         ),
         cv.Optional(CONF_MAX_TARGET_STEP, default=0.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_PACE_BASE_STEP, default=30.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_PACE_MAX_STEP, default=100.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_OSC_DAMP_MAX, default=0.95): cv.float_range(min=0.0, max=1.0),
+        cv.Optional(CONF_OSC_DAMP_ALPHA, default=0.3): cv.float_range(min=0.0, max=1.0),
+        cv.Optional(CONF_OSC_DAMP_DECAY, default=0.05): cv.float_range(
+            min=0.0, max=1.0
+        ),
+        cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=300.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
@@ -205,7 +227,15 @@ BALANCER_SCHEMA = cv.Schema(
         cv.Optional(CONF_EFFICIENCY_SATURATION_THRESHOLD, default=0.4): cv.float_range(
             min=0.0, max=1.0
         ),
+        cv.Optional(CONF_EFFICIENCY_DEMAND_ALPHA, default=0.1): cv.float_range(
+            min=0.01, max=1.0
+        ),
         cv.Optional(CONF_MIN_DC_OUTPUT, default=0.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_GRID_PREDICT_TRUST, default=0.5): cv.float_range(
+            min=0.0, max=1.0
+        ),
+        cv.Optional(CONF_CONCENTRATE_DEADBAND, default=60.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_IMPORT_TRIM_W, default=15.0): cv.float_range(min=0.0),
     }
 )
 
@@ -315,6 +345,37 @@ MARSTEK_REGISTRATION_SCHEMA = cv.All(
     cv.requires_component("http_request"),
 )
 
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: cloud_reporting (opt-in HTTP status reporting to hamedata.com)
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_CLOUD_REPORTING = "cloud_reporting"
+CONF_HOST = "host"
+CONF_FCV = "fcv"
+CONF_SV = "sv"
+CONF_INTERVAL = "interval"
+
+CLOUD_REPORTING_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(CloudReportingComponent),
+            cv.GenerateID(CONF_HTTP_REQUEST_ID): cv.use_id(
+                http_request.HttpRequestComponent
+            ),
+            cv.Optional(CONF_HOST, default="eu.hamedata.com"): cv.string_strict,
+            cv.Optional(CONF_FCV, default="202409090159"): cv.string_strict,
+            # getDateInfo writes sv -> the cloud record's version field, so it
+            # defaults to the version managed devices are registered with (121).
+            cv.Optional(CONF_SV, default=121): cv.int_,
+            cv.Optional(
+                CONF_INTERVAL, default="60s"
+            ): cv.positive_time_period_milliseconds,
+        }
+    ),
+    # Plain-HTTP GETs go through the http_request component.
+    cv.requires_component("http_request"),
+)
+
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -333,13 +394,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_MAX_SENSOR_AGE, default="30s"
             ): cv.positive_time_period_milliseconds,
-            # TTL after which a silent consumer is evicted, matching
-            # Python's consumer_ttl default. Lower it for fleets with
-            # short-lived bench-test batteries; raise it if your network
-            # has long polling gaps.
-            cv.Optional(
-                CONF_CONSUMER_TTL, default="120s"
-            ): cv.positive_time_period_seconds,
+            # Fixed TTL after which a silent consumer is evicted. Unset
+            # (default) = adaptive eviction (~2 missed poll cycles per
+            # consumer, like the real CT), matching Python's consumer_ttl
+            # default. Set a fixed value if your network has long polling
+            # gaps.
+            cv.Optional(CONF_CONSUMER_TTL): cv.positive_time_period_seconds,
             # Drop repeat polls from the same battery within this window.
             # 0 (default) disables dedup, matching Python's
             # dedupe_time_window=0.0. Useful on noisy networks where a
@@ -356,6 +416,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_SATURATION): SATURATION_SCHEMA,
             cv.Optional(CONF_MQTT_INSIGHTS): MQTT_INSIGHTS_SCHEMA,
             cv.Optional(CONF_MARSTEK_REGISTRATION): MARSTEK_REGISTRATION_SCHEMA,
+            cv.Optional(CONF_CLOUD_REPORTING): CLOUD_REPORTING_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_three_phase_sensors,
@@ -380,7 +441,10 @@ async def to_code(config):
     cg.add(var.set_udp_port(config[CONF_UDP_PORT]))
     cg.add(var.set_active_control(config[CONF_ACTIVE_CONTROL]))
     cg.add(var.set_max_sensor_age_ms(config[CONF_MAX_SENSOR_AGE].total_milliseconds))
-    cg.add(var.set_consumer_ttl_seconds(int(config[CONF_CONSUMER_TTL].total_seconds)))
+    if CONF_CONSUMER_TTL in config:
+        cg.add(
+            var.set_consumer_ttl_seconds(int(config[CONF_CONSUMER_TTL].total_seconds))
+        )
     cg.add(var.set_dedupe_window_ms(int(config[CONF_DEDUPE_WINDOW].total_milliseconds)))
 
     if CONF_TEST_CONTROL_PORT in config:
@@ -422,12 +486,18 @@ async def to_code(config):
         BalancerConfig,
         ("fair_distribution", bal.get(CONF_FAIR_DISTRIBUTION, True)),
         ("balance_gain", bal.get(CONF_BALANCE_GAIN, 0.2)),
-        ("balance_deadband", bal.get(CONF_BALANCE_DEADBAND, 15.0)),
+        ("balance_deadband", bal.get(CONF_BALANCE_DEADBAND, 25.0)),
         ("error_boost_threshold", bal.get(CONF_ERROR_BOOST_THRESHOLD, 150.0)),
         ("error_boost_max", bal.get(CONF_ERROR_BOOST_MAX, 0.5)),
         ("error_reduce_threshold", bal.get(CONF_ERROR_REDUCE_THRESHOLD, 20.0)),
         ("max_correction_per_step", bal.get(CONF_MAX_CORRECTION_PER_STEP, 80.0)),
         ("max_target_step", bal.get(CONF_MAX_TARGET_STEP, 0.0)),
+        ("pace_base_step", bal.get(CONF_PACE_BASE_STEP, 30.0)),
+        ("pace_max_step", bal.get(CONF_PACE_MAX_STEP, 100.0)),
+        ("osc_damp_max", bal.get(CONF_OSC_DAMP_MAX, 0.95)),
+        ("osc_damp_alpha", bal.get(CONF_OSC_DAMP_ALPHA, 0.3)),
+        ("osc_damp_decay", bal.get(CONF_OSC_DAMP_DECAY, 0.05)),
+        ("osc_damp_threshold", bal.get(CONF_OSC_DAMP_THRESHOLD, 300.0)),
         ("min_efficient_power", bal.get(CONF_MIN_EFFICIENT_POWER, 0.0)),
         ("probe_min_power", bal.get(CONF_PROBE_MIN_POWER, 80.0)),
         (
@@ -439,7 +509,11 @@ async def to_code(config):
             "efficiency_saturation_threshold",
             bal.get(CONF_EFFICIENCY_SATURATION_THRESHOLD, 0.4),
         ),
+        ("efficiency_demand_alpha", bal.get(CONF_EFFICIENCY_DEMAND_ALPHA, 0.1)),
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
+        ("grid_predict_trust", bal.get(CONF_GRID_PREDICT_TRUST, 0.5)),
+        ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
+        ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
     )
     cg.add(var.set_balancer_config(bcfg))
 
@@ -459,6 +533,8 @@ async def to_code(config):
         await _to_code_mqtt_insights(config, var)
     if CONF_MARSTEK_REGISTRATION in config:
         await _to_code_marstek_registration(config, var)
+    if CONF_CLOUD_REPORTING in config:
+        await _to_code_cloud_reporting(config, var)
 
 
 async def _to_code_mqtt_insights(config, ct002_var):
@@ -513,3 +589,29 @@ async def _to_code_marstek_registration(config, ct002_var):
     cg.add(var.set_device_type(sub[CONF_DEVICE_TYPE]))
     cg.add(var.set_retry_interval_ms(int(sub[CONF_RETRY_INTERVAL].total_milliseconds)))
     cg.add(var.set_force_reregister(sub[CONF_FORCE_REREGISTER]))
+
+
+async def _to_code_cloud_reporting(config, ct002_var):
+    """Codegen for the optional `cloud_reporting:` sub-block.
+
+    Mirrors src/astrameter/cloud_reporting.py: a loop()-driven state machine
+    that runs the getDateInfo handshake once, then periodically GETs
+    setCtReporting with live CT data. Plain HTTP via the http_request
+    component; reads grid/bucket data from the parent ct002 via set_ct002().
+    """
+    sub = config[CONF_CLOUD_REPORTING]
+    # Gate the cloud_reporting runtime .cpp on this define — the URL builders
+    # compile unconditionally (for the host test), but the http_request-using
+    # component body only when this sub-block is present.
+    cg.add_define("USE_CT002_CLOUD_REPORTING")
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+
+    http_var = await cg.get_variable(sub[CONF_HTTP_REQUEST_ID])
+    cg.add(var.set_http(http_var))
+
+    cg.add(var.set_host(sub[CONF_HOST]))
+    cg.add(var.set_fcv(sub[CONF_FCV]))
+    cg.add(var.set_sv(sub[CONF_SV]))
+    cg.add(var.set_interval_ms(int(sub[CONF_INTERVAL].total_milliseconds)))

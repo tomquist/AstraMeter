@@ -9,8 +9,65 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 
 PHASES = ("A", "B", "C")
+
+
+def load_power_trace(path: str | Path) -> list[tuple[float, float]]:
+    """Read a ``t_s,watts`` power trace into ``[(seconds, watts), ...]``.
+
+    Lines starting with ``#`` (the attribution/license header), blank lines and
+    a single ``t_s,watts`` column header are ignored, so the vendored CSVs under
+    ``traces/`` (real household data, see ``traces/README.md``) load directly.
+    Samples are returned sorted by time. Raises :class:`ValueError` if the file
+    yields no valid samples (so a corrupt/empty fixture fails fast and clearly
+    rather than as a late ``IndexError`` downstream).
+    """
+    points: list[tuple[float, float]] = []
+    for raw in Path(path).read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        a, _, b = line.partition(",")
+        try:
+            points.append((float(a), float(b)))
+        except ValueError:
+            continue  # header row (``t_s,watts``) or stray text
+    if not points:
+        raise ValueError(
+            f"No valid trace samples found in {Path(path)!s} (expected: t_s,watts)"
+        )
+    points.sort(key=lambda p: p[0])
+    return points
+
+
+def load_net_trace(path: str | Path) -> list[tuple[float, float, float]]:
+    """Read a ``t_s,load_w,pv_w`` trace into ``[(seconds, load, pv), ...]``.
+
+    Same comment/blank/header handling as :func:`load_power_trace`, for the
+    vendored real prosumer net-load CSVs (load + PV from one site, see
+    ``traces/README.md``). Samples are returned sorted by time. Raises
+    :class:`ValueError` if the file yields no valid samples.
+    """
+    points: list[tuple[float, float, float]] = []
+    for raw in Path(path).read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(",")
+        if len(parts) < 3:
+            continue
+        try:
+            points.append((float(parts[0]), float(parts[1]), float(parts[2])))
+        except ValueError:
+            continue  # header row (``t_s,load_w,pv_w``) or stray text
+    if not points:
+        raise ValueError(
+            f"No valid trace samples found in {Path(path)!s} (expected: t_s,load_w,pv_w)"
+        )
+    points.sort(key=lambda p: p[0])
+    return points
 
 
 @dataclass

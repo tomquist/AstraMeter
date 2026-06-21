@@ -10,6 +10,7 @@ def mock_aiohttp_session():
 
     mock_resp = MagicMock()
     mock_resp.json = AsyncMock(return_value=json_data)
+    mock_resp.read = AsyncMock(return_value=b"")
     mock_resp.raise_for_status = MagicMock()
     mock_resp.status = 200
     mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
@@ -35,6 +36,10 @@ def mock_aiohttp_session():
     def set_post_json(data):
         mock_post_resp.json.return_value = data
 
+    def set_read(data):
+        mock_resp.read.return_value = data
+
     session.set_json = set_json
     session.set_post_json = set_post_json
+    session.set_read = set_read
     return session

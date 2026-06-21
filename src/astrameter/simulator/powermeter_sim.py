@@ -62,7 +62,17 @@ class PowermeterSimulator:
     # -- grid power --------------------------------------------------------
 
     def compute_grid(self) -> dict[str, float]:
-        contribution = self.load_model.get_grid_contribution()
+        return self.compute_grid_from(self.load_model.get_grid_contribution())
+
+    def compute_grid_from(self, contribution: list[float]) -> dict[str, float]:
+        """Grid per phase for an already-sampled load *contribution*.
+
+        Split out from :meth:`compute_grid` so a caller that also needs the raw
+        house consumption can draw the load once — ``get_grid_contribution``
+        draws fresh noise on every call — and derive both the grid and the raw
+        consumption from the *same* sample, instead of re-drawing (which would
+        decorrelate them).
+        """
         grid: dict[str, float] = {}
         for i, phase in enumerate(PHASES):
             battery_sum = sum(

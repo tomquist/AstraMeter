@@ -34,7 +34,7 @@ wifi:
   password: !secret wifi_password
 
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 # Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
@@ -99,7 +99,9 @@ ct002:
   #                                # false → forward raw grid readings as-is
   # max_sensor_age: 30s            # treat the input as 0 if no sensor update
   #                                # arrives within this window
-  # consumer_ttl: 120s             # evict a battery this long after it goes silent
+  # consumer_ttl: 120s             # fixed eviction window for a silent battery;
+  #                                # unset (default) adapts to each battery's
+  #                                # poll rate (~2 missed polls, like the real CT)
   # dedupe_window: 0s              # 0 = off; >0 drops duplicate polls from the
   #                                # same battery within the window
 
@@ -143,18 +145,24 @@ ct002:
   # balancer:
   #   fair_distribution: true
   #   balance_gain: 0.2
-  #   balance_deadband: 15
+  #   balance_deadband: 25
   #   error_boost_threshold: 150
   #   error_boost_max: 0.5
   #   error_reduce_threshold: 20
   #   max_correction_per_step: 80
   #   max_target_step: 0           # 0 = no per-step target clamp
+  #   pace_base_step: 30           # ramp pacing first step; 0 disables pacing
+  #   pace_max_step: 100           # pacing cap ceiling while tracking
+  #   import_trim_w: 15            # cover the few W the firmware leaves importing in steady state; 0 = off
   #   min_dc_output: 0             # >0 keeps a DC battery (B2500) inverter awake
   #   min_efficient_power: 0       # >0 enables efficiency rotation
   #   probe_min_power: 80
   #   efficiency_rotation_interval: 15min
   #   efficiency_fade_alpha: 0.15
   #   efficiency_saturation_threshold: 0.4
+  #   # Smooth the demand estimate so meter noise can't thrash batteries in and
+  #   # out of the active pool. Lower = smoother; 1.0 = off.
+  #   efficiency_demand_alpha: 0.1
 
   # Saturation tracker (detects a battery that can't follow its target and
   # backs off). Runs by default with these values; shown at defaults.
@@ -197,3 +205,15 @@ ct002:
   #   timezone: Europe/Berlin
   #   retry_interval: 60s
   #   force_reregister: false             # set true to redo the cloud flow
+
+  # ── Optional sub-block: cloud_reporting ──────────────────────────────
+  # Opt-in: periodically report to the Marstek cloud (hamedata.com) over
+  # plain HTTP, like a real CT — live grid power, the charge/discharge
+  # split, signal, battery count and link state. Uncomment together with
+  # the top-level `http_request:` block above. The cloud only stores
+  # reports for a device id it already knows; the reported id is the CT's
+  # MAC (ct_mac — the registered device's MAC when marstek_registration is
+  # configured). The model and firmware version are sent automatically.
+  # cloud_reporting:
+  #   host: eu.hamedata.com
+  #   interval: 60s

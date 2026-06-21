@@ -19,15 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -48,15 +48,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -79,7 +79,7 @@ jobs:
       matrix: ${{ steps.find.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Collect test YAML files
         id: find
@@ -96,10 +96,10 @@ jobs:
         yaml: ${{ fromJSON(needs.ct002-esphome-yaml.outputs.matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -114,15 +114,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -172,16 +172,16 @@ jobs:
         python-version: [ "3.10", "3.11", "3.12", "3.13" ]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-suffix: ${{ matrix.python-version }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -196,17 +196,254 @@ jobs:
 
       - name: Upload test results
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.python-version }}
           path: test-results.xml
 
       - name: Upload coverage XML
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
+
+  # Steering-quality evaluation (issue #458): runs the deterministic
+  # active-control simulation suite (src/astrameter/simulator/evaluation.py)
+  # on the PR base and head and posts the before/after metrics as a sticky
+  # PR comment. Purely informational — thresholds that must hold live in
+  # pytest regressions, not here.
+  #
+  # The suite is split across three jobs so every scenario runs in its own
+  # matrix worker in parallel, cutting wall time from ~(N_scenarios * seeds)
+  # sequential minutes down to roughly one scenario's worth.
+  steering-eval-discover:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: List scenarios
+        id: list
+        run: |
+          matrix=$(uv run python -m astrameter.simulator.evaluation --list \
+            | awk '{print $1}' \
+            | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  steering-eval-run:
+    needs: [ steering-eval-discover ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(needs.steering-eval-discover.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Compute safe artifact name
+        id: safe
+        run: |
+          safe=$(echo '${{ matrix.scenario }}' | tr '/' '-')
+          echo "name=steering-eval-${safe}" >> "$GITHUB_OUTPUT"
+          echo "safe=${safe}" >> "$GITHUB_OUTPUT"
+
+      - name: Run evaluation (head)
+        run: |
+          uv run python -m astrameter.simulator.evaluation \
+            --scenario '${{ matrix.scenario }}' \
+            --json "head-${{ steps.safe.outputs.safe }}.json"
+
+      # The base run uses the base commit's own harness + controller. Until the
+      # harness exists on the base branch — or for a scenario this PR adds that
+      # the base doesn't have yet — this produces an empty array and the compare
+      # job shows head-only numbers for this scenario.
+      - name: Run evaluation (base)
+        if: github.event_name == 'pull_request'
+        run: |
+          safe='${{ steps.safe.outputs.safe }}'
+          scenario='${{ matrix.scenario }}'
+          base_out="$GITHUB_WORKSPACE/base-${safe}.json"
+          git worktree add /tmp/steering-base "${{ github.event.pull_request.base.sha }}"
+          if [ -f /tmp/steering-base/src/astrameter/simulator/evaluation.py ]; then
+            cd /tmp/steering-base
+            uv sync --frozen --extra dev
+            # A scenario this PR introduces won't exist on base; emit an empty
+            # array (head-only compare) instead of failing the whole job.
+            if uv run python -m astrameter.simulator.evaluation --list 2>/dev/null \
+                 | awk '{print $1}' | grep -qxF "$scenario"; then
+              uv run python -m astrameter.simulator.evaluation \
+                --scenario "$scenario" --json "$base_out"
+            else
+              echo "[]" > "$base_out"
+            fi
+          else
+            echo "[]" > "$base_out"
+          fi
+
+      - name: Upload scenario/seed metrics
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.safe.outputs.name }}
+          path: |
+            head-${{ steps.safe.outputs.safe }}.json
+            base-${{ steps.safe.outputs.safe }}.json
+          if-no-files-found: ignore
+
+  steering-eval-compare:
+    needs: [ steering-eval-run ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Download all scenario metrics
+        uses: actions/download-artifact@v7
+        with:
+          pattern: steering-eval-*
+          path: eval-artifacts
+          merge-multiple: true
+
+      - name: Merge scenario JSONs
+        run: |
+          jq -s 'add' eval-artifacts/head-*.json > head.json
+          if ls eval-artifacts/base-*.json 2>/dev/null | grep -q .; then
+            jq -s 'add' eval-artifacts/base-*.json > base.json
+          else
+            echo "[]" > base.json
+          fi
+
+      - name: Render comparison
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python -m astrameter.simulator.evaluation \
+            --input head.json --compare base.json \
+            --html steering-eval-report.html > steering-eval-comment.md
+          cat steering-eval-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The report is uploaded unzipped (v7 + archive:false): a single
+      # self-contained file (all CSS/JS inlined, no external links) that GitHub
+      # can render in the browser straight from its artifact page. archive:false
+      # accepts exactly one file and uses the filename as the artifact name, so
+      # the report and the raw metrics go to separate artifacts.
+      - name: Upload report (unzipped, browser-viewable)
+        id: report
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          archive: false
+          path: steering-eval-report.html
+          if-no-files-found: ignore
+
+      - name: Upload raw metrics
+        uses: actions/upload-artifact@v7
+        with:
+          name: steering-eval-data
+          path: |
+            head.json
+            base.json
+            steering-eval-comment.md
+          if-no-files-found: ignore
+
+      # Forks get a read-only token; they still see the table in the job
+      # summary above.
+      - name: Post sticky PR comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v8
+        env:
+          # Direct per-artifact URL from the upload step (login-required, valid
+          # until the artifact/run expires) — the closest thing to a direct
+          # link to the report; GitHub has no stable raw-file permalink.
+          REPORT_URL: ${{ steps.report.outputs.artifact-url }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- steering-eval -->';
+            const reportUrl = process.env.REPORT_URL;
+            const link = reportUrl
+              ? `\n\n📊 [**Open the interactive report**](${reportUrl}) — ` +
+                `\`steering-eval-report.html\`, a single self-contained file ` +
+                `(opens in-browser; download it if your browser blocks inline ` +
+                `scripts).\n`
+              : '';
+            const body = marker + '\n' +
+              fs.readFileSync('steering-eval-comment.md', 'utf8') + link;
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
   build:
     needs: [ validate ]

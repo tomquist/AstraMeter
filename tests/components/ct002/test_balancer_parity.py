@@ -107,14 +107,36 @@ class PyDriver:
                 sat_grace,
                 sat_enabled,
             ) = parts[1:9]
-            # Optional trailing global MIN_DC_OUTPUT (absent = disabled).
+            # Optional trailing global MIN_DC_OUTPUT (absent = disabled) and
+            # ramp-pacing pair (absent = dataclass defaults, pacing on).
             min_dc = float(parts[9]) if len(parts) > 9 else 0.0
+            pace_kwargs = (
+                {
+                    "pace_base_step": float(parts[10]),
+                    "pace_max_step": float(parts[11]),
+                }
+                if len(parts) > 11
+                else {}
+            )
+            # Optional trailing deadband-concentration threshold (after the
+            # pace pair; absent = BalancerConfig default, matching the C++ harness).
+            if len(parts) > 12:
+                pace_kwargs["concentrate_deadband"] = float(parts[12])
+            # Optional trailing steady-import trim (after concentration; absent =
+            # disabled so existing fixtures keep their pre-trim behaviour).
+            if len(parts) > 13:
+                pace_kwargs["import_trim_w"] = float(parts[13])
+            # Optional trailing efficiency demand-smoothing alpha (after the
+            # trim; absent = BalancerConfig default, matching the C++ harness).
+            if len(parts) > 14:
+                pace_kwargs["efficiency_demand_alpha"] = float(parts[14])
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
                 min_dc_output=min_dc,
+                **pace_kwargs,
             )
             self.balancer = LoadBalancer(
                 cfg,
@@ -142,14 +164,15 @@ class PyDriver:
             reports = {}
             i = 6
             for _ in range(n):
-                rc, dev, phase, power, md = parts[i : i + 5]
+                rc, dev, phase, power, md, eww = parts[i : i + 6]
                 reports[rc] = {
                     "device_type": dev,
                     "phase": phase,
                     "power": int(power),
                     "min_dc_output": None if float(md) < 0 else float(md),
+                    "efficiency_window_weight": float(eww),
                 }
-                i += 5
+                i += 6
             res = self.balancer.compute_target(
                 cid,
                 ConsumerMode(mode, float(manual)),
@@ -157,7 +180,11 @@ class PyDriver:
                 float(grid),
                 frozenset(),
                 frozenset(),
-                (),
+                # sample_id mirrors the meter reading (as in production, where
+                # it is the grid values): a changed grid is a fresh sample, so
+                # the grid-state predictor's meter-correction / trust-adaptation
+                # branch is exercised in the differential comparison.
+                (float(grid),),
             )
             self.out.append(f"{res[0]:.4f} {res[1]:.4f} {res[2]:.4f}")
         elif cmd == "sat":
@@ -165,6 +192,9 @@ class PyDriver:
         elif cmd == "last":
             lt = self.balancer.get_last_target(parts[1])
             self.out.append("none" if lt is None else f"{lt:.4f}")
+        elif cmd == "intent":
+            li = self.balancer.get_last_intent(parts[1])
+            self.out.append("none" if li is None else f"{li:.4f}")
 
 
 def _run_cpp(harness: Path, lines: list[str]) -> list[str]:
@@ -226,10 +256,16 @@ _CFG_EFFICIENCY = "cfg 1 100 900 0.4 0.15 20 90 1"
 
 
 def _report(
-    cid: str, phase: str, power: int, dev: str = "HMA-2", min_dc: float = -1.0
+    cid: str,
+    phase: str,
+    power: int,
+    dev: str = "HMA-2",
+    min_dc: float = -1.0,
+    eff_weight: float = 1.0,
 ) -> str:
-    # min_dc < 0 encodes "unset" (inherit global / None).
-    return f"{cid} {dev} {phase} {power} {min_dc}"
+    # min_dc < 0 encodes "unset" (inherit global / None). The efficiency-window
+    # weight token is always emitted (default 1.0 = neutral).
+    return f"{cid} {dev} {phase} {power} {min_dc} {eff_weight}"
 
 
 def _target(
@@ -302,6 +338,40 @@ def _scenario_efficiency_lifecycle() -> list[str]:
     return lines
 
 
+def _scenario_efficiency_window_weight() -> list[str]:
+    """Per-battery efficiency-window weight: a parked unit (0) stays
+    deprioritized while limiting, and a half-weight head rotates out at half the
+    interval. Both stacks must agree poll-by-poll on the resulting targets."""
+    lines = [_CFG_EFFICIENCY, "clock 5000"]
+    # "y" is parked for efficiency (weight 0); under low demand it must stay
+    # deprioritized while "x" carries the load.
+    parked = [
+        _report("x", "A", 0, eff_weight=1.0),
+        _report("y", "A", 0, eff_weight=0.0),
+    ]
+    for _ in range(6):
+        lines.append(_target("x", parked, grid=120))
+        lines.append(_target("y", parked, grid=120))
+        lines.append("advance 1")
+        lines.append("last x")
+        lines.append("last y")
+    # Two half-weight units: the active head should rotate out after ~half the
+    # rotation interval (900 * 0.5 = 450). Cross that boundary and keep polling.
+    half = [_report("x", "A", 0, eff_weight=0.5), _report("y", "A", 0, eff_weight=0.5)]
+    for _ in range(3):
+        lines.append(_target("x", half, grid=120))
+        lines.append(_target("y", half, grid=120))
+        lines.append("advance 1")
+    lines.append("advance 460")
+    for _ in range(4):
+        lines.append(_target("x", half, grid=120))
+        lines.append(_target("y", half, grid=120))
+        lines.append("advance 1")
+        lines.append("last x")
+        lines.append("last y")
+    return lines
+
+
 def _scenario_min_dc_output() -> list[str]:
     """Exercise the MIN_DC_OUTPUT floor: global on a DC battery + Venus, and a
     per-device override on the Venus, across surplus/discharge."""
@@ -322,6 +392,34 @@ def _scenario_min_dc_output() -> list[str]:
     return lines
 
 
+def _scenario_import_trim() -> list[str]:
+    """Hold a steady small grid import for many polls so the steady-import trim
+    engages (dwell crosses IMPORT_TRIM_DWELL), then drop into export so the dwell
+    resets — both branches must match between the Python and C++ balancers."""
+    # Single Venus, fair on, pacing on, concentration off (0), trim = 15.
+    lines = ["cfg 1 0 900 0.4 0.15 20 90 1 0 30 100 0 15", "clock 2000"]
+    pool = [_report("a", "A", 0, "HMG-50")]
+    # A small import that jitters every poll (so each reading is a *fresh* sample,
+    # which the trim requires) but stays well inside the trim band, long enough to
+    # cross the dwell threshold and keep firing.
+    for i in range(14):
+        lines.append(_target("a", pool, grid=50 + (i % 5) * 6))
+        lines.append("last a")
+        lines.append("intent a")
+        lines.append("advance 1")
+    # Export resets the dwell; the trim must go silent.
+    for i in range(4):
+        lines.append(_target("a", pool, grid=-200 - i))
+        lines.append("last a")
+        lines.append("advance 1")
+    return lines
+
+
+def test_parity_import_trim(harness: Path) -> None:
+    lines = _scenario_import_trim()
+    _compare("import_trim", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
 def test_parity_min_dc_output(harness: Path) -> None:
     lines = _scenario_min_dc_output()
     _compare("min_dc_output", lines, _run_cpp(harness, lines), _run_py(lines))
@@ -337,6 +435,13 @@ def test_parity_efficiency_lifecycle(harness: Path) -> None:
     _compare("efficiency", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
+def test_parity_efficiency_window_weight(harness: Path) -> None:
+    lines = _scenario_efficiency_window_weight()
+    _compare(
+        "efficiency_window_weight", lines, _run_cpp(harness, lines), _run_py(lines)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Randomized differential fuzzing.
 # ---------------------------------------------------------------------------
@@ -350,8 +455,44 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     sat_threshold = rng.choice([0.0, 0.3, 0.4])
     sat_enabled = rng.choice([0, 1])
     min_dc = rng.choice([0, 0, 25, 50])
+    # Vary ramp pacing too: off, defaults (omitted), constant cap, tight cap.
+    pace = rng.choice(["", "", " 0 0", " 50 200", " 50 50", " 30 120"])
+    # Deadband concentration is the trailing cfg token, so it needs an explicit
+    # pace pair before it; force one when emitting it. ``None`` omits the token
+    # (exercises the default), while an explicit ``0`` exercises the disabled
+    # (plain-split) path — distinct now that the default is on.
+    conc = rng.choice([None, None, 0, 40, 60])
+    if conc is not None and not pace:
+        pace = " 50 200"
+    conc_tok = f" {conc}" if conc is not None else ""
+    # Steady-import trim is the next trailing token (after concentration), so it
+    # needs both the pace pair and a concentration token present; force them when
+    # exercising it.
+    trim = rng.choice([0, 0, 15, 30])
+    trim_tok = ""
+    if trim:
+        if not pace:
+            pace = " 50 200"
+        if not conc_tok:
+            conc_tok = " 0"
+        trim_tok = f" {trim}"
+    # Efficiency demand-smoothing alpha is the next trailing token (after the
+    # trim), so it needs the pace pair, a concentration token and a trim token
+    # present; force them when emitting it. ``None`` omits it (exercises the
+    # default); ``1.0`` exercises the disabled (react-every-sample) path.
+    demand_alpha = rng.choice([None, None, 1.0, 0.1, 0.3])
+    demand_tok = ""
+    if demand_alpha is not None:
+        if not pace:
+            pace = " 50 200"
+        if not conc_tok:
+            conc_tok = " 0"
+        if not trim_tok:
+            trim_tok = " 0"
+        demand_tok = f" {demand_alpha}"
     lines = [
-        f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} {min_dc}",
+        f"cfg {fair} {min_eff} {rot} {sat_threshold} 0.15 20 {90} {sat_enabled} "
+        f"{min_dc}{pace}{conc_tok}{trim_tok}{demand_tok}",
         f"clock {rng.randint(1000, 9000)}",
     ]
     n_consumers = rng.randint(1, 3)
@@ -361,11 +502,21 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
         cid: rng.choice(["HMA-2", "HME-4", "HMG-50", "HMN-1", "VNSD"]) for cid in cids
     }
     overrides = {cid: rng.choice([-1, -1, -1, 25, 80]) for cid in cids}
+    # Per-consumer efficiency-window weight: mostly neutral, sometimes parked (0)
+    # or partial, to exercise the weight-driven sink/rotation across stacks.
+    eff_weights = {cid: rng.choice([1.0, 1.0, 1.0, 0.0, 0.5, 0.25]) for cid in cids}
     for _ in range(n_polls):
         grid = rng.choice([-901, -300, -150, -1, 0, 1, 100, 300, 450, 901, 1500])
         powers = {cid: rng.choice([-200, -50, 0, 0, 50, 200]) for cid in cids}
         pool = [
-            _report(cid, phases[cid], powers[cid], devs[cid], overrides[cid])
+            _report(
+                cid,
+                phases[cid],
+                powers[cid],
+                devs[cid],
+                overrides[cid],
+                eff_weights[cid],
+            )
             for cid in cids
         ]
         target_cid = rng.choice(cids)
@@ -375,6 +526,7 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
         for cid in cids:
             lines.append(f"sat {cid}")
             lines.append(f"last {cid}")
+            lines.append(f"intent {cid}")
         lines.append(f"advance {rng.choice([0.5, 1, 2, 5, 30, 60])}")
     return lines
 

@@ -10,6 +10,8 @@ from astrameter.config.config_loader import (
     create_client_filter,
     create_emlog_powermeter,
     create_esphome_powermeter,
+    create_fritz_powermeter,
+    create_fronius_powermeter,
     create_homeassistant_powermeter,
     create_homewizard_powermeter,
     create_iobroker_powermeter,
@@ -22,6 +24,7 @@ from astrameter.config.config_loader import (
     create_shrdzm_powermeter,
     create_sml_powermeter,
     create_tasmota_powermeter,
+    create_tibber_pulse_powermeter,
     create_tq_em_powermeter,
     create_vzlogger_powermeter,
     parse_float_list,
@@ -466,6 +469,58 @@ def test_create_homewizard_powermeter():
             raise
 
 
+def test_create_fritz_powermeter():
+    """Test FRITZ!Smart Energy powermeter creation and AIN suffix defaulting."""
+    config = configparser.ConfigParser()
+    config["FRITZ"] = {
+        "HOST": "fritz.box",
+        "USER": "smarthome",
+        "PASSWORD": "secret",
+        "AIN": "12345 0123456",
+    }
+    pm = create_fritz_powermeter("FRITZ", config)
+    assert pm._base_url == "http://fritz.box"
+    assert pm._ain == "123450123456-1"
+
+
+def test_create_fronius_powermeter():
+    """Test Fronius powermeter creation and DeviceId defaulting."""
+    config = configparser.ConfigParser()
+    config["FRONIUS"] = {"IP": "127.0.0.1"}
+    pm = create_fronius_powermeter("FRONIUS", config)
+    assert pm.ip == "127.0.0.1"
+    assert pm.device_id == "0"
+    assert pm.per_phase is False
+
+    config["FRONIUS_2"] = {"IP": "127.0.0.1", "DEVICE_ID": "1", "PER_PHASE": "True"}
+    pm = create_fronius_powermeter("FRONIUS_2", config)
+    assert pm.device_id == "1"
+    assert pm.per_phase is True
+
+
+def test_create_tibber_pulse_powermeter():
+    """Test Tibber Pulse powermeter creation, defaults, and OBIS overrides."""
+    config = configparser.ConfigParser()
+    config["TIBBER_PULSE"] = {"IP": "127.0.0.1", "PASSWORD": "AD56-54BA"}
+    pm = create_tibber_pulse_powermeter("TIBBER_PULSE", config)
+    assert pm.ip == "127.0.0.1"
+    assert pm.password == "AD56-54BA"
+    assert pm.node_id == "1"
+    assert pm.user == "admin"
+
+    config["TIBBER_PULSE_2"] = {
+        "IP": "127.0.0.1",
+        "PASSWORD": "pw",
+        "NODE_ID": "2",
+        "USER": "root",
+        "OBIS_POWER_CURRENT": "0100100700ff",
+    }
+    pm = create_tibber_pulse_powermeter("TIBBER_PULSE_2", config)
+    assert pm.node_id == "2"
+    assert pm.user == "root"
+    assert pm._obis_current == "0100100700ff"
+
+
 def test_create_sml_powermeter():
     """Test SML powermeter creation: SERIAL required, OBIS overrides applied."""
     config = configparser.ConfigParser()
@@ -520,6 +575,14 @@ def test_create_powermeter():
         "SERIAL": "aabbccddee",
     }
     config["SML_TEST"] = {"SERIAL": "/dev/ttyUSB0"}
+    config["FRITZ_TEST"] = {
+        "HOST": "fritz.box",
+        "USER": "smarthome",
+        "PASSWORD": "secret",
+        "AIN": "12345 0123456",
+    }
+    config["FRONIUS_TEST"] = {"IP": "127.0.0.1"}
+    config["TIBBER_PULSE_TEST"] = {"IP": "127.0.0.1", "PASSWORD": "pw"}
     config["UNKNOWN_TEST"] = {"SOME_KEY": "some_value"}
 
     # Test each powermeter type

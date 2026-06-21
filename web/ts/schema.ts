@@ -59,6 +59,8 @@ export interface Powermeter {
   fields: Field[];
   esphome: EsphomeSpec;
   phaseListKeys?: { topic: string; jsonPath: string };
+  /** Boolean key set to True when three-phase is selected (e.g. Fronius PER_PHASE). */
+  phaseFlagKey?: string;
 }
 
 export interface DeviceType {
@@ -620,6 +622,78 @@ export const POWERMETERS: Powermeter[] = [
     esphome: { kind: "unsupported", tier: "unsupported", note: "There is no ESPHome component for SMA Speedwire yet. Use the Python add-on for this meter." },
   },
   {
+    id: "fritz",
+    label: "FRITZ!Smart Energy 250",
+    section: "FRITZ",
+    blurb: "An AVM FRITZ!Smart Energy 250 meter read head, via the FRITZ!Box AHA-HTTP-Interface. Power it over USB — on battery it only updates every ~2 min, too slow for battery control.",
+    docPython: "docs/powermeters.md#fritzsmart-energy-250",
+    fields: [
+      { key: "HOST", label: "FRITZ!Box host", type: "text", default: "fritz.box", placeholder: "fritz.box", required: true, help: "The FRITZ!Box hostname or IP the read head is paired with." },
+      { key: "USER", label: "FRITZ!Box user", type: "text", placeholder: "smarthome", required: true, help: "A FRITZ!Box user with the Smart Home permission (Home Network → FRITZ!Box Users)." },
+      { key: "PASSWORD", label: "Password", type: "password", placeholder: "(your FRITZ!Box password)", required: true, help: "Password for that FRITZ!Box user." },
+      { key: "AIN", label: "AIN", type: "text", placeholder: "12345 0123456", required: true, help: "The read head's AIN from Home Network → SmartHome. The signed grid-import (-1) branch is read by default; append -1 or -2 to pick a branch." },
+      { key: "HTTPS", label: "Use HTTPS", type: "checkbox", default: false, advanced: true, help: "Reach the FRITZ!Box over https:// instead of http://." },
+      { key: "VERIFY_SSL", label: "Verify TLS certificate", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }], advanced: true, help: "FRITZ!Box certs are self-signed — turn off if HTTPS fails verification." },
+      { key: "TIMEOUT", label: "Timeout (seconds)", type: "number", default: "10.0", placeholder: "10.0", advanced: true, help: "Request timeout." },
+    ],
+    esphome: {
+      kind: "homeassistant",
+      tier: "alternate",
+      note: "The FRITZ!Box AHA-HTTP login (challenge-response) and XML device list have no ESP port. Bridge via Home Assistant's FRITZ!Smart Home integration and read the resulting power sensor over the native API.",
+      haEntity: () => "sensor.fritz_smart_energy_power",
+      warn: () => "The FRITZ!Box AHA-HTTP API has no ESP port — this reads the power sensor exposed by Home Assistant's FRITZ!Smart Home integration instead. Set entity_id to your meter's sensor.",
+    },
+  },
+  {
+    id: "fronius",
+    label: "Fronius Smart Meter",
+    section: "FRONIUS",
+    blurb:
+      "A Fronius Smart Meter read through a Fronius inverter's local Solar API.",
+    docPython: "docs/powermeters.md#fronius-smart-meter",
+    fields: [
+      { key: "IP", label: "Inverter IP", type: "text", placeholder: "192.168.1.130", required: true, help: "The Fronius inverter's local IP (the meter is read through it)." },
+      { key: "DEVICE_ID", label: "Meter device id", type: "number", default: "0", placeholder: "0", advanced: true, help: "Solar API meter DeviceId. 0 is the first/only meter." },
+    ],
+    // Three-phase emits PER_PHASE = True (read PowerReal_P_Phase_1..3). Only
+    // works if your meter reports signed per-phase power — some firmwares report
+    // it unsigned, which breaks export; otherwise keep single-phase (the sum).
+    phaseFlagKey: "PER_PHASE",
+    esphome: {
+      kind: "http",
+      tier: "generic",
+      note: "Polls the inverter's Solar API and reads the signed PowerReal_P_Sum (positive = import). Flip with a multiply: -1 filter if reversed.",
+      url1: (f) => `http://${f.IP || "192.168.1.130"}/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=${f.DEVICE_ID || "0"}`,
+      url3: (f) => `http://${f.IP || "192.168.1.130"}/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=${f.DEVICE_ID || "0"}`,
+      lambda1: 'id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Sum"]);',
+      lambda3:
+        'id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Phase_1"]);\n                    id(grid_l2).publish_state(root["Body"]["Data"]["PowerReal_P_Phase_2"]);\n                    id(grid_l3).publish_state(root["Body"]["Data"]["PowerReal_P_Phase_3"]);',
+    },
+  },
+  {
+    id: "tibber_pulse",
+    label: "Tibber Pulse (local Bridge)",
+    section: "TIBBER_PULSE",
+    blurb:
+      "A Tibber Pulse read locally through the Pulse Bridge HTTP API (no Tibber cloud). The bridge decodes your meter's SML telegram; enable its local webserver first.",
+    docPython: "docs/powermeters.md#tibber-pulse",
+    fields: [
+      { key: "IP", label: "Bridge IP", type: "text", placeholder: "192.168.1.140", required: true, help: "The Pulse Bridge's local IP." },
+      { key: "PASSWORD", label: "Bridge password", type: "password", placeholder: "AD56-54BA", required: true, help: "The nine-character code printed on the bridge (with the dash)." },
+      { key: "USER", label: "Username", type: "text", default: "admin", placeholder: "admin", advanced: true, help: "HTTP Basic-auth user; the bridge uses 'admin'." },
+      { key: "NODE_ID", label: "Node id", type: "text", default: "1", placeholder: "1", advanced: true, help: "Pulse node id (see http://<bridge>/nodes/). Usually 1." },
+      { key: "OBIS_POWER_CURRENT", label: "OBIS: aggregate power", type: "text", placeholder: "0100100700ff", advanced: true, help: "12-hex OBIS code. Leave blank for the common eHZ default." },
+      { key: "OBIS_POWER_L1", label: "OBIS: L1", type: "text", placeholder: "0100240700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
+      { key: "OBIS_POWER_L2", label: "OBIS: L2", type: "text", placeholder: "0100380700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
+      { key: "OBIS_POWER_L3", label: "OBIS: L3", type: "text", placeholder: "01004c0700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
+    ],
+    esphome: {
+      kind: "sml",
+      tier: "alternate",
+      note: "The bridge serves a binary SML telegram over HTTP basic auth, which stock ESPHome can't decode. Instead read the meter directly with the native sml component via your own IR head (the config below), or use a community external component for the bridge.",
+    },
+  },
+  {
     id: "script",
     label: "Custom script",
     section: "SCRIPT",
@@ -664,6 +738,8 @@ export const PHASE_CAPABLE: Set<string> = new Set([
   "mqtt",
   "json_http",
   "sml",
+  "fronius",
+  "tibber_pulse",
 ]);
 
 // CT002/CT003 active-steering options. Grouped for the form. These live in the
@@ -673,7 +749,7 @@ export const CT_BASIC: Field[] = [
   { key: "CT_MAC", ey: "ct_mac", label: "CT MAC", help: "12 hex digits from the Marstek app. Leave blank to answer any battery and mirror its MAC.", type: "text", placeholder: "(blank = any)" },
   { key: "UDP_PORT", ey: "udp_port", label: "UDP port", help: "Port the emulator listens on. Default 12345.", type: "number", placeholder: "12345" },
   { key: "WIFI_RSSI", ey: "wifi_rssi", label: "Reported WiFi RSSI", help: "Signal strength reported back to the battery. Default -50.", type: "number", placeholder: "-50" },
-  { key: "CONSUMER_TTL", ey: "consumer_ttl", label: "Consumer TTL (seconds)", help: "Forget a battery this long after it goes silent. Default 120.", type: "number", placeholder: "120" },
+  { key: "CONSUMER_TTL", ey: "consumer_ttl", label: "Consumer TTL (seconds)", help: "Forget a battery this long after it goes silent. Blank (default) adapts to each battery's poll rate (~2 missed polls, like the real CT); set a number for a fixed window.", type: "number", placeholder: "(adaptive)" },
   { key: "DEDUPE_TIME_WINDOW", ey: "dedupe_window", label: "Dedupe window (seconds)", help: "Drop duplicate polls from the same battery within this window. 0 = off.", type: "number", placeholder: "0" },
 ];
 
@@ -684,12 +760,21 @@ export const CT_ACTIVE: Field[] = [
 export const CT_BALANCER: Field[] = [
   { key: "FAIR_DISTRIBUTION", ey: "fair_distribution", label: "Fair distribution", help: "Share load evenly across batteries. Only matters with 2+ batteries.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "BALANCE_GAIN", ey: "balance_gain", label: "Balance gain", help: "How aggressively to correct imbalance. 0 = equal split only; 0.3–0.5 = faster. Default 0.2.", type: "number", placeholder: "0.2" },
-  { key: "BALANCE_DEADBAND", ey: "balance_deadband", label: "Balance deadband (W)", help: "Ignore imbalance smaller than this. Default 15.", type: "number", placeholder: "15" },
+  { key: "BALANCE_DEADBAND", ey: "balance_deadband", label: "Balance deadband (W)", help: "Ignore imbalance smaller than this; kept above the battery firmware's own ~20 W input deadband. Default 25.", type: "number", placeholder: "25" },
   { key: "MAX_CORRECTION_PER_STEP", ey: "max_correction_per_step", label: "Max correction per step (W)", help: "Cap on per-cycle balance correction. Default 80.", type: "number", placeholder: "80" },
   { key: "ERROR_BOOST_THRESHOLD", ey: "error_boost_threshold", label: "Error boost threshold (W)", help: "Above this imbalance, gain is boosted. Default 150.", type: "number", placeholder: "150" },
   { key: "ERROR_BOOST_MAX", ey: "error_boost_max", label: "Error boost max", help: "Maximum extra gain multiplier. Default 0.5.", type: "number", placeholder: "0.5" },
   { key: "ERROR_REDUCE_THRESHOLD", ey: "error_reduce_threshold", label: "Error reduce threshold (W)", help: "Below this imbalance, gain is scaled down. Default 20.", type: "number", placeholder: "20" },
   { key: "MAX_TARGET_STEP", ey: "max_target_step", label: "Max target step (W)", help: "Hard clamp on per-cycle target change. 0 = off.", type: "number", placeholder: "0" },
+  { key: "PACE_BASE_STEP", ey: "pace_base_step", label: "Ramp pacing base step (W)", help: "Starting cap on each battery's per-poll command delta; grows toward the max only while the battery is observed following the command, keeping the firmware's accelerating ramp from overshooting on meter latency. Default 30; 0 = off.", type: "number", placeholder: "30" },
+  { key: "PACE_MAX_STEP", ey: "pace_max_step", label: "Ramp pacing max step (W)", help: "Ceiling the pacing cap grows toward once a battery tracks the command. Default 100.", type: "number", placeholder: "100" },
+  { key: "OSC_DAMP_MAX", ey: "osc_damp_max", label: "Oscillation damping", help: "Max gain reduction while a battery hunts (keeps reversing direction) under a laggy/delayed meter; genuine load/solar steps stay at full speed. 0 = off. Default 0.95.", type: "number", placeholder: "0.95" },
+  { key: "OSC_DAMP_ALPHA", ey: "osc_damp_alpha", label: "Oscillation damping ramp-up", help: "How fast the hunting detector engages on repeated reversals. Higher = sooner/stronger. Default 0.3.", type: "number", placeholder: "0.3" },
+  { key: "OSC_DAMP_DECAY", ey: "osc_damp_decay", label: "Oscillation damping decay", help: "How fast the detector relaxes when no longer hunting. Default 0.05.", type: "number", placeholder: "0.05" },
+  { key: "OSC_DAMP_THRESHOLD", ey: "osc_damp_threshold", label: "Oscillation damping threshold (W)", help: "Corrections larger than this are a genuine demand step (kettle, solar ramp) and are never damped. Default 300.", type: "number", placeholder: "300" },
+  { key: "GRID_PREDICT_TRUST", ey: "grid_predict_trust", label: "Grid prediction", help: "Keeps the grid closer to zero (less import/export, less overshoot and hunting) by adapting automatically to your power meter, including meters that report with a delay. 0.5 (default) needs no tuning; lower reacts more cautiously, 0 = off.", type: "number", placeholder: "0.5" },
+  { key: "CONCENTRATE_DEADBAND", ey: "concentrate_deadband", label: "Deadband concentration (W)", help: "Multiple batteries only: when the grid is within this many watts of zero, hand the whole correction to one battery instead of splitting it below each battery's ~20 W deadband. Reduces small steady import/export (better self-consumption) at the cost of slightly more setpoint changes. Default 60; 0 = off.", type: "number", placeholder: "60" },
+  { key: "IMPORT_TRIM_W", ey: "import_trim_w", label: "Steady-import trim (W)", help: "Covers the few watts of real load your battery's firmware leaves importing in steady state (its deadband won't chase a small residual), recovering that self-consumption at the retail price. Only nudges once the grid has sat steady (never during load steps, so no extra overshoot) and stays clear of a full/empty battery. 15 (default) is a good value; 0 = off.", type: "number", placeholder: "15" },
 ];
 
 // Applies to each DC-only battery individually (also with a single battery,
@@ -704,6 +789,7 @@ export const CT_EFFICIENCY: Field[] = [
   { key: "PROBE_MIN_POWER", ey: "probe_min_power", label: "Probe min power (W)", help: "Floor sent when probing a newly promoted battery. Default 80.", type: "number", placeholder: "80" },
   { key: "EFFICIENCY_FADE_ALPHA", ey: "efficiency_fade_alpha", label: "Fade alpha", help: "How fast the old battery fades after a successful probe. Default 0.15.", type: "number", placeholder: "0.15" },
   { key: "EFFICIENCY_SATURATION_THRESHOLD", ey: "efficiency_saturation_threshold", label: "Saturation swap threshold", help: "Swap out a battery that can't follow its target. Default 0.4; raise for slow meters.", type: "number", placeholder: "0.4" },
+  { key: "EFFICIENCY_DEMAND_ALPHA", ey: "efficiency_demand_alpha", label: "Demand smoothing", help: "Smooths the household-demand estimate that decides how many batteries stay active, so meter noise can't thrash a battery in and out of the pool (big drop in setpoint wear on a jittery load). Lower = smoother. Default 0.1; 1.0 = off (react to every reading).", type: "number", placeholder: "0.1" },
 ];
 
 export const CT_SATURATION: Field[] = [
@@ -713,6 +799,15 @@ export const CT_SATURATION: Field[] = [
   { key: "SATURATION_GRACE_SECONDS", ey: "grace_seconds", label: "Probe window (seconds)", help: "Max probe window when promoting a battery. Default 90.", type: "number", placeholder: "90" },
   { key: "SATURATION_STALL_TIMEOUT_SECONDS", ey: "stall_timeout_seconds", label: "Stall timeout (seconds)", help: "Stall escape for non-probe cases. Default 60.", type: "number", placeholder: "60" },
   { key: "SATURATION_DECAY_FACTOR", ey: "decay_factor", label: "Saturation decay factor", help: "How fast a swapped-out battery becomes eligible again. Default 0.995.", type: "number", placeholder: "0.995" },
+];
+
+// Opt-in HTTP cloud reporting (hamedata.com). Emitted to config.ini, the HA
+// add-on options, and the ESPHome `cloud_reporting:` sub-block (which also pulls
+// in an http_request: block). Generator handles the mapping by key, so no `ey`.
+export const CT_CLOUD: Field[] = [
+  { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for a device id it already knows from pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured).", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "CLOUD_REPORTING_HOST", label: "Reporting host", help: "Host to report to. Blank uses the default eu.hamedata.com (other regions swap the host).", type: "text", placeholder: "eu.hamedata.com" },
+  { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds between reports. Default 60; tune to match a real device's cadence.", type: "number", placeholder: "60" },
 ];
 
 export const MARSTEK_FIELDS: Field[] = [

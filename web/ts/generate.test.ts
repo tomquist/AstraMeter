@@ -48,7 +48,15 @@ const ha = generateConfigIni({
       tuning: { THROTTLE_INTERVAL: "3", POWER_MULTIPLIER: "-1", PID_KP: "0.5" },
     },
   ],
-  ct: { fields: { CT_MAC: "001122334455", BALANCE_GAIN: "0.3", ACTIVE_CONTROL: "True" } },
+  ct: {
+    fields: {
+      CT_MAC: "001122334455",
+      BALANCE_GAIN: "0.3",
+      ACTIVE_CONTROL: "True",
+      CLOUD_REPORTING: "True",
+      CLOUD_REPORTING_INTERVAL: "30",
+    },
+  },
 });
 has(ha, "[HOMEASSISTANT]", "ha: section");
 has(ha, "HTTPS = True", "ha: https bool");
@@ -59,6 +67,8 @@ has(ha, "PID_KP = 0.5", "ha: pid");
 has(ha, "[CT002]", "ha: CT002 section emitted");
 has(ha, "CT_MAC = 001122334455", "ha: ct mac");
 has(ha, "BALANCE_GAIN = 0.3", "ha: balancer option");
+has(ha, "CLOUD_REPORTING = True", "ha: cloud reporting on");
+has(ha, "CLOUD_REPORTING_INTERVAL = 30", "ha: cloud reporting interval");
 
 // ── config.ini: EmLog calculate defaults to True (schema default) ────────────
 const emlog = generateConfigIni({
@@ -82,6 +92,21 @@ const mqtt = generateConfigIni({
 });
 has(mqtt, "TOPICS = p/l1, p/l2, p/l3", "mqtt: TOPIC promoted to TOPICS in 3-phase");
 lacks(mqtt, "\nTOPIC =", "mqtt: no singular TOPIC");
+
+// ── config.ini: Fronius single- vs three-phase (PER_PHASE flag) ──────────────
+const fronius1 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "fronius", phases: 1, fields: { IP: "10.0.0.9" }, tuning: {} }],
+});
+has(fronius1, "[FRONIUS]", "fronius: section header");
+lacks(fronius1, "PER_PHASE", "fronius: no PER_PHASE in single-phase");
+const fronius3 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "fronius", phases: 3, fields: { IP: "10.0.0.9" }, tuning: {} }],
+});
+has(fronius3, "PER_PHASE = True", "fronius: PER_PHASE emitted in three-phase");
 
 // ── config.ini: multi-meter NETMASK ──────────────────────────────────────────
 const multi = generateConfigIni({
@@ -132,9 +157,21 @@ const eyHa = generateEsphome({
       tuning: { POWER_OFFSET: "-20" },
     },
   ],
-  ct: { fields: { BALANCE_GAIN: "0.3" } },
+  ct: {
+    fields: {
+      BALANCE_GAIN: "0.3",
+      CLOUD_REPORTING: "True",
+      CLOUD_REPORTING_HOST: "eu.hamedata.com",
+      CLOUD_REPORTING_INTERVAL: "30",
+    },
+  },
 });
 has(eyHa, "name: my-ct002", "esp/ha: name");
+// Cloud reporting emits a single http_request + a cloud_reporting: sub-block.
+has(eyHa, "http_request:", "esp/ha: http_request for cloud reporting");
+has(eyHa, "cloud_reporting:", "esp/ha: cloud_reporting sub-block");
+has(eyHa, 'host: "eu.hamedata.com"', "esp/ha: cloud host quoted");
+has(eyHa, "interval: 30s", "esp/ha: cloud interval");
 has(eyHa, "external_components:", "esp/ha: external component");
 has(eyHa, "platform: homeassistant", "esp/ha: native sensor");
 has(eyHa, "entity_id: sensor.l1", "esp/ha: l1 entity");
@@ -199,6 +236,14 @@ const eyJsonHeaders = generateEsphome({
 has(eyJsonHeaders, "headers:", "esp/json_http: headersField emits a headers block");
 has(eyJsonHeaders, "Authorization: Bearer t", "esp/json_http: first header");
 has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
+// The url/capture_response/on_response keys must be nested *under* the
+// http_request.get action (indented one level deeper than the list item),
+// otherwise ESPHome rejects them as sibling actions (issue #477).
+has(eyJsonHeaders, "      - http_request.get:\n          url: http://x/api", "esp/json_http: url nested under http_request.get");
+has(eyJsonHeaders, "          capture_response: true", "esp/json_http: capture_response nested under action");
+has(eyJsonHeaders, "          on_response:", "esp/json_http: on_response nested under action");
+has(eyJsonHeaders, "          headers:", "esp/json_http: headers nested under action");
+has(eyJsonHeaders, "            Authorization: Bearer t", "esp/json_http: header entry nested under headers");
 
 const eyModbusTcp = generateEsphome({
   target: "esphome",
@@ -257,13 +302,25 @@ const haOpts = generateHomeAssistant({
       },
     },
   ],
-  ct: { fields: { CT_MAC: "abc123" } },
+  ct: {
+    fields: {
+      CT_MAC: "abc123",
+      MIN_DC_OUTPUT: "30",
+      ACTIVE_CONTROL: "False",
+      CLOUD_REPORTING: "True",
+      CLOUD_REPORTING_INTERVAL: "30",
+    },
+  },
 });
 has(haOpts, "power_input_alias: \"sensor.grid_power\"", "ha-opts: power input alias");
+has(haOpts, "cloud_reporting: true", "ha-opts: cloud reporting on");
+has(haOpts, "cloud_reporting_interval: 30", "ha-opts: cloud interval");
 has(haOpts, "device_types: \"ct002\"", "ha-opts: device types");
 has(haOpts, "throttle_interval: 2", "ha-opts: throttle interval");
 has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");
 has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
+has(haOpts, "active_control: false", "ha-opts: active control off");
+has(haOpts, "min_dc_output: 30", "ha-opts: min dc output");
 has(haOpts, 'power_offset: "-20"', "ha-opts: power offset (quoted str)");
 has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
 has(haOpts, "deadband: 5", "ha-opts: deadband");
@@ -285,6 +342,8 @@ const haMin = generateHomeAssistant({
 lacks(haMin, "hampel_window", "ha-opts: omits unset hampel");
 lacks(haMin, "pid_kp", "ha-opts: omits unset pid");
 lacks(haMin, "deadband", "ha-opts: omits unset deadband");
+lacks(haMin, "min_dc_output", "ha-opts: omits unset min dc output");
+lacks(haMin, "active_control", "ha-opts: omits default active control");
 
 // ── Home Assistant add-on options: calculate from in/out ─────────────────────
 const haCalc = generateHomeAssistant({

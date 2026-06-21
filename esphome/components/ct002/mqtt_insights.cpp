@@ -111,7 +111,8 @@ void MqttInsightsComponent::on_mqtt_connected_() {
 
   if (this->ha_discovery_) {
     auto [topic, payload] = build_ct002_device_discovery(
-        this->base_topic_, this->device_id_, this->ha_discovery_prefix_);
+        this->base_topic_, this->device_id_, this->ha_discovery_prefix_,
+        this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled());
     this->mqtt_->publish(topic, payload, 0, true);
     this->device_discovered_ = true;
   }
@@ -124,7 +125,6 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   ESP_LOGD(TAG, "MQTT disconnected");
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
-  this->discovered_consumers_with_ip_.clear();
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
@@ -240,6 +240,8 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     }
     root["auto_target"] = snap.auto_target;
     root["distribution_weight"] = snap.distribution_weight;
+    // On-wire value is the 0-1 fraction; HA renders it as a percentage.
+    root["efficiency_window_weight"] = snap.efficiency_window_weight;
     if (snap.min_dc_output.has_value()) {
       root["min_dc_output"] = *snap.min_dc_output;
     } else {
@@ -256,35 +258,27 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     // pre-balancer), mirroring Python's _last_smooth_target — NOT the sum
     // of the balancer's per-phase output targets.
     root["smooth_target"] = std::lround(snap.smooth_target);
-    // Reflect the configured active_control setting — HA's binary_sensor
-    // should show "off" when the user disabled active control in YAML
-    // rather than always reading "running".
+    // Reflect the live active_control setting — HA's "Active Control" switch
+    // reads its state here, so it shows "off" when active control is disabled
+    // (via YAML or the switch itself) rather than always reading "on".
     root["active_control"] = this->ct002_->active_control();
     root["consumer_count"] = this->ct002_->reporting_consumer_count();
   });
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);
 
-  // Consumer-level discovery on first sight — re-published when
-  // battery_ip first becomes known so HA's device.connections array
-  // picks up the ["ip", ...] entry (Python: service.py:447-476 re-runs
-  // discovery whenever ARP lookup succeeds for a previously-unknown
-  // consumer). We track "discovered with IP" separately from
-  // "discovered" so a later IP arrival triggers exactly one
-  // re-discovery, not one per subsequent event.
+  // Consumer-level discovery on first sight. The payload no longer depends on
+  // battery_ip (no `connections` are emitted; see ha_discovery.cpp / #438), so
+  // a single publish per consumer suffices — matching Python service.py.
   if (this->ha_discovery_) {
     const bool first_sight =
         this->discovered_consumers_.find(consumer_id) == this->discovered_consumers_.end();
-    const bool ip_just_arrived =
-        !snap.last_ip.empty() &&
-        this->discovered_consumers_with_ip_.find(consumer_id) ==
-            this->discovered_consumers_with_ip_.end();
-    if (first_sight || ip_just_arrived) {
+    if (first_sight) {
       this->discovered_consumers_.insert(consumer_id);
-      if (!snap.last_ip.empty()) this->discovered_consumers_with_ip_.insert(consumer_id);
       auto [topic, payload] = build_ct002_consumer_discovery(
           this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-          snap.device_type, /*network_mac=*/"", snap.last_ip);
+          snap.device_type,
+          this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled());
       this->mqtt_->publish(topic, payload, 0, true);
     }
   }
@@ -296,7 +290,6 @@ void MqttInsightsComponent::publish_consumer_removed_(const std::string &consume
                                   "/consumer/" + consumer_id + "/availability";
   this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
   this->discovered_consumers_.erase(consumer_id);
-  this->discovered_consumers_with_ip_.erase(consumer_id);
 }
 
 void MqttInsightsComponent::handle_command_message_(const std::string &topic,
@@ -397,6 +390,18 @@ void MqttInsightsComponent::handle_consumer_field_command_(const std::string &co
     } else {
       ESP_LOGW(TAG, "Out-of-range distribution_weight for %s: %.2f", consumer_id.c_str(), w);
     }
+  } else if (field == "efficiency_window_weight") {
+    // HA sends a percentage (0-100 %); convert to the internal 0-1 fraction.
+    float pct;
+    if (!parse_float_payload(payload, pct)) {
+      ESP_LOGW(TAG, "Invalid efficiency_window_weight for %s: %s", consumer_id.c_str(),
+               payload.c_str());
+    } else if (std::isfinite(pct) && pct >= 0.0f && pct <= 100.0f) {
+      this->ct002_->set_consumer_efficiency_window_weight(consumer_id, pct / 100.0f);
+    } else {
+      ESP_LOGW(TAG, "Out-of-range efficiency_window_weight for %s: %.2f",
+               consumer_id.c_str(), pct);
+    }
   } else if (field == "min_dc_output") {
     float v;
     if (!parse_float_payload(payload, v)) {
@@ -413,6 +418,14 @@ void MqttInsightsComponent::handle_device_command_(const std::string &payload) {
   bool parsed = json::parse_json(payload, [&](JsonObject root) -> bool {
     if (root["force_rotation"].is<bool>() && root["force_rotation"].as<bool>()) {
       this->ct002_->force_balancer_rotation();
+    }
+    // Active Control switch — toggles the emulator between computing targets
+    // (on, default) and relay mode (off). Published retained by HA so the
+    // choice restores on restart.
+    if (root["active_control"].is<bool>()) {
+      this->ct002_->set_active_control(root["active_control"].as<bool>());
+    } else if (!root["active_control"].isNull()) {
+      ESP_LOGW(TAG, "Invalid active_control value in device command");
     }
     return true;
   });

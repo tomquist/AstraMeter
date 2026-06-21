@@ -14,6 +14,7 @@ import {
   CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
+  CT_CLOUD,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   ESP_BOARDS,
@@ -199,7 +200,14 @@ const HA_ADDON_METER_FIELDS = new Set([
 // (active control, balancer, saturation, Marstek base URL / timezone, …) is set
 // automatically or only reachable via a custom config.ini, so it's hidden for
 // the Home Assistant target.
-const HA_ADDON_CT_FIELDS = new Set(["CT_MAC", "MIN_EFFICIENT_POWER", "EFFICIENCY_ROTATION_INTERVAL"]);
+const HA_ADDON_CT_FIELDS = new Set([
+  "CT_MAC",
+  "MIN_EFFICIENT_POWER",
+  "EFFICIENCY_ROTATION_INTERVAL",
+  "CLOUD_REPORTING",
+  "CLOUD_REPORTING_HOST",
+  "CLOUD_REPORTING_INTERVAL",
+]);
 
 function hasCtType(types: string[]): boolean {
   return types.includes("ct002") || types.includes("ct003");
@@ -449,7 +457,7 @@ function meterCard(): HTMLElement {
         : "Tell us where AstraMeter should read your real grid power. Add more than one only for advanced multi-network setups.";
   const customConfigNote =
     state.target === "homeassistant"
-      ? el("p", { class: "note", html: "The add-on supports a single Home Assistant power source. For other meter types, multiple meters, or options the add-on UI doesn't expose, switch to the <strong>config.ini</strong> target above, save the file to <code>/addon_configs/a0ef98c5_b2500_meter/</code>, and set the add-on's <em>Custom Config</em> option to its filename. See the <a href='" + ghDoc("README.md#home-assistant-app-installation") + "' target='_blank' rel='noopener'>custom configuration docs ↗</a>." })
+      ? el("p", { class: "note", html: "The add-on supports a single Home Assistant power source. For other meter types, multiple meters, or options the add-on UI doesn't expose, switch to the <strong>config.ini</strong> target above, save the file to <code>/addon_configs/a0ef98c5_b2500_meter/</code>, and set the add-on's <em>Custom Config</em> option to its filename. See the <a href='" + ghDoc("docs/installation/home-assistant.md#b-using-a-custom-configuration-file-advanced") + "' target='_blank' rel='noopener'>custom configuration docs ↗</a>." })
       : null;
   return card(3, "Your power meter", intro, [...meters, addBtn, customConfigNote]);
 }
@@ -463,7 +471,7 @@ function ctCard(): HTMLElement | null {
   // The add-on only exposes a handful of CT options; show just those for the HA
   // target (the rest need a custom config.ini).
   if (isHa) {
-    const haFields = [...CT_BASIC, ...CT_EFFICIENCY].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
+    const haFields = [...CT_BASIC, ...CT_EFFICIENCY, ...CT_CLOUD].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
     return card(4, "Battery steering (CT002 / CT003)", "Optional CT options exposed by the add-on. Leave them blank to use the defaults.", [
       el("div", { class: "field-grid" }, haFields.map((fl) => fieldControl(fl, f, {}))),
     ]);
@@ -480,6 +488,7 @@ function ctCard(): HTMLElement | null {
     group("DC battery keep-alive", CT_DC_KEEPALIVE),
     group("Efficiency optimization (AC batteries only)", CT_EFFICIENCY),
     group("Saturation handling", CT_SATURATION),
+    group("Cloud reporting (experimental)", CT_CLOUD),
   ]);
 }
 
@@ -538,7 +547,7 @@ function esphomeStepsCard(): HTMLElement | null {
       li("<strong>Install / flash.</strong> Click <em>Install → Plug into this computer</em> for the first flash (USB). After that you can update it wirelessly over WiFi. Flashing takes a few minutes."),
       li("<strong>Point your battery at it.</strong> In the Marstek app, set the battery to use a CT002/CT003 meter (matching the CT type you chose). The ESP32 answers on your network automatically — power it from any USB charger near the battery."),
     ]),
-    el("p", { class: "note", html: "Full reference: <a href='" + ghDoc("README.md#esphome-external-component-run-on-an-esp32") + "' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
+    el("p", { class: "note", html: "Full reference: <a href='" + ghDoc("docs/installation/esphome.md") + "' target='_blank' rel='noopener'>ESPHome external component docs ↗</a>. Stuck? The board, WiFi, and CT-type are the three things to double-check." }),
   ]);
 }
 

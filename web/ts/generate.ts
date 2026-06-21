@@ -11,6 +11,7 @@ import {
   CT_DC_KEEPALIVE,
   CT_EFFICIENCY,
   CT_SATURATION,
+  CT_CLOUD,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   type Field,
@@ -92,6 +93,12 @@ function meterSection(meter: Meter, opts: { multi: boolean }): string {
     if (line) lines.push(line);
   }
 
+  // Meters that signal per-phase reads with a boolean flag (e.g. Fronius
+  // PER_PHASE) rather than per-phase field lists.
+  if (pm.phaseFlagKey && meter.phases === 3) {
+    lines.push(`${pm.phaseFlagKey} = True`);
+  }
+
   // Per-meter tuning (throttle, smoothing, transform, hampel, PID …)
   const tuning = meter.tuning || {};
   for (const field of PER_METER_TUNING) {
@@ -118,6 +125,7 @@ function ctSection(state: State, sectionName: string): string {
     CT_DC_KEEPALIVE,
     CT_EFFICIENCY,
     CT_SATURATION,
+    CT_CLOUD,
   ];
   for (const group of groups) {
     for (const field of group) {
@@ -298,7 +306,7 @@ function esphomeSensor(state: State) {
     const jsonRoot = esp.jsonRoot || "JsonObject root";
     const headerLines =
       esp.headersField && !isBlank(f[esp.headersField])
-        ? `\n${IND}${IND}${IND}${IND}headers:\n` +
+        ? `\n${IND}${IND}${IND}${IND}${IND}headers:\n` +
           String(f[esp.headersField])
             .split(";")
             .map((h) => h.trim())
@@ -307,19 +315,19 @@ function esphomeSensor(state: State) {
               const idx = h.indexOf(":");
               const k = idx >= 0 ? h.slice(0, idx).trim() : h;
               const v = idx >= 0 ? h.slice(idx + 1).trim() : "";
-              return `${IND}${IND}${IND}${IND}${IND}${k}: ${v}`;
+              return `${IND}${IND}${IND}${IND}${IND}${IND}${k}: ${v}`;
             })
             .join("\n")
         : "";
     const interval =
       `interval:\n${IND}- interval: 1s\n${IND}${IND}then:\n${IND}${IND}${IND}- http_request.get:\n` +
-      `${IND}${IND}${IND}${IND}url: ${url}${headerLines}\n` +
-      `${IND}${IND}${IND}${IND}capture_response: true\n${IND}${IND}${IND}${IND}on_response:\n${IND}${IND}${IND}${IND}${IND}then:\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}- lambda: |-\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}json::parse_json(body, [](${jsonRoot}) -> bool {\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${lambdaBody}\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}return true;\n` +
-      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}});`;
+      `${IND}${IND}${IND}${IND}${IND}url: ${url}${headerLines}\n` +
+      `${IND}${IND}${IND}${IND}${IND}capture_response: true\n${IND}${IND}${IND}${IND}${IND}on_response:\n${IND}${IND}${IND}${IND}${IND}${IND}then:\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}- lambda: |-\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}json::parse_json(body, [](${jsonRoot}) -> bool {\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${lambdaBody}\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}return true;\n` +
+      `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}});`;
     topBlocks.push(interval);
     if (use3) warnings.push("Three-phase HTTP support is illustrative — confirm the JSON field names for your meter.");
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases: use3 ? 3 : 1, warnings };
@@ -458,6 +466,7 @@ export function generateEsphome(state: State): string {
   // — Insights reuses whatever broker this YAML connects to.
   const wantInsights = state.mqttInsights && state.mqttInsights.enabled;
   const wantMarstek = state.marstek && state.marstek.enabled;
+  const wantCloud = ((state.ct && state.ct.fields) || {}).CLOUD_REPORTING === "True";
   const pm0 = getPowermeter(meter.type);
   if (wantInsights && pm0 && pm0.esphome && pm0.esphome.kind === "mqtt") {
     const mf0 = state.mqttInsights.fields || {};
@@ -511,7 +520,8 @@ export function generateEsphome(state: State): string {
     const port = (useMeter && mFields.PORT) || mf.PORT || "1883";
     out.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
   }
-  if (wantMarstek) {
+  // Both marstek_registration and cloud_reporting need a single http_request:.
+  if (wantMarstek || wantCloud) {
     out.push(`http_request:\n${IND}timeout: 20s`);
   }
 
@@ -566,6 +576,13 @@ export function generateEsphome(state: State): string {
     ctLines.push(sub.join("\n"));
   }
 
+  if (wantCloud) {
+    const sub = [`${IND}cloud_reporting:`];
+    if (!isBlank(ctf.CLOUD_REPORTING_HOST)) sub.push(`${IND}${IND}host: ${quoteYaml(String(ctf.CLOUD_REPORTING_HOST).trim())}`);
+    if (!isBlank(ctf.CLOUD_REPORTING_INTERVAL)) sub.push(`${IND}${IND}interval: ${ctf.CLOUD_REPORTING_INTERVAL}s`);
+    ctLines.push(sub.join("\n"));
+  }
+
   out.push(ctLines.join("\n"));
 
   return out.join("\n\n") + "\n";
@@ -593,6 +610,7 @@ const QUOTED_OPTION_KEYS = new Set([
   "marstek_mailbox",
   "marstek_password",
   "mqtt_uri",
+  "cloud_reporting_host",
 ]);
 
 function quoteYaml(s: string): string {
@@ -639,11 +657,22 @@ export function generateHomeAssistant(state: State): string {
   add("wait_for_next_message", !isBlank(g.waitForNextMessage) ? g.waitForNextMessage : tuning.WAIT_FOR_NEXT_MESSAGE);
   add("dedupe_time_window", g.dedupeTimeWindow);
 
-  // CT identity / efficiency options.
+  // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};
   add("ct_mac", ctf.CT_MAC);
+  // Active control is a tri-state select in the editor ("" = default on); the
+  // add-on option is a plain bool, so only an explicit On/Off is emitted.
+  if (ctf.ACTIVE_CONTROL === "True") add("active_control", true);
+  else if (ctf.ACTIVE_CONTROL === "False") add("active_control", false);
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
+  add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  // Opt-in cloud reporting. The toggle is a tri-state select ("" = default off);
+  // the add-on option is a plain bool, so only an explicit On/Off is emitted.
+  if (ctf.CLOUD_REPORTING === "True") add("cloud_reporting", true);
+  else if (ctf.CLOUD_REPORTING === "False") add("cloud_reporting", false);
+  add("cloud_reporting_host", ctf.CLOUD_REPORTING_HOST);
+  add("cloud_reporting_interval", ctf.CLOUD_REPORTING_INTERVAL);
 
   // Signal-conditioning filters (transform, smoothing, deadband, hampel, pid).
   // Option names are the lower-cased INI keys; throttle/wait handled above.

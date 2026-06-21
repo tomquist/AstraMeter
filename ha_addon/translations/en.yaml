@@ -26,12 +26,21 @@ configuration:
   mqtt_uri:
     name: Custom MQTT URI
     description: "Optional. MQTT broker URI for MQTT Insights, e.g. mqtt://user:pass@broker.example.com:1883 (or mqtts:// for TLS). When set, this overrides Home Assistant's internal MQTT broker. Leave empty to use the Mosquitto add-on automatically."
+  active_control:
+    name: Active Control
+    description: "When enabled (default), the emulator smooths the grid reading, splits the target across batteries and balances them. Disable for relay mode: the raw per-phase readings are forwarded and each battery decides on its own. Only applies to CT002/CT003 device types."
   min_efficient_power:
     name: Min Efficient Power
     description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."
   efficiency_rotation_interval:
     name: Efficiency Rotation Interval
     description: "Seconds between rotating which battery has priority when Min Efficient Power is active (default 900). Ensures fair wear across batteries by periodically swapping which batteries are active and which are idled. Minimum value is 1. Only applies to CT002/CT003 device types."
+  min_dc_output:
+    name: Min DC Output
+    description: "Minimum discharge (in watts) to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Applies per battery and only affects DC-only batteries without their own inverter (Venus and Jupiter are unaffected). Set to 0 to disable (default); recommended >= 20. Only applies to CT002/CT003 device types."
+  grid_predict_trust:
+    name: Grid Prediction
+    description: "Keeps the grid closer to zero — less import, less export, less overshoot and hunting — by adapting automatically to your power meter, including meters that report with a delay (e.g. a Home Assistant push sensor). 0.5 (default) is recommended and needs no tuning; lower values react more cautiously and 0 turns the feature off (steer directly on the raw meter reading). Only applies to CT002/CT003 device types."
   marstek_auto_register_ct_device:
     name: Auto-register Managed CT Device (Marstek)
     description: "If enabled, the app signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."
@@ -41,6 +50,15 @@ configuration:
   marstek_password:
     name: Marstek Account Password
     description: "Password used to sign in to your Marstek account for managed CT device registration."
+  cloud_reporting:
+    name: Cloud Reporting (Experimental)
+    description: "When enabled, the emulated CT periodically reports to the Marstek cloud (hamedata.com) over plain HTTP, like a real CT does — live grid power, the per-phase charge/discharge split, signal, battery count and link state. Disabled by default. The cloud only stores reports for a device id it already knows from pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured). Only applies to CT002/CT003 device types."
+  cloud_reporting_host:
+    name: Cloud Reporting Host
+    description: "Host to report to. Leave empty for the default eu.hamedata.com (other regions swap the host)."
+  cloud_reporting_interval:
+    name: Cloud Reporting Interval
+    description: "Seconds between reports (default 60). Tune to match a real device's cadence."
   power_offset:
     name: Power Offset
     description: "Optional. Added to each power value after the multiplier is applied. Single value (e.g. -50) or a comma-separated list (one per phase, e.g. -50,-30,-40). Leave empty to disable."

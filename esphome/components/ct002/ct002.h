@@ -22,6 +22,25 @@
 namespace esphome {
 namespace ct002 {
 
+// Cross-talk aggregation bucket indices, mirroring Python's PHASE_BUCKETS
+// ("x", "A", "B", "C", "ABC"): x collects unassigned/inspection ("0")
+// reporters, ABC collects combined-mode (phase "D") reporters.
+enum PhaseBucket : size_t {
+  BUCKET_X = 0,
+  BUCKET_A = 1,
+  BUCKET_B = 2,
+  BUCKET_C = 3,
+  BUCKET_ABC = 4,
+  BUCKET_COUNT = 5,
+};
+
+// Default eviction policy (no consumer_ttl configured): a consumer expires
+// after missing ~2 of its own poll cycles, like the real CT. Mirrors
+// Python's ADAPTIVE_TTL_* constants (see ct002.py / issue #462).
+constexpr double ADAPTIVE_TTL_POLL_MULTIPLIER = 2.0;
+constexpr double ADAPTIVE_TTL_MIN_SECONDS = 5.0;
+constexpr double ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0;
+
 // Per-consumer (battery) state mirrored from src/astrameter/ct002/ct002.py's
 // `Consumer` dataclass. Lives in CT002Component::consumers_; mutated by
 // _update_consumer_report and the MQTT/insights setters.
@@ -40,16 +59,26 @@ struct Consumer {
   bool active{true};
   bool manual_enabled{false};
   float manual_target{0.0f};
+  // "Participate" flag from the request's optional 7th field. ``0`` on the wire
+  // means "do not aggregate me"; defaults to true when the field is absent.
+  bool participates{true};
   // Relative fair-share weight (1.0 = neutral). Tuned live via the MQTT
   // "Distribution Weight" entity; mirrors Python's Consumer.distribution_weight.
   float distribution_weight{1.0f};
+  // Efficiency-rotation window weight ([0, 1], 1.0 = neutral / full
+  // participation, 0.0 = skipped while limiting). Tuned live via the MQTT
+  // "Efficiency Window Weight" entity; mirrors Python's
+  // Consumer.efficiency_window_weight.
+  float efficiency_window_weight{1.0f};
   // Per-device MIN_DC_OUTPUT override (W); unset = inherit global. Tuned live
   // via the MQTT "Min DC Output" entity; mirrors Python's Consumer.min_dc_output.
   std::optional<float> min_dc_output;
   // Net AC power the balancer last instructed this consumer to be at —
-  // distinct from `power` (what the consumer reports). The cross-talk
-  // *_chrg_power / *_dchrg_power fields aggregate THIS, not `power`,
-  // so PV-passthrough doesn't masquerade as discharge (issue #376).
+  // distinct from `power` (what the consumer reports). Under active control
+  // the A/B/C cross-talk *_chrg_power / *_dchrg_power fields aggregate THIS,
+  // not `power`, so PV-passthrough doesn't masquerade as discharge (issue
+  // #376). In relay mode (and for x/ABC consumers) the buckets aggregate the
+  // reported `power` instead, like the real CT (issues #457/#460).
   float last_instructed_power{0.0f};
 };
 
@@ -91,7 +120,7 @@ class CT002Component : public Component {
   // Balancer configuration setter (called once from to_code() after
   // populating a BalancerConfig).
   void set_balancer_config(const BalancerConfig &cfg) { this->balancer_cfg_ = cfg; }
-  void set_balancer_saturation(float alpha, float min_target, float decay_factor,
+  void set_balancer_saturation(double alpha, float min_target, double decay_factor,
                               float grace_seconds, float stall_timeout_seconds, bool enabled) {
     this->saturation_alpha_ = alpha;
     this->saturation_min_target_ = min_target;
@@ -119,6 +148,7 @@ class CT002Component : public Component {
     bool auto_target{true};
     std::optional<float> manual_target;
     float distribution_weight{1.0f};
+    float efficiency_window_weight{1.0f};
     std::optional<float> min_dc_output;
     std::optional<float> poll_interval;
     double timestamp{0.0};
@@ -146,6 +176,16 @@ class CT002Component : public Component {
   std::vector<float> latest_grid_power() const;
   size_t connected_slave_count() const;
 
+  // Per-bucket charge/discharge power (W) in x/A/B/C/ABC order — the source for
+  // the HTTP cloud reporter's cz../dz.. fields. Mirrors Python's
+  // CT002.reporting_phase_buckets() (the same sign-split the UDP response uses:
+  // chrg_power <= 0, dchrg_power >= 0).
+  struct PhaseBucketPowers {
+    std::array<float, BUCKET_COUNT> chrg_power{};
+    std::array<float, BUCKET_COUNT> dchrg_power{};
+  };
+  PhaseBucketPowers reporting_phase_buckets() const;
+
   // Configured ct_type/ct_mac forwarded to the Marstek MQTT topics.
   const std::string &ct_type() const { return this->ct_type_; }
   const std::string &ct_mac() const { return this->ct_mac_; }
@@ -153,8 +193,10 @@ class CT002Component : public Component {
   // Used by mqtt_insights for the device-level "active_control" entity so
   // HA reflects the configured state instead of always reading "running".
   bool active_control() const { return this->active_control_; }
-  // TTL (seconds) after which a silent consumer is evicted from the
-  // tracking map. Defaults to 120 s, matching Python's consumer_ttl.
+  // Fixed TTL (seconds) after which a silent consumer is evicted from the
+  // tracking map. When never called (the YAML default), eviction is adaptive
+  // — ~2 missed poll cycles per consumer — matching Python's
+  // consumer_ttl=None default (issue #462).
   void set_consumer_ttl_seconds(uint32_t v) { this->consumer_ttl_seconds_ = v; }
   // Dedup window (ms). Repeat polls from the same consumer within this
   // window are dropped. 0 (default) disables dedup. Mirrors Python's
@@ -179,8 +221,16 @@ class CT002Component : public Component {
   void set_consumer_manual_target(const std::string &consumer_id, float target);
   void set_consumer_auto_target(const std::string &consumer_id, bool auto_target);
   void set_consumer_distribution_weight(const std::string &consumer_id, float weight);
+  void set_consumer_efficiency_window_weight(const std::string &consumer_id, float weight);
   void set_consumer_min_dc_output(const std::string &consumer_id, float value);
   void force_balancer_rotation();
+
+  // True when efficiency rotation is enabled (min_efficient_power > 0). Mirrors
+  // LoadBalancer.efficiency_rotation_enabled in the Python stack; used by
+  // mqtt_insights to decide whether to surface the Force Rotation button.
+  bool efficiency_rotation_enabled() const {
+    return this->balancer_cfg_.min_efficient_power > 0.0f;
+  }
 
   // Listener registration — mqtt_insights subscribes once at setup() to
   // be notified after every successful UDP poll-reply round trip. Allows
@@ -217,25 +267,32 @@ class CT002Component : public Component {
   bool dedup_should_process_(const std::string &consumer_id);
   void update_consumer_report_(const std::string &consumer_id, const std::string &phase,
                               float power, const std::string &device_type,
-                              const std::string &source_ip);
+                              const std::string &source_ip, bool participates = true);
 
   bool validate_ct_mac_(const std::vector<std::string> &request_fields) const;
   std::vector<std::string> build_response_fields_(
       const std::vector<std::string> &request_fields, const std::vector<float> &values);
   ReportMap collect_reports_for_balancer_() const;
+  // One slot per PhaseBucket (x/A/B/C/ABC), mirroring Python's
+  // _collect_reports_by_phase dict.
   struct PhaseReports {
-    std::array<float, 3> chrg_power{0.0f, 0.0f, 0.0f};
-    std::array<float, 3> dchrg_power{0.0f, 0.0f, 0.0f};
-    std::array<bool, 3> active{false, false, false};
+    std::array<float, BUCKET_COUNT> chrg_power{};
+    std::array<float, BUCKET_COUNT> dchrg_power{};
+    std::array<bool, BUCKET_COUNT> active{};
+    std::array<int, BUCKET_COUNT> count{};
   };
   PhaseReports collect_reports_by_phase_() const;
+  // Seconds of silence after which a consumer counts as gone: the configured
+  // fixed TTL, or (default) ~2 missed cycles of its observed poll cadence.
+  double consumer_ttl_for_(const Consumer &c) const;
+  bool consumer_expired_(const Consumer &c, double now) const;
   std::vector<float> compute_smooth_target_(const std::vector<float> &values,
                                             const std::string &consumer_id);
   // Monotonic seconds used for all time-gated logic (saturation, probe,
   // eviction, dedup, poll_interval). Instance method (not static) so the
   // test-hook mock clock can override it. Falls back to millis() in
   // production builds and whenever the mock clock is not engaged.
-  double now_seconds_();
+  double now_seconds_() const;
   // (Re)constructs balancer_ from balancer_cfg_ + saturation_* members.
   void build_balancer_();
 
@@ -249,10 +306,12 @@ class CT002Component : public Component {
   uint16_t udp_port_{12345};
   bool active_control_{true};
   uint32_t max_sensor_age_ms_{30000};
-  // Eviction interval for stale consumers (Python: consumer_ttl=120s).
-  // Stored in seconds; the cleanup loop runs every 5s and evicts any
-  // consumer whose last `timestamp` is older than this value.
-  uint32_t consumer_ttl_seconds_{120};
+  // Fixed eviction TTL for stale consumers, in seconds (Python:
+  // consumer_ttl). Unset (default) = adaptive per-consumer TTL derived from
+  // the observed poll cadence — see consumer_ttl_for_(). The cleanup loop
+  // runs every 5s; aggregation additionally skips expired consumers per
+  // response so counts shrink at poll granularity, like the real CT.
+  std::optional<uint32_t> consumer_ttl_seconds_{};
   uint32_t dedupe_window_ms_{0};
   // Last-accepted-poll timestamp (monotonic seconds) per consumer_id,
   // for the dedup gate. Purged alongside consumer eviction.
@@ -262,9 +321,10 @@ class CT002Component : public Component {
   // MQTT-insights poll_interval matches between stacks.
   static constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
   BalancerConfig balancer_cfg_;
-  float saturation_alpha_{0.15f};
+  // double (matching Python) so the saturation EMA bit-matches across stacks.
+  double saturation_alpha_{0.15};
   float saturation_min_target_{20.0f};
-  float saturation_decay_factor_{0.995f};
+  double saturation_decay_factor_{0.995};
   float saturation_grace_seconds_{90.0f};
   float saturation_stall_timeout_seconds_{60.0f};
   bool saturation_enabled_{true};

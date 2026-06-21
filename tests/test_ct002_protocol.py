@@ -96,15 +96,30 @@ def test_reporting_consumer_rows_order_and_shape() -> None:
     )
 
 
+def test_reporting_consumer_rows_preserve_inspection_and_combined_phases() -> None:
+    """The cd=4 slave list carries each battery's canonical phase char, so an
+    inspecting ('0') or combined-mode ('D') battery must not be reported as
+    phase a — that would diverge from the ESPHome mirror and a real CT."""
+    device = CT002()
+    device._update_consumer_report("ins-mac", "0", 0, "HMG-50", source_ip="10.0.0.2")
+    device._update_consumer_report("d-mac", "D", 5, "HMA-2", source_ip="10.0.0.3")
+    rows = device.reporting_consumer_rows()
+    assert rows == (
+        ReportingConsumerRow("HMA-2", "d-mac", "10.0.0.3", "d"),
+        ReportingConsumerRow("HMG-50", "ins-mac", "10.0.0.2", "0"),
+    )
+
+
 def _set_instruction(
     device: CT002, consumer_id: str, phase: str, instructed: float
 ) -> None:
     """Record an instruction value for *consumer_id* on *phase*.
 
-    The cross-talk *_chrg_power / *_dchrg_power fields aggregate the
-    *instructions* AstraMeter sends to each battery, not the powers they
-    report.  Tests that want to assert on the aggregate must populate the
-    instruction state, not just the report.
+    Under active control the A/B/C cross-talk *_chrg_power / *_dchrg_power
+    fields aggregate the *instructions* AstraMeter sends to each battery, not
+    the powers they report (relay mode forwards the reported power instead —
+    issue #457).  Active-control tests that want to assert on the aggregate
+    must populate the instruction state, not just the report.
     """
     device._update_consumer_report(consumer_id, phase=phase, power=0)
     device._consumers[consumer_id].last_instructed_power = float(instructed)
@@ -137,6 +152,98 @@ def test_ct002_relays_sum_of_charge_instructions_by_phase():
 
     assert response_for_b[15] == "-180"  # A_chrg_power
     assert response_for_b[16] == "-240"  # B_chrg_power
+
+
+def test_ct002_relay_reports_battery_count_per_phase():
+    """Relay mode forwards the real per-phase battery count as *_chrg_nb.
+
+    Each battery divides the forwarded aggregate by this count to take its
+    1/N share, so the count must be the actual number of batteries on the
+    phase, not a flat 1.
+    """
+    device = CT002(active_control=False)
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+
+    # Two batteries on phase A, one on B, none on C.
+    _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
+    _set_instruction(device, "consumer-a2", phase="A", instructed=-120)
+    _set_instruction(device, "consumer-b", phase="B", instructed=-240)
+
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[10, 20, 30],
+    )
+
+    assert response[8] == "2"  # A_chrg_nb: two batteries on phase A
+    assert response[9] == "1"  # B_chrg_nb: one battery on phase B
+    assert response[10] == "0"  # C_chrg_nb: none
+
+
+def test_ct002_active_control_reports_count_one_per_phase():
+    """Active control distributes a per-consumer target, so *_chrg_nb stays 1."""
+    device = CT002(active_control=True)
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+
+    _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
+    _set_instruction(device, "consumer-a2", phase="A", instructed=-120)
+
+    # Only phase A carries power, so B/C stay inactive.
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[10, 0, 0],
+    )
+
+    assert response[8] == "1"  # A_chrg_nb: flat 1 in active control (2 batteries)
+    assert response[10] == "0"  # C_chrg_nb: inactive phase
+
+
+def test_ct002_excludes_non_participating_from_aggregation():
+    """A consumer that sent participate=0 is left out of the relay aggregates."""
+    device = CT002(active_control=False)
+    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+
+    # Relay buckets aggregate the *reported* power (issue #457).
+    device._update_consumer_report("consumer-a1", phase="A", power=-180)
+    device._update_consumer_report("consumer-a2", phase="A", power=-120)
+    # consumer-a2 opts out.
+    device._consumers["consumer-a2"].participates = False
+
+    response = device._build_response_fields(
+        request_fields=request_fields,
+        values=[10, 0, 0],
+    )
+
+    # Only the participating battery's -180 is forwarded, and the count is 1.
+    assert response[8] == "1"  # A_chrg_nb: one participating battery
+    assert response[15] == "-180"  # A_chrg_power excludes the opted-out -120
+
+
+async def test_ct002_handle_request_respects_participate_field():
+    """The optional 7th request field marks a consumer non-participating."""
+    transport = MagicMock()
+
+    async def before_send(_addr, _fields, _consumer_id):
+        return [0, 0, 0]
+
+    # 7th field == "0" → opted out → treated as inactive by active control.
+    optout = CT002(ct_mac="112233445566", active_control=True)
+    optout.before_send = before_send
+    req = build_payload(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100", "0"]
+    )
+    await optout._handle_request(req, ("1.1.1.1", 12345), transport)
+    consumer = next(iter(optout._consumers.values()))
+    assert consumer.participates is False
+    assert optout._consumer_mode(consumer.consumer_id).mode == "inactive"
+
+    # No 7th field → defaults to participating.
+    default = CT002(ct_mac="112233445566", active_control=False)
+    default.before_send = before_send
+    req2 = build_payload(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    )
+    await default._handle_request(req2, ("1.1.1.1", 12345), transport)
+    assert next(iter(default._consumers.values())).participates is True
 
 
 def test_ct002_splits_positive_instructions_into_dchrg_fields():
@@ -265,9 +372,13 @@ async def test_handle_request_records_net_instructed_power_not_delta():
     )
 
 
-async def test_handle_request_pv_passthrough_records_zero_net_target():
-    """Venus D scenario from issue #376: reports +500 (passthrough), we
-    send a -500 charge delta → net target 0, A_dchrg_power must be 0."""
+async def test_handle_request_pv_passthrough_net_target_and_relay_buckets():
+    """Venus scenario from issue #376 driven in relay mode: reports +500
+    (passthrough), the relayed grid delta is -500 → the *expected* net target
+    is 0 (``last_instructed_power``).  But relay buckets must forward the
+    +500 the battery actually *reported*, exactly like the real CT
+    (issue #457) — the #376 net-instruction shielding applies to active
+    control only (see test_ct002_pv_passthrough_does_not_appear_as_dchrg)."""
     device = CT002(ct_mac="112233445566", active_control=False)
     await _drive_request(
         device,
@@ -279,8 +390,32 @@ async def test_handle_request_pv_passthrough_records_zero_net_target():
     consumer = device._consumers["aabbccddeeff"]
     assert consumer.last_instructed_power == 0.0
     by_phase = device._collect_reports_by_phase()
-    assert by_phase["A"]["dchrg_power"] == 0
+    assert by_phase["A"]["dchrg_power"] == 500
     assert by_phase["A"]["chrg_power"] == 0
+
+
+async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid():
+    """Issue #457: relay-mode buckets must equal the per-phase sum of
+    *reported* battery powers, not reported+grid (the battery's *next*
+    expected net), matching real CT captures."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="A",
+        reported_power=-100,
+        delta_values=[-50, 0, 0],
+    )
+    # The diagnostic still records the expected next net (-150)...
+    assert device._consumers["aabbccddeeff"].last_instructed_power == -150.0
+    # ...but the forwarded bucket carries the reported -100.
+    by_phase = device._collect_reports_by_phase()
+    assert by_phase["A"]["chrg_power"] == -100
+    assert by_phase["A"]["dchrg_power"] == 0
+    response = device._build_response_fields(
+        ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "B", "0"], [0, 0, 0]
+    )
+    assert response[15] == "-100"  # A_chrg_power
 
 
 async def test_handle_request_skips_instruction_update_in_inspection_mode():
@@ -431,3 +566,193 @@ def test_ct002_logs_phase_detection_and_change(caplog):
     assert any("phase detected: A" in m for m in messages)
     assert any("phase changed: A -> B" in m for m in messages)
     assert len(messages) == 2
+
+
+# ── x / ABC bucket routing (issue #460) ─────────────────────────────────────
+
+
+async def test_inspection_reporter_counts_in_x_bucket_not_a():
+    """An inspection ('0') reporter must populate the x bucket — not inflate
+    phase A's count/aggregate (which would skew the relay share split)."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="0",
+        reported_power=-200,
+        delta_values=[0, 0, 0],
+    )
+    by_phase = device._collect_reports_by_phase()
+    assert by_phase["x"]["count"] == 1
+    assert by_phase["x"]["chrg_power"] == -200
+    assert by_phase["A"]["count"] == 0
+    assert by_phase["A"]["chrg_power"] == 0
+
+    response = device._build_response_fields(
+        ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "A", "0"], [0, 0, 0]
+    )
+    assert response[14] == "-200"  # x_chrg_power
+    assert response[19] == "0"  # x_dchrg_power
+    assert response[8] == "0"  # A_chrg_nb excludes the inspecting battery
+    assert response[15] == "0"  # A_chrg_power
+
+
+async def test_combined_phase_d_reporter_lands_in_abc_bucket():
+    """A combined-mode (phase 'D') reporter must populate the ABC bucket and
+    ABC_chrg_nb instead of being folded into phase A."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="D",
+        reported_power=300,
+        delta_values=[0, 0, 0],
+    )
+    by_phase = device._collect_reports_by_phase()
+    assert by_phase["ABC"]["count"] == 1
+    assert by_phase["ABC"]["dchrg_power"] == 300
+    assert by_phase["A"]["count"] == 0
+
+    response = device._build_response_fields(
+        ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "A", "0"], [0, 0, 0]
+    )
+    assert response[11] == "1"  # ABC_chrg_nb
+    assert response[23] == "300"  # ABC_dchrg_power
+    assert response[18] == "0"  # ABC_chrg_power
+    assert response[8] == "0"  # A_chrg_nb
+
+
+def test_active_control_x_abc_buckets_use_reported_power():
+    """Even under active control, x/ABC consumers are never instructed, so
+    their buckets carry the reported power while A/B/C keep aggregating the
+    net instructed power (issue #376 behavior preserved)."""
+    device = CT002(active_control=True)
+    # Phase-A battery: reported +500 passthrough, instructed net -500.
+    device._update_consumer_report("venus-a", phase="A", power=500)
+    device._consumers["venus-a"].last_instructed_power = -500.0
+    # Combined-mode battery: reports -300, never instructed.
+    device._update_consumer_report("venus-d", phase="D", power=-300)
+
+    by_phase = device._collect_reports_by_phase()
+    assert by_phase["A"]["chrg_power"] == -500  # instructed net
+    assert by_phase["A"]["dchrg_power"] == 0
+    assert by_phase["ABC"]["chrg_power"] == -300  # reported
+    assert by_phase["ABC"]["count"] == 1
+
+
+def test_ct002_logs_phase_detection_for_combined_mode(caplog):
+    device = CT002()
+
+    with caplog.at_level(logging.INFO):
+        device._update_consumer_report("consumer-d", phase="0", power=0)
+        device._update_consumer_report("consumer-d", phase="D", power=100)
+
+    messages = [r.message for r in caplog.records if "CT002 consumer" in r.message]
+    assert any("phase detected: D" in m for m in messages)
+    assert len(messages) == 1
+
+
+# ── Consumer eviction TTL (issue #462) ──────────────────────────────────────
+
+
+class _StepClock:
+    """Deterministic wall clock for eviction tests."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_adaptive_ttl_evicts_after_two_missed_poll_cycles():
+    """Default (consumer_ttl=None): a consumer expires after missing ~2 of
+    its own poll cycles, like the real CT."""
+    clock = _StepClock()
+    device = CT002(clock=clock)
+    device._update_consumer_report("a", "A", 100)
+    clock.advance(10.0)
+    device._update_consumer_report("a", "A", 100)  # poll_interval ≈ 10 s
+    assert device._consumers["a"].poll_interval == 10.0
+
+    clock.advance(19.0)  # within 2x the 10 s
+    device._cleanup_consumers()
+    assert "a" in device._consumers
+
+    clock.advance(2.0)  # 21 s of silence > 2x the 10 s
+    device._cleanup_consumers()
+    assert "a" not in device._consumers
+
+
+def test_adaptive_ttl_uses_fallback_while_cadence_unknown():
+    """A consumer that has polled only once has no cadence yet; it survives
+    the fallback window and is evicted after it."""
+    clock = _StepClock()
+    device = CT002(clock=clock)
+    device._update_consumer_report("a", "A", 100)
+
+    clock.advance(29.0)
+    device._cleanup_consumers()
+    assert "a" in device._consumers
+
+    clock.advance(2.0)
+    device._cleanup_consumers()
+    assert "a" not in device._consumers
+
+
+def test_adaptive_ttl_floor_protects_fast_pollers():
+    """A battery polling every second isn't evicted by a 2-3 s hiccup: the
+    adaptive TTL is floored (network-jitter tolerance)."""
+    clock = _StepClock()
+    device = CT002(clock=clock)
+    device._update_consumer_report("a", "A", 100)
+    clock.advance(1.0)
+    device._update_consumer_report("a", "A", 100)  # poll_interval ≈ 1 s
+
+    clock.advance(4.0)  # > 2x the 1 s but within the 5 s floor
+    device._cleanup_consumers()
+    assert "a" in device._consumers
+
+    clock.advance(2.0)  # 6 s of silence > floor
+    device._cleanup_consumers()
+    assert "a" not in device._consumers
+
+
+def test_fixed_consumer_ttl_overrides_adaptive_eviction():
+    """An explicit CONSUMER_TTL keeps the old fixed-window behavior."""
+    clock = _StepClock()
+    device = CT002(consumer_ttl=120, clock=clock)
+    device._update_consumer_report("a", "A", 100)
+    clock.advance(10.0)
+    device._update_consumer_report("a", "A", 100)
+
+    clock.advance(110.0)  # way past the adaptive 2-cycle window
+    device._cleanup_consumers()
+    assert "a" in device._consumers
+
+    clock.advance(15.0)  # past the fixed 120 s
+    device._cleanup_consumers()
+    assert "a" not in device._consumers
+
+
+def test_stale_consumer_drops_out_of_aggregation_before_cleanup_runs():
+    """The real CT evicts per response cycle, so the relay count/aggregate
+    must shrink as soon as a battery goes silent — without waiting for the
+    periodic cleanup task to remove the entry."""
+    clock = _StepClock()
+    device = CT002(active_control=False, clock=clock)
+    for _ in range(2):
+        device._update_consumer_report("a", "A", 100)
+        device._update_consumer_report("b", "A", 50)
+        clock.advance(10.0)
+    # Battery b goes silent; a keeps polling.
+    clock.advance(15.0)
+    device._update_consumer_report("a", "A", 100)
+
+    by_phase = device._collect_reports_by_phase()
+    assert "b" in device._consumers  # cleanup hasn't run yet
+    assert by_phase["A"]["count"] == 1
+    assert by_phase["A"]["dchrg_power"] == 100  # b's 50 W is gone

@@ -21,20 +21,23 @@ namespace mqtt_insights {
 std::string sanitize_id(const std::string &value);
 
 // CT002 per-consumer (per-battery) HA Discovery payload.
-// device_type / network_mac / battery_ip drive the `device.connections`
-// list and the human-readable name; pass "" for anything you don't have.
+// device_type feeds the human-readable name / model_id. We intentionally emit
+// NO device `connections`: in HA a `connection` is a global cross-integration
+// identity, so advertising the battery's own MAC merges this device into the
+// battery device owned by another bridge (e.g. hm2mqtt). The device is
+// identified by its own namespaced `identifiers` and linked to the meter via
+// `via_device`. See the note in discovery.py and issue #438.
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type = "", const std::string &network_mac = "",
-    const std::string &battery_ip = "");
+    const std::string &device_type = "", bool efficiency_rotation = false);
 
 // CT002 device-level HA Discovery payload (parent device, smooth_target
-// sensor, active_control binary_sensor, consumer_count diagnostic,
-// force_rotation button).
+// sensor, active_control binary_sensor, consumer_count diagnostic, and —
+// only when efficiency rotation is enabled — the force_rotation button).
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix);
+    const std::string &ha_prefix, bool efficiency_rotation = false);
 
 }  // namespace mqtt_insights
 }  // namespace ct002

@@ -15,6 +15,8 @@ from astrameter.powermeter import (
     Emlog,
     Envoy,
     ESPHome,
+    FritzSmartEnergy,
+    Fronius,
     HomeAssistant,
     HomeWizardPowermeter,
     IoBroker,
@@ -33,6 +35,7 @@ from astrameter.powermeter import (
     Sml,
     Tasmota,
     ThrottledPowermeter,
+    TibberPulse,
     TQEnergyManager,
     TransformedPowermeter,
     VZLogger,
@@ -62,6 +65,9 @@ TQ_EM_SECTION = "TQ_EM"
 HOMEWIZARD_SECTION = "HOMEWIZARD"
 ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
+FRITZ_SECTION = "FRITZ"
+FRONIUS_SECTION = "FRONIUS"
+TIBBER_PULSE_SECTION = "TIBBER_PULSE"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
 
@@ -389,6 +395,12 @@ def create_powermeter(
         return create_envoy_powermeter(section, config)
     elif section.startswith(SMA_ENERGY_METER_SECTION):
         return create_sma_energy_meter_powermeter(section, config)
+    elif section.startswith(FRITZ_SECTION):
+        return create_fritz_powermeter(section, config)
+    elif section.startswith(FRONIUS_SECTION):
+        return create_fronius_powermeter(section, config)
+    elif section.startswith(TIBBER_PULSE_SECTION):
+        return create_tibber_pulse_powermeter(section, config)
     elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
         return create_mqtt_powermeter(section, config)
     else:
@@ -691,6 +703,46 @@ def create_sma_energy_meter_powermeter(
         config.getint(section, "PORT", fallback=9522),
         config.getint(section, "SERIAL_NUMBER", fallback=0),
         config.get(section, "INTERFACE", fallback=""),
+    )
+
+
+def create_fritz_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    return FritzSmartEnergy(
+        config.get(section, "HOST", fallback="fritz.box"),
+        config.get(section, "USER", fallback=""),
+        config.get(section, "PASSWORD", fallback=""),
+        config.get(section, "AIN", fallback=""),
+        use_tls=config.getboolean(section, "HTTPS", fallback=False),
+        verify_ssl=config.getboolean(section, "VERIFY_SSL", fallback=True),
+        timeout=config.getfloat(section, "TIMEOUT", fallback=10.0),
+    )
+
+
+def create_fronius_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    return Fronius(
+        config.get(section, "IP", fallback=""),
+        config.get(section, "DEVICE_ID", fallback="0"),
+        per_phase=config.getboolean(section, "PER_PHASE", fallback=False),
+    )
+
+
+def create_tibber_pulse_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    oc, o1, o2, o3 = parse_sml_obis_config(section, config)
+    return TibberPulse(
+        config.get(section, "IP", fallback=""),
+        config.get(section, "PASSWORD", fallback=""),
+        config.get(section, "NODE_ID", fallback="1"),
+        config.get(section, "USER", fallback="admin"),
+        obis_power_current=oc,
+        obis_power_l1=o1,
+        obis_power_l2=o2,
+        obis_power_l3=o3,
     )
 
 

@@ -3,6 +3,8 @@ from .base import Powermeter
 from .emlog import Emlog
 from .envoy import Envoy
 from .esphome import ESPHome
+from .fritz import FritzSmartEnergy
+from .fronius import Fronius
 from .homeassistant import HomeAssistant
 from .homewizard import HomeWizardPowermeter
 from .iobroker import IoBroker
@@ -15,6 +17,7 @@ from .shrdzm import Shrdzm
 from .sma_energy_meter import SmaEnergyMeter
 from .sml import Sml, parse_sml_obis_config
 from .tasmota import Tasmota
+from .tibber_pulse import TibberPulse
 from .tq_em import TQEnergyManager
 from .vzlogger import VZLogger
 from .wrappers import (
@@ -33,6 +36,8 @@ __all__ = [
     "ESPHome",
     "Emlog",
     "Envoy",
+    "FritzSmartEnergy",
+    "Fronius",
     "HampelPowermeter",
     "HomeAssistant",
     "HomeWizardPowermeter",
@@ -57,6 +62,7 @@ __all__ = [
     "TQEnergyManager",
     "Tasmota",
     "ThrottledPowermeter",
+    "TibberPulse",
     "TransformedPowermeter",
     "VZLogger",
     "parse_sml_obis_config",

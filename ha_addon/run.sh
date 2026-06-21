@@ -80,6 +80,42 @@ else
         efficiency_rotation_interval="$(bashio::config 'efficiency_rotation_interval')"
     fi
 
+    min_dc_output=""
+    if bashio::config.has_value 'min_dc_output'; then
+        min_dc_output="$(bashio::config 'min_dc_output')"
+    fi
+
+    active_control=""
+    if bashio::config.has_value 'active_control'; then
+        active_control="$(bashio::config 'active_control')"
+    fi
+
+    grid_predict_trust=""
+    if bashio::config.has_value 'grid_predict_trust'; then
+        grid_predict_trust="$(bashio::config 'grid_predict_trust')"
+    fi
+
+    # Opt-in HTTP cloud reporting (hamedata.com). Only emit keys the user set.
+    cloud_reporting=""
+    if bashio::config.has_value 'cloud_reporting'; then
+        cloud_reporting="$(bashio::config 'cloud_reporting')"
+    fi
+    cloud_reporting_host=""
+    if bashio::config.has_value 'cloud_reporting_host'; then
+        cloud_reporting_host="$(bashio::config 'cloud_reporting_host')"
+    fi
+    cloud_reporting_interval=""
+    if bashio::config.has_value 'cloud_reporting_interval'; then
+        cloud_reporting_interval="$(bashio::config 'cloud_reporting_interval')"
+    fi
+
+    # Emit the cloud-reporting keys (if any) into the current [CT00x] section.
+    emit_cloud_reporting() {
+        [ -n "$cloud_reporting" ] && echo "CLOUD_REPORTING=$cloud_reporting"
+        [ -n "$cloud_reporting_host" ] && echo "CLOUD_REPORTING_HOST=$cloud_reporting_host"
+        [ -n "$cloud_reporting_interval" ] && echo "CLOUD_REPORTING_INTERVAL=$cloud_reporting_interval"
+    }
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -93,19 +129,31 @@ else
         if [ "$has_ct002" -eq 1 ] && [ "$has_ct003" -eq 1 ]; then
             echo "[CT002]"
             echo "CT_MAC=$ct_mac"
+            [ -n "$active_control" ] && echo "ACTIVE_CONTROL=$active_control"
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
+            [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
+            [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_cloud_reporting
             echo ""
             echo "[CT003]"
             echo "CT_MAC=$ct_mac"
+            [ -n "$active_control" ] && echo "ACTIVE_CONTROL=$active_control"
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
+            [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
+            [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_cloud_reporting
             echo ""
         else
             echo "[$ct_section]"
             echo "CT_MAC=$ct_mac"
+            [ -n "$active_control" ] && echo "ACTIVE_CONTROL=$active_control"
             [ -n "$min_efficient_power" ] && echo "MIN_EFFICIENT_POWER=$min_efficient_power"
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
+            [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
+            [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_cloud_reporting
             echo ""
         fi
 

@@ -7,6 +7,11 @@ import signal
 from collections import OrderedDict
 from collections.abc import Sequence
 
+from astrameter.cloud_reporting import (
+    CloudReporter,
+    CloudReporterConfig,
+    CtMeasurement,
+)
 from astrameter.config.config_loader import (
     ClientFilter,
     read_all_powermeter_configs,
@@ -154,10 +159,22 @@ async def run_device(
         ct_mac = cfg.get(ct_section, "CT_MAC", fallback="")
         ct_udp_port = cfg.getint(ct_section, "UDP_PORT", fallback=UDP_PORT)
         wifi_rssi = cfg.getint(ct_section, "WIFI_RSSI", fallback=-50)
+        # Opt-in Marstek HTTP cloud reporting (hamedata.com). Disabled by default;
+        # see docs/marstek-mqtt-http.md (§6) for what it sends and its limits.
+        cloud_reporting = cfg.getboolean(ct_section, "CLOUD_REPORTING", fallback=False)
+        cloud_reporting_host = (
+            cfg.get(ct_section, "CLOUD_REPORTING_HOST", fallback="").strip()
+            or "eu.hamedata.com"
+        )
+        cloud_reporting_interval = cfg.getfloat(
+            ct_section, "CLOUD_REPORTING_INTERVAL", fallback=60.0
+        )
         dedupe_time_window = cfg.getfloat(
             ct_section, "DEDUPE_TIME_WINDOW", fallback=global_dedupe_time_window
         )
-        consumer_ttl = cfg.getint(ct_section, "CONSUMER_TTL", fallback=120)
+        # Unset (default) → adaptive eviction (~2 missed poll cycles, like the
+        # real CT); a number → fixed TTL in seconds.
+        consumer_ttl = cfg.getint(ct_section, "CONSUMER_TTL", fallback=None)
         debug_status = cfg.getboolean(ct_section, "DEBUG_STATUS", fallback=False)
         if os.environ.get("DEBUG_STATUS", "").lower() in ("1", "true", "yes"):
             debug_status = True
@@ -173,11 +190,26 @@ async def run_device(
         error_reduce_threshold = cfg.getint(
             ct_section, "ERROR_REDUCE_THRESHOLD", fallback=20
         )
-        balance_deadband = cfg.getint(ct_section, "BALANCE_DEADBAND", fallback=15)
+        balance_deadband = cfg.getint(ct_section, "BALANCE_DEADBAND", fallback=25)
         max_correction_per_step = cfg.getint(
             ct_section, "MAX_CORRECTION_PER_STEP", fallback=80
         )
         max_target_step = cfg.getint(ct_section, "MAX_TARGET_STEP", fallback=0)
+        pace_base_step = cfg.getint(ct_section, "PACE_BASE_STEP", fallback=30)
+        pace_max_step = cfg.getint(ct_section, "PACE_MAX_STEP", fallback=100)
+        osc_damp_max = cfg.getfloat(ct_section, "OSC_DAMP_MAX", fallback=0.95)
+        osc_damp_alpha = cfg.getfloat(ct_section, "OSC_DAMP_ALPHA", fallback=0.3)
+        osc_damp_decay = cfg.getfloat(ct_section, "OSC_DAMP_DECAY", fallback=0.05)
+        osc_damp_threshold = cfg.getfloat(
+            ct_section, "OSC_DAMP_THRESHOLD", fallback=300
+        )
+        grid_predict_trust = cfg.getfloat(
+            ct_section, "GRID_PREDICT_TRUST", fallback=0.5
+        )
+        concentrate_deadband = cfg.getfloat(
+            ct_section, "CONCENTRATE_DEADBAND", fallback=60.0
+        )
+        import_trim_w = cfg.getfloat(ct_section, "IMPORT_TRIM_W", fallback=15.0)
         saturation_detection = cfg.getboolean(
             ct_section, "SATURATION_DETECTION", fallback=True
         )
@@ -201,6 +233,9 @@ async def run_device(
         )
         efficiency_saturation_threshold = cfg.getfloat(
             ct_section, "EFFICIENCY_SATURATION_THRESHOLD", fallback=0.4
+        )
+        efficiency_demand_alpha = cfg.getfloat(
+            ct_section, "EFFICIENCY_DEMAND_ALPHA", fallback=0.1
         )
         saturation_decay_factor = cfg.getfloat(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
@@ -259,6 +294,15 @@ async def run_device(
             balance_deadband=balance_deadband,
             max_correction_per_step=max_correction_per_step,
             max_target_step=max_target_step,
+            pace_base_step=pace_base_step,
+            pace_max_step=pace_max_step,
+            osc_damp_max=osc_damp_max,
+            osc_damp_alpha=osc_damp_alpha,
+            osc_damp_decay=osc_damp_decay,
+            osc_damp_threshold=osc_damp_threshold,
+            grid_predict_trust=grid_predict_trust,
+            concentrate_deadband=concentrate_deadband,
+            import_trim_w=import_trim_w,
             saturation_detection=saturation_detection,
             saturation_alpha=saturation_alpha,
             min_target_for_saturation=min_target_for_saturation,
@@ -269,6 +313,7 @@ async def run_device(
             efficiency_rotation_interval=efficiency_rotation_interval,
             efficiency_fade_alpha=efficiency_fade_alpha,
             efficiency_saturation_threshold=efficiency_saturation_threshold,
+            efficiency_demand_alpha=efficiency_demand_alpha,
             min_dc_output=min_dc_output,
             saturation_decay_factor=saturation_decay_factor,
             device_id=device_id or "",
@@ -372,11 +417,17 @@ async def run_device(
         insights.register_distribution_weight_handler(
             device_id or "", device.set_consumer_distribution_weight
         )
+        insights.register_efficiency_window_weight_handler(
+            device_id or "", device.set_consumer_efficiency_window_weight
+        )
         insights.register_min_dc_output_handler(
             device_id or "", device.set_consumer_min_dc_output
         )
         insights.register_rotation_handler(
             device_id or "", device.force_efficiency_rotation
+        )
+        insights.register_active_control_handler(
+            device_id or "", device.set_active_control
         )
 
     # Marstek MQTT responder — only wired up when Marstek credentials
@@ -431,9 +482,91 @@ async def run_device(
                 device_id,
             )
 
+    # Opt-in HTTP cloud reporting (hamedata.com), mimicking what a real CT does:
+    # a handshake then a periodic setCtReporting GET with live grid/bucket data.
+    cloud_task: asyncio.Task[None] | None = None
+    if isinstance(device, CT002) and cloud_reporting:
+        # The reported id is the CT's MAC: the one AstraMeter registered in the
+        # Marstek account (the id the cloud actually knows) when configured, else
+        # the locally set CT_MAC.
+        report_id = marstek_mac or ct_mac
+        if not report_id:
+            logger.warning(
+                "CLOUD_REPORTING enabled for %s but no device id is available; "
+                "set CT_MAC, or enable the Marstek account so the registered "
+                "device id is used. Cloud reporting disabled.",
+                device_id,
+            )
+        else:
+            ct_device: CT002 = device
+
+            async def _cloud_gather(
+                _pms: list[tuple[Powermeter, ClientFilter, bool]] = powermeters,
+                _dev: CT002 = ct_device,
+                _insights: MqttInsightsService | None = insights,
+            ) -> CtMeasurement:
+                chosen: Powermeter | None = next(
+                    (pm for pm, cf, _ in _pms if cf.matches("0.0.0.0")), None
+                )
+                if chosen is None and _pms:
+                    chosen = _pms[0][0]
+                phases = [0.0, 0.0, 0.0]
+                if chosen is not None:
+                    with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+                        await asyncio.wait_for(
+                            chosen.wait_for_next_message(), timeout=2.0
+                        )
+                    vs = await chosen.get_powermeter_watts_raw()
+                    phases = [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
+                ap, bp, cp = (round(p) for p in phases)
+                buckets = _dev.reporting_phase_buckets()
+
+                def _chrg(b: str) -> int:
+                    return int(buckets.get(b, {}).get("chrg_power", 0))
+
+                def _dchrg(b: str) -> int:
+                    return int(buckets.get(b, {}).get("dchrg_power", 0))
+
+                return CtMeasurement(
+                    ap=ap,
+                    bp=bp,
+                    cp=cp,
+                    dp=ap + bp + cp,
+                    rssi=_dev.wifi_rssi,
+                    slv=_dev.reporting_consumer_count(),
+                    udp=1,
+                    mqtt=1 if _insights is not None else 0,
+                    cz=_chrg("x"),
+                    ca=_chrg("A"),
+                    cb=_chrg("B"),
+                    cc=_chrg("C"),
+                    cd=_chrg("ABC"),
+                    dz=_dchrg("x"),
+                    da=_dchrg("A"),
+                    db=_dchrg("B"),
+                    dc=_dchrg("C"),
+                    dd=_dchrg("ABC"),
+                )
+
+            cloud_task = asyncio.create_task(
+                CloudReporter(
+                    CloudReporterConfig(
+                        ct_type=device.ct_type,
+                        device_id=report_id,
+                        host=cloud_reporting_host,
+                        interval_seconds=cloud_reporting_interval,
+                    ),
+                    _cloud_gather,
+                ).run()
+            )
+
     try:
         await device.wait()
     finally:
+        if cloud_task is not None:
+            cloud_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cloud_task
         if insights and isinstance(device, CT002):
             insights.unregister_handlers(device_id or "")
             with contextlib.suppress(Exception):

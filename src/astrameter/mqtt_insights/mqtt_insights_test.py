@@ -34,7 +34,6 @@ from .service import (
     POWERMETER_IDLE_THRESHOLD,
     MqttInsightsConfig,
     MqttInsightsService,
-    _arp_lookup,
 )
 
 # ── Discovery payload unit tests ──────────────────────────────────────────
@@ -74,7 +73,10 @@ def test_ct002_consumer_discovery_structure():
     assert dev["name"] == "AstraMeter Consumer HMJ-2 aabbccddeeff"
     assert dev["manufacturer"] == "Marstek"
     assert dev["model_id"] == "HMJ-2"
-    assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in dev["connections"]
+    # The consumer device advertises no connections — the battery MAC is never
+    # exposed (it would merge with the hm2mqtt battery device; issue #438); the
+    # meter link is carried by via_device.
+    assert "connections" not in dev
     assert dev["via_device"] == "astrameter_ct002_dev1"
 
     # Check two-level availability
@@ -158,6 +160,10 @@ def test_ct002_consumer_discovery_structure():
     assert weight["max"] == 10
     assert weight["entity_category"] == "config"
 
+    # Efficiency Window Weight is gated on efficiency rotation (covered by its
+    # own test); the default structure here has rotation off, so it's absent.
+    assert "efficiency_window_weight" not in comps
+
     # Min DC Output number entity — present for the B2500 family (HMJ-2).
     min_dc = comps["min_dc_output"]
     assert min_dc["platform"] == "number"
@@ -209,26 +215,36 @@ def test_ct002_consumer_discovery_non_mac_consumer():
     assert payload["device"]["via_device"] == "astrameter_ct002_dev1"
 
 
-def test_ct002_consumer_discovery_network_mac_and_ip():
-    """network_mac and battery_ip add connection entries."""
+def test_ct002_consumer_discovery_emits_no_connections_issue_438():
+    """The consumer device advertises NO ``connections`` at all.
+
+    Advertising the battery's own MAC (bluetooth or mac) would make HA merge
+    this standalone "AstraMeter Consumer" device into the battery device owned
+    by another bridge (e.g. hm2mqtt, which publishes ``["bluetooth", MAC]`` for
+    the same battery), non-deterministically depending on MQTT registration
+    order. The device is identified solely by its own namespaced
+    ``identifiers`` and linked to the meter via ``via_device``. See #438.
+    """
     _, payload = build_ct002_consumer_discovery(
         "astrameter",
         "dev1",
-        "aabbccddeeff",
+        "aabbccddeeff",  # a 12-hex MAC consumer_id — must NOT become a connection
         "homeassistant",
-        network_mac="11:22:33:44:55:66",
-        battery_ip="192.168.1.10",
+        device_type="HMJ-2",
     )
-    conns = payload["device"]["connections"]
-    assert ["bluetooth", "AA:BB:CC:DD:EE:FF"] in conns
-    assert ["mac", "11:22:33:44:55:66"] in conns
-    assert ["ip", "192.168.1.10"] in conns
-    assert payload["device"]["via_device"] == "astrameter_ct002_dev1"
+    dev = payload["device"]
+    assert "connections" not in dev
+    assert dev["identifiers"] == ["astrameter_consumer_aabbccddeeff"]
+    assert dev["via_device"] == "astrameter_ct002_dev1"
 
 
 def test_ct002_device_discovery_structure():
     topic, payload = build_ct002_device_discovery(
-        "astrameter", "dev1", "homeassistant", addon_slug="34dea19a_astrameter"
+        "astrameter",
+        "dev1",
+        "homeassistant",
+        addon_slug="34dea19a_astrameter",
+        efficiency_rotation=True,
     )
     _assert_discovery_structure(topic, payload)
     assert "AstraMeter" in payload["device"]["name"]
@@ -241,12 +257,71 @@ def test_ct002_device_discovery_structure():
     assert comps["smooth_target"]["device_class"] == "power"
     assert comps["smooth_target"]["state_class"] == "measurement"
 
+    # Active Control switch — controllable, retained command for restart restore
+    ac = comps["active_control"]
+    assert ac["platform"] == "switch"
+    assert ac["command_topic"] == "astrameter/ct002/dev1/set"
+    assert ac["value_template"] == "{{ value_json.active_control }}"
+    assert ac["state_on"] == "True"
+    assert ac["state_off"] == "False"
+    assert ac["retain"] is True
+    assert ac["entity_category"] == "config"
+
     # Force rotation button
     btn = comps["force_rotation"]
     assert btn["platform"] == "button"
     assert "command_topic" in btn
     assert "payload_press" in btn
     assert btn["entity_category"] == "config"
+
+
+def test_ct002_device_discovery_omits_force_rotation_without_efficiency():
+    """The Force Rotation button is only surfaced when efficiency rotation is
+    enabled (the default omits it — there's nothing to rotate)."""
+    _, default_payload = build_ct002_device_discovery(
+        "astrameter", "dev1", "homeassistant"
+    )
+    assert "force_rotation" not in default_payload["components"]
+    # The remaining device entities are unaffected.
+    assert "smooth_target" in default_payload["components"]
+    assert "active_control" in default_payload["components"]
+    assert "consumer_count" in default_payload["components"]
+
+    _, enabled_payload = build_ct002_device_discovery(
+        "astrameter", "dev1", "homeassistant", efficiency_rotation=True
+    )
+    assert "force_rotation" in enabled_payload["components"]
+
+
+def test_ct002_consumer_discovery_gates_efficiency_window_weight():
+    """The Efficiency Window Weight number is only surfaced when efficiency
+    rotation is enabled (the default omits it — every battery stays active)."""
+    _, default_payload = build_ct002_consumer_discovery(
+        "astrameter", "dev1", "aabbccddeeff", "homeassistant", device_type="HMJ-2"
+    )
+    comps = default_payload["components"]
+    assert "efficiency_window_weight" not in comps
+    # The remaining per-consumer entities are unaffected.
+    assert "distribution_weight" in comps
+    assert "min_dc_output" in comps
+
+    _, enabled_payload = build_ct002_consumer_discovery(
+        "astrameter",
+        "dev1",
+        "aabbccddeeff",
+        "homeassistant",
+        device_type="HMJ-2",
+        efficiency_rotation=True,
+    )
+    eww = enabled_payload["components"]["efficiency_window_weight"]
+    assert eww["platform"] == "number"
+    assert eww["command_topic"].endswith("/efficiency_window_weight/set")
+    assert eww["retain"] is True
+    assert eww["unit_of_measurement"] == "%"
+    assert eww["min"] == 0
+    assert eww["max"] == 100
+    assert eww["entity_category"] == "config"
+    assert "* 100" in eww["value_template"]
 
 
 def test_shelly_battery_discovery_structure():
@@ -416,49 +491,6 @@ def test_sanitize_id():
     assert _sanitize_id("192.168.1.100") == "192_168_1_100"
     assert _sanitize_id("AA:BB:CC") == "AA_BB_CC"
     assert _sanitize_id("normal-id_123") == "normal-id_123"
-
-
-async def test_arp_lookup_found(tmp_path):
-    """ARP lookup finds a matching entry."""
-    arp_file = tmp_path / "arp"
-    arp_file.write_text(
-        "IP address       HW type     Flags       HW address            Mask     Device\n"
-        "192.168.1.10     0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
-        "192.168.1.20     0x1         0x2         11:22:33:44:55:66     *        eth0\n"
-    )
-    from unittest.mock import mock_open, patch
-
-    real_data = arp_file.read_text()
-    m = mock_open(read_data=real_data)
-    # mock_open doesn't support iteration by default; wire it up
-    m.return_value.__iter__ = lambda self: iter(real_data.splitlines(keepends=True))
-    with patch("builtins.open", m):
-        result = await _arp_lookup("192.168.1.10")
-    assert result == "AA:BB:CC:DD:EE:FF"
-
-
-async def test_arp_lookup_not_found(tmp_path):
-    """ARP lookup returns empty when IP is not in the table."""
-    from unittest.mock import mock_open, patch
-
-    data = (
-        "IP address       HW type     Flags       HW address            Mask     Device\n"
-        "192.168.1.10     0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
-    )
-    m = mock_open(read_data=data)
-    m.return_value.__iter__ = lambda self: iter(data.splitlines(keepends=True))
-    with patch("builtins.open", m):
-        result = await _arp_lookup("192.168.1.99")
-    assert result == ""
-
-
-async def test_arp_lookup_file_missing():
-    """ARP lookup returns empty when /proc/net/arp is not available."""
-    from unittest.mock import patch
-
-    with patch("builtins.open", side_effect=OSError):
-        result = await _arp_lookup("192.168.1.10")
-    assert result == ""
 
 
 # ── Config tests ──────────────────────────────────────────────────────────
@@ -953,6 +985,7 @@ SAMPLE_CT002_DATA = {
     "manual_target": None,
     "auto_target": True,
     "distribution_weight": 1.5,
+    "efficiency_window_weight": 0.5,
     "min_dc_output": 25.0,
     "smooth_target": 500.0,
     "active_control": True,
@@ -994,6 +1027,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
         assert payload["active"] is True
         assert payload["poll_interval"] == 5.0
         assert payload["distribution_weight"] == 1.5
+        assert payload["efficiency_window_weight"] == 0.5
         assert payload["min_dc_output"] == 25.0
         assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
     finally:
@@ -1342,6 +1376,9 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service.register_distribution_weight_handler(
         "dev1", lambda cid, v: calls.__setitem__("weight", v)
     )
+    service.register_efficiency_window_weight_handler(
+        "dev1", lambda cid, v: calls.__setitem__("eff_weight", v)
+    )
     service.register_min_dc_output_handler(
         "dev1", lambda cid, v: calls.__setitem__("min_dc", v)
     )
@@ -1350,19 +1387,34 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "auto_target", "true")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "250")
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "2.5")
+    # HA sends a percentage; the handler receives the 0-1 fraction.
+    service._handle_consumer_field_command(
+        "dev1", "c1", "efficiency_window_weight", "50"
+    )
     service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "25")
     assert calls == {
         "active": False,
         "auto": True,
         "manual": 250.0,
         "weight": 2.5,
+        "eff_weight": 0.5,
         "min_dc": 25.0,
     }
 
-    # 0.0 is a valid weight (battery takes no share).
+    # 0.0 is a valid weight (battery takes no share / skipped for efficiency).
     calls.clear()
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "0")
-    assert calls == {"weight": 0.0}
+    service._handle_consumer_field_command(
+        "dev1", "c1", "efficiency_window_weight", "0"
+    )
+    assert calls == {"weight": 0.0, "eff_weight": 0.0}
+
+    # 100 % maps to the full 1.0 fraction.
+    calls.clear()
+    service._handle_consumer_field_command(
+        "dev1", "c1", "efficiency_window_weight", "100"
+    )
+    assert calls == {"eff_weight": 1.0}
 
     # Out-of-range and unparseable values are dropped, not dispatched.
     calls.clear()
@@ -1371,8 +1423,16 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "active", "maybe")
     service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "-5")
     service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "2000")
+    # The efficiency window weight is a percentage: 101 % is out of range.
+    service._handle_consumer_field_command(
+        "dev1", "c1", "efficiency_window_weight", "101"
+    )
+    service._handle_consumer_field_command(
+        "dev1", "c1", "efficiency_window_weight", "-1"
+    )
     # An empty (cleared) retained payload is ignored silently.
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "")
+    service._handle_consumer_field_command("dev1", "c1", "efficiency_window_weight", "")
     assert calls == {}
 
 
@@ -1400,6 +1460,52 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
 
         await _poll(lambda: len(handler_calls) >= 1)
         assert handler_calls[0] == "rotated"
+    finally:
+        await service.stop()
+
+
+def test_active_control_device_command_dispatch():
+    """The device-level active_control field routes booleans to the handler
+    and rejects non-boolean payloads."""
+    service = _make_service(1883)
+    calls: list[bool] = []
+    service.register_active_control_handler("dev1", calls.append)
+
+    service._handle_device_command("dev1", {"active_control": False})
+    service._handle_device_command("dev1", {"active_control": True})
+    assert calls == [False, True]
+
+    # Non-boolean is rejected (no dispatch); unknown device is a no-op.
+    service._handle_device_command("dev1", {"active_control": "nope"})
+    service._handle_device_command("other", {"active_control": False})
+    assert calls == [False, True]
+
+    service.unregister_handlers("dev1")
+    service._handle_device_command("dev1", {"active_control": True})
+    assert calls == [False, True]
+
+
+@needs_mosquitto
+async def test_active_control_toggle_via_mqtt(mqtt_broker) -> None:
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    handler_calls: list[bool] = []
+
+    service.register_active_control_handler("dev1", handler_calls.append)
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(
+                f"{base}/ct002/dev1/set",
+                payload=json.dumps({"active_control": False}).encode(),
+            )
+
+        await _poll(lambda: len(handler_calls) >= 1)
+        assert handler_calls[0] is False
     finally:
         await service.stop()
 

@@ -49,27 +49,6 @@ POWERMETER_IDLE_THRESHOLD = 2.0
 POWERMETER_PROBE_TIMEOUT = 5.0
 
 
-async def _arp_lookup(ip: str) -> str:
-    """Best-effort ARP lookup via /proc/net/arp. Returns 'AA:BB:CC:DD:EE:FF' or ''."""
-
-    def _sync_lookup() -> str:
-        try:
-            with open("/proc/net/arp") as f:
-                for line in f:
-                    parts = line.split()
-                    if (
-                        len(parts) >= 4
-                        and parts[0] == ip
-                        and parts[3] != "00:00:00:00:00:00"
-                    ):
-                        return parts[3].upper()
-        except OSError:
-            pass
-        return ""
-
-    return await asyncio.to_thread(_sync_lookup)
-
-
 @dataclass
 class MqttInsightsConfig:
     broker: str
@@ -118,13 +97,16 @@ class MqttInsightsService:
         self._discovered_shelly_batteries: set[str] = set()
         self._discovered_shelly_devices: set[str] = set()
         self._discovered_powermeters: set[str] = set()
-        self._pending_arp: set[str] = set()
         self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
         self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
         self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
+        self._efficiency_window_weight_handlers: dict[
+            str, Callable[[str, float], None]
+        ] = {}
         self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
+        self._active_control_handlers: dict[str, Callable[[bool], None]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
         self._marstek_bindings: dict[str, MarstekMqttBinding] = {}
@@ -189,6 +171,11 @@ class MqttInsightsService:
     ) -> None:
         self._distribution_weight_handlers[device_id] = handler
 
+    def register_efficiency_window_weight_handler(
+        self, device_id: str, handler: Callable[[str, float], None]
+    ) -> None:
+        self._efficiency_window_weight_handlers[device_id] = handler
+
     def register_min_dc_output_handler(
         self, device_id: str, handler: Callable[[str, float], None]
     ) -> None:
@@ -199,14 +186,21 @@ class MqttInsightsService:
     ) -> None:
         self._rotation_handlers[device_id] = handler
 
+    def register_active_control_handler(
+        self, device_id: str, handler: Callable[[bool], None]
+    ) -> None:
+        self._active_control_handlers[device_id] = handler
+
     def unregister_handlers(self, device_id: str) -> None:
         """Remove all command handlers for a device (e.g. on device stop)."""
         self._active_handlers.pop(device_id, None)
         self._manual_target_handlers.pop(device_id, None)
         self._auto_target_handlers.pop(device_id, None)
         self._distribution_weight_handlers.pop(device_id, None)
+        self._efficiency_window_weight_handlers.pop(device_id, None)
         self._min_dc_output_handlers.pop(device_id, None)
         self._rotation_handlers.pop(device_id, None)
+        self._active_control_handlers.pop(device_id, None)
 
     # ── Marstek MQTT responder ────────────────────────────────────────
 
@@ -507,6 +501,7 @@ class MqttInsightsService:
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),
             "distribution_weight": data.get("distribution_weight", 1.0),
+            "efficiency_window_weight": data.get("efficiency_window_weight", 1.0),
             "min_dc_output": data.get("min_dc_output"),
         }
 
@@ -538,42 +533,26 @@ class MqttInsightsService:
                     did,
                     cfg.ha_discovery_prefix,
                     addon_slug=self._hub_identifier(),
+                    efficiency_rotation=bool(data.get("efficiency_rotation", False)),
                 )
                 await client.publish(
                     topic, payload=json.dumps(payload).encode(), retain=True
                 )
 
-            need_discovery = consumer_key not in self._discovered_ct002_consumers
-            need_arp_retry = consumer_key in self._pending_arp
-
-            if need_discovery or need_arp_retry:
-                network_mac = ""
-                battery_ip = data.get("battery_ip", "")
-                if battery_ip:
-                    network_mac = await _arp_lookup(battery_ip)
-
-                if need_discovery:
-                    self._discovered_ct002_consumers.add(consumer_key)
-                    if battery_ip and not network_mac:
-                        self._pending_arp.add(consumer_key)
-                    await self._publish_bridge(client, cfg)
-
-                if network_mac:
-                    self._pending_arp.discard(consumer_key)
-
-                if need_discovery or network_mac:
-                    topic, payload = build_ct002_consumer_discovery(
-                        base,
-                        did,
-                        cid,
-                        cfg.ha_discovery_prefix,
-                        device_type=data.get("device_type", ""),
-                        network_mac=network_mac,
-                        battery_ip=battery_ip,
-                    )
-                    await client.publish(
-                        topic, payload=json.dumps(payload).encode(), retain=True
-                    )
+            if consumer_key not in self._discovered_ct002_consumers:
+                self._discovered_ct002_consumers.add(consumer_key)
+                await self._publish_bridge(client, cfg)
+                topic, payload = build_ct002_consumer_discovery(
+                    base,
+                    did,
+                    cid,
+                    cfg.ha_discovery_prefix,
+                    device_type=data.get("device_type", ""),
+                    efficiency_rotation=bool(data.get("efficiency_rotation", False)),
+                )
+                await client.publish(
+                    topic, payload=json.dumps(payload).encode(), retain=True
+                )
 
     async def _handle_ct002_remove(
         self,
@@ -588,7 +567,6 @@ class MqttInsightsService:
         avail_topic = f"{base}/ct002/{did}/consumer/{cid}/availability"
         await client.publish(avail_topic, payload=b"offline", retain=True)
         self._discovered_ct002_consumers.discard(consumer_key)
-        self._pending_arp.discard(consumer_key)
         await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_event(
@@ -843,6 +821,34 @@ class MqttInsightsService:
                 consumer_id,
                 weight,
             )
+        elif field == "efficiency_window_weight":
+            # HA surfaces this as a percentage (0-100 %); convert to the internal
+            # 0-1 fraction before dispatching.
+            try:
+                pct = float(payload)
+            except ValueError:
+                logger.warning(
+                    "Invalid efficiency_window_weight value for %s/%s: %r",
+                    device_id,
+                    consumer_id,
+                    payload,
+                )
+                return
+            if not math.isfinite(pct) or not 0.0 <= pct <= 100.0:
+                logger.warning(
+                    "Out-of-range efficiency_window_weight for %s/%s: %s",
+                    device_id,
+                    consumer_id,
+                    pct,
+                )
+                return
+            self._dispatch(
+                self._efficiency_window_weight_handlers,
+                "efficiency_window_weight",
+                device_id,
+                consumer_id,
+                pct / 100.0,
+            )
         elif field == "min_dc_output":
             try:
                 min_dc = float(payload)
@@ -887,6 +893,25 @@ class MqttInsightsService:
                     logger.exception("Rotation handler error for device %s", device_id)
             else:
                 logger.debug("No rotation handler for device %s", device_id)
+        if "active_control" in cmd:
+            value = cmd["active_control"]
+            if not isinstance(value, bool):
+                logger.warning(
+                    "Invalid active_control value for device %s: %r",
+                    device_id,
+                    value,
+                )
+                return
+            ac_handler = self._active_control_handlers.get(device_id)
+            if ac_handler:
+                try:
+                    ac_handler(value)
+                except Exception:
+                    logger.exception(
+                        "Active control handler error for device %s", device_id
+                    )
+            else:
+                logger.debug("No active_control handler for device %s", device_id)
 
     # ── Powermeter health ─────────────────────────────────────────────
 

@@ -7,10 +7,10 @@ the matching `config.ini` section.**
 These sections only cover the *source* of the grid-power reading. Options that
 apply to **any** powermeter — throttling, wait-for-fresh-push, EMA smoothing,
 deadband, Hampel outlier rejection — plus [Value
-Transformation](../README.md#value-transformation), the [PID
-Controller](../README.md#pid-controller), and running [Multiple
-Powermeters](../README.md#multiple-powermeters) are documented in the main
-[README](../README.md#configuration).
+Transformation](configuration.md#value-transformation), the [PID
+Controller](configuration.md#pid-controller), and running [Multiple
+Powermeters](configuration.md#multiple-powermeters) are documented in the
+[Configuration reference](configuration.md).
 
 > **Running on an ESP32 instead of the Python add-on?** See
 > [esphome-powermeters.md](esphome-powermeters.md) for the equivalent
@@ -34,6 +34,9 @@ Powermeters](../README.md#multiple-powermeters) are documented in the main
 - [HomeWizard](#homewizard)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway)
 - [SMA Energy Meter](#sma-energy-meter)
+- [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
+- [Fronius Smart Meter](#fronius-smart-meter)
+- [Tibber Pulse](#tibber-pulse)
 - [Script](#script)
 - [SML](#sml)
 
@@ -411,6 +414,107 @@ SERIAL_NUMBER = 0
 # INTERFACE = 192.168.1.10
 # THROTTLE_INTERVAL = 0
 ```
+
+## FRITZ!Smart Energy 250
+
+Reads grid power from an [AVM FRITZ!Smart Energy 250](https://fritz.com/en/products/fritz-smart-energy-250-20003088) smart-meter read head. The read head pairs with a FRITZ!Box over DECT and clips onto a digital electricity meter; AstraMeter polls the FRITZ!Box's [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf) (`getdevicelistinfos`) for the current reading.
+
+> **⚠️ Power the read head over USB.** On battery the read head only refreshes its reading roughly **every 2 minutes** — far too slow for AstraMeter's ~1 s control loop, so battery balancing **will not work** (the batteries would be steered from a reading that's minutes stale). Connect the read head to USB power, which raises the update rate to ~10 s and makes it usable. Even at 10 s it's on the slow side; a meter that updates every second (e.g. SML/P1, Shelly, SMA) gives noticeably tighter control.
+
+```ini
+[FRITZ]
+HOST = fritz.box
+USER = smarthome
+PASSWORD = your-fritzbox-password
+AIN = 12345 0123456
+# Reach the box over HTTPS (default False = http); FRITZ!Box certs are self-signed
+# HTTPS = False
+# VERIFY_SSL = True
+# TIMEOUT = 10.0
+# Power the read head via USB: on battery it only updates ~every 2 min, too slow
+# for control. USB raises that to ~10 s, which this throttle matches.
+THROTTLE_INTERVAL = 10
+```
+
+**Authentication.** Create a FRITZ!Box user with the **Smart Home** permission under *Home Network → FRITZ!Box Users* and put its name/password in `USER`/`PASSWORD`. AstraMeter logs in through `login_sid.lua` (supporting both the PBKDF2 and legacy MD5 challenge) and reuses the session, re-authenticating automatically if the box expires it.
+
+**AIN.** Find the AIN under *Home Network → SmartHome* (open the device's detail/edit view). The read head exposes two sub-units under that base AIN: `-1` (*Strombezug* / grid import) and `-2` (*Einspeisung* / feed-in). Both report the **signed** instantaneous power (positive = import, negative = feed-in), so AstraMeter reads the `-1` branch as net grid power and appends `-1` automatically when no suffix is given. Spaces in the AIN are optional.
+
+**Update rate.** USB power is effectively required (see the warning above): the ~2 min battery cadence is too slow for battery control, while USB raises it to ~10 s. `THROTTLE_INTERVAL = 10` then matches that USB cadence so AstraMeter doesn't hammer the box between fresh readings.
+
+## Fronius Smart Meter
+
+Reads a [Fronius Smart Meter](https://www.fronius.com/) through a Fronius
+inverter's local [Solar API](https://www.fronius.com/en/solar-energy/installers-partners/technical-data/all-products/system-monitoring/open-interfaces/fronius-solar-api-json-). AstraMeter polls `GetMeterRealtimeData.cgi` and reads the signed
+`PowerReal_P_Sum` (positive = grid import, negative = feed-in) — no token or
+login is required on the local network.
+
+```ini
+[FRONIUS]
+IP = 192.168.1.130
+# Solar API meter device id; 0 is the first/only meter (default)
+# DEVICE_ID = 0
+```
+
+**Sign.** `PowerReal_P_Sum` is reported signed, with positive = consumption from
+the grid. If your readings come out reversed, flip them with the global
+`POWER_MULTIPLIER = -1`.
+
+**Per-phase.** By default the single signed sum is used. Set `PER_PHASE = True`
+to report the three per-phase real powers (`PowerReal_P_Phase_1..3`) as L1/L2/L3
+instead:
+
+```ini
+[FRONIUS]
+IP = 192.168.1.130
+PER_PHASE = True
+```
+
+> ⚠️ Only enable `PER_PHASE` if your meter reports **signed** per-phase power.
+> Several meter firmwares report `PowerReal_P_Phase_*` *unsigned* (always
+> positive), which would make exported power read as imported on each phase. If
+> in doubt, leave it off and use the always-signed sum.
+
+## Tibber Pulse
+
+Reads a [Tibber Pulse](https://tibber.com/) locally through the **Pulse Bridge**,
+with no dependency on the Tibber cloud. AstraMeter polls the bridge's
+`/data.json` endpoint (HTTP Basic auth) and decodes the meter's SML telegram on
+the fly, so this works with the SML smart meters the Pulse IR head is attached
+to.
+
+```ini
+[TIBBER_PULSE]
+IP = 192.168.1.140
+# Username is always "admin"; the password is the nine-character code printed on
+# the bridge (with the dash), e.g. AD56-54BA
+PASSWORD = AD56-54BA
+# Optional: node id (see http://<bridge>/nodes/); defaults to 1
+# NODE_ID = 1
+# Optional: override the Basic-auth user (defaults to "admin")
+# USER = admin
+## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
+# OBIS_POWER_CURRENT = 0100100700ff
+# OBIS_POWER_L1 = 0100240700ff
+# OBIS_POWER_L2 = 0100380700ff
+# OBIS_POWER_L3 = 01004c0700ff
+```
+
+**Enable the local API first.** In the bridge's web UI open the *params* page, set
+`webserver-force-enable` to `true`, save, and **Store params to flash**. Without
+this the `/data.json` endpoint is not served.
+
+**Multi-phase.** Like the [SML](#sml) source, if the meter reports per-phase
+active power for L1–L3 those three values are used; otherwise the aggregate
+register is used as a single reading. Override the OBIS codes only if your meter
+uses different registers.
+
+**Update rate.** SML meters refresh roughly every few seconds, so a
+`THROTTLE_INTERVAL` of `2`–`3` avoids hammering the bridge between fresh
+telegrams.
+
+**Sign.** Power is signed (positive = import, negative = feed-in). If your
+readings are reversed, flip them with the global `POWER_MULTIPLIER = -1`.
 
 ## Script
 

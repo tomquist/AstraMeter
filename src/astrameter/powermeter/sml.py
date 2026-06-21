@@ -173,6 +173,34 @@ class Sml(Powermeter):
         return sml_frame
 
 
+def parse_sml_powers(
+    data: bytes,
+    obis_current: str = _OBIS_POWER_CURRENT,
+    obis_l1: str = _OBIS_POWER_L1,
+    obis_l2: str = _OBIS_POWER_L2,
+    obis_l3: str = _OBIS_POWER_L3,
+) -> list[int] | None:
+    """Decode a complete SML telegram (bytes) into instantaneous watts.
+
+    Returns the per-phase (``[L1, L2, L3]``) or aggregate (``[W]``) power list,
+    or ``None`` if no complete, valid SML frame could be parsed from *data*.
+    Used by sources that fetch a whole telegram at once (e.g. the Tibber Pulse
+    Bridge HTTP API) rather than streaming from a serial port.
+    """
+    stream = SmlStreamReader()
+    stream.add(data)
+    try:
+        sml_frame = stream.get_frame()
+    except smllib.errors.SmlLibException as e:
+        logger.debug("failed to parse SML telegram: %s", e)
+        return None
+    if sml_frame is None:
+        return None
+    return EnergyStats.from_sml_frame(
+        sml_frame, obis_current, obis_l1, obis_l2, obis_l3
+    ).powers
+
+
 def parse_sml_obis_config(
     section: str,
     config: configparser.ConfigParser,

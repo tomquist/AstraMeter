@@ -1,7 +1,7 @@
 # Powermeter Configuration Reference (ESPHome external component)
 
 When you run AstraMeter as the [ESPHome external
-component](../README.md#esphome-external-component-run-on-an-esp32) on an ESP32,
+component](installation/esphome.md) on an ESP32,
 the `ct002:` block does **not** talk to your meter directly. Instead it consumes
 **any ESPHome `sensor`** that reports grid power in watts. So "configuring a
 powermeter" here means: *give ESPHome a sensor that reads your meter, then point
@@ -24,7 +24,7 @@ full board config). What's shown is complete for the meter → emulator wiring.
 
 Per-phase calibration/throttling (`offset:`, `multiply:`, `throttle:`) goes in
 `filters:` **on the sensor**, not in `ct002:` — see the
-[main README note](../README.md#esphome-external-component-run-on-an-esp32).
+[ESPHome installation note](installation/esphome.md#one-important-divergence-from-the-python-emulator).
 Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 > The polling/lambda examples are **illustrative**. ESPHome's `http_request`,
@@ -59,6 +59,9 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [HomeWizard](#homewizard) — 🟠 Alternate (local v1 HTTP, or native P1)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway) — 🔴 Not yet available
 - [SMA Energy Meter](#sma-energy-meter) — 🔴 Not yet available
+- [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
+- [Fronius Smart Meter](#fronius-smart-meter) — 🔵 Generic
+- [Tibber Pulse](#tibber-pulse) — 🟠 Alternate (native SML / community component)
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
 > an ESP32 can't run a host shell command — so it is intentionally omitted here.
@@ -83,7 +86,7 @@ family, RPC `apower`):
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -120,7 +123,7 @@ poll, all three phases on `ct002:`:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -186,7 +189,7 @@ Tasmota answers `GET /cm?cmnd=status%2010` with sensor JSON nested under
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -229,7 +232,7 @@ returning OBIS keys; grid power is `1.7.0` (import) minus `2.7.0` (export):
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -271,7 +274,7 @@ ct002:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -312,7 +315,7 @@ returns a JSON array (`GET /getPlainValue/<id>` returns a bare number):
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -358,7 +361,7 @@ required for this source):
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 api:        # native API link to Home Assistant is required for this source
@@ -387,7 +390,7 @@ vzlogger's HTTP interface serves `GET /<uuid>` with the latest tuple at
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -436,7 +439,7 @@ The latter, complete:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 api:        # required to import the other node's entity from Home Assistant
@@ -460,7 +463,7 @@ You can also subscribe over [MQTT](#mqtt) if both nodes share a broker.
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -500,7 +503,7 @@ sensor over an RS485 transceiver wired to the ESP:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 uart:
@@ -548,7 +551,7 @@ ct002:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 mqtt:
@@ -572,7 +575,7 @@ sensor:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 mqtt:
@@ -607,7 +610,7 @@ set the lambda to your JSON field. Headers and basic auth are supported on the
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -650,7 +653,7 @@ UART RX pin, then select the OBIS register:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 uart:
@@ -695,7 +698,7 @@ register map — `address` / `value_type` below are placeholders):
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 uart:
@@ -742,7 +745,7 @@ API (TLS + token), which has no ESPHome component. Easiest ESP path: enable
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.1.2
+  - source: github://tomquist/astrameter@2.2.0
     components: [ct002]
 
 http_request:
@@ -818,3 +821,159 @@ network interface and parses the Speedwire datagram (per-phase
 Python implementation in `src/astrameter/powermeter/sma_energy_meter.py`, and the
 protocol as implemented by [sma2mqtt](https://github.com/vindolin/sma2mqtt) and
 [SMA-Speedwire](https://github.com/J0B10/SMA-Speedwire).
+
+## FRITZ!Smart Energy 250
+
+**Tier: 🟠 Alternate.** The Python `[FRITZ]` source reads the read head through
+the FRITZ!Box [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf):
+it logs in with the `login_sid.lua` **challenge-response** (PBKDF2-SHA256, or the
+legacy MD5 challenge), then parses the **XML** `getdevicelistinfos` device list.
+Stock ESPHome `http_request` can't comfortably do the PBKDF2 session handshake or
+parse XML (the built-in parser is JSON-only), so there is no direct ESP port.
+
+The read head only speaks DECT to the FRITZ!Box, so there's no local protocol to
+read on the ESP either. The practical path is to let **Home Assistant** read it
+via the built-in [AVM FRITZ!SmartHome](https://www.home-assistant.io/integrations/fritzbox/)
+integration — which surfaces the read head's power as a sensor entity — and then
+subscribe to that entity on the ESP with the native
+[`homeassistant`](https://esphome.io/components/sensor/homeassistant/) sensor
+platform (the same bridge the [HomeAssistant](#homeassistant) source uses):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@2.2.0
+    components: [ct002]
+
+api:        # native API link to Home Assistant is required for this source
+
+sensor:
+  - platform: homeassistant
+    id: grid_l1
+    entity_id: sensor.fritz_smart_energy_power   # the FRITZ!SmartHome power entity
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+The FRITZ!Smart Energy 250 is single-phase, so only `grid_l1` is needed. If your
+Home Assistant exposes import and export as separate entities (no signed net
+sensor), use a [template sensor](https://www.home-assistant.io/integrations/template/)
+in HA to subtract them (`import − export`) and point `entity_id` at that.
+
+**Native alternative:** the read head clips onto your existing electricity meter.
+If that meter has an SML/D0 IR output or a P1 port, you can skip the FRITZ
+hardware entirely and read it directly on the ESP with the native [`sml`](#sml)
+or [`dsmr`](https://esphome.io/components/sensor/dsmr/) component.
+
+*To implement (direct):* an external component that performs the `login_sid.lua`
+challenge-response (PBKDF2/MD5) against the FRITZ!Box, GETs
+`getdevicelistinfos`, and extracts the configured AIN's `<powermeter><power>`
+(mW, signed) from the XML — re-authenticating on the 403 the box returns for an
+expired SID. Reference: the AstraMeter Python implementation in
+`src/astrameter/powermeter/fritz.py`.
+
+## Fronius Smart Meter
+
+**Tier: 🔵 Generic.** A Fronius inverter exposes its attached smart meter over
+the local Solar API. Poll `GET /solar_api/v1/GetMeterRealtimeData.cgi` and read
+the signed `PowerReal_P_Sum` (positive = grid import, negative = feed-in):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@2.2.0
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.130/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=0
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["Body"]["Data"]["PowerReal_P_Sum"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+If your readings have the wrong sign, add a `multiply: -1` filter on the sensor.
+
+For three-phase, add `grid_l2` / `grid_l3` template sensors and publish the
+per-phase fields from the same poll (only if your meter reports **signed**
+per-phase power — some firmwares report it unsigned, which breaks export):
+
+```yaml
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    JsonObject data = root["Body"]["Data"];
+                    id(grid_l1).publish_state(data["PowerReal_P_Phase_1"]);
+                    id(grid_l2).publish_state(data["PowerReal_P_Phase_2"]);
+                    id(grid_l3).publish_state(data["PowerReal_P_Phase_3"]);
+                    return true;
+                  });
+```
+
+…and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`.
+
+## Tibber Pulse
+
+**Tier: 🟠 Alternate.** The Python `[TIBBER_PULSE]` source fetches a **binary SML
+telegram** from the Pulse Bridge's `/data.json` over HTTP basic auth, then decodes
+it. Stock ESPHome's `http_request`/`json` can't decode binary SML, so there is no
+direct port of the bridge API.
+
+The Pulse IR head just reads your meter's SML output, so the clean ESP path is to
+**read the meter directly** with the native
+[`sml`](https://esphome.io/components/sml/) component via your own IR head —
+skipping the bridge entirely (the same approach as the [SML](#sml) source):
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@2.2.0
+    components: [ct002]
+
+uart:
+  id: uart_bus
+  rx_pin: GPIO16
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+sml:
+  id: mysml
+  uart_id: uart_bus
+
+sensor:
+  - platform: sml
+    id: grid_l1
+    sml_id: mysml
+    obis_code: "1-0:16.7.0"     # aggregate active power
+    unit_of_measurement: W
+    # per-phase instead: 1-0:36.7.0 (L1), 1-0:56.7.0 (L2), 1-0:76.7.0 (L3)
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+**Bridge alternative:** if you'd rather keep the Pulse Bridge, a community
+external component (e.g. `tibber_pulse_local_esphome`) can query it on the ESP
+and decode the SML; point its resulting power sensor at `grid_l1`.

@@ -40,8 +40,7 @@ def build_ct002_consumer_discovery(
     consumer_id: str,
     ha_prefix: str,
     device_type: str = "",
-    network_mac: str = "",
-    battery_ip: str = "",
+    efficiency_rotation: bool = False,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     safe_cid = _sanitize_id(consumer_id)
@@ -215,6 +214,32 @@ def build_ct002_consumer_discovery(
         "entity_category": "config",
     }
 
+    # Efficiency window weight number — how much of the efficiency rotation
+    # window this battery participates in, as a percentage.  100 % is neutral
+    # (full participation); 0 % skips the battery for efficiency (parked while
+    # limiting); intermediate values give it proportionally less active time.
+    # Surfaced as a percentage; the internal value is a 0-1 fraction.  Only
+    # meaningful when efficiency rotation is enabled (``min_efficient_power >
+    # 0``); without it every battery stays active, so don't surface the entity.
+    if efficiency_rotation:
+        components["efficiency_window_weight"] = {
+            "platform": "number",
+            "unique_id": f"{uid_prefix}_efficiency_window_weight",
+            "name": "Efficiency Window Weight",
+            "unit_of_measurement": "%",
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "mode": "slider",
+            "state_topic": state_topic,
+            "value_template": (
+                "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}"
+            ),
+            "command_topic": f"{state_topic}/efficiency_window_weight/set",
+            "retain": True,
+            "entity_category": "config",
+        }
+
     # Min DC Output number — minimum discharge (W) to keep a DC battery's
     # external inverter from switching off at 0 W.  Only surfaced for batteries
     # where it has an effect (no built-in inverter, no AC input — the B2500
@@ -247,18 +272,11 @@ def build_ct002_consumer_discovery(
         "manufacturer": "Marstek",
         "via_device": meter_identifier,
     }
-    connections: list[list[str]] = []
-    if re.fullmatch(r"[0-9a-f]{12}", mac_slug):
-        bt_mac = ":".join(
-            mac_slug[i : i + 2] for i in range(0, len(mac_slug), 2)
-        ).upper()
-        connections.append(["bluetooth", bt_mac])
-    if network_mac:
-        connections.append(["mac", network_mac])
-    if battery_ip:
-        connections.append(["ip", battery_ip])
-    if connections:
-        device_info["connections"] = connections
+    # No device ``connections`` are advertised: HA treats a connection as a
+    # global cross-integration identity and merges devices that share one, so
+    # advertising the battery's MAC folded this consumer into the battery device
+    # (owned by e.g. hm2mqtt) depending on MQTT registration order (issue #438).
+    # Identify solely via the namespaced ``identifiers`` + ``via_device``.
     if device_type:
         device_info["model_id"] = device_type
 
@@ -364,6 +382,7 @@ def build_ct002_device_discovery(
     device_id: str,
     ha_prefix: str,
     addon_slug: str | None = None,
+    efficiency_rotation: bool = False,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_ct002_{safe_dev}"
@@ -381,15 +400,26 @@ def build_ct002_device_discovery(
             "state_topic": state_topic,
             "value_template": "{{ value_json.smooth_target }}",
         },
+        # Active Control switch — on (default) computes per-battery targets; off
+        # falls back to relay mode. The command is published retained so an "off"
+        # choice survives an AstraMeter restart (the broker redelivers it on
+        # reconnect, like the per-consumer settings).
         "active_control": {
-            "platform": "binary_sensor",
+            "platform": "switch",
             "unique_id": f"{uid_prefix}_active_control",
             "name": "Active Control",
-            "device_class": "running",
             "state_topic": state_topic,
             "value_template": "{{ value_json.active_control }}",
-            "payload_on": "True",
-            "payload_off": "False",
+            "command_topic": f"{base_topic}/ct002/{device_id}/set",
+            "command_template": (
+                '{"active_control": {{ "true" if value == "ON" else "false" }}}'
+            ),
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": True,
+            "entity_category": "config",
         },
         "consumer_count": {
             "platform": "sensor",
@@ -399,15 +429,20 @@ def build_ct002_device_discovery(
             "value_template": "{{ value_json.consumer_count }}",
             "entity_category": "diagnostic",
         },
-        "force_rotation": {
+    }
+
+    # The Force Rotation button only does anything when efficiency rotation is
+    # enabled (``min_efficient_power > 0``); without it the balancer keeps every
+    # battery active and there's nothing to rotate, so don't surface the button.
+    if efficiency_rotation:
+        components["force_rotation"] = {
             "platform": "button",
             "unique_id": f"{uid_prefix}_force_rotation",
             "name": "Force Rotation",
             "command_topic": f"{base_topic}/ct002/{device_id}/set",
             "payload_press": '{"force_rotation": true}',
             "entity_category": "config",
-        },
-    }
+        }
 
     device_info: dict = {
         "identifiers": node_id,

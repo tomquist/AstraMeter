@@ -45,15 +45,29 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
+        with:
+          # Parallel matrix jobs race to reserve the same binfmt cache key,
+          # which only logs a noisy "Unable to reserve cache" warning. The
+          # binfmt image is tiny, so skip caching it to avoid the race.
+          cache-image: false
       - id: lower-repo
+        # Pass inputs via env (not ${{ }} interpolation) to avoid template
+        # injection, and reject control characters so a crafted suffix can't
+        # inject extra $GITHUB_OUTPUT keys.
+        env:
+          IMAGE_SUFFIX: ${{ inputs.image-suffix }}
         run: |
-          echo "IMAGE_NAME=${GITHUB_REPOSITORY@L}${{ inputs.image-suffix }}" >> $GITHUB_OUTPUT
+          if printf '%s' "$IMAGE_SUFFIX" | grep -q '[[:cntrl:]]'; then
+            echo "Invalid image-suffix: control characters are not allowed" >&2
+            exit 1
+          fi
+          printf 'IMAGE_NAME=%s%s\n' "${GITHUB_REPOSITORY@L}" "$IMAGE_SUFFIX" >> "$GITHUB_OUTPUT"
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ inputs.registry }}/${{ steps.lower-repo.outputs.IMAGE_NAME }}
           tags: |
@@ -68,10 +82,10 @@ jobs:
           flavor: |
             latest=${{ github.ref == 'refs/heads/main' }}
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Log in to Container registry
         if: inputs.push
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ inputs.registry }}
           username: ${{ github.actor }}
@@ -79,7 +93,7 @@ jobs:
       - name: Build and push by digest
         id: build
         if: inputs.push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
           platforms: ${{ inputs.platform }}
@@ -95,7 +109,7 @@ jobs:
       - name: Build (no push)
         id: build-no-push
         if: inputs.push == false
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
           platforms: ${{ inputs.platform }}
@@ -120,7 +134,7 @@ jobs:
           echo "name=$SAFE_PLATFORM" >> $GITHUB_OUTPUT
       - name: Upload digest
         if: inputs.push
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.digest-prefix }}${{ steps.platform.outputs.name }}
           path: /tmp/digests/*

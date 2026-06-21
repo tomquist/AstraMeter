@@ -71,6 +71,63 @@ def _report_weight(report: dict) -> float:
     return 1.0 if weight is None else float(weight)
 
 
+def _efficiency_window_weight(report: dict) -> float:
+    """Per-battery efficiency-rotation weight from a report dict (default 1.0).
+
+    Scales how much of the efficiency rotation window a battery participates in:
+    ``1.0`` = full participation (holds an active efficiency slot for the whole
+    ``efficiency_rotation_interval``), ``0.0`` = skipped while efficiency
+    limiting is active (parked, as long as enough non-zero-weight batteries can
+    fill the active slots), intermediate = proportionally less active time. A
+    missing key (or an explicit ``None``) means "neutral" and maps to 1.0; the
+    value is clamped to ``[0, 1]``.
+    """
+    weight = report.get("efficiency_window_weight", 1.0)
+    if weight is None:
+        return 1.0
+    return max(0.0, min(1.0, float(weight)))
+
+
+# Ramp pacing (issue #458): the pace cap only grows once the battery's reported
+# output has moved at least this far in the commanded direction since the last
+# paced poll; a non-moving battery (startup delay, saturation) keeps the base
+# step. The threshold sits below the firmware's worst-case 10 W step on a
+# constant reading (issue #469) — at 20 W the loop locked at 10 W/poll for a
+# whole step response — while still rejecting a genuinely stalled battery.
+PACE_TRACKING_DELTA_W = 5.0
+PACE_GROWTH_FACTOR = 2.0
+# Reference poll interval the pace caps are defined against: pace_base_step /
+# pace_max_step are watts per reference second, scaled by the consumer's observed
+# inter-poll time so a fast poller can't integrate the same per-poll reading into
+# a higher slew. Clamped at 1.0 so slow pollers keep the per-poll cap (widening it
+# would re-introduce the stale-feedback overshoot pacing exists to bound).
+PACE_REFERENCE_DT = 1.0
+
+# Adaptive grid-state predictor (see BalancerConfig.grid_predict_trust and
+# LoadBalancer._predict_control_grid). Meter trust is bounded to
+# [PRED_TRUST_MIN, PRED_TRUST_MAX] and adapted per fresh sample whose innovation
+# clears PRED_INNOVATION_GATE_W (above the noise floor). The raise is additive, so
+# trust only climbs under a sustained same-sign innovation run (a real step); the
+# shrink is multiplicative, so a single sign flip (latency-driven hunting) collapses
+# it. That asymmetry tracks real steps fast yet stays steady against a hunting load
+# with no per-meter tuning; the steering-evaluation suite tunes the pair.
+PRED_TRUST_MIN = 0.15
+PRED_TRUST_MAX = 0.9
+PRED_TRUST_RAISE_STEP = 0.2
+PRED_TRUST_SHRINK = 0.5
+PRED_INNOVATION_GATE_W = 40.0
+
+# Steady-import trim (see BalancerConfig.import_trim_w and
+# LoadBalancer._apply_import_trim). The trim engages only once the predicted grid
+# has held inside the small-import band (0, IMPORT_TRIM_GATE_W) for
+# IMPORT_TRIM_DWELL consecutive fresh samples — long enough to be a genuine steady
+# state, not a load step approaching zero, and never on a stale meter. The gate
+# sits above the firmware deadband/hold window (so a few watts of residual import
+# is caught) but below the large-disturbance regime (so a saturated/empty battery,
+# which leaves a larger import, is left alone).
+IMPORT_TRIM_GATE_W = 120.0
+IMPORT_TRIM_DWELL = 6
+
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active.  Covers the physical ramp-up time of the
@@ -183,7 +240,10 @@ class BalancerConfig:
 
     fair_distribution: bool = True
     balance_gain: float = 0.2
-    balance_deadband: float = 15
+    # Share-rebalance deadband.  Kept above the battery firmware's own ±20 W
+    # input deadband so the balancer never chases share errors the battery
+    # would ignore anyway (issue #458).
+    balance_deadband: float = 25
     error_boost_threshold: float = 150
     error_boost_max: float = 0.5
     error_reduce_threshold: float = 20
@@ -194,11 +254,82 @@ class BalancerConfig:
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
+    # EMA factor for the household-demand estimate that decides how many batteries
+    # stay active (see ``_compute_efficiency_deprioritized``). The demand is read
+    # from the noisy meter, so without smoothing a jittery load crosses the
+    # ``min_efficient_power`` threshold every few polls and thrashes a battery
+    # active/deprioritized — a fade transition and probe handoff each time, for no
+    # tracking benefit. Low-pass filtering makes the active-set decision follow
+    # *sustained* demand; the regulation loop still acts on the raw grid, so
+    # tracking is unaffected. ``1.0`` disables the smoothing (react to every sample).
+    efficiency_demand_alpha: float = 0.1
     # Minimum net discharge (W) to hold an external-inverter DC battery at so
     # its inverter doesn't switch off at 0 W and sleep.  0 disables.  Only
     # applied to batteries selected by ``_needs_dc_output_floor`` (B2500
     # family) unless overridden per-device.  See issue #425.
     min_dc_output: float = 0
+    # Ramp pacing for the auto path (issue #458). The battery firmware runs its
+    # own gain-scheduled ramp on the reading we send (stepping up to ~400 W/poll
+    # once an error persists); with a poll or two of feedback lag an uncapped
+    # reading lets that ramp overshoot by hundreds of watts. Pacing clamps each
+    # consumer's sent reading to a per-consumer cap that starts at
+    # ``pace_base_step`` (the firmware's first-step gain), grows x2 toward
+    # ``pace_max_step`` only while the battery is observed tracking the command,
+    # follows the error back down, and resets on direction reversal. The defaults
+    # trade a little settling speed for much lower worst-case overshoot/travel (the
+    # grid-state predictor below keeps real-step reaction quick despite the lower
+    # cap). ``pace_base_step = 0`` disables.
+    pace_base_step: float = 30
+    pace_max_step: float = 100
+    # Oscillation-gated damping (issue #473).  Under meter latency the gain-1
+    # grid-following residual limit-cycles: the controller keeps reacting to a
+    # stale reading that doesn't yet reflect its last command, so it overshoots
+    # and the grid hunts continuously.  We track an EMA of how often a
+    # consumer's residual *reverses sign* (the signature of hunting, not of a
+    # genuine load step, which holds one sign) and scale the residual down by up
+    # to ``osc_damp_max`` as that score rises.  A clean step keeps full gain
+    # (sign constant -> score ~0 -> factor ~1), so step reaction is unchanged;
+    # only a hunting loop is damped.  ``osc_damp_max = 0`` disables.
+    osc_damp_max: float = 0.95
+    osc_damp_alpha: float = 0.3
+    osc_damp_decay: float = 0.05
+    # Only near-null corrections are damped: a residual above this magnitude is
+    # a genuine demand step (kettle, solar ramp), not hunting, so it passes
+    # through at full gain and reacts immediately.  Keeps the damper from
+    # bleeding a real step response just because the loop was hunting before it.
+    osc_damp_threshold: float = 300
+    # Adaptive grid-state predictor. The controller acts on a *predicted* grid
+    # rather than the raw meter: every poll the prediction is advanced by the
+    # pool's own freshly-reported output change, and on each fresh meter sample it
+    # is pulled toward the reading by an *adaptive* trust. Battery reports are
+    # fresher than the (poll- and latency-delayed) grid meter, so crediting the
+    # pool's just-delivered output reconstructs the grid the meter has not yet
+    # shown — the controller stops re-issuing a correction already in flight, the
+    # dominant source of overshoot and latency-driven limit-cycling. The trust is
+    # learned online from the innovation's sign pattern (see
+    # ``_predict_control_grid``), so the loop self-tunes to each meter's latency.
+    # ``0`` disables it (act on the raw meter); a positive value only *seeds* the
+    # self-adapting trust, so ``0.5`` is a neutral default.
+    grid_predict_trust: float = 0.5
+    # Deadband concentration (opt-in). Near steady state a small grid error split
+    # N ways can leave each battery's share below the firmware's ~20 W input
+    # deadband, so none of them correct and the pool tolerates ~Nx the residual a
+    # single battery would. When the absolute (predicted) grid error is below this
+    # threshold and more than one battery is active on the same phase, the whole
+    # correction is handed to the single most-active battery so it clears its
+    # deadband — cutting steady-state avoidable import/export at the cost of more
+    # setpoint churn on that battery (see ``_compute_auto_target``). ``0`` disables.
+    concentrate_deadband: float = 60.0
+    # Steady-import trim (W). Every Marstek firmware parks the grid a few watts to
+    # the *import* side of zero in steady state (deadband + small-import hold),
+    # leaving load the battery could have supplied to be imported at the retail
+    # tariff. When the predicted grid has held inside a small-import band for a few
+    # consecutive polls (a genuine steady state, not a transient), the control grid
+    # is nudged up by this many watts so the firmware discharges to cover that
+    # residual. The dwell keeps it inert during load steps (never deepening
+    # overshoot) and the band gate keeps it clear of a saturated/empty pack. ``0``
+    # disables. See ``LoadBalancer._apply_import_trim``.
+    import_trim_w: float = 15.0
 
     def __post_init__(self) -> None:
         def _clamp(name: str, lo: float, hi: float) -> None:
@@ -219,7 +350,17 @@ class BalancerConfig:
         _clamp("efficiency_rotation_interval", 1, float("inf"))
         _clamp("efficiency_fade_alpha", 0.01, 1.0)
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
+        _clamp("efficiency_demand_alpha", 0.01, 1.0)
         _clamp("min_dc_output", 0, float("inf"))
+        _clamp("pace_base_step", 0, float("inf"))
+        _clamp("pace_max_step", self.pace_base_step, float("inf"))
+        _clamp("osc_damp_max", 0.0, 1.0)
+        _clamp("osc_damp_alpha", 0.0, 1.0)
+        _clamp("osc_damp_decay", 0.0, 1.0)
+        _clamp("osc_damp_threshold", 0.0, float("inf"))
+        _clamp("grid_predict_trust", 0.0, 1.0)
+        _clamp("concentrate_deadband", 0.0, float("inf"))
+        _clamp("import_trim_w", 0.0, float("inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +385,30 @@ class BalancerConsumerState:
     """Bundled per-consumer state owned by LoadBalancer."""
 
     last_target: float | None = None
+    # Absolute net-output target (NetOutputW currency) the control path
+    # intended for this consumer, recorded *before* wire pacing.  While
+    # ``last_target`` is the (paced) reading actually sent, ``last_intent``
+    # preserves the control direction — the cross-talk chrg/dchrg
+    # attribution uses it to filter involuntary outputs such as PV
+    # passthrough from a full battery (issue #376).
+    last_intent: float | None = None
     fade_weight: float = 1.0
+    # Ramp-pacing state (see BalancerConfig.pace_base_step): the current
+    # cap on the sent reading in W per reference second, the sign of the
+    # last paced reading, the battery's reported power at the last pacing
+    # step (used to detect whether it is tracking the command before
+    # growing the cap), and the wall-clock time of the last paced poll
+    # (0.0 = none yet) used to scale the per-poll clamp to the consumer's
+    # cadence.
+    pace_cap: float = 0.0
+    pace_sign: int = 0
+    pace_prev_reported: float | None = None
+    pace_last_at: float = 0.0
+    # Oscillation-gated damping (see BalancerConfig.osc_damp_max): accumulated
+    # reversal score (1.0 = sustained hunting, 0.0 = steady) and the sign of the
+    # last non-zero residual that fed it.
+    osc_score: float = 0.0
+    osc_last_sign: int = 0
     saturation_score: float = 0.0
     saturation_grace_until: float = 0.0
     saturation_grace_started_at: float = 0.0
@@ -455,6 +619,43 @@ class LoadBalancer:
         # Latch so the "surplus with no AC-chargeable battery" notice is
         # logged once per transition into that state, not every tick.
         self._all_dc_surplus_warned: bool = False
+        # Adaptive grid-state observer (see BalancerConfig.grid_predict_trust).
+        # ``_pred_grid`` is the estimate of the *instantaneous* grid the control
+        # path acts on; ``_pred_meter`` models what the *latent* meter currently
+        # reads (so a fresh reading's innovation isolates genuine disturbances
+        # from corrections still in flight); ``_pred_pool_output`` is the pool's
+        # last-seen reported output (its per-call delta advances both estimates);
+        # ``_pred_sample_id`` flags a genuinely fresh meter reading; and
+        # ``_pred_catchup`` is the online estimate of how fast the meter absorbs
+        # the pool's output (the learned meter responsiveness — see
+        # ``_predict_control_grid``).
+        self._pred_grid: float | None = None
+        self._pred_pool_output: float = 0.0
+        self._pred_sample_id: tuple | None = None
+        # Adaptive meter trust and the sign of the last significant innovation
+        # that drove it (see ``_predict_control_grid``).
+        self._pred_trust: float = 0.0
+        self._pred_innov_sign: int = 0
+        # Count of consecutive *fresh* meter samples the predicted grid has held
+        # inside the small-import band; gates the steady-import trim (see
+        # ``_apply_import_trim``).  ``_trim_sample_id`` is the last meter sample
+        # the trim acted on, used to tell a fresh reading from a repeated (stale /
+        # frozen) one.
+        self._steady_import_dwell: int = 0
+        self._trim_sample_id: tuple = ()
+        # Low-pass-filtered household-demand estimate for the efficiency
+        # active-set decision (see ``_compute_efficiency_deprioritized``); keeps
+        # meter noise from thrashing batteries in and out of the active pool.
+        self._demand_ema: float | None = None
+
+    @property
+    def efficiency_rotation_enabled(self) -> bool:
+        """True when efficiency rotation is active (``min_efficient_power > 0``).
+
+        When disabled the balancer keeps every battery in the active pool, so
+        there is nothing to rotate and the "Force Rotation" control is a no-op.
+        """
+        return self._cfg.min_efficient_power > 0
 
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
@@ -731,6 +932,7 @@ class LoadBalancer:
             probe.requested_power_abs = abs(desired_probe)
             reading = to_grid_reading(NetOutputW(desired_probe), probe_actual)
             state.last_target = reading
+            state.last_intent = desired_probe
             return self._split_by_phase(reading, {candidate_id: reports[candidate_id]})
 
         backup_weights = {
@@ -748,6 +950,7 @@ class LoadBalancer:
         reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
         reading = to_grid_reading(NetOutputW(desired), reported)
         state.last_target = reading
+        state.last_intent = desired
         return self._split_by_phase(reading, support_reports, backup_weights)
 
     # ------------------------------------------------------------------
@@ -814,6 +1017,7 @@ class LoadBalancer:
             reported = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
             reading = to_grid_reading(NetOutputW(consumer_mode.manual_value), reported)
             state.last_target = reading
+            state.last_intent = consumer_mode.manual_value
             return self._split_by_phase(reading, active_reports)
 
         # Auto-pool reports (exclude manual consumers)
@@ -853,6 +1057,13 @@ class LoadBalancer:
         """
         state = self._get_consumer(consumer_id)
         state.last_target = None
+        state.last_intent = None
+        state.pace_cap = 0.0
+        state.pace_sign = 0
+        state.pace_prev_reported = None
+        state.pace_last_at = 0.0
+        state.osc_score = 0.0
+        state.osc_last_sign = 0
         state.saturation_score = 0.0
         grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
@@ -898,6 +1109,15 @@ class LoadBalancer:
     def get_last_target(self, consumer_id: str) -> float | None:
         state = self._consumers.get(consumer_id)
         return state.last_target if state else None
+
+    def get_last_intent(self, consumer_id: str) -> float | None:
+        """Absolute net-output target intended for the consumer, pre-pacing.
+
+        ``None`` until the consumer has received its first instruction.  See
+        :attr:`BalancerConsumerState.last_intent`.
+        """
+        state = self._consumers.get(consumer_id)
+        return state.last_intent if state else None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -964,17 +1184,38 @@ class LoadBalancer:
         phase = (report.get("phase") or "A").upper()
         out = [0.0, 0.0, 0.0]
         out[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = reading
-        self._get_consumer(consumer_id).last_target = reading
+        state = self._get_consumer(consumer_id)
+        state.last_target = reading
+        state.last_intent = eff_min
         return out
 
-    def _steer_to_zero(self, consumer_id: str | None, reports: dict) -> list[float]:
-        """Drive a consumer's output to zero (``NetOutputW(0)``)."""
-        if consumer_id:
-            self._get_consumer(consumer_id).last_target = 0
+    def _steer_to_zero(
+        self, consumer_id: str | None, reports: dict, *, paced: bool = False
+    ) -> list[float]:
+        """Drive a consumer's output to zero (``NetOutputW(0)``).
+
+        With ``paced=True`` the wind-down reading goes through the ramp-pacing
+        cap like any other auto-path command.  The auto-pool callers
+        (deprioritized fade-out, charge-blind hold) use this: the battery
+        firmware applies a *negative* (charge-direction) reading in full in a
+        single cycle — its accelerating ramp only paces the discharge
+        direction — so an unpaced wind-down dumps a discharging consumer's
+        whole output in one poll, leaving the rest of the pool a step
+        disturbance the meter only reports a poll later (issue #469's
+        load-off import spikes).  Inactive consumers and the
+        ``min_efficient_power <= 0`` paths keep the one-shot behaviour: those
+        are user-initiated mode changes, not part of a closed-loop handoff.
+        """
         reported = parse_int(
             reports.get(consumer_id, {}).get("power", 0) if consumer_id else 0
         )
         reading = to_grid_reading(NetOutputW(0), reported)
+        if paced and consumer_id:
+            reading = self._pace_reading(consumer_id, reading, reported)
+        if consumer_id:
+            state = self._get_consumer(consumer_id)
+            state.last_target = reading if paced else 0
+            state.last_intent = 0
         if reading == 0:
             return [0, 0, 0]
         phase = (
@@ -1020,6 +1261,22 @@ class LoadBalancer:
         sample_id: tuple = (),
     ) -> list[float]:
         """Automatic allocation for auto-pool consumers."""
+        # Predicted grid the residual/fair-share control acts on (compensates
+        # for meter latency; see ``_predict_control_grid``).  Updated on every
+        # call so the running estimate stays continuous across the probe /
+        # fading / charge-blind early-return paths, which keep using the raw
+        # meter for their categorical (charge-territory, demand-sizing)
+        # decisions.  Only the steady residual loop below acts on the
+        # prediction.
+        # The trim integrates a steady-state bias, so it must only act on
+        # genuinely *fresh* meter samples (closed-loop feedback). A frozen / stale
+        # meter repeats its ``sample_id``; without this gate the trim would wind a
+        # blind bias the meter can never correct (e.g. through a probe handoff).
+        trim_fresh = sample_id != self._trim_sample_id
+        self._trim_sample_id = sample_id
+        control_grid = self._predict_control_grid(reports, grid_total, sample_id)
+        control_grid = self._apply_import_trim(control_grid, trim_fresh)
+
         saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
         num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
@@ -1113,7 +1370,7 @@ class LoadBalancer:
         # at 0 — don't fall through to the fair-share math where a residual
         # correction could leak a nonzero target.
         if consumer_id and consumer_id in charge_blind:
-            return self._steer_to_zero(consumer_id, reports)
+            return self._steer_to_zero(consumer_id, reports, paced=True)
 
         # --- Fading path ---
         if any_fading and consumer_id:
@@ -1121,7 +1378,7 @@ class LoadBalancer:
             fade_w = state.fade_weight
             reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
             if fade_w == 0.0:
-                return self._steer_to_zero(consumer_id, reports)
+                return self._steer_to_zero(consumer_id, reports, paced=True)
 
             total_battery = sum(
                 parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
@@ -1130,8 +1387,10 @@ class LoadBalancer:
             total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             reading = to_grid_reading(NetOutputW(desired), reported)
+            reading = self._pace_reading(consumer_id, reading, reported)
 
             state.last_target = reading
+            state.last_intent = desired
 
             return self._split_by_phase(reading, reports, eff_part)
 
@@ -1144,7 +1403,7 @@ class LoadBalancer:
             and consumer_id
             and faded_adjustments.get(consumer_id) == 0.0
         ):
-            return self._steer_to_zero(consumer_id, reports)
+            return self._steer_to_zero(consumer_id, reports, paced=True)
 
         # Fold the per-battery user weight into the effectiveness map so the
         # fair-share split honours the configured ratio.  ``eff_part`` stays the
@@ -1163,12 +1422,44 @@ class LoadBalancer:
         }
         total_effective = sum(share_part.values())
         fair_share = (
-            (grid_total / total_effective) * share_part.get(consumer_id, 1.0)
+            (control_grid / total_effective) * share_part.get(consumer_id, 1.0)
             if consumer_id and consumer_id in reports and total_effective > 0
-            else grid_total / num_consumers
+            else control_grid / num_consumers
         )
 
         cfg = self._cfg
+        # Deadband concentration (``concentrate_deadband``): hand the whole small
+        # correction to the most-active battery (deterministic id tiebreak, to
+        # match the C++ port) so it clears the firmware deadband, and bypass
+        # balance correction for this tick. Restricted to *participating*
+        # batteries (a charge-blind B2500 passing PV is most-active but can't
+        # absorb; zero-weight units were asked to take no share) all on the *same*
+        # phase (``control_grid`` sums phases, so concentrating across phases makes
+        # one battery hunt). Gated on ``fair_distribution``, being a fair-share
+        # strategy.
+        conc_ids = [
+            cid
+            for cid in reports
+            if cid not in charge_blind
+            and eff_part.get(cid, 0.0) > 0.1
+            and _report_weight(reports[cid]) > 0.0
+        ]
+        concentrate = False
+        if (
+            cfg.fair_distribution
+            and cfg.concentrate_deadband > 0
+            and len(conc_ids) > 1
+            and consumer_id in conc_ids
+            and 0 < abs(control_grid) < cfg.concentrate_deadband
+            and len({(reports[c].get("phase") or "A").upper() for c in conc_ids}) == 1
+        ):
+            designated = max(
+                conc_ids,
+                key=lambda c: (abs(parse_int(reports[c].get("power", 0))), c),
+            )
+            fair_share = control_grid if consumer_id == designated else 0.0
+            concentrate = True
+
         # ``fair_share`` / ``_balance_correction`` produce the residual: this
         # consumer's slice of the grid imbalance to fold into its current
         # output.  The absolute net-output target is therefore "what I report
@@ -1177,6 +1468,7 @@ class LoadBalancer:
             not cfg.fair_distribution
             or consumer_id is None
             or consumer_id not in reports
+            or concentrate
         ):
             residual = fair_share
         elif consumer_id in eff_part:
@@ -1187,9 +1479,12 @@ class LoadBalancer:
             residual = fair_share
 
         # Clamp sign disagreement: prevent the inverter from acting
-        # against the current grid direction.
-        if (grid_total < 0 and residual > 0) or (grid_total > 0 and residual < 0):
+        # against the current (predicted) grid direction.
+        if (control_grid < 0 and residual > 0) or (control_grid > 0 and residual < 0):
             residual = 0
+
+        if consumer_id:
+            residual = self._damp_oscillation(consumer_id, residual)
 
         reported = (
             parse_int(reports.get(consumer_id, {}).get("power", 0))
@@ -1199,9 +1494,228 @@ class LoadBalancer:
         reading = to_grid_reading(NetOutputW(reported + residual), reported)
 
         if consumer_id:
-            self._get_consumer(consumer_id).last_target = reading
+            reading = self._pace_reading(consumer_id, reading, reported)
+            state = self._get_consumer(consumer_id)
+            state.last_target = reading
+            state.last_intent = reported + residual
 
         return self._split_by_phase(reading, reports, eff_part)
+
+    def _predict_control_grid(
+        self, reports: dict, grid_total: float, sample_id: tuple
+    ) -> float:
+        """Return the grid power the control path should act on.
+
+        An online grid-state observer that compensates for meter latency without
+        per-meter tuning. It fuses two views of the same grid at different delays:
+
+        * **Output crediting** — every call, advance the estimate by the pool's
+          reported output change (grid moves opposite to net output). A correction
+          is credited the moment the battery delivers it, before the meter shows
+          it, so the loop never re-issues a correction already in flight — the
+          double-count that makes a latent loop overshoot and limit-cycle.
+        * **Meter correction** — on a fresh reading, pull the estimate toward the
+          meter by the *adaptive* trust. This is the only channel by which
+          disturbances the pool did not cause (load steps, clouds) enter.
+
+        The trust is learned from the **innovation** ``meter - estimate``: same-sign
+        runs (the estimate lagging a real, sustained disturbance) raise it; sign
+        flips (hunting on stale feedback) shrink it hard. Only innovations above
+        ``PRED_INNOVATION_GATE_W`` adapt it, so steady-state noise doesn't.
+
+        Returns the raw total when disabled (``grid_predict_trust <= 0``); a
+        positive value only seeds the trust within
+        ``[PRED_TRUST_MIN, PRED_TRUST_MAX]``. Uses the auto-pool reports, so
+        manual/inactive batteries and house load enter only via the innovation.
+        """
+        if self._cfg.grid_predict_trust <= 0.0:
+            return grid_total
+        pool_output = sum(parse_int(r.get("power", 0)) for r in reports.values())
+        if self._pred_grid is None:
+            self._pred_grid = grid_total
+            self._pred_pool_output = pool_output
+            self._pred_sample_id = sample_id
+            self._pred_trust = min(
+                PRED_TRUST_MAX, max(PRED_TRUST_MIN, self._cfg.grid_predict_trust)
+            )
+            return grid_total
+        self._pred_grid -= pool_output - self._pred_pool_output
+        self._pred_pool_output = pool_output
+        if sample_id != self._pred_sample_id:
+            self._pred_sample_id = sample_id
+            innovation = grid_total - self._pred_grid
+            sign = 1 if innovation > 0 else (-1 if innovation < 0 else 0)
+            if abs(innovation) >= PRED_INNOVATION_GATE_W and sign != 0:
+                if self._pred_innov_sign == 0 or sign == self._pred_innov_sign:
+                    self._pred_trust = min(
+                        PRED_TRUST_MAX, self._pred_trust + PRED_TRUST_RAISE_STEP
+                    )
+                else:
+                    self._pred_trust = max(
+                        PRED_TRUST_MIN, self._pred_trust * PRED_TRUST_SHRINK
+                    )
+                self._pred_innov_sign = sign
+            self._pred_grid += self._pred_trust * innovation
+        return self._pred_grid
+
+    def _apply_import_trim(self, control_grid: float, fresh: bool) -> float:
+        """Cover the small residual grid *import* the battery firmware leaves.
+
+        Every Marstek firmware parks the grid a few watts to the *import* side of
+        zero in steady state (the HMG ramp's small-import hold and ±20 W deadband,
+        the Venus-D integrator's -5 W bias), so the pool settles importing real
+        load it had the headroom to supply — missed self-consumption at the retail
+        tariff. Once the predicted grid has sat inside ``(0, IMPORT_TRIM_GATE_W)``
+        for :data:`IMPORT_TRIM_DWELL` consecutive fresh samples (a genuine steady
+        state, not a step approaching zero), add ``import_trim_w`` so the firmware
+        discharges to cover it. The dwell keeps it inert during transients; the
+        gate keeps it clear of a saturated/empty pack (whose import exceeds it).
+
+        Acts only on a *fresh* sample — a stale meter offers no feedback to bound
+        it, so the dwell neither advances nor fires until a new reading arrives.
+        ``import_trim_w = 0`` disables it.
+        """
+        trim = self._cfg.import_trim_w
+        if trim <= 0 or not fresh:
+            return control_grid
+        if 0.0 < control_grid < IMPORT_TRIM_GATE_W:
+            self._steady_import_dwell += 1
+        else:
+            self._steady_import_dwell = 0
+        if self._steady_import_dwell >= IMPORT_TRIM_DWELL:
+            return control_grid + trim
+        return control_grid
+
+    def _damp_oscillation(self, consumer_id: str, residual: float) -> float:
+        """Scale ``residual`` down while the consumer is hunting (issue #473).
+
+        Tracks an EMA (``osc_score``) of how often the residual reverses sign.
+        A genuine load step holds one sign, so the score decays to 0 and the
+        residual passes through unchanged; a latency-driven limit cycle flips
+        sign nearly every poll, driving the score toward 1 and shrinking the
+        residual by up to ``osc_damp_max`` — bleeding the loop gain that
+        sustains the hunt without slowing same-direction reactions.  Mirrors
+        the C++ port (balancer.cpp ``damp_oscillation_``).
+        """
+        cfg = self._cfg
+        if cfg.osc_damp_max <= 0.0:
+            return residual
+        state = self._get_consumer(consumer_id)
+        sign = 1 if residual > 0 else (-1 if residual < 0 else 0)
+        # A residual past the threshold is a genuine demand step, not hunting:
+        # react at full gain (and bleed any hunt memory) so a real load/solar
+        # change isn't slowed just because the loop was hunting beforehand.
+        if cfg.osc_damp_threshold > 0.0 and abs(residual) > cfg.osc_damp_threshold:
+            state.osc_score *= 1.0 - cfg.osc_damp_decay
+            if sign != 0:
+                state.osc_last_sign = sign
+            return residual
+        # Accumulate the score by ``osc_damp_alpha`` on each sign reversal and
+        # bleed it by ``osc_damp_decay`` otherwise.  A few reversals (a solar
+        # ramp crossing zero, or the brief ring-down after a load step) only
+        # nudge it, so genuine reactions keep near-full gain; only *repeated*
+        # reversals — a hunting limit cycle —
+        # accumulate the score toward 1 and engage the damping.  The reversal
+        # rate, not a one-off flip, is what distinguishes a hunt from a step.
+        if sign != 0 and state.osc_last_sign != 0 and sign != state.osc_last_sign:
+            state.osc_score = min(1.0, state.osc_score + cfg.osc_damp_alpha)
+        else:
+            state.osc_score *= 1.0 - cfg.osc_damp_decay
+        if sign != 0:
+            state.osc_last_sign = sign
+        return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
+
+    def _pace_reading(self, consumer_id: str, reading: float, reported: float) -> float:
+        """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
+
+        The battery integrates the reading with its own accelerating ramp,
+        stepping by at most ``min(GAIN[ramp], |reading|)`` per poll — so the
+        reading we send is the only bound on its per-poll movement once the
+        ramp has accelerated.  Pacing keeps that bound tight: the cap starts
+        at the firmware's first-step gain (``pace_base_step``), doubles per
+        reference second toward ``pace_max_step`` only while the battery
+        demonstrably tracks the command, follows the error back down as it
+        shrinks (so the final approach is gentle), and resets to the base
+        step when the command direction reverses.  This bounds
+        stale-feedback overshoot to roughly the battery's *demonstrated*
+        slew instead of its maximum ramp gain.  The caps are defined in W
+        per :data:`PACE_REFERENCE_DT`; the per-poll clamp scales with the
+        consumer's observed inter-poll time (clamped at 1.0) so a fast
+        poller cannot integrate the same per-poll reading into a higher W/s
+        slew.
+
+        Only the auto-pool paths are paced — the persistent regulation
+        loop, the fade transition, and the deprioritized/charge-blind
+        wind-down to zero (the firmware applies a charge-direction reading
+        in full in one cycle, so an unpaced wind-down would dump a
+        discharging consumer's whole output as a one-poll step disturbance
+        on the rest of the pool).  Probe targets (own ramp schedule, must
+        clear inverter floors in one step), the MIN_DC_OUTPUT floor (must
+        jump to the floor), manual targets and inactive-consumer
+        steer-to-zero (a user-initiated one-shot, not a closed-loop
+        handoff) deliberately bypass this.
+
+        Pacing deliberately applies to direction reversals too (capping the
+        wind-down/reversal rate bounds the overshoot at zero crossings, a
+        major oscillation source on load drops).  Consumers needing the
+        *unpaced* control intent — the cross-talk chrg/dchrg attribution
+        that filters involuntary PV passthrough (issue #376) — read it from
+        ``last_intent`` / :meth:`get_last_intent`, which every control path
+        records before pacing.
+        """
+        base = self._cfg.pace_base_step
+        if base <= 0:
+            return reading
+        state = self._get_consumer(consumer_id)
+        now = self._clock()
+        # Cadence scale: the caps are W per PACE_REFERENCE_DT; a faster
+        # poller gets a proportionally smaller per-poll clamp so its W/s
+        # slew matches a reference-cadence battery.  Clamped at 1.0 so a
+        # slow poller keeps the per-poll cap (see PACE_REFERENCE_DT).  The
+        # first paced poll, and anything past a long gap, uses the full
+        # reference scale.
+        dt = now - state.pace_last_at if state.pace_last_at > 0.0 else 0.0
+        if dt <= 0.0:
+            # First paced poll, a non-advancing clock, or a backwards jump:
+            # assume one reference period rather than starving the clamp.
+            dt = PACE_REFERENCE_DT
+        state.pace_last_at = now
+        dt_ratio = min(1.0, dt / PACE_REFERENCE_DT)
+        sign = 1 if reading > 0 else -1 if reading < 0 else 0
+        cap = state.pace_cap if state.pace_cap > 0 else base
+        # The clamp never drops below the base step: devices with
+        # hysteresis-style regulators (B2500) need a minimum reading to
+        # clear their input hold window at all, and the base step is the
+        # rate the cap growth schedule was tuned to bootstrap from.  The
+        # cadence scale still bounds the *grown* cap, which is where the
+        # fast-poller overshoot lived.
+        limit = max(base, cap * dt_ratio)
+        if sign == 0 or sign != state.pace_sign:
+            cap = base
+        elif abs(reading) > limit:
+            moved = (
+                (reported - state.pace_prev_reported) * sign
+                if state.pace_prev_reported is not None
+                else 0.0
+            )
+            # The tracking threshold and growth rate scale with the same
+            # cadence ratio: a fast poller is expected to have moved less
+            # between polls, and its cap doubles per reference second, not
+            # per poll.
+            if moved >= PACE_TRACKING_DELTA_W * dt_ratio:
+                cap = min(cap * PACE_GROWTH_FACTOR**dt_ratio, self._cfg.pace_max_step)
+        else:
+            cap = max(base, abs(reading) / dt_ratio)
+        # Enforce the pace_max_step contract: the grow branch already clamps,
+        # but the else branch back-computes cap as abs(reading) / dt_ratio,
+        # which a fast poll (small dt_ratio) can inflate past the max — and a
+        # later normal-cadence poll would then slew beyond pace_max_step.
+        cap = min(cap, self._cfg.pace_max_step)
+        state.pace_cap = cap
+        state.pace_sign = sign
+        state.pace_prev_reported = reported
+        limit = max(base, cap * dt_ratio)
+        return max(-limit, min(limit, reading))
 
     def _balance_correction(
         self,
@@ -1281,6 +1795,17 @@ class LoadBalancer:
                 self._priority.append(cid)
                 self._set_consumer_grace(cid, grace)
 
+        # Sink low/zero efficiency-window-weight batteries to the back of the
+        # priority order so they fall into the deprioritized tail first while
+        # limiting (active set is ``self._priority[:slots]`` and ``slots`` never
+        # exceeds ``n - 1`` while limiting). A *stable* descending sort preserves
+        # the fair-wear rotation cycle within each weight tier. When all
+        # consumers are needed (``slots == n``) every battery still runs.
+        self._priority.sort(
+            key=lambda cid: _efficiency_window_weight(reports.get(cid, {})),
+            reverse=True,
+        )
+
         prev_slots = max(
             0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
         )
@@ -1288,16 +1813,19 @@ class LoadBalancer:
         probe_resolved = self._resolve_probe_state(reports, now, grid_total)
         probe_active = self._probe_state is not None
 
-        # Rotation check BEFORE cache
-        if (
-            not probe_active
-            and not probe_resolved
-            and self._priority
-            and now - self._last_rotation >= cfg.efficiency_rotation_interval
-        ):
-            self._last_rotation = now
-            self._priority.append(self._priority.pop(0))
-            self._invalidate_efficiency_cache()
+        # Rotation check BEFORE cache. The active head holds its slot for
+        # ``efficiency_rotation_interval`` scaled by its efficiency window weight,
+        # so a lower-weight battery rotates out sooner (weight 0 → threshold 0 →
+        # it rotates out on the next tick).
+        if not probe_active and not probe_resolved and self._priority:
+            head_weight = _efficiency_window_weight(reports.get(self._priority[0], {}))
+            if (
+                now - self._last_rotation
+                >= cfg.efficiency_rotation_interval * head_weight
+            ):
+                self._last_rotation = now
+                self._priority.append(self._priority.pop(0))
+                self._invalidate_efficiency_cache()
 
         # Saturation swap check BEFORE cache
         if (
@@ -1320,11 +1848,21 @@ class LoadBalancer:
         if cache_key == self._cache_sample:
             return self._cache_result or {}
 
-        # Estimate demand
+        # Estimate household demand (``|total_battery_power + grid_total|`` == the
+        # true house load) and low-pass filter it by ``efficiency_demand_alpha`` so
+        # the active-set decision below follows *sustained* demand rather than meter
+        # noise (see the config field). The regulation loop still acts on the
+        # unsmoothed grid, so tracking is unaffected.
         total_battery_power = sum(
             parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
         )
-        abs_target = abs(total_battery_power + grid_total)
+        raw_abs_target = abs(total_battery_power + grid_total)
+        alpha = cfg.efficiency_demand_alpha
+        if self._demand_ema is None or alpha >= 1.0:
+            self._demand_ema = raw_abs_target
+        else:
+            self._demand_ema += alpha * (raw_abs_target - self._demand_ema)
+        abs_target = self._demand_ema
         n = len(self._priority)
         per_consumer = abs_target / n
 
@@ -1339,6 +1877,20 @@ class LoadBalancer:
 
         if enter_limiting and n > 1:
             slots = max(1, min(n - 1, int(abs_target / cfg.min_efficient_power)))
+            if was_limiting and 1 <= prev_slots < slots:
+                # Growing the active set while limiting takes the same 20%
+                # margin as exiting limiting entirely.  Without it, demand
+                # sitting at an exact multiple of min_efficient_power (e.g.
+                # ~300 W base load with a 150 W floor) toggles a unit
+                # active/deprioritized on every meter-noise tick, keeping the
+                # fade EMA permanently mid-transition and the pool hunting
+                # (issue #469).  Shrinking stays immediate, mirroring how
+                # entering limiting is immediate.
+                grown = int(
+                    abs_target
+                    / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR)
+                )
+                slots = max(prev_slots, min(n - 1, grown))
         else:
             slots = n
 

@@ -19,6 +19,47 @@
 namespace esphome {
 namespace ct002 {
 
+// Ramp pacing (issue #458): the pacing cap doubles per reference second, and
+// only when the battery's reported output moved at least
+// PACE_TRACKING_DELTA_W (scaled by the consumer's poll cadence) in the
+// commanded direction since the previous paced poll. The threshold sits
+// below the battery firmware's guaranteed 10 W minimum step on a constant
+// reading (it would deadlock a step response otherwise), and the caps are W
+// per PACE_REFERENCE_DT so fast pollers cannot integrate per-poll readings
+// into a higher W/s slew. Mirrors balancer.py.
+inline constexpr float PACE_TRACKING_DELTA_W = 5.0f;
+inline constexpr float PACE_GROWTH_FACTOR = 2.0f;
+inline constexpr double PACE_REFERENCE_DT = 1.0;
+
+// Adaptive grid-state predictor (see BalancerConfig::grid_predict_trust and
+// LoadBalancer::predict_control_grid_). The meter trust is bounded to
+// [PRED_TRUST_MIN, PRED_TRUST_MAX] and adapted per fresh meter sample whose
+// innovation clears PRED_INNOVATION_GATE_W. The raise is an additive step
+// (trust climbs only under a sustained same-sign innovation run — a genuine
+// lasting disturbance) while the shrink is a multiplicative cut (a single
+// sign flip, the signature of latency-driven hunting, collapses it). The band
+// is wide with a brisk raise so a real step is caught in a couple of fresh
+// samples (recovering self-consumption energy a slower ramp leaves on the
+// grid), paired with a softer shrink that still halves trust on a hunt.
+// Mirrors balancer.py.
+inline constexpr float PRED_TRUST_MIN = 0.15f;
+inline constexpr float PRED_TRUST_MAX = 0.9f;
+inline constexpr float PRED_TRUST_RAISE_STEP = 0.2f;
+inline constexpr float PRED_TRUST_SHRINK = 0.5f;
+inline constexpr float PRED_INNOVATION_GATE_W = 40.0f;
+
+// Steady-import trim (see BalancerConfig::import_trim_w and
+// LoadBalancer::apply_import_trim_). The trim engages only once the predicted
+// grid has held inside the small-import band (0, IMPORT_TRIM_GATE_W) for
+// IMPORT_TRIM_DWELL consecutive fresh meter samples (a genuine steady state, not
+// a load step on its final approach to zero, so the trim never deepens
+// overshoot). The gate
+// sits above the firmware deadband / hold window but below the large-disturbance
+// regime, so a saturated/empty pack (which leaves an import larger than the
+// gate) is left alone. Mirrors balancer.py.
+inline constexpr float IMPORT_TRIM_GATE_W = 120.0f;
+inline constexpr int IMPORT_TRIM_DWELL = 6;
+
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
@@ -65,20 +106,69 @@ inline float to_grid_reading(NetOutputW target, float reported) {
 struct BalancerConfig {
   bool fair_distribution{true};
   float balance_gain{0.2f};
-  float balance_deadband{15.0f};
+  // Kept above the battery firmware's own +-20 W input deadband so the
+  // balancer never chases share errors the battery would ignore (issue #458).
+  float balance_deadband{25.0f};
   float error_boost_threshold{150.0f};
   float error_boost_max{0.5f};
   float error_reduce_threshold{20.0f};
   float max_correction_per_step{80.0f};
   float max_target_step{0.0f};
+  // Ramp pacing for the auto path (issue #458): per-poll cap on the sent
+  // reading, starting at the firmware ramp's first-step gain and growing
+  // toward pace_max_step only while the battery is observed tracking.
+  // pace_base_step = 0 disables. See balancer.py for the tuning rationale.
+  float pace_base_step{30.0f};
+  float pace_max_step{100.0f};
+  // Oscillation-gated damping (issue #473): under meter latency the gain-1
+  // grid-following residual limit-cycles. An EMA of how often a consumer's
+  // residual reverses sign scales the residual down by up to osc_damp_max; a
+  // genuine step holds one sign (score ~0, full gain), only a hunt is damped.
+  // osc_damp_max = 0 disables. See balancer.py for the tuning rationale.
+  float osc_damp_max{0.95f};
+  float osc_damp_alpha{0.3f};
+  float osc_damp_decay{0.05f};
+  // Only residuals below this magnitude are damped; a larger one is a genuine
+  // demand step that reacts at full gain. See balancer.py.
+  float osc_damp_threshold{300.0f};
   float min_efficient_power{0.0f};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
-  float efficiency_saturation_threshold{0.4f};
+  // double (compared against the double saturation_score EMA) so the swap
+  // decision matches the canonical Python double math; a float 0.4f sits a few
+  // 1e-8 above 0.4 and flips the comparison on a knife-edge score, diverging the
+  // deprioritized set from Python.
+  double efficiency_saturation_threshold{0.4};
+  // EMA factor for the household-demand estimate that decides the active-set
+  // size. Low-pass filtering it keeps meter noise from thrashing batteries in
+  // and out of the active pool (the regulation loop still acts on the raw grid).
+  // 1.0 disables the smoothing. See balancer.py BalancerConfig.
+  float efficiency_demand_alpha{0.1f};
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
+  // Adaptive grid-state predictor: act on a predicted grid that credits the
+  // pool's freshly-reported output between meter refreshes and trusts each
+  // fresh meter sample by an online-learned amount, compensating for meter
+  // latency without per-meter tuning. 0 disables (act on the raw meter); any
+  // positive value only seeds the self-adapting trust. See balancer.py.
+  float grid_predict_trust{0.5f};
+  // Deadband concentration (opt-in): when the absolute (predicted) grid error is
+  // below this and more than one battery is active, hand the whole correction to
+  // the most-active battery instead of splitting it below each battery's firmware
+  // deadband. Cuts steady-state avoidable import/export at the cost of more
+  // setpoint churn. 0 disables. See balancer.py.
+  float concentrate_deadband{60.0f};
+  // Steady-import trim (W): once the predicted grid has held inside a small
+  // import band for a few consecutive polls (a genuine steady state, not a
+  // transient), nudge the control grid up by this much so the firmware covers
+  // the few watts of real load its deadband / small-import hold would otherwise
+  // leave importing at the retail tariff — missed self-consumption. The dwell
+  // requirement keeps it inert during load steps (no added overshoot) and the
+  // band gate keeps it clear of a saturated/empty pack. 0 disables. See
+  // balancer.py.
+  float import_trim_w{15.0f};
 
   void clamp();
 };
@@ -91,7 +181,25 @@ struct ConsumerMode {
 
 struct BalancerConsumerState {
   std::optional<float> last_target;
-  float fade_weight{1.0f};
+  // Absolute net-output target (NetOutputW currency) intended for this
+  // consumer, recorded *before* wire pacing. The cross-talk chrg/dchrg
+  // attribution uses it to filter involuntary outputs (issue #376).
+  std::optional<float> last_intent;
+  // Long-running EMA weight — double (like saturation_score) so the fade
+  // trajectory and its snap-to-goal threshold match the canonical Python double
+  // math poll-for-poll; float drifts enough to flip the snap on a different poll.
+  double fade_weight{1.0};
+  // Ramp-pacing state (see BalancerConfig::pace_base_step): current per-poll
+  // cap, sign of the last paced reading, and the battery's reported power at
+  // the last pacing step (tracking detection).
+  float pace_cap{0.0f};
+  int pace_sign{0};
+  std::optional<float> pace_prev_reported{};
+  double pace_last_at{0.0};
+  // Oscillation-gated damping (see BalancerConfig::osc_damp_max): accumulated
+  // reversal score and the sign of the last non-zero residual that fed it.
+  float osc_score{0.0f};
+  int osc_last_sign{0};
   // Long-running EMA accumulator — double prevents small-bias drift on
   // steady signals over hours of runtime.
   double saturation_score{0.0};
@@ -120,6 +228,10 @@ struct ConsumerReport {
   // Relative fair-share weight (1.0 = neutral). Mirrors the Python reports
   // dict's "weight" key, set live via the MQTT "Distribution Weight" entity.
   float weight{1.0f};
+  // Efficiency-rotation window weight ([0, 1], 1.0 = neutral). Mirrors the
+  // Python reports dict's "efficiency_window_weight" key, set live via the MQTT
+  // "Efficiency Window Weight" entity.
+  float efficiency_window_weight{1.0f};
   // Per-device MIN_DC_OUTPUT override (W); unset = inherit the global setting.
   // Mirrors the Python reports dict's "min_dc_output" key. Default-initialized
   // so aggregate ``ConsumerReport{...}`` init stays warning-clean.
@@ -130,7 +242,7 @@ using ReportMap = std::unordered_map<std::string, ConsumerReport>;
 
 class SaturationTracker {
  public:
-  SaturationTracker(float alpha, float min_target, float decay_factor,
+  SaturationTracker(double alpha, float min_target, double decay_factor,
                     float stall_timeout_seconds, bool enabled,
                     std::function<double()> clock);
 
@@ -143,16 +255,19 @@ class SaturationTracker {
  private:
   std::function<double()> clock_;
   bool enabled_;
-  float alpha_;
+  // double (like the saturation_score it drives) so the EMA matches the
+  // canonical Python double math; a float alpha/decay sits ~1e-8 off the double
+  // value and drifts the score across the swap threshold on a knife-edge.
+  double alpha_;
   float min_target_;
-  float decay_factor_;
+  double decay_factor_;
   float stall_timeout_seconds_;
 };
 
 class LoadBalancer {
  public:
-  LoadBalancer(BalancerConfig config, float saturation_alpha,
-               float saturation_min_target, float saturation_decay_factor,
+  LoadBalancer(BalancerConfig config, double saturation_alpha,
+               float saturation_min_target, double saturation_decay_factor,
                float saturation_grace_seconds, float saturation_stall_timeout_seconds,
                bool saturation_enabled, std::function<double()> clock,
                std::function<void()> reset_fn);
@@ -171,6 +286,8 @@ class LoadBalancer {
 
   double get_saturation(const std::string &consumer_id) const;
   std::optional<float> get_last_target(const std::string &consumer_id) const;
+  // Absolute net-output target intended pre-pacing (see BalancerConsumerState).
+  std::optional<float> get_last_intent(const std::string &consumer_id) const;
 
  protected:
   BalancerConsumerState &get_consumer_(const std::string &consumer_id);
@@ -206,7 +323,7 @@ class LoadBalancer {
                                             std::array<float, 3> result);
 
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
-                                      const ReportMap &reports);
+                                      const ReportMap &reports, bool paced = false);
   static std::array<float, 3> split_by_phase_(
       float target, const ReportMap &reports,
       const std::unordered_map<std::string, float> *weights = nullptr);
@@ -217,6 +334,11 @@ class LoadBalancer {
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
+  float pace_reading_(const std::string &consumer_id, float reading, float reported);
+  float damp_oscillation_(const std::string &consumer_id, float residual);
+  float predict_control_grid_(const ReportMap &reports, float grid_total,
+                              const std::vector<float> &sample_id);
+  float apply_import_trim_(float control_grid, bool fresh);
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
@@ -248,6 +370,27 @@ class LoadBalancer {
   double post_probe_fade_until_{0.0};
   std::unordered_set<std::string> post_probe_fade_ids_;
   bool all_dc_surplus_warned_{false};
+
+  // Adaptive grid-state predictor state (see predict_control_grid_).
+  // pred_grid_ is the estimate the control path acts on; pred_pool_output_ is
+  // the pool's last-seen reported output (its per-call delta advances the
+  // estimate); pred_sample_id_ flags a genuinely fresh meter reading;
+  // pred_trust_ is the online-adapted meter trust and pred_innov_sign_ the sign
+  // of the last significant innovation that drove it.
+  std::optional<float> pred_grid_{};
+  float pred_pool_output_{0.0f};
+  std::optional<std::vector<float>> pred_sample_id_{};
+  float pred_trust_{0.0f};
+  int pred_innov_sign_{0};
+  // Count of consecutive *fresh* meter samples the predicted grid has held
+  // inside the small-import band; gates the steady-import trim (see
+  // apply_import_trim_). trim_sample_id_ is the last meter sample the trim acted
+  // on, used to tell a fresh reading from a repeated (stale / frozen) one.
+  int steady_import_dwell_{0};
+  std::vector<float> trim_sample_id_{};
+  // Low-pass-filtered household-demand estimate for the efficiency active-set
+  // decision (see compute_efficiency_deprioritized_). Unset until the first poll.
+  std::optional<float> demand_ema_{};
 };
 
 }  // namespace ct002

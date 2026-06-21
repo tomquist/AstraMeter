@@ -92,6 +92,12 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "error_reduce_threshold") this->balancer_cfg_.error_reduce_threshold = f;
   else if (key == "max_correction_per_step") this->balancer_cfg_.max_correction_per_step = f;
   else if (key == "max_target_step") this->balancer_cfg_.max_target_step = f;
+  else if (key == "pace_base_step") this->balancer_cfg_.pace_base_step = f;
+  else if (key == "pace_max_step") this->balancer_cfg_.pace_max_step = f;
+  else if (key == "osc_damp_max") this->balancer_cfg_.osc_damp_max = f;
+  else if (key == "osc_damp_alpha") this->balancer_cfg_.osc_damp_alpha = f;
+  else if (key == "osc_damp_decay") this->balancer_cfg_.osc_damp_decay = f;
+  else if (key == "osc_damp_threshold") this->balancer_cfg_.osc_damp_threshold = f;
   else if (key == "min_efficient_power") this->balancer_cfg_.min_efficient_power = f;
   else if (key == "probe_min_power") this->balancer_cfg_.probe_min_power = f;
   else if (key == "efficiency_rotation_interval") this->balancer_cfg_.efficiency_rotation_interval = f;
@@ -106,6 +112,15 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "saturation_decay_factor") this->saturation_decay_factor_ = f;
   else if (key == "saturation_grace_seconds") this->saturation_grace_seconds_ = f;
   else if (key == "saturation_stall_timeout_seconds") this->saturation_stall_timeout_seconds_ = f;
+  // Component-level fields the shared e2e scenarios toggle at runtime (the
+  // balancer rebuild below is harmless for these).
+  else if (key == "active_control") this->active_control_ = (v != 0.0);
+  else if (key == "consumer_ttl") {
+    // Negative = adaptive eviction (Python's consumer_ttl=None default);
+    // >= 0 = fixed TTL in seconds.
+    if (v < 0.0) this->consumer_ttl_seconds_.reset();
+    else this->consumer_ttl_seconds_ = static_cast<uint32_t>(v);
+  }
   else return false;
   // Rebuild so the change takes effect (resets balancer state — fine before
   // a scenario begins).
@@ -201,7 +216,7 @@ void CT002Component::handle_control_command_(const std::string &cmd,
   } else if (matched >= 1 && std::strcmp(verb, "dump") == 0) {
     // Serialize the internal state the Python e2e suites read directly, so
     // the black-box binary can be asserted on the same way. Pipe-delimited:
-    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>|...
+    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>,<last_intent>|...
     std::string s = "ok|smooth_target=";
     char num[48];
     std::snprintf(num, sizeof(num), "%.3f",
@@ -212,16 +227,20 @@ void CT002Component::handle_control_command_(const std::string &cmd,
       if (consumer.timestamp <= 0.0) continue;
       const double sat = this->balancer_ ? this->balancer_->get_saturation(kv.first) : 0.0;
       double last_target = 0.0;
+      double last_intent = 0.0;
       if (this->balancer_) {
         auto lt = this->balancer_->get_last_target(kv.first);
         if (lt.has_value()) last_target = *lt;
+        auto li = this->balancer_->get_last_intent(kv.first);
+        if (li.has_value()) last_intent = *li;
       }
       s += "|";
       s += kv.first;
-      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f", consumer.phase.c_str(),
+      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f,%.1f",
+                    consumer.phase.c_str(),
                     static_cast<double>(consumer.last_instructed_power), last_target, sat,
                     consumer.active ? 1 : 0, consumer.manual_enabled ? 1 : 0,
-                    static_cast<double>(consumer.power));
+                    static_cast<double>(consumer.power), last_intent);
       s += num;
     }
     reply = s;
