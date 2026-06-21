@@ -1167,20 +1167,23 @@ code {
 }
 .sim-legend .key {
   display: inline-block;
-  width: 14px;
-  height: 3px;
+  width: 18px;
+  height: 4px;
   border-radius: 2px;
   margin-right: 6px;
   vertical-align: middle;
 }
-.key-grid {
+.key-smart {
   background: var(--green);
 }
-.key-load {
-  background: rgba(34, 211, 238, 0.7);
+.key-naive {
+  background: var(--bad);
 }
-.key-batt {
-  background: var(--purple);
+.sim-readout-ok strong {
+  color: var(--ok);
+}
+.sim-readout-bad strong {
+  color: var(--bad);
 }
 .sim-readouts {
   display: grid;
@@ -1204,31 +1207,6 @@ code {
 .sim-readout strong {
   font-size: 18px;
   font-variant-numeric: tabular-nums;
-}
-.sim-score {
-  margin-top: 14px;
-}
-.sim-score-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
-}
-.sim-score-track {
-  height: 8px;
-  background: var(--bg-raised);
-  border-radius: 5px;
-  overflow: hidden;
-}
-.sim-score-bar {
-  height: 100%;
-  width: 0;
-  background: var(--ok);
-  border-radius: 5px;
-  transition:
-    width 0.3s ease,
-    background 0.3s ease;
 }
 .sim-panel {
   background: var(--bg-card);

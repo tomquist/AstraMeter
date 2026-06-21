@@ -1,21 +1,23 @@
 // balancing.ts — the interactive "how AstraMeter steers your batteries" toy on
 // how-balancing-works.html.  A deliberately simplified, homeowner-friendly
-// visualisation: a household load wanders and spikes, one (or a few) batteries
-// chase the grid back to zero, and three toggles let you switch off the tricks
-// that keep the chase smooth so you can *see* why each exists.
+// visualisation: a household load wanders and occasionally steps, and TWO
+// controllers race side-by-side on the *same* load —
 //
-// The model here is a cartoon of the real control loop in
-// src/astrameter/ct002/balancer.py — it is NOT the firmware-accurate plant the
-// steering-evaluation suite uses.  It only has to make the intuition land:
-//   • Latency compensation  ↔  the adaptive grid-state predictor
-//                              (LoadBalancer._predict_control_grid)
-//   • Smooth ramping         ↔  ramp pacing (LoadBalancer._pace_reading)
-//   • Anti-oscillation       ↔  oscillation-gated damping
-//                              (LoadBalancer._damp_oscillation)
+//   • a "plain meter-follower" that just reacts to the (delayed) meter, and
+//   • AstraMeter, which compensates for the meter's lag, eases the battery in,
+//     and damps any hunting.
 //
-// The pure step function (`stepSim`) is exported and exercised by
-// balancing.test.ts; everything DOM/canvas is guarded so importing the module
-// under Node (the test runner) never touches `document`.
+// Driving both at once makes the point without any "dead" toggle: the plain
+// follower hunts wildly while AstraMeter sits on zero.  The model is a cartoon
+// of the real loop in src/astrameter/ct002/balancer.py — NOT the
+// firmware-accurate plant the steering-evaluation suite uses; it only has to
+// make the intuition land.  The smart controller folds in, in spirit, the
+// adaptive grid-state predictor (_predict_control_grid), ramp pacing
+// (_pace_reading) and oscillation-gated damping (_damp_oscillation).
+//
+// The pure step functions are exported and exercised by balancing.test.ts;
+// everything DOM/canvas is guarded so importing under Node never touches
+// `document`.
 
 // ── Pure simulation model (exported for tests) ──────────────────────────────
 
@@ -23,11 +25,15 @@ export interface SimToggles {
   /** Act on a latency-compensated estimate of the grid instead of the raw,
    *  delayed meter reading (the grid-state predictor). */
   predictor: boolean;
-  /** Limit how fast each battery may change its output per tick (ramp pacing). */
+  /** Limit how fast the battery may change its output per tick (ramp pacing). */
   pacing: boolean;
   /** Bleed loop gain while the correction keeps reversing sign (anti-hunting). */
   damping: boolean;
 }
+
+/** All of AstraMeter's smart-steering tricks engaged — the demo's "AstraMeter"
+ *  controller. The toggles remain so the test suite can isolate each trick. */
+export const SMART: SimToggles = { predictor: true, pacing: true, damping: true };
 
 export interface SimState {
   /** Net battery output in watts (positive = discharging to serve the house). */
@@ -49,17 +55,24 @@ export const METER_LATENCY = 7;
 /** Fraction of the grid error folded into battery output each tick. Below 1 so
  *  the approach is a smooth ramp rather than a single deadbeat jump. */
 const CONTROL_GAIN = 0.6;
+/** Input deadband (watts), like the real battery firmware: errors smaller than
+ *  this are left alone, so the controller doesn't chase meter noise and buzz
+ *  around zero. Keeps the balanced baseline visibly flat. */
+const DEADBAND = 18;
 /** Max output change per tick when ramp pacing is on (watts). */
 const PACE_STEP = 55;
 /** Plausible ceiling on a battery's discharge, so the un-compensated loop's
- *  oscillation stays bounded (and on-screen) instead of running away. */
-const BATT_MAX = 3500;
+ *  oscillation stays bounded (and roughly on-screen) instead of running away. */
+const BATT_MAX = 1900;
+/** Loop gain of the plain meter-follower. High enough that, combined with the
+ *  meter delay, it limit-cycles — the classic dead-time instability. */
+const NAIVE_GAIN = 0.5;
 /** Strongest damping applied to a fully-hunting loop (fraction of gain removed). */
 const DAMP_MAX = 0.95;
 const DAMP_ALPHA = 0.6;
 const DAMP_DECAY = 0.05;
 
-export function makeSim(initialLoad = 250): SimState {
+export function makeSim(initialLoad = 550): SimState {
   return {
     battOut: initialLoad,
     meterHistory: new Array<number>(METER_LATENCY).fill(0),
@@ -71,16 +84,16 @@ export function makeSim(initialLoad = 250): SimState {
 }
 
 /**
- * Advance the simulation one tick against a given household `load` (watts).
+ * Advance the smart controller one tick against a household `load` (watts).
  *
  * Returns the new true grid power (positive = importing from the grid, the
- * thing we want at zero).  Mutates `state` in place.  Deterministic: no RNG in
- * here, so the test can script a load profile and assert on the outcome.
+ * thing we want at zero).  Mutates `state` in place.  Deterministic, so the
+ * test can script a load profile and assert on the outcome.  `cfg` selects
+ * which tricks are active; the demo always passes {@link SMART}.
  */
 export function stepSim(state: SimState, load: number, cfg: SimToggles): number {
   // True grid right now, before we react: what the house draws minus what the
-  // battery currently delivers.  This is the physical truth; the controller
-  // does not get to see it directly.
+  // battery currently delivers.  The controller does not see this directly.
   const trueGrid = load - state.battOut;
 
   // The meter only reports this after a delay.  Push the truth (and the output
@@ -94,13 +107,14 @@ export function stepSim(state: SimState, load: number, cfg: SimToggles): number 
   // recent corrections.  Add back the output we have committed since then, so
   // the estimate tracks where the grid really is *now* — and the controller
   // stops re-issuing a correction already on its way (the cause of the
-  // overshoot/hunting when this is off).
+  // overshoot/hunting a plain follower suffers).
   const estimated = meter - (state.battOut - battWhenMeasured);
   const controlGrid = cfg.predictor ? estimated : meter;
 
   // The correction we want to fold into battery output: if we are importing
   // (grid > 0) we need to discharge more, so raise output by the grid error.
-  let correction = CONTROL_GAIN * controlGrid;
+  // Errors inside the deadband are ignored so a balanced pool sits still.
+  let correction = Math.abs(controlGrid) < DEADBAND ? 0 : CONTROL_GAIN * controlGrid;
 
   if (cfg.damping) {
     const sign = correction > 0 ? 1 : correction < 0 ? -1 : 0;
@@ -126,13 +140,45 @@ export function stepSim(state: SimState, load: number, cfg: SimToggles): number 
   return state.grid;
 }
 
+export interface NaiveState {
+  battOut: number;
+  meterHistory: number[];
+  grid: number;
+}
+
+export function makeNaive(initialLoad = 550): NaiveState {
+  return {
+    battOut: initialLoad,
+    meterHistory: new Array<number>(METER_LATENCY).fill(0),
+    grid: 0,
+  };
+}
+
+/**
+ * Advance the "plain meter-follower" one tick: just steer the battery by the
+ * latest *delayed* meter reading, full stop.  With the meter lag this is the
+ * textbook dead-time instability — it overshoots and limit-cycles.  This is the
+ * "without AstraMeter" baseline the demo races against {@link stepSim}.
+ */
+export function stepNaive(state: NaiveState, load: number): number {
+  const trueGrid = load - state.battOut;
+  state.meterHistory.push(trueGrid);
+  const meter = state.meterHistory.shift() ?? trueGrid;
+  state.battOut = Math.max(0, Math.min(BATT_MAX, state.battOut + NAIVE_GAIN * meter));
+  state.grid = load - state.battOut;
+  return state.grid;
+}
+
 // ── DOM / canvas demo (browser only) ────────────────────────────────────────
 
 interface LoadGen {
+  /** Quiet baseline household draw (watts). */
   base: number;
-  current: number;
-  /** Ticks remaining on a transient event (kettle, cloud). */
-  eventTicks: number;
+  /** "calm" = sitting at base; "event" = a load step is active. */
+  phase: "calm" | "event";
+  /** Ticks left in the current phase before it flips. */
+  ticks: number;
+  /** Watts added by the active event (kettle/oven up, cloud over solar down). */
   eventDelta: number;
 }
 
@@ -146,51 +192,42 @@ function initBalancingDemo(): void {
   const canvas: HTMLCanvasElement = canvasEl;
   const ctx: CanvasRenderingContext2D = context;
 
-  const toggleEls = {
-    predictor: document.getElementById("t-predictor") as HTMLInputElement | null,
-    pacing: document.getElementById("t-pacing") as HTMLInputElement | null,
-    damping: document.getElementById("t-damping") as HTMLInputElement | null,
-  };
+  const showNaiveEl = document.getElementById("t-naive") as HTMLInputElement | null;
   const readoutLoad = document.getElementById("r-load");
-  const readoutBatt = document.getElementById("r-batt");
-  const readoutGrid = document.getElementById("r-grid");
-  const scoreBar = document.getElementById("sim-score-bar");
-  const scoreLabel = document.getElementById("sim-score-label");
+  const readoutSmart = document.getElementById("r-smart");
+  const readoutNaive = document.getElementById("r-naive");
+  const naiveReadoutWrap = document.getElementById("r-naive-wrap");
   const kettleBtn = document.getElementById("sim-kettle");
   const pauseBtn = document.getElementById("sim-pause");
 
-  const cfg = (): SimToggles => ({
-    predictor: toggleEls.predictor?.checked ?? true,
-    pacing: toggleEls.pacing?.checked ?? true,
-    damping: toggleEls.damping?.checked ?? true,
-  });
+  const showNaive = (): boolean => showNaiveEl?.checked ?? true;
 
-  const sim = makeSim(250);
-  const gen: LoadGen = { base: 250, current: 250, eventTicks: 0, eventDelta: 0 };
-  // Plotted history of [grid, load, battery]; trimmed to the canvas width.
-  const history: { grid: number; load: number; batt: number }[] = [];
-  const errWindow: number[] = [];
-  const MAX_W = 1400; // vertical scale (±watts)
+  const sim = makeSim(550);
+  const naive = makeNaive(550);
+  const gen: LoadGen = { base: 550, phase: "calm", ticks: 90, eventDelta: 0 };
+  // Plotted history; trimmed to the canvas width.
+  const history: { load: number; smart: number; naive: number }[] = [];
+  const MAX_W = 1600; // vertical scale (±watts)
   let running = true;
   let lastFrame = 0;
 
-  // Step the synthetic household: gentle drift + occasional spikes/dips so the
-  // controller always has something to chase.
+  // Step the synthetic household.  Most of the time it sits quietly at the
+  // baseline; every so often a discrete event — kettle/oven on (up) or a cloud
+  // over solar (down) — steps the load so you can watch each controller react.
   function nextLoad(): number {
-    if (gen.eventTicks > 0) {
-      gen.eventTicks--;
-    } else if (Math.random() < 0.012) {
-      // Kettle/oven spike (up) or a cloud passing over solar (acts like a dip).
-      gen.eventDelta = (Math.random() < 0.5 ? 1 : -1) * (250 + Math.random() * 550);
-      gen.eventTicks = 40 + Math.floor(Math.random() * 80);
+    if (gen.ticks > 0) {
+      gen.ticks--;
+    } else if (gen.phase === "calm") {
+      gen.phase = "event";
+      gen.eventDelta = (Math.random() < 0.5 ? 1 : -1) * (150 + Math.random() * 200);
+      gen.ticks = 130 + Math.floor(Math.random() * 120);
     } else {
+      gen.phase = "calm";
       gen.eventDelta = 0;
+      gen.ticks = 150 + Math.floor(Math.random() * 150);
     }
-    gen.base += (Math.random() - 0.5) * 14;
-    gen.base = Math.max(120, Math.min(600, gen.base));
-    const noise = (Math.random() - 0.5) * 30;
-    gen.current = Math.max(0, gen.base + gen.eventDelta + noise);
-    return gen.current;
+    const noise = (Math.random() - 0.5) * 10;
+    return Math.max(0, gen.base + gen.eventDelta + noise);
   }
 
   function resize(): void {
@@ -199,7 +236,7 @@ function initBalancingDemo(): void {
     const cssH = canvas.clientHeight || 320;
     canvas.width = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function yOf(w: number, h: number): number {
@@ -207,106 +244,88 @@ function initBalancingDemo(): void {
     return h / 2 - (w / MAX_W) * (h / 2 - 14);
   }
 
+  function plotLine(
+    key: "load" | "smart" | "naive",
+    color: string,
+    width: number,
+    h: number,
+    dx: number,
+  ): void {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    history.forEach((p, i) => {
+      const y = yOf(p[key], h);
+      if (i === 0) ctx.moveTo(0, y);
+      else ctx.lineTo(i * dx, y);
+    });
+    ctx.stroke();
+  }
+
   function draw(): void {
     const w = canvas.clientWidth || 640;
     const h = canvas.clientHeight || 320;
-    ctx!.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, w, h);
 
     const zeroY = yOf(0, h);
-    // Import (above zero) / export (below zero) tint so the goal — the centre
-    // line — reads as "balanced" at a glance.
-    ctx!.fillStyle = "rgba(244, 63, 94, 0.05)";
-    ctx!.fillRect(0, 0, w, zeroY);
-    ctx!.fillStyle = "rgba(16, 185, 129, 0.05)";
-    ctx!.fillRect(0, zeroY, w, h - zeroY);
+    // Import (above zero) / export (below zero) tint so the centre line reads
+    // as "balanced" at a glance.
+    ctx.fillStyle = "rgba(244, 63, 94, 0.05)";
+    ctx.fillRect(0, 0, w, zeroY);
+    ctx.fillStyle = "rgba(16, 185, 129, 0.05)";
+    ctx.fillRect(0, zeroY, w, h - zeroY);
 
     // Zero / target line.
-    ctx!.strokeStyle = "rgba(226, 232, 240, 0.55)";
-    ctx!.setLineDash([5, 5]);
-    ctx!.lineWidth = 1;
-    ctx!.beginPath();
-    ctx!.moveTo(0, zeroY);
-    ctx!.lineTo(w, zeroY);
-    ctx!.stroke();
-    ctx!.setLineDash([]);
-    ctx!.fillStyle = "rgba(148, 163, 184, 0.9)";
-    ctx!.font = "11px -apple-system, system-ui, sans-serif";
-    ctx!.fillText("0 W · perfectly balanced", 8, zeroY - 6);
+    ctx.strokeStyle = "rgba(226, 232, 240, 0.55)";
+    ctx.setLineDash([5, 5]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, zeroY);
+    ctx.lineTo(w, zeroY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(148, 163, 184, 0.9)";
+    ctx.font = "11px -apple-system, system-ui, sans-serif";
+    ctx.fillText("0 W · perfectly balanced", 8, zeroY - 6);
 
     if (history.length < 2) return;
-    const n = history.length;
-    const dx = w / (n - 1);
+    const dx = w / (history.length - 1);
 
-    // Faint context lines: household load and battery output.
-    const faint = (key: "load" | "batt", color: string) => {
-      ctx!.strokeStyle = color;
-      ctx!.lineWidth = 1;
-      ctx!.beginPath();
-      history.forEach((p, i) => {
-        const y = yOf(p[key], h);
-        i === 0 ? ctx!.moveTo(0, y) : ctx!.lineTo(i * dx, y);
-      });
-      ctx!.stroke();
-    };
-    faint("load", "rgba(34, 211, 238, 0.35)");
-    faint("batt", "rgba(139, 92, 246, 0.45)");
-
-    // The star of the show: the grid line.  Coloured by how far off zero it is.
-    ctx!.lineWidth = 2.5;
-    ctx!.beginPath();
-    history.forEach((p, i) => {
-      const y = yOf(p.grid, h);
-      i === 0 ? ctx!.moveTo(0, y) : ctx!.lineTo(i * dx, y);
-    });
-    const avgErr = errWindow.length
-      ? errWindow.reduce((a, b) => a + Math.abs(b), 0) / errWindow.length
-      : 0;
-    ctx!.strokeStyle =
-      avgErr < 60 ? "#10b981" : avgErr < 180 ? "#f59e0b" : "#f43f5e";
-    ctx!.stroke();
+    // Plain follower first (behind), only when shown.
+    if (showNaive()) plotLine("naive", "#f43f5e", 2, h, dx);
+    // AstraMeter on top — the line that hugs zero.
+    plotLine("smart", "#10b981", 2.5, h, dx);
   }
 
   function updateReadouts(): void {
     const last = history[history.length - 1];
     if (!last) return;
+    const fmt = (v: number) => {
+      const r = Math.round(v);
+      return r > 0 ? `+${r} W` : `${r} W`;
+    };
     if (readoutLoad) readoutLoad.textContent = `${Math.round(last.load)} W`;
-    if (readoutBatt) readoutBatt.textContent = `${Math.round(last.batt)} W`;
-    if (readoutGrid) {
-      const g = Math.round(last.grid);
-      readoutGrid.textContent = g > 0 ? `+${g} W` : `${g} W`;
-    }
-    const avgErr = errWindow.length
-      ? errWindow.reduce((a, b) => a + Math.abs(b), 0) / errWindow.length
-      : 0;
-    // Map 0..300 W average error → 100..0 "steadiness".
-    const score = Math.max(0, Math.min(100, 100 - (avgErr / 300) * 100));
-    if (scoreBar) {
-      scoreBar.style.width = `${score}%`;
-      scoreBar.style.background =
-        avgErr < 60 ? "var(--ok)" : avgErr < 180 ? "var(--warn)" : "var(--bad)";
-    }
-    if (scoreLabel) {
-      scoreLabel.textContent =
-        avgErr < 60 ? "Rock steady" : avgErr < 180 ? "A bit jumpy" : "Hunting hard";
-    }
+    if (readoutSmart) readoutSmart.textContent = fmt(last.smart);
+    if (readoutNaive) readoutNaive.textContent = fmt(last.naive);
+    if (naiveReadoutWrap) naiveReadoutWrap.style.display = showNaive() ? "" : "none";
   }
 
   function tick(load: number): void {
-    const grid = stepSim(sim, load, cfg());
-    history.push({ grid, load, batt: sim.battOut });
+    const smart = stepSim(sim, load, SMART);
+    const nv = stepNaive(naive, load);
+    history.push({ load, smart, naive: nv });
     const maxPts = Math.max(120, Math.floor(canvas.clientWidth || 640));
     while (history.length > maxPts) history.shift();
-    errWindow.push(grid);
-    while (errWindow.length > 90) errWindow.shift();
   }
 
   function frame(now: number): void {
     if (running) {
-      // Run a few model ticks per animation frame so the trace scrolls at a
-      // lively, readable pace regardless of display refresh rate.
-      if (now - lastFrame > 28) {
+      // One model tick per ~38 ms (regardless of display refresh rate): slow
+      // enough that the eye can follow the meter delay and recovery, brisk
+      // enough to feel live.
+      if (now - lastFrame > 38) {
         lastFrame = now;
-        for (let i = 0; i < 2; i++) tick(nextLoad());
+        tick(nextLoad());
         updateReadouts();
       }
       draw();
@@ -315,8 +334,10 @@ function initBalancingDemo(): void {
   }
 
   kettleBtn?.addEventListener("click", () => {
-    gen.eventDelta = 750;
-    gen.eventTicks = 90;
+    // Force a big load step right now so both controllers must react on demand.
+    gen.phase = "event";
+    gen.eventDelta = 700;
+    gen.ticks = 120;
   });
   pauseBtn?.addEventListener("click", () => {
     running = !running;
@@ -328,7 +349,7 @@ function initBalancingDemo(): void {
   ro.observe(canvas);
   resize();
   // Warm up so the first painted frame already shows a settled trace.
-  for (let i = 0; i < METER_LATENCY + 4; i++) tick(nextLoad());
+  for (let i = 0; i < METER_LATENCY + 6; i++) tick(nextLoad());
   requestAnimationFrame(frame);
 }
 
