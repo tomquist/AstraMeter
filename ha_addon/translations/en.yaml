@@ -51,7 +51,7 @@ configuration:
     name: Marstek Account Password
     description: "Password used to sign in to your Marstek account for managed CT device registration."
   cloud_reporting:
-    name: Cloud Reporting (Advanced)
+    name: Cloud Reporting (Experimental)
     description: "When enabled, the emulated CT periodically reports to the Marstek cloud (hamedata.com) over plain HTTP, like a real CT does — live grid power, the per-phase charge/discharge split, signal, battery count and link state. Disabled by default. The cloud only stores reports for a device id it already knows from pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured). Only applies to CT002/CT003 device types."
   cloud_reporting_host:
     name: Cloud Reporting Host
