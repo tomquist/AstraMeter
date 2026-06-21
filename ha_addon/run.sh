@@ -110,10 +110,16 @@ else
     fi
 
     # Emit the cloud-reporting keys (if any) into the current [CT00x] section.
+    # The trailing `return 0` is required: the last `[ -n ... ] && echo` is a
+    # no-op when the key is unset (the common case), which would make the
+    # function return 1. Under `set -e` a bare call to a function returning
+    # non-zero aborts the whole script — silently, since we're inside the
+    # `{ ... } > "$CONFIG"` block — so the add-on never started (issue #510).
     emit_cloud_reporting() {
         [ -n "$cloud_reporting" ] && echo "CLOUD_REPORTING=$cloud_reporting"
         [ -n "$cloud_reporting_host" ] && echo "CLOUD_REPORTING_HOST=$cloud_reporting_host"
         [ -n "$cloud_reporting_interval" ] && echo "CLOUD_REPORTING_INTERVAL=$cloud_reporting_interval"
+        return 0
     }
 
     # Generate default config
@@ -266,8 +272,10 @@ fi
 
 print_redacted_config "$CONFIG"
 
-# Wait for Home Assistant to be ready before starting
-wait_for_homeassistant
+# Wait for Home Assistant to be ready before starting. It returns non-zero on
+# timeout (and logs a warning) but we continue anyway, so guard the bare call
+# from `set -e`.
+wait_for_homeassistant || true
 
 . /app/.venv/bin/activate
 cd /app
