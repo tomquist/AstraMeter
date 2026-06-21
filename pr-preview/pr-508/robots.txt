@@ -1,4 +1,5 @@
+# Staging (/develop/) and PR previews (/pr-preview/) are kept out of search via a
+# per-page <meta name="robots" content="noindex"> on those builds, not blocked
+# here — a crawler must be able to fetch the page to honor the noindex.
 User-agent: *
-# Staging and PR previews live under these paths; keep them out of search indexes.
-Disallow: /develop/
-Disallow: /pr-preview/
+Disallow:
