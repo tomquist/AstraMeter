@@ -51,7 +51,7 @@ THROTTLE_INTERVAL = 0
 # CONSUMER_TTL = 120
 ## Log concise status (phase consumption + consumer charge/discharge) on each request when enabled
 # DEBUG_STATUS = False
-## --- HTTP cloud reporting (opt-in, advanced) ---
+## --- HTTP cloud reporting (opt-in, experimental) ---
 ## Mimic what a real CT does: periodically GET hamedata.com's setCtReporting with
 ## live grid power, the charge/discharge buckets, RSSI, slave count and link
 ## flags (the HME-4/HME-3 field layout follows the emulated device type). Plain

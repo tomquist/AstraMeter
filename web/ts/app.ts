@@ -488,7 +488,7 @@ function ctCard(): HTMLElement | null {
     group("DC battery keep-alive", CT_DC_KEEPALIVE),
     group("Efficiency optimization (AC batteries only)", CT_EFFICIENCY),
     group("Saturation handling", CT_SATURATION),
-    group("Cloud reporting (advanced)", CT_CLOUD),
+    group("Cloud reporting (experimental)", CT_CLOUD),
   ]);
 }
 
