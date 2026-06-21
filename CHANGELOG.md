@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.1
+
+- **Fixed** the Home Assistant add-on failing to start on 2.2.0 — it exited immediately on every launch (looping with no log output) for anyone not using a custom config file. Updating to this version restores normal startup ([#510](https://github.com/tomquist/astrameter/issues/510), [#511](https://github.com/tomquist/astrameter/issues/511), [#513](https://github.com/tomquist/astrameter/pull/513)).
+
+
 ## 2.2.0
 
 - **Added** opt-in, **experimental** **HTTP cloud reporting** for the CT002/CT003 emulator (Python and ESPHome): when enabled, AstraMeter periodically pushes live readings to Marstek's cloud (`hamedata.com`) the way a real CT does. Off by default and marked experimental — how (and whether) the data surfaces in the Marstek app isn't fully confirmed yet. See [docs/marstek-mqtt-http.md](docs/marstek-mqtt-http.md#6-http-cloud-reporting-both-models) ([#500](https://github.com/tomquist/astrameter/pull/500), [#506](https://github.com/tomquist/astrameter/pull/506), [#507](https://github.com/tomquist/astrameter/pull/507)).
