@@ -88,23 +88,17 @@ every push that touches `web/`:
 - **Production** — pushes to **`main`** publish to the site **root**, served at
   the custom domain [`https://astrameter.com/`](https://astrameter.com/) (the
   `CNAME` file in `web/` is published to the `gh-pages` root by the build).
-- **Staging** — pushes to **`develop`** publish under **`/develop/`**, kept off
-  the production domain by the in-page guard (see *Production domain* below):
-  `https://<user>.github.io/<repo>/develop/`
+- **Staging** — pushes to **`develop`** publish under **`/develop/`**:
+  `https://astrameter.com/develop/`
 - **Per-PR previews** — the *Deploy PR preview* workflow deploys each pull
   request to `pr-preview/pr-<number>/` and comments the live URL on the PR; it's
   removed when the PR closes. (Same-repo branches only; forks can't write
   `gh-pages`.)
 
 Root, `/develop/`, and `/pr-preview/` all coexist on `gh-pages` (`keep_files:
-true`). The site uses only relative URLs, so it works under any subpath.
-
-**Production domain is for production only.** Both HTML pages carry a tiny inline
-guard that, when served on a non-`github.io` host (i.e. `astrameter.com`),
-redirects any `/develop/` or `/pr-preview/` path back to the production root — so
-staging and PR previews don't open on the public domain. `robots.txt` also
-disallows those paths. (Note: GitHub redirects the `*.github.io` URLs to the
-custom domain, so staging/previews are not independently browsable there either.)
+true`). The site uses only relative URLs, so it works under any subpath. They all
+serve under the custom domain; `robots.txt` keeps `/develop/` and `/pr-preview/`
+out of search indexes so only production gets indexed.
 
 ### GitHub links track the deployed ref
 

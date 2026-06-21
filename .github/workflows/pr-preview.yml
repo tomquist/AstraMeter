@@ -90,7 +90,7 @@ jobs:
           number: ${{ github.event.number }}
           message: |
             🚀 Preview for this PR is deployed at
-            https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.number }}/
+            https://astrameter.com/pr-preview/pr-${{ github.event.number }}/
 
             It will be live once the GitHub Pages deployment finishes.
 
