@@ -6,10 +6,10 @@
     <title>How balancing works — AstraMeter</title>
     <meta
       name="description"
-      content="An interactive, plain-language look at how AstraMeter steers one or more Marstek batteries to keep your grid power at zero — and the tricks that keep the chase smooth."
+      content="An interactive, plain-language look at how AstraMeter steers one or more Marstek batteries to keep your grid power at zero — raced live against a plain meter-follower."
     />
     <meta property="og:title" content="How AstraMeter balances your batteries" />
-    <meta property="og:description" content="Watch AstraMeter chase your grid power to zero in real time — and flip off the tricks that keep it smooth to see why they matter." />
+    <meta property="og:description" content="Watch AstraMeter hold your grid power at zero in real time, side by side with a plain meter-follower that overshoots and hunts." />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="https://astrameter.com/assets/astrameter-logo.png" />
     <meta name="theme-color" content="#020617" />
@@ -58,52 +58,29 @@
                 <canvas id="sim-canvas" aria-label="Live grid-balancing simulation"></canvas>
               </div>
               <div class="sim-legend">
-                <span><i class="key key-grid"></i> Grid power <small>(the line we want at zero)</small></span>
-                <span><i class="key key-load"></i> House load</span>
-                <span><i class="key key-batt"></i> Battery output</span>
+                <span><i class="key key-smart"></i> <strong>AstraMeter</strong> — stays balanced</span>
+                <span><i class="key key-naive"></i> Plain meter-follower — hunts</span>
               </div>
               <div class="sim-readouts">
                 <div class="sim-readout"><span class="sim-r-label">House is using</span><strong id="r-load">— W</strong></div>
-                <div class="sim-readout"><span class="sim-r-label">Battery gives</span><strong id="r-batt">— W</strong></div>
-                <div class="sim-readout"><span class="sim-r-label">Grid (goal: 0)</span><strong id="r-grid">— W</strong></div>
-              </div>
-              <div class="sim-score">
-                <div class="sim-score-head">
-                  <span>Steadiness</span><span id="sim-score-label">—</span>
-                </div>
-                <div class="sim-score-track"><div id="sim-score-bar" class="sim-score-bar"></div></div>
+                <div class="sim-readout sim-readout-ok"><span class="sim-r-label">AstraMeter grid</span><strong id="r-smart">— W</strong></div>
+                <div class="sim-readout sim-readout-bad" id="r-naive-wrap"><span class="sim-r-label">Plain follower grid</span><strong id="r-naive">— W</strong></div>
               </div>
             </div>
 
             <aside class="sim-panel">
-              <h3>Try switching off the tricks</h3>
-              <p class="help">Each one keeps the chase smooth. Turn them off and watch the grid line start to
-                overshoot and hunt — that's the problem each trick exists to solve.</p>
+              <h3>The same home, two controllers</h3>
+              <p class="help">Both lines are driven by the <em>same</em> household — the kettle, the oven, a cloud
+                over the solar. The <strong style="color: var(--bad)">plain meter-follower</strong> just reacts to
+                the meter, which always reports a moment late, so it overshoots and hunts. <strong style="color: var(--ok)">AstraMeter</strong>
+                predicts where the grid really is, eases the battery in, and damps any wobble — so it sits on zero.</p>
 
               <label class="sim-toggle">
-                <input type="checkbox" id="t-predictor" checked />
+                <input type="checkbox" id="t-naive" checked />
                 <span class="sim-toggle-box"></span>
                 <span class="sim-toggle-text">
-                  <strong>Latency compensation</strong>
-                  <small>The meter reports a moment late. AstraMeter predicts where the grid really is right now, so it stops re-issuing corrections already on their way.</small>
-                </span>
-              </label>
-
-              <label class="sim-toggle">
-                <input type="checkbox" id="t-pacing" checked />
-                <span class="sim-toggle-box"></span>
-                <span class="sim-toggle-text">
-                  <strong>Smooth ramping</strong>
-                  <small>Eases the battery toward its new target instead of slamming the full change in one step — so a sudden load change doesn't fling the grid the other way.</small>
-                </span>
-              </label>
-
-              <label class="sim-toggle">
-                <input type="checkbox" id="t-damping" checked />
-                <span class="sim-toggle-box"></span>
-                <span class="sim-toggle-text">
-                  <strong>Anti-oscillation</strong>
-                  <small>If corrections keep flip-flopping, it's a sign of hunting — so AstraMeter gently backs off the gain until things settle, without slowing real changes.</small>
+                  <strong>Show the plain meter-follower</strong>
+                  <small>Hide it to watch AstraMeter on its own, or keep it on to compare the two side by side.</small>
                 </span>
               </label>
 
