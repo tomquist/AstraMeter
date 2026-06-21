@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 2.2.1
 
 - **Fixed** the Home Assistant add-on failing to start on 2.2.0 — it exited immediately on every launch (looping with no log output) for anyone not using a custom config file. Updating to this version restores normal startup ([#510](https://github.com/tomquist/astrameter/issues/510), [#511](https://github.com/tomquist/astrameter/issues/511), [#513](https://github.com/tomquist/astrameter/pull/513)).
 
