@@ -1,13 +1,13 @@
 # Configuration Reference
 
 > **New to AstraMeter?** The
-> [**config generator**](https://tomquist.github.io/astrameter/generator.html)
+> [**config generator**](https://astrameter.com/generator.html)
 > asks a few questions about your power meter and produces a ready-to-use
 > `config.ini` or ESPHome YAML, explaining each option along the way. You can
 > save, share, and reload your answers. It's the easiest way to get a working
 > configuration. (The generator is part of the
-> [AstraMeter website](../web/); once Pages is enabled it's hosted at the
-> repository's GitHub Pages URL, and you can also run it locally from `web/`.)
+> [AstraMeter website](../web/), hosted at [astrameter.com](https://astrameter.com),
+> and you can also run it locally from `web/`.)
 
 Configuration is managed via a `config.ini` file. This page documents the
 options that apply across the whole app and to every powermeter. For details

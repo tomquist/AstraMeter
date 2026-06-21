@@ -29,7 +29,7 @@ It does this by emulating one or more of these devices:
 ## ⚡ Quick start with the config generator
 
 The easiest way to get going is the
-[**config generator**](https://tomquist.github.io/astrameter/generator.html): a
+[**config generator**](https://astrameter.com/generator.html): a
 beginner-friendly tool that asks a few questions about your power meter and
 produces a ready-to-use `config.ini` (Home Assistant add-on / Docker / direct
 install) or ESPHome YAML, explaining each option as you go. It runs entirely in
@@ -65,7 +65,7 @@ Energy Manager, HomeWizard, Enphase Envoy, SMA Energy Meter, FRITZ!Smart Energy
 ## Configuration
 
 Configuration is managed via a `config.ini` file (or ESPHome YAML on an ESP32).
-Start with the [**config generator**](https://tomquist.github.io/astrameter/generator.html),
+Start with the [**config generator**](https://astrameter.com/generator.html),
 then consult the reference docs as needed:
 
 - **[Configuration reference](docs/configuration.md)** — general options, value

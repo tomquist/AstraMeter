@@ -83,10 +83,11 @@ can push to `gh-pages`).
 The *Deploy config generator to GitHub Pages* workflow builds and publishes on
 every push that touches `web/`:
 
-- **Production** — pushes to **`main`** publish to the site **root**:
-  `https://<user>.github.io/<repo>/`
+- **Production** — pushes to **`main`** publish to the site **root**, served at
+  the custom domain [`https://astrameter.com/`](https://astrameter.com/) (the
+  `CNAME` file in `web/` is published to the `gh-pages` root by the build).
 - **Staging** — pushes to **`develop`** publish under **`/develop/`**:
-  `https://<user>.github.io/<repo>/develop/`
+  `https://astrameter.com/develop/`
 - **Per-PR previews** — the *Deploy PR preview* workflow deploys each pull
   request to `pr-preview/pr-<number>/` and comments the live URL on the PR; it's
   removed when the PR closes. (Same-repo branches only; forks can't write

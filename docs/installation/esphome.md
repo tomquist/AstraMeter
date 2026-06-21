@@ -8,7 +8,7 @@ already addressable by ESPHome (Modbus, M-Bus, Tasmota, MQTT, Shelly, Envoy,
 etc.).
 
 > **Tip:** The
-> [config generator](https://tomquist.github.io/astrameter/generator.html) can
+> [config generator](https://astrameter.com/generator.html) can
 > produce a ready-to-flash ESPHome YAML — pick the "ESPHome (run on an ESP32)"
 > target.
 

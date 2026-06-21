@@ -13,7 +13,7 @@ await rm(outdir, { recursive: true, force: true });
 await mkdir(`${outdir}/js`, { recursive: true });
 
 // Static assets, copied verbatim.
-for (const item of ["index.html", "generator.html", "css", "assets"]) {
+for (const item of ["index.html", "generator.html", "css", "assets", "CNAME"]) {
   await cp(item, `${outdir}/${item}`, { recursive: true });
 }
 

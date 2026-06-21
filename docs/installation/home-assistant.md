@@ -5,7 +5,7 @@ use Home Assistant. It provides a user-friendly configuration interface and
 integrates seamlessly with your installation.
 
 > **Tip:** Prefer a guided setup? The
-> [config generator](https://tomquist.github.io/astrameter/generator.html) can
+> [config generator](https://astrameter.com/generator.html) can
 > produce a ready-to-paste Home Assistant add-on options block — pick the
 > "Home Assistant add-on" target.
 

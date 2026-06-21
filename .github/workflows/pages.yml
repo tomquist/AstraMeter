@@ -4,9 +4,9 @@ name: Deploy config generator to GitHub Pages
 # which GitHub Pages serves at the repository's Pages URL.
 #
 #   push to main    -> published to the site ROOT (production)
-#                      https://<user>.github.io/<repo>/
+#                      https://astrameter.com/ (custom domain via web/CNAME)
 #   push to develop -> published under /develop/ (staging)
-#                      https://<user>.github.io/<repo>/develop/
+#                      https://astrameter.com/develop/
 #
 # The GitHub ref the site links to is baked into the bundle at build time via
 # GH_REF (see web/ts/links.ts), so a main build links to @main, develop to
