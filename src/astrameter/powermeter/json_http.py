@@ -2,20 +2,11 @@ import json
 
 import aiohttp
 from aiohttp import BasicAuth, ClientTimeout
-from jsonpath_ng.ext import parse
 
 from astrameter.config.logger import logger
 
 from .base import Powermeter
-
-
-def extract_json_value(data, path):
-    jsonpath_expr = parse(path)
-    match = jsonpath_expr.find(data)
-    if match:
-        return float(match[0].value)
-    else:
-        raise ValueError("No match found for the JSON path")
+from .json_utils import extract_json_value
 
 
 class JsonHttpPowermeter(Powermeter):
