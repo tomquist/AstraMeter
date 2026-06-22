@@ -3,10 +3,11 @@
 **Primary use:** publish CT002/Shelly internal state (grid power, targets,
 saturation, topology, switches) to MQTT. Home Assistant gets **optional MQTT
 Device Discovery** so entities show up automatically, but the underlying topics
-are **plain JSON on stable paths** — you can consume them from Node-RED,
-openHAB, Telegraf/Grafana, `mosquitto_sub`, or any custom script **without Home
-Assistant**. The [Topic reference](#topic-reference) below documents every topic
-and payload so you can build your own dashboards and automations.
+are **plain JSON on stable paths** — Home Assistant is just one optional
+consumer, and you can read and command the same topics from Node-RED, openHAB,
+Telegraf/Grafana, `mosquitto_sub`, or any custom MQTT client. The
+[Topic reference](#topic-reference) below documents every topic and payload so
+you can build your own dashboards and automations.
 
 **Home Assistant app:** With the Mosquitto add-on installed, MQTT Insights is
 auto-configured; entities appear without manual `[MQTT_INSIGHTS]` wiring.
@@ -195,7 +196,7 @@ interval when no battery is reading them. A multi-phase source whose value
 simply stops changing (an idle circuit reporting a steady number) stays
 **online** — only an unavailable/missing reading marks it offline.
 
-### Command topics (set values without Home Assistant)
+### Command topics (set values from any MQTT client)
 
 AstraMeter **subscribes** to the topics below; publish to them from any client
 to change settings live. Publishing **retained** is recommended — AstraMeter
@@ -266,7 +267,7 @@ exact online/offline semantics.
 
 When HA discovery is on, each battery gets a few **config** entities you can set
 live from Home Assistant. Each maps to a command topic in
-[Command topics](#command-topics-set-values-without-home-assistant), so the same
+[Command topics](#command-topics-set-values-from-any-mqtt-client), so the same
 controls are available to any MQTT client:
 
 - **Manual Target** / **Auto Target** — override a battery's power, or hand it
