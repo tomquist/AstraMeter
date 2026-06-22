@@ -204,7 +204,7 @@ class HomeAssistant(Powermeter):
                     self._update_entity_value(eid, None)
 
     async def _handle_message(
-        self, ws: aiohttp.ClientWebSocketResponse, raw: str
+        self, ws: aiohttp.ClientWebSocketResponse[bool], raw: str
     ) -> None:
         try:
             msg = json.loads(raw)
