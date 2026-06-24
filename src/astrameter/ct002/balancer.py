@@ -1436,7 +1436,9 @@ class LoadBalancer:
         # absorb; zero-weight units were asked to take no share) all on the *same*
         # phase (``control_grid`` sums phases, so concentrating across phases makes
         # one battery hunt). Gated on ``fair_distribution``, being a fair-share
-        # strategy.
+        # strategy, and on the pool already being balanced
+        # (``_concentration_pool_balanced``) so it never suppresses the
+        # equalization of a real imbalance (issue #523).
         conc_ids = [
             cid
             for cid in reports
@@ -1452,6 +1454,7 @@ class LoadBalancer:
             and consumer_id in conc_ids
             and 0 < abs(control_grid) < cfg.concentrate_deadband
             and len({(reports[c].get("phase") or "A").upper() for c in conc_ids}) == 1
+            and self._concentration_pool_balanced(reports, conc_ids)
         ):
             designated = max(
                 conc_ids,
@@ -1716,6 +1719,44 @@ class LoadBalancer:
         state.pace_prev_reported = reported
         limit = max(base, cap * dt_ratio)
         return max(-limit, min(limit, reading))
+
+    def _concentration_pool_balanced(self, reports: dict, conc_ids: list[str]) -> bool:
+        """True iff every battery in *conc_ids* already sits at its fair share.
+
+        Deadband concentration (see ``_compute_auto_target``) hands the whole
+        small grid correction to one battery and *bypasses* balance correction
+        for that tick.  That is only safe once the pool is already balanced —
+        its job is to push a tiny residual past the firmware deadband at steady
+        state, not to override active rebalancing.  If a real imbalance exists
+        (issue #523: one Venus charging at 88 W while the other takes 890 W),
+        concentrating near a near-zero grid would pin that split forever because
+        the equalizing ``_balance_correction`` never runs.
+
+        A battery is "in balance" when its reported output is within
+        ``balance_deadband`` of its weight-proportional share of the pool total
+        — the same target/deadband ``_balance_correction`` uses, so the two
+        agree on what counts as balanced.  Mirrors the C++ port
+        (balancer.cpp ``concentration_pool_balanced_``).
+        """
+        deadband = self._cfg.balance_deadband
+        if deadband <= 0:
+            # No deadband means balance correction always runs at full authority;
+            # never let concentration suppress it.
+            return False
+        actual_total = sum(
+            parse_int(reports.get(cid, {}).get("power", 0)) for cid in conc_ids
+        )
+        weights = {cid: _report_weight(reports.get(cid, {})) for cid in conc_ids}
+        total_weight = sum(weights.values())
+        for cid in conc_ids:
+            actual_self = parse_int(reports.get(cid, {}).get("power", 0))
+            if total_weight > 0:
+                target_share = actual_total * weights[cid] / total_weight
+            else:
+                target_share = actual_total / len(conc_ids)
+            if abs(target_share - actual_self) >= deadband:
+                return False
+        return True
 
     def _balance_correction(
         self,

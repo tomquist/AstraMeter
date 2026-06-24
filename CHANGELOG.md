@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** uneven charging/discharging across multiple batteries sharing a phase (e.g. two Marstek Venus E3 where one sat at ~88 W while the other took ~890 W and never equalized), a regression in 2.2.0. The steady-state deadband optimization now steps aside whenever the batteries are actually out of balance, so they're pulled back to an even split instead of staying lopsided ([#523](https://github.com/tomquist/astrameter/issues/523)).
+
 
 ## 2.2.1
 

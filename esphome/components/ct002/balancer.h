@@ -334,6 +334,8 @@ class LoadBalancer {
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
+  bool concentration_pool_balanced_(const ReportMap &reports,
+                                    const std::vector<const std::string *> &conc_ids);
   float pace_reading_(const std::string &consumer_id, float reading, float reported);
   float damp_oscillation_(const std::string &consumer_id, float residual);
   float predict_control_grid_(const ReportMap &reports, float grid_total,

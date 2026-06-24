@@ -735,8 +735,10 @@ class TestGridPredictor:
 class TestConcentrateDeadband:
     """Opt-in deadband concentration: when the grid error is small enough that a
     fair-share split would drop each battery below its firmware deadband, the
-    whole correction is handed to the single most-active battery. Mirrored by the
-    C++ port and the differential parity suite."""
+    whole correction is handed to the single most-active battery. Only engages
+    on an already-balanced pool, so it never suppresses equalization of a real
+    imbalance (issue #523). Mirrored by the C++ port and the differential parity
+    suite."""
 
     def _lb(self, **cfg):
         # Disable the grid predictor so the test exercises the raw control grid
@@ -793,13 +795,36 @@ class TestConcentrateDeadband:
 
     def test_small_error_concentrated_on_most_active_battery(self):
         lb = self._lb(concentrate_deadband=60)
-        reports = self._reports()
-        # 30 W error < 60 W threshold: the most-active battery (a, 200 W) takes
-        # the whole correction; the other is left untouched.
+        # An *already-balanced* pool (both within balance_deadband of their
+        # 150 W fair share): concentration is safe here. 30 W error < 60 W
+        # threshold, so the most-active battery (a, 160 W) takes the whole
+        # correction and the other is left untouched.
+        reports = {
+            "a": {"device_type": "HMG-50", "phase": "A", "power": 160},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 140},
+        }
         a = self._target(lb, "a", reports, 30)
         b = self._target(lb, "b", reports, 30)
         assert a == pytest.approx(30.0, abs=1.0)
         assert b == pytest.approx(0.0, abs=1e-6)
+
+    def test_imbalanced_pool_is_not_concentrated(self):
+        # Regression for issue #523: two Venus E3 charging unevenly (one at
+        # 88 W, the other at 890 W). The grid error is small (< 60 W), so the
+        # pre-fix concentration handed the whole correction to the most-active
+        # battery and *bypassed* balance correction — pinning the split forever.
+        # With the balance gate, an out-of-balance pool falls through to
+        # balance correction so the lagging battery is pulled back toward its
+        # fair share instead of being left at 0.
+        lb = self._lb(concentrate_deadband=60)
+        reports = {
+            "a": {"device_type": "VNSE3", "phase": "A", "power": -890},
+            "b": {"device_type": "VNSE3", "phase": "A", "power": -88},
+        }
+        # Small surplus (charge territory): the lagging battery (b) must keep
+        # charging more rather than being parked at 0 by concentration.
+        b = self._target(lb, "b", reports, -30)
+        assert b < -1.0
 
     def test_large_error_still_split(self):
         lb = self._lb(concentrate_deadband=60)
@@ -822,10 +847,12 @@ class TestConcentrateDeadband:
         # active among the weighted batteries) takes it and ``a`` stays at 0.
         # Needs a third battery so the candidate set still has >1 after dropping
         # ``a`` (otherwise concentration wouldn't fire at all).
+        # b and c sit at their fair share (75 W each, within balance_deadband)
+        # so the pool is balanced and concentration engages.
         reports = {
             "a": {"device_type": "HMG-50", "phase": "A", "power": 200, "weight": 0.0},
-            "b": {"device_type": "HMG-50", "phase": "A", "power": 100},
-            "c": {"device_type": "HMG-50", "phase": "A", "power": 50},
+            "b": {"device_type": "HMG-50", "phase": "A", "power": 80},
+            "c": {"device_type": "HMG-50", "phase": "A", "power": 70},
         }
         assert self._target(lb, "a", reports, 30) == pytest.approx(0.0, abs=1e-6)
         assert self._target(lb, "b", reports, 30) == pytest.approx(30.0, abs=1.0)
