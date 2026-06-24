@@ -43,7 +43,8 @@ improved/regressed and the mean relative change), so an across-the-board
 improvement or regression is visible without reading every scenario table. A
 second **priority verdict** sits below it: a value-weighted score (`_METRIC_WEIGHTS`
 — `cost_regret_ct` money north-star, import-heavy self-consumption energy,
-do-no-harm overshoot/hunting guardrails, cycle-life battery travel) plus a hard
+do-no-harm overshoot/hunting guardrails, cycle-life battery travel and
+`share_imbalance_w` inter-battery fairness) plus a hard
 flag when any do-no-harm guardrail (`_GUARDRAIL_METRICS`: overshoot,
 band-crossings, grid p2p, avoidable grid import, and cost regret) regresses past
 5% (or appears from a zero base). Read the flat mean for "did most numbers move
