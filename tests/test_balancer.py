@@ -826,6 +826,25 @@ class TestConcentrateDeadband:
         b = self._target(lb, "b", reports, -30)
         assert b < -1.0
 
+    def test_imbalanced_pool_equalizes_from_both_sides(self):
+        # Issue #523 regression-cost fix: the equalizing swap is zero-sum across
+        # the phase, so it must move *both* batteries — the under-charging one
+        # charges more AND the over-charging one backs off. The over-charging
+        # battery's "back off" half opposes the surplus grid direction; the old
+        # blanket sign clamp zeroed it, leaving equalization one-sided (only the
+        # under-charging battery moved), which pushed the pool's net output
+        # around and disturbed the grid. Clamping only the grid-tracking half
+        # lets the grid-neutral swap through.
+        lb = self._lb(concentrate_deadband=60)
+        reports = {
+            "a": {"device_type": "VNSE3", "phase": "A", "power": -890},
+            "b": {"device_type": "VNSE3", "phase": "A", "power": -88},
+        }
+        a = self._target(lb, "a", reports, -30)
+        b = self._target(lb, "b", reports, -30)
+        assert b < 0  # under-charging battery charges more
+        assert a > 0  # over-charging battery backs off (was clamped to 0 before)
+
     def test_large_error_still_split(self):
         lb = self._lb(concentrate_deadband=60)
         reports = self._reports()
@@ -842,21 +861,25 @@ class TestConcentrateDeadband:
     def test_zero_weight_battery_not_designated(self):
         lb = self._lb(concentrate_deadband=60)
         # ``a`` is the most-active (200 W) but configured to take no share
-        # (weight 0). Without excluding it from candidates it would be picked as
-        # designee and swallow the whole correction; instead ``b`` (next most
-        # active among the weighted batteries) takes it and ``a`` stays at 0.
-        # Needs a third battery so the candidate set still has >1 after dropping
-        # ``a`` (otherwise concentration wouldn't fire at all).
+        # (weight 0). It must not be picked as the concentration designee —
+        # ``b`` (most active among the weighted batteries) takes the +30 grid
+        # correction. Needs a third battery so the candidate set still has >1
+        # after dropping ``a`` (otherwise concentration wouldn't fire at all).
         # b and c sit at their fair share (75 W each, within balance_deadband)
-        # so the pool is balanced and concentration engages.
+        # so the pool is balanced and concentration engages. ``a`` carries no
+        # weight so its fair share is 0; it is wound down toward that share (a
+        # grid-neutral redistribution the active pool absorbs), not frozen at
+        # 200 — so it reduces output rather than being designated.
         reports = {
             "a": {"device_type": "HMG-50", "phase": "A", "power": 200, "weight": 0.0},
             "b": {"device_type": "HMG-50", "phase": "A", "power": 80},
             "c": {"device_type": "HMG-50", "phase": "A", "power": 70},
         }
-        assert self._target(lb, "a", reports, 30) == pytest.approx(0.0, abs=1e-6)
+        a = self._target(lb, "a", reports, 30)
         assert self._target(lb, "b", reports, 30) == pytest.approx(30.0, abs=1.0)
         assert self._target(lb, "c", reports, 30) == pytest.approx(0.0, abs=1e-6)
+        # Not designated (b took the +30) and pulled toward its 0 share.
+        assert a < 0
 
 
 class TestImportTrim:

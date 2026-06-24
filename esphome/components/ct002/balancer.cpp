@@ -949,10 +949,21 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   } else {
     residual = fair_share;
   }
-  if ((control_grid < 0.0f && residual > 0.0f) ||
-      (control_grid > 0.0f && residual < 0.0f)) {
-    residual = 0.0f;
+  // Clamp only the grid-tracking half (fair_share) against the grid direction,
+  // not the balance-correction redistribution. fair_share always carries the
+  // grid's sign by construction, so this guard never fires on it; the balance
+  // term is ~zero-sum across the same-phase pool, so letting it through is
+  // grid-neutral (the over-served battery backs off exactly as the under-served
+  // one takes on). Zeroing the whole residual on a sign disagreement made
+  // equalization one-sided near steady state, pushing the pool's net output
+  // around and disturbing the grid (issue #523 balance fix regressions).
+  // Mirrors balancer.py _compute_auto_target.
+  float tracking = fair_share;
+  if ((control_grid < 0.0f && tracking > 0.0f) ||
+      (control_grid > 0.0f && tracking < 0.0f)) {
+    tracking = 0.0f;
   }
+  residual = tracking + (residual - fair_share);
   if (consumer_id) {
     residual = this->damp_oscillation_(*consumer_id, residual);
   }

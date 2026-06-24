@@ -1481,10 +1481,27 @@ class LoadBalancer:
         else:
             residual = fair_share
 
-        # Clamp sign disagreement: prevent the inverter from acting
-        # against the current (predicted) grid direction.
-        if (control_grid < 0 and residual > 0) or (control_grid > 0 and residual < 0):
-            residual = 0
+        # Split the residual into its grid-tracking and balance-redistribution
+        # halves and clamp only the former against the (predicted) grid
+        # direction.  The grid-tracking share (``fair_share``) always carries the
+        # grid's sign by construction (``control_grid / total_effective *
+        # share``), so this guard never fires on it; what it used to *also* catch
+        # — and must no longer — is the balance-correction term flipping the
+        # residual's sign.  That term is, to first order, zero-sum across the
+        # same-phase pool (``sum(target_share_i - actual_i) == 0``), so applying
+        # it is grid-neutral: the over-served battery backs off by exactly what
+        # the under-served one takes on.  Zeroing the whole residual on a sign
+        # disagreement (the old behaviour) killed the over-served battery's "back
+        # off" half near steady state, so equalization ran one-sided — only the
+        # under-served battery moved, pushing the pool's net output around and
+        # disturbing the grid (the overshoot / slow-settle cost the issue #523
+        # balance fix otherwise carries).  Letting the zero-sum swap through
+        # equalizes without moving the pool's net output.  Mirrors the C++ port
+        # (balancer.cpp ``compute_auto_target_``).
+        tracking = fair_share
+        if (control_grid < 0 and tracking > 0) or (control_grid > 0 and tracking < 0):
+            tracking = 0.0
+        residual = tracking + (residual - fair_share)
 
         if consumer_id:
             residual = self._damp_oscillation(consumer_id, residual)
