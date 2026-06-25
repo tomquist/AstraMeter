@@ -4,7 +4,7 @@
 
 - **Added** the CT002/CT003 active-control and balancing tuning options (ramp pacing, fair distribution, grid prediction, oscillation damping, steady-import trim and more) to the Home Assistant add-on, so they can be changed from the add-on UI instead of a hand-edited config file ([#527](https://github.com/tomquist/astrameter/pull/527)).
 - **Fixed** uneven charging/discharging across multiple batteries sharing a phase (e.g. two Marstek Venus E3 where one sat at ~88 W while the other took ~890 W and never equalized), a regression in 2.2.0. The steady-state deadband optimization now steps aside whenever the batteries are actually out of balance, so they're pulled back to an even split instead of staying lopsided ([#523](https://github.com/tomquist/astrameter/issues/523), [#526](https://github.com/tomquist/astrameter/pull/526)).
-- **Fixed** a full or empty battery not handing its load over to a healthy one under fair distribution when `PACE_BASE_STEP` was set below `MIN_TARGET_FOR_SATURATION` (e.g. 15 vs the default 20), which left part of the surplus imported or exported instead of absorbed ([#522](https://github.com/tomquist/astrameter/issues/522)).
+- **Fixed** a full or empty battery not handing its load over to a healthy one under fair distribution when `PACE_BASE_STEP` was set below `MIN_TARGET_FOR_SATURATION` (e.g. 15 vs the default 20), which left part of the surplus imported or exported instead of absorbed ([#522](https://github.com/tomquist/astrameter/issues/522), [#529](https://github.com/tomquist/astrameter/pull/529)).
 
 
 ## 2.2.1
