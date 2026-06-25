@@ -78,17 +78,18 @@ def parse_full_battery_stream(mac="18cedff579dd"):
     """
     stream = []
     last_actual = 0
-    for ln in open(LOG_PATH):
-        mq = _REQ.search(ln)
-        if mq and mq.group(1) == mac:
-            last_actual = int(mq.group(2))
-            continue
-        mr = _RESP.search(ln)
-        if mr:
-            f = [x.strip().strip("'") for x in mr.group(1).split(",")]
-            # positional: [2]=meter_dev_type [3]=meter_mac [7]=total_power
-            if len(f) > 7 and f[3] == mac:
-                stream.append((int(f[7]), last_actual))
+    with open(LOG_PATH) as fh:
+        for ln in fh:
+            mq = _REQ.search(ln)
+            if mq and mq.group(1) == mac:
+                last_actual = int(mq.group(2))
+                continue
+            mr = _RESP.search(ln)
+            if mr:
+                f = [x.strip().strip("'") for x in mr.group(1).split(",")]
+                # positional: [2]=meter_dev_type [3]=meter_mac [7]=total_power
+                if len(f) > 7 and f[3] == mac:
+                    stream.append((int(f[7]), last_actual))
     return stream
 
 
@@ -106,8 +107,12 @@ def part_a() -> None:
     def replay(min_target: float) -> float:
         clock = _Clock(0.0)
         trk = SaturationTracker(
-            alpha=SAT_ALPHA, min_target=min_target, decay_factor=DECAY,
-            stall_timeout_seconds=STALL_S, enabled=True, clock=clock,
+            alpha=SAT_ALPHA,
+            min_target=min_target,
+            decay_factor=DECAY,
+            stall_timeout_seconds=STALL_S,
+            enabled=True,
+            clock=clock,
         )
         st = BalancerConsumerState()
         trk.set_grace(st, clock() + GRACE_S)  # startup grace, like reset_consumer
@@ -124,8 +129,10 @@ def part_a() -> None:
     print(f"  Venus E3 saturation after ~5 min, reporter's config : {sat_real:.3f}")
     print("    -> never recognised as saturated; keeps its fair share -> surplus")
     print("       exported instead of transferred to Venus A.")
-    print(f"  Same stream if the reading were >= min_target (min_target=10): "
-          f"{sat_if_detectable:.3f}")
+    print(
+        f"  Same stream if the reading were >= min_target (min_target=10): "
+        f"{sat_if_detectable:.3f}"
+    )
     print("    -> stall-timeout fires, battery correctly marked saturated (1.0).\n")
 
 
@@ -135,15 +142,23 @@ def part_a() -> None:
 
 PHASE_IDX = {"A": 0, "B": 1, "C": 2}
 CFG = dict(
-    fair_distribution=True, balance_gain=0.40, balance_deadband=30,
-    max_correction_per_step=150, import_trim_w=8, min_efficient_power=150,
-    efficiency_rotation_interval=900, efficiency_fade_alpha=0.8,
+    fair_distribution=True,
+    balance_gain=0.40,
+    balance_deadband=30,
+    max_correction_per_step=150,
+    import_trim_w=8,
+    min_efficient_power=150,
+    efficiency_rotation_interval=900,
+    efficiency_fade_alpha=0.8,
     efficiency_saturation_threshold=0.4,
 )
 SAT_KW = dict(
-    saturation_alpha=SAT_ALPHA, saturation_min_target=MIN_TARGET,
-    saturation_decay_factor=DECAY, saturation_grace_seconds=GRACE_S,
-    saturation_stall_timeout_seconds=STALL_S, saturation_enabled=True,
+    saturation_alpha=SAT_ALPHA,
+    saturation_min_target=MIN_TARGET,
+    saturation_decay_factor=DECAY,
+    saturation_grace_seconds=GRACE_S,
+    saturation_stall_timeout_seconds=STALL_S,
+    saturation_enabled=True,
 )
 
 
@@ -164,7 +179,8 @@ def part_b_case(pace_base, pace_max):
     clock = _Clock()
     lb = LoadBalancer(
         config=BalancerConfig(pace_base_step=pace_base, pace_max_step=pace_max, **CFG),
-        clock=clock, **SAT_KW,
+        clock=clock,
+        **SAT_KW,
     )
     for tick in range(900):
         reports = {b.mac: {"phase": b.phase, "power": round(b.power)} for b in bats}
@@ -174,9 +190,13 @@ def part_b_case(pace_base, pace_max):
         gt = sum(grid.values())
         tg = {
             b.mac: lb.compute_target(
-                consumer_id=b.mac, consumer_mode=ConsumerMode("auto"),
-                all_reports=reports, grid_total=gt, inactive=frozenset(),
-                manual=frozenset(), sample_id=(tick,),
+                consumer_id=b.mac,
+                consumer_mode=ConsumerMode("auto"),
+                all_reports=reports,
+                grid_total=gt,
+                inactive=frozenset(),
+                manual=frozenset(),
+                sample_id=(tick,),
             )
             for b in bats
         }
@@ -193,14 +213,20 @@ def part_b() -> None:
     print("=" * 78)
     print("PART B — balancer end-to-end. Venus E3 FULL, sweep PACE_BASE_STEP")
     print("=" * 78)
-    print(f"  {'PACE_BASE_STEP':>14} | {'E(full) sat':>11} | {'A charge':>9} | "
-          f"{'grid':>7} |")
+    print(
+        f"  {'PACE_BASE_STEP':>14} | {'E(full) sat':>11} | {'A charge':>9} | "
+        f"{'grid':>7} |"
+    )
     for pb in (15, 19, 20, 0):
         sat, ap, gr = part_b_case(float(pb), max(300.0, float(pb)))
         flag = "  <-- full battery never detected, surplus wasted" if sat < 0.4 else ""
         print(f"  {pb:>14g} | {sat:>11.3f} | {ap:>+9.0f} | {gr:>+7.0f} |{flag}")
-    print("  Reporter ran 15 (< MIN_TARGET 20) -> broken; 0 (their workaround) "
-          "-> fixed.")
+    print(
+        "  Before the fix, PACE_BASE_STEP < MIN_TARGET (15, 19) left the full\n"
+        "  battery at sat 0.000 and ~300 W exported. After the fix (saturation\n"
+        "  keyed off the unpaced command) it saturates and Venus A takes the\n"
+        "  full load at every PACE_BASE_STEP."
+    )
 
 
 def main() -> None:
