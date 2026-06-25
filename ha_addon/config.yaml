@@ -63,6 +63,22 @@ schema:
   efficiency_rotation_interval: int(1,)?
   min_dc_output: float(0,)?
   grid_predict_trust: float(0,1)?
+  fair_distribution: bool?
+  balance_gain: float(0,1)?
+  balance_deadband: int(0,)?
+  max_correction_per_step: int(0,)?
+  error_boost_threshold: int(0,)?
+  error_boost_max: float(0,)?
+  error_reduce_threshold: int(0,)?
+  max_target_step: int(0,)?
+  pace_base_step: int(0,)?
+  pace_max_step: int(0,)?
+  osc_damp_max: float(0,1)?
+  osc_damp_alpha: float(0,1)?
+  osc_damp_decay: float(0,1)?
+  osc_damp_threshold: float(0,)?
+  concentrate_deadband: float(0,)?
+  import_trim_w: float(0,)?
   log_level: list(critical|error|warning|info|debug)
   power_offset: str?
   power_multiplier: str?

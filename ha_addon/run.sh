@@ -122,6 +122,40 @@ else
         return 0
     }
 
+    # Emit the optional CT002/CT003 balancer / active-control tuning knobs (only
+    # the ones the user actually set) into the current [CT00x] section. Mirrors
+    # the "balancer" group of the web config editor; main.py reads each key from
+    # the section with a built-in default, so an unset option simply keeps that
+    # default. The trailing `return 0` guards `set -e` the same way
+    # emit_cloud_reporting does (see the note above).
+    emit_balancer_options() {
+        local pair opt key
+        for pair in \
+            "fair_distribution:FAIR_DISTRIBUTION" \
+            "balance_gain:BALANCE_GAIN" \
+            "balance_deadband:BALANCE_DEADBAND" \
+            "max_correction_per_step:MAX_CORRECTION_PER_STEP" \
+            "error_boost_threshold:ERROR_BOOST_THRESHOLD" \
+            "error_boost_max:ERROR_BOOST_MAX" \
+            "error_reduce_threshold:ERROR_REDUCE_THRESHOLD" \
+            "max_target_step:MAX_TARGET_STEP" \
+            "pace_base_step:PACE_BASE_STEP" \
+            "pace_max_step:PACE_MAX_STEP" \
+            "osc_damp_max:OSC_DAMP_MAX" \
+            "osc_damp_alpha:OSC_DAMP_ALPHA" \
+            "osc_damp_decay:OSC_DAMP_DECAY" \
+            "osc_damp_threshold:OSC_DAMP_THRESHOLD" \
+            "concentrate_deadband:CONCENTRATE_DEADBAND" \
+            "import_trim_w:IMPORT_TRIM_W"; do
+            opt="${pair%%:*}"
+            key="${pair##*:}"
+            if bashio::config.has_value "$opt"; then
+                echo "${key}=$(bashio::config "$opt")"
+            fi
+        done
+        return 0
+    }
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -140,6 +174,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_balancer_options
             emit_cloud_reporting
             echo ""
             echo "[CT003]"
@@ -149,6 +184,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_balancer_options
             emit_cloud_reporting
             echo ""
         else
@@ -159,6 +195,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_balancer_options
             emit_cloud_reporting
             echo ""
         fi
