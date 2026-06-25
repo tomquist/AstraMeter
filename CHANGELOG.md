@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** the CT002/CT003 active-control and load-balancing tuning options to the Home Assistant add-on's Configuration tab (and the add-on output of the web config generator), so settings that were previously config-file only — ramp pacing (Ramp Pacing Base/Max Step), fair distribution and balance gain, grid prediction, oscillation damping, deadband concentration and steady-import trim — can be changed straight from the add-on UI. For example, raising the ramp-pacing steps (or setting the base step to 0) makes the batteries follow large load changes faster instead of in small steps.
+- **Added** the CT002/CT003 active-control and load-balancing tuning options to the Home Assistant add-on's Configuration tab (and the add-on output of the web config generator), so settings that were previously config-file only — ramp pacing (Ramp Pacing Base/Max Step), fair distribution and balance gain, grid prediction, oscillation damping, deadband concentration and steady-import trim — can be changed straight from the add-on UI. For example, raising the ramp-pacing steps (or setting the base step to 0) makes the batteries follow large load changes faster instead of in small steps ([#527](https://github.com/tomquist/astrameter/pull/527)).
 - **Fixed** uneven charging/discharging across multiple batteries sharing a phase (e.g. two Marstek Venus E3 where one sat at ~88 W while the other took ~890 W and never equalized), a regression in 2.2.0. The steady-state deadband optimization now steps aside whenever the batteries are actually out of balance, so they're pulled back to an even split instead of staying lopsided ([#523](https://github.com/tomquist/astrameter/issues/523), [#526](https://github.com/tomquist/astrameter/pull/526)).
 
 
