@@ -667,6 +667,29 @@ export function generateHomeAssistant(state: State): string {
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  // Balancer / active-control tuning (the "balancer" group). These map 1:1 to
+  // the add-on options of the same lower-cased name; only values the user set
+  // are emitted. Fair distribution is a tri-state select in the editor
+  // ("" = default on) but a plain bool add-on option, so only an explicit
+  // On/Off is emitted (like active_control above).
+  add("grid_predict_trust", ctf.GRID_PREDICT_TRUST);
+  if (ctf.FAIR_DISTRIBUTION === "True") add("fair_distribution", true);
+  else if (ctf.FAIR_DISTRIBUTION === "False") add("fair_distribution", false);
+  add("balance_gain", ctf.BALANCE_GAIN);
+  add("balance_deadband", ctf.BALANCE_DEADBAND);
+  add("max_correction_per_step", ctf.MAX_CORRECTION_PER_STEP);
+  add("error_boost_threshold", ctf.ERROR_BOOST_THRESHOLD);
+  add("error_boost_max", ctf.ERROR_BOOST_MAX);
+  add("error_reduce_threshold", ctf.ERROR_REDUCE_THRESHOLD);
+  add("max_target_step", ctf.MAX_TARGET_STEP);
+  add("pace_base_step", ctf.PACE_BASE_STEP);
+  add("pace_max_step", ctf.PACE_MAX_STEP);
+  add("osc_damp_max", ctf.OSC_DAMP_MAX);
+  add("osc_damp_alpha", ctf.OSC_DAMP_ALPHA);
+  add("osc_damp_decay", ctf.OSC_DAMP_DECAY);
+  add("osc_damp_threshold", ctf.OSC_DAMP_THRESHOLD);
+  add("concentrate_deadband", ctf.CONCENTRATE_DEADBAND);
+  add("import_trim_w", ctf.IMPORT_TRIM_W);
   // Opt-in cloud reporting. The toggle is a tri-state select ("" = default off);
   // the add-on option is a plain bool, so only an explicit On/Off is emitted.
   if (ctf.CLOUD_REPORTING === "True") add("cloud_reporting", true);
