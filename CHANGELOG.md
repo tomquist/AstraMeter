@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** the Home Assistant add-on leaking secrets into its debug log — at log level `debug` the MQTT broker password and your Marstek account email/password could appear in the add-on log (e.g. when sharing it for support). The add-on now redacts passwords, tokens and other credentials from everything it logs ([#520](https://github.com/tomquist/astrameter/discussions/520)).
 - **Fixed** uneven charging/discharging across multiple batteries sharing a phase (e.g. two Marstek Venus E3 where one sat at ~88 W while the other took ~890 W and never equalized), a regression in 2.2.0. The steady-state deadband optimization now steps aside whenever the batteries are actually out of balance, so they're pulled back to an even split instead of staying lopsided ([#523](https://github.com/tomquist/astrameter/issues/523), [#526](https://github.com/tomquist/astrameter/pull/526)).
 
 
