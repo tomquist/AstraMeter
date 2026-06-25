@@ -11,6 +11,14 @@ set -e
 read -r -d '' __ASTRAMETER_REDACT_PY <<'PYEOF' || true
 import re, sys
 
+# Stay alive on non-UTF-8 bytes: this filter is in the critical log path, so a
+# single undecodable byte must not crash it and break SIGPIPE-sensitive writers.
+try:
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 PATTERNS = [
     # JSON: "<...password|token|secret|username|mailbox...>": "<value>"
     (re.compile(
@@ -67,7 +75,7 @@ CONFIG="/app/config.ini"
 
 print_redacted_config() {
     sed -E \
-        -e 's/^((MAILBOX|PASSWORD|ACCESSTOKEN|TOKEN|SECRET))\s*=\s*.*/\1 = REDACTED/i' \
+        -e 's/^((MAILBOX|USERNAME|PASSWORD|ACCESSTOKEN|TOKEN|SECRET))\s*=\s*.*/\1 = REDACTED/i' \
         -e 's#^(URI\s*=\s*[a-zA-Z][a-zA-Z0-9+.-]*://)[^/@[:space:]]+@#\1***:***@#i' \
         "$1"
 }
