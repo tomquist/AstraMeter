@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Reproduction for issue #522 — pace settings break saturation detection.
 
-The reporter's posted debug log (issue522_logs.txt, alongside this file) is the
-ground truth. Setup decoded from it:
+The setup is decoded from the reporter's posted debug log:
 
   * Venus E3 (VNSE3-0, phase A) is FULL — it reports power=0 every poll.
   * Venus A  (VNSA-0,  phase B) is healthy and charging (ramps -341 -> -569 W).
@@ -11,14 +10,14 @@ ground truth. Setup decoded from it:
 
 Two parts:
 
-  PART A — log replay (ground truth). Feeds Venus E3's actual (=0) and the
-  exact reading the balancer sent it (total_power = -15 every poll, read
-  straight out of the log) through the real SaturationTracker with the
-  reporter's config. The score never leaves 0: because |reading|=15 is below
-  MIN_TARGET=20, every tick takes the "idle" decay branch, and the stall-timeout
-  rescue (which would force the score to 1.0) also can't fire because it too
-  requires |target| >= MIN_TARGET. So the full battery is never recognised as
-  saturated and keeps its fair share of a surplus it cannot absorb.
+  PART A — saturation tracker replay. Feeds Venus E3's actual (=0) and the exact
+  reading the balancer sent it in the log (total_power = -15 every poll) through
+  the real SaturationTracker with the reporter's config. The score never leaves
+  0: because |reading|=15 is below MIN_TARGET=20, every tick takes the "idle"
+  decay branch, and the stall-timeout rescue (which would force the score to
+  1.0) also can't fire because it too requires |target| >= MIN_TARGET. So the
+  full battery is never recognised as saturated and keeps its fair share of a
+  surplus it cannot absorb.
 
   PART B — balancer end-to-end. Replays the same scenario through the real
   LoadBalancer and shows the resulting symptom and the sharp dependence on
@@ -29,8 +28,6 @@ Run: uv run python tests/issue_repros/repro_issue522.py
 
 from __future__ import annotations
 
-import os
-import re
 import time
 
 from astrameter.ct002.balancer import (
@@ -40,8 +37,6 @@ from astrameter.ct002.balancer import (
     LoadBalancer,
     SaturationTracker,
 )
-
-LOG_PATH = os.path.join(os.path.dirname(__file__), "issue522_logs.txt")
 
 # Reporter's CT003 tuning.
 MIN_TARGET = 20
@@ -63,34 +58,13 @@ class _Clock:
 
 
 # ---------------------------------------------------------------------------
-# PART A — replay Venus E3's real (actual, reading) stream from the log
+# PART A — replay the FULL battery's (reading, actual) stream from the log
 # ---------------------------------------------------------------------------
 
-_RESP = re.compile(r"response to.*fields=\[([^\]]*)\]")
-_REQ = re.compile(r"parsed fields.*meter_mac=(\w+).*power=(-?\d+) consumer_id=(\w+)")
-
-
-def parse_full_battery_stream(mac="18cedff579dd"):
-    """Return [(reading_sent, actual_power)] for the full battery, from the log.
-
-    reading_sent is the response 'total_power' field (== the balancer's stored
-    last_target); actual_power is the most recent reported power for that mac.
-    """
-    stream = []
-    last_actual = 0
-    with open(LOG_PATH) as fh:
-        for ln in fh:
-            mq = _REQ.search(ln)
-            if mq and mq.group(1) == mac:
-                last_actual = int(mq.group(2))
-                continue
-            mr = _RESP.search(ln)
-            if mr:
-                f = [x.strip().strip("'") for x in mr.group(1).split(",")]
-                # positional: [2]=meter_dev_type [3]=meter_mac [7]=total_power
-                if len(f) > 7 and f[3] == mac:
-                    stream.append((int(f[7]), last_actual))
-    return stream
+# Decoded from the reporter's log: over all 36 of the full battery's polls the
+# balancer sent it total_power = -15 (the pace_base_step floor) every time while
+# it reported 0 W. Inlined here so this repro needs no vendored log file.
+FULL_BATTERY_STREAM = [(-15, 0)] * 36  # (reading_sent, actual_power) per poll
 
 
 def part_a() -> None:
@@ -98,7 +72,7 @@ def part_a() -> None:
     print("PART A — log replay of the FULL battery (Venus E3) through the real")
     print(f"          SaturationTracker (MIN_TARGET_FOR_SATURATION={MIN_TARGET})")
     print("=" * 78)
-    stream = parse_full_battery_stream()
+    stream = FULL_BATTERY_STREAM
     readings = {r for r, _ in stream}
     print(f"  log polls for full battery: {len(stream)}")
     print(f"  distinct readings the balancer sent it: {sorted(readings)}  (all |.|<20)")
