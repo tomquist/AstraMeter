@@ -147,6 +147,30 @@ class PythonBackend:
         # binary's `cfg consumer_ttl` control command (-1 = adaptive).
         self.ct002.consumer_ttl = seconds
 
+    def set_manual_target(self, cid: str, value: float) -> None:
+        self.ct002.set_consumer_manual_target(cid, value)
+
+    def set_auto_target(self, cid: str, auto: bool) -> None:
+        self.ct002.set_consumer_auto_target(cid, auto)
+
+    def evict_now(self) -> None:
+        # Run a cleanup pass directly; the production background loop isn't
+        # active in the in-process harness.
+        self.ct002._cleanup_consumers()
+
+    def dump(self) -> dict[str, dict]:
+        # Same per-consumer state the binary's `dump` control serializes:
+        # entries with timestamp <= 0 (never reported) are omitted.
+        return {
+            cid: {
+                "manual_enabled": c.manual_enabled,
+                "manual_target": c.manual_target,
+                "active": c.active,
+            }
+            for cid, c in self.ct002._consumers.items()
+            if c.timestamp > 0
+        }
+
     def poll(self, mac: str, phase: str, power: int):
         transport = _FakeTransport()
         addr = ("127.0.0.1", 50000)  # synthetic; consumer_id keys off meter_mac
@@ -195,6 +219,35 @@ class EsphomeBackend:
 
     def set_consumer_ttl(self, seconds: float | None) -> None:
         self._cmd(f"cfg consumer_ttl {-1 if seconds is None else seconds}")
+
+    def set_manual_target(self, cid: str, value: float) -> None:
+        self._cmd(f"set_manual_target {cid} {value}")
+
+    def set_auto_target(self, cid: str, auto: bool) -> None:
+        self._cmd(f"set_auto_target {cid} {1 if auto else 0}")
+
+    def evict_now(self) -> None:
+        self._cmd("evict")
+
+    def dump(self) -> dict[str, dict]:
+        # Parse the pipe-delimited `dump` reply (can exceed the 128-byte control
+        # reply size, so read with a roomier buffer than _cmd):
+        #   ok|smooth_target=<f>|<cid>,<phase>,<li>,<lt>,<sat>,<active>,<manual>,<reported>,<intent>,<manual_target>|...
+        self._ctrl.sendto(b"dump", ("127.0.0.1", CONTROL_PORT))
+        reply = self._ctrl.recvfrom(2048)[0].decode()
+        assert reply.startswith("ok"), f"dump failed: {reply!r}"
+        out: dict[str, dict] = {}
+        for record in reply.split("|")[2:]:  # skip "ok" and "smooth_target=..."
+            if not record:
+                continue
+            fields = record.split(",")
+            cid = fields[0]
+            out[cid] = {
+                "manual_enabled": fields[6] == "1",
+                "manual_target": float(fields[9]),
+                "active": fields[5] == "1",
+            }
+        return out
 
     def set_sensor_stale(self) -> None:
         # Back-date the sensor stamps so the next read reports the grid sensor
@@ -571,6 +624,42 @@ def test_adaptive_eviction_drops_silent_battery_from_relay_count(backend) -> Non
     assert int(rx[_A_DCHRG]) == 100, (
         f"[{backend.name}] A_dchrg_power should drop the silent battery's 50, "
         f"got {rx[_A_DCHRG]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_manual_override_survives_eviction(backend) -> None:
+    """A user-set manual target/mode is re-seeded onto the fresh consumer when a
+    silent battery is evicted and later returns — on both stacks (issue #520)."""
+    backend.set_clock(1000)
+    backend.set_active_control(True)
+    backend.set_consumer_ttl(10)  # fixed TTL for a deterministic eviction
+    backend.set_grid(0)
+
+    cid = "aabbccddeeff"  # consumer id is the lowercased meter MAC
+
+    # Battery reports, then the user pins a manual target and enters manual mode.
+    assert backend.poll("AABBCCDDEEFF", "A", 0) is not None
+    backend.set_manual_target(cid, 200.0)
+    backend.set_auto_target(cid, False)
+
+    before = backend.dump()
+    assert before[cid]["manual_enabled"] is True
+    assert before[cid]["manual_target"] == 200.0
+
+    # Battery goes silent past the TTL, then the eviction pass drops it.
+    backend.set_clock(1030)
+    backend.evict_now()
+    assert cid not in backend.dump(), f"[{backend.name}] silent battery not evicted"
+
+    # It returns — the override must be re-applied to the recreated consumer.
+    assert backend.poll("AABBCCDDEEFF", "A", 0) is not None
+    revived = backend.dump()[cid]
+    assert revived["manual_enabled"] is True, (
+        f"[{backend.name}] manual mode lost after eviction"
+    )
+    assert revived["manual_target"] == 200.0, (
+        f"[{backend.name}] manual target reset after eviction"
     )
 
 

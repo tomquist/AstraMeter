@@ -54,3 +54,62 @@ def test_set_consumer_efficiency_window_weight_rejects_out_of_range() -> None:
 def test_consumer_efficiency_window_weight_defaults_to_one() -> None:
     ct = CT002()
     assert ct._get_consumer("c1").efficiency_window_weight == 1.0
+
+
+def test_overrides_survive_consumer_eviction() -> None:
+    """A battery that goes silent past its TTL is evicted, but its user-set
+    control state is re-seeded onto the fresh consumer when it returns."""
+    clock = FakeClock()
+    ct = CT002(consumer_ttl=10, clock=clock)
+
+    # User sets a manual override and tweaks the distribution weight.
+    ct.set_consumer_manual_target("c1", 150.0)
+    ct.set_consumer_auto_target("c1", False)  # manual mode
+    ct.set_consumer_distribution_weight("c1", 2.0)
+    ct.set_consumer_active("c1", False)
+
+    # Mark it as having reported, then let it fall silent past the TTL.
+    clock.now = 5.0
+    ct._get_consumer("c1").timestamp = clock.now
+    clock.now += 11.0
+    ct._cleanup_consumers()
+    assert "c1" not in ct._consumers  # evicted
+    assert "c1" in ct._consumer_overrides  # but the override is retained
+
+    # Battery returns — a fresh consumer is created and re-seeded.
+    revived = ct._get_consumer("c1")
+    assert revived.manual_target == 150.0
+    assert revived.manual_enabled is True
+    assert revived.distribution_weight == 2.0
+    assert revived.active is False
+
+
+def test_override_tracks_latest_value_through_eviction() -> None:
+    """Returning a battery to auto mode is also remembered, so it doesn't come
+    back stuck in a stale manual override after an eviction."""
+    clock = FakeClock()
+    ct = CT002(consumer_ttl=10, clock=clock)
+
+    ct.set_consumer_manual_target("c1", 150.0)
+    ct.set_consumer_auto_target("c1", False)
+    # User changes their mind and switches back to automatic control.
+    ct.set_consumer_auto_target("c1", True)
+
+    clock.now = 5.0
+    ct._get_consumer("c1").timestamp = clock.now
+    clock.now += 11.0
+    ct._cleanup_consumers()
+
+    revived = ct._get_consumer("c1")
+    assert revived.manual_enabled is False  # auto mode preserved, not manual
+
+
+def test_no_override_leaves_fresh_consumer_at_defaults() -> None:
+    """A consumer never touched by a setter is created with plain defaults."""
+    ct = CT002()
+    consumer = ct._get_consumer("c1")
+    assert consumer.manual_enabled is False
+    assert consumer.manual_target == 0.0
+    assert consumer.active is True
+    assert consumer.distribution_weight == 1.0
+    assert "c1" not in ct._consumer_overrides

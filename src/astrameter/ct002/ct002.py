@@ -130,6 +130,27 @@ class Consumer:
     last_ip: str = ""
 
 
+@dataclasses.dataclass(slots=True)
+class ConsumerOverride:
+    """User-set control state that must outlive a consumer's eviction.
+
+    A battery that goes silent past its TTL is evicted and its ``Consumer``
+    (holding the user's manual target, distribution weight, etc.) is destroyed;
+    when the battery returns a fresh ``Consumer`` is created with defaults.  The
+    explicit control state is snapshotted here — keyed by the stable consumer id
+    (battery MAC) — and re-seeded onto the new ``Consumer`` so a setting sticks
+    to the battery, not to the transient object.  Mirrors the C++
+    ``ConsumerOverride`` in ``esphome/components/ct002/ct002.h``.
+    """
+
+    manual_target: float = 0.0
+    manual_enabled: bool = False
+    active: bool = True
+    distribution_weight: float = 1.0
+    efficiency_window_weight: float = 1.0
+    min_dc_output: float | None = None
+
+
 # Lowercase phase label carried on reporting rows: the three physical phases,
 # ``d`` (combined / whole-home) and ``0`` (unassigned / inspection).
 ReportingPhase = Literal["a", "b", "c", "d", "0"]
@@ -223,6 +244,11 @@ class CT002:
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
         self._device_id = device_id
         self._consumers: dict[str, Consumer] = {}
+        # User-set control state, kept per consumer id so it survives the
+        # consumer's eviction (battery silent past its TTL) and is re-seeded
+        # onto the fresh Consumer when the battery returns — see _get_consumer
+        # and _snapshot_override.
+        self._consumer_overrides: dict[str, ConsumerOverride] = {}
         self._info_idx_counter = 0
         # Use wall-clock (time.time) so the dedup shares a timebase with
         # _cleanup_consumers' purge; RequestDeduplicator would otherwise
@@ -292,8 +318,36 @@ class CT002:
         consumer = self._consumers.get(consumer_id)
         if consumer is None:
             consumer = Consumer(consumer_id=consumer_id)
+            self._apply_override(consumer)
             self._consumers[consumer_id] = consumer
         return consumer
+
+    def _apply_override(self, consumer: Consumer) -> None:
+        """Seed a freshly created consumer with any saved user overrides."""
+        override = self._consumer_overrides.get(consumer.consumer_id)
+        if override is None:
+            return
+        consumer.manual_target = override.manual_target
+        consumer.manual_enabled = override.manual_enabled
+        consumer.active = override.active
+        consumer.distribution_weight = override.distribution_weight
+        consumer.efficiency_window_weight = override.efficiency_window_weight
+        consumer.min_dc_output = override.min_dc_output
+
+    def _snapshot_override(self, consumer: Consumer) -> None:
+        """Record a consumer's current control state so it survives eviction.
+
+        Called after every user-driven setter; the snapshot is re-applied by
+        _apply_override if the consumer is later evicted and recreated.
+        """
+        self._consumer_overrides[consumer.consumer_id] = ConsumerOverride(
+            manual_target=consumer.manual_target,
+            manual_enabled=consumer.manual_enabled,
+            active=consumer.active,
+            distribution_weight=consumer.distribution_weight,
+            efficiency_window_weight=consumer.efficiency_window_weight,
+            min_dc_output=consumer.min_dc_output,
+        )
 
     def set_consumer_value(self, consumer_id, values):
         self._get_consumer(consumer_id).values = values
@@ -307,7 +361,9 @@ class CT002:
         if not math.isfinite(value):
             msg = f"manual target must be finite, got {target!r}"
             raise ValueError(msg)
-        self._get_consumer(consumer_id).manual_target = value
+        consumer = self._get_consumer(consumer_id)
+        consumer.manual_target = value
+        self._snapshot_override(consumer)
 
     def set_consumer_distribution_weight(self, consumer_id: str, weight: float) -> None:
         """Set the relative fair-share weight for a battery.
@@ -320,7 +376,9 @@ class CT002:
         if not math.isfinite(value) or not (0.0 <= value <= 10.0):
             msg = f"distribution weight must be in [0, 10], got {weight!r}"
             raise ValueError(msg)
-        self._get_consumer(consumer_id).distribution_weight = value
+        consumer = self._get_consumer(consumer_id)
+        consumer.distribution_weight = value
+        self._snapshot_override(consumer)
 
     def set_consumer_efficiency_window_weight(
         self, consumer_id: str, weight: float
@@ -337,7 +395,9 @@ class CT002:
         if not math.isfinite(value) or not (0.0 <= value <= 1.0):
             msg = f"efficiency window weight must be in [0, 1], got {weight!r}"
             raise ValueError(msg)
-        self._get_consumer(consumer_id).efficiency_window_weight = value
+        consumer = self._get_consumer(consumer_id)
+        consumer.efficiency_window_weight = value
+        self._snapshot_override(consumer)
 
     def set_consumer_min_dc_output(self, consumer_id: str, value: float) -> None:
         """Set the per-device MIN_DC_OUTPUT floor (W) for a battery.
@@ -349,7 +409,9 @@ class CT002:
         if not math.isfinite(v) or v < 0.0:
             msg = f"min_dc_output must be finite and >= 0, got {value!r}"
             raise ValueError(msg)
-        self._get_consumer(consumer_id).min_dc_output = v
+        consumer = self._get_consumer(consumer_id)
+        consumer.min_dc_output = v
+        self._snapshot_override(consumer)
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
@@ -363,6 +425,7 @@ class CT002:
         else:
             consumer.manual_enabled = True
             self._balancer.detach_from_auto_pool(consumer_id)
+        self._snapshot_override(consumer)
 
     def force_efficiency_rotation(self) -> None:
         current = {
@@ -392,6 +455,7 @@ class CT002:
             self._balancer.reset_consumer(consumer_id)
         else:
             consumer.active = False
+        self._snapshot_override(consumer)
 
     def is_consumer_active(self, consumer_id: str) -> bool:
         consumer = self._consumers.get(consumer_id)

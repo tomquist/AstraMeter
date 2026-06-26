@@ -353,9 +353,36 @@ Consumer &CT002Component::get_consumer_(const std::string &consumer_id) {
   if (it == this->consumers_.end()) {
     Consumer c;
     c.consumer_id = consumer_id;
+    this->apply_override_(c);
     return this->consumers_.emplace(consumer_id, std::move(c)).first->second;
   }
   return it->second;
+}
+
+void CT002Component::apply_override_(Consumer &consumer) {
+  // Seed a freshly created consumer with any saved user override (Python:
+  // _apply_override). Eviction drops the Consumer but keeps the override.
+  auto it = this->consumer_overrides_.find(consumer.consumer_id);
+  if (it == this->consumer_overrides_.end()) return;
+  const ConsumerOverride &ov = it->second;
+  consumer.manual_target = ov.manual_target;
+  consumer.manual_enabled = ov.manual_enabled;
+  consumer.active = ov.active;
+  consumer.distribution_weight = ov.distribution_weight;
+  consumer.efficiency_window_weight = ov.efficiency_window_weight;
+  consumer.min_dc_output = ov.min_dc_output;
+}
+
+void CT002Component::snapshot_override_(const Consumer &consumer) {
+  // Record current control state after a user-driven setter so it survives the
+  // consumer's eviction (Python: _snapshot_override).
+  ConsumerOverride &ov = this->consumer_overrides_[consumer.consumer_id];
+  ov.manual_target = consumer.manual_target;
+  ov.manual_enabled = consumer.manual_enabled;
+  ov.active = consumer.active;
+  ov.distribution_weight = consumer.distribution_weight;
+  ov.efficiency_window_weight = consumer.efficiency_window_weight;
+  ov.min_dc_output = consumer.min_dc_output;
 }
 
 void CT002Component::update_consumer_report_(const std::string &consumer_id,
@@ -753,12 +780,14 @@ void CT002Component::set_consumer_active(const std::string &consumer_id, bool ac
     if (this->balancer_) this->balancer_->reset_consumer(consumer_id);
   }
   consumer.active = active;
+  this->snapshot_override_(consumer);
 }
 
 void CT002Component::set_consumer_manual_target(const std::string &consumer_id, float target) {
   auto &consumer = this->get_consumer_(consumer_id);
   consumer.manual_enabled = true;
   consumer.manual_target = target;
+  this->snapshot_override_(consumer);
 }
 
 void CT002Component::set_consumer_distribution_weight(const std::string &consumer_id,
@@ -766,7 +795,9 @@ void CT002Component::set_consumer_distribution_weight(const std::string &consume
   // Same [0, 10] range the Python setter enforces (0 = take no share); ignore
   // non-finite or out-of-range values rather than corrupting the split.
   if (!std::isfinite(weight) || weight < 0.0f || weight > 10.0f) return;
-  this->get_consumer_(consumer_id).distribution_weight = weight;
+  auto &consumer = this->get_consumer_(consumer_id);
+  consumer.distribution_weight = weight;
+  this->snapshot_override_(consumer);
 }
 
 void CT002Component::set_consumer_efficiency_window_weight(const std::string &consumer_id,
@@ -774,7 +805,9 @@ void CT002Component::set_consumer_efficiency_window_weight(const std::string &co
   // Same [0, 1] range the Python setter enforces (1 = full participation,
   // 0 = skipped while limiting); ignore non-finite or out-of-range values.
   if (!std::isfinite(weight) || weight < 0.0f || weight > 1.0f) return;
-  this->get_consumer_(consumer_id).efficiency_window_weight = weight;
+  auto &consumer = this->get_consumer_(consumer_id);
+  consumer.efficiency_window_weight = weight;
+  this->snapshot_override_(consumer);
 }
 
 void CT002Component::set_consumer_min_dc_output(const std::string &consumer_id,
@@ -783,7 +816,9 @@ void CT002Component::set_consumer_min_dc_output(const std::string &consumer_id,
   // setter (finite, >= 0, no upper bound). The MQTT command handler still
   // enforces the 0..1000 entry range on both stacks.
   if (!std::isfinite(value) || value < 0.0f) return;
-  this->get_consumer_(consumer_id).min_dc_output = value;
+  auto &consumer = this->get_consumer_(consumer_id);
+  consumer.min_dc_output = value;
+  this->snapshot_override_(consumer);
 }
 
 void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bool auto_target) {
@@ -803,6 +838,7 @@ void CT002Component::set_consumer_auto_target(const std::string &consumer_id, bo
     // (Python: ct002.py:251-253).
     if (this->balancer_) this->balancer_->detach_from_auto_pool(consumer_id);
   }
+  this->snapshot_override_(consumer);
 }
 
 void CT002Component::evict_stale_consumers_() {
