@@ -1436,6 +1436,110 @@ def test_handle_consumer_field_command_dispatch() -> None:
     assert calls == {}
 
 
+def test_retained_command_replayed_when_handler_registers_late() -> None:
+    """A retained command redelivered before the device registered its handler
+    (the usual order on an app restart) is replayed once the handler appears,
+    instead of being silently dropped.
+
+    Broker-free: exercises the buffer/replay path directly.
+    """
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    manual_calls: list[tuple[str, float]] = []
+    auto_calls: list[tuple[str, bool]] = []
+
+    # Commands arrive first — no handlers yet (mirrors the broker redelivering
+    # retained commands on reconnect before run_device() has registered them).
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "150")
+    service._handle_consumer_field_command("dev1", "c1", "auto_target", "false")
+    assert manual_calls == []
+    assert auto_calls == []
+
+    service.register_manual_target_handler(
+        "dev1", lambda cid, v: manual_calls.append((cid, v))
+    )
+    service.register_auto_target_handler(
+        "dev1", lambda cid, v: auto_calls.append((cid, v))
+    )
+
+    # Registering each handler replays the buffered command for its own field.
+    assert manual_calls == [("c1", 150.0)]
+    assert auto_calls == [("c1", False)]
+
+
+def test_retained_command_replay_is_per_field() -> None:
+    """Registering one field's handler only replays that field, and a handler
+    for a device with no buffered command is a no-op."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    manual_calls: list[tuple[str, float]] = []
+    auto_calls: list[tuple[str, bool]] = []
+
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "150")
+
+    # A device with no buffered command replays nothing.
+    service.register_manual_target_handler("dev2", lambda cid, v: None)
+
+    service.register_auto_target_handler(
+        "dev1", lambda cid, v: auto_calls.append((cid, v))
+    )
+    # No auto_target was buffered for dev1, so nothing fires for it.
+    assert auto_calls == []
+
+    service.register_manual_target_handler(
+        "dev1", lambda cid, v: manual_calls.append((cid, v))
+    )
+    assert manual_calls == [("c1", 150.0)]
+
+
+def test_cleared_retained_command_not_replayed() -> None:
+    """An empty payload clears the retained command, so a handler registering
+    afterwards must not be handed the stale pre-clear value."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    manual_calls: list[tuple[str, float]] = []
+
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "150")
+    # User clears the override; HA publishes an empty retained payload.
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "")
+
+    service.register_manual_target_handler(
+        "dev1", lambda cid, v: manual_calls.append((cid, v))
+    )
+    assert manual_calls == []
+
+
+@needs_mosquitto
+async def test_retained_command_redelivered_on_restart(mqtt_broker) -> None:
+    """End-to-end: a retained command sitting on the broker is applied on the
+    next connect even though the handler registers *after* start()/subscribe —
+    the ordering that occurs on an app restart."""
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    topic = f"{base}/ct002/dev1/consumer/consumer1/manual_target/set"
+
+    # Pre-seed a retained command, as Home Assistant would have left it.
+    async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+        await pub.publish(topic, payload=b"150", retain=True)
+
+    handler_calls: list[tuple[str, float]] = []
+    await service.start()
+    try:
+        await service.wait_connected()
+
+        # Wait for the listener to receive & buffer the redelivered retained
+        # command, then register the handler (post-subscribe, as on restart).
+        await _poll(lambda: service._pending_consumer_commands.get("dev1") is not None)
+        service.register_manual_target_handler(
+            "dev1", lambda cid, t: handler_calls.append((cid, t))
+        )
+
+        assert handler_calls == [("consumer1", 150.0)]
+    finally:
+        # Clean up the retained command so it doesn't leak into other tests.
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(topic, payload=b"", retain=True)
+        await service.stop()
+
+
 @needs_mosquitto
 async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
