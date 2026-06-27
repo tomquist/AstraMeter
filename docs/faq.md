@@ -116,7 +116,7 @@ distribution. See [CT002 / CT003 steering](ct002.md).
 A:
 
 - **Venus:** Firmware 120+ for Shelly support, 152+ for improved regulation
-- **B2500:** Firmware 108+ (HMJ devices) or 224+ (all others); **HMA-1 devices require 226+** for CT002/CT003 support
+- **B2500:** Firmware 108+ (HMJ devices) or 224+ (all others)
 
 ### How do I handle the different ports for Shelly Pro 3EM?
 
