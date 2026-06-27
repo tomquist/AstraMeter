@@ -85,25 +85,6 @@ import, negative for export), put it in `POWER_INPUT_ALIAS` (or
 import/export sensors can update at different moments and get read out of sync,
 causing drift and oscillation; a single signed value avoids that.
 
-### I keep getting authentication errors in the Home Assistant powermeter logs after restarting.
-
-A: When running as a Home Assistant add-on with `IP = supervisor` in the
-`[HOMEASSISTANT]` section, AstraMeter reads the Supervisor token from the environment
-on every connection attempt, so token rotation on a Home Assistant restart is handled
-automatically — no manual token management is required.
-
-If you are running AstraMeter **outside** the add-on (e.g. as a standalone Python
-script or in your own Docker container) and point it at the Supervisor API, the
-Supervisor token won't be available. In that case, generate a **static long-lived
-access token** instead:
-
-1. In Home Assistant, go to your profile page (click your name in the sidebar).
-2. Scroll to **Long-Lived Access Tokens** and create a new one.
-3. In `config.ini`, set `ACCESSTOKEN` to the generated token and point `IP` at your
-   Home Assistant host directly (e.g. `IP = 192.168.1.x`, `PORT = 8123`).
-
-The static token never rotates and survives restarts on both sides.
-
 ### Should I use Shelly emulation or CT002/CT003 for multiple batteries?
 
 A: Prefer CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`) for multi-battery
@@ -302,13 +283,13 @@ actions:
       entity_id: number.astrameter_consumer_aabbccddeeff_distribution_weight
     data:
       value: >
-        {{ [0, 2.0 * (1 - states('sensor.marstek_b2500_aabbccddeeff_soc') | float(50) / 100)] | max | round(1) }}
+        {{ [0, 2.0 * (1 - states('sensor.marstek_b2500_aabbccddeeff_soc') | float(100) / 100)] | max | round(1) }}
   - action: number.set_value
     target:
       entity_id: number.astrameter_consumer_112233445566_distribution_weight
     data:
       value: >
-        {{ [0, 2.0 * (1 - states('sensor.marstek_b2500_112233445566_soc') | float(50) / 100)] | max | round(1) }}
+        {{ [0, 2.0 * (1 - states('sensor.marstek_b2500_112233445566_soc') | float(100) / 100)] | max | round(1) }}
 mode: queued
 max: 2
 ```
