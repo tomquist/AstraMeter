@@ -191,6 +191,25 @@ def test_create_homeassistant_powermeter():
             raise
 
 
+def test_create_homeassistant_powermeter_supervisor_token(monkeypatch):
+    """IP=supervisor reads SUPERVISOR_TOKEN from env at call time, not from config."""
+    import configparser as _cp
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "initial-token")
+    config = _cp.ConfigParser()
+    config["HA"] = {
+        "IP": "supervisor",
+        "PORT": "80",
+        "CURRENT_POWER_ENTITY": "sensor.power",
+        "ACCESSTOKEN": "stale-token",
+    }
+    pm = create_homeassistant_powermeter("HA", config)
+    assert pm._token() == "initial-token"
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "rotated-token")
+    assert pm._token() == "rotated-token"
+
+
 def test_create_vzlogger_powermeter():
     """Test VZLogger powermeter creation."""
     config = configparser.ConfigParser()

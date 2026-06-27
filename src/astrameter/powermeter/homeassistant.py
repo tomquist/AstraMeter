@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import aiohttp
@@ -27,7 +28,7 @@ class HomeAssistant(Powermeter):
         ip: str,
         port: str,
         use_https: bool,
-        access_token: str,
+        token: Callable[[], str],
         current_power_entity: str | list[str],
         power_calculate: bool,
         power_input_alias: str | list[str],
@@ -37,7 +38,7 @@ class HomeAssistant(Powermeter):
         self.ip = ip
         self.port = port
         self.use_https = use_https
-        self.access_token = access_token
+        self._token = token
         self.current_power_entity = (
             [current_power_entity]
             if isinstance(current_power_entity, str)
@@ -216,7 +217,7 @@ class HomeAssistant(Powermeter):
 
         if msg_type == "auth_required":
             logger.debug("Home Assistant: auth required, sending token")
-            await ws.send_json({"type": "auth", "access_token": self.access_token})
+            await ws.send_json({"type": "auth", "access_token": self._token()})
         elif msg_type == "auth_ok":
             logger.info("Home Assistant: authenticated")
             self._connected = True
@@ -261,7 +262,7 @@ class HomeAssistant(Powermeter):
     async def _fetch_initial_states(self) -> None:
         if not self._session:
             return
-        headers = {"Authorization": f"Bearer {self.access_token}"}
+        headers = {"Authorization": f"Bearer {self._token()}"}
         for eid in sorted(self._tracked_entities):
             if self._entity_values.get(eid) is not None:
                 continue
