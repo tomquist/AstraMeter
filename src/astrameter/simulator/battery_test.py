@@ -170,6 +170,25 @@ def test_cross_phase_dchrg_does_not_idle_battery() -> None:
     assert b.target_power == -500.0
 
 
+def test_initial_power_starts_in_motion() -> None:
+    """``initial_power`` seeds the output (and target) so the battery starts
+    already producing instead of from rest."""
+    b = _battery(initial_power=-300.0)  # already charging
+    assert b.current_power == -300.0
+    assert b.target_power == -300.0
+
+
+def test_initial_power_holds_under_balanced_grid() -> None:
+    """A seeded charging output is held by the firmware ramp on a balanced
+    grid — the steering setpoint is seeded too, so it doesn't wind back to 0 on
+    the first response (a sub-deadband command at non-zero output is held)."""
+    b = _battery(initial_power=-300.0)
+    # Balanced grid (0 W): the firmware deadband holds the setpoint, so the
+    # battery stays where it was seeded rather than collapsing to rest.
+    b._handle_ct_response(_response_fields(phase_targets=(0, 0, 0)))
+    assert b.target_power == -300.0
+
+
 def test_steering_deadband_uses_own_output() -> None:
     """A <20 W grid residual is ignored while the battery is idle, but acted
     on once its own output is above ~1 W (the firmware deadband condition)."""
