@@ -95,7 +95,7 @@ access token**:
 
 1. In Home Assistant, go to your profile page (click your name in the sidebar).
 2. Scroll to **Long-Lived Access Tokens** and create a new one.
-3. In `config.ini` (or the add-on options), set `API_KEY` to the generated token and
+3. In `config.ini` (or the add-on options), set `TOKEN` to the generated token and
    point `HOST` at the regular HA API (`http://<your-ha-ip>:8123`) instead of the
    Supervisor URL.
 
