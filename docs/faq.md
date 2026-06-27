@@ -198,6 +198,87 @@ answer the app's polls via MQTT. See
 
 ## Advanced
 
+### How can I distribute load based on each battery's State of Charge (SoC)?
+
+A: AstraMeter exposes a **Distribution Weight** entity for every battery in a
+CT002/CT003 fleet (requires [MQTT Insights](mqtt-insights.md) with HA discovery
+enabled). Raising the weight on a battery makes it receive a larger share of the
+charging or discharging target; you can adjust these weights dynamically from a
+Home Assistant automation so that emptier batteries are prioritised and fuller
+ones are throttled back.
+
+#### Step 1 — Find the Distribution Weight entity for each battery
+
+1. In Home Assistant go to **Settings → Devices & Services → MQTT** and open the
+   **Devices** tab.
+2. Look for devices named **AstraMeter Consumer …** (one per battery). Open each
+   one.
+3. Under **Controls** you will find a **Distribution Weight** slider. Note its
+   entity ID — it looks like
+   `number.astrameter_consumer_<mac>_distribution_weight`, where `<mac>` is the
+   battery's MAC address with all non-alphanumeric characters replaced by `_`
+   (e.g. a battery with MAC `AA:BB:CC:DD:EE:FF` produces
+   `number.astrameter_consumer_aabbccddeeff_distribution_weight`).
+
+   You can also find the entity ID by opening the entity's detail page and
+   clicking the gear icon → the entity ID is shown at the top of the settings
+   dialog.
+
+#### Step 2 — Find the SoC sensor for each battery
+
+The SoC sensor comes from your battery's native integration (e.g. hm2mqtt,
+hame-relay, or any other source). Open the battery device in Home Assistant,
+find the **State of Charge** sensor, and note its entity ID
+(e.g. `sensor.marstek_b2500_aabbccddeeff_soc`).
+
+#### Step 3 — Create the automation
+
+The formula below maps SoC to weight so that an empty battery (0 %) gets weight
+2.0 and a full battery (100 %) gets weight 0.0, linearly. Adjust the formula to
+taste — for example clamp the minimum above 0 if you never want a battery fully
+excluded.
+
+Go to **Settings → Automations & Scenes → Create Automation → Start with an
+empty automation** and paste the following YAML (switch to YAML mode with the
+three-dot menu):
+
+```yaml
+alias: AstraMeter – SoC-based distribution weights
+description: >
+  Adjust each battery's distribution weight inversely proportional to its SoC
+  so that the emptiest battery is charged first.
+triggers:
+  - trigger: state
+    entity_id:
+      - sensor.marstek_b2500_aabbccddeeff_soc   # battery 1 SoC — replace with yours
+      - sensor.marstek_b2500_112233445566_soc   # battery 2 SoC — replace with yours
+    for:
+      seconds: 10
+actions:
+  - action: number.set_value
+    target:
+      entity_id: number.astrameter_consumer_aabbccddeeff_distribution_weight
+    data:
+      value: >
+        {{ [0, 2.0 * (1 - states('sensor.marstek_b2500_aabbccddeeff_soc') | float(50) / 100)] | max | round(1) }}
+  - action: number.set_value
+    target:
+      entity_id: number.astrameter_consumer_112233445566_distribution_weight
+    data:
+      value: >
+        {{ [0, 2.0 * (1 - states('sensor.marstek_b2500_112233445566_soc') | float(50) / 100)] | max | round(1) }}
+mode: queued
+max: 2
+```
+
+Replace the four entity IDs with the real ones you found in steps 1 and 2. Add
+one `number.set_value` action block per additional battery.
+
+> **Tip:** `mode: queued` with `max: 2` ensures that a burst of rapid SoC
+> updates doesn't pile up; the 10-second `for:` delay further debounces
+> short-lived spikes. Increase `max` if you have more than two batteries so
+> that a concurrent trigger for every battery can queue safely.
+
 ### How do signed (positive/negative) power values work with the emulator?
 
 A: Powermeters typically report import as positive and export as negative (see
