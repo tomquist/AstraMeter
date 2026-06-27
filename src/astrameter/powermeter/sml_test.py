@@ -23,8 +23,10 @@ from astrameter.powermeter.sml import (
 )
 
 
-def _obis_value(obis: str, value: int, unit: int) -> SimpleNamespace:
-    return SimpleNamespace(obis=obis, value=value, unit=unit)
+def _obis_value(
+    obis: str, value: int, unit: int, scaler: int | None = None
+) -> SimpleNamespace:
+    return SimpleNamespace(obis=obis, value=value, unit=unit, scaler=scaler)
 
 
 def _defaults():
@@ -67,6 +69,35 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
             _obis_value(_OBIS_POWER_CURRENT, 1500, 27),
             _obis_value(_OBIS_POWER_L1, 100, 27),
             _obis_value(_OBIS_POWER_L2, 200, 27),
+        ]
+        stats = EnergyStats.from_sml_frame(frame, *_defaults())
+        self.assertEqual(stats.powers, [1500])
+
+    def test_applies_negative_scaler_aggregate(self):
+        # Meters like the Apator Picus eHZ send watts with scaler -3, so the
+        # raw integer is 1000x too large; the scaler must be applied (#519).
+        frame = MagicMock()
+        frame.get_obis.return_value = [
+            _obis_value(_OBIS_POWER_CURRENT, 170000, 27, scaler=-3),
+        ]
+        stats = EnergyStats.from_sml_frame(frame, *_defaults())
+        self.assertEqual(stats.powers, [170.0])
+
+    def test_applies_scaler_per_phase(self):
+        frame = MagicMock()
+        frame.get_obis.return_value = [
+            _obis_value(_OBIS_POWER_L1, 100000, 27, scaler=-3),
+            _obis_value(_OBIS_POWER_L2, 200000, 27, scaler=-3),
+            _obis_value(_OBIS_POWER_L3, -50000, 27, scaler=-3),
+        ]
+        stats = EnergyStats.from_sml_frame(frame, *_defaults())
+        self.assertEqual(stats.powers, [100.0, 200.0, -50.0])
+
+    def test_scaler_zero_or_absent_unchanged(self):
+        # scaler 0 and a missing scaler both mean "already in watts".
+        frame = MagicMock()
+        frame.get_obis.return_value = [
+            _obis_value(_OBIS_POWER_CURRENT, 1500, 27, scaler=0),
         ]
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [1500])
@@ -284,13 +315,15 @@ def _build_sml_frame(
     power_l1: int = 500,
     power_l2: int = 600,
     power_l3: int = 400,
+    scaler: int = 0,
 ) -> bytes:
     """Construct a valid SML binary frame with power OBIS entries."""
     from smllib.crc.x25 import get_crc
 
     def make_list_entry(obis_hex: str, value: int) -> bytes:
         entry = b"\x77\x07" + bytes.fromhex(obis_hex)
-        entry += b"\x01\x01\x62\x1b\x52\x00"
+        # status, val_time, unit (0x1b = W), then a signed-byte scaler.
+        entry += b"\x01\x01\x62\x1b\x52" + struct.pack(">b", scaler)
         entry += b"\x55" + struct.pack(">i", value) + b"\x01"
         return entry
 
@@ -336,6 +369,15 @@ def test_parse_sml_powers_decodes_full_telegram():
     frame = _build_sml_frame(power_agg=1234, power_l1=400, power_l2=500, power_l3=334)
     # All three phases present → per-phase preferred over the aggregate.
     assert parse_sml_powers(frame) == [400, 500, 334]
+
+
+def test_parse_sml_powers_applies_scaler():
+    """A meter sending watts with scaler -3 is decoded to true watts (#519)."""
+    frame = _build_sml_frame(
+        power_agg=170000, power_l1=170000, power_l2=0, power_l3=0, scaler=-3
+    )
+    # Per-phase preferred; the raw 170000 mW becomes 170 W, not 170000 W.
+    assert parse_sml_powers(frame) == [170.0, 0.0, 0.0]
 
 
 def test_parse_sml_powers_returns_none_on_garbage():

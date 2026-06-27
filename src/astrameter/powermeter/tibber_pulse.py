@@ -1,5 +1,10 @@
+import time
+from collections.abc import Callable
+
 import aiohttp
 from aiohttp import BasicAuth, ClientTimeout
+
+from astrameter.config.logger import logger
 
 from .base import Powermeter
 from .sml import (
@@ -9,6 +14,13 @@ from .sml import (
     _OBIS_POWER_L3,
     parse_sml_powers,
 )
+
+# The Pulse Bridge mirrors a push source (the meter emits ~1/s, with jitter):
+# polling it occasionally returns an incomplete or CRC-bad telegram that can't
+# be decoded. Such misses are transient and self-healing, so reuse the last
+# good reading for up to this long rather than erroring on every miss (#518).
+# Beyond the window a genuinely broken bridge/meter still surfaces as an error.
+_STALE_AFTER_S = 15.0
 
 
 class TibberPulse(Powermeter):
@@ -36,6 +48,7 @@ class TibberPulse(Powermeter):
         obis_power_l1: str = _OBIS_POWER_L1,
         obis_power_l2: str = _OBIS_POWER_L2,
         obis_power_l3: str = _OBIS_POWER_L3,
+        clock: Callable[[], float] | None = None,
     ):
         self.ip = ip
         self.password = password
@@ -46,6 +59,11 @@ class TibberPulse(Powermeter):
         self._obis_l2 = obis_power_l2
         self._obis_l3 = obis_power_l3
         self.session: aiohttp.ClientSession | None = None
+        self._clock = clock or time.monotonic
+        # Last successfully decoded reading and when it was decoded, so a
+        # transient undecodable telegram can reuse it instead of erroring.
+        self._last_powers: list[float] | None = None
+        self._last_good: float | None = None
 
     async def start(self) -> None:
         if self.session:
@@ -76,6 +94,22 @@ class TibberPulse(Powermeter):
             self._obis_l2,
             self._obis_l3,
         )
-        if not powers:
-            raise ValueError("Could not decode SML telegram from Tibber Pulse")
-        return [float(x) for x in powers]
+        if powers:
+            result = [float(x) for x in powers]
+            self._last_powers = result
+            self._last_good = self._clock()
+            return result
+        # Transient decode miss: reuse the last good reading for a bounded
+        # window so an occasional bad telegram doesn't spam warnings or starve
+        # the control loop (#518). Past the window, surface the failure.
+        if self._last_powers is not None and self._last_good is not None:
+            age = self._clock() - self._last_good
+            if age <= _STALE_AFTER_S:
+                logger.debug(
+                    "Tibber Pulse: undecodable telegram, reusing last good "
+                    "values %s (age %.1fs)",
+                    self._last_powers,
+                    age,
+                )
+                return list(self._last_powers)
+        raise ValueError("Could not decode SML telegram from Tibber Pulse")

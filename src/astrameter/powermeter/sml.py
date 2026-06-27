@@ -37,7 +37,7 @@ def _normalize_obis_hex(raw: str, label: str) -> str:
 class EnergyStats:
     """Instantaneous power: one value (aggregate W) or three (per-phase W)."""
 
-    powers: list[int] = field(default_factory=lambda: [0])
+    powers: list[float] = field(default_factory=lambda: [0])
     when: datetime.datetime = field(default_factory=datetime.datetime.now)
 
     @classmethod
@@ -61,12 +61,29 @@ class EnergyStats:
         return cls()
 
 
-def _optional_w(by_obis: dict, obis_key: str, label: str) -> int | None:
+def _optional_w(by_obis: dict, obis_key: str, label: str) -> float | None:
     ov = by_obis.get(obis_key)
     if ov is None:
         return None
     _expect_unit(ov, "W", label)
-    return ov.value
+    return _apply_scaler(ov)
+
+
+def _apply_scaler(ov) -> float:
+    """Scale an SML value by its ``10**scaler`` exponent.
+
+    smllib exposes the meter's raw integer in ``ov.value`` and the decimal
+    exponent in ``ov.scaler``; the true reading is ``value * 10**scaler``.
+    Classic eHZ meters report power already scaled (``scaler`` 0 or absent),
+    but some meters (e.g. Apator Picus eHZ) send watts with ``scaler = -3``,
+    so the raw integer is 1000x too large. Applying the scaler avoids the
+    inflated readings reported in #519 (no manual ``POWER_MULTIPLIER`` needed).
+    """
+    value = ov.value
+    scaler = getattr(ov, "scaler", None)
+    if not scaler:
+        return value
+    return round(value * 10**scaler, abs(scaler) + 3)
 
 
 def _expect_unit(ov, expected: str, label: str) -> None:
@@ -179,7 +196,7 @@ def parse_sml_powers(
     obis_l1: str = _OBIS_POWER_L1,
     obis_l2: str = _OBIS_POWER_L2,
     obis_l3: str = _OBIS_POWER_L3,
-) -> list[int] | None:
+) -> list[float] | None:
     """Decode a complete SML telegram (bytes) into instantaneous watts.
 
     Returns the per-phase (``[L1, L2, L3]``) or aggregate (``[W]``) power list,
