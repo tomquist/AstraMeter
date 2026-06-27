@@ -216,7 +216,7 @@ ones are throttled back.
 3. Under **Controls** you will find a **Distribution Weight** slider. Note its
    entity ID — it looks like
    `number.astrameter_consumer_<mac>_distribution_weight`, where `<mac>` is the
-   battery's MAC address with all non-alphanumeric characters replaced by `_`
+   battery's MAC address lowercased with all non-alphanumeric characters removed
    (e.g. a battery with MAC `AA:BB:CC:DD:EE:FF` produces
    `number.astrameter_consumer_aabbccddeeff_distribution_weight`).
 
