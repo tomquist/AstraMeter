@@ -756,13 +756,27 @@ class MqttInsightsService:
             self._forget_consumer_command(device_id, consumer_id, field)
             return
 
-        # Remember the latest payload so a handler registering *after* the broker
-        # redelivered this retained command (the usual order on an app restart)
-        # still receives it — see _replay_consumer_commands.
-        self._pending_consumer_commands.setdefault(device_id, {})[
-            (consumer_id, field)
-        ] = payload
+        # Validate and dispatch first; only a known field that parsed to an
+        # in-range value gets buffered, so a malformed or unknown retained
+        # command isn't cached and replayed to every future handler.
+        if self._dispatch_consumer_field(device_id, consumer_id, field, payload):
+            # Remember the latest valid payload so a handler registering *after*
+            # the broker redelivered this retained command (the usual order on an
+            # app restart) still receives it — see _replay_consumer_commands.
+            self._pending_consumer_commands.setdefault(device_id, {})[
+                (consumer_id, field)
+            ] = payload
 
+    def _dispatch_consumer_field(
+        self, device_id: str, consumer_id: str, field: str, payload: str
+    ) -> bool:
+        """Validate and dispatch a consumer command.
+
+        Returns True when the field is known and the value valid (the command is
+        dispatched even if no handler is registered yet, so the caller may buffer
+        it for replay); False on an unknown field or an invalid/out-of-range
+        value (which must not be buffered).
+        """
         if field == "active":
             value = self._parse_bool(payload)
             if value is None:
@@ -772,10 +786,11 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             self._dispatch(
                 self._active_handlers, "active", device_id, consumer_id, value
             )
+            return True
         elif field == "auto_target":
             value = self._parse_bool(payload)
             if value is None:
@@ -785,7 +800,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             self._dispatch(
                 self._auto_target_handlers,
                 "auto_target",
@@ -793,6 +808,7 @@ class MqttInsightsService:
                 consumer_id,
                 value,
             )
+            return True
         elif field == "manual_target":
             try:
                 target = float(payload)
@@ -803,7 +819,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(target) or not -10000 <= target <= 10000:
                 logger.warning(
                     "Out-of-range manual_target for %s/%s: %s",
@@ -811,7 +827,7 @@ class MqttInsightsService:
                     consumer_id,
                     target,
                 )
-                return
+                return False
             self._dispatch(
                 self._manual_target_handlers,
                 "manual_target",
@@ -819,6 +835,7 @@ class MqttInsightsService:
                 consumer_id,
                 target,
             )
+            return True
         elif field == "distribution_weight":
             try:
                 weight = float(payload)
@@ -829,7 +846,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(weight) or not 0.0 <= weight <= 10.0:
                 logger.warning(
                     "Out-of-range distribution_weight for %s/%s: %s",
@@ -837,7 +854,7 @@ class MqttInsightsService:
                     consumer_id,
                     weight,
                 )
-                return
+                return False
             self._dispatch(
                 self._distribution_weight_handlers,
                 "distribution_weight",
@@ -845,6 +862,7 @@ class MqttInsightsService:
                 consumer_id,
                 weight,
             )
+            return True
         elif field == "efficiency_window_weight":
             # HA surfaces this as a percentage (0-100 %); convert to the internal
             # 0-1 fraction before dispatching.
@@ -857,7 +875,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(pct) or not 0.0 <= pct <= 100.0:
                 logger.warning(
                     "Out-of-range efficiency_window_weight for %s/%s: %s",
@@ -865,7 +883,7 @@ class MqttInsightsService:
                     consumer_id,
                     pct,
                 )
-                return
+                return False
             self._dispatch(
                 self._efficiency_window_weight_handlers,
                 "efficiency_window_weight",
@@ -873,6 +891,7 @@ class MqttInsightsService:
                 consumer_id,
                 pct / 100.0,
             )
+            return True
         elif field == "min_dc_output":
             try:
                 min_dc = float(payload)
@@ -883,7 +902,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(min_dc) or not 0.0 <= min_dc <= 1000.0:
                 logger.warning(
                     "Out-of-range min_dc_output for %s/%s: %s",
@@ -891,7 +910,7 @@ class MqttInsightsService:
                     consumer_id,
                     min_dc,
                 )
-                return
+                return False
             self._dispatch(
                 self._min_dc_output_handlers,
                 "min_dc_output",
@@ -899,6 +918,7 @@ class MqttInsightsService:
                 consumer_id,
                 min_dc,
             )
+            return True
         else:
             logger.debug(
                 "Unknown consumer command field %r for %s/%s",
@@ -906,6 +926,7 @@ class MqttInsightsService:
                 device_id,
                 consumer_id,
             )
+            return False
 
     def _forget_consumer_command(
         self, device_id: str, consumer_id: str, field: str

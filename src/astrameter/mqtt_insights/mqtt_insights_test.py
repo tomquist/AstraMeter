@@ -1506,6 +1506,31 @@ def test_cleared_retained_command_not_replayed() -> None:
     assert manual_calls == []
 
 
+def test_invalid_or_unknown_retained_command_not_buffered() -> None:
+    """A malformed, out-of-range, or unknown-field retained command must not be
+    cached — otherwise it would be replayed to every handler that registers."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    manual_calls: list[tuple[str, float]] = []
+
+    # All arrive before any handler is registered.
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "99999")
+    service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
+    service._handle_consumer_field_command("dev1", "c1", "bogus_field", "1")
+    assert service._pending_consumer_commands == {}
+
+    service.register_manual_target_handler(
+        "dev1", lambda cid, v: manual_calls.append((cid, v))
+    )
+    assert manual_calls == []
+
+    # A subsequent valid value is still buffered and replayed normally.
+    service._handle_consumer_field_command("dev2", "c1", "manual_target", "150")
+    service.register_manual_target_handler(
+        "dev2", lambda cid, v: manual_calls.append((cid, v))
+    )
+    assert manual_calls == [("c1", 150.0)]
+
+
 @needs_mosquitto
 async def test_retained_command_redelivered_on_restart(mqtt_broker) -> None:
     """End-to-end: a retained command sitting on the broker is applied on the
