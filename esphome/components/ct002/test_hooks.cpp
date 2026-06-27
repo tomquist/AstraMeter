@@ -149,6 +149,37 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     return;
   }
 
+  // Per-consumer setters carry a string consumer id, so parse them separately
+  // from the numeric verbs below (same approach as `cfg`). These mirror the
+  // MQTT/insights setters and let the shared e2e suite assert that a user
+  // override survives the consumer's eviction.
+  if (cmd.rfind("set_manual_target ", 0) == 0) {
+    char cid[48] = {0};
+    double value = 0.0;
+    if (std::sscanf(cmd.c_str() + 18, "%47s %lf", cid, &value) == 2) {
+      this->set_consumer_manual_target(std::string(cid), static_cast<float>(value));
+      reply = std::string("ok set_manual_target ") + cid;
+    } else {
+      reply = "err set_manual_target (parse)";
+    }
+    this->control_socket_->sendto(reply.data(), reply.size(), 0,
+                                  reinterpret_cast<const struct sockaddr *>(&from), from_len);
+    return;
+  }
+  if (cmd.rfind("set_auto_target ", 0) == 0) {
+    char cid[48] = {0};
+    double value = 0.0;
+    if (std::sscanf(cmd.c_str() + 16, "%47s %lf", cid, &value) == 2) {
+      this->set_consumer_auto_target(std::string(cid), value != 0.0);
+      reply = std::string("ok set_auto_target ") + cid;
+    } else {
+      reply = "err set_auto_target (parse)";
+    }
+    this->control_socket_->sendto(reply.data(), reply.size(), 0,
+                                  reinterpret_cast<const struct sockaddr *>(&from), from_len);
+    return;
+  }
+
   char verb[24] = {0};
   double a = 0.0, b = 0.0, c = 0.0;
   const int matched = std::sscanf(cmd.c_str(), "%23s %lf %lf %lf", verb, &a, &b, &c);
@@ -213,10 +244,16 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     // Mirror ct002.force_efficiency_rotation() for the rotation tests.
     this->force_balancer_rotation();
     reply = "ok force_rotation";
+  } else if (matched >= 1 && std::strcmp(verb, "evict") == 0) {
+    // Run the eviction pass synchronously (it otherwise fires on a real-time
+    // interval) so the shared e2e suite can drive eviction deterministically
+    // against the mock clock. Mirrors Python's _cleanup_consumers().
+    this->evict_stale_consumers_();
+    reply = "ok evict";
   } else if (matched >= 1 && std::strcmp(verb, "dump") == 0) {
     // Serialize the internal state the Python e2e suites read directly, so
     // the black-box binary can be asserted on the same way. Pipe-delimited:
-    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>,<last_intent>|...
+    //   ok|smooth_target=<f>|<cid>,<phase>,<last_instructed>,<last_target>,<sat>,<active>,<manual>,<reported>,<last_intent>,<manual_target>|...
     std::string s = "ok|smooth_target=";
     char num[48];
     std::snprintf(num, sizeof(num), "%.3f",
@@ -236,11 +273,12 @@ void CT002Component::handle_control_command_(const std::string &cmd,
       }
       s += "|";
       s += kv.first;
-      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f,%.1f",
+      std::snprintf(num, sizeof(num), ",%s,%.1f,%.1f,%.4f,%d,%d,%.1f,%.1f,%.1f",
                     consumer.phase.c_str(),
                     static_cast<double>(consumer.last_instructed_power), last_target, sat,
                     consumer.active ? 1 : 0, consumer.manual_enabled ? 1 : 0,
-                    static_cast<double>(consumer.power), last_intent);
+                    static_cast<double>(consumer.power), last_intent,
+                    static_cast<double>(consumer.manual_target));
       s += num;
     }
     reply = s;

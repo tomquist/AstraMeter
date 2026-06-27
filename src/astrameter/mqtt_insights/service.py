@@ -107,6 +107,15 @@ class MqttInsightsService:
         self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
         self._rotation_handlers: dict[str, Callable[[], None]] = {}
         self._active_control_handlers: dict[str, Callable[[bool], None]] = {}
+        # Latest retained consumer command per (consumer_id, field) for each
+        # device, keyed by device_id.  On (re)connect the broker redelivers
+        # retained command messages right after we subscribe — usually *before*
+        # the owning device has finished starting and registered its handlers,
+        # so the command would otherwise be dropped and the user's override
+        # (e.g. a manual target) would silently revert to its default on every
+        # app restart.  We stash the payload here and replay it the moment the
+        # matching handler registers — see _replay_consumer_commands.
+        self._pending_consumer_commands: dict[str, dict[tuple[str, str], str]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
         self._marstek_bindings: dict[str, MarstekMqttBinding] = {}
@@ -155,31 +164,37 @@ class MqttInsightsService:
         self, device_id: str, handler: Callable[[str, bool], None]
     ) -> None:
         self._active_handlers[device_id] = handler
+        self._replay_consumer_commands(device_id, "active")
 
     def register_manual_target_handler(
         self, device_id: str, handler: Callable[[str, float], None]
     ) -> None:
         self._manual_target_handlers[device_id] = handler
+        self._replay_consumer_commands(device_id, "manual_target")
 
     def register_auto_target_handler(
         self, device_id: str, handler: Callable[[str, bool], None]
     ) -> None:
         self._auto_target_handlers[device_id] = handler
+        self._replay_consumer_commands(device_id, "auto_target")
 
     def register_distribution_weight_handler(
         self, device_id: str, handler: Callable[[str, float], None]
     ) -> None:
         self._distribution_weight_handlers[device_id] = handler
+        self._replay_consumer_commands(device_id, "distribution_weight")
 
     def register_efficiency_window_weight_handler(
         self, device_id: str, handler: Callable[[str, float], None]
     ) -> None:
         self._efficiency_window_weight_handlers[device_id] = handler
+        self._replay_consumer_commands(device_id, "efficiency_window_weight")
 
     def register_min_dc_output_handler(
         self, device_id: str, handler: Callable[[str, float], None]
     ) -> None:
         self._min_dc_output_handlers[device_id] = handler
+        self._replay_consumer_commands(device_id, "min_dc_output")
 
     def register_rotation_handler(
         self, device_id: str, handler: Callable[[], None]
@@ -735,10 +750,33 @@ class MqttInsightsService:
         self, device_id: str, consumer_id: str, field: str, payload: str
     ) -> None:
         # An empty payload is how a retained command gets cleared — ignore it
-        # rather than logging a spurious "invalid value" warning.
+        # rather than logging a spurious "invalid value" warning, and forget any
+        # buffered value so it isn't replayed to a late-registering handler.
         if not payload.strip():
+            self._forget_consumer_command(device_id, consumer_id, field)
             return
 
+        # Validate and dispatch first; only a known field that parsed to an
+        # in-range value gets buffered, so a malformed or unknown retained
+        # command isn't cached and replayed to every future handler.
+        if self._dispatch_consumer_field(device_id, consumer_id, field, payload):
+            # Remember the latest valid payload so a handler registering *after*
+            # the broker redelivered this retained command (the usual order on an
+            # app restart) still receives it — see _replay_consumer_commands.
+            self._pending_consumer_commands.setdefault(device_id, {})[
+                (consumer_id, field)
+            ] = payload
+
+    def _dispatch_consumer_field(
+        self, device_id: str, consumer_id: str, field: str, payload: str
+    ) -> bool:
+        """Validate and dispatch a consumer command.
+
+        Returns True when the field is known and the value valid (the command is
+        dispatched even if no handler is registered yet, so the caller may buffer
+        it for replay); False on an unknown field or an invalid/out-of-range
+        value (which must not be buffered).
+        """
         if field == "active":
             value = self._parse_bool(payload)
             if value is None:
@@ -748,10 +786,11 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             self._dispatch(
                 self._active_handlers, "active", device_id, consumer_id, value
             )
+            return True
         elif field == "auto_target":
             value = self._parse_bool(payload)
             if value is None:
@@ -761,7 +800,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             self._dispatch(
                 self._auto_target_handlers,
                 "auto_target",
@@ -769,6 +808,7 @@ class MqttInsightsService:
                 consumer_id,
                 value,
             )
+            return True
         elif field == "manual_target":
             try:
                 target = float(payload)
@@ -779,7 +819,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(target) or not -10000 <= target <= 10000:
                 logger.warning(
                     "Out-of-range manual_target for %s/%s: %s",
@@ -787,7 +827,7 @@ class MqttInsightsService:
                     consumer_id,
                     target,
                 )
-                return
+                return False
             self._dispatch(
                 self._manual_target_handlers,
                 "manual_target",
@@ -795,6 +835,7 @@ class MqttInsightsService:
                 consumer_id,
                 target,
             )
+            return True
         elif field == "distribution_weight":
             try:
                 weight = float(payload)
@@ -805,7 +846,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(weight) or not 0.0 <= weight <= 10.0:
                 logger.warning(
                     "Out-of-range distribution_weight for %s/%s: %s",
@@ -813,7 +854,7 @@ class MqttInsightsService:
                     consumer_id,
                     weight,
                 )
-                return
+                return False
             self._dispatch(
                 self._distribution_weight_handlers,
                 "distribution_weight",
@@ -821,6 +862,7 @@ class MqttInsightsService:
                 consumer_id,
                 weight,
             )
+            return True
         elif field == "efficiency_window_weight":
             # HA surfaces this as a percentage (0-100 %); convert to the internal
             # 0-1 fraction before dispatching.
@@ -833,7 +875,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(pct) or not 0.0 <= pct <= 100.0:
                 logger.warning(
                     "Out-of-range efficiency_window_weight for %s/%s: %s",
@@ -841,7 +883,7 @@ class MqttInsightsService:
                     consumer_id,
                     pct,
                 )
-                return
+                return False
             self._dispatch(
                 self._efficiency_window_weight_handlers,
                 "efficiency_window_weight",
@@ -849,6 +891,7 @@ class MqttInsightsService:
                 consumer_id,
                 pct / 100.0,
             )
+            return True
         elif field == "min_dc_output":
             try:
                 min_dc = float(payload)
@@ -859,7 +902,7 @@ class MqttInsightsService:
                     consumer_id,
                     payload,
                 )
-                return
+                return False
             if not math.isfinite(min_dc) or not 0.0 <= min_dc <= 1000.0:
                 logger.warning(
                     "Out-of-range min_dc_output for %s/%s: %s",
@@ -867,7 +910,7 @@ class MqttInsightsService:
                     consumer_id,
                     min_dc,
                 )
-                return
+                return False
             self._dispatch(
                 self._min_dc_output_handlers,
                 "min_dc_output",
@@ -875,6 +918,7 @@ class MqttInsightsService:
                 consumer_id,
                 min_dc,
             )
+            return True
         else:
             logger.debug(
                 "Unknown consumer command field %r for %s/%s",
@@ -882,6 +926,33 @@ class MqttInsightsService:
                 device_id,
                 consumer_id,
             )
+            return False
+
+    def _forget_consumer_command(
+        self, device_id: str, consumer_id: str, field: str
+    ) -> None:
+        pending = self._pending_consumer_commands.get(device_id)
+        if not pending:
+            return
+        pending.pop((consumer_id, field), None)
+        if not pending:
+            self._pending_consumer_commands.pop(device_id, None)
+
+    def _replay_consumer_commands(self, device_id: str, field: str) -> None:
+        """Re-dispatch any buffered command for ``(device_id, field)``.
+
+        Called right after a handler registers so a retained command the broker
+        redelivered before that handler existed (the normal ordering on an app
+        restart) gets applied instead of silently dropped.
+        """
+        pending = self._pending_consumer_commands.get(device_id)
+        if not pending:
+            return
+        for (consumer_id, fld), payload in list(pending.items()):
+            if fld == field:
+                self._handle_consumer_field_command(
+                    device_id, consumer_id, fld, payload
+                )
 
     def _handle_device_command(self, device_id: str, cmd: dict) -> None:
         if cmd.get("force_rotation") is True:
