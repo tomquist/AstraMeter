@@ -136,6 +136,10 @@ class BatterySpec:
     startup_delay: float = 2.0
     min_power_threshold: float = 5.0
     max_dc_input: int = 0
+    # Net output (W) already flowing at t=0 (positive = discharge, negative =
+    # charge). Default 0 cold-starts from rest; non-zero models a system already
+    # in motion, which the firmware input deadband treats differently from rest.
+    initial_power: float = 0.0
 
     @property
     def ac_chargeable(self) -> bool:
@@ -304,6 +308,7 @@ async def run_scenario(
             min_power_threshold=spec.min_power_threshold,
             startup_delay=spec.startup_delay,
             max_dc_input=spec.max_dc_input,
+            initial_power=spec.initial_power,
         )
         for i, spec in enumerate(scenario.batteries)
     ]
@@ -1527,6 +1532,63 @@ def build_scenarios() -> dict[str, Scenario]:
                 ct_kwargs=dict(kwargs),
             )
         )
+
+    # Issue #522: fair distribution, both units active, one FULL (cannot charge)
+    # on the PV-export phase while the healthy unit (on another phase) is already
+    # charging. Under a sustained surplus the balance correction pulls the
+    # healthy unit's command down toward an even split with the idle full unit,
+    # so part of its absorption falls inside the battery firmware's input
+    # deadband and is held — the healthy unit under-charges and the surplus is
+    # partly exported. The fix lets the full unit be recognised as saturated
+    # (dropping out of the share math) so the healthy unit keeps more of the
+    # command above the deadband and absorbs more. Ramp pacing's base step is
+    # below the saturation min-target (the reporter's pace_base_step <
+    # min_target_for_saturation), the condition under which the full unit's
+    # pinned command used to read as idle and never registered as saturated.
+    # The effect requires a unit already in motion (initial_power): the firmware
+    # deadband holds an in-motion sub-deadband command, where a cold start would
+    # instead just sit at rest, so without it the handoff dynamics differ and the
+    # fix shows no benefit.
+    add(
+        Scenario(
+            name="full_battery_low_pace",
+            description=(
+                "Fair distribution, both active: a full unit on the PV-export "
+                "phase + a healthy unit (already charging) on another phase, "
+                "sustained surplus; ramp-pace base step below the saturation "
+                "min-target (issue #522). The full unit must be detected "
+                "saturated so the healthy one keeps absorbing instead of having "
+                "part of its command held inside the firmware deadband"
+            ),
+            batteries=[
+                BatterySpec(
+                    device_type="VNSE3-0",
+                    phase="A",
+                    max_charge_power=0,  # full: cannot charge
+                    initial_soc=0.95,
+                ),
+                BatterySpec(
+                    device_type="VNSE3-0",
+                    phase="B",
+                    initial_soc=0.4,
+                    initial_power=-200.0,  # already charging when the run begins
+                ),
+            ],
+            duration_s=900.0,
+            base_load=[-250.0, 0.0, 0.0],  # ~250 W sustained PV surplus
+            build_events=lambda rng: [],
+            ct_kwargs={
+                "balance_gain": 0.40,
+                "balance_deadband": 30.0,
+                "max_correction_per_step": 150.0,
+                "pace_base_step": 30.0,
+                "pace_max_step": 200.0,
+                "min_target_for_saturation": 40.0,
+                "saturation_alpha": 0.9,
+            },
+            meter_latency_s=0.5,
+        )
+    )
 
     dur_mixed = 5400.0
     for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
