@@ -392,6 +392,15 @@ class BalancerConsumerState:
     # attribution uses it to filter involuntary outputs such as PV
     # passthrough from a full battery (issue #376).
     last_intent: float | None = None
+    # The *unpaced* grid reading (command magnitude) the control path wanted
+    # to send this consumer, before ``_pace_reading`` throttled it.  Saturation
+    # detection keys off this, not ``last_target``: ramp pacing pins a battery
+    # that can't follow its command at the base step, so a full/empty battery
+    # commanded hard but capped at e.g. 15 W would look "idle" to the detector
+    # whenever ``pace_base_step < min_target`` and never register as saturated
+    # (issue #522).  The unpaced command reflects how hard we are actually
+    # pushing, independent of the wire-pacing throttle.
+    last_intent_reading: float | None = None
     fade_weight: float = 1.0
     # Ramp-pacing state (see BalancerConfig.pace_base_step): the current
     # cap on the sent reading in W per reference second, the sign of the
@@ -933,6 +942,7 @@ class LoadBalancer:
             reading = to_grid_reading(NetOutputW(desired_probe), probe_actual)
             state.last_target = reading
             state.last_intent = desired_probe
+            state.last_intent_reading = reading
             return self._split_by_phase(reading, {candidate_id: reports[candidate_id]})
 
         backup_weights = {
@@ -951,6 +961,7 @@ class LoadBalancer:
         reading = to_grid_reading(NetOutputW(desired), reported)
         state.last_target = reading
         state.last_intent = desired
+        state.last_intent_reading = reading
         return self._split_by_phase(reading, support_reports, backup_weights)
 
     # ------------------------------------------------------------------
@@ -985,22 +996,28 @@ class LoadBalancer:
 
         # Update saturation (skip manual, probe, and deprioritized consumers).
         #
+        # The detector keys off ``last_intent_reading`` — the *unpaced* command
+        # the control path wanted to send last tick — not the paced
+        # ``last_target`` actually put on the wire.  Ramp pacing pins a battery
+        # that can't follow its command at the base step, so feeding the paced
+        # reading would make a genuinely full/empty battery look "idle" (and
+        # never saturate) whenever ``pace_base_step < min_target`` (issue #522).
+        #
         # Deprioritized consumers are steered toward zero, but while their
         # ``_fade_efficiency_weights`` EMA is still winding down from 1.0
-        # their ``last_target`` carries a transient, non-zero value from
-        # the fade path (see ``_compute_auto_target``).  Feeding that
-        # transient into the saturation EMA causes a false-positive
-        # "cannot follow target" spike for a battery that's really just
-        # in the process of being phased out — and with the time-weighted
-        # EMA that spike is large enough to stay above the swap threshold
-        # for many ticks, locking ``_maybe_force_swap_saturated`` out of
-        # ever promoting the consumer back.  Simply skipping the update
-        # while the consumer is deprioritized leaves the score pinned to
-        # whatever the symmetric clear in ``_compute_efficiency_deprioritized``
-        # set it to (zero), which is exactly what the swap path expects
-        # for a "healthy" candidate.
+        # their command carries a transient, non-zero value from the fade
+        # path (see ``_compute_auto_target``).  Feeding that transient into the
+        # saturation EMA causes a false-positive "cannot follow target" spike
+        # for a battery that's really just in the process of being phased out —
+        # and with the time-weighted EMA that spike is large enough to stay
+        # above the swap threshold for many ticks, locking
+        # ``_maybe_force_swap_saturated`` out of ever promoting the consumer
+        # back.  Simply skipping the update while the consumer is deprioritized
+        # leaves the score pinned to whatever the symmetric clear in
+        # ``_compute_efficiency_deprioritized`` set it to (zero), which is
+        # exactly what the swap path expects for a "healthy" candidate.
         state = self._get_consumer(consumer_id) if consumer_id else None
-        last_target = state.last_target if state else None
+        last_intent_reading = state.last_intent_reading if state else None
         if (
             consumer_id
             and state
@@ -1010,7 +1027,7 @@ class LoadBalancer:
             and consumer_id not in self._deprioritized
         ):
             actual = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
-            self._saturation.update(state, last_target, actual)
+            self._saturation.update(state, last_intent_reading, actual)
 
         # --- Manual override ---
         if consumer_mode.mode == "manual" and consumer_id and state:
@@ -1018,6 +1035,7 @@ class LoadBalancer:
             reading = to_grid_reading(NetOutputW(consumer_mode.manual_value), reported)
             state.last_target = reading
             state.last_intent = consumer_mode.manual_value
+            state.last_intent_reading = reading
             return self._split_by_phase(reading, active_reports)
 
         # Auto-pool reports (exclude manual consumers)
@@ -1058,6 +1076,7 @@ class LoadBalancer:
         state = self._get_consumer(consumer_id)
         state.last_target = None
         state.last_intent = None
+        state.last_intent_reading = None
         state.pace_cap = 0.0
         state.pace_sign = 0
         state.pace_prev_reported = None
@@ -1187,6 +1206,7 @@ class LoadBalancer:
         state = self._get_consumer(consumer_id)
         state.last_target = reading
         state.last_intent = eff_min
+        state.last_intent_reading = reading
         return out
 
     def _steer_to_zero(
@@ -1216,6 +1236,9 @@ class LoadBalancer:
             state = self._get_consumer(consumer_id)
             state.last_target = reading if paced else 0
             state.last_intent = 0
+            # Driving to zero is an intentional "produce nothing" command, not a
+            # failed-to-follow one — treat it as idle so saturation decays.
+            state.last_intent_reading = 0
         if reading == 0:
             return [0, 0, 0]
         phase = (
@@ -1387,10 +1410,12 @@ class LoadBalancer:
             total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             reading = to_grid_reading(NetOutputW(desired), reported)
+            unpaced_reading = reading
             reading = self._pace_reading(consumer_id, reading, reported)
 
             state.last_target = reading
             state.last_intent = desired
+            state.last_intent_reading = unpaced_reading
 
             return self._split_by_phase(reading, reports, eff_part)
 
@@ -1512,12 +1537,14 @@ class LoadBalancer:
             else 0
         )
         reading = to_grid_reading(NetOutputW(reported + residual), reported)
+        unpaced_reading = reading
 
         if consumer_id:
             reading = self._pace_reading(consumer_id, reading, reported)
             state = self._get_consumer(consumer_id)
             state.last_target = reading
             state.last_intent = reported + residual
+            state.last_intent_reading = unpaced_reading
 
         return self._split_by_phase(reading, reports, eff_part)
 

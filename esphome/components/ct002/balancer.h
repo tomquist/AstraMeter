@@ -185,6 +185,13 @@ struct BalancerConsumerState {
   // consumer, recorded *before* wire pacing. The cross-talk chrg/dchrg
   // attribution uses it to filter involuntary outputs (issue #376).
   std::optional<float> last_intent;
+  // The *unpaced* grid reading (command magnitude) the control path wanted to
+  // send, before pace_reading throttled it. Saturation detection keys off this,
+  // not last_target: ramp pacing pins a battery that can't follow its command
+  // at the base step, so a full/empty battery commanded hard but capped at e.g.
+  // 15 W would look "idle" whenever pace_base_step < min_target and never
+  // register as saturated (issue #522).
+  std::optional<float> last_intent_reading;
   // Long-running EMA weight — double (like saturation_score) so the fade
   // trajectory and its snap-to-goal threshold match the canonical Python double
   // math poll-for-poll; float drifts enough to flip the snap on a different poll.

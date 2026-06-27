@@ -243,8 +243,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 400)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         out_a = device._compute_smooth_target([400, 0, 0], "a")
         out_b = device._compute_smooth_target([400, 0, 0], "b")
         assert out_a[0] < out_b[0]
@@ -260,8 +260,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 200)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         out1 = device._compute_smooth_target([400, 0, 0], "a")
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 200)
@@ -279,8 +279,8 @@ class TestSaturationDetection:
         device._balancer._get_consumer("a").saturation_score = 1.0
         device._update_consumer_report("a", "A", 200)
         device._update_consumer_report("b", "A", 200)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         out1 = device._compute_smooth_target([400, 0, 0], "a")
         device._update_consumer_report("a", "A", 200)
         device._update_consumer_report("b", "A", 200)
@@ -297,8 +297,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 0)
-        device._balancer._get_consumer("a").last_target = 10
-        device._balancer._get_consumer("b").last_target = 10
+        device._balancer._get_consumer("a").last_intent_reading = 10
+        device._balancer._get_consumer("b").last_intent_reading = 10
         out = device._compute_smooth_target([20, 0, 0], "a")
         assert out[0] == 10
 
@@ -310,8 +310,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 0)
         device._update_consumer_report("b", "A", 400)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         out_a = device._compute_smooth_target([400, 0, 0], "a")
         out_b = device._compute_smooth_target([400, 0, 0], "b")
         assert out_a[0] == out_b[0] == 200
@@ -327,8 +327,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", -100)
         device._update_consumer_report("b", "A", 200)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         out = device._compute_smooth_target([400, 0, 0], "a")
         # Consumer "a" is still producing meaningful power, so it should not
         # be flagged as saturated solely because it has not crossed zero yet.
@@ -351,8 +351,8 @@ class TestSaturationDetection:
         )
         device._update_consumer_report("a", "A", 50)
         device._update_consumer_report("b", "A", 150)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         device._compute_smooth_target([200, 0, 0], "a")
         # actual=50 is well above min_target_for_saturation=20, so no saturation.
         assert device._balancer._get_consumer("a").saturation_score == 0.0
@@ -370,14 +370,14 @@ class TestSaturationDetection:
         # actual=20 (at threshold) → not saturated
         device._update_consumer_report("a", "A", 20)
         device._update_consumer_report("b", "A", 180)
-        device._balancer._get_consumer("a").last_target = 200
-        device._balancer._get_consumer("b").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
+        device._balancer._get_consumer("b").last_intent_reading = 200
         device._compute_smooth_target([200, 0, 0], "a")
         assert device._balancer._get_consumer("a").saturation_score == 0.0
 
         # actual=19 (just below threshold) → saturated
         device._update_consumer_report("a", "A", 19)
-        device._balancer._get_consumer("a").last_target = 200
+        device._balancer._get_consumer("a").last_intent_reading = 200
         device._compute_smooth_target([200, 0, 0], "a")
         assert device._balancer._get_consumer("a").saturation_score > 0.0
 

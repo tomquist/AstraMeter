@@ -480,6 +480,7 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
     const float reading = to_grid_reading(NetOutputW(desired_probe), probe_actual);
     state.last_target = reading;
     state.last_intent = desired_probe;
+    state.last_intent_reading = reading;
     ReportMap cand_only;
     cand_only[candidate_id] = cand_it->second;
     return split_by_phase_(reading, cand_only);
@@ -506,6 +507,7 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
   const float reading = to_grid_reading(NetOutputW(desired), reported);
   state.last_target = reading;
   state.last_intent = desired;
+  state.last_intent_reading = reading;
   return split_by_phase_(reading, support_reports, &backup_weights);
 }
 
@@ -553,6 +555,7 @@ std::array<float, 3> LoadBalancer::apply_min_dc_output_(
   auto &mdc_state = this->get_consumer_(*consumer_id);
   mdc_state.last_target = reading;
   mdc_state.last_intent = eff_min;
+  mdc_state.last_intent_reading = reading;
   return out;
 }
 
@@ -577,6 +580,9 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
     auto &stz_state = this->get_consumer_(*consumer_id);
     stz_state.last_target = paced ? reading : 0.0f;
     stz_state.last_intent = 0.0f;
+    // Driving to zero is an intentional "produce nothing" command, not a
+    // failed-to-follow one — treat it as idle so saturation decays.
+    stz_state.last_intent_reading = 0.0f;
   }
   if (reading == 0.0f) return {0.0f, 0.0f, 0.0f};
   for (auto &c : phase) c = static_cast<char>(std::toupper(c));
@@ -630,7 +636,10 @@ std::array<float, 3> LoadBalancer::compute_target(
 
   BalancerConsumerState *state = nullptr;
   if (consumer_id) state = &this->get_consumer_(*consumer_id);
-  std::optional<float> last_target = state ? state->last_target : std::optional<float>{};
+  // Saturation keys off the *unpaced* command (last_intent_reading), not the
+  // paced last_target: pacing pins a stuck battery at the base step, which would
+  // look "idle" when pace_base_step < min_target (issue #522).
+  std::optional<float> last_intent_reading = state ? state->last_intent_reading : std::optional<float>{};
 
   if (consumer_id && state && active_reports.find(*consumer_id) != active_reports.end() &&
       mode.kind != ConsumerModeKind::MANUAL) {
@@ -638,7 +647,7 @@ std::array<float, 3> LoadBalancer::compute_target(
     if (probe_set.find(*consumer_id) == probe_set.end() &&
         this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
       const float actual = active_reports[*consumer_id].power;
-      this->saturation_.update(*state, last_target, actual);
+      this->saturation_.update(*state, last_intent_reading, actual);
     }
   }
 
@@ -649,6 +658,7 @@ std::array<float, 3> LoadBalancer::compute_target(
     const float reading = to_grid_reading(NetOutputW(mode.manual_value), reported);
     state->last_target = reading;
     state->last_intent = mode.manual_value;
+    state->last_intent_reading = reading;
     return split_by_phase_(reading, active_reports);
   }
 
@@ -694,6 +704,7 @@ void LoadBalancer::reset_consumer(const std::string &consumer_id) {
   auto &state = this->get_consumer_(consumer_id);
   state.last_target.reset();
   state.last_intent.reset();
+  state.last_intent_reading.reset();
   state.pace_cap = 0.0f;
   state.pace_sign = 0;
   state.pace_prev_reported.reset();
@@ -844,9 +855,11 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     for (const auto &r : reports) total_fade += this->get_consumer_(r.first).fade_weight;
     const double desired = (total_fade > 0.0) ? demand * fade_w / total_fade : 0.0;
     float reading = to_grid_reading(NetOutputW(desired), reported);
+    const float unpaced_reading = reading;
     reading = this->pace_reading_(*consumer_id, reading, reported);
     state.last_target = reading;
     state.last_intent = desired;
+    state.last_intent_reading = unpaced_reading;
     return split_by_phase_(reading, reports, &eff_part);
   }
 
@@ -973,11 +986,13 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     if (it != reports.end()) reported = it->second.power;
   }
   float reading = to_grid_reading(NetOutputW(reported + residual), reported);
+  const float unpaced_reading = reading;
   if (consumer_id) {
     reading = this->pace_reading_(*consumer_id, reading, reported);
     auto &auto_state = this->get_consumer_(*consumer_id);
     auto_state.last_target = reading;
     auto_state.last_intent = reported + residual;
+    auto_state.last_intent_reading = unpaced_reading;
   }
   return split_by_phase_(reading, reports, &eff_part);
 }
