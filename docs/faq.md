@@ -204,7 +204,7 @@ to `0`. See [Battery efficiency optimization](ct002.md#battery-efficiency-optimi
 ### I have batteries of different capacities and the smaller one drains much faster.
 
 A: By default AstraMeter splits the load equally, so a 5 kWh battery receives the same
-share as a 15 kWh one and saturates first. Two settings work together to fix this:
+share as a 15 kWh one and saturates first. Three settings work together to fix this:
 
 - **`MIN_EFFICIENT_POWER`** is a *per-battery* threshold, not a total. If you set it
   to, say, 900 W, AstraMeter won't activate a second battery until demand is high
@@ -212,9 +212,17 @@ share as a 15 kWh one and saturates first. Two settings work together to fix thi
   value so both batteries run together across a wider demand range rather than the
   smaller one absorbing everything alone.
 - **Distribution Weight** (the per-battery slider exposed via MQTT Insights) lets you
-  split load proportionally to capacity once both batteries are active. For example, a
-  15 kWh battery paired with a 5 kWh one might use weights of `3.0` and `1.0`
-  respectively for a 75:25 split. See [CT002 / CT003 steering](ct002.md) for details.
+  split load proportionally to capacity once both batteries are active simultaneously.
+  For example, a 15 kWh battery paired with a 5 kWh one might use weights of `3.0`
+  and `1.0` respectively for a 75:25 split.
+- **Efficiency Window Weight** (also a per-battery slider via MQTT Insights, shown only
+  when `MIN_EFFICIENT_POWER > 0`) controls what fraction of the efficiency-rotation
+  active time each battery holds. When demand is low and only one battery runs at a
+  time, a larger battery should hold a proportionally bigger slice of the rotation
+  window — e.g. `75` % and `25` % for the same 3:1 capacity ratio — so it handles
+  more of the cumulative energy over time.
+
+See [CT002 / CT003 steering](ct002.md) for details on all three settings.
 
 ### The Marstek app shows the meter offline or doesn't display my real meter values.
 
