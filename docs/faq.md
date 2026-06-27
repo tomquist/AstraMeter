@@ -85,6 +85,22 @@ import, negative for export), put it in `POWER_INPUT_ALIAS` (or
 import/export sensors can update at different moments and get read out of sync,
 causing drift and oscillation; a single signed value avoids that.
 
+### I keep getting authentication errors in the Home Assistant powermeter logs after restarting.
+
+A: If you configured the Home Assistant powermeter using the Supervisor internal endpoint
+(`http://supervisor/core/api` or `http://homeassistant/api`), the token associated with
+that endpoint rotates on every Home Assistant or add-on restart, which invalidates the
+credentials AstraMeter cached at startup. The fix is to generate a **static long-lived
+access token**:
+
+1. In Home Assistant, go to your profile page (click your name in the sidebar).
+2. Scroll to **Long-Lived Access Tokens** and create a new one.
+3. In `config.ini` (or the add-on options), set `API_KEY` to the generated token and
+   point `HOST` at the regular HA API (`http://<your-ha-ip>:8123`) instead of the
+   Supervisor URL.
+
+The static token never rotates and survives restarts on both sides.
+
 ### Should I use Shelly emulation or CT002/CT003 for multiple batteries?
 
 A: Prefer CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`) for multi-battery
@@ -100,7 +116,7 @@ distribution. See [CT002 / CT003 steering](ct002.md).
 A:
 
 - **Venus:** Firmware 120+ for Shelly support, 152+ for improved regulation
-- **B2500:** Firmware 108+ (HMJ devices) or 224+ (all others)
+- **B2500:** Firmware 108+ (HMJ devices) or 224+ (all others); **HMA-1 devices require 226+** for CT002/CT003 support
 
 ### How do I handle the different ports for Shelly Pro 3EM?
 
@@ -184,6 +200,21 @@ engaged for a given demand. It's intended for AC batteries that can hold a preci
 setpoint; pure DC battery pools can't be steered to exactly zero the same way. If a
 second unit won't engage, lower `MIN_EFFICIENT_POWER`; for DC-only setups, set it
 to `0`. See [Battery efficiency optimization](ct002.md#battery-efficiency-optimization).
+
+### I have batteries of different capacities and the smaller one drains much faster.
+
+A: By default AstraMeter splits the load equally, so a 5 kWh battery receives the same
+share as a 15 kWh one and saturates first. Two settings work together to fix this:
+
+- **`MIN_EFFICIENT_POWER`** is a *per-battery* threshold, not a total. If you set it
+  to, say, 900 W, AstraMeter won't activate a second battery until demand is high
+  enough for each battery to handle at least 900 W. For asymmetric packs, lower this
+  value so both batteries run together across a wider demand range rather than the
+  smaller one absorbing everything alone.
+- **Distribution Weight** (the per-battery slider exposed via MQTT Insights) lets you
+  split load proportionally to capacity once both batteries are active. For example, a
+  15 kWh battery paired with a 5 kWh one might use weights of `3.0` and `1.0`
+  respectively for a 75:25 split. See [CT002 / CT003 steering](ct002.md) for details.
 
 ### The Marstek app shows the meter offline or doesn't display my real meter values.
 
