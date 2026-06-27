@@ -260,7 +260,6 @@ else
         echo "IP=supervisor"
         echo "PORT=80"
         echo "API_PATH_PREFIX=/core"
-        echo "ACCESSTOKEN=$SUPERVISOR_TOKEN"
         echo "WAIT_FOR_NEXT_MESSAGE=$(bashio::config 'wait_for_next_message')"
         if bashio::config.has_value 'power_output_alias'; then
             echo "POWER_CALCULATE=True"
