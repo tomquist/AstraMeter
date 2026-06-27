@@ -663,6 +663,30 @@ def test_manual_override_survives_eviction(backend) -> None:
     )
 
 
+@pytest.mark.timeout(30, func_only=True)
+def test_manual_target_does_not_auto_enter_manual_mode(backend) -> None:
+    """Setting the Manual Target alone must not flip the battery into manual
+    mode — Manual Target and Auto Target are independent controls on both
+    stacks (the number sets the value; the switch chooses the mode)."""
+    backend.set_clock(1000)
+    backend.set_active_control(True)
+    backend.set_grid(0)
+
+    cid = "aabbccddeeff"
+    assert backend.poll("AABBCCDDEEFF", "A", 0) is not None
+
+    backend.set_manual_target(cid, 200.0)
+    state = backend.dump()[cid]
+    assert state["manual_enabled"] is False, (
+        f"[{backend.name}] manual_target must not enter manual mode on its own"
+    )
+    assert state["manual_target"] == 200.0
+
+    # Turning Auto Target off is what actually enters manual mode.
+    backend.set_auto_target(cid, False)
+    assert backend.dump()[cid]["manual_enabled"] is True
+
+
 # ── Direct dual-backend wire comparison ────────────────────────────────────
 #
 # The strongest parity guard: drive the *same* randomized poll sequence

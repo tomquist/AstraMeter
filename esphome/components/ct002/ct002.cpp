@@ -784,8 +784,12 @@ void CT002Component::set_consumer_active(const std::string &consumer_id, bool ac
 }
 
 void CT002Component::set_consumer_manual_target(const std::string &consumer_id, float target) {
+  // Store the target only. manual_target and auto_target are independent
+  // persisted settings — entering manual mode is set_consumer_auto_target's job
+  // — so a retained manual-target replay or a number-entity edit must not force
+  // the battery back into manual mode while the saved state is still auto.
+  // Mirrors Python's set_consumer_manual_target (ct002.py).
   auto &consumer = this->get_consumer_(consumer_id);
-  consumer.manual_enabled = true;
   consumer.manual_target = target;
   this->snapshot_override_(consumer);
 }
