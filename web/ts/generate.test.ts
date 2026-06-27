@@ -309,6 +309,14 @@ const haOpts = generateHomeAssistant({
       ACTIVE_CONTROL: "False",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_INTERVAL: "30",
+      GRID_PREDICT_TRUST: "0.7",
+      FAIR_DISTRIBUTION: "False",
+      BALANCE_GAIN: "0.3",
+      PACE_BASE_STEP: "150",
+      PACE_MAX_STEP: "600",
+      OSC_DAMP_MAX: "0.5",
+      CONCENTRATE_DEADBAND: "0",
+      IMPORT_TRIM_W: "20",
     },
   },
 });
@@ -321,6 +329,14 @@ has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");
 has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
 has(haOpts, "active_control: false", "ha-opts: active control off");
 has(haOpts, "min_dc_output: 30", "ha-opts: min dc output");
+has(haOpts, "grid_predict_trust: 0.7", "ha-opts: grid predict trust");
+has(haOpts, "fair_distribution: false", "ha-opts: fair distribution off");
+has(haOpts, "balance_gain: 0.3", "ha-opts: balance gain");
+has(haOpts, "pace_base_step: 150", "ha-opts: pace base step");
+has(haOpts, "pace_max_step: 600", "ha-opts: pace max step");
+has(haOpts, "osc_damp_max: 0.5", "ha-opts: oscillation damping");
+has(haOpts, "concentrate_deadband: 0", "ha-opts: concentrate deadband (explicit 0 kept)");
+has(haOpts, "import_trim_w: 20", "ha-opts: steady-import trim");
 has(haOpts, 'power_offset: "-20"', "ha-opts: power offset (quoted str)");
 has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
 has(haOpts, "deadband: 5", "ha-opts: deadband");
@@ -344,6 +360,10 @@ lacks(haMin, "pid_kp", "ha-opts: omits unset pid");
 lacks(haMin, "deadband", "ha-opts: omits unset deadband");
 lacks(haMin, "min_dc_output", "ha-opts: omits unset min dc output");
 lacks(haMin, "active_control", "ha-opts: omits default active control");
+lacks(haMin, "pace_base_step", "ha-opts: omits unset pace base step");
+lacks(haMin, "grid_predict_trust", "ha-opts: omits unset grid predict trust");
+lacks(haMin, "fair_distribution", "ha-opts: omits unset fair distribution");
+lacks(haMin, "import_trim_w", "ha-opts: omits unset import trim");
 
 // ── Home Assistant add-on options: calculate from in/out ─────────────────────
 const haCalc = generateHomeAssistant({

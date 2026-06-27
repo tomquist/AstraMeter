@@ -46,6 +46,7 @@ class BatterySimulator:
         max_dc_input: int = 0,
         dc_input_power: float = 0.0,
         participates: bool = True,
+        initial_power: float = 0.0,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
@@ -126,6 +127,25 @@ class BatterySimulator:
         self._venus_d_steering = (
             VenusDSteeringController() if self._is_venus_d else None
         )
+
+        # Optionally start already in motion (net output W; positive = discharge,
+        # negative = charge) instead of cold-starting from rest. The firmware
+        # input deadband holds a sub-deadband command only while a unit is at
+        # rest, so a from-rest-only model can't represent a system already
+        # running when a disturbance arrives. The relevant steering controller's
+        # setpoint is seeded so its ramp law holds the seeded output instead of
+        # winding back to zero on the first cycle.
+        if initial_power:
+            self._current_power = float(initial_power)
+            self._target_power = float(initial_power)
+            self._requested_target = float(initial_power)
+            if self._venus_d_steering is not None:
+                self._venus_d_steering.setpoint = round(initial_power)
+            elif not self._b2500_channels:
+                # Ramp controller: target = -setpoint, so seed the inverse. (The
+                # B2500's command-domain regulator converges from the seeded
+                # measured output, so it needs no explicit setpoint seed.)
+                self._steering.setpoint = -float(initial_power)
 
     # -- public read-only properties ---------------------------------------
 

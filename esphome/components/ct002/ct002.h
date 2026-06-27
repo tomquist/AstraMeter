@@ -82,6 +82,20 @@ struct Consumer {
   float last_instructed_power{0.0f};
 };
 
+// User-set control state, kept per consumer id so it survives the consumer's
+// eviction (battery silent past its TTL) and is re-seeded onto the fresh
+// Consumer when the battery returns — so a setting sticks to the battery, not
+// to the transient Consumer object. Mirrors src/astrameter/ct002/ct002.py's
+// ConsumerOverride. See CT002Component::get_consumer_ / snapshot_override_.
+struct ConsumerOverride {
+  float manual_target{0.0f};
+  bool manual_enabled{false};
+  bool active{true};
+  float distribution_weight{1.0f};
+  float efficiency_window_weight{1.0f};
+  std::optional<float> min_dc_output;
+};
+
 class CT002Component : public Component {
  public:
   void setup() override;
@@ -253,6 +267,12 @@ class CT002Component : public Component {
   std::string consumer_key_(const std::string &meter_mac, const std::string &addr_ip,
                             uint16_t addr_port) const;
   Consumer &get_consumer_(const std::string &consumer_id);
+  // Seed a freshly created consumer with any saved user override
+  // (apply_override_), and snapshot a consumer's current control state after a
+  // user-driven setter (snapshot_override_), so settings survive eviction —
+  // mirrors Python's _apply_override / _snapshot_override.
+  void apply_override_(Consumer &consumer);
+  void snapshot_override_(const Consumer &consumer);
   // Periodic cleanup driven by set_interval in setup(). Fires
   // consumer_removed_listeners_ and calls balancer_->remove_consumer for
   // every entry older than consumer_ttl_seconds_. Also purges the dedup
@@ -353,6 +373,8 @@ class CT002Component : public Component {
 
   // Consumers.
   std::unordered_map<std::string, Consumer> consumers_;
+  // User overrides kept by consumer id, outliving the Consumer's eviction.
+  std::unordered_map<std::string, ConsumerOverride> consumer_overrides_;
   uint8_t info_idx_counter_{0};
 
   // Last per-phase grid_power and balancer-issued target observed during

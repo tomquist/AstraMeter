@@ -6,9 +6,46 @@ from unittest.mock import patch
 
 import pytest
 
-from astrameter.config.logger import setLogLevel
+from astrameter.config.logger import redact_secrets, setLogLevel
 
 logger_module = importlib.import_module("astrameter.config.logger")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # URI userinfo (e.g. a custom MQTT broker URL).
+        (
+            "Connecting to mqtt://alice:s3cret@broker.example.com:1883",
+            "Connecting to mqtt://***:***@broker.example.com:1883",
+        ),
+        # Inline key=value / key: value.
+        ("PASSWORD=hunter2", "PASSWORD=***"),
+        ("marstek password: hunter2 done", "marstek password: *** done"),
+        ("access_token=abc.def.ghi tail", "access_token=*** tail"),
+        # JSON-ish payloads (e.g. an echoed config or API response).
+        (
+            '{"username": "addons", "password": "xxx"}',
+            '{"username": "***", "password": "***"}',
+        ),
+        ('{"marstek_mailbox": "me@example.com"}', '{"marstek_mailbox": "***"}'),
+    ],
+)
+def test_redact_secrets_masks_credentials(raw, expected):
+    assert redact_secrets(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "benign",
+    [
+        "auth required, sending token",
+        "Envoy: obtained new JWT token from Enlighten cloud",
+        "Connected to MQTT broker core-mosquitto:1883",
+        "CT002 consumer 60323bd11234 phase detected: A",
+    ],
+)
+def test_redact_secrets_leaves_benign_messages_untouched(benign):
+    assert redact_secrets(benign) == benign
 
 
 @pytest.mark.parametrize(
@@ -128,3 +165,46 @@ def test_exc_info_false_opts_out_of_auto_traceback():
     output = buffer.getvalue()
     assert "WARNING:suppressed: boom" in output
     assert "Traceback" not in output
+
+
+def test_set_log_level_installs_redacting_formatter_on_root_handlers():
+    setLogLevel("debug")
+    root = logging.getLogger()
+    assert root.handlers
+    for handler in root.handlers:
+        assert isinstance(handler.formatter, logger_module._RedactingFormatter)
+
+
+def test_root_logger_redacts_secrets_end_to_end(capsys):
+    setLogLevel("info")
+    logging.getLogger("astrameter.test").info(
+        "broker mqtt://alice:s3cret@example.com PASSWORD=hunter2"
+    )
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "s3cret" not in combined
+    assert "hunter2" not in combined
+    assert "mqtt://***:***@example.com" in combined
+    assert "PASSWORD=***" in combined
+
+
+def test_redaction_covers_traceback_text():
+    setLogLevel("warning")
+    root = logging.getLogger()
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logger_module._RedactingFormatter("%(levelname)s:%(message)s"))
+    root.addHandler(handler)
+    try:
+        try:
+            raise RuntimeError("login failed for mqtt://bob:topsecret@host")
+        except RuntimeError:
+            logging.getLogger("astrameter.test").warning(
+                "connect failed", exc_info=True
+            )
+    finally:
+        root.removeHandler(handler)
+
+    output = buffer.getvalue()
+    assert "topsecret" not in output
+    assert "mqtt://***:***@host" in output

@@ -136,6 +136,10 @@ class BatterySpec:
     startup_delay: float = 2.0
     min_power_threshold: float = 5.0
     max_dc_input: int = 0
+    # Net output (W) already flowing at t=0 (positive = discharge, negative =
+    # charge). Default 0 cold-starts from rest; non-zero models a system already
+    # in motion, which the firmware input deadband treats differently from rest.
+    initial_power: float = 0.0
 
     @property
     def ac_chargeable(self) -> bool:
@@ -304,6 +308,7 @@ async def run_scenario(
             min_power_threshold=spec.min_power_threshold,
             startup_delay=spec.startup_delay,
             max_dc_input=spec.max_dc_input,
+            initial_power=spec.initial_power,
         )
         for i, spec in enumerate(scenario.batteries)
     ]
@@ -614,9 +619,25 @@ def _compute_metrics(
     # fused with an arbitrary trade-off constant. Both grid_rms and mean_abs are
     # *time-weighted* (by dt) so they're true time-averages, not sample-averages
     # skewed by uneven / staggered poll spacing (slow meters, multi-battery).
+    # --- inter-battery share imbalance (issue #523) ---
+    # Batteries sharing a phase should split the phase's net output evenly (the
+    # balancer's fair-share target with the eval's equal distribution weights);
+    # a controller that leaves them lopsided — e.g. one Venus charging at 88 W
+    # while its twin takes 890 W — is doing real harm (uneven cycle wear, a pack
+    # that saturates first). ``share_imbalance_w`` is the time-weighted mean of
+    # the per-sample watts misallocated: within each phase group of >=2 active
+    # batteries, the sum of |power_i - phase_fair_share|. It is 0 for a perfectly
+    # balanced pool and 0 by construction for any scenario with at most one
+    # battery per phase (nothing to balance).
+    phase_groups: dict[str, list[int]] = {}
+    for i, sp in enumerate(specs):
+        phase_groups.setdefault((sp.phase or "A").upper(), []).append(i)
+    balance_groups = [grp for grp in phase_groups.values() if len(grp) >= 2]
+
     import_wh = export_wh = avoid_import_wh = avoid_export_wh = 0.0
     travel_w = 0.0
     grid_sq_dt = abs_grid_dt = total_dt = 0.0
+    imbalance_dt = 0.0
     for prev, cur in itertools.pairwise(samples):
         dt = min(cur.t - prev.t, 5.0)
         if dt <= 0:
@@ -624,6 +645,9 @@ def _compute_metrics(
         grid_sq_dt += prev.grid * prev.grid * dt
         abs_grid_dt += abs(prev.grid) * dt
         total_dt += dt
+        for grp in balance_groups:
+            fair = sum(prev.powers[i] for i in grp) / len(grp)
+            imbalance_dt += sum(abs(prev.powers[i] - fair) for i in grp) * dt
         wh = prev.grid * dt / 3600.0
         if wh > 0:
             import_wh += wh
@@ -650,6 +674,7 @@ def _compute_metrics(
 
     grid_rms = math.sqrt(grid_sq_dt / total_dt) if total_dt > 0 else 0.0
     mean_abs = abs_grid_dt / total_dt if total_dt > 0 else 0.0
+    share_imbalance = imbalance_dt / total_dt if total_dt > 0 else 0.0
 
     # --- money: cost vs perfect-foresight oracle (the north-star metric) ---
     # The actual electricity bill (eurocents) for the residual grid this
@@ -693,6 +718,7 @@ def _compute_metrics(
         "grid_rms_w": round(grid_rms, 1),
         "steady_rms_w": round(steady_rms, 1),
         "mean_abs_grid_w": round(mean_abs, 1),
+        "share_imbalance_w": round(share_imbalance, 1),
         "import_wh": round(import_wh, 1),
         "export_wh": round(export_wh, 1),
         "avoidable_import_wh": round(avoid_import_wh, 1),
@@ -1507,6 +1533,63 @@ def build_scenarios() -> dict[str, Scenario]:
             )
         )
 
+    # Issue #522: fair distribution, both units active, one FULL (cannot charge)
+    # on the PV-export phase while the healthy unit (on another phase) is already
+    # charging. Under a sustained surplus the balance correction pulls the
+    # healthy unit's command down toward an even split with the idle full unit,
+    # so part of its absorption falls inside the battery firmware's input
+    # deadband and is held — the healthy unit under-charges and the surplus is
+    # partly exported. The fix lets the full unit be recognised as saturated
+    # (dropping out of the share math) so the healthy unit keeps more of the
+    # command above the deadband and absorbs more. Ramp pacing's base step is
+    # below the saturation min-target (the reporter's pace_base_step <
+    # min_target_for_saturation), the condition under which the full unit's
+    # pinned command used to read as idle and never registered as saturated.
+    # The effect requires a unit already in motion (initial_power): the firmware
+    # deadband holds an in-motion sub-deadband command, where a cold start would
+    # instead just sit at rest, so without it the handoff dynamics differ and the
+    # fix shows no benefit.
+    add(
+        Scenario(
+            name="full_battery_low_pace",
+            description=(
+                "Fair distribution, both active: a full unit on the PV-export "
+                "phase + a healthy unit (already charging) on another phase, "
+                "sustained surplus; ramp-pace base step below the saturation "
+                "min-target (issue #522). The full unit must be detected "
+                "saturated so the healthy one keeps absorbing instead of having "
+                "part of its command held inside the firmware deadband"
+            ),
+            batteries=[
+                BatterySpec(
+                    device_type="VNSE3-0",
+                    phase="A",
+                    max_charge_power=0,  # full: cannot charge
+                    initial_soc=0.95,
+                ),
+                BatterySpec(
+                    device_type="VNSE3-0",
+                    phase="B",
+                    initial_soc=0.4,
+                    initial_power=-200.0,  # already charging when the run begins
+                ),
+            ],
+            duration_s=900.0,
+            base_load=[-250.0, 0.0, 0.0],  # ~250 W sustained PV surplus
+            build_events=lambda rng: [],
+            ct_kwargs={
+                "balance_gain": 0.40,
+                "balance_deadband": 30.0,
+                "max_correction_per_step": 150.0,
+                "pace_base_step": 30.0,
+                "pace_max_step": 200.0,
+                "min_target_for_saturation": 40.0,
+                "saturation_alpha": 0.9,
+            },
+            meter_latency_s=0.5,
+        )
+    )
+
     dur_mixed = 5400.0
     for mode, kwargs in (("fair", {}), ("eff", _EFF_MODE)):
         add(
@@ -1573,6 +1656,7 @@ _REPORT_METRICS = [
     "grid_rms_w",
     "steady_rms_w",
     "mean_abs_grid_w",
+    "share_imbalance_w",
     "avoidable_import_wh",
     "avoidable_export_wh",
     "cost_regret_ct",
@@ -1598,6 +1682,9 @@ _REPORT_METRICS = [
 #     wastes energy, wears the pack and reads as "broken" — so they carry heavy
 #     weight (and a separate hard regression flag, see ``_GUARDRAIL_METRICS``).
 #   * **Battery travel is cycle-life / hardware wear**, a real € cost.
+#   * **Inter-battery share imbalance is cycle-life / fairness** — a lopsided
+#     split (issue #523) wears and saturates one pack ahead of its peers, so it
+#     shares the cycle-life weight with battery travel.
 #   * **Settle time is an enabler** (it mostly feeds energy), weighted lightly.
 #
 # All metrics are lower-is-better, so a negative weighted change is an overall
@@ -1609,6 +1696,7 @@ _METRIC_WEIGHTS: dict[str, float] = {
     "overshoot_max_w": 3.0,
     "band_crossings_per_h": 2.0,
     "battery_travel_w_per_h": 2.0,
+    "share_imbalance_w": 2.0,
     "grid_p2p_w": 1.5,
     "grid_rms_w": 1.0,
     "overshoot_mean_w": 1.0,
@@ -1712,6 +1800,13 @@ _METRIC_GLOSSARY = [
     (
         "mean_abs_grid_w",
         "Mean absolute grid power (W) over the whole run — overall tracking accuracy.",
+    ),
+    (
+        "share_imbalance_w",
+        "Time-weighted watts misallocated between batteries sharing a phase (sum "
+        "of each battery's deviation from the even fair share) — 0 when the pool "
+        "splits load evenly, higher when one battery is left lopsided (issue "
+        "#523). 0 for scenarios with at most one battery per phase.",
     ),
     (
         "avoidable_import_wh",

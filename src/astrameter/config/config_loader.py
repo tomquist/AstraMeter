@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import os
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 from typing import TYPE_CHECKING
@@ -592,11 +593,23 @@ def create_homeassistant_powermeter(
         config.get(section, "POWER_OUTPUT_ALIAS", fallback="")
     )
 
+    ip = config.get(section, "IP", fallback="")
+    if ip == "supervisor":
+
+        def token_getter() -> str:
+            return os.environ.get("SUPERVISOR_TOKEN", "")
+
+    else:
+        _static_token = config.get(section, "ACCESSTOKEN", fallback="")
+
+        def token_getter() -> str:  # type: ignore[no-redef]
+            return _static_token
+
     return HomeAssistant(
-        config.get(section, "IP", fallback=""),
+        ip,
         config.get(section, "PORT", fallback=""),
         config.getboolean(section, "HTTPS", fallback=False),
-        config.get(section, "ACCESSTOKEN", fallback=""),
+        token_getter,
         current_power_entity,
         config.getboolean(section, "POWER_CALCULATE", fallback=False),
         power_input_alias,

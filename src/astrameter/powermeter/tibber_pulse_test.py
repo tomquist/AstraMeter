@@ -50,6 +50,42 @@ async def test_get_powermeter_watts_raises_on_undecodable_telegram(
         await pm.stop()
 
 
+async def test_transient_undecodable_reuses_last_good(mock_aiohttp_session):
+    # A bridge serving a push source occasionally returns an undecodable
+    # telegram; within the staleness window the last good reading is reused
+    # instead of raising (#518).
+    now = [1000.0]
+    frame = _build_sml_frame(power_l1=100, power_l2=200, power_l3=300)
+    mock_aiohttp_session.set_read(frame)
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+        pm = TibberPulse("127.0.0.1", "pw", clock=lambda: now[0])
+        await pm.start()
+        assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
+
+        # Next poll a couple of seconds later returns garbage → reuse cached.
+        now[0] += 2.0
+        mock_aiohttp_session.set_read(b"not a valid sml frame")
+        assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
+        await pm.stop()
+
+
+async def test_stale_undecodable_raises_after_window(mock_aiohttp_session):
+    now = [1000.0]
+    frame = _build_sml_frame(power_l1=100, power_l2=200, power_l3=300)
+    mock_aiohttp_session.set_read(frame)
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+        pm = TibberPulse("127.0.0.1", "pw", clock=lambda: now[0])
+        await pm.start()
+        assert await pm.get_powermeter_watts() == [100.0, 200.0, 300.0]
+
+        # Past the staleness window a persistent failure surfaces as an error.
+        now[0] += 60.0
+        mock_aiohttp_session.set_read(b"not a valid sml frame")
+        with pytest.raises(ValueError, match="decode SML"):
+            await pm.get_powermeter_watts()
+        await pm.stop()
+
+
 async def test_get_powermeter_watts_raises_when_decoder_returns_no_powers(
     mock_aiohttp_session,
 ):

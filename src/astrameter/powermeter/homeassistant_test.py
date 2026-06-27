@@ -12,7 +12,7 @@ def _create_powermeter(**overrides):
         ip="192.168.1.8",
         port="8123",
         use_https=False,
-        access_token="token",
+        token=lambda: "token",
         current_power_entity="sensor.current_power",
         power_calculate=False,
         power_input_alias="",

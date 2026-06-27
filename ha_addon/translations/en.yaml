@@ -41,6 +41,54 @@ configuration:
   grid_predict_trust:
     name: Grid Prediction
     description: "Keeps the grid closer to zero — less import, less export, less overshoot and hunting — by adapting automatically to your power meter, including meters that report with a delay (e.g. a Home Assistant push sensor). 0.5 (default) is recommended and needs no tuning; lower values react more cautiously and 0 turns the feature off (steer directly on the raw meter reading). Only applies to CT002/CT003 device types."
+  pace_base_step:
+    name: Ramp Pacing Base Step (W)
+    description: "Starting cap on how many watts each battery's command may change per poll. It grows toward the max step only while the battery is observed following the command, which keeps the firmware's accelerating ramp from overshooting when the meter reports with a delay. Lower = gentler, slower reaction to load steps; higher = faster, more like a plain CT002. Default 30; set 0 to turn pacing off entirely. Raise this (and the max step) if the batteries ramp too slowly in small steps and your meter is fast/low-latency. Only applies to CT002/CT003 device types."
+  pace_max_step:
+    name: Ramp Pacing Max Step (W)
+    description: "Ceiling the ramp-pacing cap grows toward once a battery is tracking the command. Higher lets large load changes be followed in fewer, bigger steps. Default 100 (roughly matches the firmware's own maximum ramp around 400–600 W when raised). Only used when the base step is above 0. Only applies to CT002/CT003 device types."
+  fair_distribution:
+    name: Fair Distribution
+    description: "Adjust each battery's target so multiple batteries share the load evenly. Only matters with two or more batteries. Enabled by default. Only applies to CT002/CT003 device types."
+  balance_gain:
+    name: Balance Gain
+    description: "How aggressively imbalance between batteries is corrected. 0 = equal split only (no correction); 0.3–0.5 = faster rebalancing but may overshoot. Default 0.2. Only applies to CT002/CT003 device types."
+  balance_deadband:
+    name: Balance Deadband (W)
+    description: "Ignore imbalance between batteries smaller than this many watts, to avoid micro-corrections. Kept above the battery firmware's own ~20 W input deadband so corrections it would ignore are never sent. Default 25. Only applies to CT002/CT003 device types."
+  max_correction_per_step:
+    name: Max Balance Correction Per Step (W)
+    description: "Cap on how many watts a single battery's target may deviate from its fair share in one cycle, limiting how fast rebalancing happens. Default 80. Only applies to CT002/CT003 device types."
+  error_boost_threshold:
+    name: Error Boost Threshold (W)
+    description: "When the imbalance between batteries exceeds this many watts, the balance gain is temporarily boosted to correct it faster. Default 150. Only applies to CT002/CT003 device types."
+  error_boost_max:
+    name: Error Boost Max
+    description: "Maximum extra balance-gain multiplier applied once imbalance is past the boost threshold (e.g. 0.5 = up to +50% gain). Default 0.5. Only applies to CT002/CT003 device types."
+  error_reduce_threshold:
+    name: Error Reduce Threshold (W)
+    description: "Below this much imbalance the balance gain is scaled down for gentler corrections as the batteries approach equilibrium. Default 20. Only applies to CT002/CT003 device types."
+  max_target_step:
+    name: Max Target Step (W)
+    description: "Hard clamp on how much a battery's target may change per cycle relative to its current output. 0 = disabled (default). This is separate from ramp pacing; leave at 0 unless you specifically want a fixed cap. Only applies to CT002/CT003 device types."
+  osc_damp_max:
+    name: Oscillation Damping
+    description: "Maximum reduction in correction strength while a battery is hunting (repeatedly reversing direction) under a laggy or delayed meter. Genuine load/solar steps stay at full speed. Default 0.95; set 0 to turn damping off. Only applies to CT002/CT003 device types."
+  osc_damp_alpha:
+    name: Oscillation Damping Ramp-up
+    description: "How quickly the hunting detector engages when a battery keeps reversing direction. Higher reacts sooner and damps more. Default 0.3. Only applies to CT002/CT003 device types."
+  osc_damp_decay:
+    name: Oscillation Damping Decay
+    description: "How quickly the hunting detector relaxes once a battery stops reversing direction. Default 0.05. Only applies to CT002/CT003 device types."
+  osc_damp_threshold:
+    name: Oscillation Damping Threshold (W)
+    description: "Corrections larger than this many watts are treated as a genuine demand step (kettle, solar ramp) and are never damped, so big load changes always react at full speed. Default 300. Only applies to CT002/CT003 device types."
+  concentrate_deadband:
+    name: Deadband Concentration (W)
+    description: "Multiple batteries only: when the grid is within this many watts of zero, hand the whole correction to a single battery instead of splitting it below each battery's ~20 W input deadband. Reduces small steady import/export (better self-consumption) at the cost of slightly more setpoint changes on that battery. Default 60; set 0 to turn off. Only applies to CT002/CT003 device types."
+  import_trim_w:
+    name: Steady-import Trim (W)
+    description: "Covers the few watts of real load the battery firmware leaves importing in steady state (its input deadband won't chase a small residual), recovering that self-consumption at the retail price. Only nudges once the grid has held steady for a few polls — never during a load step, so it adds no overshoot — and stays clear of a full/empty battery. Default 15; set 0 to turn off. Only applies to CT002/CT003 device types."
   marstek_auto_register_ct_device:
     name: Auto-register Managed CT Device (Marstek)
     description: "If enabled, the app signs in to your Marstek account at startup and ensures one managed fake CT device exists for each emulated CT type (ct002 -> HME-4, ct003 -> HME-3). Existing matching devices are reused to avoid duplicates."

@@ -1,6 +1,47 @@
 #!/usr/bin/with-contenv bashio
 set -e
 
+# Redact secrets from everything this script and its children log. bashio
+# echoes full supervisor API responses at debug level — including the MQTT
+# broker password (GET /services/mqtt) and the add-on's own option values such
+# as the Marstek account password/email (GET /addons/self/info) — which would
+# otherwise end up verbatim in shared debug logs (see discussion #520). Route
+# all output through a line-buffered filter so those values never reach the log;
+# the Python app inherits the same filtered stdout, so it is covered too.
+read -r -d '' __ASTRAMETER_REDACT_PY <<'PYEOF' || true
+import re, sys
+
+# Stay alive on non-UTF-8 bytes: this filter is in the critical log path, so a
+# single undecodable byte must not crash it and break SIGPIPE-sensitive writers.
+try:
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
+PATTERNS = [
+    # JSON: "<...password|token|secret|username|mailbox...>": "<value>"
+    (re.compile(
+        r'("[A-Za-z0-9_]*'
+        r'(?:password|passwd|secret|token|api[_-]?key|username|mailbox)"'
+        r'\s*:\s*")[^"]*"', re.I), r'\1REDACTED"'),
+    # URI userinfo: scheme://user:pass@host
+    (re.compile(r'([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@'),
+     r'\1***:***@'),
+]
+
+for line in iter(sys.stdin.readline, ''):
+    for pat, repl in PATTERNS:
+        line = pat.sub(repl, line)
+    sys.stdout.write(line)
+    sys.stdout.flush()
+PYEOF
+
+if [ -z "${ASTRAMETER_NO_LOG_REDACT:-}" ] && command -v python3 >/dev/null 2>&1; then
+    export ASTRAMETER_NO_LOG_REDACT=1
+    exec > >(python3 -c "$__ASTRAMETER_REDACT_PY") 2>&1
+fi
+
 # Function to check if Home Assistant is ready
 wait_for_homeassistant() {
     local max_attempts=60  # 5 minutes with 5-second intervals
@@ -34,7 +75,7 @@ CONFIG="/app/config.ini"
 
 print_redacted_config() {
     sed -E \
-        -e 's/^((MAILBOX|PASSWORD|ACCESSTOKEN|TOKEN|SECRET))\s*=\s*.*/\1 = REDACTED/i' \
+        -e 's/^((MAILBOX|USERNAME|PASSWORD|ACCESSTOKEN|TOKEN|SECRET))\s*=\s*.*/\1 = REDACTED/i' \
         -e 's#^(URI\s*=\s*[a-zA-Z][a-zA-Z0-9+.-]*://)[^/@[:space:]]+@#\1***:***@#i' \
         "$1"
 }
@@ -122,6 +163,40 @@ else
         return 0
     }
 
+    # Emit the optional CT002/CT003 balancer / active-control tuning knobs (only
+    # the ones the user actually set) into the current [CT00x] section. Mirrors
+    # the "balancer" group of the web config editor; main.py reads each key from
+    # the section with a built-in default, so an unset option simply keeps that
+    # default. The trailing `return 0` guards `set -e` the same way
+    # emit_cloud_reporting does (see the note above).
+    emit_balancer_options() {
+        local pair opt key
+        for pair in \
+            "fair_distribution:FAIR_DISTRIBUTION" \
+            "balance_gain:BALANCE_GAIN" \
+            "balance_deadband:BALANCE_DEADBAND" \
+            "max_correction_per_step:MAX_CORRECTION_PER_STEP" \
+            "error_boost_threshold:ERROR_BOOST_THRESHOLD" \
+            "error_boost_max:ERROR_BOOST_MAX" \
+            "error_reduce_threshold:ERROR_REDUCE_THRESHOLD" \
+            "max_target_step:MAX_TARGET_STEP" \
+            "pace_base_step:PACE_BASE_STEP" \
+            "pace_max_step:PACE_MAX_STEP" \
+            "osc_damp_max:OSC_DAMP_MAX" \
+            "osc_damp_alpha:OSC_DAMP_ALPHA" \
+            "osc_damp_decay:OSC_DAMP_DECAY" \
+            "osc_damp_threshold:OSC_DAMP_THRESHOLD" \
+            "concentrate_deadband:CONCENTRATE_DEADBAND" \
+            "import_trim_w:IMPORT_TRIM_W"; do
+            opt="${pair%%:*}"
+            key="${pair##*:}"
+            if bashio::config.has_value "$opt"; then
+                echo "${key}=$(bashio::config "$opt")"
+            fi
+        done
+        return 0
+    }
+
     # Generate default config
     {
         echo "[GENERAL]"
@@ -140,6 +215,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_balancer_options
             emit_cloud_reporting
             echo ""
             echo "[CT003]"
@@ -149,6 +225,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_balancer_options
             emit_cloud_reporting
             echo ""
         else
@@ -159,6 +236,7 @@ else
             [ -n "$efficiency_rotation_interval" ] && echo "EFFICIENCY_ROTATION_INTERVAL=$efficiency_rotation_interval"
             [ -n "$min_dc_output" ] && echo "MIN_DC_OUTPUT=$min_dc_output"
             [ -n "$grid_predict_trust" ] && echo "GRID_PREDICT_TRUST=$grid_predict_trust"
+            emit_balancer_options
             emit_cloud_reporting
             echo ""
         fi
@@ -182,7 +260,6 @@ else
         echo "IP=supervisor"
         echo "PORT=80"
         echo "API_PATH_PREFIX=/core"
-        echo "ACCESSTOKEN=$SUPERVISOR_TOKEN"
         echo "WAIT_FOR_NEXT_MESSAGE=$(bashio::config 'wait_for_next_message')"
         if bashio::config.has_value 'power_output_alias'; then
             echo "POWER_CALCULATE=True"
