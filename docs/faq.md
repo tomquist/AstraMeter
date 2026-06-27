@@ -87,17 +87,20 @@ causing drift and oscillation; a single signed value avoids that.
 
 ### I keep getting authentication errors in the Home Assistant powermeter logs after restarting.
 
-A: If you configured the Home Assistant powermeter using the Supervisor internal endpoint
-(`http://supervisor/core/api` or `http://homeassistant/api`), the token associated with
-that endpoint rotates on every Home Assistant or add-on restart, which invalidates the
-credentials AstraMeter cached at startup. The fix is to generate a **static long-lived
-access token**:
+A: When running as a Home Assistant add-on with `IP = supervisor` in the
+`[HOMEASSISTANT]` section, AstraMeter reads the Supervisor token from the environment
+on every connection attempt, so token rotation on a Home Assistant restart is handled
+automatically — no manual token management is required.
+
+If you are running AstraMeter **outside** the add-on (e.g. as a standalone Python
+script or in your own Docker container) and point it at the Supervisor API, the
+Supervisor token won't be available. In that case, generate a **static long-lived
+access token** instead:
 
 1. In Home Assistant, go to your profile page (click your name in the sidebar).
 2. Scroll to **Long-Lived Access Tokens** and create a new one.
-3. In `config.ini` (or the add-on options), set `TOKEN` to the generated token and
-   point `HOST` at the regular HA API (`http://<your-ha-ip>:8123`) instead of the
-   Supervisor URL.
+3. In `config.ini`, set `ACCESSTOKEN` to the generated token and point `IP` at your
+   Home Assistant host directly (e.g. `IP = 192.168.1.x`, `PORT = 8123`).
 
 The static token never rotates and survives restarts on both sides.
 
