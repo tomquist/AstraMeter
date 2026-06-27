@@ -1,5 +1,8 @@
 # Changelog
 
+## Next
+
+
 ## 2.2.2
 
 - **Added** the CT002/CT003 active-control and balancing tuning options (ramp pacing, fair distribution, grid prediction, oscillation damping, steady-import trim and more) to the Home Assistant add-on, so they can be changed from the add-on UI instead of a hand-edited config file ([#527](https://github.com/tomquist/astrameter/pull/527)).

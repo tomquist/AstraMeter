@@ -18,7 +18,7 @@ Point `power_sensor_l1` at any ESPHome sensor that reports grid power in watts:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.2.2
+  - source: github://tomquist/astrameter@develop
     components: [ct002]
 
 sensor:
