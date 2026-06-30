@@ -248,6 +248,20 @@ has(eyJsonHeaders, "          headers:", "esp/json_http: headers nested under ac
 // Enlarge the buffer on both the client and the per-request action (issue #534).
 has(eyJsonHeaders, "buffer_size_rx: 4096", "esp/http: enlarged http_request rx buffer");
 has(eyJsonHeaders, "          max_response_buffer_size: 4096", "esp/http: enlarged per-request response buffer");
+
+// An HTTP-polled meter plus cloud_reporting both need http_request:, but ESPHome
+// allows only one. They must merge into a single block that keeps the RX buffer
+// and uses the longer 20s timeout — not two blocks that drop one or the other.
+const eyHttpPlusCloud = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "fronius", phases: 1, fields: { IP: "10.0.0.9" }, tuning: {} }],
+  ct: { fields: { CLOUD_REPORTING: "True", CLOUD_REPORTING_HOST: "eu.hamedata.com" } },
+});
+ok((eyHttpPlusCloud.match(/^http_request:/gm) || []).length === 1, "esp/http+cloud: exactly one http_request block");
+has(eyHttpPlusCloud, "buffer_size_rx: 4096", "esp/http+cloud: rx buffer survives merge");
+has(eyHttpPlusCloud, "timeout: 20s", "esp/http+cloud: timeout bumped to 20s");
+lacks(eyHttpPlusCloud, "timeout: 5s", "esp/http+cloud: meter's 5s timeout replaced, not duplicated");
 has(eyJsonHeaders, "            Authorization: Bearer t", "esp/json_http: header entry nested under headers");
 
 const eyModbusTcp = generateEsphome({

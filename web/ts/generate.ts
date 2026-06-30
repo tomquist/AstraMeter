@@ -527,9 +527,18 @@ export function generateEsphome(state: State): string {
     const port = (useMeter && mFields.PORT) || mf.PORT || "1883";
     out.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
   }
-  // Both marstek_registration and cloud_reporting need a single http_request:.
+  // ESPHome allows only one top-level http_request:. An HTTP-polled meter
+  // already emits one (with useragent + RX buffer); marstek_registration and
+  // cloud_reporting also need one (with a longer 20s timeout). When both apply,
+  // merge into the meter's single block — bump its timeout to 20s rather than
+  // emitting a second block that would drop either the timeout or the buffer.
+  const meterHttpIdx = topBlocks.findIndex((b) => b.startsWith("http_request:"));
   if (wantMarstek || wantCloud) {
-    out.push(`http_request:\n${IND}timeout: 20s`);
+    if (meterHttpIdx >= 0) {
+      topBlocks[meterHttpIdx] = topBlocks[meterHttpIdx].replace(/timeout: \d+s/, "timeout: 20s");
+    } else {
+      out.push(`http_request:\n${IND}timeout: 20s`);
+    }
   }
 
   // top blocks from the sensor (api/mqtt/uart/etc.) — de-dup api/mqtt if already added
