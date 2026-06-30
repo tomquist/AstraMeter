@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** the generated ESPHome config for HTTP-polled meters (notably the **Fronius Smart Meter**) not reading the grid, which left the battery uncontrolled until the config was hand-edited. It now works as generated ([#534](https://github.com/tomquist/astrameter/discussions/534)).
+- **Fixed** the generated ESPHome config for HTTP-polled meters (notably the **Fronius Smart Meter**) not reading the grid, which left the battery uncontrolled until the config was hand-edited. It now works as generated ([#534](https://github.com/tomquist/astrameter/discussions/534), [#535](https://github.com/tomquist/astrameter/pull/535)).
 
 
 ## 2.2.2
