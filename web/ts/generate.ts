@@ -294,7 +294,14 @@ function esphomeSensor(state: State) {
   }
 
   if (esp.kind === "http") {
-    topBlocks.push(`http_request:\n${IND}useragent: esphome/astrameter\n${IND}timeout: 5s`);
+    // Some meters (notably the Fronius Solar API) return a multi-KB JSON
+    // document. ESPHome's default receive buffer is far smaller, so the body is
+    // truncated and json::parse_json silently fails. Enlarge it on both the
+    // client and the per-request action so the generated config works as-is.
+    const RX_BUFFER = 4096;
+    topBlocks.push(
+      `http_request:\n${IND}useragent: esphome/astrameter\n${IND}timeout: 5s\n${IND}buffer_size_rx: ${RX_BUFFER}`,
+    );
     const use3 = phases === 3 && esp.url3;
     const sensors = (use3 ? ids : ["grid_l1"]).map((id, i) => templateSensor(id) + phaseFilterBlock(i));
     const url = use3 ? esp.url3!(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
@@ -322,7 +329,7 @@ function esphomeSensor(state: State) {
     const interval =
       `interval:\n${IND}- interval: 1s\n${IND}${IND}then:\n${IND}${IND}${IND}- http_request.get:\n` +
       `${IND}${IND}${IND}${IND}${IND}url: ${url}${headerLines}\n` +
-      `${IND}${IND}${IND}${IND}${IND}capture_response: true\n${IND}${IND}${IND}${IND}${IND}on_response:\n${IND}${IND}${IND}${IND}${IND}${IND}then:\n` +
+      `${IND}${IND}${IND}${IND}${IND}capture_response: true\n${IND}${IND}${IND}${IND}${IND}max_response_buffer_size: ${RX_BUFFER}\n${IND}${IND}${IND}${IND}${IND}on_response:\n${IND}${IND}${IND}${IND}${IND}${IND}then:\n` +
       `${IND}${IND}${IND}${IND}${IND}${IND}${IND}- lambda: |-\n` +
       `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}json::parse_json(body, [](${jsonRoot}) -> bool {\n` +
       `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${lambdaBody}\n` +
