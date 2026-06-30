@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** the generated ESPHome config for HTTP-polled meters (notably the **Fronius Smart Meter** via the inverter's Solar API) truncating large JSON responses, which left the grid reading stuck and the battery uncontrolled until you manually enlarged the receive buffer. The config generator and docs now set a 4 KB receive buffer so it works as-is ([#534](https://github.com/tomquist/astrameter/discussions/534)).
+- **Fixed** the generated ESPHome config for HTTP-polled meters (notably the **Fronius Smart Meter**) not reading the grid, which left the battery uncontrolled until the config was hand-edited. It now works as generated ([#534](https://github.com/tomquist/astrameter/discussions/534)).
 
 
 ## 2.2.2
