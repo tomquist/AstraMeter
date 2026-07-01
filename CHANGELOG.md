@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.3
+
+- **Fixed** Marstek batteries running in combined / whole-home mode (newer firmware, no per-phase assignment) missing all their per-battery Home Assistant entities — Distribution Weight, Manual/Auto Target, Active and Min DC Output never appeared, so per-battery balancing couldn't be controlled. These batteries are now recognized as a valid, actively-steered mode: their entities show up and fair distribution applies to them like any phase-assigned battery ([#536](https://github.com/tomquist/astrameter/discussions/536), [#537](https://github.com/tomquist/astrameter/pull/537)).
+- **Fixed** the generated ESPHome config for HTTP-polled meters (notably the **Fronius Smart Meter**) not reading the grid, which left the battery uncontrolled until the config was hand-edited. It now works as generated ([#534](https://github.com/tomquist/astrameter/discussions/534), [#535](https://github.com/tomquist/astrameter/pull/535)).
+
+
 ## 2.2.2
 
 - **Added** the CT002/CT003 active-control and balancing tuning options (ramp pacing, fair distribution, grid prediction, oscillation damping, steady-import trim and more) to the Home Assistant add-on, so they can be changed from the add-on UI instead of a hand-edited config file ([#527](https://github.com/tomquist/astrameter/pull/527)).

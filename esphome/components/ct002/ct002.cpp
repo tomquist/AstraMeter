@@ -252,7 +252,13 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     reported_phase.erase(reported_phase.begin());
   while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.back())))
     reported_phase.pop_back();
-  const bool in_inspection_mode = reported_phase != "A" && reported_phase != "B" && reported_phase != "C";
+  // Only an unassigned / diagnostic reporter is inspection mode ("0", empty,
+  // or any other unexpected marker). "A"/"B"/"C" are physical phases and "D"
+  // is combined / whole-home mode (newer Marstek firmware) — all four are
+  // valid, actively-steered phases, so they are NOT inspection. Mirrors
+  // ct002.py _handle_request.
+  const bool in_inspection_mode = reported_phase != "A" && reported_phase != "B" &&
+                                  reported_phase != "C" && reported_phase != "D";
   int reported_power = 0;
   if (fields.size() > 5) {
     // Match Python's parse_int (int()): reject trailing garbage / float
@@ -311,10 +317,19 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 
   if (!in_inspection_mode) {
     auto &consumer = this->get_consumer_(consumer_id);
-    size_t phase_idx = 0;
-    if (consumer.phase == "B") phase_idx = 1;
-    else if (consumer.phase == "C") phase_idx = 2;
-    consumer.last_instructed_power = reported_power + values[phase_idx];
+    float delta;
+    if (consumer.phase == "D") {
+      // Combined / whole-home mode: the battery reads the summed grid field
+      // (field 7 == sum of the per-phase values), so its net is the reported
+      // power plus the whole target, not a single phase.
+      delta = values[0] + values[1] + values[2];
+    } else {
+      size_t phase_idx = 0;
+      if (consumer.phase == "B") phase_idx = 1;
+      else if (consumer.phase == "C") phase_idx = 2;
+      delta = values[phase_idx];
+    }
+    consumer.last_instructed_power = reported_power + delta;
   }
 
   auto response_fields = this->build_response_fields_(fields, values);
@@ -507,10 +522,10 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
     // divides the forwarded aggregate by it to take its 1/N share).
     out.count[idx] += 1;
     float power;
-    if (this->active_control_ && idx >= BUCKET_A && idx <= BUCKET_C) {
+    if (this->active_control_ && idx >= BUCKET_A && idx <= BUCKET_ABC) {
       // Active control: aggregate the net power we *instructed* this
-      // consumer to be at, so PV passthrough doesn't masquerade as
-      // discharge (issue #376).
+      // consumer to be at (A/B/C plus combined "D"/ABC), so PV passthrough
+      // doesn't masquerade as discharge (issue #376).
       power = static_cast<float>(round_half_even(c.last_instructed_power));
       // With ramp pacing the per-poll delta is capped, so the instructed
       // net power can keep the sign of the battery's involuntary output
@@ -524,7 +539,7 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
       }
     } else {
       // Relay mode forwards each battery's *reported* power, exactly like
-      // the real CT (issue #457). x/ABC consumers are never actively
+      // the real CT (issue #457). x (inspection) consumers are never actively
       // instructed, so their reported power is the only truthful signal in
       // either mode.
       power = static_cast<float>(round_half_even(static_cast<double>(c.power)));
@@ -663,10 +678,28 @@ std::vector<std::string> CT002Component::build_response_fields_(
   // no x count field.
   fields[14] = to_int_str(phase_reports.chrg_power[BUCKET_X]);
   fields[19] = to_int_str(phase_reports.dchrg_power[BUCKET_X]);
-  // ABC (combined, phase "D") bucket. Combined-mode consumers are never
-  // actively instructed (the emulator has no combined control mode), so they
-  // are effectively relayed in both modes: forward the real count.
-  fields[11] = std::to_string(phase_reports.count[BUCKET_ABC]);
+  // ABC (combined, phase "D") bucket. A combined-mode battery reads the summed
+  // grid field (field 7, `total`) and divides it by this count. Under active
+  // control we deliver a per-consumer target in that summed field, so report a
+  // count of 1 when a combined battery is being instructed (like the per-phase
+  // branch above) so it applies its individual target as-is instead of
+  // under-responding by a factor of N (issue #459); relay mode forwards the real
+  // count for the 1/N share. The `total` guard is scoped to a phase-"D"
+  // requester: a per-phase target also sums into that field, so an unscoped
+  // check would spuriously set the ABC count on phase-A/B/C responses.
+  std::string reported_phase = request_fields.size() > 4 ? request_fields[4] : "";
+  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.front())))
+    reported_phase.erase(reported_phase.begin());
+  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.back())))
+    reported_phase.pop_back();
+  for (auto &c : reported_phase) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  if (this->active_control_) {
+    if (phase_reports.active[BUCKET_ABC] || (reported_phase == "D" && total != 0.0f)) {
+      fields[11] = "1";
+    }
+  } else {
+    fields[11] = std::to_string(phase_reports.count[BUCKET_ABC]);
+  }
   fields[18] = to_int_str(phase_reports.chrg_power[BUCKET_ABC]);
   fields[23] = to_int_str(phase_reports.dchrg_power[BUCKET_ABC]);
 

@@ -202,10 +202,14 @@ the transient state while a device is still detecting its phase (`phase_t = 0`).
 
 > The AstraMeter emulator mirrors this bucketing: `'0'`/unassigned reporters
 > aggregate into the `x_*` fields, phase‑`D` reporters into the `ABC_*` fields
-> and the `ABC_chrg_nb` count, and `A`/`B`/`C` into their own buckets. It does
-> not yet implement a combined (`ABC`) **control** mode, though: a phase‑`D`
-> battery is served the relay path (raw grid reading + aggregates) even when
-> active control is on, exactly as during inspection.
+> and the `ABC_chrg_nb` count, and `A`/`B`/`C` into their own buckets. A phase‑`D`
+> battery is a valid, **actively‑steered** operating mode: under active control it
+> receives a per‑consumer target in the summed grid field (field 7) with an
+> `ABC_chrg_nb` count of `1` (so it applies the target as‑is instead of dividing
+> by `N`), and its instructed net power aggregates into the `ABC_*` cross‑talk
+> fields — exactly like an `A`/`B`/`C` battery. Only `'0'`/unassigned reporters
+> (still detecting their phase) are treated as inspection and served the raw relay
+> path.
 
 ### CT003 energy fields (fields 25–28)
 
