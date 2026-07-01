@@ -656,7 +656,7 @@ class CT002:
             # battery count — each battery divides the forwarded aggregate by it
             # to take its 1/N share.
             by_phase[bucket]["count"] += 1
-            if self.active_control and bucket in ("A", "B", "C"):
+            if self.active_control and bucket in ("A", "B", "C", "ABC"):
                 # Active control: use the net AC power we *instructed* this
                 # consumer to be at (its reported output plus the delta in the
                 # last response), not what it physically reported.  A battery
@@ -678,10 +678,9 @@ class CT002:
                     power = 0
             else:
                 # Relay mode forwards each battery's *reported* power, exactly
-                # like the real CT (issue #457).  x/ABC consumers are never
-                # actively instructed (the emulator has no combined control
-                # mode and gives no instruction during inspection), so their
-                # reported power is the only truthful signal in either mode.
+                # like the real CT (issue #457).  x (inspection) consumers are
+                # never actively instructed, so their reported power is the only
+                # truthful signal in either mode.
                 power = consumer.power
             if power == 0:
                 continue
@@ -839,12 +838,28 @@ class CT002:
         # carries no x count field.
         response_fields[14] = str(phase_values["x"]["chrg_power"])
         response_fields[19] = str(phase_values["x"]["dchrg_power"])
-        # ABC (combined, phase "D") bucket.  Combined-mode consumers are never
-        # actively instructed (the emulator has no combined control mode), so
-        # they are effectively relayed in both modes: forward the real count.
-        response_fields[11] = str(phase_values["ABC"]["count"])
-        response_fields[18] = str(phase_values["ABC"]["chrg_power"])
-        response_fields[23] = str(phase_values["ABC"]["dchrg_power"])
+        # ABC (combined, phase "D") bucket.  A combined-mode battery reads the
+        # summed grid field (field 7, ``measured_total_power``) and divides it
+        # by this count.  Under active control we deliver a per-consumer target
+        # in that summed field, so report a count of 1 when a combined battery
+        # is being instructed (like the per-phase branch above) so it applies
+        # its individual target as-is instead of under-responding by a factor of
+        # N (issue #459); relay mode forwards the real count so each combined
+        # battery takes its 1/N share.  The ``measured_total_power`` guard is
+        # scoped to a phase-"D" requester: a per-phase target also sums into
+        # that field, so an unscoped check would spuriously set the ABC count on
+        # phase-A/B/C responses (where the battery ignores it anyway).
+        reported_phase = (
+            (request_fields[4] if len(request_fields) > 4 else "").strip().upper()
+        )
+        abc = phase_values["ABC"]
+        if self.active_control:
+            if abc["active"] or (reported_phase == "D" and measured_total_power != 0):
+                response_fields[11] = "1"
+        else:
+            response_fields[11] = str(abc["count"])
+        response_fields[18] = str(abc["chrg_power"])
+        response_fields[23] = str(abc["dchrg_power"])
 
         response_fields += ["0"] * (len(RESPONSE_LABELS) - len(response_fields))
         self._info_idx_counter = (self._info_idx_counter + 1) % 256
@@ -942,11 +957,13 @@ class CT002:
         participate_raw = fields[6].strip() if len(fields) > 6 else ""
         participates = participate_raw == "" or parse_int(participate_raw, 1) != 0
 
-        # Anything other than A/B/C is treated as inspection mode. Observed
-        # inspection markers in real traffic include "0", empty, and "D"
-        # (newer Marstek battery firmwares); accept any other value too so
-        # future markers don't break phase detection.
-        in_inspection_mode = reported_phase not in ("A", "B", "C")
+        # Only an unassigned / diagnostic reporter is in inspection mode: "0",
+        # empty, or any other unexpected marker.  "A"/"B"/"C" are the physical
+        # phases and "D" is combined / whole-home mode (newer Marstek firmware)
+        # — all four are valid, actively-steered operating phases, so they are
+        # NOT inspection.  Accept any other value as inspection so a future
+        # marker doesn't get mistaken for a real phase.
+        in_inspection_mode = reported_phase not in ("A", "B", "C", "D")
         if in_inspection_mode:
             logger.debug(
                 "CT002 request from %s in inspection mode (phase=%r)",
@@ -1041,8 +1058,15 @@ class CT002:
         # into the x bucket from ``consumer.power`` instead.
         if not in_inspection_mode:
             consumer = self._get_consumer(consumer_id)
-            phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
-            consumer.last_instructed_power = float(reported_power + values[phase_idx])
+            if consumer.phase.upper() == "D":
+                # Combined / whole-home mode: the battery reads the summed grid
+                # field (field 7 == sum of the per-phase values), so its net is
+                # the reported power plus the whole target, not a single phase.
+                delta = sum(values)
+            else:
+                phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
+                delta = values[phase_idx]
+            consumer.last_instructed_power = float(reported_power + delta)
 
         try:
             response_fields = self._build_response_fields(fields, values)

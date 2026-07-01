@@ -372,6 +372,38 @@ async def test_handle_request_records_net_instructed_power_not_delta():
     )
 
 
+async def test_combined_mode_records_net_from_summed_grid_field():
+    """A combined-mode (phase 'D') battery reads the *summed* grid field
+    (field 7), so its net instructed power is the reported output plus the
+    whole target — not just the phase-A slot.  Feeding a target spread across
+    phases proves the sum is used: 300 reported + (200+300) = 800, not 500."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    await _drive_request(
+        device,
+        battery_mac="AABBCCDDEEFF",
+        phase="D",
+        reported_power=300,
+        delta_values=[200, 300, 0],
+    )
+    consumer = device._consumers["aabbccddeeff"]
+    assert consumer.last_instructed_power == 800.0
+
+
+async def test_event_listener_fires_for_combined_mode_not_inspection():
+    """HA discovery/state is driven by the consumer event listener, which must
+    fire for a combined-mode ('D') battery — a valid, steered phase — but stay
+    silent for a true inspection ('0') poll (still discovering its phase)."""
+    device = CT002(ct_mac="112233445566", active_control=False)
+    fired: list[str] = []
+    device.event_listener = lambda _dev, cid, _data: fired.append(cid)
+
+    await _drive_request(device, "AABBCCDDEEFF", "D", 300, [0, 0, 0])
+    await _drive_request(device, "BBCCDDEEFFAA", "0", 0, [0, 0, 0])
+
+    assert "aabbccddeeff" in fired  # combined mode → discovery fires
+    assert "bbccddeeffaa" not in fired  # inspection → suppressed
+
+
 async def test_handle_request_pv_passthrough_net_target_and_relay_buckets():
     """Venus scenario from issue #376 driven in relay mode: reports +500
     (passthrough), the relayed grid delta is -500 → the *expected* net target
@@ -622,22 +654,53 @@ async def test_combined_phase_d_reporter_lands_in_abc_bucket():
     assert response[8] == "0"  # A_chrg_nb
 
 
-def test_active_control_x_abc_buckets_use_reported_power():
-    """Even under active control, x/ABC consumers are never instructed, so
-    their buckets carry the reported power while A/B/C keep aggregating the
-    net instructed power (issue #376 behavior preserved)."""
+def test_active_control_abc_bucket_uses_instructed_power():
+    """Under active control a combined-mode (phase 'D') battery is steered like
+    any A/B/C battery, so its ABC bucket aggregates the *instructed* net power
+    (issue #376), not the raw reported passthrough.  A true inspection ('0')
+    reporter is never instructed, so the x bucket still carries reported power."""
     device = CT002(active_control=True)
     # Phase-A battery: reported +500 passthrough, instructed net -500.
     device._update_consumer_report("venus-a", phase="A", power=500)
     device._consumers["venus-a"].last_instructed_power = -500.0
-    # Combined-mode battery: reports -300, never instructed.
-    device._update_consumer_report("venus-d", phase="D", power=-300)
+    # Combined-mode battery: reported +300 passthrough, instructed net -300.
+    device._update_consumer_report("venus-d", phase="D", power=300)
+    device._consumers["venus-d"].last_instructed_power = -300.0
+    # Inspection reporter: never instructed, reported -200 stays in the x bucket.
+    device._update_consumer_report("ins-x", phase="0", power=-200)
 
     by_phase = device._collect_reports_by_phase()
     assert by_phase["A"]["chrg_power"] == -500  # instructed net
     assert by_phase["A"]["dchrg_power"] == 0
-    assert by_phase["ABC"]["chrg_power"] == -300  # reported
+    assert by_phase["ABC"]["chrg_power"] == -300  # instructed net, not reported
     assert by_phase["ABC"]["count"] == 1
+    assert by_phase["x"]["chrg_power"] == -200  # reported (never instructed)
+
+
+def test_active_control_combined_mode_response_reports_count_one():
+    """Under active control the ABC (combined 'D') count field must be 1 so a
+    combined battery applies its individual target as-is instead of dividing by
+    N — mirroring the per-phase active-control count (issue #459)."""
+    device = CT002(active_control=True)
+    device._update_consumer_report("venus-d", phase="D", power=0)
+    device._consumers["venus-d"].last_instructed_power = -400.0
+    response = device._build_response_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "D", "0"], [-400, 0, 0]
+    )
+    assert response[11] == "1"  # ABC_chrg_nb = 1 (not the real battery count)
+    assert response[18] == "-400"  # ABC_chrg_power = instructed net
+
+
+def test_relay_mode_combined_count_is_real_battery_count():
+    """Relay mode forwards the real combined-battery count so each battery takes
+    its 1/N share — the contrast with active control's count of 1."""
+    device = CT002(active_control=False)
+    device._update_consumer_report("venus-d1", phase="D", power=100)
+    device._update_consumer_report("venus-d2", phase="D", power=100)
+    response = device._build_response_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "D", "0"], [0, 0, 0]
+    )
+    assert response[11] == "2"  # ABC count = real battery count in relay mode
 
 
 def test_ct002_logs_phase_detection_for_combined_mode(caplog):
