@@ -1,5 +1,8 @@
 # Changelog
 
+## Next
+
+
 ## 2.2.3
 
 - **Fixed** Marstek batteries running in combined / whole-home mode (newer firmware, no per-phase assignment) missing all their per-battery Home Assistant entities — Distribution Weight, Manual/Auto Target, Active and Min DC Output never appeared, so per-battery balancing couldn't be controlled. These batteries are now recognized as a valid, actively-steered mode: their entities show up and fair distribution applies to them like any phase-assigned battery ([#536](https://github.com/tomquist/astrameter/discussions/536), [#537](https://github.com/tomquist/astrameter/pull/537)).
