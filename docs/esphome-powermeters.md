@@ -887,6 +887,7 @@ external_components:
 http_request:
   useragent: esphome/astrameter
   timeout: 5s
+  buffer_size_rx: 4096
 
 sensor:
   - platform: template
@@ -900,6 +901,7 @@ interval:
       - http_request.get:
           url: http://192.168.1.130/solar_api/v1/GetMeterRealtimeData.cgi?Scope=Device&DeviceId=0
           capture_response: true
+          max_response_buffer_size: 4096
           on_response:
             then:
               - lambda: |-
@@ -912,6 +914,10 @@ ct002:
   id: ct002_main
   power_sensor_l1: grid_l1
 ```
+
+The Solar API returns a multi-KB JSON document, so the `buffer_size_rx` /
+`max_response_buffer_size` above are required — with ESPHome's small default the
+response is truncated and `json::parse_json` silently fails.
 
 If your readings have the wrong sign, add a `multiply: -1` filter on the sensor.
 
