@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** the CT002/CT003 emulator sending a battery several control commands in quick succession — instead of a single one — whenever a reading was delayed (with `WAIT_FOR_NEXT_MESSAGE` enabled, a throttled meter via `THROTTLE_INTERVAL`, or any slow power source). Because each command nudges the battery relative to its current output, the burst could push it well past the intended setpoint. Batteries polling during a delayed reading now get exactly one command per reading.
+
 
 ## 2.2.3
 
