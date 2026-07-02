@@ -859,9 +859,16 @@ def test_meter_latency_drives_sustained_oscillation():
 
     sc = build_scenarios()["single_venus_washer"]
     assert sc.meter_latency_s > 0  # the scenario opts into delay
-    delayed = asyncio.run(run_scenario(sc, seed=1))
+    # Isolate the latency model: disable the hunt-gated deadband (on by default),
+    # which independently suppresses the latency-driven washer hunting this test
+    # demonstrates — leaving it on would flatten the delayed run below the
+    # instant one. (Same isolation rationale as TestRampPacingRegression.)
+    overrides = {"hunt_deadband_extra": 0.0}
+    delayed = asyncio.run(run_scenario(sc, seed=1, overrides=overrides))
     instant = asyncio.run(
-        run_scenario(dataclasses.replace(sc, meter_latency_s=0.0), seed=1)
+        run_scenario(
+            dataclasses.replace(sc, meter_latency_s=0.0), seed=1, overrides=overrides
+        )
     )
     assert delayed["grid_p2p_w"] > instant["grid_p2p_w"]
 

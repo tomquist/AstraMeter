@@ -131,6 +131,12 @@ struct BalancerConfig {
   // Only residuals below this magnitude are damped; a larger one is a genuine
   // demand step that reacts at full gain. See balancer.py.
   float osc_damp_threshold{300.0f};
+  // Hunt-gated residual deadband (W): while a consumer is hunting (osc_score
+  // rising toward 1) a damped residual whose magnitude is under
+  // hunt_deadband_extra * osc_score is dropped to 0, so no noise-driven
+  // micro-correction is issued. The band is 0 when not hunting, so a genuine
+  // step passes through. 0 disables. See balancer.py.
+  float hunt_deadband_extra{35.0f};
   float min_efficient_power{0.0f};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
@@ -344,7 +350,7 @@ class LoadBalancer {
   bool concentration_pool_balanced_(const ReportMap &reports,
                                     const std::vector<const std::string *> &conc_ids);
   float pace_reading_(const std::string &consumer_id, float reading, float reported);
-  float damp_oscillation_(const std::string &consumer_id, float residual);
+  float damp_oscillation_(const std::string &consumer_id, float residual, bool fresh = true);
   float predict_control_grid_(const ReportMap &reports, float grid_total,
                               const std::vector<float> &sample_id);
   float apply_import_trim_(float control_grid, bool fresh);
