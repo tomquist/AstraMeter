@@ -1,5 +1,5 @@
-name: Issue Report
-description: Report a bug, ask for help, or request a feature
+name: Bug Report
+description: Report a bug or ask for help
 body:
   - type: textarea
     id: what
@@ -43,7 +43,7 @@ body:
       description: Your full config.ini, with passwords and tokens removed.
       render: ini
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: logs
@@ -55,4 +55,4 @@ body:
         or run Docker/Python with LOG_LEVEL=debug.
       render: shell
     validations:
-      required: false
+      required: true
