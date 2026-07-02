@@ -29,6 +29,21 @@ class FailingPowermeter(Powermeter):
         raise TimeoutError("Connection timeout to host http://192.168.2.17/")
 
 
+class GatedPowermeter(Powermeter):
+    """A meter whose read parks until ``gate`` is set — models a slow/throttled
+    read or WAIT_FOR_NEXT_MESSAGE holding the handler so concurrent polls pile
+    up behind it."""
+
+    def __init__(self):
+        self.gate = asyncio.Event()
+        self.call_count = 0
+
+    async def get_powermeter_watts(self):
+        self.call_count += 1
+        await self.gate.wait()
+        return [42.0]
+
+
 class _FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -84,9 +99,13 @@ async def test_dedupe_window_drops_rapid_duplicates():
     assert dummy.call_count == 2
 
 
-async def test_multiple_requests_with_throttling():
+async def test_concurrent_polls_from_one_battery_coalesce_over_udp():
+    """End-to-end burst prevention over real UDP: a battery firing several
+    polls while a throttled read is in flight gets exactly ONE response, not one
+    per poll — repeating the same reading would feed its zero-export loop the
+    same stale error before the plant can respond, overshooting target."""
     dummy = DummyPowermeter()
-    pm = ThrottledPowermeter(dummy, throttle_interval=0.2)
+    pm = ThrottledPowermeter(dummy, throttle_interval=0.3)
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
 
     shelly = Shelly([(pm, cf, True)], udp_port=0, device_id="test")
@@ -94,33 +113,120 @@ async def test_multiple_requests_with_throttling():
     port = shelly.udp_port
     assert port != 0, "Shelly should have bound to an actual port"
     try:
-        # Prime the throttle with an initial fetch so subsequent
-        # concurrent requests coalesce on the same reading.
-        resp = await _send_req(port, 99)
-        assert resp == 99
+        # Prime the throttle so the burst parks on the throttle window rather
+        # than racing the very first fetch.
+        assert await _send_req(port, 99) == 99
         initial_calls = dummy.call_count
 
         responses = []
-        errors = []
+        timeouts = []
 
         async def send_req(i):
             try:
-                resp_id = await _send_req(port, i)
-                responses.append(resp_id)
+                responses.append(await _send_req(port, i, timeout=1.0))
             except TimeoutError:
-                errors.append(f"timeout for request id={i}")
+                timeouts.append(i)
 
         await asyncio.gather(*(send_req(i) for i in range(3)))
 
-        assert errors == []
-        assert sorted(responses) == [0, 1, 2]
-        # All 3 concurrent requests should coalesce into a single fetch.
-        assert dummy.call_count - initial_calls <= 1, (
-            f"Expected at most 1 powermeter fetch for 3 concurrent requests, "
-            f"got {dummy.call_count - initial_calls}"
-        )
+        # Same source IP == same battery: exactly one poll is answered and the
+        # duplicates are coalesced away instead of each drawing a response.
+        assert len(responses) == 1
+        assert len(timeouts) == 2
+        # The one answered poll shares a single throttled fetch.
+        assert dummy.call_count - initial_calls <= 1
     finally:
         await shelly.stop()
+
+
+async def test_concurrent_polls_coalesce_to_a_single_response():
+    """Four polls from one battery pile up in a parked read; only ONE response
+    goes out when the reading lands — not a four-deep burst."""
+    pm = GatedPowermeter()
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly([(pm, cf, False)], udp_port=0, device_id="test")
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+    addr = ("127.0.0.1", 54321)
+
+    handlers = [
+        asyncio.create_task(shelly._handle_request(transport, req, addr))
+        for _ in range(4)
+    ]
+    await asyncio.sleep(0.05)
+    assert transport.sent == []  # every handler parked on the read
+
+    pm.gate.set()  # one fresh reading arrives
+    await asyncio.gather(*handlers)
+
+    assert len(transport.sent) == 1  # one response, not four
+    assert pm.call_count == 1  # the meter was read once, not four times
+    assert shelly._inflight_batteries == set()  # flag cleared for the next read
+
+
+async def test_coalescing_is_per_battery():
+    """Coalescing is keyed per battery IP: two batteries polling at once each
+    get their own response; one does not suppress the other."""
+    pm = GatedPowermeter()
+    cf = ClientFilter([IPv4Network("127.0.0.0/8")])
+    shelly = Shelly([(pm, cf, False)], udp_port=0, device_id="test")
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+
+    handlers = []
+    for ip in ("127.0.0.1", "127.0.0.2"):
+        for _ in range(2):  # two concurrent polls per battery
+            handlers.append(
+                asyncio.create_task(shelly._handle_request(transport, req, (ip, 5000)))
+            )
+
+    await asyncio.sleep(0.05)
+    pm.gate.set()
+    await asyncio.gather(*handlers)
+
+    assert len(transport.sent) == 2  # one per battery, both answered
+    assert shelly._inflight_batteries == set()
+
+
+async def test_poll_answered_again_after_burst_coalesced():
+    """Dropping duplicates is not a lock-out: once the in-flight handler
+    responds, the next poll is served normally."""
+    pm = GatedPowermeter()
+    pm.gate.set()  # reads resolve immediately
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly([(pm, cf, False)], udp_port=0, device_id="test")
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+    addr = ("127.0.0.1", 54321)
+
+    await shelly._handle_request(transport, req, addr)
+    assert len(transport.sent) == 1
+    assert shelly._inflight_batteries == set()
+
+    await shelly._handle_request(transport, req, addr)
+    assert len(transport.sent) == 2
+
+
+async def test_inflight_flag_cleared_when_meter_read_fails():
+    """A failing meter read must still clear the in-flight flag, or the battery
+    would be locked out of every future response."""
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly([(FailingPowermeter(), cf, False)], udp_port=0, device_id="test")
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+    addr = ("127.0.0.1", 54321)
+
+    await shelly._handle_request(transport, req, addr)
+    assert transport.sent == []  # read failed, no response
+    assert shelly._inflight_batteries == set()  # but the flag is cleared
 
 
 async def _drive_failing_read(caplog, level):

@@ -49,6 +49,18 @@ class Shelly:
         self._battery_last_seen: dict[str, float] = {}
         self._battery_poll_interval: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
+        # Batteries with a request handler currently parked between the meter
+        # read and its response.  The battery runs a closed-loop zero-export
+        # controller, so the grid reading we report is the error signal it
+        # integrates against its own output.  While WAIT_FOR_NEXT_MESSAGE — or a
+        # slow/throttled meter — holds that read, the battery keeps polling
+        # (~1/s) and each datagram spawns its own handler task; without
+        # coalescing every parked handler would wake on the same stale reading
+        # and answer, feeding the loop the same pre-adjustment error several
+        # times before the plant can reflect its response, which winds the
+        # battery past target exactly like a burst of deltas.  A single
+        # in-flight handler per battery answers per reading; duplicates drop.
+        self._inflight_batteries: set[str] = set()
         self._stopped = asyncio.Event()
         self._inactive_check_task = None
         self._dedupe_time_window = max(0.0, dedupe_time_window)
@@ -221,69 +233,90 @@ class Shelly:
                     logger.warning(f"No powermeter found for client {addr[0]}")
                     return
 
-                if wait_for_next_message:
-                    try:
-                        await powermeter.wait_for_next_message(timeout=2)
-                    except TimeoutError:
-                        logger.debug(
-                            "Powermeter %s produced no fresh message within 2s; "
-                            "serving last known value",
-                            type(powermeter).__name__,
-                        )
+                # Coalesce concurrent polls from the same battery.  If a handler
+                # for this battery is already parked awaiting the next meter
+                # reading, the reading has not been answered yet — letting this
+                # duplicate poll wait and respond too would feed the battery's
+                # zero-export loop the same stale error several times the moment
+                # the meter updates and wakes every parked handler, overshooting
+                # target.  Drop it; _track_battery_seen above already refreshed
+                # the liveness/poll-interval state, and the in-flight handler
+                # sends the one response for the next reading.
+                if addr[0] in self._inflight_batteries:
+                    logger.debug(
+                        "Coalescing Shelly poll from %s: a handler is already "
+                        "awaiting the next meter reading; dropping this "
+                        "duplicate to avoid a burst of readings",
+                        addr,
+                    )
+                    return
+                self._inflight_batteries.add(addr[0])
                 try:
-                    powers = await powermeter.get_powermeter_watts()
-                except Exception as exc:
-                    # Reading the meter can fail transiently (e.g. an HTTP
-                    # source timing out). Log a one-liner at the normal level
-                    # and reserve the full traceback for DEBUG so an outage
-                    # doesn't flood the log with stack traces on every poll.
-                    logger.warning(
-                        "Could not read meter values from %s (%s): %s",
-                        type(powermeter).__name__,
-                        addr[0],
-                        exc,
-                        exc_info=debug_traceback(),
-                    )
-                    return
+                    if wait_for_next_message:
+                        try:
+                            await powermeter.wait_for_next_message(timeout=2)
+                        except TimeoutError:
+                            logger.debug(
+                                "Powermeter %s produced no fresh message within "
+                                "2s; serving last known value",
+                                type(powermeter).__name__,
+                            )
+                    try:
+                        powers = await powermeter.get_powermeter_watts()
+                    except Exception as exc:
+                        # Reading the meter can fail transiently (e.g. an HTTP
+                        # source timing out). Log a one-liner at the normal level
+                        # and reserve the full traceback for DEBUG so an outage
+                        # doesn't flood the log with stack traces on every poll.
+                        logger.warning(
+                            "Could not read meter values from %s (%s): %s",
+                            type(powermeter).__name__,
+                            addr[0],
+                            exc,
+                            exc_info=debug_traceback(),
+                        )
+                        return
 
-                if request.get("method") == "EM.GetStatus":
-                    response = self._create_em_response(request["id"], powers)
-                elif request.get("method") == "EM1.GetStatus":
-                    response = self._create_em1_response(request["id"], powers)
-                else:
-                    return
+                    if request.get("method") == "EM.GetStatus":
+                        response = self._create_em_response(request["id"], powers)
+                    elif request.get("method") == "EM1.GetStatus":
+                        response = self._create_em1_response(request["id"], powers)
+                    else:
+                        return
 
-                response_json = json.dumps(response, separators=(",", ":"))
-                logger.debug(f"Sending response: {response_json}")
-                response_data = response_json.encode()
-                transport.sendto(response_data, addr)
+                    response_json = json.dumps(response, separators=(",", ":"))
+                    logger.debug(f"Sending response: {response_json}")
+                    response_data = response_json.encode()
+                    transport.sendto(response_data, addr)
 
-                battery_ip = addr[0]
-                if len(powers) == 1:
-                    grid_l1, grid_l2, grid_l3 = powers[0], 0.0, 0.0
-                elif len(powers) >= 3:
-                    grid_l1, grid_l2, grid_l3 = (
-                        float(powers[0]),
-                        float(powers[1]),
-                        float(powers[2]),
-                    )
-                else:
-                    grid_l1, grid_l2, grid_l3 = 0.0, 0.0, 0.0
-                self._call_event_listener(
-                    battery_ip,
-                    {
-                        "grid_power": {
-                            "l1": grid_l1,
-                            "l2": grid_l2,
-                            "l3": grid_l3,
-                            "total": grid_l1 + grid_l2 + grid_l3,
+                    battery_ip = addr[0]
+                    if len(powers) == 1:
+                        grid_l1, grid_l2, grid_l3 = powers[0], 0.0, 0.0
+                    elif len(powers) >= 3:
+                        grid_l1, grid_l2, grid_l3 = (
+                            float(powers[0]),
+                            float(powers[1]),
+                            float(powers[2]),
+                        )
+                    else:
+                        grid_l1, grid_l2, grid_l3 = 0.0, 0.0, 0.0
+                    self._call_event_listener(
+                        battery_ip,
+                        {
+                            "grid_power": {
+                                "l1": grid_l1,
+                                "l2": grid_l2,
+                                "l3": grid_l3,
+                                "total": grid_l1 + grid_l2 + grid_l3,
+                            },
+                            "active": battery_ip not in self._inactive_batteries,
+                            "poll_interval": poll_interval,
+                            "last_seen": datetime.now(timezone.utc).isoformat(),
+                            "battery_count": len(self._battery_last_seen),
                         },
-                        "active": battery_ip not in self._inactive_batteries,
-                        "poll_interval": poll_interval,
-                        "last_seen": datetime.now(timezone.utc).isoformat(),
-                        "battery_count": len(self._battery_last_seen),
-                    },
-                )
+                    )
+                finally:
+                    self._inflight_batteries.discard(addr[0])
         except json.JSONDecodeError:
             logger.error("Error: Invalid JSON")
         except Exception:
