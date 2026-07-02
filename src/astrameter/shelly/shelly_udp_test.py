@@ -124,7 +124,10 @@ async def test_concurrent_polls_from_one_battery_coalesce_over_udp():
         async def send_req(i):
             try:
                 responses.append(await _send_req(port, i, timeout=1.0))
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
+                # A coalesced-away duplicate never gets a reply. ``asyncio``'s
+                # TimeoutError is a *distinct* class from the builtin on Python
+                # 3.10 (they were unified in 3.11), so catch both.
                 timeouts.append(i)
 
         await asyncio.gather(*(send_req(i) for i in range(3)))
