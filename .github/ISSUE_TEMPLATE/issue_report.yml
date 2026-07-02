@@ -1,0 +1,59 @@
+name: Bug Report
+description: Report a bug or ask for help
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What's the issue?
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Home Assistant add-on
+        - Docker
+        - Python
+        - ESPHome
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: install_other
+    attributes:
+      label: If "Other", which?
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your full config.ini, with passwords and tokens removed.
+      render: ini
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        The log around the problem, with a bit before and after. The more the better.
+        Debug logs help most: set the add-on's Log Level to "debug" (Configuration tab),
+        or run Docker/Python with LOG_LEVEL=debug.
+      render: shell
+    validations:
+      required: true
