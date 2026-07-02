@@ -1,5 +1,6 @@
 name: Bug Report
 description: Report a bug or ask for help
+labels: ["bug"]
 body:
   - type: textarea
     id: what
