@@ -168,7 +168,7 @@ The numeric section uses **four phase buckets plus one "unassigned" bucket**:
 | 24 | **ABC_dchrg_power** | 16‑bit signed ² | combined‑bucket discharge sum |
 | 25 | **low_price_ele_in** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: off‑peak import energy. TPM2-0: import energy |
 | 26 | **normal_price_ele_in** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: peak import energy. TPM2-0: always observed zero |
-| 27 | **low_price_ele_out** | 32‑bit unsigned | (HME-3 and TPM2-0 only) ME-3: off‑peak export energy. TPM2-0: export energy |
+| 27 | **low_price_ele_out** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: off‑peak export energy. TPM2-0: export energy |
 | 28 | **normal_price_ele_out** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: peak export energy. TPM2-0: always observed zero |
 
 ¹ **Field‑width difference between models:** on **old CT002 (`HME-4`)** the three
