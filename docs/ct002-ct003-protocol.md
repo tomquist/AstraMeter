@@ -8,11 +8,16 @@ Capture-based findings for issue #111 are documented in:
 - [ct002-capture-analysis.md](ct002-capture-analysis.md)
 
 The CT002 and CT003 share the **same protocol**. The only difference is the CT type value:
-- **CT002:** `HME-4`
+- **CT002 (TPM-100CTW):** `HME-4`
+- **CT002 (TPM2-100CT):** `TPM2-0`
 - **CT003:** `HME-3`
 
-CT003 additionally reads a P1/SML smart meter, so it carries cumulative energy
-data that CT002 does not (see "CT003 energy fields" below).
+Newer CT002 (`TPM2-0`) and CT003 additionally carry cumulative energy data that the older
+CT002 (`HME-4`) does not. See "Cumulative energy fields" below.
+
+Most of the information here was determined for HME-4 and HME-3 devices. The UDP communication protocol
+documented here has been verified for TPM2-0, but unless noted otherwise, further details about this model
+have not been verified.
 
 ## Transport
 
@@ -62,7 +67,7 @@ Request payload fields (consumer → CT):
 | — | length | 16‑bit int | leading digits of the framed packet |
 | 1 | **meter_dev_type** | string ≤ 10 | requester type (e.g. `HMG-50`); copied into the response |
 | 2 | **meter_mac_code** | string ≤ 30 | battery MAC (12 hex chars in practice, from the Marstek app) |
-| 3 | **hhm_dev_type** | string ≤ 8 | CT type (`HME-4` or `HME-3`) |
+| 3 | **hhm_dev_type** | string ≤ 8 | CT type (`HME-4`, `HME-3` or `TPM2-0`) |
 | 4 | **hhm_mac_code** | string ≤ 13 | CT MAC (12 hex chars) |
 | 5 | **phase** | single char | `A`/`B`/`C` = physical phase; `D` = **combined** (see "Phase selection"); `0`/empty = **unassigned / inspection** |
 | 6 | **phase_power** | 16‑bit signed | watts for the phase in field 5 (range −32768…32767) |
@@ -137,7 +142,7 @@ The numeric section uses **four phase buckets plus one "unassigned" bucket**:
 
 | # | Field | Type / width | Meaning |
 |---|-------|--------------|---------|
-| 1 | **meter_dev_type** | string | CT/meter type (`HME-4` / `HME-3`) |
+| 1 | **meter_dev_type** | string | CT/meter type (`HME-4`, `HME-3` or `TPM2-0`) |
 | 2 | **meter_mac_code** | string | CT MAC |
 | 3 | **hhm_dev_type** | string | storage type (echoes request, e.g. `HMG-50`) |
 | 4 | **hhm_mac_code** | string | storage MAC (echoes request battery MAC) |
@@ -161,16 +166,17 @@ The numeric section uses **four phase buckets plus one "unassigned" bucket**:
 | 22 | **B_dchrg_power** | 16‑bit signed ² | phase B discharge sum |
 | 23 | **C_dchrg_power** | 16‑bit signed ² | phase C discharge sum |
 | 24 | **ABC_dchrg_power** | 16‑bit signed ² | combined‑bucket discharge sum |
-| 25 | **low_price_ele_in** | 32‑bit unsigned | (CT003 only) off‑peak import energy |
-| 26 | **normal_price_ele_in** | 32‑bit unsigned | (CT003 only) peak import energy |
-| 27 | **low_price_ele_out** | 32‑bit unsigned | (CT003 only) off‑peak export energy |
-| 28 | **normal_price_ele_out** | 32‑bit unsigned | (CT003 only) peak export energy |
+| 25 | **low_price_ele_in** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: off‑peak import energy. TPM2-0: import energy |
+| 26 | **normal_price_ele_in** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: peak import energy. TPM2-0: always observed zero |
+| 27 | **low_price_ele_out** | 32‑bit unsigned | (HME-3 and TPM2-0 only) ME-3: off‑peak export energy. TPM2-0: export energy |
+| 28 | **normal_price_ele_out** | 32‑bit unsigned | (HME-3 and TPM2-0 only) HME-3: peak export energy. TPM2-0: always observed zero |
 
-¹ **Field‑width difference between models:** on **CT002 (`HME-4`)** the three
+¹ **Field‑width difference between models:** on **old CT002 (`HME-4`)** the three
 per‑phase powers (fields 5–7) are **16‑bit signed** (±32767 W); the total
-(field 8) is 32‑bit. On **CT003 (`HME-3`)** all four are 32‑bit.
+(field 8) is 32‑bit. On **CT003 (`HME-3`)** all four are 32‑bit. It is not currently
+known which range the newer CT002 models (`TPM2-0`) support.
 
-² The charge/discharge breakdown (fields 15–24) is **16‑bit signed on both
+² The charge/discharge breakdown (fields 15–24) is **16‑bit signed on HME-4 and HME-3
 models**, so each value saturates at ±32767 W.
 
 These names match `RESPONSE_LABELS` in `src/astrameter/ct002/protocol.py`. In
@@ -211,11 +217,12 @@ the transient state while a device is still detecting its phase (`phase_t = 0`).
 > (still detecting their phase) are treated as inspection and served the raw relay
 > path.
 
-### CT003 energy fields (fields 25–28)
+### Cumulative energy fields (fields 25–28)
 
-CT003 (`HME-3`) — but **not** CT002 (`HME-4`) — appends **four** trailing
-unsigned‑32‑bit fields, making the CT003 response **28 fields** vs. CT002's 24.
-They are the cumulative import/export energy registers CT003 reads from a
+CT003 (`HME-3`) and newer CT002 (`TPM2-0`) — but **not** older CT002 (`HME-4`) — append **four** trailing
+unsigned‑32‑bit fields, making the response **28 fields** vs. HME-4's 24.
+
+For CT003, they are cumulative import/export energy registers CT003 reads from a
 connected P1/SML smart meter, split by tariff, named
 `low_price_ele_in`, `normal_price_ele_in`, `low_price_ele_out`,
 `normal_price_ele_out` — i.e. off‑peak/peak import and off‑peak/peak export,
@@ -223,6 +230,10 @@ corresponding to the standard DSMR/SML registers `1-0:1.8.x` (import) and
 `1-0:2.8.x` (export). The exact scaling (the OBIS values are carried as `kWh`
 with three decimals) is the remaining unknown. The AstraMeter emulator (a
 clamp‑style CT002) does not source a smart meter and does not emit these fields.
+
+Newer CT002 (TPM2-0) also carry these additional fields. In testing so far, fields
+26 and 28 always contained 0. Fields 25 and 27 contained values consistent with
+cumulative energy import and export at a scaling of 0.1Wh per count.
 
 ## Aggregation, eviction and response cadence
 
@@ -639,6 +650,7 @@ CT003 (HME-3):
   com_t,com_b,ptl_t,smt_n,har_f,sof_f,irs_f,pwr_f,frm_c,upd_t,udp_v
 ```
 
+- Note that CT002 (TPM2-0) runtime-info layout has not yet been captured or verified.
 - Both start with `pwr_a/pwr_b/pwr_c/pwr_t` (per‑phase + total power) then
   `ble_s` (BLE state), `wif_r` (Wi‑Fi RSSI), `fc4_v` (Wi‑Fi module firmware
   string), `ver_v` (device version).
