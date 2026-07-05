@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-import random
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,7 +75,7 @@ def _http_get_json(
 
 
 def _random_hex(n: int) -> str:
-    return "".join(random.choice("0123456789abcdef") for _ in range(n))
+    return secrets.token_hex(n // 2 + n % 2)[:n]
 
 
 def _desired_type(device_type: str) -> str:

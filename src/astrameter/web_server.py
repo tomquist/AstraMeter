@@ -43,9 +43,21 @@ class WebServer:
         self.enable_web_config = enable_web_config
         self._runner = None
 
+    @staticmethod
+    @web.middleware
+    async def _security_headers(request, handler):
+        resp = await handler(request)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+        )
+        return resp
+
     async def start(self):
         """Bind the TCP port and start serving. Returns True on success, False on failure."""
-        app = web.Application()
+        app = web.Application(middlewares=[self._security_headers])
         # aiohttp auto-handles HEAD for GET routes.
         for path in ("/health", "/health/", "/api", "/api/"):
             app.router.add_get(path, self._handle_health)
