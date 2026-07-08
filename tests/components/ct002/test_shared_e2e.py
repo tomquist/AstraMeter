@@ -412,6 +412,47 @@ def test_convergence(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
+def test_nan_meter_reading_holds_then_control_recovers(backend) -> None:
+    """A NaN grid reading is answered with a zero-delta hold and leaves no
+    trace in the controller: the next finite reading steers normally.
+
+    Regression guard for issue #548: a single NaN sample used to flow into the
+    balancer and poison the adaptive grid-state predictor permanently (a NaN
+    innovation never clears the trust gate, so no later meter sample could
+    correct the estimate), after which the ramp-pacing clamp turned every
+    reading into a constant +pace_base_step discharge command until restart.
+    """
+    mac = "ABCDEF012345"
+    backend.set_clock(40000)
+    backend.set_grid(300)  # importing → discharge (+)
+    r = backend.poll(mac, "A", 0)
+    assert r is not None and int(r[4]) > 0, (
+        f"[{backend.name}] warm poll should drive discharge (+), got {r and r[4]}"
+    )
+
+    # The meter glitches: one NaN sample (ESPHome sensors publish NAN for
+    # "unavailable", and a filter chain fed one propagates it).
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    backend.set_grid(float("nan"))
+    r = backend.poll(mac, "A", 0)
+    assert r is not None, f"[{backend.name}] no response to poll during NaN reading"
+    assert [r[i] for i in (4, 5, 6, 7)] == ["0", "0", "0", "0"], (
+        f"[{backend.name}] NaN reading must take the zero-delta hold path, got {r[4:8]}"
+    )
+
+    # The meter recovers with an export reading: control must resume and steer
+    # negative — with a poisoned predictor this stayed pinned at +pace_base_step.
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    backend.set_grid(-300)
+    r = backend.poll(mac, "A", 0)
+    assert r is not None, f"[{backend.name}] no response after meter recovery"
+    assert int(r[4]) < 0, (
+        f"[{backend.name}] control must recover after a NaN sample: export "
+        f"should drive charge (-), got {r[4]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
 def test_clock_gated_dedup(backend) -> None:
     """The dedup window is driven by the (mock) clock on both stacks: a repeat
     poll inside the window is dropped; advancing the clock past it un-gates

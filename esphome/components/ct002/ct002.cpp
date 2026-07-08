@@ -110,6 +110,12 @@ void CT002Component::setup() {
   this->num_phases_ = (this->power_sensor_l2_ != nullptr) ? 3 : 1;
 
   auto cache = [this](size_t i, float v) {
+    // NAN is ESPHome's "no data" idiom (unavailable sensor, filter gap) —
+    // never a reading. Skip it without refreshing the stamp so the last good
+    // value bridges a transient gap and a persistent outage ages out into
+    // the meter-unavailable path, and so NaN never reaches the other
+    // raw_values_ readers (Marstek MQTT / cloud reporting). Issue #548.
+    if (!std::isfinite(v)) return;
     this->raw_values_[i] = v;
     this->raw_stamp_ms_[i] = ::esphome::millis();
   };
@@ -302,10 +308,21 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   // active control so the stateful controller (grid-state predictor, saturation
   // EMA, ...) never treats a fabricated zero grid as a fresh sample and emits a
   // non-zero delta from its internal state — the wind-up issue #403 guards
-  // against. The battery holds on the literal zero adjustment instead. Mirrors
-  // ct002.py _handle_request.
-  const bool meter_ok = !values.empty();
-  if (values.empty()) values = {0.0f, 0.0f, 0.0f};
+  // against. The battery holds on the literal zero adjustment instead.
+  //
+  // A non-finite reading (NaN/Inf) is a meter failure too, not a sample: one
+  // NaN fed into the balancer poisons the grid-state predictor permanently
+  // (every later innovation is NaN, so no fresh meter sample can ever correct
+  // the estimate) and pins each battery at the ramp-pacing base step until
+  // reboot (issue #548). Mirrors ct002.py _handle_request.
+  bool meter_ok = !values.empty();
+  for (float v : values) {
+    if (!std::isfinite(v)) {
+      meter_ok = false;
+      break;
+    }
+  }
+  if (!meter_ok) values = {0.0f, 0.0f, 0.0f};
   while (values.size() < 3) values.push_back(0.0f);
   values.resize(3);
 
