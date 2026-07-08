@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** active control silently breaking until a restart after a single invalid grid reading (a NaN value, e.g. from a briefly unavailable ESPHome sensor or a glitchy meter source): the controller could get stuck sending every battery a small constant discharge command regardless of the actual grid. An invalid reading is now treated like an unavailable meter — batteries hold their output for that poll and normal control resumes with the next good reading ([#548](https://github.com/tomquist/astrameter/issues/548)).
+- **Fixed** active control silently breaking until a restart after a single invalid grid reading (a NaN value, e.g. from a briefly unavailable ESPHome sensor or a glitchy meter source): the controller could get stuck sending every battery a small constant discharge command regardless of the actual grid. An invalid reading is now treated like an unavailable meter — batteries hold their output for that poll and normal control resumes with the next good reading ([#548](https://github.com/tomquist/astrameter/issues/548), [#550](https://github.com/tomquist/astrameter/pull/550)).
 
 
 ## 2.2.4
