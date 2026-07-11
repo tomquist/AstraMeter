@@ -291,3 +291,4 @@ def test_values_finite_helper() -> None:
     assert _values_finite([1.0, float("inf")]) is False
     assert _values_finite(["abc"]) is False
     assert _values_finite([None]) is False
+    assert _values_finite([10**400]) is False  # float() raises OverflowError

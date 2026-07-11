@@ -90,7 +90,8 @@ def _values_finite(values) -> bool:
     """
     try:
         return all(math.isfinite(float(v)) for v in values)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: float(10**400) — an int too large for a float.
         return False
 
 
