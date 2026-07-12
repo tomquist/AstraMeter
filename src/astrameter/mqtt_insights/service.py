@@ -1002,8 +1002,9 @@ class MqttInsightsService:
                 if not name:
                     continue
                 online, values = await self._powermeter_status(pm)
+                fallback = getattr(pm, "in_fallback_mode", False)
                 await self._publish_powermeter_health(
-                    client, base, cfg, name, online, values
+                    client, base, cfg, name, online, values, fallback
                 )
             await asyncio.sleep(interval)
 
@@ -1067,9 +1068,14 @@ class MqttInsightsService:
         name: str,
         online: bool,
         values: list[float] | None,
+        fallback_active: bool = False,
     ) -> None:
         pm_id = _sanitize_id(name)
-        state = {"online": online, "grid_power": self._grid_power_payload(values)}
+        state = {
+            "online": online, 
+            "grid_power": self._grid_power_payload(values),
+            "fallback_active": fallback_active
+        }
         await client.publish(
             f"{base}/powermeter/{pm_id}",
             payload=json.dumps(state).encode(),

@@ -22,6 +22,12 @@ class ThrottledPowermeter(PowermeterWrapper):
         super().__init__(wrapped_powermeter)
         self.throttle_interval = throttle_interval
 
+        # When True, errors always propagate instead of returning cached
+        # values.  Set by the caller (e.g. CT002 when TIMEOUT_FALLBACK_W is
+        # configured) so the control loop can activate its own fallback
+        # target instead of silently holding on stale data.
+        self.bypass_cache_on_error: bool = False
+
         # Coalescing fetch pattern: when a fetch is in flight (including the
         # throttle sleep), concurrent callers await the same future so every
         # consumer gets fresh data without hammering the source.
@@ -74,7 +80,7 @@ class ThrottledPowermeter(PowermeterWrapper):
             # Update timestamp even on failure so we respect the throttle
             # interval before retrying — avoids hammering a failing source.
             self._last_update_time = time.monotonic()
-            if self._last_values is not None:
+            if self._last_values is not None and not self.bypass_cache_on_error:
                 logger.warning(
                     "Throttling: Error getting fresh values: %s", e, exc_info=True
                 )
@@ -88,6 +94,7 @@ class ThrottledPowermeter(PowermeterWrapper):
                 return cached
             if not self._pending_fetch.done():
                 self._pending_fetch.set_exception(e)
+                self._pending_fetch.exception()  # Retrieve to prevent asyncio log spam
             raise
         finally:
             self._pending_fetch = None

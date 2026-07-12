@@ -227,9 +227,11 @@ class CT002:
         saturation_grace_seconds=SATURATION_GRACE_SECONDS,
         saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
         device_id="",
+        timeout_fallback_w=None,
         clock=None,
         reset_fn=None,
     ) -> None:
+        self.timeout_fallback_w = timeout_fallback_w
         self.udp_port = udp_port
         self.ct_mac = ct_mac
         self.ct_type = ct_type
@@ -902,16 +904,27 @@ class CT002:
                 self._before_send_failure_count == 1
                 or now - self._before_send_last_warn >= 30.0
             ):
-                logger.warning(
-                    "CT002 before_send failed (%d in a row) for %s: %s. "
-                    "The CT002 emulator is sending a zero adjustment so "
-                    "batteries hold their current output until the "
-                    "powermeter recovers.",
-                    self._before_send_failure_count,
-                    addr,
-                    exc,
-                    exc_info=debug_traceback(),
-                )
+                if self.timeout_fallback_w is not None:
+                    logger.warning(
+                        "CT002 before_send failed (%d in a row) for %s: %s. "
+                        "The CT002 emulator is sending a delta to achieve %gW fallback target.",
+                        self._before_send_failure_count,
+                        addr,
+                        exc,
+                        self.timeout_fallback_w,
+                        exc_info=debug_traceback(),
+                    )
+                else:
+                    logger.warning(
+                        "CT002 before_send failed (%d in a row) for %s: %s. "
+                        "The CT002 emulator is sending a zero adjustment so "
+                        "batteries hold their current output until the "
+                        "powermeter recovers.",
+                        self._before_send_failure_count,
+                        addr,
+                        exc,
+                        exc_info=debug_traceback(),
+                    )
                 self._before_send_last_warn = now
             return None, True
         # Success path: if we were in a failure spell, log the recovery.
@@ -1046,15 +1059,19 @@ class CT002:
 
             if meter_failed:
                 # Powermeter unavailable: do NOT re-drive control from the stale
-                # cached reading.  The CT002 instruction is a delta
+                # cached reading. The CT002 instruction is a delta
                 # (``new_target = current_power + grid_field``), so re-issuing a
                 # delta derived from a frozen reading winds the battery up in
-                # active control, and feeds frozen per-phase values into a phase
-                # self-diagnosis in inspection mode (issue #403).  Send a zero
-                # adjustment instead so each battery holds its current output —
-                # matching the ESPHome component, which uses ``[0, 0, 0]`` when
-                # its sensor ages out (see esphome/components/ct002/ct002.cpp).
-                values = [0, 0, 0]
+                # active control.
+                if self.timeout_fallback_w is not None:
+                    # To securely fall back to a specific target output, we calculate the precise delta
+                    # required to reach it based on the battery's currently reported output.
+                    delta_w = self.timeout_fallback_w - reported_power
+                    values = [delta_w / 3.0, delta_w / 3.0, delta_w / 3.0]
+                    logger.warning("CT002: Meter offline. Fallback active. Target: %gW, Reported: %gW, Sending delta: %gW", self.timeout_fallback_w, reported_power, delta_w)
+                else:
+                    # Old behaviour: Send a zero adjustment instead so each battery holds its current output
+                    values = [0, 0, 0]
             else:
                 values = self._get_consumer_value(consumer_id)
                 if values is None:
