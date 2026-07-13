@@ -61,6 +61,7 @@ def get_ct_section(device_type: str, cfg: configparser.ConfigParser) -> str:
 async def read_ct_powermeter(
     addr: tuple[str, int],
     powermeters: list[tuple[Powermeter, ClientFilter, bool]],
+    bypass_cache: bool = False,
 ) -> list[float] | None:
     """Pick the powermeter matching *addr* and return up to three phase values.
 
@@ -68,6 +69,10 @@ async def read_ct_powermeter(
     powermeter has ``WAIT_FOR_NEXT_MESSAGE`` enabled. A timeout there is
     swallowed so the cached value is still served — `update_readings`
     callers should never see a stale-meter `TimeoutError`.
+
+    When *bypass_cache* is True the matching :class:`ThrottledPowermeter`
+    wrapper (if any) is told to propagate errors instead of returning
+    stale cached values, so the caller's fallback logic can activate.
     """
     powermeter = None
     wait_for_next = False
@@ -79,6 +84,14 @@ async def read_ct_powermeter(
     if powermeter is None:
         logger.debug(f"No powermeter found for client {addr[0]}")
         return None
+    # Lazily enable bypass on the wrapper chain for this specific
+    # powermeter so other powermeters in the shared list are unaffected.
+    if bypass_cache:
+        node = powermeter
+        while hasattr(node, "wrapped_powermeter"):
+            if hasattr(node, "bypass_cache_on_error"):
+                node.bypass_cache_on_error = True
+            node = node.wrapped_powermeter
     if wait_for_next:
         try:
             await powermeter.wait_for_next_message(timeout=2)
@@ -268,16 +281,6 @@ async def run_device(
                 timeout_fallback_w, min_dc_output, min_dc_output
             )
             timeout_fallback_w = min_dc_output
-        # When a fallback target is configured, tell the throttling wrapper to
-        # propagate errors instead of silently returning cached values, so that
-        # CT002's own fallback delta logic can activate.
-        if timeout_fallback_w is not None:
-            for pm, *_ in powermeters:
-                node = pm
-                while hasattr(node, "wrapped_powermeter"):
-                    if hasattr(node, "bypass_cache_on_error"):
-                        node.bypass_cache_on_error = True
-                    node = node.wrapped_powermeter
         if 0 < min_dc_output < min_target_for_saturation:
             logger.warning(
                 "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
@@ -359,7 +362,9 @@ async def run_device(
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
-            return await read_ct_powermeter(addr, powermeters)
+            return await read_ct_powermeter(
+                addr, powermeters, bypass_cache=timeout_fallback_w is not None
+            )
 
         device.before_send = update_readings
 
@@ -691,6 +696,12 @@ async def async_main(
             await pm.start()
 
         if not skip_test:
+            # Intentionally broad: if *any* device section configures a
+            # fallback target, we allow all meters to fail startup.  The
+            # alternative (crashing on a dead meter while another device
+            # is ready to handle it gracefully) would be worse.  Per-meter
+            # scoping would require config_loader to associate powermeters
+            # with specific device sections, which it currently doesn't.
             has_fallback = any(
                 cfg.get(s, "TIMEOUT_FALLBACK_W", fallback=None) is not None
                 for s in cfg.sections()

@@ -900,26 +900,41 @@ class CT002:
             # the same rate-limit behaviour as production.
             self._before_send_failure_count += 1
             now = self._clock()
-            if (
-                self._before_send_failure_count == 1
-                or now - self._before_send_last_warn >= 30.0
-            ):
+            if self._before_send_failure_count == 1:
+                # One-shot engagement log — easy to grep / alert on.
                 if self.timeout_fallback_w is not None:
                     logger.warning(
-                        "CT002 before_send failed (%d in a row) for %s: %s. "
-                        "The CT002 emulator is sending a delta to achieve %gW fallback target.",
+                        "CT002: Fallback ENGAGED for %s. "
+                        "Powermeter offline (%s), targeting %gW.",
+                        addr,
+                        exc,
+                        self.timeout_fallback_w,
+                        exc_info=False,
+                    )
+                else:
+                    logger.warning(
+                        "CT002: Powermeter offline for %s (%s). "
+                        "Holding current output until recovery.",
+                        addr,
+                        exc,
+                        exc_info=debug_traceback(),
+                    )
+                self._before_send_last_warn = now
+            elif now - self._before_send_last_warn >= 30.0:
+                if self.timeout_fallback_w is not None:
+                    logger.warning(
+                        "CT002 before_send still failing (%d in a row) for %s: %s. "
+                        "Fallback active, targeting %gW.",
                         self._before_send_failure_count,
                         addr,
                         exc,
                         self.timeout_fallback_w,
-                        exc_info=debug_traceback(),
+                        exc_info=False,
                     )
                 else:
                     logger.warning(
-                        "CT002 before_send failed (%d in a row) for %s: %s. "
-                        "The CT002 emulator is sending a zero adjustment so "
-                        "batteries hold their current output until the "
-                        "powermeter recovers.",
+                        "CT002 before_send still failing (%d in a row) for %s: %s. "
+                        "Holding current output.",
                         self._before_send_failure_count,
                         addr,
                         exc,
@@ -929,10 +944,20 @@ class CT002:
             return None, True
         # Success path: if we were in a failure spell, log the recovery.
         if self._before_send_failure_count > 0:
-            logger.info(
-                "CT002 before_send recovered after %d consecutive failures",
-                self._before_send_failure_count,
-            )
+            if self.timeout_fallback_w is not None:
+                logger.warning(
+                    "CT002: Fallback DISENGAGED for %s. "
+                    "Powermeter recovered after %d failure(s).",
+                    addr,
+                    self._before_send_failure_count,
+                    exc_info=False,
+                )
+            else:
+                logger.info(
+                    "CT002 before_send recovered after %d consecutive failures for %s",
+                    self._before_send_failure_count,
+                    addr,
+                )
             self._before_send_failure_count = 0
             self._before_send_last_warn = 0.0
         return result, False
@@ -1064,11 +1089,24 @@ class CT002:
                 # delta derived from a frozen reading winds the battery up in
                 # active control.
                 if self.timeout_fallback_w is not None:
-                    # To securely fall back to a specific target output, we calculate the precise delta
-                    # required to reach it based on the battery's currently reported output.
+                    # Calculate the precise delta required to reach the fallback
+                    # target based on the battery's currently reported output.
                     delta_w = self.timeout_fallback_w - reported_power
-                    values = [delta_w / 3.0, delta_w / 3.0, delta_w / 3.0]
-                    logger.warning("CT002: Meter offline. Fallback active. Target: %gW, Reported: %gW, Sending delta: %gW", self.timeout_fallback_w, reported_power, delta_w)
+                    if reported_phase in ("A", "B", "C"):
+                        # Per-phase battery reads only its phase field; place
+                        # the full delta there so it converges in one step.
+                        phase_idx = {"A": 0, "B": 1, "C": 2}[reported_phase]
+                        values = [0.0, 0.0, 0.0]
+                        values[phase_idx] = float(delta_w)
+                    else:
+                        # Combined ("D") battery reads the summed field.
+                        values = [delta_w / 3.0, delta_w / 3.0, delta_w / 3.0]
+                    logger.debug(
+                        "CT002: Fallback delta. Target: %gW, Reported: %gW, "
+                        "Sending delta: %gW (phase %s)",
+                        self.timeout_fallback_w, reported_power, delta_w,
+                        reported_phase or "D",
+                    )
                 else:
                     # Old behaviour: Send a zero adjustment instead so each battery holds its current output
                     values = [0, 0, 0]
