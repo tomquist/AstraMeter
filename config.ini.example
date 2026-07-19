@@ -283,6 +283,14 @@ THROTTLE_INTERVAL = 0
 ## Per-powermeter throttling override (optional)
 # THROTTLE_INTERVAL = 1
 
+# [ESPHOMENATIVE]
+# ADDRESS = powermeter.local
+# PORT = 6053
+# API_KEY = 5BqtR16i91/+rwUl+QrJewKFOnyS/whHc3v9ySSKpb8=
+# OBJECT_ID = grid_power
+## Connection Info string (optional)
+# CLIENT_INFO = AstraMeter
+
 # [AMIS_READER]
 # IP = 192.168.1.108
 ## Per-powermeter throttling override (optional)

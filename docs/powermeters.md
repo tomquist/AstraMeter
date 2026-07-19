@@ -26,6 +26,7 @@ Powermeters](configuration.md#multiple-powermeters) are documented in the
 - [HomeAssistant](#homeassistant)
 - [VZLogger](#vzlogger)
 - [ESPHome](#esphome)
+- [ESPHomeNative](#esphomenative)
 - [AMIS Reader](#amis-reader)
 - [Modbus (TCP/UDP)](#modbus-tcpudp)
 - [MQTT](#mqtt)
@@ -249,12 +250,30 @@ UUID = uuid-l1, uuid-l2, uuid-l3
 
 ## ESPHome
 
+Poll data from an esphome device via http-requests.
+
 ```ini
 [ESPHOME]
 IP = 192.168.1.107
 PORT = 6052
 DOMAIN = your_domain
 ID = your_id
+```
+
+## ESPHomeNative
+
+Connect to an esphome device via it's native API (the same connection method used by HomeAssistant).
+
+This creates a persistend connection to the device with instant status updates via protocol buffers.
+This should be more performant than the http-polling used by `[ESPHome]`.
+
+
+```ini
+[ESPHOMENATIVE]
+ADDRESS = powermeter.local
+PORT = 6053
+API_KEY = 5BqtR16i91/+rwUl+QrJewKFOnyS/whHc3v9ySSKpb8=
+OBJECT_ID = grid_power
 ```
 
 ## AMIS Reader

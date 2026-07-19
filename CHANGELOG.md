@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Added** the **ESPHome native API** as a power source (`[ESPHOMENATIVE]`): AstraMeter reads power data from an esphome device via the native API. This should be more performant that the polling mechanism of the ESPHOME component. See [docs/powermeters.md](docs/powermeters.md#esphomenative)
 
 ## 2.2.4
 

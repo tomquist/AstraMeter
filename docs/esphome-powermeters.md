@@ -50,6 +50,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [HomeAssistant](#homeassistant) — 🟢 Native
 - [VZLogger](#vzlogger) — 🔵 Generic (or 🟢 native by reading the meter directly)
 - [ESPHome](#esphome) — 🟢 Native (it's already ESPHome)
+- [ESPHomeNative](#esphomenative) — 🟢 Native (it's already ESPHome)
 - [AMIS Reader](#amis-reader) — 🔵 Generic
 - [Modbus](#modbus) — 🟢 Native (RS485 serial; see TCP caveat)
 - [MQTT](#mqtt) — 🟢 Native
@@ -432,6 +433,34 @@ middleware.
 
 **Tier: 🟢 Native.** The Python `[ESPHOME]` source polls another ESPHome
 device's web-server REST API. On the ESP32 there's no bridge to build — if your
+grid-power source is already an ESPHome device, either define that meter's sensor
+in the **same** YAML as `ct002:` (any native chip / Modbus / pulse-counter sensor
+with `id: grid_l1`), or import another ESPHome node's entity via Home Assistant.
+The latter, complete:
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+api:        # required to import the other node's entity from Home Assistant
+
+sensor:
+  - platform: homeassistant     # the other ESPHome node's entity, via HA
+    id: grid_l1
+    entity_id: sensor.other_esphome_grid_power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+You can also subscribe over [MQTT](#mqtt) if both nodes share a broker.
+
+## ESPHomeNative
+
+**Tier: 🟢 Native.** The Python `[ESPHOMENATIVE]` source polls another ESPHome
+device's native API. On the ESP32 there's no bridge to build — if your
 grid-power source is already an ESPHome device, either define that meter's sensor
 in the **same** YAML as `ct002:` (any native chip / Modbus / pulse-counter sensor
 with `id: grid_l1`), or import another ESPHome node's entity via Home Assistant.

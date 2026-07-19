@@ -450,6 +450,27 @@ export const POWERMETERS: Powermeter[] = [
     },
   },
   {
+    id: "esphomenative",
+    label: "Another ESPHome device",
+    section: "ESPHOME",
+    blurb: "Poll another ESPHome node's native API.",
+    docPython: "docs/powermeters.md#esphomenative",
+    fields: [
+      { key: "ADDRESS", label: "IP Address or hostname", type: "text", placeholder: "myDevice.local", required: true, help: "The other ESPHome device's address" },
+      { key: "PORT", label: "Port", type: "number", default: "6053", placeholder: "6053", help: "Its web-server port (default 6053)." },
+      { key: "API_KEY", label: "Api encryption key", type: "password", placeholder: "5BqtR16i91/+rwUl+QrJewKFOnyS/whHc3v9ySSKpb8=", required: true, help: "Api encryption key as defined in the device's .yaml file" },
+      { key: "OBJECT_ID", label: "Entity id", type: "text", placeholder: "grid_power", required: true, help: "The object id of the power entity on that device." },
+      { key: "CLIENT_INFO", label: "Client info string", type: "text", default:"AstraMeter", placeholder: "AstraMeter", required: false, help: "Connection string. Can be used to distinguish different clients" },
+    ],
+    esphome: {
+      kind: "homeassistant",
+      tier: "native",
+      note: "On the ESP there is no bridge — import the other node's entity via Home Assistant (shown), or define the sensor in the same YAML.",
+      // This source names its entity explicitly rather than via CURRENT_POWER_ENTITY.
+      haEntity: (f) => `sensor.${f.ID || "grid_power"}`,
+    },
+  },
+  {
     id: "amis_reader",
     label: "AMIS reader",
     section: "AMIS_READER",

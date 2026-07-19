@@ -346,6 +346,10 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
     ),
     "VZLOGGER": _pm(PORT={"type": "integer"}),
     "ESPHOME": _pm(PORT={"type": "integer"}),
+    "ESPHOMENATIVE": _pm(
+        PORT={"type": "integer"},
+        API_KEY={"type": "password"}
+    ),
     "AMIS_READER": _pm(),
     "MODBUS": _pm(
         PORT={"type": "integer"},
