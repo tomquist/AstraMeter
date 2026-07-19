@@ -682,6 +682,7 @@ export const POWERMETERS: Powermeter[] = [
       { key: "PASSWORD", label: "Bridge password", type: "password", placeholder: "AD56-54BA", required: true, help: "The nine-character code printed on the bridge (with the dash)." },
       { key: "USER", label: "Username", type: "text", default: "admin", placeholder: "admin", advanced: true, help: "HTTP Basic-auth user; the bridge uses 'admin'." },
       { key: "NODE_ID", label: "Node id", type: "text", default: "1", placeholder: "1", advanced: true, help: "Pulse node id (see http://<bridge>/nodes/). Usually 1." },
+      { key: "TIMEOUT", label: "Timeout (seconds)", type: "number", default: "5.0", placeholder: "5.0", advanced: true, help: "Request timeout. The bridge's webserver can be slow to respond — raise this if readings drop with connection timeouts." },
       { key: "OBIS_POWER_CURRENT", label: "OBIS: aggregate power", type: "text", placeholder: "0100100700ff", advanced: true, help: "12-hex OBIS code. Leave blank for the common eHZ default." },
       { key: "OBIS_POWER_L1", label: "OBIS: L1", type: "text", placeholder: "0100240700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
       { key: "OBIS_POWER_L2", label: "OBIS: L2", type: "text", placeholder: "0100380700ff", advanced: true, help: "Per-phase OBIS code (optional)." },

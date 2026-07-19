@@ -388,7 +388,10 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         DEVICE_ID={"type": "integer"},
         PER_PHASE={"type": "boolean"},
     ),
-    "TIBBER_PULSE": _pm(PASSWORD={"type": "password"}),
+    "TIBBER_PULSE": _pm(
+        PASSWORD={"type": "password"},
+        TIMEOUT={"type": "float"},
+    ),
     "SCRIPT": _pm(),
     "SML": _pm(),
     "MQTT_INSIGHTS": {

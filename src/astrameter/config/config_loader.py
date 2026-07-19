@@ -752,6 +752,7 @@ def create_tibber_pulse_powermeter(
         config.get(section, "PASSWORD", fallback=""),
         config.get(section, "NODE_ID", fallback="1"),
         config.get(section, "USER", fallback="admin"),
+        timeout=config.getfloat(section, "TIMEOUT", fallback=5.0),
         obis_power_current=oc,
         obis_power_l1=o1,
         obis_power_l2=o2,

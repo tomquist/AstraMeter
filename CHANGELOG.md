@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Fixed** **Tibber Pulse** readings frequently dropping with connection-timeout errors because the bridge's slow webserver couldn't answer within the old hardcoded 1-second limit: the default timeout is now a more forgiving 5 seconds and can be tuned with a new `TIMEOUT` option ([#551](https://github.com/tomquist/astrameter/issues/551)).
 - **Fixed** active control silently breaking until a restart after a single invalid grid reading (a NaN value, e.g. from a briefly unavailable ESPHome sensor or a glitchy meter source): the controller could get stuck sending every battery a small constant discharge command regardless of the actual grid. An invalid reading is now treated like an unavailable meter — batteries hold their output for that poll and normal control resumes with the next good reading ([#548](https://github.com/tomquist/astrameter/issues/548), [#550](https://github.com/tomquist/astrameter/pull/550)).
 
 

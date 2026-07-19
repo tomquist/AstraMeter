@@ -526,17 +526,20 @@ def test_create_tibber_pulse_powermeter():
     assert pm.password == "AD56-54BA"
     assert pm.node_id == "1"
     assert pm.user == "admin"
+    assert pm.timeout == 5.0
 
     config["TIBBER_PULSE_2"] = {
         "IP": "127.0.0.1",
         "PASSWORD": "pw",
         "NODE_ID": "2",
         "USER": "root",
+        "TIMEOUT": "10",
         "OBIS_POWER_CURRENT": "0100100700ff",
     }
     pm = create_tibber_pulse_powermeter("TIBBER_PULSE_2", config)
     assert pm.node_id == "2"
     assert pm.user == "root"
+    assert pm.timeout == 10.0
     assert pm._obis_current == "0100100700ff"
 
 

@@ -108,6 +108,15 @@ const fronius3 = generateConfigIni({
 });
 has(fronius3, "PER_PHASE = True", "fronius: PER_PHASE emitted in three-phase");
 
+// ── config.ini: Tibber Pulse timeout (#551) ──────────────────────────────────
+const tibber = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA", TIMEOUT: "10" }, tuning: {} }],
+});
+has(tibber, "[TIBBER_PULSE]", "tibber: section header");
+has(tibber, "TIMEOUT = 10", "tibber: timeout override emitted");
+
 // ── config.ini: multi-meter NETMASK ──────────────────────────────────────────
 const multi = generateConfigIni({
   target: "python",

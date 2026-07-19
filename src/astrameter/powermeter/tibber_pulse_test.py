@@ -33,9 +33,25 @@ async def test_get_powermeter_watts_builds_authenticated_url(mock_aiohttp_sessio
     _, kwargs = session_cls.call_args
     assert kwargs["auth"].login == "admin"
     assert kwargs["auth"].password == "pw"
+    # The bridge webserver is slow, so no tight connect timeout — only the
+    # configurable total applies (#551).
+    assert kwargs["timeout"].total == 5.0
+    assert kwargs["timeout"].connect is None
     # The requested URL carries the configured node id.
     url = mock_aiohttp_session.get.call_args[0][0]
     assert url == "http://10.0.0.5/data.json?node_id=2"
+
+
+async def test_timeout_is_configurable(mock_aiohttp_session):
+    mock_aiohttp_session.set_read(_build_sml_frame(power_agg=100))
+    with patch(
+        "aiohttp.ClientSession", return_value=mock_aiohttp_session
+    ) as session_cls:
+        pm = TibberPulse("10.0.0.5", "pw", timeout=12.5)
+        await pm.start()
+        await pm.stop()
+    _, kwargs = session_cls.call_args
+    assert kwargs["timeout"].total == 12.5
 
 
 async def test_get_powermeter_watts_raises_on_undecodable_telegram(

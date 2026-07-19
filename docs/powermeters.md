@@ -493,6 +493,9 @@ PASSWORD = AD56-54BA
 # NODE_ID = 1
 # Optional: override the Basic-auth user (defaults to "admin")
 # USER = admin
+# Optional: request timeout in seconds (default 5); the bridge's webserver can
+# be slow, so raise this if readings drop with connection timeouts
+# TIMEOUT = 5.0
 ## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
 # OBIS_POWER_CURRENT = 0100100700ff
 # OBIS_POWER_L1 = 0100240700ff
