@@ -35,7 +35,7 @@ __all__ = [
     "AmisReader",
     "DeadbandPowermeter",
     "ESPHome",
-    "ESPHomeNative"
+    "ESPHomeNative",
     "Emlog",
     "Envoy",
     "FritzSmartEnergy",
