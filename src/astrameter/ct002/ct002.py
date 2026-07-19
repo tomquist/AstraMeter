@@ -81,6 +81,20 @@ def _bucket_for_phase(phase: str) -> str:
     return "x"
 
 
+def _values_finite(values) -> bool:
+    """True iff every meter value coerces to a finite number.
+
+    Numeric strings are tolerated (some sources deliver them); NaN/Inf or
+    garbage counts as a meter failure so the handler takes the hold path
+    instead of feeding it to the stateful controller (issue #548).
+    """
+    try:
+        return all(math.isfinite(float(v)) for v in values)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: float(10**400) — an int too large for a float.
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Per-consumer state
 # ---------------------------------------------------------------------------
@@ -1058,6 +1072,17 @@ class CT002:
             else:
                 values = self._get_consumer_value(consumer_id)
                 if values is None:
+                    values = [0, 0, 0]
+                elif not _values_finite(values):
+                    # A non-finite reading (NaN/Inf from a flaky source or a
+                    # filter chain fed one) is a meter failure, not a sample.
+                    # One NaN fed into the stateful controller poisons the
+                    # grid-state predictor permanently: every later innovation
+                    # is NaN, so no fresh meter sample can ever correct the
+                    # estimate, and each battery ends up pinned at the
+                    # ramp-pacing base step until restart (issue #548). Take
+                    # the same hold path as an unavailable meter.
+                    meter_failed = True
                     values = [0, 0, 0]
             raw_values = ([*list(values), 0, 0, 0])[:3]
             meter_value = sum(parse_int(v, 0) for v in raw_values)

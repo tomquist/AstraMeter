@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from astrameter.ct002.ct002 import CT002
-from astrameter.ct002.protocol import build_payload
+from astrameter.ct002.ct002 import CT002, _values_finite
+from astrameter.ct002.protocol import build_payload, parse_request
 
 
 class _RecordingTransport:
@@ -236,3 +236,59 @@ async def test_poll_answered_again_after_burst_coalesced() -> None:
     # A later poll (a fresh reading) is still answered — no permanent drop.
     await ct._handle_request(_poll(mac), addr, transport)
     assert len(transport.sent) == 2
+
+
+# ---------------------------------------------------------------------------
+# Non-finite meter readings (issue #548): a NaN/Inf sample must take the same
+# zero-delta hold path as an unavailable meter and leave the stateful
+# controller untouched, so control recovers on the next finite reading.
+# Before the guard, one NaN poisoned the grid-state predictor permanently
+# (every later innovation is NaN) and the pace clamp turned the NaN reading
+# into a constant +pace_base_step command until restart.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+async def test_non_finite_reading_holds_and_control_recovers(bad: float) -> None:
+    clock = FakeClock()
+    ct = CT002(ct_mac="", active_control=True, clock=clock)
+    grid = [300.0]
+
+    async def before_send(_addr, _fields=None, _consumer_id=None):
+        return [grid[0], 0.0, 0.0]
+
+    ct.before_send = before_send
+    transport = _RecordingTransport()
+    addr = ("192.168.178.134", 22222)
+
+    async def poll() -> list[str]:
+        clock.now += 15.0
+        await ct._handle_request(_poll("02b250b26777", power=0), addr, transport)
+        fields, err = parse_request(transport.sent[-1])
+        assert err is None
+        return fields
+
+    # Warm poll: import drives a positive (discharge) target.
+    r = await poll()
+    assert int(r[4]) > 0
+
+    # The meter glitches: a non-finite sample answers with a zero-delta hold.
+    grid[0] = bad
+    r = await poll()
+    assert [r[i] for i in (4, 5, 6, 7)] == ["0", "0", "0", "0"]
+
+    # The meter recovers with an export reading: control resumes and steers
+    # negative — a poisoned predictor kept this pinned at +pace_base_step.
+    grid[0] = -300.0
+    r = await poll()
+    assert int(r[4]) < 0
+
+
+def test_values_finite_helper() -> None:
+    assert _values_finite([1, 2.5, "300"]) is True
+    assert _values_finite([]) is True
+    assert _values_finite([float("nan")]) is False
+    assert _values_finite([1.0, float("inf")]) is False
+    assert _values_finite(["abc"]) is False
+    assert _values_finite([None]) is False
+    assert _values_finite([10**400]) is False  # float() raises OverflowError
