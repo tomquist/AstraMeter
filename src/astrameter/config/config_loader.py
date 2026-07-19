@@ -16,6 +16,7 @@ from astrameter.powermeter import (
     Emlog,
     Envoy,
     ESPHome,
+    ESPHomeNative,
     FritzSmartEnergy,
     Fronius,
     HomeAssistant,
@@ -59,6 +60,7 @@ VZLOGGER_SECTION = "VZLOGGER"
 SCRIPT_SECTION = "SCRIPT"
 SML_SECTION = "SML"
 ESPHOME_SECTION = "ESPHOME"
+ESPHOMENATIVE_SECTION = "ESPHOMENATIVE"
 AMIS_READER_SECTION = "AMIS_READER"
 MODBUS_SECTION = "MODBUS"
 JSON_HTTP_SECTION = "JSON_HTTP"
@@ -380,6 +382,8 @@ def create_powermeter(
         return create_script_powermeter(section, config)
     elif section.startswith(SML_SECTION):
         return create_sml_powermeter(section, config)
+    elif section.startswith(ESPHOMENATIVE_SECTION):
+        return create_esphomenative_powermeter(section, config)
     elif section.startswith(ESPHOME_SECTION):
         return create_esphome_powermeter(section, config)
     elif section.startswith(AMIS_READER_SECTION):
@@ -550,6 +554,16 @@ def create_modbus_powermeter(
         config.get(section, "TRANSPORT", fallback="TCP"),
     )
 
+def create_esphomenative_powermeter(
+            section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    return ESPHomeNative(
+        address    = config.get(section, "ADDRESS", fallback=""),
+        port       = config.get(section, "PORT", fallback=""),
+        apiKey     = config.get(section, "API_KEY", fallback=""),
+        objectId   = config.get(section, "OBJECT_ID", fallback=""),
+        clientInfo = config.get(section, "CLIENT_INFO", fallback="AstraMeter")
+    )
 
 def create_esphome_powermeter(
     section: str, config: configparser.ConfigParser

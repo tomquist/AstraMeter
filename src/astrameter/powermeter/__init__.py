@@ -3,6 +3,7 @@ from .base import Powermeter
 from .emlog import Emlog
 from .envoy import Envoy
 from .esphome import ESPHome
+from .esphome_native import ESPHomeNative
 from .fritz import FritzSmartEnergy
 from .fronius import Fronius
 from .homeassistant import HomeAssistant
@@ -34,6 +35,7 @@ __all__ = [
     "AmisReader",
     "DeadbandPowermeter",
     "ESPHome",
+    "ESPHomeNative"
     "Emlog",
     "Envoy",
     "FritzSmartEnergy",
