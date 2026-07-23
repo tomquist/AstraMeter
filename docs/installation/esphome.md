@@ -14,7 +14,7 @@ etc.).
 
 ## Minimal YAML
 
-Point `power_sensor_l1` at any ESPHome sensor that reports grid power in watts:
+Point `power_sensor_l1` at any ESPHome sensor that reports grid power:
 
 ```yaml
 external_components:
@@ -30,6 +30,14 @@ ct002:
   id: ct002_main
   power_sensor_l1: grid_l1
 ```
+
+**Units:** the emulator works in watts internally. A sensor that declares
+`unit_of_measurement: kW` (or `MW`/`mW`) is converted to W automatically, and a
+sensor declaring a non-power unit (`°C`, `%`, `kWh`, …) is rejected at config
+validation with an explicit error. A sensor with **no** declared unit is assumed
+to already report W — if such a sensor actually feeds kW, typical household
+values round to 0 W on the wire; the firmware logs a warning when readings look
+like kW, but the fix is to declare the real unit (or scale the value to W).
 
 Everything else is optional. See **[`esphome.example.yaml`](../../esphome.example.yaml)**
 for the complete, annotated config — three-phase sensors, the cross-phase filter

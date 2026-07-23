@@ -183,6 +183,14 @@ API_PATH_PREFIX = ""|/core
 THROTTLE_INTERVAL = 2
 ```
 
+**Units:** the entity's `unit_of_measurement` attribute is respected
+automatically — a sensor reporting `kW` (or `MW`/`mW`) is converted to watts,
+so no manual `POWER_MULTIPLIER = 1000` workaround is needed (remove it if you
+added one, or the value gets scaled twice). An entity with a non-power unit
+(`°C`, `%`, `kWh`, …) is rejected with an explicit error instead of silently
+feeding wrong values. Entities without a unit attribute are assumed to report
+watts.
+
 Example: Variant 1 with a single combined input & output sensor
 ```ini
 [HOMEASSISTANT]

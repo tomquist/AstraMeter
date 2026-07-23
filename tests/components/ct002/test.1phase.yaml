@@ -23,6 +23,9 @@ sensor:
   - platform: template
     id: grid_l1
     name: Grid L1
+    # kW on purpose: exercises the unit→W validation + auto-scale codegen
+    # (set_power_unit_scale) in the compile matrix (issue #572).
+    unit_of_measurement: kW
     lambda: |-
       return 0.0f;
     update_interval: 1s

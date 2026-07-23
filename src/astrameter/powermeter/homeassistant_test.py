@@ -31,6 +31,8 @@ def _compressed_initial_payload(states: list[dict]) -> dict:
         if not eid:
             continue
         a[eid] = {"s": s.get("state")}
+        if "attributes" in s:
+            a[eid]["a"] = s["attributes"]
     return {"a": a}
 
 
@@ -177,6 +179,223 @@ async def test_trigger_event_ignores_untracked_entity():
         ),
     )
     assert await pm.get_powermeter_watts() == [100.0]
+
+
+# Unit conversion / rejection tests (issues #39 / #572)
+
+
+async def test_kw_unit_converted_to_watts():
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "0.215",
+                "attributes": {"unit_of_measurement": "kW"},
+            }
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [215.0]
+
+
+async def test_w_unit_passes_through_unscaled():
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "1500",
+                "attributes": {"unit_of_measurement": "W"},
+            }
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [1500.0]
+
+
+async def test_missing_unit_assumes_watts():
+    """No unit attribute → historical behavior: the value is taken as W."""
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "300",
+                "attributes": {},
+            }
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [300.0]
+
+
+async def test_non_power_unit_rejected():
+    """A sensor with a non-power unit (e.g. a temperature entity wired in by
+    mistake) must fail loudly instead of feeding garbage watts downstream.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "21.5",
+                "attributes": {"unit_of_measurement": "°C"},
+            }
+        ],
+    )
+    with pytest.raises(ValueError) as exc_info:
+        await pm.get_powermeter_watts()
+    assert (
+        str(exc_info.value)
+        == "Home Assistant sensor sensor.current_power reports unit '°C', "
+        "which is not a power unit — expected W or kW"
+    )
+
+
+async def test_energy_unit_rejected():
+    """kWh is energy, not power — a classic mis-wiring that must be rejected."""
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "12.3",
+                "attributes": {"unit_of_measurement": "kWh"},
+            }
+        ],
+    )
+    with pytest.raises(ValueError):
+        await pm.get_powermeter_watts()
+
+
+async def test_kw_unit_survives_state_only_diffs():
+    """State diffs usually omit attributes; the kW unit learned from the
+    initial snapshot must keep applying to later state-only updates.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "0.1",
+                "attributes": {"unit_of_measurement": "kW"},
+            }
+        ],
+    )
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "id": 2,
+                "type": "event",
+                "event": {
+                    "c": {"sensor.current_power": {"+": {"s": "-0.6"}}},
+                },
+            }
+        ),
+    )
+    assert await pm.get_powermeter_watts() == [-600.0]
+
+
+async def test_unit_change_via_attribute_diff():
+    """A `+`/`a` attribute diff carrying a new unit_of_measurement must
+    update the conversion; one without the key must not clobber it.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "500",
+                "attributes": {"unit_of_measurement": "W"},
+            }
+        ],
+    )
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "c": {
+                        "sensor.current_power": {
+                            "+": {
+                                "s": "0.5",
+                                "a": {"unit_of_measurement": "kW"},
+                            }
+                        }
+                    },
+                },
+            }
+        ),
+    )
+    assert await pm.get_powermeter_watts() == [500.0]
+
+    # An attribute diff that doesn't touch the unit leaves kW in effect.
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "c": {
+                        "sensor.current_power": {
+                            "+": {"s": "0.2", "a": {"friendly_name": "Grid"}}
+                        }
+                    },
+                },
+            }
+        ),
+    )
+    assert await pm.get_powermeter_watts() == [200.0]
+
+
+async def test_power_calculate_mode_converts_per_entity():
+    """Mixed units in calculate mode: each alias converts independently."""
+    pm = _create_powermeter(
+        current_power_entity="",
+        power_calculate=True,
+        power_input_alias="sensor.power_input",
+        power_output_alias="sensor.power_output",
+    )
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.power_input",
+                "state": "1.0",
+                "attributes": {"unit_of_measurement": "kW"},
+            },
+            {
+                "entity_id": "sensor.power_output",
+                "state": "200",
+                "attributes": {"unit_of_measurement": "W"},
+            },
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [800.0]
+
+
+async def test_rest_bootstrap_applies_unit():
+    pm = _create_powermeter()
+    pm._session = _make_rest_session(
+        {
+            "http://192.168.1.8:8123/api/states/sensor.current_power": {
+                "entity_id": "sensor.current_power",
+                "state": "0.4",
+                "attributes": {"unit_of_measurement": "kW"},
+            },
+        }
+    )
+    await pm._fetch_initial_states()
+    assert await pm.get_powermeter_watts() == [400.0]
 
 
 # Error condition tests

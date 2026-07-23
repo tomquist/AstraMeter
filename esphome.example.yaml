@@ -62,6 +62,11 @@ sensor:
     id: grid_l1
     name: Grid L1 Power
     entity_id: sensor.grid_power_l1
+    # ct002 works in watts. If your source reports kW, declare it here —
+    # `unit_of_measurement: kW` is converted to W automatically (a declared
+    # non-power unit like °C is rejected at config validation). With no
+    # declared unit the value is taken as W as-is.
+    # unit_of_measurement: W
     filters:
       # - offset: -20      # small negative offset → import safety buffer
       # - multiply: 1.0

@@ -116,6 +116,23 @@ void CT002Component::setup() {
     // the meter-unavailable path, and so NaN never reaches the other
     // raw_values_ readers (Marstek MQTT / cloud reporting). Issue #548.
     if (!std::isfinite(v)) return;
+    // Convert a declared kW/MW/mW input to watts (issue #572); 1.0 when the
+    // sensor declares W or nothing.
+    v *= this->unit_scale_[i];
+    if (!this->unit_declared_[i] && !this->kw_suspect_warned_[i]) {
+      if (v != 0.0f && std::fabs(v) < 1.0f) {
+        if (++this->kw_suspect_count_[i] >= KW_SUSPECT_READINGS) {
+          this->kw_suspect_warned_[i] = true;
+          ESP_LOGW(TAG,
+                   "power_sensor_l%u: %u consecutive nonzero readings below 1 W — if this "
+                   "sensor reports kW, declare unit_of_measurement: kW on it (auto-converted "
+                   "to W) or scale the value to watts",
+                   static_cast<unsigned>(i + 1), static_cast<unsigned>(KW_SUSPECT_READINGS));
+        }
+      } else {
+        this->kw_suspect_count_[i] = 0;
+      }
+    }
     this->raw_values_[i] = v;
     this->raw_stamp_ms_[i] = ::esphome::millis();
   };
@@ -739,6 +756,12 @@ void CT002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  UDP Port: %u", this->udp_port_);
   ESP_LOGCONFIG(TAG, "  Active Control: %s", YESNO(this->active_control_));
   ESP_LOGCONFIG(TAG, "  Max Sensor Age: %u ms", this->max_sensor_age_ms_);
+  for (uint8_t i = 0; i < this->num_phases_; ++i) {
+    if (this->unit_scale_[i] != 1.0f) {
+      ESP_LOGCONFIG(TAG, "  L%u Unit Scale: x%g (declared unit -> W)",
+                    static_cast<unsigned>(i + 1), this->unit_scale_[i]);
+    }
+  }
   ESP_LOGCONFIG(TAG, "  Reporting Consumers: %u", static_cast<unsigned>(this->reporting_consumer_count()));
 }
 

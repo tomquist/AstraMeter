@@ -86,6 +86,46 @@ def test_three_phase_validator_rejects_only_l3():
         ct002_component._validate_three_phase_sensors(config)
 
 
+def test_power_unit_scale_accepts_power_units():
+    assert ct002_component._power_unit_scale("W") == 1.0
+    assert ct002_component._power_unit_scale("kW") == 1000.0
+    assert ct002_component._power_unit_scale("MW") == 1e6
+    assert ct002_component._power_unit_scale("mW") == 0.001
+
+
+def test_power_unit_scale_assumes_watts_when_undeclared():
+    assert ct002_component._power_unit_scale(None) == 1.0
+    assert ct002_component._power_unit_scale("") == 1.0
+
+
+def test_power_unit_scale_rejects_non_power_units():
+    # Case matters ("mW" milli vs "MW" mega), so "KW"/"w" are not accepted;
+    # non-power units (temperature, energy, ...) must map to None → rejected.
+    for unit in ("°C", "%", "V", "A", "kWh", "Wh", "KW", "w"):
+        assert ct002_component._power_unit_scale(unit) is None
+
+
+def test_validate_power_unit_accepts_watts_and_undeclared():
+    ct002_component._validate_power_unit("power_sensor_l1", "grid_l1", "W")
+    ct002_component._validate_power_unit("power_sensor_l1", "grid_l1", "kW")
+    ct002_component._validate_power_unit("power_sensor_l1", "grid_l1", None)
+
+
+def test_validate_power_unit_rejects_celsius():
+    import esphome.config_validation as cv
+
+    with pytest.raises(cv.Invalid) as exc_info:
+        ct002_component._validate_power_unit("power_sensor_l1", "temp_sensor", "°C")
+    assert "not a power unit" in str(exc_info.value)
+
+
+def test_validate_power_unit_rejects_energy_unit():
+    import esphome.config_validation as cv
+
+    with pytest.raises(cv.Invalid):
+        ct002_component._validate_power_unit("power_sensor_l2", "meter_total", "kWh")
+
+
 def test_mqtt_insights_device_id_defaults_to_python_default():
     # A blank device_id must fall back to the same default the Python add-on
     # uses, so both stacks publish HA discovery under astrameter_ct002_device-1

@@ -41,6 +41,12 @@ constexpr double ADAPTIVE_TTL_POLL_MULTIPLIER = 2.0;
 constexpr double ADAPTIVE_TTL_MIN_SECONDS = 5.0;
 constexpr double ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0;
 
+// A run of this many consecutive nonzero sub-1 W readings on a phase whose
+// sensor declares no unit_of_measurement triggers a one-shot "input looks
+// like kW" log warning (issue #572). Real watt-denominated grid meters
+// don't sustain nonzero magnitudes below 1 W; a kW feed misread as W does.
+constexpr uint8_t KW_SUSPECT_READINGS = 10;
+
 // Per-consumer (battery) state mirrored from src/astrameter/ct002/ct002.py's
 // `Consumer` dataclass. Lives in CT002Component::consumers_; mutated by
 // _update_consumer_report and the MQTT/insights setters.
@@ -107,6 +113,14 @@ class CT002Component : public Component {
   void set_power_sensor_l1(sensor::Sensor *s) { this->power_sensor_l1_ = s; }
   void set_power_sensor_l2(sensor::Sensor *s) { this->power_sensor_l2_ = s; }
   void set_power_sensor_l3(sensor::Sensor *s) { this->power_sensor_l3_ = s; }
+  // Per-phase unit→W conversion (issue #572). Called from to_code() when the
+  // referenced sensor declares a power unit_of_measurement (kW → 1000, etc.).
+  // Declaring any unit — even "W" — also disables the runtime kW-suspicion
+  // warning for that phase, since the user has stated their intent.
+  void set_power_unit_scale(uint8_t idx, float scale) {
+    this->unit_scale_[idx] = scale;
+    this->unit_declared_[idx] = true;
+  }
   void set_ct_type(const std::string &v) { this->ct_type_ = v; }
   void set_ct_mac(const std::string &v) { this->ct_mac_ = v; }
   void set_wifi_rssi(int v) { this->wifi_rssi_ = v; }
@@ -353,6 +367,14 @@ class CT002Component : public Component {
   std::array<float, 3> raw_values_{0.0f, 0.0f, 0.0f};
   std::array<uint32_t, 3> raw_stamp_ms_{0, 0, 0};
   uint8_t num_phases_{0};
+
+  // Unit→W scale per phase (1.0 unless the YAML sensor declares kW/MW/mW —
+  // see set_power_unit_scale). unit_declared_ gates the kW-suspicion
+  // heuristic; the counters back its one-shot warning.
+  std::array<float, 3> unit_scale_{1.0f, 1.0f, 1.0f};
+  std::array<bool, 3> unit_declared_{false, false, false};
+  std::array<uint8_t, 3> kw_suspect_count_{0, 0, 0};
+  std::array<bool, 3> kw_suspect_warned_{false, false, false};
 
   // Pipeline: head is SensorBackedPowermeter, then optional wrappers.
   std::vector<std::unique_ptr<Powermeter>> pipeline_;

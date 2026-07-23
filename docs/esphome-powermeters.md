@@ -7,6 +7,12 @@ the `ct002:` block does **not** talk to your meter directly. Instead it consumes
 powermeter" here means: *give ESPHome a sensor that reads your meter, then point
 `ct002:` at it.*
 
+A sensor that declares `unit_of_measurement: kW` (or `MW`/`mW`) is converted to
+watts automatically; a declared non-power unit (`°C`, `kWh`, …) is rejected at
+config validation. A sensor with no declared unit is assumed to report W — so
+for sources that deliver kW (common for Home Assistant template sensors),
+either declare the kW unit or scale the value with a `multiply: 1000` filter.
+
 ## How a reading reaches the emulator
 
 There is no "powermeter" object in the ESPHome component — the integration is a

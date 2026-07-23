@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
+import esphome.final_validate as fv
 from esphome.components import http_request, sensor
 from esphome.const import (
     CONF_ALPHA,
@@ -25,7 +26,9 @@ from esphome.const import (
     CONF_MODE,
     CONF_PASSWORD,
     CONF_TIMEZONE,
+    CONF_UNIT_OF_MEASUREMENT,
 )
+from esphome.core import CORE
 
 CODEOWNERS = ["@tomquist"]
 DEPENDENCIES = ["sensor"]
@@ -125,6 +128,85 @@ CONF_DECAY_FACTOR = "decay_factor"
 CONF_GRACE_SECONDS = "grace_seconds"
 CONF_STALL_TIMEOUT_SECONDS = "stall_timeout_seconds"
 CONF_MIN_TARGET = "min_target"
+
+
+# Power units the raw sensor state is auto-converted to watts from
+# (issue #572: a kW sensor silently rounds to 0 W without conversion).
+# Case matters: "mW" is milliwatts, "MW" megawatts. A sensor without a
+# declared unit_of_measurement is assumed to already report watts.
+POWER_UNIT_SCALES = {
+    "W": 1.0,
+    "kW": 1000.0,
+    "MW": 1e6,
+    "mW": 0.001,
+}
+
+_POWER_SENSOR_KEYS = (
+    CONF_POWER_SENSOR_L1,
+    CONF_POWER_SENSOR_L2,
+    CONF_POWER_SENSOR_L3,
+)
+
+
+def _power_unit_scale(unit: str | None) -> float | None:
+    """Scale factor that converts the sensor's declared unit to watts.
+
+    None/empty (no declared unit) → 1.0 (assume watts, the historical
+    behavior). A declared unit that isn't a power unit → None (reject).
+    """
+    if not unit:
+        return 1.0
+    return POWER_UNIT_SCALES.get(unit)
+
+
+def _declared_unit(full_config, sensor_id) -> str | None:
+    """Best-effort lookup of the referenced sensor's declared
+    unit_of_measurement in the validated full config. Returns None when the
+    sensor (or a unit) can't be found — e.g. `homeassistant` platform
+    sensors that don't declare one.
+    """
+    get_path = getattr(full_config, "get_path_for_id", None)
+    if get_path is None:
+        return None
+    try:
+        path = get_path(sensor_id)[:-1]
+        sensor_conf = full_config.get_config_for_path(path)
+    except KeyError:
+        return None
+    if not isinstance(sensor_conf, dict):
+        return None
+    unit = sensor_conf.get(CONF_UNIT_OF_MEASUREMENT)
+    return unit if isinstance(unit, str) and unit else None
+
+
+def _validate_power_unit(conf_key: str, sensor_id, unit: str | None) -> None:
+    """Raise cv.Invalid when a referenced sensor declares a non-power unit."""
+    if _power_unit_scale(unit) is None:
+        accepted = "/".join(POWER_UNIT_SCALES)
+        raise cv.Invalid(
+            f"{conf_key} '{sensor_id}' declares unit_of_measurement "
+            f"'{unit}', which is not a power unit — ct002 needs grid power "
+            f"in watts. Point it at a sensor reporting {accepted} "
+            f"(kW-style units are converted to W automatically), or scale "
+            f"the value to W and declare 'W'.",
+            path=[conf_key],
+        )
+
+
+def _final_validate_power_units(config):
+    """Reject power_sensor_lX references whose declared unit is not a power
+    unit (e.g. °C, %, kWh) at config time — a wrong-unit sensor otherwise
+    fails silently at runtime (issue #572).
+    """
+    full = fv.full_config.get()
+    for conf_key in _POWER_SENSOR_KEYS:
+        if conf_key in config:
+            _validate_power_unit(
+                conf_key, config[conf_key], _declared_unit(full, config[conf_key])
+            )
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate_power_units
 
 
 def _validate_three_phase_sensors(config):
@@ -434,6 +516,19 @@ async def to_code(config):
         sensor_l3 = await cg.get_variable(config[CONF_POWER_SENSOR_L3])
         cg.add(var.set_power_sensor_l2(sensor_l2))
         cg.add(var.set_power_sensor_l3(sensor_l3))
+
+    # Unit → watts conversion (issue #572). A declared power unit yields a
+    # per-phase scale; declaring any unit (even W) also disables the runtime
+    # kW-suspicion heuristic for that phase. Non-power units were already
+    # rejected by FINAL_VALIDATE_SCHEMA.
+    for idx, conf_key in enumerate(_POWER_SENSOR_KEYS):
+        if conf_key not in config:
+            continue
+        unit = _declared_unit(CORE.config, config[conf_key])
+        if unit is not None:
+            scale = _power_unit_scale(unit)
+            assert scale is not None  # guaranteed by final validate
+            cg.add(var.set_power_unit_scale(idx, scale))
 
     cg.add(var.set_ct_type(config[CONF_CT_TYPE]))
     cg.add(var.set_ct_mac(config[CONF_CT_MAC]))
