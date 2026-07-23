@@ -36,8 +36,19 @@ class ESPHomeNative(Powermeter):
             f"Initialized ESPHomeNative Api: Connection: {address}:{port} ClientInfo: {clientInfo} ObjectId: {self.objectId}"
         )
 
+    def ResetConnectionState(self):
+        self.isConnected = False
+        self.eventAnyMessageReceived.clear()
+        self.eventNextMessage.clear()
+        self.entityInfo = None
+
     async def start(self) -> None:
         await self.reconnectLogic.start()
+
+    async def stop(self) -> None:
+        await self.reconnectLogic.stop()
+        await self.api.disconnect()
+        self.ResetConnectionState()
 
     async def connect_callback(self):
         self.isConnected = True
@@ -68,16 +79,11 @@ class ESPHomeNative(Powermeter):
         self.api.subscribe_states(self.change_callback)
 
     async def connect_error_callback(self, err: Exception):
-        self.isConnected = False
-        self.eventAnyMessageReceived.clear()
-        self.eventNextMessage.clear()
-        self.entityInfo = None
+        self.ResetConnectionState()
         logger.error(f"Connection failed: {err}")
 
     async def disconnect_callback(self, expected_disconnect: bool):
-        self.isConnected = False
-        self.eventAnyMessageReceived.clear()
-        self.eventNextMessage.clear()
+        self.ResetConnectionState()
         self.entityInfo = None
 
         if expected_disconnect:
@@ -100,9 +106,6 @@ class ESPHomeNative(Powermeter):
         self.eventNextMessage.set()
         self.eventAnyMessageReceived.set()
         logger.debug(f"Got new sensor state: {state.state}")
-
-    async def stop(self) -> None:
-        await self.reconnectLogic.stop()
 
     async def get_powermeter_watts(self) -> list[float]:
         if self.eventAnyMessageReceived.is_set():
