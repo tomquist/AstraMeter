@@ -451,8 +451,8 @@ export const POWERMETERS: Powermeter[] = [
   },
   {
     id: "esphomenative",
-    label: "Another ESPHome device",
-    section: "ESPHOME",
+    label: "Another ESPHome device (native Api)",
+    section: "ESPHOMENATIVE",
     blurb: "Poll another ESPHome node's native API.",
     docPython: "docs/powermeters.md#esphomenative",
     fields: [
@@ -467,7 +467,7 @@ export const POWERMETERS: Powermeter[] = [
       tier: "native",
       note: "On the ESP there is no bridge — import the other node's entity via Home Assistant (shown), or define the sensor in the same YAML.",
       // This source names its entity explicitly rather than via CURRENT_POWER_ENTITY.
-      haEntity: (f) => `sensor.${f.ID || "grid_power"}`,
+      haEntity: (f) => `sensor.${f.OBJECT_ID || "grid_power"}`,
     },
   },
   {

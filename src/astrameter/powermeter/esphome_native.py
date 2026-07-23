@@ -1,3 +1,5 @@
+import asyncio
+
 import aioesphomeapi
 from aioesphomeapi import EntityInfo, EntityState, SensorState
 from aioesphomeapi.reconnect_logic import ReconnectLogic
@@ -25,17 +27,20 @@ class ESPHomeNative(Powermeter):
             on_disconnect=self.disconnect_callback,
             on_connect_error=self.connect_error_callback,
         )
-        self.newValues: list[float] = []
         self.lastValue: float = 0
         self.entityInfo: EntityInfo | None = None
+        self.isConnected: bool = False
+        self.eventAnyMessageReceived: asyncio.Event = asyncio.Event()
+        self.eventNextMessage: asyncio.Event = asyncio.Event()
         logger.debug(
-            f"Initialized ESPHomeNative Api: Connection: {address}:{port} ClientInfo: {clientInfo} ObjectId: {id}"
+            f"Initialized ESPHomeNative Api: Connection: {address}:{port} ClientInfo: {clientInfo} ObjectId: {self.objectId}"
         )
 
     async def start(self) -> None:
         await self.reconnectLogic.start()
 
     async def connect_callback(self):
+        self.isConnected = True
         logger.debug(
             f"Connected to {self.api.address}:{self.api.port}. Api version: {self.api.api_version}"
         )
@@ -53,7 +58,7 @@ class ESPHomeNative(Powermeter):
 
         if self.entityInfo is None:
             logger.error(
-                f"Cannot subscribe to objectId {self.objectId}. ObjectId is not provided by the device. Available objectIds are: {[e.object_id for e in entityInfo]}"
+                f"Cannot subscribe to objectId {self.objectId}. ObjectId is not provided by the device. Available objectIds are: {[e.object_id for e in entityInfos]}"
             )
             raise AssertionError(f"ObjectId {self.objectId} not found")
 
@@ -63,9 +68,16 @@ class ESPHomeNative(Powermeter):
         self.api.subscribe_states(self.change_callback)
 
     async def connect_error_callback(self, err: Exception):
+        self.isConnected = False
+        self.eventAnyMessageReceived.clear()
+        self.eventNextMessage.clear()
+        self.entityInfo = None
         logger.error(f"Connection failed: {err}")
 
     async def disconnect_callback(self, expected_disconnect: bool):
+        self.isConnected = False
+        self.eventAnyMessageReceived.clear()
+        self.eventNextMessage.clear()
         self.entityInfo = None
 
         if expected_disconnect:
@@ -82,20 +94,27 @@ class ESPHomeNative(Powermeter):
 
         if not isinstance(state, SensorState):
             logger.error(f"Subscribed EntityState {state} is not an SensorState")
-            raise AssertionError(
-                f"Subscribed EntityState {state} is not an SensorState"
-            )
+            return
 
-        self.newValues.append(state.state)
         self.lastValue = state.state
+        self.eventNextMessage.set()
+        self.eventAnyMessageReceived.set()
         logger.debug(f"Got new sensor state: {state.state}")
 
     async def stop(self) -> None:
         await self.reconnectLogic.stop()
 
     async def get_powermeter_watts(self) -> list[float]:
-        if self.newValues:
-            values = self.newValues.copy()
-            self.newValues.clear()
-            return values
-        return [self.lastValue]
+        if self.eventAnyMessageReceived.is_set():
+            return [self.lastValue]
+        return []
+
+    def stream_online(self) -> bool | None:
+        return self.isConnected
+
+    async def wait_for_message(self, timeout=5):
+        await asyncio.wait_for(self.eventAnyMessageReceived.wait(), timeout)
+
+    async def wait_for_next_message(self, timeout=5):
+        self.eventNextMessage.clear()
+        await asyncio.wait_for(self.eventNextMessage.wait(), timeout)
