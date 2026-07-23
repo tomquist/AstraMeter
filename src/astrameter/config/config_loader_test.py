@@ -10,6 +10,7 @@ from astrameter.config.config_loader import (
     create_client_filter,
     create_emlog_powermeter,
     create_esphome_powermeter,
+    create_esphomenative_powermeter,
     create_fritz_powermeter,
     create_fronius_powermeter,
     create_homeassistant_powermeter,
@@ -244,6 +245,35 @@ def test_create_esphome_powermeter():
     except Exception as e:
         if "Connection" not in str(e):  # Ignore expected connection errors
             raise
+
+
+async def test_create_esphomenative_powermeter():
+    """Test ESPHome native API powermeter creation (reads all keys)."""
+    config = configparser.ConfigParser()
+    config["ESPHOMENATIVE"] = {
+        "ADDRESS": "device.local",
+        "PORT": "6054",
+        "API_KEY": "5BqtR16i91/+rwUl+QrJewKFOnyS/whHc3v9ySSKpb8=",
+        "OBJECT_ID": "grid_power",
+        "CLIENT_INFO": "MyClient",
+    }
+    pm = create_esphomenative_powermeter("ESPHOMENATIVE", config)
+    assert pm.address == "device.local"
+    assert pm.port == 6054
+    assert pm.object_id == "grid_power"
+
+
+async def test_create_esphomenative_powermeter_defaults():
+    """PORT defaults to 6053 and CLIENT_INFO to AstraMeter."""
+    config = configparser.ConfigParser()
+    config["ESPHOMENATIVE"] = {
+        "ADDRESS": "device.local",
+        "API_KEY": "key",
+        "OBJECT_ID": "grid_power",
+    }
+    pm = create_esphomenative_powermeter("ESPHOMENATIVE", config)
+    assert pm.port == 6053
+    assert pm.object_id == "grid_power"
 
 
 def test_create_amisreader_powermeter():

@@ -262,9 +262,9 @@ ID = your_id
 
 ## ESPHomeNative
 
-Connect to an esphome device via it's native API (the same connection method used by HomeAssistant).
+Connect to an esphome device via its native API (the same connection method used by HomeAssistant).
 
-This creates a persistend connection to the device with instant status updates via protocol buffers.
+This creates a persistent connection to the device with instant status updates via protocol buffers.
 This should be more performant than the http-polling used by `[ESPHome]`.
 
 

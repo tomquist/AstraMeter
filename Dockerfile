@@ -1,6 +1,16 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-slim AS builder
 
+# cffi (pulled in transitively via aioesphomeapi -> cryptography) ships no
+# prebuilt wheel for linux/arm/v7, so it compiles from source and needs a full C
+# toolchain (compiler, libc headers + startup objects) plus the libffi headers.
+# cryptography itself has an armv7 wheel, so no Rust toolchain is required here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libffi-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir "uv==0.11.2"
 
 WORKDIR /app

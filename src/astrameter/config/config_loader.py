@@ -561,9 +561,9 @@ def create_esphomenative_powermeter(
     return ESPHomeNative(
         address=config.get(section, "ADDRESS", fallback=""),
         port=config.get(section, "PORT", fallback="6053"),
-        apiKey=config.get(section, "API_KEY", fallback=""),
-        objectId=config.get(section, "OBJECT_ID", fallback=""),
-        clientInfo=config.get(section, "CLIENT_INFO", fallback="AstraMeter"),
+        api_key=config.get(section, "API_KEY", fallback=""),
+        object_id=config.get(section, "OBJECT_ID", fallback=""),
+        client_info=config.get(section, "CLIENT_INFO", fallback="AstraMeter"),
     )
 
 

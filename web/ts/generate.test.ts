@@ -117,6 +117,42 @@ const tibber = generateConfigIni({
 has(tibber, "[TIBBER_PULSE]", "tibber: section header");
 has(tibber, "TIMEOUT = 10", "tibber: timeout override emitted");
 
+// ── config.ini: ESPHome native API ───────────────────────────────────────────
+const esphomeNative = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: [
+    {
+      type: "esphomenative",
+      phases: 1,
+      fields: {
+        ADDRESS: "device.local",
+        PORT: "6053",
+        API_KEY: "5BqtR16i91/+rwUl+QrJewKFOnyS/whHc3v9ySSKpb8=",
+        OBJECT_ID: "grid_power",
+        CLIENT_INFO: "AstraMeter",
+      },
+      tuning: {},
+    },
+  ],
+});
+has(esphomeNative, "[ESPHOMENATIVE]", "esphomenative: section header");
+has(esphomeNative, "ADDRESS = device.local", "esphomenative: address");
+has(esphomeNative, "PORT = 6053", "esphomenative: port");
+has(esphomeNative, "API_KEY = 5BqtR16i91/+rwUl+QrJewKFOnyS/whHc3v9ySSKpb8=", "esphomenative: api key");
+has(esphomeNative, "OBJECT_ID = grid_power", "esphomenative: object id");
+has(esphomeNative, "CLIENT_INFO = AstraMeter", "esphomenative: client info");
+
+// The native-API meter is Python-only — it must not emit an esphome sensor block
+// (on the ESP the same source is read via the homeassistant platform instead).
+const esphomeNativeEy = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "esphomenative", phases: 1, fields: { ADDRESS: "device.local", OBJECT_ID: "grid_power" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(esphomeNativeEy, "entity_id: sensor.grid_power", "esphomenative: ESP reads the entity via homeassistant platform");
+
 // ── config.ini: multi-meter NETMASK ──────────────────────────────────────────
 const multi = generateConfigIni({
   target: "python",
