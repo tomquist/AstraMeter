@@ -107,6 +107,7 @@ CONF_OSC_DAMP_MAX = "osc_damp_max"
 CONF_OSC_DAMP_ALPHA = "osc_damp_alpha"
 CONF_OSC_DAMP_DECAY = "osc_damp_decay"
 CONF_OSC_DAMP_THRESHOLD = "osc_damp_threshold"
+CONF_HUNT_DEADBAND_EXTRA = "hunt_deadband_extra"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
@@ -216,6 +217,7 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.0, max=1.0
         ),
         cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=300.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_HUNT_DEADBAND_EXTRA, default=35.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
@@ -498,6 +500,7 @@ async def to_code(config):
         ("osc_damp_alpha", bal.get(CONF_OSC_DAMP_ALPHA, 0.3)),
         ("osc_damp_decay", bal.get(CONF_OSC_DAMP_DECAY, 0.05)),
         ("osc_damp_threshold", bal.get(CONF_OSC_DAMP_THRESHOLD, 300.0)),
+        ("hunt_deadband_extra", bal.get(CONF_HUNT_DEADBAND_EXTRA, 35.0)),
         ("min_efficient_power", bal.get(CONF_MIN_EFFICIENT_POWER, 0.0)),
         ("probe_min_power", bal.get(CONF_PROBE_MIN_POWER, 80.0)),
         (

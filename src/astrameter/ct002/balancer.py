@@ -298,6 +298,21 @@ class BalancerConfig:
     # through at full gain and reacts immediately.  Keeps the damper from
     # bleeding a real step response just because the loop was hunting before it.
     osc_damp_threshold: float = 300
+    # Hunt-gated residual deadband (W).  ``osc_damp_max`` only *scales* a hunting
+    # consumer's residual; a small noise- or sub-deadband-fluctuation-driven
+    # residual still gets issued every poll, so the pool keeps re-commanding tiny
+    # corrections (and, with two batteries, splits every wiggle) — burning travel
+    # and band-crossings fighting motion it cannot actually cancel.  Once a
+    # consumer is detected hunting (``osc_score`` from ``_damp_oscillation``
+    # rising toward 1), widen its residual deadband by
+    # ``hunt_deadband_extra * osc_score``: a damped residual whose magnitude is
+    # under that band is dropped to 0 (no command issued).  A genuine demand step
+    # holds one sign, so the score decays to ~0 and the band collapses back to 0,
+    # letting the step pass through immediately — step reaction is unchanged, only
+    # a hunting loop is quieted.  Chasing noise was itself driving the grid back
+    # and forth across zero, so suppressing it cuts avoidable import *and* travel
+    # together rather than trading one for the other.  ``0`` disables it.
+    hunt_deadband_extra: float = 35.0
     # Adaptive grid-state predictor. The controller acts on a *predicted* grid
     # rather than the raw meter: every poll the prediction is advanced by the
     # pool's own freshly-reported output change, and on each fresh meter sample it
@@ -358,6 +373,7 @@ class BalancerConfig:
         _clamp("osc_damp_alpha", 0.0, 1.0)
         _clamp("osc_damp_decay", 0.0, 1.0)
         _clamp("osc_damp_threshold", 0.0, float("inf"))
+        _clamp("hunt_deadband_extra", 0.0, float("inf"))
         _clamp("grid_predict_trust", 0.0, 1.0)
         _clamp("concentrate_deadband", 0.0, float("inf"))
         _clamp("import_trim_w", 0.0, float("inf"))
@@ -1529,7 +1545,7 @@ class LoadBalancer:
         residual = tracking + (residual - fair_share)
 
         if consumer_id:
-            residual = self._damp_oscillation(consumer_id, residual)
+            residual = self._damp_oscillation(consumer_id, residual, trim_fresh)
 
         reported = (
             parse_int(reports.get(consumer_id, {}).get("power", 0))
@@ -1633,7 +1649,9 @@ class LoadBalancer:
             return control_grid + trim
         return control_grid
 
-    def _damp_oscillation(self, consumer_id: str, residual: float) -> float:
+    def _damp_oscillation(
+        self, consumer_id: str, residual: float, fresh: bool = True
+    ) -> float:
         """Scale ``residual`` down while the consumer is hunting (issue #473).
 
         Tracks an EMA (``osc_score``) of how often the residual reverses sign.
@@ -1641,8 +1659,13 @@ class LoadBalancer:
         residual passes through unchanged; a latency-driven limit cycle flips
         sign nearly every poll, driving the score toward 1 and shrinking the
         residual by up to ``osc_damp_max`` — bleeding the loop gain that
-        sustains the hunt without slowing same-direction reactions.  Mirrors
-        the C++ port (balancer.cpp ``damp_oscillation_``).
+        sustains the hunt without slowing same-direction reactions.
+
+        Once hunting, a residual whose damped magnitude is under the hunt-gated
+        deadband (``hunt_deadband_extra * osc_score``) is dropped to exactly 0,
+        so no noise-driven micro-correction is issued at all — see
+        ``BalancerConfig.hunt_deadband_extra``.  Mirrors the C++ port
+        (balancer.cpp ``damp_oscillation_``).
         """
         cfg = self._cfg
         if cfg.osc_damp_max <= 0.0:
@@ -1670,7 +1693,20 @@ class LoadBalancer:
             state.osc_score *= 1.0 - cfg.osc_damp_decay
         if sign != 0:
             state.osc_last_sign = sign
-        return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
+        damped = residual * (1.0 - cfg.osc_damp_max * state.osc_score)
+        # Hunt-gated residual deadband: while hunting (score > 0) drop a residual
+        # whose magnitude is under a band that *widens* with the score, so a
+        # noise-/sub-deadband-driven correction is not issued at all.  The band is
+        # 0 when not hunting (score ~0), so a genuine step always passes through.
+        # Gated on a *fresh* meter sample: with a stale/frozen meter the loop is
+        # holding balance blind on the predictor, so its small corrections are
+        # exactly what keeps the grid near zero — suppressing them then would let
+        # the grid drift (mirrors the freshness gate on the steady-import trim).
+        if fresh and cfg.hunt_deadband_extra > 0.0:
+            band = cfg.hunt_deadband_extra * state.osc_score
+            if abs(damped) < band:
+                return 0.0
+        return damped
 
     def _pace_reading(self, consumer_id: str, reading: float, reported: float) -> float:
         """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.

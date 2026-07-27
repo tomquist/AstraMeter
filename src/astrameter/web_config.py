@@ -301,6 +301,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "OSC_DAMP_ALPHA": {"type": "float", "min": 0, "max": 1},
         "OSC_DAMP_DECAY": {"type": "float", "min": 0, "max": 1},
         "OSC_DAMP_THRESHOLD": {"type": "float", "min": 0},
+        "HUNT_DEADBAND_EXTRA": {"type": "float", "min": 0},
         "GRID_PREDICT_TRUST": {"type": "float", "min": 0, "max": 1},
         "CONCENTRATE_DEADBAND": {"type": "float", "min": 0},
         "IMPORT_TRIM_W": {"type": "float", "min": 0},

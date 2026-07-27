@@ -203,6 +203,9 @@ async def run_device(
         osc_damp_threshold = cfg.getfloat(
             ct_section, "OSC_DAMP_THRESHOLD", fallback=300
         )
+        hunt_deadband_extra = cfg.getfloat(
+            ct_section, "HUNT_DEADBAND_EXTRA", fallback=35.0
+        )
         grid_predict_trust = cfg.getfloat(
             ct_section, "GRID_PREDICT_TRUST", fallback=0.5
         )
@@ -300,6 +303,7 @@ async def run_device(
             osc_damp_alpha=osc_damp_alpha,
             osc_damp_decay=osc_damp_decay,
             osc_damp_threshold=osc_damp_threshold,
+            hunt_deadband_extra=hunt_deadband_extra,
             grid_predict_trust=grid_predict_trust,
             concentrate_deadband=concentrate_deadband,
             import_trim_w=import_trim_w,

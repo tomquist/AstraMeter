@@ -1030,6 +1030,9 @@ class TestDampOscillation:
         cfg.setdefault("osc_damp_alpha", 0.25)
         cfg.setdefault("osc_damp_decay", 0.1)
         cfg.setdefault("osc_damp_threshold", 450)
+        # These tests isolate the *damping* factor; the hunt-gated deadband
+        # (which would zero a small damped residual) has its own test class.
+        cfg.setdefault("hunt_deadband_extra", 0.0)
         return LoadBalancer(
             config=BalancerConfig(**cfg),
             saturation_alpha=0.15,
@@ -1082,3 +1085,52 @@ class TestDampOscillation:
         for i in range(10):
             r = 100.0 if i % 2 == 0 else -100.0
             assert lb._damp_oscillation("a", r) == pytest.approx(r)
+
+
+class TestHuntDeadband:
+    """Hunt-gated residual deadband (``hunt_deadband_extra``) — mirrored by the
+    C++ ``damp_oscillation_`` and the differential parity suite."""
+
+    def _lb(self, **cfg):
+        cfg.setdefault("osc_damp_max", 0.8)
+        cfg.setdefault("osc_damp_alpha", 0.25)
+        cfg.setdefault("osc_damp_decay", 0.1)
+        cfg.setdefault("osc_damp_threshold", 450)
+        cfg.setdefault("hunt_deadband_extra", 40.0)
+        return LoadBalancer(
+            config=BalancerConfig(**cfg),
+            saturation_alpha=0.15,
+            saturation_min_target=20,
+            saturation_decay_factor=0.995,
+            saturation_grace_seconds=90.0,
+            saturation_stall_timeout_seconds=60.0,
+            saturation_enabled=False,
+        )
+
+    def test_small_residual_zeroed_while_hunting(self):
+        # A sustained hunt drives the score up; once the (damped) residual falls
+        # under the widened band it is dropped to exactly 0 — no noise-driven
+        # micro-correction is issued.
+        lb = self._lb()
+        outs = [
+            lb._damp_oscillation("a", 100.0 if i % 2 == 0 else -100.0)
+            for i in range(30)
+        ]
+        assert outs[-1] == 0.0
+
+    def test_genuine_step_passes_through(self):
+        # A steady same-sign residual keeps the score ~0, so the band collapses
+        # to 0 and the residual is never gated.
+        lb = self._lb()
+        for _ in range(10):
+            assert lb._damp_oscillation("a", 100.0) == pytest.approx(100.0)
+
+    def test_disabled_when_extra_zero(self):
+        # With the knob off, a hunting small residual is damped but never zeroed.
+        lb = self._lb(hunt_deadband_extra=0.0)
+        outs = [
+            lb._damp_oscillation("a", 100.0 if i % 2 == 0 else -100.0)
+            for i in range(30)
+        ]
+        assert abs(outs[-1]) == pytest.approx(20.0, abs=2.0)
+        assert outs[-1] != 0.0

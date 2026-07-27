@@ -120,6 +120,7 @@ void BalancerConfig::clamp() {
   clamp_v(osc_damp_alpha, 0.0f, 1.0f);
   clamp_v(osc_damp_decay, 0.0f, 1.0f);
   if (osc_damp_threshold < 0.0f) osc_damp_threshold = 0.0f;
+  if (hunt_deadband_extra < 0.0f) hunt_deadband_extra = 0.0f;
   clamp_v(grid_predict_trust, 0.0f, 1.0f);
   if (concentrate_deadband < 0.0f) concentrate_deadband = 0.0f;
   if (import_trim_w < 0.0f) import_trim_w = 0.0f;
@@ -978,7 +979,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   }
   residual = tracking + (residual - fair_share);
   if (consumer_id) {
-    residual = this->damp_oscillation_(*consumer_id, residual);
+    residual = this->damp_oscillation_(*consumer_id, residual, trim_fresh);
   }
   float reported = 0.0f;
   if (consumer_id) {
@@ -1004,7 +1005,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
 // score accumulates toward 1 and shrinks the residual by up to osc_damp_max,
 // bleeding the loop gain that sustains the hunt. Mirrors balancer.py
 // _damp_oscillation.
-float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float residual) {
+float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float residual, bool fresh) {
   if (this->cfg_.osc_damp_max <= 0.0f) return residual;
   auto &state = this->get_consumer_(consumer_id);
   int sign = (residual > 0.0f) ? 1 : (residual < 0.0f ? -1 : 0);
@@ -1023,7 +1024,20 @@ float LoadBalancer::damp_oscillation_(const std::string &consumer_id, float resi
     state.osc_score *= 1.0f - this->cfg_.osc_damp_decay;
   }
   if (sign != 0) state.osc_last_sign = sign;
-  return residual * (1.0f - this->cfg_.osc_damp_max * state.osc_score);
+  float damped = residual * (1.0f - this->cfg_.osc_damp_max * state.osc_score);
+  // Hunt-gated residual deadband: while hunting (score > 0) drop a residual
+  // whose magnitude is under a band that widens with the score, so a
+  // noise-/sub-deadband-driven correction is not issued at all. The band is 0
+  // when not hunting (score ~0), so a genuine step always passes through.
+  // Gated on a fresh meter sample: with a stale/frozen meter the loop is holding
+  // balance blind on the predictor, so its small corrections keep the grid near
+  // zero — suppressing them then would let the grid drift (mirrors the freshness
+  // gate on the steady-import trim).
+  if (fresh && this->cfg_.hunt_deadband_extra > 0.0f) {
+    float band = this->cfg_.hunt_deadband_extra * state.osc_score;
+    if (std::fabs(damped) < band) return 0.0f;
+  }
+  return damped;
 }
 
 // Online grid-state observer that compensates for meter latency without
