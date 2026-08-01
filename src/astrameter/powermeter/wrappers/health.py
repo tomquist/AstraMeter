@@ -1,9 +1,31 @@
+import dataclasses
 import time
 from collections.abc import Awaitable, Callable
 
 from astrameter.powermeter.base import Powermeter
 
 from .base import PowermeterWrapper
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PowermeterHealth:
+    """Immutable health/identity view of one configured powermeter.
+
+    ``online`` is tri-state: ``None`` means "pull meter, unknowable without
+    I/O" and must stay distinct from ``False`` (a push meter known to be
+    down).  ``last_read_age`` is seconds on the wrapper's own clock, never a
+    timestamp — that clock is :func:`time.monotonic` by default and would
+    render as 1970 if emitted raw.
+    """
+
+    name: str
+    kind: str
+    pipeline: tuple[str, ...]
+    online: bool | None
+    last_read_age: float | None
+    last_read_ok: bool
+    last_values: tuple[float, ...] | None
+    last_total: float | None
 
 
 class HealthTrackingPowermeter(PowermeterWrapper):
@@ -48,6 +70,35 @@ class HealthTrackingPowermeter(PowermeterWrapper):
     @property
     def last_values(self) -> list[float] | None:
         return self._last_values
+
+    def status_snapshot(self) -> PowermeterHealth:
+        """Immutable health view for the status API.
+
+        Reads recorded state only: it must never call
+        ``get_powermeter_watts()``, which runs the PID/Hampel/smoothing
+        chain and would inject a phantom sample into the control loop.
+        """
+        values = self._last_values
+        age = None
+        if self._last_attempt is not None:
+            age = max(0.0, self._clock() - self._last_attempt)
+        pipeline: list[str] = []
+        node: Powermeter = self.wrapped_powermeter
+        while isinstance(node, PowermeterWrapper):
+            pipeline.append(type(node).__name__)
+            node = node.wrapped_powermeter
+        return PowermeterHealth(
+            name=self.name,
+            kind=type(node).__name__,
+            # Innermost first, so the list reads in the order a reading
+            # travels outward from the meter.
+            pipeline=tuple(reversed(pipeline)),
+            online=self.stream_online(),
+            last_read_age=age,
+            last_read_ok=self._last_outcome_ok,
+            last_values=tuple(values) if values is not None else None,
+            last_total=sum(values) if values else None,
+        )
 
     async def get_powermeter_watts(self) -> list[float]:
         result = await self._tracked(self.wrapped_powermeter.get_powermeter_watts)

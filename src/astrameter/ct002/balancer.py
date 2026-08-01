@@ -428,6 +428,83 @@ class BalancerConsumerState:
     last_saturation_update: float = 0.0
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class BalancerConsumerSnapshot:
+    """Immutable view of one consumer's control state.
+
+    Produced by :meth:`LoadBalancer.snapshot_consumer` for the status API.
+    Powers are watts; ``saturation`` and ``fade_weight`` are 0..1.
+    """
+
+    last_target: float | None
+    last_intent: float | None
+    last_intent_reading: float | None
+    saturation: float
+    saturation_grace_remaining: float
+    fade_weight: float
+    deprioritized: bool
+    pace_cap: float
+    pace_sign: int
+    osc_score: float
+    osc_last_sign: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PredictorSnapshot:
+    """Adaptive grid-state observer state (see ``_predict_control_grid``)."""
+
+    grid_estimate: float | None
+    trust: float
+    innovation_sign: int
+    pool_output: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ImportTrimSnapshot:
+    """Steady-import trim state (see ``_apply_import_trim``)."""
+
+    dwell: int
+    dwell_target: int
+    gate: float
+    engaged: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class EfficiencySnapshot:
+    """Efficiency rotation / active-set state."""
+
+    demand_ema: float | None
+    priority_order: tuple[str, ...]
+    deprioritized: tuple[str, ...]
+    last_rotation_age: float
+    all_dc_under_surplus: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ProbeSnapshot:
+    """In-flight efficiency handoff, or absent when no probe is running."""
+
+    candidate_id: str
+    active_ids: tuple[str, ...]
+    backup_ids: tuple[str, ...]
+    proof_samples: int
+    requested_power_abs: float
+    started_age: float
+    deadline_in: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BalancerSnapshot:
+    """Immutable whole-balancer view for the status API."""
+
+    config: BalancerConfig
+    efficiency_rotation_enabled: bool
+    predictor: PredictorSnapshot
+    import_trim: ImportTrimSnapshot
+    efficiency: EfficiencySnapshot
+    probe: ProbeSnapshot | None
+
+
 @dataclasses.dataclass
 class ProbeState:
     """Tracks an in-flight efficiency handoff."""
@@ -1120,6 +1197,89 @@ class LoadBalancer:
     # ------------------------------------------------------------------
     # Observability
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Read-only status surface (dashboard / diagnostics)
+    # ------------------------------------------------------------------
+
+    @property
+    def config(self) -> BalancerConfig:
+        """Effective, post-clamp balancer configuration.
+
+        Safe to hand out by reference: :class:`BalancerConfig` is frozen.
+        """
+        return self._cfg
+
+    def snapshot_consumer(self, consumer_id: str) -> BalancerConsumerSnapshot | None:
+        """Per-consumer control state, or ``None`` if never steered.
+
+        Pure attribute reads — no clock advance, no mutation.  See
+        :meth:`status_snapshot` for the concurrency contract.
+        """
+        state = self._consumers.get(consumer_id)
+        if state is None:
+            return None
+        grace_remaining = 0.0
+        if state.saturation_grace_until > 0:
+            grace_remaining = max(0.0, state.saturation_grace_until - self._clock())
+        return BalancerConsumerSnapshot(
+            last_target=state.last_target,
+            last_intent=state.last_intent,
+            last_intent_reading=state.last_intent_reading,
+            saturation=state.saturation_score,
+            saturation_grace_remaining=grace_remaining,
+            fade_weight=state.fade_weight,
+            deprioritized=consumer_id in self._deprioritized,
+            pace_cap=state.pace_cap,
+            pace_sign=state.pace_sign,
+            osc_score=state.osc_score,
+            osc_last_sign=state.osc_last_sign,
+        )
+
+    def status_snapshot(self) -> BalancerSnapshot:
+        """Whole-balancer control state for the status API.
+
+        MUST stay a plain ``def`` doing attribute reads only: the caller
+        builds a snapshot of the live device tree between UDP handlers, so
+        any ``await`` here would let a datagram tear the result.
+        """
+        probe = self._probe_state
+        probe_snapshot = None
+        if probe is not None:
+            now = self._clock()
+            probe_snapshot = ProbeSnapshot(
+                candidate_id=probe.candidate_id,
+                active_ids=probe.active_ids,
+                backup_ids=probe.backup_ids,
+                proof_samples=probe.proof_samples,
+                requested_power_abs=probe.requested_power_abs,
+                started_age=max(0.0, now - probe.started_at),
+                deadline_in=probe.deadline - now,
+            )
+        return BalancerSnapshot(
+            config=self._cfg,
+            efficiency_rotation_enabled=self.efficiency_rotation_enabled,
+            predictor=PredictorSnapshot(
+                grid_estimate=self._pred_grid,
+                trust=self._pred_trust,
+                innovation_sign=self._pred_innov_sign,
+                pool_output=self._pred_pool_output,
+            ),
+            import_trim=ImportTrimSnapshot(
+                dwell=self._steady_import_dwell,
+                dwell_target=IMPORT_TRIM_DWELL,
+                gate=IMPORT_TRIM_GATE_W,
+                engaged=self._steady_import_dwell >= IMPORT_TRIM_DWELL,
+            ),
+            efficiency=EfficiencySnapshot(
+                demand_ema=self._demand_ema,
+                priority_order=tuple(self._priority),
+                deprioritized=tuple(sorted(self._deprioritized)),
+                last_rotation_age=max(0.0, self._clock() - self._last_rotation),
+                all_dc_under_surplus=self._all_dc_surplus_warned,
+            ),
+            probe=probe_snapshot,
+        )
 
     def get_saturation(self, consumer_id: str) -> float:
         state = self._consumers.get(consumer_id)
