@@ -208,6 +208,7 @@ const html = renderToString(
   h("div", null, ...view(live, actions, initialConfigState())),
 );
 has(html, "−13 W", "the hero shows the grid total");
+has(html, "effect on the grid", "the rail states which frame the battery bars use");
 has(html, "exporting to the grid", "the hero states the direction in words");
 has(html, "HMK-2 ·0001", "a battery appears by name");
 has(html, "Battery missing", "the health chip is rendered");

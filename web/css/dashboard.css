@@ -326,6 +326,12 @@ main {
   margin-top: 4px;
 }
 
+.contrib-caption {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
 .contrib-row {
   display: grid;
   grid-template-columns: minmax(90px, 130px) 1fr minmax(72px, auto);

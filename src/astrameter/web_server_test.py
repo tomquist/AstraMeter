@@ -1,0 +1,259 @@
+"""Tests for the dashboard's HTTP surface: the access gate, the routes and
+the control-write validation."""
+
+import json
+
+import pytest
+from aiohttp.test_utils import TestClient, TestServer
+
+from astrameter.ct002 import CT002
+from astrameter.status import StatusRegistry
+from astrameter.status.secrets import SENTINEL
+from astrameter.web_server import WebServer
+
+
+def _registry(tmp_path, **kwargs) -> StatusRegistry:
+    kwargs.setdefault("config_path", str(tmp_path / "config.ini"))
+    kwargs.setdefault("log_level", "info")
+    kwargs.setdefault("version", "9.9.9")
+    kwargs.setdefault("git_commit", "")
+    kwargs.setdefault("dashboard_enabled", True)
+    return StatusRegistry(**kwargs)
+
+
+def _device() -> CT002:
+    device = CT002(device_id="ct-1")
+    device._update_consumer_report(
+        "02b250000001", "A", -120, "HMK-2", source_ip="10.0.0.5"
+    )
+    device._last_grid_values = [12.0, -30.0, 5.0]
+    device._last_grid_at = 1_770_000_000.0
+    device._last_smooth_target = -13.0
+    return device
+
+
+async def _client(registry, **kwargs) -> TestClient:
+    """A test client. Requests appear to come from 127.0.0.1, i.e. NOT ingress.
+
+    Uses the production ``build_app()`` so the routes under test are exactly
+    the routes that ship.
+    """
+    server = WebServer(config_path=registry.config_path, status=registry, **kwargs)
+    client = TestClient(TestServer(server.build_app()))
+    await client.start_server()
+    return client
+
+
+# -- the access gate --------------------------------------------------
+
+
+async def test_health_is_always_reachable(tmp_path):
+    """The Docker HEALTHCHECK and the add-on watchdog both probe /health, so
+    it must answer even when everything else is gated off."""
+    client = await _client(_registry(tmp_path, direct_access=False))
+    assert (await client.get("/health")).status == 200
+    await client.close()
+
+
+@pytest.mark.parametrize("path", ["/", "/api/status", "/api/config"])
+async def test_direct_access_is_refused_by_default(tmp_path, path):
+    """Under host networking the port is on the LAN with no authentication,
+    so anything sensitive must fail closed."""
+    client = await _client(_registry(tmp_path, direct_access=False))
+    assert (await client.get(path)).status == 403
+    await client.close()
+
+
+async def test_forged_ingress_headers_do_not_grant_access(tmp_path):
+    """The gate is the peer address precisely because a LAN client can set
+    any header it likes."""
+    client = await _client(_registry(tmp_path, direct_access=False))
+    response = await client.get(
+        "/api/status",
+        headers={
+            "X-Ingress-Path": "/api/hassio_ingress/x",
+            "X-Hass-Source": "core.ingress",
+        },
+    )
+    assert response.status == 403
+    await client.close()
+
+
+async def test_direct_access_opt_in_allows_reads(tmp_path):
+    client = await _client(_registry(tmp_path, direct_access=True))
+    assert (await client.get("/api/status")).status == 200
+    await client.close()
+
+
+async def test_writes_need_both_trust_and_the_write_flag(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=False)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    response = await client.post(
+        "/api/control/consumer",
+        json={
+            "device_id": "ct-1",
+            "consumer_id": "02b250000001",
+            "field": "active",
+            "value": False,
+        },
+    )
+    assert response.status == 403
+    await client.close()
+
+
+async def test_dashboard_off_serves_no_routes(tmp_path):
+    client = await _client(_registry(tmp_path, dashboard_enabled=False))
+    assert (await client.get("/api/status")).status == 404
+    assert (await client.get("/health")).status == 200
+    await client.close()
+
+
+# -- status -----------------------------------------------------------
+
+
+async def test_status_returns_a_snapshot_and_revalidates(tmp_path):
+    registry = _registry(tmp_path, direct_access=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+
+    response = await client.get("/api/status")
+    assert response.status == 200
+    etag = response.headers["ETag"]
+    body = await response.json()
+    assert body["schema_version"] == 1
+    assert body["devices"][0]["consumers"][0]["consumer_id"] == "02b250000001"
+
+    again = await client.get("/api/status", headers={"If-None-Match": etag})
+    assert again.status == 304
+    assert await again.text() == ""
+    await client.close()
+
+
+async def test_no_handler_emits_a_location_header(tmp_path):
+    """Both ingress hops copy Location verbatim, so a redirect would navigate
+    the user straight out of the panel."""
+    registry = _registry(tmp_path, direct_access=True)
+    client = await _client(registry)
+    for path in ("/health", "/api/status", "/api/status/", "/nope"):
+        response = await client.get(path, allow_redirects=False)
+        assert "Location" not in response.headers, path
+        assert response.status != 301 and response.status != 302
+    await client.close()
+
+
+async def test_trailing_slash_variants_are_registered(tmp_path):
+    client = await _client(_registry(tmp_path, direct_access=True))
+    assert (await client.get("/api/status/")).status == 200
+    await client.close()
+
+
+# -- control writes ---------------------------------------------------
+
+
+async def test_control_write_applies_through_the_validated_setter(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+    client = await _client(registry)
+
+    response = await client.post(
+        "/api/control/consumer",
+        json={
+            "device_id": "ct-1",
+            "consumer_id": "02b250000001",
+            "field": "active",
+            "value": False,
+        },
+    )
+    assert response.status == 200
+    assert (await response.json())["applied"] is True
+    assert device.is_consumer_active("02b250000001") is False
+    await client.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("manual_target", 99999),
+        ("manual_target", -99999),
+        ("manual_target", "abc"),
+        ("distribution_weight", 50),
+        ("efficiency_window_weight", 500),
+        ("min_dc_output", 5000),
+        ("active", "yes"),
+    ],
+)
+async def test_out_of_range_control_writes_are_rejected(tmp_path, field, value):
+    """The CT002 setters do not bound their inputs — the ranges live in the
+    MQTT handlers. A value MQTT would reject must be rejected here too, or the
+    broker's retained state would silently revert it on the next reconnect."""
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    response = await client.post(
+        "/api/control/consumer",
+        json={
+            "device_id": "ct-1",
+            "consumer_id": "02b250000001",
+            "field": field,
+            "value": value,
+        },
+    )
+    assert response.status == 400
+    await client.close()
+
+
+async def test_unknown_device_or_field_is_a_404(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    for body in (
+        {"device_id": "nope", "consumer_id": "x", "field": "active", "value": True},
+        {"device_id": "ct-1", "consumer_id": "x", "field": "bogus", "value": True},
+    ):
+        assert (await client.post("/api/control/consumer", json=body)).status == 404
+    await client.close()
+
+
+# -- config -----------------------------------------------------------
+
+
+async def test_config_get_redacts_and_post_restores_secrets(tmp_path):
+    config = tmp_path / "config.ini"
+    config.write_text(
+        "[GENERAL]\nDEVICE_TYPE = ct002\n\n[MQTT_INSIGHTS]\nBROKER = 10.0.0.2\nPASSWORD = hunter2\n"
+    )
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    client = await _client(registry)
+
+    body = await (await client.get("/api/config")).json()
+    assert body["sections"]["MQTT_INSIGHTS"]["PASSWORD"] == SENTINEL
+    assert "hunter2" not in json.dumps(body)
+
+    # Echoing the sentinel back must keep the stored password, not blank it.
+    body["sections"]["MQTT_INSIGHTS"]["BROKER"] = "10.0.0.9"
+    saved = await client.post("/api/config", json=body)
+    assert saved.status == 200
+    text = config.read_text()
+    assert "PASSWORD = hunter2" in text
+    assert "BROKER = 10.0.0.9" in text
+    await client.close()
+
+
+async def test_simple_mode_refuses_config_writes(tmp_path):
+    """The add-on regenerates config.ini on every start, so a write here
+    would vanish at the next restart."""
+    config = tmp_path / "config.ini"
+    config.write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
+    registry = _registry(
+        tmp_path, direct_access=True, allow_write=True, config_mode="ha_simple"
+    )
+    client = await _client(registry)
+    response = await client.post(
+        "/api/config",
+        json={"sections": {"GENERAL": {"DEVICE_TYPE": "ct003"}}, "order": ["GENERAL"]},
+    )
+    assert response.status == 403
+    assert "add-on options" in (await response.json())["error"]
+    await client.close()

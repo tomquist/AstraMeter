@@ -51,6 +51,26 @@ than reporting the image as untested.
 
 `esphome/components/ct002/` is a C++ mirror of the Python CT002 stack. Any change to shared behavior must land on **both** sides in the same change. See `CONTRIBUTING.md` for the file mapping and what has no C++ counterpart. Verify with `uv run pytest tests/components/ct002/`.
 
+### Dashboard / web UI (parity DEFERRED, not waived)
+
+`src/astrameter/status/`, the dashboard routes in `src/astrameter/web_server.py`
+and `web/ts/dashboard/` have **no C++ counterpart today**, so the parity rule
+above does not block a change to them. This is deliberate, and it is not a
+blanket exemption:
+
+- The **status half** is deferred. The state the page renders already exists on
+  the C++ side, so an ESPHome build could serve a reduced version of the same
+  document later. Keep that possible: every field in the status schema is
+  optional at every level, the frontend renders only what it receives, and the
+  bundle stays inside the size budget enforced by `npm run check:dashboard`.
+- The **configuration half** is permanently waived. An ESPHome device's config
+  is compiled into its firmware, so there is nothing for a dashboard to write.
+
+The bundle at `src/astrameter/static/dashboard.html` is a **committed generated
+artifact** — neither the Docker build nor `esphome compile` has Node. After
+touching anything under `web/`, run `cd web && npm run build:dashboard` and
+commit the result; CI fails on a stale bundle.
+
 ## Steering-quality evaluation (run when touching balancer behavior)
 
 `uv run python -m astrameter.simulator.evaluation` simulates hours of

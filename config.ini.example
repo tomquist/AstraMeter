@@ -8,7 +8,16 @@ DEVICE_TYPE = shellypro3em
 SKIP_POWERMETER_TEST = False
 # Enable the web-based configuration editor at http://<host>:<port>/config (opt-in, default False)
 # WEB_CONFIG_ENABLED = False
-# Port for the embedded web server (health check + config editor). Default: 52500
+# Enable the live status dashboard at http://<host>:<port>/ (opt-in, default False).
+# Shows grid power, every battery's target and reported power, power-source
+# health and the balancer's internal state.  In the Home Assistant add-on this
+# is on by default and opens from the sidebar instead.
+# DASHBOARD_ENABLED = False
+# Let the dashboard change this file and control batteries (default False).
+# Leave it off to keep the dashboard read-only.  There is NO authentication on
+# this port, so only enable it on a network you trust.
+# DASHBOARD_ALLOW_WRITE = False
+# Port for the embedded web server (health check + dashboard + config editor). Default: 52500
 # WEB_SERVER_PORT = 52500
 # Global throttling configuration (in seconds) - applies to all powermeters unless overridden
 # Enforces minimum time between power meter readings by waiting when called too frequently

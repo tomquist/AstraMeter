@@ -36,10 +36,8 @@ function currentTheme(): string {
 
 const actions: Actions = {
   selectTab(tab: Tab) {
-    state.tab = tab;
     location.hash = `#/${tab}`;
-    if (tab === "config") actions.loadConfig();
-    render();
+    setTab(tab);
   },
 
   toggleTheme() {
@@ -78,8 +76,15 @@ const actions: Actions = {
   },
 
   async loadConfig() {
+    // Which surface to load depends on the mode, which only the first
+    // snapshot tells us — so a deep link into this tab has to wait for it.
+    // poll() calls back here once capabilities are known.
     const mode = state.snapshot?.capabilities?.config_mode;
-    if (config.loading) return;
+    if (!mode) return;
+    // Never refetch over unsaved edits, and never reload a surface already
+    // loaded for this mode.
+    if (config.loading || config.dirty || config.loadedMode === mode) return;
+    config.loadedMode = mode;
     config.loading = true;
     config.error = null;
     render();
@@ -96,6 +101,7 @@ const actions: Actions = {
       config.dirty = false;
     } catch (err) {
       config.error = describe(err);
+      config.loadedMode = null; // let the user retry by re-entering the tab
     } finally {
       config.loading = false;
       render();
@@ -237,6 +243,7 @@ async function poll(): Promise<void> {
     state.connection = "live";
     state.failures = 0;
     state.error = null;
+    if (state.tab === "config") actions.loadConfig();
   } catch (err) {
     state.failures += 1;
     // One dropped poll is normal on a busy network; two is a real outage.
@@ -281,22 +288,30 @@ function routeFromHash(): Tab {
   return tabs.includes(hash as Tab) ? (hash as Tab) : "overview";
 }
 
+/**
+ * The single place a tab becomes active.
+ *
+ * Every route into the Configuration tab — click, deep link, back button —
+ * has to trigger its load, so this must not be duplicated per entry point.
+ */
+function setTab(tab: Tab): void {
+  state.tab = tab;
+  if (tab === "config") actions.loadConfig();
+  render();
+}
+
 export function start(el: HTMLElement, custom?: Transport): void {
   root = el;
   if (custom) transport = custom;
   applyTheme(currentTheme());
-  state.tab = routeFromHash();
-  window.addEventListener("hashchange", () => {
-    state.tab = routeFromHash();
-    render();
-  });
+  window.addEventListener("hashchange", () => setTab(routeFromHash()));
+  setTab(routeFromHash());
   // Pause polling while the panel is hidden: HA keeps the iframe alive in a
   // background tab, and a hidden page has nobody to inform.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") poll();
     else window.clearTimeout(timer);
   });
-  render();
   poll();
 }
 

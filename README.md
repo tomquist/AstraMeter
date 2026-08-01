@@ -88,6 +88,9 @@ then consult the reference docs as needed:
 - **[CT002 / CT003 steering](docs/ct002.md)** — the CT emulator, active control,
   multi-battery balancing, efficiency optimization, and Marstek cloud
   registration.
+- **[Live status dashboard](docs/dashboard.md)** — the built-in web UI showing
+  live grid and per-battery state, and editing your configuration from the
+  browser. On by default in the Home Assistant add-on.
 - **[MQTT Insights & Home Assistant entities](docs/mqtt-insights.md)** —
   publishing internal state to MQTT, HA Device Discovery, and per-battery
   controls.

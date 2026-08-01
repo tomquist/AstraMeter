@@ -150,6 +150,15 @@ function balanceRail(state: AppState, offline: boolean): VNode {
         ? h(
             "div",
             { class: "contrib" },
+            // The rows are plotted in the GRID's frame, not the battery's:
+            // a charging battery pushes the grid toward import, so its bar
+            // goes right. Stating the frame here is what stops the row from
+            // contradicting the battery-frame numbers on the Batteries tab.
+            h(
+              "div",
+              { class: "contrib-caption" },
+              "Each battery's effect on the grid",
+            ),
             ...consumers.map((c) => contributionRow(c, fillStyle)),
           )
         : null,
@@ -199,8 +208,8 @@ function contributionRow(
     ),
     h(
       "span",
-      { class: "contrib-val" },
-      signedWatts(consumer.reported_power_w) ?? "—",
+      { class: "contrib-val", title: charging ? "charging" : "discharging" },
+      signedWatts(value) ?? "—",
     ),
   );
 }

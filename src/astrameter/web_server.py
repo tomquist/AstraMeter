@@ -45,6 +45,47 @@ def _json(payload, status=200, **headers):
     )
 
 
+_CONSUMER_SETTERS = {
+    "manual_target": "set_consumer_manual_target",
+    "auto_target": "set_consumer_auto_target",
+    "active": "set_consumer_active",
+    "distribution_weight": "set_consumer_distribution_weight",
+    "efficiency_window_weight": "set_consumer_efficiency_window_weight",
+    "min_dc_output": "set_consumer_min_dc_output",
+}
+
+# The CT002 setters themselves do not bound their inputs — the ranges live in
+# the MQTT command handlers.  The dashboard must enforce exactly the same
+# ones, or a value MQTT would reject could be set here and then silently
+# reverted on the next broker reconnect.
+_CONTROL_RANGES = {
+    "manual_target": (-10000.0, 10000.0),
+    "distribution_weight": (0.0, 10.0),
+    "efficiency_window_weight": (0.0, 100.0),
+    "min_dc_output": (0.0, 1000.0),
+}
+
+_CONTROL_BOOLS = ("active", "auto_target")
+
+
+def _coerce_control_value(field, value):
+    """Validate and coerce a control value, mirroring the MQTT bounds."""
+    import math
+
+    if field in _CONTROL_BOOLS:
+        if not isinstance(value, bool):
+            raise ValueError(f"{field} must be true or false")
+        return value
+    low, high = _CONTROL_RANGES[field]
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a number") from exc
+    if not math.isfinite(number) or not low <= number <= high:
+        raise ValueError(f"{field} must be between {low:g} and {high:g}")
+    return number
+
+
 class WebServer:
     """Async HTTP server exposing health, dashboard, config and API routes."""
 
@@ -104,8 +145,12 @@ class WebServer:
             return f"{name or 'unknown'} ({uid or 'no id'})"
         return f"direct {request.remote}"
 
-    async def start(self):
-        """Bind the TCP port and start serving. Returns True on success, False on failure."""
+    def build_app(self):
+        """Assemble the aiohttp application.
+
+        Split out from ``start()`` so tests exercise the real route table
+        rather than a copy of it that can drift.
+        """
         app = web.Application()
         # aiohttp auto-handles HEAD for GET routes.
         for path in ("/health", "/health/", "/api", "/api/"):
@@ -139,8 +184,11 @@ class WebServer:
 
         # Catch-all for unknown paths
         app.router.add_route("*", "/{path:.*}", self._handle_not_found)
+        return app
 
-        self._runner = web.AppRunner(app, access_log=None)
+    async def start(self):
+        """Bind the TCP port and start serving. Returns True on success, False on failure."""
+        self._runner = web.AppRunner(self.build_app(), access_log=None)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.bind_address, self.port)
         try:
@@ -266,18 +314,12 @@ class WebServer:
             return _json({"error": f"Invalid request: {exc}"}, status=400)
 
         device = self._device(device_id)
-        setters = {
-            "manual_target": "set_consumer_manual_target",
-            "auto_target": "set_consumer_auto_target",
-            "active": "set_consumer_active",
-            "distribution_weight": "set_consumer_distribution_weight",
-            "efficiency_window_weight": "set_consumer_efficiency_window_weight",
-            "min_dc_output": "set_consumer_min_dc_output",
-        }
-        setter = getattr(device, setters.get(field, ""), None) if device else None
+        setter_name = _CONSUMER_SETTERS.get(field)
+        setter = getattr(device, setter_name, None) if device and setter_name else None
         if setter is None:
             return _json({"error": "Unknown device or field"}, status=404)
         try:
+            value = _coerce_control_value(field, value)
             setter(consumer_id, value)
         except ValueError as exc:
             return _json({"error": str(exc)}, status=400)

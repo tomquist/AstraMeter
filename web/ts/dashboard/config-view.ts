@@ -17,6 +17,8 @@ import { OPTION_META, parseAddonSchema, type OptionSpec } from "./option-meta.js
 
 export interface ConfigState {
   loading: boolean;
+  /** Mode the currently held data was loaded for; null when never loaded. */
+  loadedMode: string | null;
   /** Add-on options, as edited. */
   options: Record<string, unknown>;
   schema: Record<string, string>;
@@ -41,6 +43,7 @@ export interface ConfigActions {
 export function initialConfigState(): ConfigState {
   return {
     loading: false,
+    loadedMode: null,
     options: {},
     schema: {},
     iniText: "",

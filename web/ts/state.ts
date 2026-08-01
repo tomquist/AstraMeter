@@ -23,6 +23,8 @@ export interface State {
     deviceIds: string;
     skipPowermeterTest: boolean;
     webConfigEnabled: boolean;
+    dashboardEnabled: boolean;
+    dashboardAllowWrite: boolean;
     webServerPort: string;
     throttleInterval: string;
     waitForNextMessage: string;
@@ -53,6 +55,8 @@ export function defaultState(): State {
       deviceIds: "",
       skipPowermeterTest: false,
       webConfigEnabled: false,
+      dashboardEnabled: false,
+      dashboardAllowWrite: false,
       webServerPort: "",
       throttleInterval: "",
       waitForNextMessage: "",
@@ -140,6 +144,8 @@ export function migrate(s: any): State {
         deviceIds: asStr(sg.deviceIds, dg.deviceIds),
         skipPowermeterTest: asBool(sg.skipPowermeterTest, dg.skipPowermeterTest),
         webConfigEnabled: asBool(sg.webConfigEnabled, dg.webConfigEnabled),
+        dashboardEnabled: asBool(sg.dashboardEnabled, dg.dashboardEnabled),
+        dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
         webServerPort: asStr(sg.webServerPort, dg.webServerPort),
         throttleInterval: asStr(sg.throttleInterval, dg.throttleInterval),
         waitForNextMessage: asStr(sg.waitForNextMessage, dg.waitForNextMessage),

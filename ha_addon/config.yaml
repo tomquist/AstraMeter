@@ -9,6 +9,9 @@ arch:
 url: "https://github.com/tomquist/astrameter"
 image: "ghcr.io/tomquist/astrameter-addon"
 panel_icon: "mdi:meter-electric"
+panel_title: "AstraMeter"
+ingress: true
+ingress_port: 52500
 init: false
 startup: application
 boot: auto
@@ -44,6 +47,9 @@ options:
   efficiency_rotation_interval: 900
   min_dc_output: 0
   grid_predict_trust: 0.5
+  dashboard: true
+  dashboard_allow_write: true
+  dashboard_direct_access: false
   log_level: "info"
 schema:
   power_input_alias: str
@@ -63,6 +69,9 @@ schema:
   efficiency_rotation_interval: int(1,)?
   min_dc_output: float(0,)?
   grid_predict_trust: float(0,1)?
+  dashboard: bool?
+  dashboard_allow_write: bool?
+  dashboard_direct_access: bool?
   fair_distribution: bool?
   balance_gain: float(0,1)?
   balance_deadband: int(0,)?

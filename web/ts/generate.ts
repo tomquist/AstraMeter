@@ -60,7 +60,13 @@ function generalSection(state: State): string {
   lines.push(`SKIP_POWERMETER_TEST = ${boolToIni(!!g.skipPowermeterTest)}`);
   if (g.webConfigEnabled) {
     lines.push("WEB_CONFIG_ENABLED = True");
-    if (!isBlank(g.webServerPort)) lines.push(`WEB_SERVER_PORT = ${g.webServerPort}`);
+  }
+  if (g.dashboardEnabled) {
+    lines.push("DASHBOARD_ENABLED = True");
+    if (g.dashboardAllowWrite) lines.push("DASHBOARD_ALLOW_WRITE = True");
+  }
+  if ((g.webConfigEnabled || g.dashboardEnabled) && !isBlank(g.webServerPort)) {
+    lines.push(`WEB_SERVER_PORT = ${g.webServerPort}`);
   }
   if (!isBlank(g.throttleInterval)) lines.push(`THROTTLE_INTERVAL = ${g.throttleInterval}`);
   if (!isBlank(g.waitForNextMessage)) lines.push(`WAIT_FOR_NEXT_MESSAGE = ${g.waitForNextMessage}`);
@@ -672,6 +678,12 @@ export function generateHomeAssistant(state: State): string {
   add("throttle_interval", !isBlank(g.throttleInterval) ? g.throttleInterval : tuning.THROTTLE_INTERVAL);
   add("wait_for_next_message", !isBlank(g.waitForNextMessage) ? g.waitForNextMessage : tuning.WAIT_FOR_NEXT_MESSAGE);
   add("dedupe_time_window", g.dedupeTimeWindow);
+
+  // The dashboard is on by default in the add-on, so only an explicit opt-out
+  // is worth emitting; the write flag is emitted whenever it differs from the
+  // add-on default of on.
+  if (!g.dashboardEnabled) add("dashboard", false);
+  else if (!g.dashboardAllowWrite) add("dashboard_allow_write", false);
 
   // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};

@@ -207,8 +207,42 @@ jobs:
       - name: Run the add-on container tests
         run: uv run pytest tests/test_addon_container.py -v
 
-  validate:
+  # The dashboard bundle is a COMMITTED generated artifact (neither the Docker
+  # build nor `esphome compile` has Node), so CI has to prove it still matches
+  # its source. Deliberately unfiltered and not fork-gated: `npm run check`
+  # otherwise runs only in the pages/preview workflows, both filtered to
+  # `web/**`, so a Python-only PR could land a stale bundle with green CI.
+  web:
     needs: [ lint ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      # Typecheck, unit tests, and the dashboard drift + size-budget gate.
+      - name: Check
+        working-directory: web
+        run: npm run check
+
+      - name: Show dashboard bundle size
+        working-directory: web
+        run: |
+          gz=$(gzip -9 -c ../src/astrameter/static/dashboard.html | wc -c)
+          echo "dashboard.html: $(wc -c < ../src/astrameter/static/dashboard.html) B raw, ${gz} B gzipped" >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    needs: [ lint, web ]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -490,7 +524,7 @@ jobs:
             }
 
   build:
-    needs: [ validate ]
+    needs: [ validate, web ]
     permissions:
       contents: read
       packages: write
