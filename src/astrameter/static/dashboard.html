@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>AstraMeter</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2303a9f4'/%3E%3Cpath d='M18 4 10 18h5l-1 10 8-14h-5z' fill='%23fff'/%3E%3C/svg%3E">
+<style>/* AstraMeter dashboard — styled to sit inside Home Assistant without
+ * looking like a guest.
+ *
+ * Home Assistant serves add-on panels in an iframe, and an iframe inherits
+ * none of HA's CSS custom properties. So every HA token is mirrored here
+ * with HA's own default value as the fallback: `var(--primary-color, #03a9f4)`
+ * resolves to the fallback today, and starts tracking the user's theme for
+ * free if HA ever pipes its variables through ingress.
+ *
+ * Colour never carries meaning alone — every status also has a glyph, so the
+ * page reads in greyscale and to a deuteranope.
+ */
+
+:root {
+  color-scheme: light;
+
+  --ha-primary: var(--primary-color, #03a9f4);
+  --ha-accent: var(--accent-color, #ff9800);
+  --text: var(--primary-text-color, #212121);
+  --text-dim: var(--secondary-text-color, #727272);
+  --text-faint: var(--disabled-text-color, #bdbdbd);
+  --divider: var(--divider-color, rgba(0, 0, 0, 0.12));
+  --card: var(--card-background-color, #fff);
+  --bg: var(--primary-background-color, #fafafa);
+  --bg-sunken: var(--secondary-background-color, #e5e5e5);
+  --radius: var(--ha-card-border-radius, 12px);
+
+  /* Status fills. Text never sits directly on these — see --*-fg. */
+  --ok: var(--state-icon-active-color, #43a047);
+  --warn: #ffa600;
+  --err: #db4437;
+  --idle: #8e8e8e;
+  /* Foregrounds derived to clear 4.5:1 on the card background: #ffa600 is
+   * ~2.0:1 and #43a047 ~3.4:1, so neither may be used as text. */
+  --ok-fg: #2b7430;
+  --warn-fg: #8a5a00;
+  --err-fg: #b3261e;
+
+  /* Energy semantics: import is what costs money, export is what earns. */
+  --import: #e2703a;
+  --export: #3d9970;
+  --charge: #4a7fd4;
+  --discharge: #b06fc4;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --text: var(--primary-text-color, #e1e1e1);
+    --text-dim: var(--secondary-text-color, #9b9b9b);
+    --text-faint: var(--disabled-text-color, #6f6f6f);
+    --divider: var(--divider-color, rgba(225, 225, 225, 0.12));
+    --card: var(--card-background-color, #1c1c1c);
+    --bg: var(--primary-background-color, #111);
+    --bg-sunken: var(--secondary-background-color, #202020);
+    --ok-fg: #7ac67f;
+    --warn-fg: #ffc451;
+    --err-fg: #ff8a80;
+    --shadow: none;
+  }
+}
+
+/* The explicit toggle must beat the media query in both directions, so each
+ * theme is stated as its own rule rather than relying on cascade order. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --text: #212121;
+  --text-dim: #727272;
+  --text-faint: #bdbdbd;
+  --divider: rgba(0, 0, 0, 0.12);
+  --card: #fff;
+  --bg: #fafafa;
+  --bg-sunken: #e5e5e5;
+  --ok-fg: #2b7430;
+  --warn-fg: #8a5a00;
+  --err-fg: #b3261e;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --text: #e1e1e1;
+  --text-dim: #9b9b9b;
+  --text-faint: #6f6f6f;
+  --divider: rgba(225, 225, 225, 0.12);
+  --card: #1c1c1c;
+  --bg: #111;
+  --bg-sunken: #202020;
+  --ok-fg: #7ac67f;
+  --warn-fg: #ffc451;
+  --err-fg: #ff8a80;
+  --shadow: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* HA's own density: 14px base rather than 16px. */
+  font-size: 87.5%;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  container-type: inline-size;
+  min-height: 100vh;
+}
+
+/* ── app bar ─────────────────────────────────────────────────────── */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--card);
+  border-bottom: 1px solid var(--divider);
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+
+.bar .spacer {
+  flex: 1;
+}
+
+.bar .ver {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A 2px gradient hairline is the only place the AstraMeter brand appears in
+ * the chrome; everything else uses HA neutrals so the panel reads as native. */
+.bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--export), var(--ha-primary), var(--import));
+  opacity: 0.75;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--divider);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 500;
+  padding: 11px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-current="page"] {
+  color: var(--ha-primary);
+  border-bottom-color: var(--ha-primary);
+}
+
+main {
+  padding: 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+}
+
+/* ── cards ───────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--divider);
+  padding: 14px 16px;
+}
+
+.card > h2 {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card > h2 .spacer {
+  flex: 1;
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+/* ── the balance rail ────────────────────────────────────────────── */
+
+.rail {
+  display: grid;
+  gap: 6px;
+}
+
+.rail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.rail-value {
+  font-size: 2rem;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  /* Reserve the widest plausible value so the layout never shifts when the
+   * number changes width. */
+  min-width: 7ch;
+}
+
+.rail-value.import {
+  color: var(--import);
+}
+
+.rail-value.export {
+  color: var(--export);
+}
+
+.rail-label {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.rail-track {
+  position: relative;
+  height: 34px;
+  background: var(--bg-sunken);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.rail-zero {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-faint);
+  opacity: 0.9;
+}
+
+.rail-fill {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  /* scaleX only: a compositor frame, no layout, and it settles before the
+   * next poll lands. */
+  transition: transform 180ms ease-out;
+  transform-origin: left center;
+  border-radius: 3px;
+}
+
+.rail-fill.import {
+  background: var(--import);
+}
+
+.rail-fill.export {
+  background: var(--export);
+}
+
+.rail-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Per-battery contribution bars share the rail's axis, so the picture
+ * carries the invariant: the battery bars are what pull the grid to zero. */
+.contrib {
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.contrib-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) 1fr minmax(72px, auto);
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+.contrib-name {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contrib-track {
+  position: relative;
+  height: 14px;
+  background: var(--bg-sunken);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.contrib-fill {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 2px;
+  transition: transform 180ms ease-out;
+  transform-origin: left center;
+}
+
+.contrib-fill.charge {
+  background: var(--charge);
+}
+
+.contrib-fill.discharge {
+  background: var(--discharge);
+}
+
+.contrib-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+/* ── status chips ────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.chip .glyph {
+  font-size: 0.85em;
+  line-height: 1;
+}
+
+.chip.ok {
+  color: var(--ok-fg);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.chip.warn {
+  color: var(--warn-fg);
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+}
+
+.chip.err {
+  color: var(--err-fg);
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+}
+
+/* ── key/value rows ──────────────────────────────────────────────── */
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 4px 14px;
+  font-size: 0.82rem;
+}
+
+.kv dt {
+  color: var(--text-dim);
+}
+
+.kv dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* ── battery cards ───────────────────────────────────────────────── */
+
+.batt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.batt-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.batt-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+
+.batt-figure .n {
+  font-size: 1.5rem;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  min-width: 6ch;
+}
+
+.batt-figure .n.charge {
+  color: var(--charge);
+}
+
+.batt-figure .n.discharge {
+  color: var(--discharge);
+}
+
+.meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  background: var(--ha-primary);
+  transition: transform 180ms ease-out;
+  transform-origin: left center;
+}
+
+/* ── controls ────────────────────────────────────────────────────── */
+
+button.btn {
+  appearance: none;
+  font: inherit;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--divider);
+  background: var(--card);
+  color: var(--text);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button.btn:hover:not(:disabled) {
+  background: var(--bg-sunken);
+}
+
+button.btn.primary {
+  background: var(--ha-primary);
+  border-color: var(--ha-primary);
+  color: #fff;
+}
+
+button.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.btn.sm {
+  padding: 3px 9px;
+  font-size: 0.78rem;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  min-height: 55vh;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ha-primary);
+  outline-offset: 2px;
+}
+
+label.field {
+  display: grid;
+  gap: 3px;
+  font-size: 0.8rem;
+}
+
+label.field > .name {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+label.field > .help {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+label.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+label.row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+/* ── banners ─────────────────────────────────────────────────────── */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  border: 1px solid var(--divider);
+}
+
+.banner.warn {
+  background: color-mix(in srgb, var(--warn) 14%, var(--card));
+  color: var(--warn-fg);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.banner.err {
+  background: color-mix(in srgb, var(--err) 12%, var(--card));
+  color: var(--err-fg);
+  border-color: color-mix(in srgb, var(--err) 32%, transparent);
+}
+
+.banner.info {
+  background: color-mix(in srgb, var(--ha-primary) 10%, var(--card));
+}
+
+.empty {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.empty strong {
+  display: block;
+  color: var(--text);
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+/* Offline: dim everything and let the absolute clock times in the markup do
+ * the talking. A frozen "0.4 s ago" is the worst possible staleness cue. */
+#app[data-conn="offline"] main {
+  opacity: 0.55;
+  transition: opacity 240ms;
+}
+
+/* One 1px tick on frame arrival, decaying — instead of a dot that pulses
+ * forever and animates hardest exactly when the data has stopped. */
+.pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  opacity: 0.25;
+}
+
+.pulse.beat {
+  animation: beat 1.5s ease-out;
+}
+
+@keyframes beat {
+  0% {
+    opacity: 1;
+    transform: scale(1.5);
+  }
+  100% {
+    opacity: 0.25;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Container queries, not media queries: inside ingress the iframe width is
+ * not the viewport width. */
+@container (max-width: 560px) {
+  main {
+    padding: 12px;
+  }
+
+  .rail-value {
+    font-size: 1.6rem;
+  }
+
+  .contrib-row {
+    grid-template-columns: 84px 1fr 68px;
+    gap: 7px;
+  }
+
+  .kv {
+    grid-template-columns: 1fr;
+    gap: 1px 0;
+  }
+
+  .kv dd {
+    margin-bottom: 6px;
+  }
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>"use strict";(()=>{function o(e,t=null,...n){let r=[];for(let i of n)Array.isArray(i)?r.push(...i):r.push(i);let s=t||{};return{tag:e,props:s,children:r,key:s.key}}function Ae(e){return e.startsWith("on")&&e.length>2}function ne(e,t,n){if(t!=="key"){if(Ae(t)){let r=t.slice(2).toLowerCase(),s=e["__"+t];s&&e.removeEventListener(r,s),typeof n=="function"&&(e.addEventListener(r,n),e["__"+t]=n);return}if(t==="value"){let r=e;document.activeElement!==r&&r.value!==String(n)&&(r.value=n==null?"":String(n));return}if(t==="checked"){e.checked=!!n;return}n==null||n===!1?e.removeAttribute(t):n===!0?e.setAttribute(t,""):e.getAttribute(t)!==String(n)&&e.setAttribute(t,String(n))}}function W(e){if(e==null||e===!1)return document.createComment("");if(typeof e=="string"||typeof e=="number")return document.createTextNode(String(e));let t=document.createElement(e.tag);for(let[n,r]of Object.entries(e.props))ne(t,n,r);for(let n of e.children)t.appendChild(W(n));return t}function U(e,t){let n=t.filter(r=>r!=null&&r!==!1);for(let r=0;r<n.length;r++){let s=e.childNodes[r],i=n[r];if(!s){e.appendChild(W(i));continue}Me(e,s,i,r)}for(;e.childNodes.length>n.length;)e.removeChild(e.lastChild)}function Me(e,t,n,r){if(typeof n=="string"||typeof n=="number"){if(t.nodeType===Node.TEXT_NODE){let l=String(n);t.textContent!==l&&(t.textContent=l)}else e.replaceChild(W(n),t);return}let i=n;if(t.nodeType!==Node.ELEMENT_NODE||t.tagName.toLowerCase()!==i.tag){e.replaceChild(W(i),t);return}let a=t,c=new Set(Object.keys(i.props));for(let l of Array.from(a.attributes))c.has(l.name)||a.removeAttribute(l.name);for(let[l,h]of Object.entries(i.props))ne(a,l,h);U(a,i.children)}var E=class extends Error{constructor(t,n){super(t),this.status=n}};async function C(e,t){var a;let n={};t!=null&&t.etag&&(n["If-None-Match"]=t.etag),t!=null&&t.body&&(n["Content-Type"]="application/json");let r=await fetch(e,{...t,headers:n});if(r.status===304)return{data:null,etag:(a=t==null?void 0:t.etag)!=null?a:null,status:304};let s=await r.text(),i=null;if(s)try{i=JSON.parse(s)}catch{i=null}if(!r.ok){let c=i&&typeof i.error=="string"&&i.error||`Request failed (${r.status})`;throw new E(c,r.status)}return{data:i,etag:r.headers.get("ETag"),status:r.status}}var F=class{constructor(){this.etag=null}async fetchStatus(){var r;let{data:t,etag:n}=await C("api/status",{etag:(r=this.etag)!=null?r:void 0});return t===null?null:(this.etag=n,t)}async controlConsumer(t,n,r,s){await C("api/control/consumer",{method:"POST",body:JSON.stringify({device_id:t,consumer_id:n,field:r,value:s})})}async controlDevice(t,n,r){await C("api/control/device",{method:"POST",body:JSON.stringify({device_id:t,field:n,value:r})})}async getConfig(){let{data:t}=await C("api/config");return t!=null?t:{sections:{},order:[]}}async saveConfig(t,n){await C("api/config",{method:"POST",body:JSON.stringify({sections:t,order:n})})}async getAddonOptions(){let{data:t}=await C("api/addon/options");return t!=null?t:{options:{},schema:{}}}async saveAddonOptions(t,n){await C("api/addon/options",{method:"POST",body:JSON.stringify({options:t,restart:n})})}async switchConfigMode(t,n){await C("api/config-mode",{method:"POST",body:JSON.stringify({mode:t,filename:n})})}async restart(){await C("api/restart",{method:"POST"})}};function re(){return{tab:"overview",snapshot:null,connection:"connecting",failures:0,lastFrameAt:null,error:null,notice:null,busy:{}}}var ke={ok:"\u25CF",warn:"\u25B2",err:"\u2715",idle:"\u25CB"};function f(e,t){return{severity:e,glyph:ke[e],label:t}}function oe(e){if(e.connection==="offline")return f("err","Disconnected");if(!e.snapshot)return f("idle","Connecting");let t=e.snapshot.devices||[];if(t.length===0)return f("warn","Starting up");if((e.snapshot.powermeters||[]).some(s=>s.online===!1||s.last_read_ok===!1)||t.some(s=>{var i;return(i=s.grid)==null?void 0:i.meter_failed}))return f("err","Meter unavailable");let r=B(e.snapshot);return r.length===0?f("warn","No batteries reporting"):r.some(s=>s.expired)?f("warn","Battery missing"):f("ok","Steering")}function B(e){return e?(e.devices||[]).flatMap(t=>t.consumers||[]):[]}function L(e){return e?(e.devices||[]).filter(t=>t.kind==="ct002"):[]}function q(e){let t=L(e).find(s=>s.grid),n=t==null?void 0:t.grid;if(!n)return;if(n.grid_total_w!=null)return n.grid_total_w;let r=[n.l1_w,n.l2_w,n.l3_w].filter(s=>s!=null);return r.length?r.reduce((s,i)=>s+i,0):void 0}function z(e){let t=e.reported_power_w;if(t!=null)return-t}function ie(e,t){let n=[Math.abs(e!=null?e:0)];for(let i of t){let a=z(i);a!=null&&n.push(Math.abs(a))}let r=Math.max(...n,1),s=r<=200?100:r<=1e3?250:r<=3e3?500:1e3;return Math.ceil(r/s)*s}function se(e){var n,r;if(e.expired)return f("err","Not reporting");if(e.active===!1)return f("idle","Disabled");if(e.manual_enabled)return f("warn","Manual");let t=(n=e.balancer)==null?void 0:n.saturation;return t!=null&&t>=.85?f("warn","Saturated"):(r=e.balancer)!=null&&r.deprioritized?f("idle","Parked"):f("ok","Auto")}function ae(e){return e.online===!1?f("err","Offline"):e.last_read_ok===!1?f("err","Read failed"):e.last_read_age_s!=null&&e.last_read_age_s>60?f("warn","Stale"):e.online==null&&e.last_read_ok==null?f("idle","Idle"):f("ok","Live")}function le(e){var n,r;let t=(r=(n=e==null?void 0:e.capabilities)==null?void 0:n.poll_interval_ms)!=null?r:2e3;return Math.min(3e4,Math.max(500,t))}function j(e){if(e==null||!Number.isFinite(e))return null;let t=Math.round(e);return Math.abs(t)>=1e3?`${(t/1e3).toFixed(2)} kW`:`${t} W`}function v(e){if(e==null||!Number.isFinite(e))return null;let t=j(Math.abs(e));return t===null?null:Math.round(e)===0?t:`${e<0?"\u2212":"+"}${t}`}function J(e,t=0){return e==null||!Number.isFinite(e)?null:`${(e*100).toFixed(t)}%`}function X(e){return e==null||!Number.isFinite(e)?null:e<1?`${e.toFixed(1)} s`:e<90?`${Math.round(e)} s`:e<5400?`${Math.round(e/60)} min`:`${(e/3600).toFixed(1)} h`}function D(e){let t=X(e);return t===null?null:`${t} ago`}function G(e){if(!e)return null;let t=new Date(e);return Number.isNaN(t.getTime())?null:t.toLocaleTimeString(void 0,{hour:"2-digit",minute:"2-digit",second:"2-digit"})}function ce(e){if(e==null||!Number.isFinite(e))return null;let t=Math.floor(e),n=Math.floor(t/86400),r=Math.floor(t%86400/3600),s=Math.floor(t%3600/60);return n?`${n}d ${r}h`:r?`${r}h ${s}m`:s?`${s}m`:`${t}s`}function ue(e){return e?e==="D"?"All phases":e==="0"?"Unassigned":`Phase ${e}`:null}function Q(e){if(!e)return null;let t=e.replace(/[^0-9a-fA-F]/g,"");return t.length!==12?e:(t.toUpperCase().match(/.{2}/g)||[]).join(":")}function Y(e,t){let n=(e||"").replace(/[^0-9a-fA-F]/g,"").slice(-4),r=(t||"").trim();return r&&n?`${r} \xB7${n.toUpperCase()}`:n?`Battery \xB7${n.toUpperCase()}`:"Battery"}function pe(e){let t=(e||"str").trim(),n=t.endsWith("?"),r=n?t.slice(0,-1):t,s=/^([a-z_]+)(?:\((.*)\))?$/.exec(r);if(!s)return{type:"str",optional:n};let i=s[1],a=s[2];if(a==null)return{type:i,optional:n};if(i==="list"||i==="match")return{type:i,options:a.split("|").filter(Boolean),optional:n};let[c,l]=a.split(",");return{type:i,min:c?Number(c):void 0,max:l?Number(l):void 0,optional:n}}var O="Grid measurement",de="Emulated meter",P="Battery control",p="Fine tuning",y="Advanced",K={power_input_alias:{label:"Grid power sensor",group:O,help:"The Home Assistant entity holding your grid power in watts."},power_output_alias:{label:"Export power sensor",group:O,help:"Only if import and export are two separate sensors."},power_offset:{label:"Power offset (W)",group:O},power_multiplier:{label:"Power multiplier",group:O},throttle_interval:{label:"Throttle interval (s)",group:O,help:"Minimum time between meter reads. 0 reads as fast as the batteries poll."},wait_for_next_message:{label:"Wait for a fresh reading",group:O,help:"Answer a battery only once a new meter value has arrived."},device_types:{label:"Emulated device",group:de,help:"Which meter AstraMeter pretends to be. Use ct002 for Marstek batteries."},ct_mac:{label:"CT MAC address",group:de},active_control:{label:"Active control",group:P,help:"Let AstraMeter compute each battery's target instead of relaying the raw total."},fair_distribution:{label:"Share load between batteries",group:P},min_efficient_power:{label:"Minimum efficient power (W)",group:P,help:"Below this, concentrate on fewer batteries instead of running them all inefficiently."},efficiency_rotation_interval:{label:"Rotation interval (s)",group:P,help:"How often the batteries swap who takes the load."},min_dc_output:{label:"Minimum DC output (W)",group:P},grid_predict_trust:{label:"Grid prediction trust",group:P,help:"0 trusts the meter only; 1 trusts the model. 0.5 is a good default."},dashboard:{label:"Show the dashboard",group:y,help:"Opens from the Home Assistant sidebar."},dashboard_allow_write:{label:"Allow changes from the dashboard",group:y,help:"Lets the dashboard edit this configuration and control batteries."},dashboard_direct_access:{label:"Allow access outside Home Assistant",group:y,help:"Exposes the dashboard on port 52500 with no authentication. Trusted networks only."},custom_config:{label:"Custom config file",group:y,help:"Filename in /config to use instead of these options."},log_level:{label:"Log level",group:y},mqtt_uri:{label:"MQTT broker URL",group:y},marstek_auto_register_ct_device:{label:"Register a CT with Marstek",group:y},marstek_mailbox:{label:"Marstek account e-mail",group:y},marstek_password:{label:"Marstek password",group:y},cloud_reporting:{label:"Report to the Marstek cloud",group:y},cloud_reporting_host:{label:"Cloud host",group:y},cloud_reporting_interval:{label:"Cloud interval (s)",group:y},balance_gain:{label:"Balance gain",group:p},balance_deadband:{label:"Balance deadband (W)",group:p},max_correction_per_step:{label:"Max correction per step (W)",group:p},error_boost_threshold:{label:"Error boost threshold (W)",group:p},error_boost_max:{label:"Error boost max",group:p},error_reduce_threshold:{label:"Error reduce threshold (W)",group:p},max_target_step:{label:"Max target step (W)",group:p},pace_base_step:{label:"Pace base step (W)",group:p},pace_max_step:{label:"Pace max step (W)",group:p},osc_damp_max:{label:"Oscillation damping max",group:p},osc_damp_alpha:{label:"Oscillation damping alpha",group:p},osc_damp_decay:{label:"Oscillation damping decay",group:p},osc_damp_threshold:{label:"Oscillation threshold (W)",group:p},concentrate_deadband:{label:"Concentrate deadband (W)",group:p},import_trim_w:{label:"Import trim (W)",group:p},dedupe_time_window:{label:"Dedupe window (s)",group:p},smooth_target_alpha:{label:"Target smoothing",group:p},max_smooth_step:{label:"Max smoothing step (W)",group:p},deadband:{label:"Deadband (W)",group:p},hampel_window:{label:"Spike filter window",group:p},hampel_n_sigma:{label:"Spike filter sigma",group:p},hampel_min_threshold:{label:"Spike filter threshold (W)",group:p},pid_kp:{label:"PID proportional",group:p},pid_ki:{label:"PID integral",group:p},pid_kd:{label:"PID derivative",group:p},pid_output_max:{label:"PID output max",group:p},pid_mode:{label:"PID mode",group:p}};function ge(){return{loading:!1,options:{},schema:{},iniText:"",iniLoaded:!1,dirty:!1,saving:!1,message:null,error:null}}function R(e,...t){return o("section",{class:"card"},e?o("h2",null,e):null,...t)}function fe(e,t,n){var a,c,l;let r=(a=e.snapshot)==null?void 0:a.capabilities,s=(c=r==null?void 0:r.config_mode)!=null?c:"standalone",i=[Ne(s,(l=r==null?void 0:r.ha_options)!=null?l:!1,n)];return t.error&&i.unshift(o("div",{class:"banner err"},t.error)),t.message&&i.unshift(o("div",{class:"banner info"},t.message)),r!=null&&r.controls?(s==="ha_simple"?i.push($e(t,n)):i.push(Ve(t,n)),i):(i.push(o("div",{class:"banner warn"},"This dashboard is read-only. Turn on the add-on's \u201CAllow changes from the dashboard\u201D option to edit your configuration here.")),i)}function Ne(e,t,n){let r=e==="ha_simple",s=e.startsWith("ha_");return R("Configuration mode",o("p",{style:"margin:0 0 10px"},r?"Guided setup \u2014 AstraMeter is configured from the add-on options, and rewrites its config file on every start.":s?"Config file \u2014 AstraMeter reads a config.ini you control, and the add-on options are ignored.":"Config file \u2014 AstraMeter reads the config.ini mounted into this container."),s&&t?o("div",{style:"display:flex;gap:8px;flex-wrap:wrap;align-items:center"},o("button",{class:"btn sm",onclick:()=>n.switchMode(r?"file":"options")},r?"Switch to a config file":"Switch to guided setup"),o("span",{class:"help",style:"color:var(--text-faint);font-size:.75rem"},r?"Copies what is running now into /config/astrameter.ini, then restarts.":"Goes back to the add-on options. Your config file is kept, not deleted.")):null)}function $e(e,t){var i,a;if(e.loading)return R(null,o("div",{class:"empty"},"Loading add-on options\u2026"));let n=Object.keys(e.schema);if(!n.length)return R(null,o("div",{class:"empty"},o("strong",null,"Add-on options unavailable"),"AstraMeter could not reach the Home Assistant Supervisor."));let r=new Map;for(let c of n){let l=(a=(i=K[c])==null?void 0:i.group)!=null?a:"Other";r.has(l)||r.set(l,[]),r.get(l).push(c)}let s=[];for(let[c,l]of r)s.push(o("div",{style:"margin-bottom:18px"},o("h3",{style:"font-size:.85rem;margin:0 0 8px;color:var(--text-dim)"},c),o("div",{class:"fields"},...l.map(h=>Ee(h,e.schema[h],e.options[h],t)))));return R("Guided setup",...s,me(e,t,"supervisor"))}function Ee(e,t,n,r){var c;let s=pe(t),i=K[e],a=(c=i==null?void 0:i.label)!=null?c:Re(e);return s.type==="bool"?o("label",{class:"row"},o("input",{type:"checkbox",checked:!!n,onchange:l=>r.editOption(e,l.target.checked)}),o("span",null,a)):o("label",{class:"field"},o("span",{class:"name"},a),s.type==="list"?o("select",{onchange:l=>r.editOption(e,l.target.value)},...(s.options||[]).map(l=>o("option",{value:l,selected:String(n)===l},l))):o("input",{type:Oe(s),value:n==null?"":String(n),min:s.min,max:s.max,step:s.type==="float"?"any":void 0,placeholder:s.optional?"optional":"",oninput:l=>r.editOption(e,Pe(s,l.target.value))}),i!=null&&i.help?o("span",{class:"help"},i.help):null)}function Oe(e){return e.type==="password"?"password":e.type==="int"||e.type==="float"||e.type==="port"?"number":"text"}function Pe(e,t){if(t==="")return"";if(e.type==="int"||e.type==="port"){let n=parseInt(t,10);return Number.isNaN(n)?t:n}if(e.type==="float"){let n=parseFloat(t);return Number.isNaN(n)?t:n}return t}function Re(e){return e.split("_").map(t=>t.charAt(0).toUpperCase()+t.slice(1)).join(" ")}function Ve(e,t){return e.iniLoaded?R("config.ini",o("p",{style:"margin:0 0 10px;color:var(--text-dim);font-size:.8rem"},"Passwords and tokens are shown as ",o("code",null,"\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"),". Leave them as-is to keep the stored value."),o("textarea",{spellcheck:"false",value:e.iniText,"aria-label":"Configuration file contents",oninput:n=>t.editIni(n.target.value)}),me(e,t,"process")):R(null,o("div",{class:"empty"},"Loading config.ini\u2026"))}function me(e,t,n){return o("div",{style:"display:flex;gap:10px;align-items:center;margin-top:14px;padding-top:12px;border-top:1px solid var(--divider)"},o("button",{class:"btn primary",disabled:!e.dirty||e.saving,onclick:()=>t.saveConfig(!0)},e.saving?"Saving\u2026":"Save and restart"),o("button",{class:"btn",disabled:!e.dirty||e.saving,onclick:()=>t.saveConfig(!1)},"Save only"),o("span",{style:"color:var(--text-dim);font-size:.78rem"},e.dirty?n==="supervisor"?"Saving restarts the add-on \u2014 this can take a minute.":"Saving reloads AstraMeter; the dashboard stays up.":"No unsaved changes."))}var Le=[{id:"overview",label:"Overview"},{id:"batteries",label:"Batteries"},{id:"sources",label:"Power source"},{id:"config",label:"Configuration"},{id:"diagnostics",label:"Diagnostics"}];function I(e){return o("span",{class:`chip ${e.severity}`},o("span",{class:"glyph","aria-hidden":"true"},e.glyph),e.label)}function u(e,t){return t==null?[]:[o("dt",null,e),o("dd",null,t)]}function T(e,...t){return o("section",{class:"card"},e?o("h2",null,e):null,...t)}function De(e,t){var A,w,M,k;let n=e.snapshot,r=q(n),s=B(n).filter(b=>!b.expired),i=ie(r,s),a=(r!=null?r:0)>0,c=r==null?"":a?"import":"export",l=(b,$)=>{if(b==null)return"transform:scaleX(0)";let N=Math.min(Math.abs(b)/i,1);return($?b>0:b<0)?`left:50%;right:auto;width:50%;transform:scaleX(${N.toFixed(4)});transform-origin:left center`:`right:50%;left:auto;width:50%;transform:scaleX(${N.toFixed(4)});transform-origin:right center`},h=r==null?o("span",{class:"rail-value"},"\u2014"):o("span",{class:`rail-value ${c}`},(A=v(r))!=null?A:"\u2014");return T(null,o("div",{class:"rail"},o("div",{class:"rail-head"},h,o("span",{class:"rail-label"},r==null?"Waiting for a grid reading":a?"importing from the grid":"exporting to the grid")),o("div",{class:"rail-track",role:"img","aria-label":Ie(r)},o("div",{class:"rail-zero"}),r==null?null:o("div",{class:`rail-fill ${c}`,style:l(r,!0)})),o("div",{class:"rail-scale"},o("span",null,`\u25C0 export ${(w=j(i))!=null?w:""}`),o("span",null,"0"),o("span",null,`import ${(M=j(i))!=null?M:""} \u25B6`)),s.length?o("div",{class:"contrib"},...s.map(b=>He(b,l))):null,t?o("div",{class:"rail-scale"},o("span",null,`Last update ${(k=G(n==null?void 0:n.generated_at))!=null?k:"unknown"}`)):null))}function Ie(e){return e==null?"Grid power unknown":e>0?`Importing ${Math.round(e)} watts from the grid`:`Exporting ${Math.round(Math.abs(e))} watts to the grid`}function He(e,t){var s,i;let n=z(e),r=((s=e.reported_power_w)!=null?s:0)<0;return o("div",{class:"contrib-row"},o("span",{class:"contrib-name"},Y(e.consumer_id,e.device_type)),o("div",{class:"contrib-track"},o("div",{class:`contrib-fill ${r?"charge":"discharge"}`,style:t(n,!0)})),o("span",{class:"contrib-val"},(i=v(e.reported_power_w))!=null?i:"\u2014"))}function We(e,t){let n=e.snapshot;if(!n)return[he()];let r=L(n),s=B(n);return[De(e,t),o("div",{class:"grid"},...r.map(i=>Fe(i,t)),...(n.powermeters||[]).map(i=>ve(i,t))),s.length===0?be():null]}function he(){return T(null,o("div",{class:"empty"},o("strong",null,"Connecting to AstraMeter\u2026"),"Reading the first status snapshot."))}function be(){return T(null,o("div",{class:"empty"},o("strong",null,"No batteries have reported yet"),"AstraMeter is listening. In the Marstek app, set the battery's mode to Automatic and select the AstraMeter CT as its meter."))}function Fe(e,t){var s,i;let n=e.grid,r=(e.consumers||[]).filter(a=>!a.expired).length;return T(e.ct_type?`${e.ct_type} emulator`:"Meter emulator",o("div",{class:"batt-head"},I(e.running===!1?{severity:"err",glyph:"\u2715",label:"Stopped"}:(s=e.control)!=null&&s.active_control?{severity:"ok",glyph:"\u25CF",label:"Active control"}:{severity:"idle",glyph:"\u25CE",label:"Relay mode"}),o("span",{class:"spacer",style:"flex:1"}),o("span",{class:"mono"},`UDP ${(i=e.udp_port)!=null?i:"\u2014"}`)),o("dl",{class:"kv"},...u("Batteries",`${r}`),...u("Phase A",v(n==null?void 0:n.l1_w)),...u("Phase B",v(n==null?void 0:n.l2_w)),...u("Phase C",v(n==null?void 0:n.l3_w)),...u(t?"Reading at":"Reading",t?G(n==null?void 0:n.sample_at):D(Be(n==null?void 0:n.sample_at))),...u("CT MAC",Q(e.ct_mac))))}function Be(e){if(!e)return;let t=new Date(e).getTime();if(!Number.isNaN(t))return Math.max(0,(Date.now()-t)/1e3)}function ve(e,t){let n=ae(e);return T(e.name?`Power source \xB7 ${e.name}`:"Power source",o("div",{class:"batt-head"},I(n)),o("dl",{class:"kv"},...u("Reads via",e.kind),...u("Total",v(e.last_total_w)),...u(t?"Last read at":"Last read",t?null:D(e.last_read_age_s)),...u("Filters",(e.pipeline||[]).join(" \u2192 ")||null)))}function je(e,t){var a;let n=e.snapshot,r=L(n);if(!r.some(c=>(c.consumers||[]).length>0))return[be()];let i=!!((a=n==null?void 0:n.capabilities)!=null&&a.controls);return r.flatMap(c=>[o("div",{class:"grid"},...(c.consumers||[]).map(l=>Ge(c,l,i,e,t)))])}function Ge(e,t,n,r,s){var M,k,b,$,N;let i=se(t),a=t.reported_power_w,c=(a!=null?a:0)<0,l=e.device_id||"",h=t.consumer_id||"",A=S=>!!r.busy[`${h}:${S}`],w=(M=t.balancer)==null?void 0:M.saturation;return o("section",{class:"card"},o("div",{class:"batt-head"},o("h3",null,Y(t.consumer_id,t.device_type)),o("span",{style:"flex:1"}),I(i)),o("div",{class:"mono"},(k=Q(t.consumer_id))!=null?k:""),o("div",{class:"batt-figure"},o("span",{class:`n ${c?"charge":"discharge"}`},(b=v(a))!=null?b:"\u2014"),o("span",{class:"rail-label"},a==null?"no report":c?"charging":"discharging")),o("dl",{class:"kv"},...u("Phase",ue(t.phase)),...u("Target",v(($=t.balancer)==null?void 0:$.last_target_w)),...u("Last seen",D(t.last_seen_age_s)),...u("Polls every",X(t.poll_interval_s)),...u("Distribution weight",Ue(t.distribution_weight))),w==null?null:o("div",{style:"margin-top:10px"},o("div",{class:"rail-scale"},o("span",null,"Saturation"),o("span",null,(N=J(w))!=null?N:"")),o("div",{class:"meter"},o("span",{style:`transform:scaleX(${Math.min(w,1).toFixed(3)})`}))),n?o("div",{style:"margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"},o("button",{class:"btn sm",disabled:A("active"),onclick:()=>{var S;return s.setConsumer(l,h,"active",!((S=t.active)==null||S))}},t.active===!1?"Enable":"Disable"),t.manual_enabled?o("button",{class:"btn sm",disabled:A("auto_target"),onclick:()=>s.setConsumer(l,h,"auto_target",!0)},"Return to automatic"):null):null)}function Ue(e){return e==null?null:e===1?"1.0 (neutral)":e.toFixed(2)}function qe(e,t){var r;let n=((r=e.snapshot)==null?void 0:r.powermeters)||[];return n.length?[o("div",{class:"grid"},...n.map(s=>ve(s,t)))]:[T(null,o("div",{class:"empty"},o("strong",null,"No power source configured"),"AstraMeter needs a meter to read grid power from."))]}function ze(e){var a,c,l,h,A,w,M,k,b,$,N;let t=e.snapshot;if(!t)return[he()];let n=t.service||{},r=[T("Service",o("dl",{class:"kv"},...u("Version",n.version),...u("Runtime",n.runtime),...u("Uptime",ce(t.uptime_s)),...u("Config file",n.config_path),...u("Config mode",t.capabilities.config_mode),...u("Log level",n.log_level),...u("Commit",(a=n.git_commit)==null?void 0:a.slice(0,12))))];for(let S of L(t)){let x=S.balancer;x&&r.push(T(`Balancer \xB7 ${S.device_id||S.ct_type||"device"}`,o("dl",{class:"kv"},...u("Predicted grid",v((c=x.predictor)==null?void 0:c.grid_estimate_w)),...u("Prediction trust",J((l=x.predictor)==null?void 0:l.trust)),...u("Pool output",v((h=x.predictor)==null?void 0:h.pool_output_w)),...u("Import trim",(A=x.import_trim)!=null&&A.engaged?"engaged":"idle"),...u("Demand average",v((w=x.efficiency)==null?void 0:w.demand_ema_w)),...u("Efficiency rotation",x.efficiency_rotation_enabled?"enabled":"disabled"),...u("Last rotation",D((M=x.efficiency)==null?void 0:M.last_rotation_age_s)),...u("Probing",(b=(k=x.probe)==null?void 0:k.candidate_id)!=null?b:null))))}let i=(t.integrations||{}).mqtt_insights;return i&&r.push(T("MQTT Insights",o("div",{class:"batt-head"},I(i.connected?{severity:"ok",glyph:"\u25CF",label:"Connected"}:{severity:"err",glyph:"\u2715",label:"Disconnected"})),o("dl",{class:"kv"},...u("Broker",i.broker?`${i.broker}:${($=i.port)!=null?$:""}`:null),...u("Base topic",i.base_topic),...u("Discovery",i.ha_discovery?"enabled":"disabled"),...u("Queue depth",(N=i.queue_depth)==null?void 0:N.toString())))),[o("div",{class:"grid"},...r)]}function ye(e,t,n){var c;let r=e.connection==="offline",s=oe(e),i=e.snapshot,a=e.tab==="overview"?We(e,r):e.tab==="batteries"?je(e,t):e.tab==="sources"?qe(e,r):e.tab==="config"?fe(e,n,t):ze(e);return[o("header",{class:"bar"},o("h1",null,"AstraMeter"),I(s),o("span",{class:"spacer"}),(c=i==null?void 0:i.service)!=null&&c.version?o("span",{class:"ver"},`v${i.service.version}`):null,o("button",{class:"btn sm",onclick:()=>t.toggleTheme(),title:"Switch between light, dark and automatic"},"Theme")),o("nav",{class:"tabs"},...Le.map(l=>o("button",{class:"tab","aria-current":e.tab===l.id?"page":!1,onclick:()=>t.selectTab(l.id)},l.label))),o("main",null,r?Je(e):null,e.error?o("div",{class:"banner err"},e.error):null,e.notice?o("div",{class:"banner info"},e.notice):null,...a),o("div",{class:"sr-only",role:"status","aria-live":"polite"},s.label)]}function Je(e){var n;let t=G((n=e.snapshot)==null?void 0:n.generated_at);return o("div",{class:"banner err"},o("span",{"aria-hidden":"true"},"\u2715"),t?`Lost contact with AstraMeter. Showing the last reading from ${t}.`:"Lost contact with AstraMeter. Retrying\u2026")}function _e(e){let t=q(e),n=v(t);return n?`${n} \xB7 AstraMeter`:"AstraMeter"}var Se="astrameter.theme",Z=["auto","light","dark"],g=re(),d=ge(),_=new F,ee,te;function xe(e){e==="auto"?document.documentElement.removeAttribute("data-theme"):document.documentElement.setAttribute("data-theme",e)}function Ce(){try{return localStorage.getItem(Se)||"auto"}catch{return"auto"}}var Te={selectTab(e){g.tab=e,location.hash=`#/${e}`,e==="config"&&Te.loadConfig(),m()},toggleTheme(){let e=Z[(Z.indexOf(Ce())+1)%Z.length];try{localStorage.setItem(Se,e)}catch{}xe(e)},async setConsumer(e,t,n,r){let s=`${t}:${n}`;g.busy[s]=!0,m();try{await _.controlConsumer(e,t,n,r),await H()}catch(i){g.error=V(i)}finally{delete g.busy[s],m()}},async setDevice(e,t,n){try{await _.controlDevice(e,t,n),await H()}catch(r){g.error=V(r),m()}},async loadConfig(){var t,n;let e=(n=(t=g.snapshot)==null?void 0:t.capabilities)==null?void 0:n.config_mode;if(!d.loading){d.loading=!0,d.error=null,m();try{if(e==="ha_simple"){let r=await _.getAddonOptions();d.options=r.options||{},d.schema=r.schema||{}}else{let r=await _.getConfig();d.iniText=Xe(r.sections,r.order),d.iniLoaded=!0}d.dirty=!1}catch(r){d.error=V(r)}finally{d.loading=!1,m()}}},editOption(e,t){d.options[e]=t,d.dirty=!0,d.message=null,m()},editIni(e){d.iniText=e,d.dirty=!0,d.message=null,m()},async saveConfig(e){var t,n;d.saving=!0,d.error=null,d.message=null,m();try{if(((n=(t=g.snapshot)==null?void 0:t.capabilities)==null?void 0:n.config_mode)==="ha_simple")await _.saveAddonOptions(d.options,e),d.message=e?"Saved. The add-on is restarting \u2014 this can take a minute.":"Saved. Restart the add-on to apply.";else{let{sections:s,order:i}=Qe(d.iniText);await _.saveConfig(s,i),e&&await _.restart(),d.message=e?"Saved. AstraMeter is reloading.":"Saved. Restart to apply."}d.dirty=!1}catch(r){d.error=V(r)}finally{d.saving=!1,m()}},async switchMode(e){d.saving=!0,d.error=null,m();try{await _.switchConfigMode(e),d.message="Configuration mode changed. The add-on is restarting \u2014 this can take a minute."}catch(t){d.error=V(t)}finally{d.saving=!1,m()}},async restart(){try{await _.restart(),d.message="Restarting\u2026"}catch(e){d.error=V(e)}m()}};function V(e){return e instanceof E||e instanceof Error?e.message:String(e)}function Xe(e,t){return[...t,...Object.keys(e).filter(r=>!t.includes(r))].map(r=>{let s=e[r]||{},i=Object.entries(s).map(([a,c])=>`${a} = ${c}`).join(`
+`);return`[${r}]
+${i}`}).join(`
+
+`).concat(`
+`)}function Qe(e){let t={},n=[],r=null;for(let s of e.split(/\r?\n/)){let i=s.trim();if(!i||i.startsWith("#")||i.startsWith(";"))continue;let a=/^\[(.+)\]$/.exec(i);if(a){r=a[1].trim(),t[r]||(t[r]={},n.push(r));continue}if(!r)continue;let c=i.indexOf("=");c!==-1&&(t[r][i.slice(0,c).trim()]=i.slice(c+1).trim())}return{sections:t,order:n}}async function H(){try{let e=await _.fetchStatus();e&&(g.snapshot=e,g.lastFrameAt=Date.now(),Ke()),g.connection="live",g.failures=0,g.error=null}catch(e){g.failures+=1,g.failures>=2&&(g.connection="offline"),e instanceof E&&e.status===403&&(g.error="This dashboard is not reachable from here. Open it from the Home Assistant sidebar.")}m(),Ye()}function Ye(){window.clearTimeout(te);let e=le(g.snapshot),t=g.connection==="offline"?Math.min(e*4,1e4):e;te=window.setTimeout(H,t)}function Ke(){let e=document.getElementById("pulse");e&&(e.classList.remove("beat"),e.offsetWidth,e.classList.add("beat"))}function m(){ee.dataset.conn=g.connection,U(ee,ye(g,Te,d));let e=_e(g.snapshot);document.title!==e&&(document.title=e)}function we(){let e=location.hash.replace(/^#\/?/,"");return["overview","batteries","sources","config","diagnostics"].includes(e)?e:"overview"}function Ze(e,t){ee=e,t&&(_=t),xe(Ce()),g.tab=we(),window.addEventListener("hashchange",()=>{g.tab=we(),m()}),document.addEventListener("visibilitychange",()=>{document.visibilityState==="visible"?H():window.clearTimeout(te)}),m(),H()}if(typeof document!="undefined"){let e=document.getElementById("app");e&&Ze(e)}})();
+</script>
+</body>
+</html>

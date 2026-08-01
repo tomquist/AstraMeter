@@ -1,0 +1,697 @@
+/* AstraMeter dashboard — styled to sit inside Home Assistant without
+ * looking like a guest.
+ *
+ * Home Assistant serves add-on panels in an iframe, and an iframe inherits
+ * none of HA's CSS custom properties. So every HA token is mirrored here
+ * with HA's own default value as the fallback: `var(--primary-color, #03a9f4)`
+ * resolves to the fallback today, and starts tracking the user's theme for
+ * free if HA ever pipes its variables through ingress.
+ *
+ * Colour never carries meaning alone — every status also has a glyph, so the
+ * page reads in greyscale and to a deuteranope.
+ */
+
+:root {
+  color-scheme: light;
+
+  --ha-primary: var(--primary-color, #03a9f4);
+  --ha-accent: var(--accent-color, #ff9800);
+  --text: var(--primary-text-color, #212121);
+  --text-dim: var(--secondary-text-color, #727272);
+  --text-faint: var(--disabled-text-color, #bdbdbd);
+  --divider: var(--divider-color, rgba(0, 0, 0, 0.12));
+  --card: var(--card-background-color, #fff);
+  --bg: var(--primary-background-color, #fafafa);
+  --bg-sunken: var(--secondary-background-color, #e5e5e5);
+  --radius: var(--ha-card-border-radius, 12px);
+
+  /* Status fills. Text never sits directly on these — see --*-fg. */
+  --ok: var(--state-icon-active-color, #43a047);
+  --warn: #ffa600;
+  --err: #db4437;
+  --idle: #8e8e8e;
+  /* Foregrounds derived to clear 4.5:1 on the card background: #ffa600 is
+   * ~2.0:1 and #43a047 ~3.4:1, so neither may be used as text. */
+  --ok-fg: #2b7430;
+  --warn-fg: #8a5a00;
+  --err-fg: #b3261e;
+
+  /* Energy semantics: import is what costs money, export is what earns. */
+  --import: #e2703a;
+  --export: #3d9970;
+  --charge: #4a7fd4;
+  --discharge: #b06fc4;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --text: var(--primary-text-color, #e1e1e1);
+    --text-dim: var(--secondary-text-color, #9b9b9b);
+    --text-faint: var(--disabled-text-color, #6f6f6f);
+    --divider: var(--divider-color, rgba(225, 225, 225, 0.12));
+    --card: var(--card-background-color, #1c1c1c);
+    --bg: var(--primary-background-color, #111);
+    --bg-sunken: var(--secondary-background-color, #202020);
+    --ok-fg: #7ac67f;
+    --warn-fg: #ffc451;
+    --err-fg: #ff8a80;
+    --shadow: none;
+  }
+}
+
+/* The explicit toggle must beat the media query in both directions, so each
+ * theme is stated as its own rule rather than relying on cascade order. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --text: #212121;
+  --text-dim: #727272;
+  --text-faint: #bdbdbd;
+  --divider: rgba(0, 0, 0, 0.12);
+  --card: #fff;
+  --bg: #fafafa;
+  --bg-sunken: #e5e5e5;
+  --ok-fg: #2b7430;
+  --warn-fg: #8a5a00;
+  --err-fg: #b3261e;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --text: #e1e1e1;
+  --text-dim: #9b9b9b;
+  --text-faint: #6f6f6f;
+  --divider: rgba(225, 225, 225, 0.12);
+  --card: #1c1c1c;
+  --bg: #111;
+  --bg-sunken: #202020;
+  --ok-fg: #7ac67f;
+  --warn-fg: #ffc451;
+  --err-fg: #ff8a80;
+  --shadow: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* HA's own density: 14px base rather than 16px. */
+  font-size: 87.5%;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  container-type: inline-size;
+  min-height: 100vh;
+}
+
+/* ── app bar ─────────────────────────────────────────────────────── */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--card);
+  border-bottom: 1px solid var(--divider);
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+
+.bar .spacer {
+  flex: 1;
+}
+
+.bar .ver {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A 2px gradient hairline is the only place the AstraMeter brand appears in
+ * the chrome; everything else uses HA neutrals so the panel reads as native. */
+.bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--export), var(--ha-primary), var(--import));
+  opacity: 0.75;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--divider);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 500;
+  padding: 11px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-current="page"] {
+  color: var(--ha-primary);
+  border-bottom-color: var(--ha-primary);
+}
+
+main {
+  padding: 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+}
+
+/* ── cards ───────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--divider);
+  padding: 14px 16px;
+}
+
+.card > h2 {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card > h2 .spacer {
+  flex: 1;
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+/* ── the balance rail ────────────────────────────────────────────── */
+
+.rail {
+  display: grid;
+  gap: 6px;
+}
+
+.rail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.rail-value {
+  font-size: 2rem;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  /* Reserve the widest plausible value so the layout never shifts when the
+   * number changes width. */
+  min-width: 7ch;
+}
+
+.rail-value.import {
+  color: var(--import);
+}
+
+.rail-value.export {
+  color: var(--export);
+}
+
+.rail-label {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.rail-track {
+  position: relative;
+  height: 34px;
+  background: var(--bg-sunken);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.rail-zero {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-faint);
+  opacity: 0.9;
+}
+
+.rail-fill {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  /* scaleX only: a compositor frame, no layout, and it settles before the
+   * next poll lands. */
+  transition: transform 180ms ease-out;
+  transform-origin: left center;
+  border-radius: 3px;
+}
+
+.rail-fill.import {
+  background: var(--import);
+}
+
+.rail-fill.export {
+  background: var(--export);
+}
+
+.rail-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Per-battery contribution bars share the rail's axis, so the picture
+ * carries the invariant: the battery bars are what pull the grid to zero. */
+.contrib {
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.contrib-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) 1fr minmax(72px, auto);
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+.contrib-name {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contrib-track {
+  position: relative;
+  height: 14px;
+  background: var(--bg-sunken);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.contrib-fill {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 2px;
+  transition: transform 180ms ease-out;
+  transform-origin: left center;
+}
+
+.contrib-fill.charge {
+  background: var(--charge);
+}
+
+.contrib-fill.discharge {
+  background: var(--discharge);
+}
+
+.contrib-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+/* ── status chips ────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.chip .glyph {
+  font-size: 0.85em;
+  line-height: 1;
+}
+
+.chip.ok {
+  color: var(--ok-fg);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.chip.warn {
+  color: var(--warn-fg);
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+}
+
+.chip.err {
+  color: var(--err-fg);
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+}
+
+/* ── key/value rows ──────────────────────────────────────────────── */
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 4px 14px;
+  font-size: 0.82rem;
+}
+
+.kv dt {
+  color: var(--text-dim);
+}
+
+.kv dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* ── battery cards ───────────────────────────────────────────────── */
+
+.batt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.batt-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.batt-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+
+.batt-figure .n {
+  font-size: 1.5rem;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  min-width: 6ch;
+}
+
+.batt-figure .n.charge {
+  color: var(--charge);
+}
+
+.batt-figure .n.discharge {
+  color: var(--discharge);
+}
+
+.meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  background: var(--ha-primary);
+  transition: transform 180ms ease-out;
+  transform-origin: left center;
+}
+
+/* ── controls ────────────────────────────────────────────────────── */
+
+button.btn {
+  appearance: none;
+  font: inherit;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--divider);
+  background: var(--card);
+  color: var(--text);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button.btn:hover:not(:disabled) {
+  background: var(--bg-sunken);
+}
+
+button.btn.primary {
+  background: var(--ha-primary);
+  border-color: var(--ha-primary);
+  color: #fff;
+}
+
+button.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.btn.sm {
+  padding: 3px 9px;
+  font-size: 0.78rem;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  min-height: 55vh;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ha-primary);
+  outline-offset: 2px;
+}
+
+label.field {
+  display: grid;
+  gap: 3px;
+  font-size: 0.8rem;
+}
+
+label.field > .name {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+label.field > .help {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+label.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+label.row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+/* ── banners ─────────────────────────────────────────────────────── */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  border: 1px solid var(--divider);
+}
+
+.banner.warn {
+  background: color-mix(in srgb, var(--warn) 14%, var(--card));
+  color: var(--warn-fg);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.banner.err {
+  background: color-mix(in srgb, var(--err) 12%, var(--card));
+  color: var(--err-fg);
+  border-color: color-mix(in srgb, var(--err) 32%, transparent);
+}
+
+.banner.info {
+  background: color-mix(in srgb, var(--ha-primary) 10%, var(--card));
+}
+
+.empty {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.empty strong {
+  display: block;
+  color: var(--text);
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+/* Offline: dim everything and let the absolute clock times in the markup do
+ * the talking. A frozen "0.4 s ago" is the worst possible staleness cue. */
+#app[data-conn="offline"] main {
+  opacity: 0.55;
+  transition: opacity 240ms;
+}
+
+/* One 1px tick on frame arrival, decaying — instead of a dot that pulses
+ * forever and animates hardest exactly when the data has stopped. */
+.pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  opacity: 0.25;
+}
+
+.pulse.beat {
+  animation: beat 1.5s ease-out;
+}
+
+@keyframes beat {
+  0% {
+    opacity: 1;
+    transform: scale(1.5);
+  }
+  100% {
+    opacity: 0.25;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Container queries, not media queries: inside ingress the iframe width is
+ * not the viewport width. */
+@container (max-width: 560px) {
+  main {
+    padding: 12px;
+  }
+
+  .rail-value {
+    font-size: 1.6rem;
+  }
+
+  .contrib-row {
+    grid-template-columns: 84px 1fr 68px;
+    gap: 7px;
+  }
+
+  .kv {
+    grid-template-columns: 1fr;
+    gap: 1px 0;
+  }
+
+  .kv dd {
+    margin-bottom: 6px;
+  }
+}

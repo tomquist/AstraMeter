@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 
 import pytest
@@ -128,6 +129,63 @@ async def test_reporter_handshakes_then_reports() -> None:
     assert "sv=121" in seen[0]
     assert "setCtReporting" in seen[1]
     assert "id=aabbccddeeff" in seen[1]
+
+
+def _counting_reporter(statuses: list[int | None]) -> CloudReporter:
+    async def fake_get(url: str) -> int | None:
+        return statuses.pop(0)
+
+    async def gather() -> CtMeasurement:
+        return _measurement()
+
+    return CloudReporter(
+        CloudReporterConfig(
+            ct_type="HME-4", device_id="aabbccddeeff", interval_seconds=999
+        ),
+        gather=gather,
+        http_get=fake_get,
+        clock=lambda: datetime.datetime(2026, 6, 18, 12, 0, 0),
+    )
+
+
+async def test_report_counters() -> None:
+    reporter = _counting_reporter([200, None, 500])
+    assert reporter.status_snapshot().last_report_at is None
+    assert reporter.status_snapshot().report_count == 0
+
+    await reporter._report_once()
+    snap = reporter.status_snapshot()
+    assert (snap.report_count, snap.fail_count, snap.last_http_status) == (1, 0, 200)
+    assert snap.last_report_at == datetime.datetime(2026, 6, 18, 12, 0, 0)
+
+    # Transport failure: the seam reports it as a `None` status.
+    await reporter._report_once()
+    snap = reporter.status_snapshot()
+    assert (snap.report_count, snap.fail_count, snap.last_http_status) == (2, 1, None)
+
+    # A completed request the cloud rejected is a failure too.
+    await reporter._report_once()
+    snap = reporter.status_snapshot()
+    assert (snap.report_count, snap.fail_count, snap.last_http_status) == (3, 2, 500)
+
+
+async def test_snapshot_exposes_host_not_url() -> None:
+    reporter = _counting_reporter([200])
+    await reporter._report_once()
+    snap = reporter.status_snapshot()
+
+    assert snap.host == "eu.hamedata.com"
+    assert (snap.device_id, snap.ct_type, snap.interval) == (
+        "aabbccddeeff",
+        "HME-4",
+        999,
+    )
+    # The report URL embeds the device id (and could grow more identity params),
+    # so no snapshot field may carry a URL.
+    assert not any(
+        isinstance(value, str) and ("://" in value or "?" in value)
+        for value in dataclasses.asdict(snap).values()
+    )
 
 
 async def test_reporter_swallows_gather_errors() -> None:

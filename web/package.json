@@ -6,9 +6,11 @@
   "description": "AstraMeter project website + config generator (static, TypeScript).",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx ts/schema.test.ts && tsx ts/state.test.ts && tsx ts/generate.test.ts",
+    "test": "node tools/run-tests.mjs",
     "build": "node build.mjs",
-    "check": "npm run typecheck && npm test"
+    "build:dashboard": "node tools/gen-dashboard-assets.mjs",
+    "check:dashboard": "node tools/gen-dashboard-assets.mjs --check",
+    "check": "npm run typecheck && npm test && npm run check:dashboard"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -1,0 +1,171 @@
+// Labels for the guided form, and a parser for the add-on's own schema
+// strings.
+//
+// The *types* come from Supervisor at runtime (`data.schema`), so this file
+// holds only the human copy. An option missing from OPTION_META still
+// renders — in a trailing "Other" group with a title-cased name — which is
+// deliberately the drift behaviour: a new add-on option appears in the form
+// as soon as config.yaml has it, rather than disappearing silently or
+// failing a test.
+
+export interface OptionSpec {
+  type: string;
+  min?: number;
+  max?: number;
+  options?: string[];
+  optional: boolean;
+}
+
+/**
+ * Parse a bashio validator string.
+ *
+ * Grammar: `type[(min,max)|(a|b|c)][?]`, e.g. `float(0,1)?`,
+ * `list(critical|error|info)`, `int(0,)?`, `password?`.
+ * An unknown type falls back to a text input rather than dropping the field.
+ */
+export function parseAddonSchema(spec: string): OptionSpec {
+  const raw = (spec || "str").trim();
+  const optional = raw.endsWith("?");
+  const body = optional ? raw.slice(0, -1) : raw;
+  const match = /^([a-z_]+)(?:\((.*)\))?$/.exec(body);
+  if (!match) return { type: "str", optional };
+  const type = match[1];
+  const arg = match[2];
+  if (arg == null) return { type, optional };
+  if (type === "list" || type === "match") {
+    return { type, options: arg.split("|").filter(Boolean), optional };
+  }
+  const [lo, hi] = arg.split(",");
+  return {
+    type,
+    min: lo ? Number(lo) : undefined,
+    max: hi ? Number(hi) : undefined,
+    optional,
+  };
+}
+
+interface Meta {
+  label: string;
+  group: string;
+  help?: string;
+}
+
+const GRID = "Grid measurement";
+const DEVICE = "Emulated meter";
+const CONTROL = "Battery control";
+const TUNING = "Fine tuning";
+const ADVANCED = "Advanced";
+
+export const OPTION_META: Record<string, Meta> = {
+  power_input_alias: {
+    label: "Grid power sensor",
+    group: GRID,
+    help: "The Home Assistant entity holding your grid power in watts.",
+  },
+  power_output_alias: {
+    label: "Export power sensor",
+    group: GRID,
+    help: "Only if import and export are two separate sensors.",
+  },
+  power_offset: { label: "Power offset (W)", group: GRID },
+  power_multiplier: { label: "Power multiplier", group: GRID },
+  throttle_interval: {
+    label: "Throttle interval (s)",
+    group: GRID,
+    help: "Minimum time between meter reads. 0 reads as fast as the batteries poll.",
+  },
+  wait_for_next_message: {
+    label: "Wait for a fresh reading",
+    group: GRID,
+    help: "Answer a battery only once a new meter value has arrived.",
+  },
+  device_types: {
+    label: "Emulated device",
+    group: DEVICE,
+    help: "Which meter AstraMeter pretends to be. Use ct002 for Marstek batteries.",
+  },
+  ct_mac: { label: "CT MAC address", group: DEVICE },
+  active_control: {
+    label: "Active control",
+    group: CONTROL,
+    help: "Let AstraMeter compute each battery's target instead of relaying the raw total.",
+  },
+  fair_distribution: {
+    label: "Share load between batteries",
+    group: CONTROL,
+  },
+  min_efficient_power: {
+    label: "Minimum efficient power (W)",
+    group: CONTROL,
+    help: "Below this, concentrate on fewer batteries instead of running them all inefficiently.",
+  },
+  efficiency_rotation_interval: {
+    label: "Rotation interval (s)",
+    group: CONTROL,
+    help: "How often the batteries swap who takes the load.",
+  },
+  min_dc_output: { label: "Minimum DC output (W)", group: CONTROL },
+  grid_predict_trust: {
+    label: "Grid prediction trust",
+    group: CONTROL,
+    help: "0 trusts the meter only; 1 trusts the model. 0.5 is a good default.",
+  },
+  dashboard: {
+    label: "Show the dashboard",
+    group: ADVANCED,
+    help: "Opens from the Home Assistant sidebar.",
+  },
+  dashboard_allow_write: {
+    label: "Allow changes from the dashboard",
+    group: ADVANCED,
+    help: "Lets the dashboard edit this configuration and control batteries.",
+  },
+  dashboard_direct_access: {
+    label: "Allow access outside Home Assistant",
+    group: ADVANCED,
+    help: "Exposes the dashboard on port 52500 with no authentication. Trusted networks only.",
+  },
+  custom_config: {
+    label: "Custom config file",
+    group: ADVANCED,
+    help: "Filename in /config to use instead of these options.",
+  },
+  log_level: { label: "Log level", group: ADVANCED },
+  mqtt_uri: { label: "MQTT broker URL", group: ADVANCED },
+  marstek_auto_register_ct_device: {
+    label: "Register a CT with Marstek",
+    group: ADVANCED,
+  },
+  marstek_mailbox: { label: "Marstek account e-mail", group: ADVANCED },
+  marstek_password: { label: "Marstek password", group: ADVANCED },
+  cloud_reporting: { label: "Report to the Marstek cloud", group: ADVANCED },
+  cloud_reporting_host: { label: "Cloud host", group: ADVANCED },
+  cloud_reporting_interval: { label: "Cloud interval (s)", group: ADVANCED },
+  balance_gain: { label: "Balance gain", group: TUNING },
+  balance_deadband: { label: "Balance deadband (W)", group: TUNING },
+  max_correction_per_step: { label: "Max correction per step (W)", group: TUNING },
+  error_boost_threshold: { label: "Error boost threshold (W)", group: TUNING },
+  error_boost_max: { label: "Error boost max", group: TUNING },
+  error_reduce_threshold: { label: "Error reduce threshold (W)", group: TUNING },
+  max_target_step: { label: "Max target step (W)", group: TUNING },
+  pace_base_step: { label: "Pace base step (W)", group: TUNING },
+  pace_max_step: { label: "Pace max step (W)", group: TUNING },
+  osc_damp_max: { label: "Oscillation damping max", group: TUNING },
+  osc_damp_alpha: { label: "Oscillation damping alpha", group: TUNING },
+  osc_damp_decay: { label: "Oscillation damping decay", group: TUNING },
+  osc_damp_threshold: { label: "Oscillation threshold (W)", group: TUNING },
+  concentrate_deadband: { label: "Concentrate deadband (W)", group: TUNING },
+  import_trim_w: { label: "Import trim (W)", group: TUNING },
+  dedupe_time_window: { label: "Dedupe window (s)", group: TUNING },
+  smooth_target_alpha: { label: "Target smoothing", group: TUNING },
+  max_smooth_step: { label: "Max smoothing step (W)", group: TUNING },
+  deadband: { label: "Deadband (W)", group: TUNING },
+  hampel_window: { label: "Spike filter window", group: TUNING },
+  hampel_n_sigma: { label: "Spike filter sigma", group: TUNING },
+  hampel_min_threshold: { label: "Spike filter threshold (W)", group: TUNING },
+  pid_kp: { label: "PID proportional", group: TUNING },
+  pid_ki: { label: "PID integral", group: TUNING },
+  pid_kd: { label: "PID derivative", group: TUNING },
+  pid_output_max: { label: "PID output max", group: TUNING },
+  pid_mode: { label: "PID mode", group: TUNING },
+};

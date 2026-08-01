@@ -186,6 +186,28 @@ class CloudReporterConfig:
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
 
 
+@dataclass(frozen=True, slots=True)
+class CloudReporterSnapshot:
+    """Immutable view of one cloud reporter for the status API.
+
+    Carries the ``host`` only, never a built URL: both templates embed the
+    device id in the query string (``uid``/``id``), so a URL here would leak
+    identity into every status response.  ``report_count`` counts *attempts*
+    that reached the HTTP seam and ``fail_count`` the subset of those that did
+    not come back ``2xx``; ``last_report_at`` and ``last_http_status`` are the
+    wall-clock time and outcome of the same, most recent attempt.
+    """
+
+    device_id: str
+    ct_type: str
+    host: str
+    interval: float
+    last_report_at: datetime.datetime | None
+    last_http_status: int | None
+    report_count: int
+    fail_count: int
+
+
 class CloudReporter:
     """Runs the handshake + periodic ``setCtReporting`` push a real CT does."""
 
@@ -201,6 +223,31 @@ class CloudReporter:
         self._gather = gather
         self._http_get = http_get or aiohttp_get
         self._clock = clock or (lambda: datetime.datetime.now())
+        # Read-only status surface (see status_snapshot).  Reporting is
+        # best-effort and failures are only logged at debug, so these counters
+        # are the operator's only evidence that the cloud is rejecting us.
+        self._last_status: int | None = None
+        self._last_report_at: datetime.datetime | None = None
+        self._report_count = 0
+        self._fail_count = 0
+
+    def status_snapshot(self) -> CloudReporterSnapshot:
+        """Immutable view of this reporter for the status API.
+
+        MUST stay a plain ``def``: the reporter task and the HTTP handlers
+        share one asyncio loop, so an await-free builder can never observe a
+        half-updated report.
+        """
+        return CloudReporterSnapshot(
+            device_id=self._cfg.device_id,
+            ct_type=self._cfg.ct_type,
+            host=self._cfg.host,
+            interval=self._cfg.interval_seconds,
+            last_report_at=self._last_report_at,
+            last_http_status=self._last_status,
+            report_count=self._report_count,
+            fail_count=self._fail_count,
+        )
 
     async def _handshake(self) -> None:
         # The handshake's `aid`/`sv` params are not an account id / settings
@@ -231,6 +278,13 @@ class CloudReporter:
             m=m,
         )
         status = await self._http_get(url)
+        self._last_status = status
+        self._last_report_at = now
+        self._report_count += 1
+        # `None` is the seam's "the request never completed"; anything outside
+        # 2xx is the cloud rejecting the report. Both count as a failure.
+        if status is None or not 200 <= status < 300:
+            self._fail_count += 1
         logger.debug("cloud setCtReporting -> %s", status)
 
     async def run(self) -> None:

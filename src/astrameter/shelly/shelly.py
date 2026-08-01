@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import time
 from collections.abc import Callable
@@ -15,6 +16,36 @@ from astrameter.request_dedupe import RequestDeduplicator
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_EMA_ALPHA = 0.3
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ShellyBatterySnapshot:
+    """Immutable view of one battery polling this emulator.
+
+    ``last_seen_at`` is a wall-clock epoch, ages and intervals seconds.
+    ``poll_interval`` is the EMA-smoothed cadence and stays ``None`` until a
+    battery has been seen twice.
+    """
+
+    ip: str
+    last_seen_at: float
+    last_seen_age: float
+    poll_interval: float | None
+    active: bool
+    in_flight: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ShellySnapshot:
+    """Immutable view of the whole Shelly emulator for the status API."""
+
+    device_id: str
+    device_type: str
+    udp_port: int
+    running: bool
+    started_at: float | None
+    inactive_timeout: int
+    batteries: tuple[ShellyBatterySnapshot, ...]
 
 
 class _ShellyProtocol(asyncio.DatagramProtocol):
@@ -40,9 +71,11 @@ class Shelly:
         udp_port: int,
         device_id,
         dedupe_time_window: float = 0.0,
+        device_type: str = "",
     ):
         self._udp_port = udp_port
         self._device_id = device_id
+        self._device_type = device_type
         self._powermeters = powermeters
         self._transport = None
         self._protocol: _ShellyProtocol | None = None
@@ -68,6 +101,9 @@ class Shelly:
             self._dedupe_time_window
         )
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
+        # Read-only status surface (see status_snapshot).
+        self._started_at: float = 0.0
+        self._running: bool = False
 
     def _calculate_derived_values(self, power):
         decimal_point_enforcer = 0.001
@@ -349,11 +385,43 @@ class Shelly:
         bound = self._transport.get_extra_info("sockname")
         if bound:
             self._udp_port = bound[1]
+        self._started_at = time.time()
+        self._running = True
         logger.info(f"Shelly emulator listening on UDP port {self._udp_port}...")
 
     @property
     def udp_port(self) -> int:
         return self._udp_port
+
+    def status_snapshot(self) -> ShellySnapshot:
+        """Immutable view of the emulator for the status API.
+
+        MUST stay a plain ``def``: the UDP handlers and the HTTP handlers
+        share one asyncio loop, so an await-free builder is atomic against
+        every in-flight datagram.  Adding an ``await`` here silently yields
+        torn snapshots that mix two polls.
+        """
+        now = time.time()
+        return ShellySnapshot(
+            device_id=self._device_id,
+            device_type=self._device_type,
+            udp_port=self._udp_port,
+            running=self._running,
+            started_at=self._started_at or None,
+            inactive_timeout=BATTERY_INACTIVE_TIMEOUT_SECONDS,
+            batteries=tuple(
+                ShellyBatterySnapshot(
+                    ip=ip,
+                    last_seen_at=last_seen,
+                    last_seen_age=max(0.0, now - last_seen),
+                    poll_interval=self._battery_poll_interval.get(ip),
+                    active=ip not in self._inactive_batteries,
+                    in_flight=ip in self._inflight_batteries,
+                )
+                # Sorted so a battery keeps its list position across polls.
+                for ip, last_seen in sorted(self._battery_last_seen.items())
+            ),
+        )
 
     async def wait(self):
         await self._stopped.wait()
@@ -374,4 +442,5 @@ class Shelly:
                 task.cancel()
             await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
         self._protocol = None
+        self._running = False
         self._stopped.set()

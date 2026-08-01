@@ -11,6 +11,7 @@ import time
 from unittest.mock import AsyncMock
 
 import aiomqtt
+import pytest
 
 from astrameter.config.config_loader import (
     create_powermeter,
@@ -32,6 +33,7 @@ from .discovery import (
 from .marstek_mqtt import MarstekMqttBinding
 from .service import (
     POWERMETER_IDLE_THRESHOLD,
+    QUEUE_MAX_SIZE,
     MqttInsightsConfig,
     MqttInsightsService,
 )
@@ -692,6 +694,21 @@ def test_queue_overflow_does_not_raise():
     for i in range(200):
         service.on_ct002_response("dev1", f"consumer{i}", {"grid_power": {}})
     # No exception raised
+
+
+def test_queue_dropped_counter():
+    """Every drop-oldest overflow is counted, so the dashboard can show that
+    events were lost rather than silently under-reporting."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    for i in range(QUEUE_MAX_SIZE):
+        service.on_ct002_response("dev1", f"consumer{i}", {})
+    assert service.status_snapshot().queue_dropped_total == 0
+
+    for i in range(5):
+        service.on_ct002_response("dev1", f"overflow{i}", {})
+    snapshot = service.status_snapshot()
+    assert snapshot.queue_dropped_total == 5
+    assert snapshot.queue_depth == QUEUE_MAX_SIZE
 
 
 # ── Powermeter health loop (no broker) ───────────────────────────────────
@@ -2133,3 +2150,177 @@ async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker):
     finally:
         slow_gate.set()
         await service.stop()
+
+
+# ── Status snapshot & dashboard writes (no broker) ───────────────────────
+
+
+def _async_iter(messages):
+    async def _gen():
+        for message in messages:
+            yield message
+
+    return _gen()
+
+
+class _FakeMessage:
+    def __init__(self, topic: str, payload: bytes) -> None:
+        self.topic = topic
+        self.payload = payload
+
+
+def test_status_snapshot_shape():
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="broker.local",
+            port=8883,
+            tls=True,
+            base_topic="am",
+            ha_discovery_prefix="ha",
+            addon_slug="34dea19a_astrameter",
+            powermeter_health_interval=30.0,
+            marstek_mqtt_interval=120.0,
+        )
+    )
+    service._discovered_ct002_devices.add("dev1")
+    service._discovered_ct002_consumers.update({"dev1/c1", "dev1/c2"})
+    service._discovered_shelly_devices.add("shelly1")
+    service._discovered_shelly_batteries.add("shelly1/192_168_1_5")
+    service._discovered_powermeters.add("MQTT_1")
+
+    snapshot = service.status_snapshot()
+
+    assert snapshot.connected is False
+    assert (snapshot.broker, snapshot.port, snapshot.tls) == (
+        "broker.local",
+        8883,
+        True,
+    )
+    assert snapshot.base_topic == "am"
+    assert snapshot.ha_discovery is True
+    assert snapshot.ha_discovery_prefix == "ha"
+    assert snapshot.hub_identifier == "34dea19a_astrameter"
+    assert snapshot.queue_depth == 0
+    assert snapshot.queue_dropped_total == 0
+    assert snapshot.discovered_ct002_devices == 1
+    assert snapshot.discovered_ct002_consumers == 2
+    assert snapshot.discovered_shelly_devices == 1
+    assert snapshot.discovered_shelly_batteries == 1
+    assert snapshot.discovered_powermeters == 1
+    assert snapshot.powermeter_health_interval == 30.0
+    assert snapshot.marstek_enabled is True
+    assert snapshot.marstek_interval == 120.0
+    assert snapshot.marstek_bindings == ()
+
+
+def test_status_snapshot_connected_tracks_the_connected_flag():
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    assert service.connected is False
+    service._connected.set()
+    assert service.connected is True
+    assert service.status_snapshot().connected is True
+
+
+def test_status_snapshot_carries_no_credentials():
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="broker.local", username="grid-user", password="s3cret"
+        )
+    )
+    snapshot = service.status_snapshot()
+
+    assert not hasattr(snapshot, "username")
+    assert not hasattr(snapshot, "password")
+    # repr covers the nested binding rows too.
+    rendered = repr(snapshot)
+    assert "grid-user" not in rendered
+    assert "s3cret" not in rendered
+
+
+async def test_status_snapshot_reports_marstek_bindings():
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    binding, _ = _make_binding()
+    await service.register_marstek(binding)
+    service._marstek_get_values_failed.add(binding.device_id)
+
+    (row,) = service.status_snapshot().marstek_bindings
+    assert row.device_id == "ct002-dev1"
+    assert row.ct_type == "HME-4"
+    assert row.mac == "02b250aabbcc"
+    assert row.ver_v == binding.ver_v
+    assert row.wifi_rssi == -50
+    assert row.poll_in_flight is False
+    assert row.value_fetch_failing is True
+
+
+async def test_status_snapshot_no_lock():
+    """The snapshot must read the bindings without ``_marstek_lock`` — taking
+    it would need an await, and an await tears the surrounding snapshot."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    binding, _ = _make_binding()
+    await service.register_marstek(binding)
+
+    async with service._marstek_lock:
+        snapshot = service.status_snapshot()
+
+    assert [row.device_id for row in snapshot.marstek_bindings] == ["ct002-dev1"]
+
+
+async def test_publish_consumer_command_lands_where_the_replay_path_reads():
+    """A dashboard write must target the same retained topic the broker
+    redelivers on reconnect, or the next reconnect reverts it."""
+    service = MqttInsightsService(
+        MqttInsightsConfig(broker="localhost", base_topic="am")
+    )
+    service._client = AsyncMock()
+
+    await service.publish_consumer_command("dev1", "c1", "manual_target", "150")
+
+    call = service._client.publish.call_args
+    assert call.args[0] == "am/ct002/dev1/consumer/c1/manual_target/set"
+    assert call.kwargs["retain"] is True
+
+    # Feed the published message back through the listener that receives the
+    # retained redelivery: it must reach the manual-target handler.
+    calls: list[tuple[str, float]] = []
+    service.register_manual_target_handler(
+        "dev1", lambda cid, v: calls.append((cid, v))
+    )
+    listener = AsyncMock()
+    listener.messages = _async_iter(
+        [_FakeMessage(call.args[0], call.kwargs["payload"])]
+    )
+    await service._listen_commands(listener)
+
+    assert calls == [("c1", 150.0)]
+
+
+async def test_publish_device_command_lands_where_the_listener_reads():
+    service = MqttInsightsService(
+        MqttInsightsConfig(broker="localhost", base_topic="am")
+    )
+    service._client = AsyncMock()
+
+    await service.publish_device_command("dev1", {"active_control": False})
+
+    call = service._client.publish.call_args
+    assert call.args[0] == "am/ct002/dev1/set"
+    assert call.kwargs["retain"] is True
+
+    seen: list[bool] = []
+    service.register_active_control_handler("dev1", seen.append)
+    listener = AsyncMock()
+    listener.messages = _async_iter(
+        [_FakeMessage(call.args[0], call.kwargs["payload"])]
+    )
+    await service._listen_commands(listener)
+
+    assert seen == [False]
+
+
+async def test_publish_command_without_a_connection_raises():
+    service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
+    with pytest.raises(RuntimeError):
+        await service.publish_device_command("dev1", {"force_rotation": True})
+    with pytest.raises(RuntimeError):
+        await service.publish_consumer_command("dev1", "c1", "active", "true")

@@ -77,6 +77,19 @@ class IniAppConfig(AppConfig):
             web_server_port=config.getint(
                 GENERAL_SECTION, "WEB_SERVER_PORT", fallback=defaults.web_server_port
             ),
+            dashboard=config.getboolean(
+                GENERAL_SECTION, "DASHBOARD_ENABLED", fallback=defaults.dashboard
+            ),
+            dashboard_allow_write=config.getboolean(
+                GENERAL_SECTION,
+                "DASHBOARD_ALLOW_WRITE",
+                fallback=defaults.dashboard_allow_write,
+            ),
+            dashboard_direct_access=config.getboolean(
+                GENERAL_SECTION,
+                "DASHBOARD_DIRECT_ACCESS",
+                fallback=defaults.dashboard_direct_access,
+            ),
             signal=read_signal_settings(
                 GENERAL_SECTION, config, SignalSettings(), with_transform=False
             ),

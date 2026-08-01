@@ -31,6 +31,25 @@ def _system_availability(base_topic: str) -> dict:
     }
 
 
+# ── Command topics ────────────────────────────────────────────────────────
+# One definition shared by the discovery payloads below, the service's
+# subscription/replay path, and the dashboard write path — a dashboard write
+# that missed this topic would be reverted by the retained value the broker
+# redelivers on the next reconnect.
+
+
+def consumer_command_topic(
+    base_topic: str, device_id: str, consumer_id: str, field: str
+) -> str:
+    """Retained command topic for one per-consumer setting (scalar payload)."""
+    return f"{base_topic}/ct002/{device_id}/consumer/{consumer_id}/{field}/set"
+
+
+def device_command_topic(base_topic: str, device_id: str) -> str:
+    """Retained device-level command topic (JSON object payload)."""
+    return f"{base_topic}/ct002/{device_id}/set"
+
+
 # ── CT002 consumer (per-battery) ──────────────────────────────────────────
 
 
@@ -160,7 +179,9 @@ def build_ct002_consumer_discovery(
         "mode": "box",
         "state_topic": state_topic,
         "value_template": "{{ value_json.manual_target | default(0) }}",
-        "command_topic": f"{state_topic}/manual_target/set",
+        "command_topic": consumer_command_topic(
+            base_topic, device_id, consumer_id, "manual_target"
+        ),
         "retain": True,
         "entity_category": "config",
     }
@@ -171,7 +192,9 @@ def build_ct002_consumer_discovery(
         "unique_id": f"{uid_prefix}_auto_target",
         "name": "Auto Target",
         "state_topic": state_topic,
-        "command_topic": f"{state_topic}/auto_target/set",
+        "command_topic": consumer_command_topic(
+            base_topic, device_id, consumer_id, "auto_target"
+        ),
         "value_template": "{{ value_json.auto_target }}",
         "payload_on": "true",
         "payload_off": "false",
@@ -187,7 +210,9 @@ def build_ct002_consumer_discovery(
         "unique_id": f"{uid_prefix}_active",
         "name": "Active",
         "state_topic": state_topic,
-        "command_topic": f"{state_topic}/active/set",
+        "command_topic": consumer_command_topic(
+            base_topic, device_id, consumer_id, "active"
+        ),
         "value_template": "{{ value_json.active }}",
         "payload_on": "true",
         "payload_off": "false",
@@ -209,7 +234,9 @@ def build_ct002_consumer_discovery(
         "mode": "slider",
         "state_topic": state_topic,
         "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
-        "command_topic": f"{state_topic}/distribution_weight/set",
+        "command_topic": consumer_command_topic(
+            base_topic, device_id, consumer_id, "distribution_weight"
+        ),
         "retain": True,
         "entity_category": "config",
     }
@@ -235,7 +262,9 @@ def build_ct002_consumer_discovery(
             "value_template": (
                 "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}"
             ),
-            "command_topic": f"{state_topic}/efficiency_window_weight/set",
+            "command_topic": consumer_command_topic(
+                base_topic, device_id, consumer_id, "efficiency_window_weight"
+            ),
             "retain": True,
             "entity_category": "config",
         }
@@ -257,7 +286,9 @@ def build_ct002_consumer_discovery(
             "mode": "box",
             "state_topic": state_topic,
             "value_template": "{{ value_json.min_dc_output | default(0) }}",
-            "command_topic": f"{state_topic}/min_dc_output/set",
+            "command_topic": consumer_command_topic(
+                base_topic, device_id, consumer_id, "min_dc_output"
+            ),
             "retain": True,
             "entity_category": "config",
         }
@@ -410,7 +441,7 @@ def build_ct002_device_discovery(
             "name": "Active Control",
             "state_topic": state_topic,
             "value_template": "{{ value_json.active_control }}",
-            "command_topic": f"{base_topic}/ct002/{device_id}/set",
+            "command_topic": device_command_topic(base_topic, device_id),
             "command_template": (
                 '{"active_control": {{ "true" if value == "ON" else "false" }}}'
             ),
@@ -439,7 +470,7 @@ def build_ct002_device_discovery(
             "platform": "button",
             "unique_id": f"{uid_prefix}_force_rotation",
             "name": "Force Rotation",
-            "command_topic": f"{base_topic}/ct002/{device_id}/set",
+            "command_topic": device_command_topic(base_topic, device_id),
             "payload_press": '{"force_rotation": true}',
             "entity_category": "config",
         }

@@ -37,7 +37,8 @@ from astrameter.mqtt_insights import (
 from astrameter.powermeter import Powermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.shelly import Shelly
-from astrameter.version_info import get_git_commit_sha
+from astrameter.status import StatusRegistry, detect_config_mode
+from astrameter.version_info import get_git_commit_sha, get_version
 from astrameter.web_server import WebServer
 
 # CT002/CT003 phase assignment is auto-managed by emulator runtime.
@@ -192,6 +193,7 @@ async def run_device(
     insights: MqttInsightsService | None = None,
     marstek_mac: str = "",
     marstek_ver_v: int | None = None,
+    registry: StatusRegistry | None = None,
 ):
     logger.debug(f"Starting device: {device_type}")
 
@@ -268,6 +270,7 @@ async def run_device(
         device = Shelly(
             powermeters=powermeters,
             device_id=device_id,
+            device_type=device_type,
             udp_port=1010,
             dedupe_time_window=general.dedupe_time_window,
         )
@@ -278,6 +281,7 @@ async def run_device(
         device = Shelly(
             powermeters=powermeters,
             device_id=device_id,
+            device_type=device_type,
             udp_port=2220,
             dedupe_time_window=general.dedupe_time_window,
         )
@@ -288,6 +292,7 @@ async def run_device(
         device = Shelly(
             powermeters=powermeters,
             device_id=device_id,
+            device_type=device_type,
             udp_port=2222,
             dedupe_time_window=general.dedupe_time_window,
         )
@@ -298,6 +303,7 @@ async def run_device(
         device = Shelly(
             powermeters=powermeters,
             device_id=device_id,
+            device_type=device_type,
             udp_port=2223,
             dedupe_time_window=general.dedupe_time_window,
         )
@@ -329,6 +335,12 @@ async def run_device(
                 "Device %s (%s) cleanup also failed", device_type, device_id
             )
         return
+
+    # Same rule as the MQTT handlers below: only a device that actually came
+    # up is visible to the dashboard, so a port conflict shows as an absent
+    # device rather than a device reporting zeros.
+    if registry is not None:
+        registry.register_device(device_id or "", device_type, device)
 
     # Register active handler only after successful start so MQTT commands
     # are never routed to a device that failed to come up.
@@ -474,21 +486,24 @@ async def run_device(
                     dd=_dchrg("ABC"),
                 )
 
-            cloud_task = asyncio.create_task(
-                CloudReporter(
-                    CloudReporterConfig(
-                        ct_type=device.ct_type,
-                        device_id=report_id,
-                        host=ct.cloud_reporting_host,
-                        interval_seconds=ct.cloud_reporting_interval,
-                    ),
-                    _cloud_gather,
-                ).run()
+            reporter = CloudReporter(
+                CloudReporterConfig(
+                    ct_type=device.ct_type,
+                    device_id=report_id,
+                    host=ct.cloud_reporting_host,
+                    interval_seconds=ct.cloud_reporting_interval,
+                ),
+                _cloud_gather,
             )
+            if registry is not None:
+                registry.cloud_reporters[device_id or ""] = reporter
+            cloud_task = asyncio.create_task(reporter.run())
 
     try:
         await device.wait()
     finally:
+        if registry is not None:
+            registry.unregister_device(device_id or "")
         if cloud_task is not None:
             cloud_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -510,27 +525,9 @@ async def async_main(
     device_ids: list[str],
     skip_test: bool,
     managed_marstek: dict[str, tuple[str, int]] | None = None,
+    registry: StatusRegistry | None = None,
 ):
     managed_marstek = managed_marstek or {}
-    web_server = None
-    if general.enable_web_server:
-        logger.info("Starting web server...")
-        try:
-            web_server = WebServer(
-                port=general.web_server_port,
-                config_path=config.path,
-                enable_web_config=general.web_config_enabled,
-            )
-            if await web_server.start():
-                logger.info("Web server started successfully")
-            else:
-                logger.error("Failed to start web server")
-                web_server = None
-        except Exception:
-            logger.exception("Web server failed to initialize")
-            if web_server:
-                await web_server.stop()
-            web_server = None
 
     powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
     insights: MqttInsightsService | None = None
@@ -538,6 +535,9 @@ async def async_main(
     try:
         # Create powermeters
         powermeters = config.powermeters(general)
+        if registry is not None:
+            registry.powermeters = [pm for pm, _, _ in powermeters]
+            registry.bump()
 
         # Start powermeter lifecycle
         for pm, _, _ in powermeters:
@@ -555,6 +555,9 @@ async def async_main(
             )
             await insights.start()
             logger.info("MQTT Insights service started")
+        if registry is not None:
+            registry.insights = insights
+            registry.bump()
 
         if not device_types:
             logger.warning("No runnable device types configured after filtering.")
@@ -569,7 +572,9 @@ async def async_main(
                     powermeters,
                     device_id,
                     insights,
-                    *managed_marstek.get(device_type, ("", None)),
+                    managed_marstek.get(device_type, ("", None))[0],
+                    managed_marstek.get(device_type, ("", None))[1],
+                    registry=registry,
                 )
                 for device_type, device_id in zip(
                     device_types, device_ids, strict=False
@@ -590,14 +595,6 @@ async def async_main(
                 await pm.stop()
             except Exception:
                 logger.exception("Error stopping powermeter %s", pm)
-        if web_server:
-            logger.info("Stopping web server...")
-            try:
-                await asyncio.wait_for(web_server.stop(), timeout=5.0)
-            except TimeoutError:
-                logger.warning("Web server stop timed out")
-            except Exception:
-                logger.exception("Error stopping web server")
 
 
 def _build_managed_marstek(
@@ -661,6 +658,13 @@ def _build_managed_marstek(
             "Unexpected Marstek auto-registration error: %s", exc, exc_info=True
         )
     return managed_marstek
+
+
+def _addon_slug(args: argparse.Namespace) -> str | None:
+    """This add-on's slug, so the dashboard can build ingress-relative links."""
+    if not args.addon:
+        return None
+    return addon.SupervisorClient().addon_slug() or None
 
 
 def _apply_cli_overrides(
@@ -804,7 +808,8 @@ def main():
     # be read before the logger is configured — everything the config backend
     # logs while talking to the Supervisor honours the user's level that way.
     addon_options = addon.load_options() if args.addon else {}
-    setLogLevel(str(addon.get_option(addon_options, "log_level", args.loglevel)))
+    log_level = str(addon.get_option(addon_options, "log_level", args.loglevel))
+    setLogLevel(log_level)
     logger.info("started astrameter application")
     _sha = get_git_commit_sha()
     if _sha:
@@ -823,34 +828,92 @@ def main():
 
     general = _apply_cli_overrides(config.general(), args)
     logger.info("Effective configuration: %s", general)
-    device_types, device_ids, skip_test = _resolve_device_config(config, general, args)
 
-    # Optional Marstek cloud registration for managed fake CT devices (sync, before event loop).
-    # When registration succeeds, the returned MAC is captured per device
-    # type so the Marstek MQTT responder in MQTT Insights uses the same
-    # MAC that hame-relay will route back to the Marstek app.
-    managed_marstek = _build_managed_marstek(config.marstek(), device_types)
+    registry = StatusRegistry(
+        config_path=config.path,
+        log_level=log_level,
+        version=get_version(),
+        git_commit=_sha,
+        config_mode=detect_config_mode(addon=args.addon, config_path=config.path),
+        addon_slug=_addon_slug(args),
+        web_port=general.web_server_port,
+        dashboard_enabled=general.dashboard,
+        allow_write=general.dashboard_allow_write,
+        direct_access=general.dashboard_direct_access,
+    )
 
     # Map SIGTERM to KeyboardInterrupt so asyncio.run cancels tasks and
     # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).
     signal.signal(signal.SIGTERM, signal.default_int_handler)
 
-    # SIGUSR1 is used by the web UI restart button.  We set a flag *before*
-    # raising KeyboardInterrupt so the outer loop knows to re-run instead of
-    # exiting.
-    restart_requested = False
+    try:
+        asyncio.run(_supervise(config, general, args, registry))
+    except KeyboardInterrupt:
+        pass
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        exit(1)
 
-    def _restart_handler(signum, frame):
-        nonlocal restart_requested
-        restart_requested = True
-        signal.default_int_handler(signum, frame)
 
-    signal.signal(signal.SIGUSR1, _restart_handler)
+async def _supervise(
+    config: AppConfig,
+    general: GeneralSettings,
+    args: argparse.Namespace,
+    registry: StatusRegistry,
+) -> None:
+    """Own the one asyncio loop for the process lifetime.
 
-    while True:
-        restart_requested = False
+    The web server is started here, *outside* the per-cycle ``async_main``,
+    so the dashboard URL and the add-on watchdog endpoint survive a restart.
+    An ``AppRunner`` is bound to the loop that created it, so a long-lived
+    server is only possible with exactly one loop per process — which is why
+    the restart is an :class:`asyncio.Event` rather than a re-``asyncio.run``.
+    """
+    loop = asyncio.get_running_loop()
+    restart = asyncio.Event()
+
+    def _on_sigusr1() -> None:
+        registry.restart_pending = True
+        registry.bump()
+        restart.set()
+
+    loop.add_signal_handler(signal.SIGUSR1, _on_sigusr1)
+
+    web_server = None
+    if general.enable_web_server:
+        logger.info("Starting web server...")
         try:
-            asyncio.run(
+            web_server = WebServer(
+                port=general.web_server_port,
+                config_path=config.path,
+                enable_web_config=general.web_config_enabled,
+                status=registry,
+            )
+            if not await web_server.start():
+                logger.error("Failed to start web server")
+                web_server = None
+        except Exception:
+            logger.exception("Web server failed to initialize")
+            if web_server:
+                await web_server.stop()
+            web_server = None
+
+    try:
+        while True:
+            restart.clear()
+            registry.restart_pending = False
+            device_types, device_ids, skip_test = _resolve_device_config(
+                config, general, args
+            )
+            # Marstek registration is blocking HTTP with retries; off-loop so a
+            # slow or unreachable cloud cannot stall /health for ~40 s.
+            managed_marstek = await asyncio.to_thread(
+                _build_managed_marstek, config.marstek(), device_types
+            )
+            registry.managed_marstek = managed_marstek
+            registry.bump()
+
+            cycle = asyncio.create_task(
                 async_main(
                     config,
                     general,
@@ -858,22 +921,54 @@ def main():
                     device_ids,
                     skip_test,
                     managed_marstek,
+                    registry,
                 )
             )
-            break  # clean exit
-        except KeyboardInterrupt:
-            if not restart_requested:
-                break
+            waiter = asyncio.create_task(restart.wait())
+            try:
+                await asyncio.wait({cycle, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                waiter.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await waiter
+
+            if cycle.done():
+                # A finished cycle means the devices exited on their own; let
+                # the exception (if any) propagate as before.
+                await cycle
+                if not restart.is_set():
+                    break
+
+            # Restart requested: unwind this cycle fully before starting the
+            # next one, so no device task, powermeter or MQTT client leaks
+            # into it.
             logger.info("Restarting service…")
-            config = _load_config(args)
+            cycle.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cycle
+            registry.reset_cycle()
+
+            # Re-read the configuration off-loop: a backend may have to ask
+            # the Supervisor for part of it, and prefetch() is blocking.
+            config = await asyncio.to_thread(_load_config, args)
             general = _apply_cli_overrides(config.general(), args)
-            device_types, device_ids, skip_test = _resolve_device_config(
-                config, general, args
+            # The dashboard can add or remove `custom_config`, so the source
+            # the next cycle runs from may not be the one this one used.
+            registry.config_path = config.path
+            registry.config_mode = detect_config_mode(
+                addon=args.addon, config_path=config.path
             )
-            managed_marstek = _build_managed_marstek(config.marstek(), device_types)
-        except RuntimeError as exc:
-            logger.error("%s", exc)
-            exit(1)
+            registry.bump()
+    finally:
+        loop.remove_signal_handler(signal.SIGUSR1)
+        if web_server:
+            logger.info("Stopping web server...")
+            try:
+                await asyncio.wait_for(web_server.stop(), timeout=5.0)
+            except TimeoutError:
+                logger.warning("Web server stop timed out")
+            except Exception:
+                logger.exception("Error stopping web server")
 
 
 # end main
