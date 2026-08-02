@@ -8,9 +8,9 @@ _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 # Patterns for credentials that must never reach the log, regardless of how the
 # app is launched (Home Assistant add-on, plain Docker, CLI, ...). Redaction
 # happens on the fully-rendered line — message *and* any traceback text — so a
-# secret can't slip through via an exception repr either. The add-on's run.sh
-# applies the same masking to bashio's own output, which never passes through
-# this Python formatter.
+# secret can't slip through via an exception repr either. On the Home Assistant
+# add-on this is the only masking layer — the add-on reads its own options and
+# talks to the Supervisor from Python, so every log line goes through here.
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Credentials in a URI userinfo: scheme://user:pass@host -> scheme://***:***@host
     (

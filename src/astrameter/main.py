@@ -4,7 +4,6 @@ import configparser
 import contextlib
 import os
 import signal
-from collections import OrderedDict
 from collections.abc import Sequence
 
 from astrameter.cloud_reporting import (
@@ -12,8 +11,10 @@ from astrameter.cloud_reporting import (
     CloudReporterConfig,
     CtMeasurement,
 )
+from astrameter.config import addon
 from astrameter.config.config_loader import (
     ClientFilter,
+    new_config_parser,
     read_all_powermeter_configs,
     read_mqtt_insights_config,
 )
@@ -823,10 +824,38 @@ def _resolve_device_config(
     return device_types, device_ids, skip_test
 
 
+def _load_config(
+    args: argparse.Namespace, options: addon.Options | None = None
+) -> configparser.ConfigParser:
+    """Load the configuration from the backend selected on the command line.
+
+    ``--addon`` reads the Home Assistant add-on options (and the Supervisor
+    API) directly; otherwise the ``--config`` file is parsed. In add-on mode
+    ``args.config`` is repointed at the user's custom config file when they
+    supplied one, and cleared when the config was generated from the add-on
+    options — there is no file the web UI could show in that case.
+    """
+    if not args.addon:
+        cfg = new_config_parser()
+        cfg.read(args.config)
+        return cfg
+
+    cfg, path = addon.load_config(addon.load_options() if options is None else options)
+    args.config = path
+    addon.log_config(cfg)
+    return cfg
+
+
 def main():
     parser = argparse.ArgumentParser(description="Power meter device emulator")
     parser.add_argument(
         "-c", "--config", default="config.ini", help="Path to the configuration file"
+    )
+    parser.add_argument(
+        "--addon",
+        action="store_true",
+        help="Run as the Home Assistant add-on: take the configuration from the "
+        "add-on options and the Supervisor API instead of a config file",
     )
     parser.add_argument(
         "-t", "--skip-powermeter-test", action="store_true", default=None
@@ -861,13 +890,12 @@ def main():
     )
 
     args = parser.parse_args()
-    # Disable interpolation so literal '%' in credentials (e.g. MARSTEK.PASSWORD)
-    # is read as-is from config.ini.
-    cfg = configparser.ConfigParser(dict_type=OrderedDict, interpolation=None)
-    cfg.read(args.config)
 
-    # configure logger
-    setLogLevel(args.loglevel)
+    # In add-on mode the log level is an add-on option, so the options have to
+    # be read before the logger is configured — everything the config backend
+    # logs while talking to the Supervisor honours the user's level that way.
+    addon_options = addon.load_options() if args.addon else {}
+    setLogLevel(str(addon.get_option(addon_options, "log_level", args.loglevel)))
     logger.info("started astrameter application")
     _sha = get_git_commit_sha()
     if _sha:
@@ -876,6 +904,13 @@ def main():
         logger.debug(
             "Git commit not logged (set GIT_COMMIT_SHA at image build for CI images)"
         )
+
+    cfg = _load_config(args, addon_options)
+
+    if args.addon:
+        # Home Assistant is the power source, so give it a chance to finish
+        # booting before the first reading is attempted.
+        addon.wait_for_home_assistant(addon.SupervisorClient())
 
     device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
 
@@ -916,8 +951,7 @@ def main():
             if not restart_requested:
                 break
             logger.info("Restarting service…")
-            cfg = configparser.ConfigParser(dict_type=OrderedDict, interpolation=None)
-            cfg.read(args.config)
+            cfg = _load_config(args)
             _apply_cli_overrides(cfg, args)
             device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
             managed_marstek = _build_managed_marstek(cfg, device_types)

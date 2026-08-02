@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 from typing import TYPE_CHECKING
@@ -72,6 +73,15 @@ FRITZ_SECTION = "FRITZ"
 FRONIUS_SECTION = "FRONIUS"
 TIBBER_PULSE_SECTION = "TIBBER_PULSE"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
+
+
+def new_config_parser() -> configparser.ConfigParser:
+    """Parser used for every config backend.
+
+    Interpolation is disabled so a literal ``%`` in a credential (e.g.
+    ``MARSTEK.PASSWORD``) is read as-is.
+    """
+    return configparser.ConfigParser(dict_type=OrderedDict, interpolation=None)
 
 
 class ClientFilter:
