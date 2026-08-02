@@ -270,7 +270,6 @@ async function poll(): Promise<void> {
     if (snapshot) {
       state.snapshot = snapshot;
       state.lastFrameAt = Date.now();
-      beat();
     }
     state.connection = "live";
     state.failures = 0;
@@ -292,19 +291,15 @@ async function poll(): Promise<void> {
 
 function schedule(): void {
   window.clearTimeout(timer);
+  // A poll already in flight when the page was hidden still lands here and
+  // would restart the loop behind a hidden iframe. visibilitychange arms it
+  // again on the way back.
+  if (document.visibilityState === "hidden") return;
   const base = pollInterval(state.snapshot);
   // Back off while offline so a down backend is not hammered, but stay
   // responsive enough that recovery feels immediate.
   const delay = state.connection === "offline" ? Math.min(base * 4, 10000) : base;
   timer = window.setTimeout(poll, delay);
-}
-
-function beat(): void {
-  const dot = document.getElementById("pulse");
-  if (!dot) return;
-  dot.classList.remove("beat");
-  void dot.offsetWidth; // restart the animation
-  dot.classList.add("beat");
 }
 
 function render(): void {

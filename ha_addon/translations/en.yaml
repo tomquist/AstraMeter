@@ -43,7 +43,7 @@ configuration:
     description: "Keeps the grid closer to zero — less import, less export, less overshoot and hunting — by adapting automatically to your power meter, including meters that report with a delay (e.g. a Home Assistant push sensor). 0.5 (default) is recommended and needs no tuning; lower values react more cautiously and 0 turns the feature off (steer directly on the raw meter reading). Only applies to CT002/CT003 device types."
   dashboard_allow_write:
     name: Allow Changes From The Dashboard
-    description: "Lets the dashboard change your configuration and control individual batteries (enable/disable, manual target). Turn this off to make the dashboard read-only. Only applies to the dashboard opened from the sidebar. On by default."
+    description: "Lets the dashboard change your configuration and control individual batteries (enable/disable, manual target). Turn this off to make the dashboard read-only. Applies however the dashboard is opened, from the sidebar or directly. On by default."
   dashboard_direct_access:
     name: Allow Dashboard Access Outside Home Assistant
     description: "Also serves the dashboard on http://<your-host>:52500 without any authentication. Home Assistant's login does not protect this, so anyone on your network can see and (if changes are allowed) alter your configuration. Leave this off unless you specifically need it. Off by default."

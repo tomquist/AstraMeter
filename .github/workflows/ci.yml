@@ -218,6 +218,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -252,6 +254,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { BASE_URL, readIni, startStack, type Stack } from "./stack.js";
 
+/** What the backend substitutes for a stored secret (status/secrets.py). */
+const SENTINEL = "\u2022".repeat(8);
+
 /** The structured `config.ini` editor, asserted against the file on disk. */
 
 let stack: Stack;
@@ -76,10 +79,27 @@ test("a setting can be added, typed from its name, and saved", async ({ page }) 
 });
 
 test("a setting can be removed", async ({ page }) => {
+  // Create it here rather than leaning on the previous test: Playwright
+  // retries a single test, not the file, so on a retry the row would be
+  // missing and a skip would report this as green without asserting removal.
   const row = page.locator(".keyrow", {
     has: page.locator('[aria-label="Setting name: WIFI_RSSI"]'),
   });
-  if ((await row.count()) === 0) test.skip(true, "depends on the add test");
+  if ((await row.count()) === 0) {
+    const ct = page.locator("details.section", {
+      has: page.locator('summary:text("CT002")'),
+    });
+    await ct.locator('button:text("+ Add setting")').click();
+    const name = page.locator('[aria-label="Setting name: NEW_SETTING"]');
+    await name.fill("WIFI_RSSI");
+    await name.blur();
+    const value = page.locator('[aria-label="WIFI_RSSI value"]');
+    await value.fill("-62");
+    await value.dispatchEvent("change");
+    await page.locator('button:text("Save only")').click();
+    await expect(page.locator(".banner")).toContainText("Saved");
+  }
+  await expect(row).toHaveCount(1);
   await row.locator("button.iconbtn").click();
   await page.locator('button:text("Save only")').click();
   await expect(page.locator(".banner")).toContainText("Saved");
@@ -144,7 +164,16 @@ test("secrets are masked and survive an unrelated edit", async ({ page }) => {
   await expect(page.locator("details.section").first()).toBeVisible();
   const served = await (await fetch(`${BASE_URL}api/config`)).text();
   expect(served).not.toContain("hunter2");
-  expect(served).toContain("\\u2022");
+  // Assert the decoded value: whether the encoder escapes the bullet or
+  // emits it as UTF-8 is not what this test is about.
+  const sections = JSON.parse(served).sections as Record<
+    string,
+    Record<string, string>
+  >;
+  const stored = Object.values(sections)
+    .map((pairs) => pairs.PASSWORD)
+    .filter((v) => v !== undefined);
+  expect(stored).toEqual([SENTINEL]);
 
   await page.locator('[aria-label="MIN_EFFICIENT_POWER value"]').fill("300");
   await page.locator('button:text("Save only")').click();

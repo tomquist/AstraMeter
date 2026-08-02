@@ -17,7 +17,6 @@ export interface VNode {
   tag: string;
   props: Record<string, any>;
   children: VChild[];
-  key?: string;
 }
 
 export function h(
@@ -31,7 +30,7 @@ export function h(
     else flat.push(child);
   }
   const p = props || {};
-  return { tag, props: p, children: flat, key: p.key };
+  return { tag, props: p, children: flat };
 }
 
 const VOID_TAGS = new Set(["br", "hr", "img", "input", "meta", "link"]);
@@ -82,6 +81,8 @@ function setProp(
   value: any,
   creating = false,
 ): void {
+  // Reconciliation is by index, not by key (see patch); a stray `key`
+  // prop is ignored rather than written to the DOM.
   if (key === "key") return;
   if (UNCONTROLLED.has(key) && !creating) return;
   if (isEventProp(key)) {

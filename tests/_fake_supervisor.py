@@ -206,7 +206,16 @@ def build_app(state: SupervisorState) -> web.Application:
         options = payload.get("options") or {}
         for key, value in options.items():
             spec = str(state.schema.get(key, ""))
-            if spec.startswith("float(0,1)") and not 0 <= float(value) <= 1:
+            if not spec.startswith("float(0,1)"):
+                continue
+            try:
+                # The real Supervisor answers 400 for a value it cannot
+                # coerce, not a 500 — a raw ValueError here would hide the
+                # message the dashboard is supposed to show.
+                in_range = 0 <= float(value) <= 1
+            except (TypeError, ValueError):
+                in_range = False
+            if not in_range:
                 return web.json_response(
                     {
                         "result": "error",

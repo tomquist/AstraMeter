@@ -143,6 +143,12 @@ class WebServer:
 
     def _actor(self, request) -> str:
         """Who made a mutating request, for the audit log."""
+        # Home Assistant sets these on an ingress request. Reached directly the
+        # port is on the LAN, where any client can send the same headers, so
+        # believing them there would let a caller sign the audit trail with
+        # someone else's name.
+        if not self._is_ingress(request):
+            return f"direct {request.remote}"
         name = request.headers.get("X-Remote-User-Display-Name")
         uid = request.headers.get("X-Remote-User-Id")
         if name or uid:
@@ -324,8 +330,8 @@ class WebServer:
         if setter is None:
             return _json({"error": "Unknown device or field"}, status=404)
         try:
-            value = _coerce_control_value(field, value)
-            setter(consumer_id, value)
+            coerced = _coerce_control_value(field, value)
+            setter(consumer_id, coerced)
         except ValueError as exc:
             return _json({"error": str(exc)}, status=400)
 
@@ -342,6 +348,10 @@ class WebServer:
         insights = getattr(self.status, "insights", None)
         if insights is not None and hasattr(insights, "publish_consumer_command"):
             try:
+                # The command topic carries the *entity* unit, the same one
+                # this request arrived in — mirror the wire value, not the
+                # scaled setter argument, or the replay on the next reconnect
+                # reapplies a percentage as a fraction.
                 await insights.publish_consumer_command(
                     device_id, consumer_id, field, value
                 )
@@ -518,6 +528,9 @@ class WebServer:
             filename = (body.get("filename") or "astrameter.ini").strip()
             try:
                 materialize_config(self.status.app_config, filename)
+            except ValueError as exc:
+                # A filename the user chose that target_path refuses.
+                return _json({"error": str(exc)}, status=400)
             except OSError as exc:
                 return _json({"error": f"Cannot write config file: {exc}"}, status=500)
             options = {"custom_config": filename}

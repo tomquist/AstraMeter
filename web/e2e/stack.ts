@@ -8,7 +8,7 @@
 // add-on's real option schema rather than a fixture.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, openSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,13 +89,15 @@ async function waitFor(
   probe: () => Promise<boolean>,
   what: string,
   timeoutMs = 90_000,
+  logDir?: string,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await probe().catch(() => false)) return;
     await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error(`timed out waiting for ${what}`);
+  const where = logDir ? ` — child output is in ${logDir}` : "";
+  throw new Error(`timed out waiting for ${what}${where}`);
 }
 
 const ok = (url: string, token?: string) => async () => {
@@ -136,11 +138,15 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
   writeFileSync(join(dir, "sim.json"), JSON.stringify(SIM_CONFIG, null, 2));
 
   const children: ChildProcess[] = [];
+  // Each child's output goes to a file in `dir`. Discarding it makes a CI
+  // start-up timeout unexplainable: all the failure says is what was waited
+  // for, never why the process it was waiting for did not come up.
   const spawnChild = (cmd: string, args: string[], env: NodeJS.ProcessEnv = {}) => {
+    const log = openSync(join(dir, `${cmd}-${children.length}.log`), "a");
     const child = spawn(cmd, args, {
       cwd: REPO,
       env: { ...process.env, ...env },
-      stdio: "ignore",
+      stdio: ["ignore", log, log],
       detached: true,
     });
     children.push(child);
@@ -193,11 +199,17 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
       ok(`http://127.0.0.1:${SUPERVISOR_PORT}/core/api/`, SUPERVISOR_TOKEN),
       "the stand-in Supervisor",
       30_000,
+      dir,
     );
   }
 
   spawnChild("uv", ["run", "astra-sim", "run", "--no-tui", "-c", join(dir, "sim.json")]);
-  await waitFor(ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`), "the simulator");
+  await waitFor(
+    ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`),
+    "the simulator",
+    90_000,
+    dir,
+  );
 
   spawnChild(
     "uv",
@@ -218,9 +230,14 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
         : {}),
     },
   );
-  await waitFor(ok(`${BASE_URL}health`), "AstraMeter");
+  await waitFor(ok(`${BASE_URL}health`), "AstraMeter", 90_000, dir);
   // The page is only meaningful once batteries have actually reported.
-  await waitFor(async () => (await reportingBatteries()) >= 2, "battery reports");
+  await waitFor(
+    async () => (await reportingBatteries()) >= 2,
+    "battery reports",
+    90_000,
+    dir,
+  );
 
   return {
     dir,

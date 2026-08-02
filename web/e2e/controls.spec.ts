@@ -74,7 +74,7 @@ test("controls are not recreated under the user on each poll", async ({ page }) 
 test("enabling and disabling a battery reaches the device", async ({ page }) => {
   const fold = firstFold(page);
   await fold.locator("summary").click();
-  const active = fold.locator('input[type="checkbox"]').first();
+  const active = fold.locator('input[aria-label="Active"]');
 
   await active.uncheck();
   await expect.poll(async () => (await battery(BATTERY)).active).toBe(false);
@@ -85,7 +85,7 @@ test("enabling and disabling a battery reaches the device", async ({ page }) => 
 test("a manual target can be set and handed back to automatic", async ({ page }) => {
   const fold = firstFold(page);
   await fold.locator("summary").click();
-  const auto = fold.locator('input[type="checkbox"]').nth(1);
+  const auto = fold.locator('input[aria-label="Auto target"]');
 
   await auto.uncheck();
   await expect.poll(async () => (await battery(BATTERY)).manual_enabled).toBe(true);
@@ -139,7 +139,7 @@ test("device-wide active control and force rotation are reachable", async ({
   await expect(page.locator('button:text("Force rotation")')).toBeEnabled();
   await page.locator('button:text("Force rotation")').click();
 
-  const toggle = controls.locator('input[type="checkbox"]').first();
+  const toggle = controls.locator('input[aria-label="Active control"]');
   await toggle.uncheck();
   await expect
     .poll(async () => (await statusSnapshot()).devices[0].control.active_control)
@@ -155,7 +155,7 @@ test("an in-flight write is not snapped back by the next poll", async ({ page })
   // value before the write landed, flipping it back under the user.
   const fold = firstFold(page);
   await fold.locator("summary").click();
-  const active = fold.locator('input[type="checkbox"]').first();
+  const active = fold.locator('input[aria-label="Active"]');
 
   // Hold the write open so a poll is guaranteed to land mid-flight.
   await page.route("**/api/control/consumer", async (route) => {
@@ -177,7 +177,7 @@ test("an in-flight write is not snapped back by the next poll", async ({ page })
 test("a rejected write surfaces the reason", async ({ page }) => {
   const fold = firstFold(page);
   await fold.locator("summary").click();
-  await fold.locator('input[type="checkbox"]').nth(1).uncheck();
+  await fold.locator('input[aria-label="Auto target"]').uncheck();
   const target = fold.locator('[aria-label="Manual target"]');
   await expect(target).toBeVisible();
 

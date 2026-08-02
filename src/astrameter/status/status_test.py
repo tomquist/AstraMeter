@@ -77,6 +77,23 @@ def test_snapshot_hands_out_copies_not_live_containers():
     assert len(registry.snapshot(ingress=False)["devices"][0]["consumers"]) == 2
 
 
+def test_relay_mode_reports_the_grid_it_served_not_zero():
+    """`_last_smooth_target` is only written by the active-control path, so
+    deriving the headline figure from it alone showed every relay-mode user a
+    grid total of 0 W beside three non-zero phases."""
+    device = _ct()
+    device.active_control = False
+    device._last_smooth_target = 0.0  # never set when relaying
+    snapshot = device.status_snapshot()
+    assert snapshot.grid == (12.0, -30.0, 5.0)
+    assert snapshot.grid_total == pytest.approx(-13.0)
+
+    # Under active control the balancer's own figure still wins.
+    device.active_control = True
+    device._last_smooth_target = -11.0
+    assert device.status_snapshot().grid_total == pytest.approx(-11.0)
+
+
 # -- absence is not zero ----------------------------------------------
 
 
@@ -131,7 +148,11 @@ def test_simple_mode_is_never_config_writable():
     assert caps["ha_options"] is True
 
 
-def test_etag_changes_with_state_and_over_time():
+def test_etag_changes_with_state_and_over_time(monkeypatch):
+    # The ETag mixes in a coarse time bucket, so two real calls either side of
+    # a bucket boundary differ for a reason this test is not about. Freeze the
+    # clock and the assertion is purely about state.
+    monkeypatch.setattr("astrameter.status.registry.time.monotonic", lambda: 1000.0)
     registry = _registry()
     first = registry.etag()
     assert registry.etag() == first
@@ -260,6 +281,16 @@ def test_uri_userinfo_is_redacted():
     out = redact_sections({"MQTT_INSIGHTS": {"URI": "mqtt://bob:hunter2@broker:1883"}})
     assert "hunter2" not in out["MQTT_INSIGHTS"]["URI"]
     assert "broker:1883" in out["MQTT_INSIGHTS"]["URI"]
+
+
+def test_editing_a_uri_around_its_redacted_credential_keeps_both():
+    """The bullets stand in for the userinfo only; the host and port are the
+    user's to change in the same round trip."""
+    current = {"MQTT_INSIGHTS": {"URI": "mqtt://bob:hunter2@old-host:1883"}}
+    redacted = redact_sections(current)["MQTT_INSIGHTS"]["URI"]
+    edited = redacted.replace("old-host:1883", "new-host:8883")
+    restored = restore_sections({"MQTT_INSIGHTS": {"URI": edited}}, current)
+    assert restored["MQTT_INSIGHTS"]["URI"] == "mqtt://bob:hunter2@new-host:8883"
 
 
 def test_sentinel_round_trip_keeps_the_stored_secret():

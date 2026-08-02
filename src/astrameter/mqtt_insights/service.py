@@ -393,14 +393,20 @@ class MqttInsightsService:
     # snapshot path.
 
     async def publish_consumer_command(
-        self, device_id: str, consumer_id: str, field: str, payload: str
+        self, device_id: str, consumer_id: str, field: str, payload: str | float | bool
     ) -> None:
-        """Publish a retained per-consumer command (scalar payload)."""
+        """Publish a retained per-consumer command (scalar payload).
+
+        Callers hand this native scalars as well as strings — the dashboard
+        mirrors the JSON value it was given. The command topic is text, and
+        the reader parses it (``_parse_bool`` lower-cases, so ``True``
+        round-trips), so stringify here rather than at every call site.
+        """
         await self._publish_command(
             consumer_command_topic(
                 self._config.base_topic, device_id, consumer_id, field
             ),
-            payload.encode(),
+            str(payload).encode(),
         )
 
     async def publish_device_command(

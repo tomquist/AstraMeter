@@ -857,6 +857,12 @@ class CT002:
         torn snapshots that mix two polls.
         """
         grid = self._last_grid_values
+        # `_last_smooth_target` is only written by the active-control path, so
+        # relaying alone would report a total of 0 W beside non-zero phases.
+        # The per-phase values are recorded either way, so sum those instead.
+        grid_total = (
+            self._last_smooth_target if self.active_control else sum(grid or ())
+        )
         return CT002Snapshot(
             device_id=self._device_id,
             ct_type=self.ct_type,
@@ -872,7 +878,7 @@ class CT002:
             debug_status=self.debug_status,
             info_idx=self._info_idx_counter,
             grid=tuple(grid) if grid is not None else None,
-            grid_total=self._last_smooth_target,
+            grid_total=grid_total,
             grid_sample_at=self._last_grid_at or None,
             meter_failed=self._last_meter_failed,
             consecutive_meter_failures=self._before_send_failure_count,

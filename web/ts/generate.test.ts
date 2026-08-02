@@ -500,7 +500,7 @@ const haDashDefault = generateHomeAssistant({
   meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
   ct: { fields: {} },
 });
-lacks(haDashDefault, "dashboard", "ha-opts: nothing emitted when writes match the add-on default");
+lacks(haDashDefault, "dashboard_allow_write", "ha-opts: nothing emitted when writes match the add-on default");
 
 // The add-on's sidebar panel *is* the dashboard, so it cannot be turned off
 // there — no `dashboard` option exists to emit, whatever the form says.

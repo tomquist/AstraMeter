@@ -104,16 +104,27 @@ export function ctDevices(snapshot: StatusSnapshot | null): DeviceStatus[] {
   return (snapshot.devices || []).filter((d) => d.kind === "ct002");
 }
 
-/** Whole-house grid power: + import, − export. */
+/** Whole-house grid power: + import, − export.
+ *
+ * Summed over every reporting emulator, because `allConsumers` aggregates
+ * batteries across all of them — taking one emulator's grid reading would
+ * show a house total against contributions from a larger set.
+ */
 export function gridTotal(snapshot: StatusSnapshot | null): number | undefined {
-  const device = ctDevices(snapshot).find((d) => d.grid);
-  const grid = device?.grid;
-  if (!grid) return undefined;
-  if (grid.grid_total_w != null) return grid.grid_total_w;
-  const phases = [grid.l1_w, grid.l2_w, grid.l3_w].filter(
-    (v): v is number => v != null,
-  );
-  return phases.length ? phases.reduce((a, b) => a + b, 0) : undefined;
+  let total: number | undefined;
+  for (const device of ctDevices(snapshot)) {
+    const grid = device.grid;
+    if (!grid) continue;
+    let value = grid.grid_total_w;
+    if (value == null) {
+      const phases = [grid.l1_w, grid.l2_w, grid.l3_w].filter(
+        (v): v is number => v != null,
+      );
+      value = phases.length ? phases.reduce((a, b) => a + b, 0) : undefined;
+    }
+    if (value != null) total = (total ?? 0) + value;
+  }
+  return total;
 }
 
 /**

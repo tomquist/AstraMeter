@@ -13,7 +13,6 @@ and are deliberately not used.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -42,12 +41,23 @@ class SupervisorError(Exception):
     ``message`` is Supervisor's own ``message`` field where it sent one — for a
     rejected options write that is its ``humanize_error`` text, which is
     rendered to the user verbatim, so it must not be reworded or wrapped.
+
+    ``unreachable`` marks the case where the call never got an answer at all,
+    which :meth:`SupervisorClient.restart` treats as success — it is exactly
+    what tearing down our own container looks like.
     """
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        unreachable: bool = False,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status = status
+        self.unreachable = unreachable
 
 
 class SupervisorClient:
@@ -130,7 +140,9 @@ class SupervisorClient:
             await self._request(
                 "POST", "/addons/self/restart", timeout=_RESTART_TIMEOUT
             )
-        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as exc:
+        except SupervisorError as exc:
+            if not exc.unreachable:
+                raise  # a refusal Supervisor did manage to answer with
             logger.debug("restart response never arrived (%s); assuming success", exc)
 
     async def list_power_entities(self) -> list[dict[str, Any]]:
@@ -178,17 +190,22 @@ class SupervisorClient:
         """A Core-proxy call whose body is not the Supervisor result envelope."""
         if not self._token:
             raise SupervisorError("Not running as a Home Assistant add-on")
-        async with (
-            aiohttp.ClientSession() as session,
-            session.request(
-                method,
-                f"{self._base_url}{path}",
-                headers={"Authorization": f"Bearer {self._token}"},
-                timeout=_TIMEOUT,
-            ) as resp,
-        ):
-            body = await resp.text()
-            status = resp.status
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    timeout=_TIMEOUT,
+                ) as resp,
+            ):
+                body = await resp.text()
+                status = resp.status
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise SupervisorError(
+                f"Could not reach Home Assistant: {exc}", unreachable=True
+            ) from exc
         if status >= 400:
             raise SupervisorError(
                 f"Home Assistant returned HTTP {status}", status=status
@@ -212,18 +229,25 @@ class SupervisorClient:
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
-        async with (
-            aiohttp.ClientSession() as session,
-            session.request(
-                method,
-                f"{self._base_url}{path}",
-                json=payload,
-                headers=headers,
-                timeout=timeout,
-            ) as resp,
-        ):
-            body = await resp.text()
-            status = resp.status
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout,
+                ) as resp,
+            ):
+                body = await resp.text()
+                status = resp.status
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            # Callers render SupervisorError verbatim; a raw aiohttp error
+            # escaping here would surface as an unhandled 500 instead.
+            raise SupervisorError(
+                f"Could not reach Supervisor: {exc}", unreachable=True
+            ) from exc
         try:
             parsed = json.loads(body) if body else {}
         except ValueError:

@@ -635,31 +635,6 @@ label.row input[type="checkbox"] {
   transition: opacity 240ms;
 }
 
-/* One 1px tick on frame arrival, decaying — instead of a dot that pulses
- * forever and animates hardest exactly when the data has stopped. */
-.pulse {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-  opacity: 0.25;
-}
-
-.pulse.beat {
-  animation: beat 1.5s ease-out;
-}
-
-@keyframes beat {
-  0% {
-    opacity: 1;
-    transform: scale(1.5);
-  }
-  100% {
-    opacity: 0.25;
-    transform: scale(1);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;
@@ -672,7 +647,7 @@ label.row input[type="checkbox"] {
   width: 1px;
   height: 1px;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 

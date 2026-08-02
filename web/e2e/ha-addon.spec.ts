@@ -7,6 +7,9 @@ import {
   type Stack,
 } from "./stack.js";
 
+/** What the backend substitutes for a stored secret (status/secrets.py). */
+const SENTINEL = "\u2022".repeat(8);
+
 /**
  * The Home Assistant add-on path: the guided form, the entity picker and the
  * configuration-mode switch, against a stand-in Supervisor serving the
@@ -92,7 +95,9 @@ test("a stored secret never reaches the browser and is not overwritten", async (
 }) => {
   const served = await (await fetch(`${BASE_URL}api/addon/options`)).text();
   expect(served).not.toContain("super-secret-pw");
-  expect(served).toContain("\\u2022");
+  // The decoded value, not its JSON escape: whether the encoder emits the
+  // bullet escaped or as UTF-8 is not what this test is about.
+  expect(JSON.parse(served).options.marstek_password).toBe(SENTINEL);
 
   await page.goto(`${BASE_URL}#/config`);
   await expect(form(page)).toBeVisible();

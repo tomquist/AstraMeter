@@ -332,6 +332,7 @@ function deviceControls(
         type: "checkbox",
         checked: active,
         disabled: Boolean(state.busy[`${deviceId}:active_control`]),
+        "aria-label": "Active control",
         onchange: (e: Event) =>
           actions.setDevice(
             deviceId,
@@ -509,6 +510,7 @@ function consumerControls(
         type: "checkbox",
         checked: pend("active", consumer.active ?? true),
         disabled: busy("active"),
+        "aria-label": "Active",
         onchange: (e: Event) =>
           set("active", (e.target as HTMLInputElement).checked),
       }),
@@ -524,6 +526,7 @@ function consumerControls(
         type: "checkbox",
         checked: !manual,
         disabled: busy("auto_target"),
+        "aria-label": "Auto target",
         onchange: (e: Event) =>
           set("auto_target", (e.target as HTMLInputElement).checked),
       }),
@@ -624,7 +627,15 @@ function numberControl(spec: ControlSpec): VNode {
       disabled: spec.busy,
       "aria-label": spec.label,
       onchange: (e: Event) => {
-        const parsed = Number((e.target as HTMLInputElement).value);
+        // Number("") is 0, so clearing the box and tabbing away would commit
+        // a real 0 W to the battery. An empty field means "no change".
+        //
+        // Deliberately NOT clamped to min/max: the server enforces the same
+        // range and says why it refused, and silently rewriting what someone
+        // typed is worse feedback than telling them it was out of range.
+        const raw = (e.target as HTMLInputElement).value.trim();
+        if (raw === "") return;
+        const parsed = Number(raw);
         if (Number.isFinite(parsed)) spec.onCommit(parsed);
       },
     }),
@@ -695,7 +706,7 @@ function diagnostics(state: AppState): VChild[] {
         ...row("Runtime", service.runtime),
         ...row("Uptime", duration(snapshot.uptime_s)),
         ...row("Config file", service.config_path),
-        ...row("Config mode", snapshot.capabilities.config_mode),
+        ...row("Config mode", snapshot.capabilities?.config_mode),
         ...row("Log level", service.log_level),
         ...row("Commit", service.git_commit?.slice(0, 12)),
       ),

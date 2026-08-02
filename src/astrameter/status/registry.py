@@ -245,7 +245,7 @@ def _as_wire_dict(snapshot: Any) -> dict[str, Any]:
             continue
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             out[field.name] = _as_wire_dict(value)
-        elif isinstance(value, tuple):
+        elif isinstance(value, (tuple, list)):
             out[field.name] = [
                 _as_wire_dict(v)
                 if dataclasses.is_dataclass(v) and not isinstance(v, type)

@@ -126,7 +126,11 @@ export function configView(
 ): VChild[] {
   const caps = state.snapshot?.capabilities;
   const mode = caps?.config_mode ?? "standalone";
-  const cards: VChild[] = [modeCard(mode, caps?.ha_options ?? false, actions)];
+  // The mode switch writes, so a read-only dashboard must not offer it: the
+  // backend refuses the call and the user gets an error for a button we drew.
+  const cards: VChild[] = [
+    modeCard(mode, Boolean(caps?.ha_options && caps?.controls), actions),
+  ];
 
   if (config.error) {
     cards.unshift(h("div", { class: "banner err" }, config.error));

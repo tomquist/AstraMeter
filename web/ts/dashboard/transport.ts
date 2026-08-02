@@ -14,6 +14,9 @@ import type { StatusSnapshot } from "./types.js";
 
 export type ConnectionState = "connecting" | "live" | "offline";
 
+/** Deadline for any single request; long enough for a slow restart to answer. */
+const REQUEST_TIMEOUT_MS = 15000;
+
 export interface HaEntity {
   entity_id: string;
   name?: string;
@@ -73,7 +76,17 @@ async function request<T>(
   const headers: Record<string, string> = {};
   if (init?.etag) headers["If-None-Match"] = init.etag;
   if (init?.body) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, { ...init, headers });
+  // Without a deadline a hung connection never settles, and the poll loop
+  // only re-arms once the previous request finishes — so the page would sit
+  // on stale values forever instead of reporting itself offline.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers, signal: abort.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (response.status === 304) {
     return { data: null, etag: init?.etag ?? null, status: 304 };
   }

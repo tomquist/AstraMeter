@@ -2295,6 +2295,25 @@ async def test_publish_consumer_command_lands_where_the_replay_path_reads():
     assert calls == [("c1", 150.0)]
 
 
+async def test_publish_consumer_command_accepts_the_native_scalars_it_is_given():
+    """The dashboard hands this the JSON value it received — a float or a
+    bool, not a string. Requiring a string made every mirrored write raise
+    inside the caller's ``except Exception``, so nothing was ever published
+    and the retained topic silently kept the old value."""
+    service = MqttInsightsService(
+        MqttInsightsConfig(broker="localhost", base_topic="am")
+    )
+    service._client = AsyncMock()
+
+    await service.publish_consumer_command("dev1", "c1", "manual_target", -450.0)
+    assert service._client.publish.call_args.kwargs["payload"] == b"-450.0"
+
+    await service.publish_consumer_command("dev1", "c1", "active", False)
+    payload = service._client.publish.call_args.kwargs["payload"]
+    # The reader lower-cases before parsing, so "False" round-trips.
+    assert MqttInsightsService._parse_bool(payload.decode()) is False
+
+
 async def test_publish_device_command_lands_where_the_listener_reads():
     service = MqttInsightsService(
         MqttInsightsConfig(broker="localhost", base_topic="am")

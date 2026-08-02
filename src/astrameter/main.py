@@ -951,8 +951,21 @@ async def _supervise(
 
             # Re-read the configuration off-loop: a backend may have to ask
             # the Supervisor for part of it, and prefetch() is blocking.
-            config = await asyncio.to_thread(_load_config, args)
-            general = _apply_cli_overrides(config.general(), args)
+            #
+            # The dashboard is what writes the file this re-reads, so a bad
+            # write must not be fatal: letting the error out would stop the
+            # web server in the `finally` below and take away the only surface
+            # that can repair the configuration. Keep running the last good one.
+            try:
+                new_config = await asyncio.to_thread(_load_config, args)
+                new_general = _apply_cli_overrides(new_config.general(), args)
+            except Exception:
+                logger.exception(
+                    "Could not reload the configuration; "
+                    "continuing with the previous one"
+                )
+            else:
+                config, general = new_config, new_general
             # The dashboard can add or remove `custom_config`, so the source
             # the next cycle runs from may not be the one this one used.
             registry.app_config = config

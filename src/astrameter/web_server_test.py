@@ -325,6 +325,14 @@ async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     device = _device()
     registry.register_device("ct-1", "ct002", device)
+
+    mirrored: list[tuple] = []
+
+    class _Insights:
+        async def publish_consumer_command(self, device_id, consumer_id, field, value):
+            mirrored.append((device_id, consumer_id, field, value))
+
+    registry.insights = _Insights()
     client = await _client(registry)
 
     response = await client.post(
@@ -345,6 +353,11 @@ async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
     body = await (await client.get("/api/status")).json()
     row = body["devices"][0]["consumers"][0]
     assert row["efficiency_window_weight_pct"] == pytest.approx(50.0)
+
+    # The retained MQTT command is replayed into the handler that reads the
+    # *entity* unit, so mirroring the scaled 0.5 would reapply it as 0.5 %
+    # on the next reconnect — the exact revert this mirror exists to stop.
+    assert mirrored == [("ct-1", "02b250000001", "efficiency_window_weight", 50)]
     await client.close()
 
 

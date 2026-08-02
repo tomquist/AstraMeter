@@ -263,6 +263,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "WEB_CONFIG_ENABLED": {"type": "boolean"},
         "DASHBOARD_ENABLED": {"type": "boolean"},
         "DASHBOARD_ALLOW_WRITE": {"type": "boolean"},
+        "DASHBOARD_DIRECT_ACCESS": {"type": "boolean"},
         "ENABLE_WEB_SERVER": {"type": "boolean"},
         "WEB_SERVER_PORT": {"type": "integer"},
         "DISABLE_SUM_PHASES": {"type": "boolean"},
