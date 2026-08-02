@@ -1,18 +1,15 @@
-"""Home Assistant add-on configuration backend.
+"""Home Assistant add-on backend: settings read from the add-on's own config.
 
-Running with ``--addon`` swaps the ``config.ini`` file backend for the add-on's
-own configuration sources: the user's options in ``/data/options.json`` and the
-Supervisor API (MQTT credentials, the add-on slug, Home Assistant readiness).
+The add-on is not configured by a file. Its configuration is the JSON the
+Supervisor writes to ``/data/options.json`` from the Configuration tab, plus
+what the Supervisor itself knows (the MQTT service, this add-on's slug).
+:class:`AddonAppConfig` reads exactly that and answers the app's
+:class:`~astrameter.config.settings.AppConfig` interface — there is no
+``config.ini`` involved, generated or otherwise, and no section/key names: an
+option maps straight onto the settings field it configures.
 
-:class:`AddonConfig` is that backend. It is not a converted or pre-rendered
-config — nothing is written out and no values are copied up front. It answers
-the same read API the rest of the app already uses (``get`` / ``getboolean`` /
-``has_section`` / ``sections`` ...) by looking the requested ``[SECTION] KEY``
-up in the add-on options at the moment it is asked, through the name maps
-below.
-
-All of this used to live in ``ha_addon/run.sh`` as bashio shell code that
-rendered an intermediate ``config.ini``.
+All of this used to live in ``ha_addon/run.sh``, which rendered the options
+into a ``config.ini`` with bashio before starting the app.
 """
 
 from __future__ import annotations
@@ -20,15 +17,32 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections import OrderedDict
 from collections.abc import Callable
-from configparser import ConfigParser, NoOptionError, NoSectionError
-from typing import Any
+from dataclasses import replace
+from ipaddress import IPv4Network
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import requests
 
-from astrameter.config.config_loader import new_config_parser
+from astrameter.config.config_loader import (
+    ClientFilter,
+    apply_signal_wrappers,
+    parse_float_list,
+    parse_mqtt_uri,
+)
+from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.logger import logger
+from astrameter.config.settings import (
+    AppConfig,
+    CtSettings,
+    GeneralSettings,
+    MarstekSettings,
+)
+from astrameter.powermeter import HomeAssistant
+
+if TYPE_CHECKING:
+    from astrameter.config.settings import ConfiguredPowermeter
+    from astrameter.mqtt_insights import MqttInsightsConfig
 
 OPTIONS_PATH = "/data/options.json"
 """Where the Supervisor stores the add-on's user options."""
@@ -44,111 +58,76 @@ REQUEST_TIMEOUT = 10.0
 HOME_ASSISTANT_ATTEMPTS = 60
 HOME_ASSISTANT_DELAY = 5.0
 
+POWER_SOURCE_NAME = "HOMEASSISTANT"
+"""Label of the add-on's single power source.
+
+It also identifies the source in MQTT discovery, so it must stay stable —
+it is not a config section.
+"""
+
 Options = dict[str, Any]
 
-# ---------------------------------------------------------------------------
-# Name maps: config key -> add-on option (or a fixed value the add-on implies).
-# ---------------------------------------------------------------------------
-
-_GENERAL_OPTIONS: dict[str, str] = {
-    "DEVICE_TYPE": "device_types",
-    "THROTTLE_INTERVAL": "throttle_interval",
-    "DEDUPE_TIME_WINDOW": "dedupe_time_window",
+# Add-on option -> the settings field it configures. Options the user left
+# untouched are skipped, so the settings defaults apply.
+_GENERAL_FIELDS: dict[str, str] = {
+    "dedupe_time_window": "dedupe_time_window",
 }
 
-# The add-on panel links to the built-in web UI, so it is always served.
-_GENERAL_CONSTANTS: dict[str, Any] = {"ENABLE_WEB_SERVER": True}
+_GLOBAL_SIGNAL_FIELDS: dict[str, str] = {
+    "throttle_interval": "throttle_interval",
+    "wait_for_next_message": "wait_for_next_message",
+}
 
-_CT_OPTIONS: dict[str, str] = {
-    "CT_MAC": "ct_mac",
-    "ACTIVE_CONTROL": "active_control",
-    "MIN_EFFICIENT_POWER": "min_efficient_power",
-    "EFFICIENCY_ROTATION_INTERVAL": "efficiency_rotation_interval",
-    "MIN_DC_OUTPUT": "min_dc_output",
-    "GRID_PREDICT_TRUST": "grid_predict_trust",
-    # Balancer / active-control tuning (mirrors the web config editor's
-    # "balancer" group).
-    "FAIR_DISTRIBUTION": "fair_distribution",
-    "BALANCE_GAIN": "balance_gain",
-    "BALANCE_DEADBAND": "balance_deadband",
-    "MAX_CORRECTION_PER_STEP": "max_correction_per_step",
-    "ERROR_BOOST_THRESHOLD": "error_boost_threshold",
-    "ERROR_BOOST_MAX": "error_boost_max",
-    "ERROR_REDUCE_THRESHOLD": "error_reduce_threshold",
-    "MAX_TARGET_STEP": "max_target_step",
-    "PACE_BASE_STEP": "pace_base_step",
-    "PACE_MAX_STEP": "pace_max_step",
-    "OSC_DAMP_MAX": "osc_damp_max",
-    "OSC_DAMP_ALPHA": "osc_damp_alpha",
-    "OSC_DAMP_DECAY": "osc_damp_decay",
-    "OSC_DAMP_THRESHOLD": "osc_damp_threshold",
-    "CONCENTRATE_DEADBAND": "concentrate_deadband",
-    "IMPORT_TRIM_W": "import_trim_w",
+_SOURCE_SIGNAL_FIELDS: dict[str, str] = {
+    "smooth_alpha": "smooth_target_alpha",
+    "max_smooth_step": "max_smooth_step",
+    "deadband": "deadband",
+    "hampel_window": "hampel_window",
+    "hampel_n_sigma": "hampel_n_sigma",
+    "hampel_min_threshold": "hampel_min_threshold",
+    "pid_kp": "pid_kp",
+    "pid_ki": "pid_ki",
+    "pid_kd": "pid_kd",
+    "pid_output_max": "pid_output_max",
+    "pid_mode": "pid_mode",
+}
+
+_CT_FIELDS: dict[str, str] = {
+    "ct_mac": "ct_mac",
+    "active_control": "active_control",
+    "min_efficient_power": "min_efficient_power",
+    "efficiency_rotation_interval": "efficiency_rotation_interval",
+    "min_dc_output": "min_dc_output",
+    "grid_predict_trust": "grid_predict_trust",
+    # Balancer / active-control tuning.
+    "fair_distribution": "fair_distribution",
+    "balance_gain": "balance_gain",
+    "balance_deadband": "balance_deadband",
+    "max_correction_per_step": "max_correction_per_step",
+    "error_boost_threshold": "error_boost_threshold",
+    "error_boost_max": "error_boost_max",
+    "error_reduce_threshold": "error_reduce_threshold",
+    "max_target_step": "max_target_step",
+    "pace_base_step": "pace_base_step",
+    "pace_max_step": "pace_max_step",
+    "osc_damp_max": "osc_damp_max",
+    "osc_damp_alpha": "osc_damp_alpha",
+    "osc_damp_decay": "osc_damp_decay",
+    "osc_damp_threshold": "osc_damp_threshold",
+    "concentrate_deadband": "concentrate_deadband",
+    "import_trim_w": "import_trim_w",
     # Opt-in HTTP cloud reporting (hamedata.com).
-    "CLOUD_REPORTING": "cloud_reporting",
-    "CLOUD_REPORTING_HOST": "cloud_reporting_host",
-    "CLOUD_REPORTING_INTERVAL": "cloud_reporting_interval",
+    "cloud_reporting": "cloud_reporting",
+    "cloud_reporting_host": "cloud_reporting_host",
+    "cloud_reporting_interval": "cloud_reporting_interval",
 }
 
-# Home Assistant sensors are the add-on's power source, reached through the
-# Supervisor proxy and authenticated with the add-on's own token.
-_HOMEASSISTANT_CONSTANTS: dict[str, Any] = {
-    "IP": "supervisor",
-    "PORT": 80,
-    "API_PATH_PREFIX": "/core",
+_MARSTEK_FIELDS: dict[str, str] = {
+    "mailbox": "marstek_mailbox",
+    "password": "marstek_password",
 }
 
-_HOMEASSISTANT_OPTIONS: dict[str, str] = {
-    "WAIT_FOR_NEXT_MESSAGE": "wait_for_next_message",
-    "POWER_OFFSET": "power_offset",
-    "POWER_MULTIPLIER": "power_multiplier",
-    "SMOOTH_TARGET_ALPHA": "smooth_target_alpha",
-    "MAX_SMOOTH_STEP": "max_smooth_step",
-    "DEADBAND": "deadband",
-    "HAMPEL_WINDOW": "hampel_window",
-    "HAMPEL_N_SIGMA": "hampel_n_sigma",
-    "HAMPEL_MIN_THRESHOLD": "hampel_min_threshold",
-    "PID_KP": "pid_kp",
-    "PID_KI": "pid_ki",
-    "PID_KD": "pid_kd",
-    "PID_OUTPUT_MAX": "pid_output_max",
-    "PID_MODE": "pid_mode",
-}
-
-# Which entity keys the power source uses depends on whether the user gave a
-# separate export entity, so these are resolved in code rather than by name.
-_HOMEASSISTANT_POWER_KEYS = (
-    "POWER_CALCULATE",
-    "CURRENT_POWER_ENTITY",
-    "POWER_INPUT_ALIAS",
-    "POWER_OUTPUT_ALIAS",
-)
-
-_MARSTEK_CONSTANTS: dict[str, Any] = {
-    "ENABLE": True,
-    "BASE_URL": "https://eu.hamedata.com",
-    "TIMEZONE": "Europe/Berlin",
-}
-
-_MARSTEK_OPTIONS: dict[str, str] = {
-    "MAILBOX": "marstek_mailbox",
-    "PASSWORD": "marstek_password",
-}
-
-# Home Assistant's own broker delivers these under different names.
-_MQTT_SERVICE_KEYS: dict[str, str] = {
-    "BROKER": "host",
-    "PORT": "port",
-    "USERNAME": "username",
-    "PASSWORD": "password",
-    "TLS": "ssl",
-}
-
-_MQTT_KEYS = ("URI", *_MQTT_SERVICE_KEYS, "HA_DISCOVERY", "ADDON_SLUG")
-
-_CT_SECTIONS = ("CT002", "CT003")
-
-# Options the add-on UI cannot honour once a custom config file takes over.
+# Options a custom config file takes over.
 _IGNORED_WITH_CUSTOM_CONFIG: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         ("marstek_mailbox", "marstek_password", "marstek_auto_register_ct_device"),
@@ -162,7 +141,7 @@ _IGNORED_WITH_CUSTOM_CONFIG: tuple[tuple[tuple[str, ...], str], ...] = (
     ),
 )
 
-_UNSET = object()
+SettingsT = TypeVar("SettingsT")
 
 
 def load_options(path: str = OPTIONS_PATH) -> Options:
@@ -189,8 +168,8 @@ def get_option(options: Options, key: str, default: Any = None) -> Any:
     """Return *key* only when the user actually set it, else *default*.
 
     Mirrors ``bashio::config.has_value``: missing, ``null`` and empty-string
-    values all count as unset, so an untouched optional field reads as absent
-    and the app's own default applies.
+    values all count as unset, so an untouched optional field keeps whatever
+    default the settings dataclass declares.
     """
     value = options.get(key)
     if value is None:
@@ -200,11 +179,36 @@ def get_option(options: Options, key: str, default: Any = None) -> Any:
     return value
 
 
-def _format(value: Any) -> str:
-    """Render an option value the way the config API hands values out: as text."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value).strip()
+def _coerce(value: Any, default: Any) -> Any:
+    """Fit an option value to the type of the settings field it feeds.
+
+    The Supervisor already hands out real JSON types (the add-on schema says
+    ``bool`` / ``int`` / ``float`` / ``str``), so this only bridges the
+    harmless mismatches, e.g. an integer where a float is expected.
+    """
+    if isinstance(default, bool):
+        return bool(value)
+    if isinstance(default, int) and not isinstance(default, bool):
+        return int(value)
+    if isinstance(default, float):
+        return float(value)
+    if isinstance(default, str):
+        return str(value).strip()
+    return value
+
+
+def _apply_options(
+    settings: SettingsT, options: Options, fields: dict[str, str]
+) -> SettingsT:
+    """Overlay the options the user set onto *settings*."""
+    values: dict[str, Any] = {}
+    for name, option_key in fields.items():
+        value = get_option(options, option_key)
+        if value is not None:
+            values[name] = _coerce(value, getattr(settings, name))
+    if not values:
+        return settings
+    return cast("SettingsT", replace(cast("Any", settings), **values))
 
 
 class SupervisorClient:
@@ -308,218 +312,151 @@ def wait_for_home_assistant(
     return False
 
 
-class AddonConfig(ConfigParser):
-    """The add-on options, read through the app's configuration API.
-
-    Every lookup is answered from the live options (and, for MQTT, from the
-    Supervisor) — there is no generated config file or copied-over set of
-    values behind this. Values assigned at runtime (CLI overrides via ``set``)
-    are kept in the parser's own storage and take precedence.
-
-    Reads must use the classic API (``get`` / ``getint`` / ``getboolean`` /
-    ``has_section`` / ``has_option`` / ``sections`` / ``options``), which is
-    what the app uses throughout; the mapping protocol (``cfg[section]``,
-    ``items()``) sees the runtime overrides only.
-    """
+class AddonAppConfig(AppConfig):
+    """Settings taken from the Home Assistant add-on options."""
 
     def __init__(
         self, options: Options, supervisor: SupervisorClient | None = None
     ) -> None:
-        super().__init__(dict_type=OrderedDict, interpolation=None)
         self._options = options
         self._supervisor = SupervisorClient() if supervisor is None else supervisor
-        self._mqtt_service: dict[str, Any] | None = None
-        self._mqtt_resolved = False
-        self._addon_slug: str | None = None
+        self._service: dict[str, Any] | None = None
+        self._service_resolved = False
+        self._slug: str | None = None
 
-    # -- configuration sources ------------------------------------------
+    def _option(self, key: str, default: Any = None) -> Any:
+        return get_option(self._options, key, default)
 
-    def _option(self, key: str) -> Any:
-        return get_option(self._options, key)
-
-    def _service(self) -> dict[str, Any] | None:
+    def _mqtt_service(self) -> dict[str, Any] | None:
         """Home Assistant's MQTT broker, asked for once and remembered."""
-        if not self._mqtt_resolved:
-            self._mqtt_resolved = True
-            self._mqtt_service = self._supervisor.mqtt_service()
-            if self._mqtt_service is not None:
-                logger.info("Using Home Assistant's internal MQTT broker")
-        return self._mqtt_service
+        if not self._service_resolved:
+            self._service_resolved = True
+            self._service = self._supervisor.mqtt_service()
+        return self._service
 
-    def _slug(self) -> str:
-        if self._addon_slug is None:
-            self._addon_slug = self._supervisor.addon_slug()
-        return self._addon_slug
+    def _addon_slug(self) -> str:
+        if self._slug is None:
+            self._slug = self._supervisor.addon_slug()
+        return self._slug
 
-    # -- section layout --------------------------------------------------
-
-    def _ct_sections(self) -> tuple[str, ...]:
-        """CT sections the configured device types imply."""
-        device_types = str(self._option("device_types") or "").lower()
-        has_ct002 = "ct002" in device_types
-        has_ct003 = "ct003" in device_types
-        if has_ct003 and not has_ct002:
-            return ("CT003",)
-        if has_ct002 and has_ct003:
-            return _CT_SECTIONS
-        return ("CT002",)
-
-    def _marstek_enabled(self) -> bool:
-        """Marstek credentials are only used with the auto-register opt-in."""
-        return bool(
-            self._option("marstek_auto_register_ct_device")
-            and self._option("marstek_mailbox")
-            and self._option("marstek_password")
+    def general(self) -> GeneralSettings:
+        defaults = GeneralSettings()
+        device_types = [
+            device_type.strip()
+            for device_type in str(self._option("device_types", "")).split(",")
+            if device_type.strip()
+        ]
+        general = replace(
+            defaults,
+            device_types=device_types or defaults.device_types,
+            # The add-on panel links to the built-in web UI, so it is always
+            # served; its config editor is for config files only.
+            enable_web_server=True,
+            web_config_enabled=False,
+            signal=_apply_options(
+                defaults.signal, self._options, _GLOBAL_SIGNAL_FIELDS
+            ),
         )
+        return _apply_options(general, self._options, _GENERAL_FIELDS)
 
-    def _mqtt_enabled(self) -> bool:
-        if self._option("mqtt_uri") is not None:
-            return True
-        return self._service() is not None
+    def ct(self, device_type: str) -> CtSettings:
+        # The add-on configures one CT emulator; when both are enabled they
+        # share these settings.
+        settings = replace(
+            CtSettings(), dedupe_time_window=self.general().dedupe_time_window
+        )
+        return _apply_options(settings, self._options, _CT_FIELDS)
 
-    def _addon_sections(self) -> list[str]:
-        sections = ["GENERAL", *self._ct_sections()]
-        if self._marstek_enabled():
-            sections.append("MARSTEK")
-        sections.append("HOMEASSISTANT")
-        if self._mqtt_enabled():
-            sections.append("MQTT_INSIGHTS")
-        return sections
+    def marstek(self) -> MarstekSettings:
+        settings = _apply_options(MarstekSettings(), self._options, _MARSTEK_FIELDS)
+        # Credentials are only used with the auto-register opt-in.
+        enable = bool(
+            self._option("marstek_auto_register_ct_device")
+            and settings.mailbox
+            and settings.password
+        )
+        return replace(settings, enable=enable)
 
-    def _keys(self, section: str) -> list[str]:
-        """Keys *section* can answer (not all of them are always set)."""
-        if section == "GENERAL":
-            return [*_GENERAL_CONSTANTS, *_GENERAL_OPTIONS]
-        if section in self._ct_sections():
-            return list(_CT_OPTIONS)
-        if section == "HOMEASSISTANT":
-            return [
-                *_HOMEASSISTANT_CONSTANTS,
-                *_HOMEASSISTANT_POWER_KEYS,
-                *_HOMEASSISTANT_OPTIONS,
-            ]
-        if section == "MARSTEK" and self._marstek_enabled():
-            return [*_MARSTEK_CONSTANTS, *_MARSTEK_OPTIONS]
-        if section == "MQTT_INSIGHTS" and self._mqtt_enabled():
-            return list(_MQTT_KEYS)
-        return []
+    def mqtt_insights(self) -> MqttInsightsConfig | None:
+        from astrameter.mqtt_insights import MqttInsightsConfig
 
-    # -- value lookup ----------------------------------------------------
-
-    def _from_maps(
-        self, key: str, constants: dict[str, Any], option_keys: dict[str, str]
-    ) -> str | None:
-        if key in constants:
-            return _format(constants[key])
-        option_key = option_keys.get(key)
-        if option_key is None:
-            return None
-        value = self._option(option_key)
-        return None if value is None else _format(value)
-
-    def _power_source(self, key: str) -> str | None:
-        """[HOMEASSISTANT] — one entity, or an import/export pair to combine."""
-        power_output = self._option("power_output_alias")
-        calculated = power_output is not None
-        power_input = _format(self._option("power_input_alias") or "")
-        if key == "POWER_CALCULATE":
-            return _format(calculated)
-        if key == "POWER_OUTPUT_ALIAS":
-            return _format(power_output) if calculated else None
-        if key == "POWER_INPUT_ALIAS":
-            return power_input if calculated else None
-        if key == "CURRENT_POWER_ENTITY":
-            return None if calculated else power_input
-        return self._from_maps(key, _HOMEASSISTANT_CONSTANTS, _HOMEASSISTANT_OPTIONS)
-
-    def _mqtt(self, key: str) -> str | None:
-        """[MQTT_INSIGHTS] — a user-supplied broker URI wins over HA's broker."""
         uri = self._option("mqtt_uri")
         if uri is not None:
-            if key == "URI":
-                return _format(uri)
+            logger.info("Using custom MQTT broker URL from configuration")
+            parts = parse_mqtt_uri(str(uri))
+            broker, port = parts.host, parts.port
+            username, password, tls = parts.username, parts.password, parts.tls
         else:
-            service = self._service()
+            service = self._mqtt_service()
             if service is None:
+                logger.info(
+                    "No MQTT broker configured and none provided by Home Assistant; "
+                    "MQTT insights disabled"
+                )
                 return None
-            if key in _MQTT_SERVICE_KEYS:
-                value = service.get(_MQTT_SERVICE_KEYS[key])
-                return None if value is None else _format(value)
-        if key == "HA_DISCOVERY":
-            return _format(True)
-        if key == "ADDON_SLUG":
-            return self._slug() or None
-        return None
+            logger.info("Using Home Assistant's internal MQTT broker")
+            broker = str(service.get("host", ""))
+            port = int(service.get("port") or 1883)
+            username = str(service.get("username") or "") or None
+            password = str(service.get("password") or "") or None
+            tls = bool(service.get("ssl", False))
 
-    def _lookup(self, section: str, option: str) -> str | None:
-        """Resolve ``[section] option`` against the add-on options.
+        return MqttInsightsConfig(
+            broker=broker,
+            port=port,
+            username=username,
+            password=password,
+            tls=tls,
+            ha_discovery=True,
+            addon_slug=self._addon_slug() or None,
+        )
 
-        Section names are matched exactly (as ConfigParser does), option names
-        case-insensitively (as ConfigParser's ``optionxform`` does).
+    def powermeters(self, general: GeneralSettings) -> list[ConfiguredPowermeter]:
+        """The add-on's single power source: Home Assistant sensors.
+
+        They are read through the Supervisor proxy, authenticated with the
+        add-on's own token.
         """
-        key = option.upper()
-        if section == "GENERAL":
-            return self._from_maps(key, _GENERAL_CONSTANTS, _GENERAL_OPTIONS)
-        if section in self._ct_sections():
-            return self._from_maps(key, {}, _CT_OPTIONS)
-        if section == "HOMEASSISTANT":
-            return self._power_source(key)
-        if section == "MARSTEK":
-            if not self._marstek_enabled():
-                return None
-            return self._from_maps(key, _MARSTEK_CONSTANTS, _MARSTEK_OPTIONS)
-        if section == "MQTT_INSIGHTS":
-            return self._mqtt(key)
-        return None
+        power_input = self._entities("power_input_alias")
+        power_output = self._entities("power_output_alias")
+        calculated = bool(power_output)
+        meter = HomeAssistant(
+            "supervisor",
+            "80",
+            False,
+            lambda: os.environ.get("SUPERVISOR_TOKEN", ""),
+            current_power_entity=[] if calculated else power_input,
+            power_calculate=calculated,
+            power_input_alias=power_input if calculated else [],
+            power_output_alias=power_output,
+            path_prefix="/core",
+        )
 
-    # -- ConfigParser read API -------------------------------------------
+        signal = _apply_options(general.signal, self._options, _SOURCE_SIGNAL_FIELDS)
+        signal = replace(
+            signal,
+            offsets=self._float_list("power_offset"),
+            multipliers=self._float_list("power_multiplier"),
+        )
+        return [
+            (
+                apply_signal_wrappers(meter, POWER_SOURCE_NAME, signal),
+                # The add-on serves whichever battery asks.
+                ClientFilter([IPv4Network("0.0.0.0/0")]),
+                signal.wait_for_next_message,
+            )
+        ]
 
-    def sections(self) -> list[str]:
-        sections = self._addon_sections()
-        sections.extend(s for s in super().sections() if s not in sections)
-        return sections
+    def _entities(self, key: str) -> list[str]:
+        """Entity ids of an option; one per phase for three-phase setups."""
+        raw = self._option(key, "")
+        return [entity.strip() for entity in str(raw).split(",") if entity.strip()]
 
-    def has_section(self, section: str) -> bool:
-        return section in self._addon_sections() or super().has_section(section)
-
-    def options(self, section: str) -> list[str]:
-        keys = [k for k in self._keys(section) if self._lookup(section, k) is not None]
-        if super().has_section(section):
-            keys.extend(k.upper() for k in super().options(section) if k not in keys)
-        return keys
-
-    def has_option(self, section: str, option: str) -> bool:
-        if super().has_section(section) and super().has_option(section, option):
-            return True
-        return self._lookup(section, option) is not None
-
-    def get(  # type: ignore[override]  # base method is overloaded on `fallback`
-        self,
-        section: str,
-        option: str,
-        *,
-        raw: bool = False,
-        vars: dict[str, str] | None = None,  # ConfigParser's parameter name
-        fallback: Any = _UNSET,
-    ) -> Any:
-        if super().has_section(section):
-            value = super().get(section, option, raw=raw, vars=vars, fallback=_UNSET)
-            if value is not _UNSET:
-                return value
-        value = self._lookup(section, option)
-        if value is not None:
-            return value
-        if fallback is _UNSET:
-            if not self.has_section(section):
-                raise NoSectionError(section)
-            raise NoOptionError(option, section)
-        return fallback
-
-    def set(self, section: str, option: str, value: str | None = None) -> None:
-        """Runtime overrides (CLI flags) win over the add-on options."""
-        if not super().has_section(section):
-            super().add_section(section)
-        super().set(section, option, value)
+    def _float_list(self, key: str) -> list[float] | None:
+        value = self._option(key)
+        if value is None:
+            return None
+        return parse_float_list(str(value), key, "add-on options")
 
 
 def custom_config_path(
@@ -551,29 +488,16 @@ def load_config(
     options: Options,
     supervisor: SupervisorClient | None = None,
     config_dir: str = ADDON_CONFIG_DIR,
-) -> tuple[ConfigParser, str | None]:
-    """Return the add-on's configuration plus the file it came from.
+) -> AppConfig:
+    """Pick the add-on's configuration source.
 
-    The path is ``None`` unless the user pointed the add-on at their own config
-    file — the options themselves are not backed by a file the web UI could
-    show or edit; the add-on's Configuration tab owns them.
+    The add-on options unless the user pointed the add-on at their own config
+    file, in which case that file takes over completely.
     """
     path = custom_config_path(options, config_dir)
     if path is None:
-        return AddonConfig(options, supervisor), None
+        return AddonAppConfig(options, supervisor)
 
     logger.info("Using custom config file: %s", path)
     _warn_ignored_options(options)
-    cfg = new_config_parser()
-    cfg.read(path)
-    return cfg, path
-
-
-def log_config(cfg: ConfigParser) -> None:
-    """Log the effective configuration (the logger masks the credentials)."""
-    lines: list[str] = []
-    for section in cfg.sections():
-        lines.append(f"[{section}]")
-        lines.extend(f"{key} = {cfg.get(section, key)}" for key in cfg.options(section))
-        lines.append("")
-    logger.info("Effective configuration:\n%s", "\n".join(lines).strip())
+    return IniAppConfig.from_file(path)

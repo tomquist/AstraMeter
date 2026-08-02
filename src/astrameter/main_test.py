@@ -1,8 +1,8 @@
 import argparse
-import configparser
 from ipaddress import IPv4Network
 
-from astrameter.config.config_loader import ClientFilter
+from astrameter.config.config_loader import ClientFilter, new_config_parser
+from astrameter.config.ini_config import IniAppConfig
 from astrameter.main import _resolve_device_config, read_ct_powermeter
 from astrameter.powermeter import Powermeter
 
@@ -87,13 +87,14 @@ async def test_read_ct_powermeter_swallows_timeout_and_serves_cached():
 
 
 def _resolve(device_type: str) -> tuple[list[str], list[str]]:
-    cfg = configparser.ConfigParser()
+    cfg = new_config_parser()
     cfg.add_section("GENERAL")
     cfg.set("GENERAL", "DEVICE_TYPE", device_type)
+    config = IniAppConfig(cfg)
     args = argparse.Namespace(
         device_types=None, skip_powermeter_test=None, device_ids=None
     )
-    device_types, device_ids, _ = _resolve_device_config(cfg, args)
+    device_types, device_ids, _ = _resolve_device_config(config, config.general(), args)
     return device_types, device_ids
 
 

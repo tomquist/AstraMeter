@@ -24,7 +24,7 @@ Application code lives under **`src/astrameter/`** (src layout). Notable pieces:
 | Path | Role |
 |------|------|
 | `src/astrameter/main.py` | CLI entry and device orchestration |
-| `src/astrameter/config/` | INI loading, powermeter factories |
+| `src/astrameter/config/` | Settings (`settings.py`) and the backends that fill them: `ini_config.py` (config.ini), `addon.py` (Home Assistant add-on options), plus the powermeter factories |
 | `src/astrameter/powermeter/` | Powermeter backends |
 | `src/astrameter/ct002/` | CT002/CT003 UDP emulator |
 | `src/astrameter/shelly/` | Shelly protocol emulation |

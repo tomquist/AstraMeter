@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
 
 from astrameter.config.logger import logger
+from astrameter.config.settings import SignalSettings
 from astrameter.powermeter import (
     AmisReader,
     Emlog,
@@ -170,195 +171,168 @@ def parse_float_list(value: str, key_name: str, section: str) -> list[float]:
     return result if result else [0.0]
 
 
+def read_signal_settings(
+    section: str,
+    config: configparser.ConfigParser,
+    defaults: SignalSettings,
+    *,
+    with_transform: bool = True,
+) -> SignalSettings:
+    """Read one section's signal conditioning, falling back to *defaults*.
+
+    Called with the ``[GENERAL]`` section to derive the defaults themselves —
+    ``with_transform`` is off there, since the offset/multiplier pair applies
+    to the source that declares it, not to every source.
+    """
+    offsets: list[float] | None = None
+    multipliers: list[float] | None = None
+    if with_transform and (
+        config.has_option(section, "POWER_OFFSET")
+        or config.has_option(section, "POWER_MULTIPLIER")
+    ):
+        offsets = parse_float_list(
+            config.get(section, "POWER_OFFSET", fallback="0"), "POWER_OFFSET", section
+        )
+        multipliers = parse_float_list(
+            config.get(section, "POWER_MULTIPLIER", fallback="1"),
+            "POWER_MULTIPLIER",
+            section,
+        )
+    return SignalSettings(
+        offsets=offsets,
+        multipliers=multipliers,
+        throttle_interval=config.getfloat(
+            section, "THROTTLE_INTERVAL", fallback=defaults.throttle_interval
+        ),
+        wait_for_next_message=config.getboolean(
+            section, "WAIT_FOR_NEXT_MESSAGE", fallback=defaults.wait_for_next_message
+        ),
+        hampel_window=config.getint(
+            section, "HAMPEL_WINDOW", fallback=defaults.hampel_window
+        ),
+        hampel_n_sigma=config.getfloat(
+            section, "HAMPEL_N_SIGMA", fallback=defaults.hampel_n_sigma
+        ),
+        hampel_min_threshold=config.getfloat(
+            section, "HAMPEL_MIN_THRESHOLD", fallback=defaults.hampel_min_threshold
+        ),
+        smooth_alpha=config.getfloat(
+            section, "SMOOTH_TARGET_ALPHA", fallback=defaults.smooth_alpha
+        ),
+        max_smooth_step=config.getfloat(
+            section, "MAX_SMOOTH_STEP", fallback=defaults.max_smooth_step
+        ),
+        deadband=config.getfloat(section, "DEADBAND", fallback=defaults.deadband),
+        pid_kp=config.getfloat(section, "PID_KP", fallback=defaults.pid_kp),
+        pid_ki=config.getfloat(section, "PID_KI", fallback=defaults.pid_ki),
+        pid_kd=config.getfloat(section, "PID_KD", fallback=defaults.pid_kd),
+        pid_output_max=config.getfloat(
+            section, "PID_OUTPUT_MAX", fallback=defaults.pid_output_max
+        ),
+        pid_mode=config.get(section, "PID_MODE", fallback=defaults.pid_mode)
+        .strip()
+        .lower(),
+    )
+
+
+def apply_signal_wrappers(
+    powermeter: Powermeter, name: str, signal: SignalSettings
+) -> Powermeter:
+    """Wrap *powermeter* in the conditioning stages *signal* asks for.
+
+    Shared by every config backend, so a power source behaves the same however
+    it was configured. *name* labels it in logs and MQTT Insights.
+    """
+    if signal.offsets is not None or signal.multipliers is not None:
+        offsets = signal.offsets if signal.offsets is not None else [0.0]
+        multipliers = signal.multipliers if signal.multipliers is not None else [1.0]
+        logger.info(
+            f"Applying power transform (multiplier={multipliers}, offset={offsets}) to {name}"
+        )
+        powermeter = TransformedPowermeter(powermeter, offsets, multipliers)
+
+    if signal.throttle_interval > 0:
+        logger.info("Applying throttling (%.1fs) to %s", signal.throttle_interval, name)
+        powermeter = ThrottledPowermeter(powermeter, signal.throttle_interval)
+
+    if signal.hampel_window > 0:
+        logger.info(
+            "Applying Hampel outlier filter (window=%d, n_sigma=%.2f, min_threshold=%.0fW) to %s",
+            signal.hampel_window,
+            signal.hampel_n_sigma,
+            signal.hampel_min_threshold,
+            name,
+        )
+        powermeter = HampelPowermeter(
+            powermeter,
+            window=signal.hampel_window,
+            n_sigma=signal.hampel_n_sigma,
+            min_threshold=signal.hampel_min_threshold,
+        )
+
+    if signal.smooth_alpha > 0:
+        alpha = max(0.01, min(1.0, signal.smooth_alpha))
+        logger.info(
+            "Applying EMA smoothing (alpha=%.2f, max_step=%.0f) to %s",
+            alpha,
+            signal.max_smooth_step,
+            name,
+        )
+        powermeter = SmoothedPowermeter(
+            powermeter, alpha=alpha, max_step=signal.max_smooth_step
+        )
+
+    if signal.deadband > 0:
+        logger.info("Applying deadband (%.0fW) to %s", signal.deadband, name)
+        powermeter = DeadbandPowermeter(powermeter, deadband=signal.deadband)
+
+    if signal.pid_kp > 0:
+        logger.info(
+            "Applying PID controller (Kp=%s, Ki=%s, Kd=%s, max=%sW, mode=%s) to %s",
+            signal.pid_kp,
+            signal.pid_ki,
+            signal.pid_kd,
+            signal.pid_output_max,
+            signal.pid_mode,
+            name,
+        )
+        powermeter = PidPowermeter(
+            powermeter,
+            kp=signal.pid_kp,
+            ki=signal.pid_ki,
+            kd=signal.pid_kd,
+            output_max=signal.pid_output_max,
+            mode=signal.pid_mode,
+        )
+
+    # Wrap outermost so health tracking sees the final processed read and
+    # labels the powermeter's MQTT Insights device.
+    return HealthTrackingPowermeter(powermeter, name=name)
+
+
 def read_all_powermeter_configs(
     config: configparser.ConfigParser,
+    global_signal: SignalSettings | None = None,
 ) -> list[tuple[Powermeter, ClientFilter, bool]]:
-    powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
-    global_throttle_interval = config.getfloat(
-        "GENERAL", "THROTTLE_INTERVAL", fallback=0.0
-    )
-    global_wait_for_next_message = config.getboolean(
-        "GENERAL", "WAIT_FOR_NEXT_MESSAGE", fallback=True
-    )
-    global_smooth_alpha = config.getfloat(
-        "GENERAL", "SMOOTH_TARGET_ALPHA", fallback=0.0
-    )
-    global_max_smooth_step = config.getfloat("GENERAL", "MAX_SMOOTH_STEP", fallback=0.0)
-    global_deadband = config.getfloat("GENERAL", "DEADBAND", fallback=0.0)
-    global_hampel_window = config.getint("GENERAL", "HAMPEL_WINDOW", fallback=0)
-    global_hampel_n_sigma = config.getfloat("GENERAL", "HAMPEL_N_SIGMA", fallback=3.0)
-    global_hampel_min_threshold = config.getfloat(
-        "GENERAL", "HAMPEL_MIN_THRESHOLD", fallback=0.0
-    )
-    global_pid_kp = config.getfloat("GENERAL", "PID_KP", fallback=0.0)
-    global_pid_ki = config.getfloat("GENERAL", "PID_KI", fallback=0.0)
-    global_pid_kd = config.getfloat("GENERAL", "PID_KD", fallback=0.0)
-    global_pid_output_max = config.getfloat("GENERAL", "PID_OUTPUT_MAX", fallback=800.0)
-    global_pid_mode = config.get("GENERAL", "PID_MODE", fallback="bias").strip().lower()
+    """Build every power source the config file declares."""
+    if global_signal is None:
+        global_signal = read_signal_settings(
+            "GENERAL", config, SignalSettings(), with_transform=False
+        )
 
+    powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
     for section in config.sections():
         powermeter = create_powermeter(section, config)
-        if powermeter is not None:
-            # Apply power transform if configured
-            has_offset = config.has_option(section, "POWER_OFFSET")
-            has_multiplier = config.has_option(section, "POWER_MULTIPLIER")
-            if has_offset or has_multiplier:
-                offsets = parse_float_list(
-                    config.get(section, "POWER_OFFSET", fallback="0"),
-                    "POWER_OFFSET",
-                    section,
-                )
-                multipliers = parse_float_list(
-                    config.get(section, "POWER_MULTIPLIER", fallback="1"),
-                    "POWER_MULTIPLIER",
-                    section,
-                )
-                logger.info(
-                    f"Applying power transform (multiplier={multipliers}, offset={offsets}) to {section}"
-                )
-                powermeter = TransformedPowermeter(powermeter, offsets, multipliers)
-
-            section_throttle_interval = config.getfloat(
-                section, "THROTTLE_INTERVAL", fallback=global_throttle_interval
+        if powermeter is None:
+            continue
+        signal = read_signal_settings(section, config, global_signal)
+        powermeters.append(
+            (
+                apply_signal_wrappers(powermeter, section, signal),
+                create_client_filter(section, config),
+                signal.wait_for_next_message,
             )
-
-            if section_throttle_interval > 0:
-                throttle_source = (
-                    "section-specific"
-                    if config.has_option(section, "THROTTLE_INTERVAL")
-                    else "global"
-                )
-                logger.info(
-                    "Applying %s throttling (%.1fs) to %s",
-                    throttle_source,
-                    section_throttle_interval,
-                    section,
-                )
-                powermeter = ThrottledPowermeter(powermeter, section_throttle_interval)
-
-            section_hampel_window = config.getint(
-                section, "HAMPEL_WINDOW", fallback=global_hampel_window
-            )
-            if section_hampel_window > 0:
-                section_hampel_n_sigma = config.getfloat(
-                    section, "HAMPEL_N_SIGMA", fallback=global_hampel_n_sigma
-                )
-                section_hampel_min_threshold = config.getfloat(
-                    section,
-                    "HAMPEL_MIN_THRESHOLD",
-                    fallback=global_hampel_min_threshold,
-                )
-                hampel_source = (
-                    "section-specific"
-                    if config.has_option(section, "HAMPEL_WINDOW")
-                    else "global"
-                )
-                logger.info(
-                    "Applying %s Hampel outlier filter (window=%d, n_sigma=%.2f, min_threshold=%.0fW) to %s",
-                    hampel_source,
-                    section_hampel_window,
-                    section_hampel_n_sigma,
-                    section_hampel_min_threshold,
-                    section,
-                )
-                powermeter = HampelPowermeter(
-                    powermeter,
-                    window=section_hampel_window,
-                    n_sigma=section_hampel_n_sigma,
-                    min_threshold=section_hampel_min_threshold,
-                )
-
-            section_smooth_alpha = config.getfloat(
-                section, "SMOOTH_TARGET_ALPHA", fallback=global_smooth_alpha
-            )
-            if section_smooth_alpha > 0:
-                section_smooth_alpha = max(0.01, min(1.0, section_smooth_alpha))
-                section_max_smooth_step = config.getfloat(
-                    section, "MAX_SMOOTH_STEP", fallback=global_max_smooth_step
-                )
-                smooth_source = (
-                    "section-specific"
-                    if config.has_option(section, "SMOOTH_TARGET_ALPHA")
-                    else "global"
-                )
-                logger.info(
-                    "Applying %s EMA smoothing (alpha=%.2f, max_step=%.0f) to %s",
-                    smooth_source,
-                    section_smooth_alpha,
-                    section_max_smooth_step,
-                    section,
-                )
-                powermeter = SmoothedPowermeter(
-                    powermeter,
-                    alpha=section_smooth_alpha,
-                    max_step=section_max_smooth_step,
-                )
-
-            section_deadband = config.getfloat(
-                section, "DEADBAND", fallback=global_deadband
-            )
-            if section_deadband > 0:
-                deadband_source = (
-                    "section-specific"
-                    if config.has_option(section, "DEADBAND")
-                    else "global"
-                )
-                logger.info(
-                    "Applying %s deadband (%.0fW) to %s",
-                    deadband_source,
-                    section_deadband,
-                    section,
-                )
-                powermeter = DeadbandPowermeter(powermeter, deadband=section_deadband)
-
-            section_pid_kp = config.getfloat(section, "PID_KP", fallback=global_pid_kp)
-            if section_pid_kp > 0:
-                pid_source = (
-                    "section-specific"
-                    if config.has_option(section, "PID_KP")
-                    else "global"
-                )
-                section_pid_ki = config.getfloat(
-                    section, "PID_KI", fallback=global_pid_ki
-                )
-                section_pid_kd = config.getfloat(
-                    section, "PID_KD", fallback=global_pid_kd
-                )
-                section_pid_output_max = config.getfloat(
-                    section, "PID_OUTPUT_MAX", fallback=global_pid_output_max
-                )
-                section_pid_mode = (
-                    config.get(section, "PID_MODE", fallback=global_pid_mode)
-                    .strip()
-                    .lower()
-                )
-                logger.info(
-                    "Applying %s PID controller (Kp=%s, Ki=%s, Kd=%s, max=%sW, mode=%s) to %s",
-                    pid_source,
-                    section_pid_kp,
-                    section_pid_ki,
-                    section_pid_kd,
-                    section_pid_output_max,
-                    section_pid_mode,
-                    section,
-                )
-                powermeter = PidPowermeter(
-                    powermeter,
-                    kp=section_pid_kp,
-                    ki=section_pid_ki,
-                    kd=section_pid_kd,
-                    output_max=section_pid_output_max,
-                    mode=section_pid_mode,
-                )
-
-            client_filter = create_client_filter(section, config)
-            wait_for_next_message = config.getboolean(
-                section, "WAIT_FOR_NEXT_MESSAGE", fallback=global_wait_for_next_message
-            )
-            # Wrap outermost so health tracking sees the final processed read
-            # and labels the powermeter's MQTT Insights device with the section.
-            powermeter = HealthTrackingPowermeter(powermeter, name=section)
-            powermeters.append((powermeter, client_filter, wait_for_next_message))
+        )
     return powermeters
 
 

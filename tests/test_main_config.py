@@ -1,24 +1,33 @@
 import argparse
-from io import StringIO
 
 from astrameter import main as main_module
-from astrameter.config.config_loader import new_config_parser
+from astrameter.config.addon import AddonAppConfig
+from astrameter.config.ini_config import IniAppConfig
 
 
-def test_main_config_parser_allows_percent_in_marstek_password():
-    cfg = new_config_parser()
-    cfg.read_file(
-        StringIO(
-            """
-[MARSTEK]
-ENABLE = True
-MAILBOX = user@example.com
-PASSWORD = abc%def/123
-""".strip()
-        )
+class NoSupervisor:
+    """Supervisor that offers nothing, so no network is touched."""
+
+    def mqtt_service(self):
+        return None
+
+    def addon_slug(self):
+        return ""
+
+
+def test_marstek_password_with_percent_is_read_verbatim(tmp_path):
+    """No interpolation: a literal '%' in a credential survives."""
+    path = tmp_path / "config.ini"
+    path.write_text(
+        "[MARSTEK]\nENABLE = True\nMAILBOX = user@example.com\n"
+        "PASSWORD = abc%def/123\n",
+        encoding="utf-8",
     )
 
-    assert cfg.get("MARSTEK", "PASSWORD") == "abc%def/123"
+    marstek = IniAppConfig.from_file(str(path)).marstek()
+
+    assert marstek.enable is True
+    assert marstek.password == "abc%def/123"
 
 
 def test_load_config_reads_the_config_file_by_default(tmp_path):
@@ -26,48 +35,34 @@ def test_load_config_reads_the_config_file_by_default(tmp_path):
     path.write_text("[GENERAL]\nDEVICE_TYPE = ct002\n", encoding="utf-8")
 
     args = argparse.Namespace(addon=False, config=str(path))
-    cfg = main_module._load_config(args)
+    config = main_module._load_config(args)
 
-    assert cfg.get("GENERAL", "DEVICE_TYPE") == "ct002"
-    assert args.config == str(path)
+    assert isinstance(config, IniAppConfig)
+    assert config.general().device_types == ["ct002"]
+    # The web UI offers its config editor for a real file.
+    assert config.path == str(path)
 
 
-def test_load_config_builds_from_addon_options(monkeypatch):
+def test_load_config_takes_the_addon_options(monkeypatch):
     """--addon skips the file entirely: the add-on options are the config."""
-
-    class NoSupervisor:
-        def mqtt_service(self):
-            return None
-
-        def addon_slug(self):
-            return ""
-
     monkeypatch.setattr(
         main_module.addon, "SupervisorClient", lambda *a, **k: NoSupervisor()
     )
 
     args = argparse.Namespace(addon=True, config="config.ini")
-    cfg = main_module._load_config(
+    config = main_module._load_config(
         args,
         {"device_types": "ct002", "power_input_alias": "sensor.grid_power"},
     )
 
-    assert cfg.get("GENERAL", "DEVICE_TYPE") == "ct002"
-    assert cfg.get("HOMEASSISTANT", "CURRENT_POWER_ENTITY") == "sensor.grid_power"
-    # Nothing on disk backs a generated config, so the web UI gets no path.
-    assert args.config is None
+    assert isinstance(config, AddonAppConfig)
+    assert config.general().device_types == ["ct002"]
+    # No file backs the options, so the web UI gets no config editor.
+    assert config.path is None
 
 
 def test_load_config_rereads_the_addon_options_on_restart(monkeypatch):
     """A restart re-reads the options, picking up changes made meanwhile."""
-
-    class NoSupervisor:
-        def mqtt_service(self):
-            return None
-
-        def addon_slug(self):
-            return ""
-
     monkeypatch.setattr(
         main_module.addon, "SupervisorClient", lambda *a, **k: NoSupervisor()
     )
@@ -76,7 +71,17 @@ def test_load_config_rereads_the_addon_options_on_restart(monkeypatch):
     )
 
     args = argparse.Namespace(addon=True, config="config.ini")
-    cfg = main_module._load_config(args)
+    config = main_module._load_config(args)
 
-    assert cfg.get("GENERAL", "DEVICE_TYPE") == "ct003"
-    assert cfg.has_section("CT003")
+    assert config.general().device_types == ["ct003"]
+
+
+def test_cli_throttle_override_reaches_the_power_sources(tmp_path):
+    path = tmp_path / "config.ini"
+    path.write_text("[GENERAL]\nTHROTTLE_INTERVAL = 1\n", encoding="utf-8")
+    config = IniAppConfig.from_file(str(path))
+    args = argparse.Namespace(throttle_interval=7.5)
+
+    general = main_module._apply_cli_overrides(config.general(), args)
+
+    assert general.signal.throttle_interval == 7.5

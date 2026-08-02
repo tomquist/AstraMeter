@@ -77,11 +77,11 @@ Write each bullet for the **user**, not the implementer: describe what changed f
 
 Any **user-facing config option** must be wired into **every** config surface, not just the loader — a setting that only one entry point understands is a bug. When you add or rename a `[SECTION]` key, update **all** of:
 
-1. **Loader** — read it in `src/astrameter/config/config_loader.py` (or the relevant `run_device` block in `main.py`).
+1. **Settings + loader** — add the field (with its default) to the matching dataclass in `src/astrameter/config/settings.py`, read the `[SECTION] KEY` for it in `src/astrameter/config/ini_config.py` (powermeter keys: `src/astrameter/config/config_loader.py`), and use it where it belongs (e.g. `run_device` in `main.py`). Config **backends** answer the `AppConfig` interface — nothing outside `ini_config.py` / `config_loader.py` should know section or key names.
 2. **`config.ini.example`** — a commented example with a short rationale.
 3. **Web config editor** — register typed keys in `SECTION_KEY_TYPES` in `src/astrameter/web_config.py`.
 4. **Web config generator (ALWAYS)** — add the field to the matching group in `web/ts/schema.ts` (e.g. a `CT_*` group or a `POWERMETERS` entry), emit it from `web/ts/generate.ts` for **every** target it applies to (`config.ini`, the Home Assistant add-on options, and ESPHome **only if** it has an ESPHome counterpart — Python-only options carry no `ey` key and must be excluded from the `ct002:` block), surface it in `web/ts/app.ts`, and add `web/ts/generate.test.ts` assertions. Run `cd web && npm run check`.
-5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it to its `[SECTION]` key in `src/astrameter/config/addon.py` (the `--addon` config backend reads the add-on options directly; usually one entry in `_CT_OPTIONS` / `_HOMEASSISTANT_OPTIONS`) with a test in `addon_test.py`, and describe it in `ha_addon/translations/en.yaml`. `ha_addon/run.sh` only launches the app — nothing to change there.
+5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it onto the settings field in `src/astrameter/config/addon.py` (the `--addon` backend reads the add-on options directly — usually one entry in `_CT_FIELDS` / `_SOURCE_SIGNAL_FIELDS` / `_GENERAL_FIELDS`) with a test in `addon_test.py`, and describe it in `ha_addon/translations/en.yaml`. `ha_addon/run.sh` only launches the app — nothing to change there.
 6. **Docs** — the relevant `docs/*.md` (and `README.md` if it belongs in the quick reference).
 
 The web config generator is **not optional** — a new option that the generator can't produce is incomplete.

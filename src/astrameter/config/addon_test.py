@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import json
-from configparser import NoOptionError, NoSectionError
 from typing import Any
 
 import pytest
 
 from astrameter.config import addon
-from astrameter.config.config_loader import (
-    read_all_powermeter_configs,
-    read_mqtt_insights_config,
-)
+from astrameter.config.ini_config import IniAppConfig
+from astrameter.config.settings import CtSettings, GeneralSettings
 from astrameter.powermeter import HomeAssistant
 
 
 class FakeSupervisor:
-    """Stand-in for :class:`addon.SupervisorClient` in config-building tests."""
+    """Stand-in for :class:`addon.SupervisorClient`."""
 
     def __init__(
         self,
@@ -49,9 +46,9 @@ BASE_OPTIONS: dict[str, Any] = {
 }
 
 
-def build(options: dict[str, Any], supervisor: Any = None) -> addon.AddonConfig:
+def config(options: dict[str, Any], supervisor: Any = None) -> addon.AddonAppConfig:
     client: Any = FakeSupervisor() if supervisor is None else supervisor
-    return addon.AddonConfig(options, client)
+    return addon.AddonAppConfig(options, client)
 
 
 def test_get_option_treats_missing_null_and_empty_as_unset():
@@ -65,156 +62,176 @@ def test_get_option_treats_missing_null_and_empty_as_unset():
     assert addon.get_option(options, "zero", "fallback") == 0
 
 
-def test_general_section_maps_device_types_and_enables_web_server():
-    cfg = build({**BASE_OPTIONS, "device_types": "ct002,ct003", "throttle_interval": 2})
-    assert cfg.get("GENERAL", "DEVICE_TYPE") == "ct002,ct003"
-    assert cfg.get("GENERAL", "THROTTLE_INTERVAL") == "2"
-    assert cfg.getboolean("GENERAL", "ENABLE_WEB_SERVER") is True
-    assert not cfg.has_option("GENERAL", "DEDUPE_TIME_WINDOW")
+def test_general_settings_come_from_the_options():
+    general = config(
+        {**BASE_OPTIONS, "device_types": "ct002,ct003", "throttle_interval": 2}
+    ).general()
+    assert general.device_types == ["ct002", "ct003"]
+    assert general.signal.throttle_interval == 2.0
+    assert general.signal.wait_for_next_message is True
+    # The add-on panel links to the web UI; its editor is for config files.
+    assert general.enable_web_server is True
+    assert general.web_config_enabled is False
 
 
-def test_unset_options_are_left_out_so_app_defaults_apply():
-    cfg = build(BASE_OPTIONS)
-    for key in ("ACTIVE_CONTROL", "MIN_DC_OUTPUT", "PACE_BASE_STEP", "IMPORT_TRIM_W"):
-        assert not cfg.has_option("CT002", key)
-    assert not cfg.has_option("HOMEASSISTANT", "PID_KP")
+def test_untouched_options_keep_the_settings_defaults():
+    general = config(BASE_OPTIONS).general()
+    ct = config(BASE_OPTIONS).ct("ct002")
+    assert general.dedupe_time_window == GeneralSettings().dedupe_time_window
+    assert ct == CtSettings()
 
 
-@pytest.mark.parametrize(
-    ("device_types", "expected"),
-    [
-        ("ct002", ["CT002"]),
-        ("ct003", ["CT003"]),
-        ("CT003", ["CT003"]),
-        ("ct002,ct003", ["CT002", "CT003"]),
-        ("shellypro3em", ["CT002"]),
-    ],
-)
-def test_ct_sections_follow_configured_device_types(device_types, expected):
-    cfg = build({**BASE_OPTIONS, "device_types": device_types, "ct_mac": "AA:BB:CC"})
-    assert [s for s in cfg.sections() if s.startswith("CT00")] == expected
-    for section in expected:
-        assert cfg.get(section, "CT_MAC") == "AA:BB:CC"
-
-
-def test_ct_tuning_options_land_in_every_ct_section():
-    cfg = build(
+def test_ct_settings_are_typed_values_not_strings():
+    ct = config(
         {
             **BASE_OPTIONS,
-            "device_types": "ct002,ct003",
+            "ct_mac": "AA:BB:CC:DD:EE:FF",
             "active_control": False,
             "min_efficient_power": 100,
             "grid_predict_trust": 0.25,
             "fair_distribution": True,
             "import_trim_w": 12.5,
+            "pace_base_step": 40,
             "cloud_reporting": True,
             "cloud_reporting_host": "eu.hamedata.com",
             "cloud_reporting_interval": 30,
         }
+    ).ct("ct002")
+    assert ct.ct_mac == "AA:BB:CC:DD:EE:FF"
+    assert ct.active_control is False
+    assert ct.min_efficient_power == 100
+    assert ct.grid_predict_trust == 0.25
+    assert ct.fair_distribution is True
+    assert ct.import_trim_w == 12.5
+    assert ct.pace_base_step == 40
+    assert ct.cloud_reporting is True
+    assert ct.cloud_reporting_host == "eu.hamedata.com"
+    assert ct.cloud_reporting_interval == 30.0
+
+
+def test_both_ct_emulators_share_the_add_on_settings():
+    """The add-on has one set of CT options, whichever emulators run."""
+    cfg = config({**BASE_OPTIONS, "device_types": "ct002,ct003", "ct_mac": "AA:BB"})
+    assert cfg.ct("ct002") == cfg.ct("ct003")
+    assert cfg.ct("ct003").ct_mac == "AA:BB"
+
+
+def test_global_dedupe_window_reaches_the_ct_emulator():
+    cfg = config({**BASE_OPTIONS, "dedupe_time_window": 1.5})
+    assert cfg.general().dedupe_time_window == 1.5
+    assert cfg.ct("ct002").dedupe_time_window == 1.5
+
+
+def test_marstek_needs_the_opt_in_and_credentials():
+    assert (
+        not config(
+            {
+                **BASE_OPTIONS,
+                "marstek_mailbox": "user@example.com",
+                "marstek_password": "secret",
+            }
+        )
+        .marstek()
+        .enable
     )
-    for section in ("CT002", "CT003"):
-        assert cfg.getboolean(section, "ACTIVE_CONTROL") is False
-        assert cfg.getint(section, "MIN_EFFICIENT_POWER") == 100
-        assert cfg.getfloat(section, "GRID_PREDICT_TRUST") == 0.25
-        assert cfg.getboolean(section, "FAIR_DISTRIBUTION") is True
-        assert cfg.getfloat(section, "IMPORT_TRIM_W") == 12.5
-        assert cfg.getboolean(section, "CLOUD_REPORTING") is True
-        assert cfg.get(section, "CLOUD_REPORTING_HOST") == "eu.hamedata.com"
-        assert cfg.getfloat(section, "CLOUD_REPORTING_INTERVAL") == 30
-
-
-def test_single_power_entity_is_read_directly():
-    cfg = build(BASE_OPTIONS)
-    assert cfg.get("HOMEASSISTANT", "IP") == "supervisor"
-    assert cfg.get("HOMEASSISTANT", "PORT") == "80"
-    assert cfg.get("HOMEASSISTANT", "API_PATH_PREFIX") == "/core"
-    assert cfg.getboolean("HOMEASSISTANT", "POWER_CALCULATE") is False
-    assert cfg.get("HOMEASSISTANT", "CURRENT_POWER_ENTITY") == "sensor.current_power_in"
-    assert cfg.getboolean("HOMEASSISTANT", "WAIT_FOR_NEXT_MESSAGE") is True
-
-
-def test_input_and_output_entities_switch_to_calculated_power():
-    cfg = build(
-        {
-            **BASE_OPTIONS,
-            "power_input_alias": "sensor.import",
-            "power_output_alias": "sensor.export",
-        }
+    assert (
+        not config({**BASE_OPTIONS, "marstek_auto_register_ct_device": True})
+        .marstek()
+        .enable
     )
-    assert cfg.getboolean("HOMEASSISTANT", "POWER_CALCULATE") is True
-    assert cfg.get("HOMEASSISTANT", "POWER_INPUT_ALIAS") == "sensor.import"
-    assert cfg.get("HOMEASSISTANT", "POWER_OUTPUT_ALIAS") == "sensor.export"
-    assert not cfg.has_option("HOMEASSISTANT", "CURRENT_POWER_ENTITY")
 
-
-def test_signal_conditioning_options_are_forwarded():
-    cfg = build(
-        {
-            **BASE_OPTIONS,
-            "power_offset": "10,20,30",
-            "power_multiplier": "1.0",
-            "smooth_target_alpha": 0.3,
-            "max_smooth_step": 50,
-            "deadband": 5,
-            "hampel_window": 7,
-            "hampel_n_sigma": 3.5,
-            "hampel_min_threshold": 20,
-            "pid_kp": 0.4,
-            "pid_ki": 0.01,
-            "pid_kd": 0,
-            "pid_output_max": 900,
-            "pid_mode": "bias",
-        }
-    )
-    assert cfg.get("HOMEASSISTANT", "POWER_OFFSET") == "10,20,30"
-    assert cfg.get("HOMEASSISTANT", "POWER_MULTIPLIER") == "1.0"
-    assert cfg.getfloat("HOMEASSISTANT", "SMOOTH_TARGET_ALPHA") == 0.3
-    assert cfg.getfloat("HOMEASSISTANT", "MAX_SMOOTH_STEP") == 50
-    assert cfg.getfloat("HOMEASSISTANT", "DEADBAND") == 5
-    assert cfg.getint("HOMEASSISTANT", "HAMPEL_WINDOW") == 7
-    assert cfg.getfloat("HOMEASSISTANT", "HAMPEL_N_SIGMA") == 3.5
-    assert cfg.getfloat("HOMEASSISTANT", "HAMPEL_MIN_THRESHOLD") == 20
-    assert cfg.getfloat("HOMEASSISTANT", "PID_KP") == 0.4
-    assert cfg.getfloat("HOMEASSISTANT", "PID_KI") == 0.01
-    assert cfg.getfloat("HOMEASSISTANT", "PID_KD") == 0
-    assert cfg.getfloat("HOMEASSISTANT", "PID_OUTPUT_MAX") == 900
-    assert cfg.get("HOMEASSISTANT", "PID_MODE") == "bias"
-
-
-def test_power_offset_strips_stray_newlines():
-    cfg = build({**BASE_OPTIONS, "power_offset": " 10 \n"})
-    assert cfg.get("HOMEASSISTANT", "POWER_OFFSET") == "10"
-
-
-def test_marstek_section_needs_opt_in_and_credentials():
-    without_opt_in = build(
-        {
-            **BASE_OPTIONS,
-            "marstek_mailbox": "user@example.com",
-            "marstek_password": "secret",
-        }
-    )
-    assert not without_opt_in.has_section("MARSTEK")
-
-    without_credentials = build(
-        {**BASE_OPTIONS, "marstek_auto_register_ct_device": True}
-    )
-    assert not without_credentials.has_section("MARSTEK")
-
-    cfg = build(
+    marstek = config(
         {
             **BASE_OPTIONS,
             "marstek_auto_register_ct_device": True,
             "marstek_mailbox": "user@example.com",
             "marstek_password": "pass%word",
         }
+    ).marstek()
+    assert marstek.enable is True
+    assert marstek.mailbox == "user@example.com"
+    assert marstek.password == "pass%word"
+    assert marstek.base_url == "https://eu.hamedata.com"
+    assert marstek.timezone == "Europe/Berlin"
+
+
+def test_single_power_entity_is_read_directly():
+    cfg = config(BASE_OPTIONS)
+    meter = cfg.powermeters(cfg.general())[0][0]
+    source = meter.wrapped_powermeter
+    assert isinstance(source, HomeAssistant)
+    assert source.power_calculate is False
+    assert source.current_power_entity == ["sensor.current_power_in"]
+    # Reached through the Supervisor proxy with the add-on's own token.
+    assert (source.ip, source.port, source.path_prefix) == ("supervisor", "80", "/core")
+
+
+def test_three_phase_entities_are_split_per_phase():
+    cfg = config({**BASE_OPTIONS, "power_input_alias": "sensor.a, sensor.b ,sensor.c"})
+    source = cfg.powermeters(cfg.general())[0][0].wrapped_powermeter
+    assert source.current_power_entity == ["sensor.a", "sensor.b", "sensor.c"]
+
+
+def test_input_and_output_entities_switch_to_calculated_power():
+    cfg = config(
+        {
+            **BASE_OPTIONS,
+            "power_input_alias": "sensor.import",
+            "power_output_alias": "sensor.export",
+        }
     )
-    assert cfg.getboolean("MARSTEK", "ENABLE") is True
-    assert cfg.get("MARSTEK", "BASE_URL") == "https://eu.hamedata.com"
-    assert cfg.get("MARSTEK", "MAILBOX") == "user@example.com"
-    # No interpolation: a literal '%' survives.
-    assert cfg.get("MARSTEK", "PASSWORD") == "pass%word"
-    assert cfg.get("MARSTEK", "TIMEZONE") == "Europe/Berlin"
+    source = cfg.powermeters(cfg.general())[0][0].wrapped_powermeter
+    assert source.power_calculate is True
+    assert source.power_input_alias == ["sensor.import"]
+    assert source.power_output_alias == ["sensor.export"]
+
+
+def test_power_source_is_conditioned_by_the_options():
+    cfg = config(
+        {
+            **BASE_OPTIONS,
+            "throttle_interval": 5,
+            "power_offset": "10,20,30",
+            "power_multiplier": " 1.5 \n",
+            "smooth_target_alpha": 0.3,
+            "deadband": 5,
+            "hampel_window": 7,
+            "pid_kp": 0.4,
+            "wait_for_next_message": False,
+        }
+    )
+    meter, client_filter, wait_for_next_message = cfg.powermeters(cfg.general())[0]
+    assert wait_for_next_message is False
+    assert client_filter.matches("192.168.1.50")
+
+    # Unwrap the conditioning stack down to the source.
+    stack = []
+    current = meter
+    while hasattr(current, "wrapped_powermeter"):
+        stack.append(type(current).__name__)
+        current = current.wrapped_powermeter
+    assert isinstance(current, HomeAssistant)
+    assert stack == [
+        "HealthTrackingPowermeter",
+        "PidPowermeter",
+        "DeadbandPowermeter",
+        "SmoothedPowermeter",
+        "HampelPowermeter",
+        "ThrottledPowermeter",
+        "TransformedPowermeter",
+    ]
+
+
+def test_command_line_throttle_override_reaches_the_power_source():
+    from dataclasses import replace
+
+    cfg = config({**BASE_OPTIONS, "throttle_interval": 1})
+    general = cfg.general()
+    general = replace(general, signal=replace(general.signal, throttle_interval=9))
+    meter = cfg.powermeters(general)[0][0]
+    throttled = meter.wrapped_powermeter
+    assert type(throttled).__name__ == "ThrottledPowermeter"
+    assert throttled.throttle_interval == 9
 
 
 def test_mqtt_uses_home_assistant_broker_when_offered():
@@ -227,8 +244,7 @@ def test_mqtt_uses_home_assistant_broker_when_offered():
             "ssl": False,
         }
     )
-    cfg = build(BASE_OPTIONS, supervisor)
-    insights = read_mqtt_insights_config(cfg)
+    insights = config(BASE_OPTIONS, supervisor).mqtt_insights()
     assert insights is not None
     assert insights.broker == "core-mosquitto"
     assert insights.port == 1883
@@ -241,62 +257,34 @@ def test_mqtt_uses_home_assistant_broker_when_offered():
 
 def test_custom_mqtt_uri_wins_over_the_home_assistant_broker():
     supervisor = FakeSupervisor(mqtt={"host": "core-mosquitto", "port": 1883})
-    cfg = build({**BASE_OPTIONS, "mqtt_uri": "mqtts://user:pw@broker:8883"}, supervisor)
-    assert not cfg.has_option("MQTT_INSIGHTS", "BROKER")
-    insights = read_mqtt_insights_config(cfg)
+    insights = config(
+        {**BASE_OPTIONS, "mqtt_uri": "mqtts://user:pw@broker:8883"}, supervisor
+    ).mqtt_insights()
     assert insights is not None
     assert (insights.broker, insights.port, insights.tls) == ("broker", 8883, True)
     assert insights.username == "user"
+    assert insights.password == "pw"
 
 
-def test_no_mqtt_section_without_a_broker():
-    cfg = build(BASE_OPTIONS, FakeSupervisor(mqtt=None))
-    assert not cfg.has_section("MQTT_INSIGHTS")
-    assert read_mqtt_insights_config(cfg) is None
+def test_no_mqtt_without_a_broker():
+    assert config(BASE_OPTIONS, FakeSupervisor(mqtt=None)).mqtt_insights() is None
 
 
 def test_missing_addon_slug_is_simply_omitted():
     supervisor = FakeSupervisor(mqtt={"host": "core-mosquitto"}, slug="")
-    cfg = build(BASE_OPTIONS, supervisor)
-    assert not cfg.has_option("MQTT_INSIGHTS", "ADDON_SLUG")
+    insights = config(BASE_OPTIONS, supervisor).mqtt_insights()
+    assert insights is not None
+    assert insights.addon_slug is None
 
 
-def test_addon_config_yields_a_home_assistant_powermeter():
-    cfg = build(BASE_OPTIONS)
-    powermeters = read_all_powermeter_configs(cfg)
-    assert len(powermeters) == 1
-    powermeter = powermeters[0][0]
-    inner = getattr(powermeter, "wrapped_powermeter", powermeter)
-    assert isinstance(inner, HomeAssistant)
-
-
-def test_values_are_read_from_the_options_on_every_lookup():
+def test_options_are_read_on_every_call():
     """No snapshot is taken: the options stay the single source of truth."""
     options = dict(BASE_OPTIONS)
-    cfg = build(options)
-    assert cfg.get("HOMEASSISTANT", "CURRENT_POWER_ENTITY") == "sensor.current_power_in"
+    cfg = config(options)
+    assert cfg.ct("ct002").active_control is True
 
-    options["power_input_alias"] = "sensor.other"
-    assert cfg.get("HOMEASSISTANT", "CURRENT_POWER_ENTITY") == "sensor.other"
-
-
-def test_runtime_overrides_win_over_the_options():
-    """CLI flags (--throttle-interval) assign into the same config object."""
-    cfg = build({**BASE_OPTIONS, "throttle_interval": 1})
-    cfg.set("GENERAL", "THROTTLE_INTERVAL", "5")
-    assert cfg.getfloat("GENERAL", "THROTTLE_INTERVAL") == 5.0
-    # Untouched keys still come from the add-on options.
-    assert cfg.get("GENERAL", "DEVICE_TYPE") == "ct002"
-
-
-def test_unknown_keys_raise_or_fall_back_like_a_config_file():
-    cfg = build(BASE_OPTIONS)
-    assert cfg.get("GENERAL", "NOPE", fallback="default") == "default"
-    assert cfg.getint("CT002", "UDP_PORT", fallback=12345) == 12345
-    with pytest.raises(NoOptionError):
-        cfg.get("GENERAL", "NOPE")
-    with pytest.raises(NoSectionError):
-        cfg.get("NOPE", "NOPE")
+    options["active_control"] = False
+    assert cfg.ct("ct002").active_control is False
 
 
 def test_load_options_reads_the_supervisor_file(tmp_path):
@@ -316,29 +304,30 @@ def test_load_options_survives_a_missing_file(tmp_path):
     assert addon.load_options(str(tmp_path / "nope.json")) == {}
 
 
-def test_custom_config_file_replaces_the_generated_config(tmp_path):
+def test_custom_config_file_replaces_the_add_on_options(tmp_path):
     (tmp_path / "my.ini").write_text(
         "[GENERAL]\nDEVICE_TYPE = ct003\n", encoding="utf-8"
     )
-    cfg, path = addon.load_config(
+    cfg = addon.load_config(
         {**BASE_OPTIONS, "custom_config": "my.ini"},
         FakeSupervisor(),
         config_dir=str(tmp_path),
     )
-    assert path == str(tmp_path / "my.ini")
-    assert cfg.get("GENERAL", "DEVICE_TYPE") == "ct003"
-    assert not cfg.has_section("HOMEASSISTANT")
+    assert isinstance(cfg, IniAppConfig)
+    assert cfg.path == str(tmp_path / "my.ini")
+    assert cfg.general().device_types == ["ct003"]
 
 
 def test_unknown_custom_config_falls_back_to_the_options(tmp_path, caplog):
     with caplog.at_level("WARNING"):
-        cfg, path = addon.load_config(
+        cfg = addon.load_config(
             {**BASE_OPTIONS, "custom_config": "missing.ini"},
             FakeSupervisor(),
             config_dir=str(tmp_path),
         )
-    assert path is None
-    assert cfg.get("HOMEASSISTANT", "IP") == "supervisor"
+    assert isinstance(cfg, addon.AddonAppConfig)
+    # Nothing on disk backs the options, so the web UI gets no config editor.
+    assert cfg.path is None
     assert "missing.ini" in caplog.text
 
 
@@ -357,27 +346,6 @@ def test_custom_config_warns_about_ignored_ui_options(tmp_path, caplog):
         )
     assert "Marstek settings are ignored" in caplog.text
     assert "mqtt_uri is ignored" in caplog.text
-
-
-def test_generated_config_is_logged_with_credentials_masked(caplog):
-    cfg = build(
-        {
-            **BASE_OPTIONS,
-            "marstek_auto_register_ct_device": True,
-            "marstek_mailbox": "user@example.com",
-            "marstek_password": "topsecret",
-        }
-    )
-    with caplog.at_level("INFO"):
-        addon.log_config(cfg)
-    rendered = "\n".join(
-        record.getMessage() for record in caplog.records if record.name == "astrameter"
-    )
-    assert "[MARSTEK]" in rendered
-    from astrameter.config.logger import redact_secrets
-
-    assert "topsecret" not in redact_secrets(rendered)
-    assert "user@example.com" not in redact_secrets(rendered)
 
 
 def test_wait_for_home_assistant_returns_once_the_api_answers():
@@ -457,11 +425,7 @@ def test_supervisor_client_reports_no_mqtt_service_when_unavailable(monkeypatch)
 def test_supervisor_client_survives_a_network_error(monkeypatch):
     patch_requests(
         monkeypatch,
-        {
-            "http://supervisor/addons/self/info": addon.requests.ConnectionError(
-                "boom"
-            ),
-        },
+        {"http://supervisor/addons/self/info": addon.requests.ConnectionError("boom")},
     )
     assert addon.SupervisorClient(token="tok").addon_slug() == ""
 

@@ -1,10 +1,10 @@
 import argparse
 import asyncio
-import configparser
 import contextlib
 import os
 import signal
 from collections.abc import Sequence
+from dataclasses import replace
 
 from astrameter.cloud_reporting import (
     CloudReporter,
@@ -12,14 +12,11 @@ from astrameter.cloud_reporting import (
     CtMeasurement,
 )
 from astrameter.config import addon
-from astrameter.config.config_loader import (
-    ClientFilter,
-    new_config_parser,
-    read_all_powermeter_configs,
-    read_mqtt_insights_config,
-)
+from astrameter.config.config_loader import ClientFilter
+from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.logger import logger, setLogLevel
-from astrameter.ct002 import CT002, UDP_PORT
+from astrameter.config.settings import AppConfig, GeneralSettings, MarstekSettings
+from astrameter.ct002 import CT002
 from astrameter.marstek_api import (
     MarstekApiError,
     MarstekConfig,
@@ -50,13 +47,6 @@ def _powermeter_log_name(powermeter: Powermeter) -> str:
         else powermeter
     )
     return type(inner).__name__
-
-
-def get_ct_section(device_type: str, cfg: configparser.ConfigParser) -> str:
-    section = "CT002"
-    if device_type == "ct003" and cfg.has_section("CT003"):
-        section = "CT003"
-    return section
 
 
 async def read_ct_powermeter(
@@ -138,8 +128,8 @@ def _reset_all_powermeters(
 
 async def run_device(
     device_type: str,
-    cfg: configparser.ConfigParser,
-    args: argparse.Namespace,
+    config: AppConfig,
+    general: GeneralSettings,
     powermeters: list[tuple[Powermeter, ClientFilter, bool]],
     device_id: str | None = None,
     insights: MqttInsightsService | None = None,
@@ -149,174 +139,87 @@ async def run_device(
     logger.debug(f"Starting device: {device_type}")
 
     device: CT002 | Shelly
-
-    global_dedupe_time_window = cfg.getfloat(
-        "GENERAL", "DEDUPE_TIME_WINDOW", fallback=0.0
-    )
+    cloud_reporting = False
 
     if device_type in ["ct002", "ct003"]:
-        ct_section = get_ct_section(device_type, cfg)
+        ct = config.ct(device_type)
         ct_type = "HME-4" if device_type == "ct002" else "HME-3"
-        ct_mac = cfg.get(ct_section, "CT_MAC", fallback="")
-        ct_udp_port = cfg.getint(ct_section, "UDP_PORT", fallback=UDP_PORT)
-        wifi_rssi = cfg.getint(ct_section, "WIFI_RSSI", fallback=-50)
-        # Opt-in Marstek HTTP cloud reporting (hamedata.com). Disabled by default;
-        # see docs/marstek-mqtt-http.md (§6) for what it sends and its limits.
-        cloud_reporting = cfg.getboolean(ct_section, "CLOUD_REPORTING", fallback=False)
-        cloud_reporting_host = (
-            cfg.get(ct_section, "CLOUD_REPORTING_HOST", fallback="").strip()
-            or "eu.hamedata.com"
-        )
-        cloud_reporting_interval = cfg.getfloat(
-            ct_section, "CLOUD_REPORTING_INTERVAL", fallback=60.0
-        )
-        dedupe_time_window = cfg.getfloat(
-            ct_section, "DEDUPE_TIME_WINDOW", fallback=global_dedupe_time_window
-        )
-        # Unset (default) → adaptive eviction (~2 missed poll cycles, like the
-        # real CT); a number → fixed TTL in seconds.
-        consumer_ttl = cfg.getint(ct_section, "CONSUMER_TTL", fallback=None)
-        debug_status = cfg.getboolean(ct_section, "DEBUG_STATUS", fallback=False)
-        if os.environ.get("DEBUG_STATUS", "").lower() in ("1", "true", "yes"):
-            debug_status = True
-        active_control = cfg.getboolean(ct_section, "ACTIVE_CONTROL", fallback=True)
-        fair_distribution = cfg.getboolean(
-            ct_section, "FAIR_DISTRIBUTION", fallback=True
-        )
-        balance_gain = cfg.getfloat(ct_section, "BALANCE_GAIN", fallback=0.2)
-        error_boost_threshold = cfg.getint(
-            ct_section, "ERROR_BOOST_THRESHOLD", fallback=150
-        )
-        error_boost_max = cfg.getfloat(ct_section, "ERROR_BOOST_MAX", fallback=0.5)
-        error_reduce_threshold = cfg.getint(
-            ct_section, "ERROR_REDUCE_THRESHOLD", fallback=20
-        )
-        balance_deadband = cfg.getint(ct_section, "BALANCE_DEADBAND", fallback=25)
-        max_correction_per_step = cfg.getint(
-            ct_section, "MAX_CORRECTION_PER_STEP", fallback=80
-        )
-        max_target_step = cfg.getint(ct_section, "MAX_TARGET_STEP", fallback=0)
-        pace_base_step = cfg.getint(ct_section, "PACE_BASE_STEP", fallback=30)
-        pace_max_step = cfg.getint(ct_section, "PACE_MAX_STEP", fallback=100)
-        osc_damp_max = cfg.getfloat(ct_section, "OSC_DAMP_MAX", fallback=0.95)
-        osc_damp_alpha = cfg.getfloat(ct_section, "OSC_DAMP_ALPHA", fallback=0.3)
-        osc_damp_decay = cfg.getfloat(ct_section, "OSC_DAMP_DECAY", fallback=0.05)
-        osc_damp_threshold = cfg.getfloat(
-            ct_section, "OSC_DAMP_THRESHOLD", fallback=300
-        )
-        grid_predict_trust = cfg.getfloat(
-            ct_section, "GRID_PREDICT_TRUST", fallback=0.5
-        )
-        concentrate_deadband = cfg.getfloat(
-            ct_section, "CONCENTRATE_DEADBAND", fallback=60.0
-        )
-        import_trim_w = cfg.getfloat(ct_section, "IMPORT_TRIM_W", fallback=15.0)
-        saturation_detection = cfg.getboolean(
-            ct_section, "SATURATION_DETECTION", fallback=True
-        )
-        saturation_alpha = cfg.getfloat(ct_section, "SATURATION_ALPHA", fallback=0.15)
-        min_target_for_saturation = cfg.getint(
-            ct_section, "MIN_TARGET_FOR_SATURATION", fallback=20
-        )
-        saturation_grace_seconds = cfg.getfloat(
-            ct_section, "SATURATION_GRACE_SECONDS", fallback=90
-        )
-        saturation_stall_timeout_seconds = cfg.getfloat(
-            ct_section, "SATURATION_STALL_TIMEOUT_SECONDS", fallback=60
-        )
-        min_efficient_power = cfg.getint(ct_section, "MIN_EFFICIENT_POWER", fallback=0)
-        probe_min_power = cfg.getint(ct_section, "PROBE_MIN_POWER", fallback=80)
-        efficiency_rotation_interval = cfg.getint(
-            ct_section, "EFFICIENCY_ROTATION_INTERVAL", fallback=900
-        )
-        efficiency_fade_alpha = cfg.getfloat(
-            ct_section, "EFFICIENCY_FADE_ALPHA", fallback=0.15
-        )
-        efficiency_saturation_threshold = cfg.getfloat(
-            ct_section, "EFFICIENCY_SATURATION_THRESHOLD", fallback=0.4
-        )
-        efficiency_demand_alpha = cfg.getfloat(
-            ct_section, "EFFICIENCY_DEMAND_ALPHA", fallback=0.1
-        )
-        saturation_decay_factor = cfg.getfloat(
-            ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
-        )
-        min_dc_output = cfg.getfloat(ct_section, "MIN_DC_OUTPUT", fallback=0.0)
-        if 0 < min_dc_output < min_target_for_saturation:
+        cloud_reporting = ct.cloud_reporting
+        debug_status = ct.debug_status or os.environ.get(
+            "DEBUG_STATUS", ""
+        ).lower() in ("1", "true", "yes")
+        if 0 < ct.min_dc_output < ct.min_target_for_saturation:
             logger.warning(
                 "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
                 "floored battery's target never clears the saturation gate, so an "
                 "empty/full unit can't be detected. Consider MIN_DC_OUTPUT >= %d.",
-                min_dc_output,
-                min_target_for_saturation,
-                min_target_for_saturation,
+                ct.min_dc_output,
+                ct.min_target_for_saturation,
+                ct.min_target_for_saturation,
             )
 
-        logger.debug(f"{device_type.upper()} Settings for {device_id}:")
+        logger.debug(f"{device_type.upper()} Settings for {device_id}: {ct}")
         logger.debug(f"CT Type: {ct_type}")
-        logger.debug(f"CT MAC: {ct_mac}")
-        logger.debug(f"CT UDP Port: {ct_udp_port}")
-        logger.debug(f"WiFi RSSI: {wifi_rssi}")
         logger.debug(
             "CT control model: %s",
             (
                 "active control (emulator computes targets)"
-                if active_control
+                if ct.active_control
                 else "relay (forward consumer aggregates)"
             ),
         )
-        if active_control:
+        if ct.active_control:
             extras = []
-            if fair_distribution:
+            if ct.fair_distribution:
                 extras.append("fair distribution")
-            if saturation_detection:
+            if ct.saturation_detection:
                 extras.append("saturation detection")
-            if min_efficient_power > 0:
-                extras.append(f"efficiency optimization ({min_efficient_power}W)")
+            if ct.min_efficient_power > 0:
+                extras.append(f"efficiency optimization ({ct.min_efficient_power}W)")
             logger.info(
                 "Active control enabled: load split%s",
                 " + " + " + ".join(extras) if extras else "",
             )
 
         device = CT002(
-            udp_port=ct_udp_port,
+            udp_port=ct.udp_port,
             ct_type=ct_type,
-            ct_mac=ct_mac,
-            wifi_rssi=wifi_rssi,
-            dedupe_time_window=dedupe_time_window,
-            consumer_ttl=consumer_ttl,
+            ct_mac=ct.ct_mac,
+            wifi_rssi=ct.wifi_rssi,
+            dedupe_time_window=ct.dedupe_time_window,
+            consumer_ttl=ct.consumer_ttl,
             debug_status=debug_status,
-            active_control=active_control,
-            fair_distribution=fair_distribution,
-            balance_gain=balance_gain,
-            error_boost_threshold=error_boost_threshold,
-            error_boost_max=error_boost_max,
-            error_reduce_threshold=error_reduce_threshold,
-            balance_deadband=balance_deadband,
-            max_correction_per_step=max_correction_per_step,
-            max_target_step=max_target_step,
-            pace_base_step=pace_base_step,
-            pace_max_step=pace_max_step,
-            osc_damp_max=osc_damp_max,
-            osc_damp_alpha=osc_damp_alpha,
-            osc_damp_decay=osc_damp_decay,
-            osc_damp_threshold=osc_damp_threshold,
-            grid_predict_trust=grid_predict_trust,
-            concentrate_deadband=concentrate_deadband,
-            import_trim_w=import_trim_w,
-            saturation_detection=saturation_detection,
-            saturation_alpha=saturation_alpha,
-            min_target_for_saturation=min_target_for_saturation,
-            saturation_grace_seconds=saturation_grace_seconds,
-            saturation_stall_timeout_seconds=saturation_stall_timeout_seconds,
-            min_efficient_power=min_efficient_power,
-            probe_min_power=probe_min_power,
-            efficiency_rotation_interval=efficiency_rotation_interval,
-            efficiency_fade_alpha=efficiency_fade_alpha,
-            efficiency_saturation_threshold=efficiency_saturation_threshold,
-            efficiency_demand_alpha=efficiency_demand_alpha,
-            min_dc_output=min_dc_output,
-            saturation_decay_factor=saturation_decay_factor,
+            active_control=ct.active_control,
+            fair_distribution=ct.fair_distribution,
+            balance_gain=ct.balance_gain,
+            error_boost_threshold=ct.error_boost_threshold,
+            error_boost_max=ct.error_boost_max,
+            error_reduce_threshold=ct.error_reduce_threshold,
+            balance_deadband=ct.balance_deadband,
+            max_correction_per_step=ct.max_correction_per_step,
+            max_target_step=ct.max_target_step,
+            pace_base_step=ct.pace_base_step,
+            pace_max_step=ct.pace_max_step,
+            osc_damp_max=ct.osc_damp_max,
+            osc_damp_alpha=ct.osc_damp_alpha,
+            osc_damp_decay=ct.osc_damp_decay,
+            osc_damp_threshold=ct.osc_damp_threshold,
+            grid_predict_trust=ct.grid_predict_trust,
+            concentrate_deadband=ct.concentrate_deadband,
+            import_trim_w=ct.import_trim_w,
+            saturation_detection=ct.saturation_detection,
+            saturation_alpha=ct.saturation_alpha,
+            min_target_for_saturation=ct.min_target_for_saturation,
+            saturation_grace_seconds=ct.saturation_grace_seconds,
+            saturation_stall_timeout_seconds=ct.saturation_stall_timeout_seconds,
+            min_efficient_power=ct.min_efficient_power,
+            probe_min_power=ct.probe_min_power,
+            efficiency_rotation_interval=ct.efficiency_rotation_interval,
+            efficiency_fade_alpha=ct.efficiency_fade_alpha,
+            efficiency_saturation_threshold=ct.efficiency_saturation_threshold,
+            efficiency_demand_alpha=ct.efficiency_demand_alpha,
+            min_dc_output=ct.min_dc_output,
+            saturation_decay_factor=ct.saturation_decay_factor,
             device_id=device_id or "",
             reset_fn=lambda: _reset_all_powermeters(powermeters),
         )
@@ -344,7 +247,7 @@ async def run_device(
             powermeters=powermeters,
             device_id=device_id,
             udp_port=1010,
-            dedupe_time_window=global_dedupe_time_window,
+            dedupe_time_window=general.dedupe_time_window,
         )
 
     elif device_type == "shellypro3em_new":
@@ -354,7 +257,7 @@ async def run_device(
             powermeters=powermeters,
             device_id=device_id,
             udp_port=2220,
-            dedupe_time_window=global_dedupe_time_window,
+            dedupe_time_window=general.dedupe_time_window,
         )
 
     elif device_type == "shellyemg3":
@@ -364,7 +267,7 @@ async def run_device(
             powermeters=powermeters,
             device_id=device_id,
             udp_port=2222,
-            dedupe_time_window=global_dedupe_time_window,
+            dedupe_time_window=general.dedupe_time_window,
         )
 
     elif device_type == "shellyproem50":
@@ -374,7 +277,7 @@ async def run_device(
             powermeters=powermeters,
             device_id=device_id,
             udp_port=2223,
-            dedupe_time_window=global_dedupe_time_window,
+            dedupe_time_window=general.dedupe_time_window,
         )
 
     else:
@@ -490,7 +393,7 @@ async def run_device(
         # The reported id is the CT's MAC: the one AstraMeter registered in the
         # Marstek account (the id the cloud actually knows) when configured, else
         # the locally set CT_MAC.
-        report_id = marstek_mac or ct_mac
+        report_id = marstek_mac or ct.ct_mac
         if not report_id:
             logger.warning(
                 "CLOUD_REPORTING enabled for %s but no device id is available; "
@@ -554,8 +457,8 @@ async def run_device(
                     CloudReporterConfig(
                         ct_type=device.ct_type,
                         device_id=report_id,
-                        host=cloud_reporting_host,
-                        interval_seconds=cloud_reporting_interval,
+                        host=ct.cloud_reporting_host,
+                        interval_seconds=ct.cloud_reporting_interval,
                     ),
                     _cloud_gather,
                 ).run()
@@ -579,8 +482,8 @@ async def run_device(
 
 
 async def async_main(
-    cfg: configparser.ConfigParser,
-    args: argparse.Namespace,
+    config: AppConfig,
+    general: GeneralSettings,
     device_types: list[str],
     device_ids: list[str],
     skip_test: bool,
@@ -588,17 +491,13 @@ async def async_main(
 ):
     managed_marstek = managed_marstek or {}
     web_server = None
-    if cfg.getboolean("GENERAL", "ENABLE_WEB_SERVER", fallback=True):
+    if general.enable_web_server:
         logger.info("Starting web server...")
         try:
-            enable_web_config = cfg.getboolean(
-                "GENERAL", "WEB_CONFIG_ENABLED", fallback=False
-            )
-            port = cfg.getint("GENERAL", "WEB_SERVER_PORT", fallback=52500)
             web_server = WebServer(
-                port=port,
-                config_path=args.config,
-                enable_web_config=enable_web_config,
+                port=general.web_server_port,
+                config_path=config.path,
+                enable_web_config=general.web_config_enabled,
             )
             if await web_server.start():
                 logger.info("Web server started successfully")
@@ -616,7 +515,7 @@ async def async_main(
 
     try:
         # Create powermeters
-        powermeters = read_all_powermeter_configs(cfg)
+        powermeters = config.powermeters(general)
 
         # Start powermeter lifecycle
         for pm, _, _ in powermeters:
@@ -627,7 +526,7 @@ async def async_main(
                 await test_powermeter(powermeter, client_filter)
 
         # MQTT Insights (optional)
-        insights_cfg = read_mqtt_insights_config(cfg)
+        insights_cfg = config.mqtt_insights()
         if insights_cfg:
             insights = MqttInsightsService(
                 insights_cfg, powermeters=[pm for pm, _, _ in powermeters]
@@ -643,8 +542,8 @@ async def async_main(
             *(
                 run_device(
                     device_type,
-                    cfg,
-                    args,
+                    config,
+                    general,
                     powermeters,
                     device_id,
                     insights,
@@ -680,7 +579,7 @@ async def async_main(
 
 
 def _build_managed_marstek(
-    cfg: configparser.ConfigParser, device_types: Sequence[str]
+    marstek: MarstekSettings, device_types: Sequence[str]
 ) -> dict[str, tuple[str, int]]:
     """Register managed fake CT devices with Marstek and return the MAC/ver map.
 
@@ -688,25 +587,20 @@ def _build_managed_marstek(
     wiring stays in sync with the (possibly reloaded) config and device_types.
     """
     managed_marstek: dict[str, tuple[str, int]] = {}
-    if not cfg.getboolean("MARSTEK", "ENABLE", fallback=False):
+    if not marstek.enable:
         return managed_marstek
 
-    mailbox = cfg.get("MARSTEK", "MAILBOX", fallback="")
-    password = cfg.get("MARSTEK", "PASSWORD", fallback="")
-    base_url = cfg.get("MARSTEK", "BASE_URL", fallback="https://eu.hamedata.com")
-    timezone_name = cfg.get("MARSTEK", "TIMEZONE", fallback="Europe/Berlin")
-
-    if not mailbox or not password:
+    if not marstek.mailbox or not marstek.password:
         logger.warning(
-            "MARSTEK.ENABLE is true, but MAILBOX/PASSWORD missing; skipping fake-device auto-registration"
+            "Marstek auto-registration is enabled, but the mailbox/password is missing; skipping it"
         )
         return managed_marstek
 
     marstek_cfg = MarstekConfig(
-        base_url=base_url,
-        mailbox=mailbox,
-        password=password,
-        timezone=timezone_name,
+        base_url=marstek.base_url,
+        mailbox=marstek.mailbox,
+        password=marstek.password,
+        timezone=marstek.timezone,
     )
     try:
         any_ct = False
@@ -748,43 +642,36 @@ def _build_managed_marstek(
 
 
 def _apply_cli_overrides(
-    cfg: configparser.ConfigParser, args: argparse.Namespace
-) -> None:
-    """Re-apply CLI flags that override config-file values."""
-    if args.throttle_interval is not None:
-        if not cfg.has_section("GENERAL"):
-            cfg.add_section("GENERAL")
-        cfg.set("GENERAL", "THROTTLE_INTERVAL", str(args.throttle_interval))
+    general: GeneralSettings, args: argparse.Namespace
+) -> GeneralSettings:
+    """Re-apply CLI flags that override configured values."""
+    if args.throttle_interval is None:
+        return general
+    # Also reaches the power sources: they are built from these settings.
+    return replace(
+        general,
+        signal=replace(general.signal, throttle_interval=args.throttle_interval),
+    )
 
 
 def _resolve_device_config(
-    cfg: configparser.ConfigParser, args: argparse.Namespace
+    config: AppConfig, general: GeneralSettings, args: argparse.Namespace
 ) -> tuple[list[str], list[str], bool]:
-    """Derive device_types, device_ids and skip_test from *cfg* and CLI *args*."""
+    """Derive device_types, device_ids and skip_test from the config and CLI."""
     device_types = (
         args.device_types
         if args.device_types is not None
-        else [
-            dt.strip()
-            for dt in cfg.get("GENERAL", "DEVICE_TYPE", fallback="shellypro3em").split(
-                ","
-            )
-            if dt.strip()
-        ]
+        else list(general.device_types)
     )
     skip_test = (
         args.skip_powermeter_test
         if args.skip_powermeter_test is not None
-        else cfg.getboolean("GENERAL", "SKIP_POWERMETER_TEST", fallback=False)
+        else general.skip_powermeter_test
     )
 
     device_ids: list[str] = list(args.device_ids) if args.device_ids is not None else []
     if not device_ids:
-        cfg_device_ids = cfg.get("GENERAL", "DEVICE_IDS", fallback="").strip()
-        if cfg_device_ids:
-            device_ids = [
-                did.strip() for did in cfg_device_ids.split(",") if did.strip()
-            ]
+        device_ids = list(general.device_ids)
     shelly_id_prefixes = {
         "shellypro3em": "shellypro3em",
         "shellypro3em_old": "shellypro3em",
@@ -806,11 +693,11 @@ def _resolve_device_config(
         device_types.append("shellypro3em_new")
         device_ids.append(device_ids[shellypro3em_index])
 
-    ct_ports = []
-    for device_type in device_types:
-        if device_type in ["ct002", "ct003"]:
-            section = get_ct_section(device_type, cfg)
-            ct_ports.append(cfg.getint(section, "UDP_PORT", fallback=UDP_PORT))
+    ct_ports = [
+        config.ct(device_type).udp_port
+        for device_type in device_types
+        if device_type in ("ct002", "ct003")
+    ]
     if len(ct_ports) != len(set(ct_ports)):
         raise ValueError(
             "Multiple CT002/CT003 devices are configured with the same UDP port. "
@@ -826,24 +713,15 @@ def _resolve_device_config(
 
 def _load_config(
     args: argparse.Namespace, options: addon.Options | None = None
-) -> configparser.ConfigParser:
-    """Load the configuration from the backend selected on the command line.
+) -> AppConfig:
+    """Pick the configuration backend the command line asks for.
 
-    ``--addon`` reads the Home Assistant add-on options (and the Supervisor
-    API) directly; otherwise the ``--config`` file is parsed. In add-on mode
-    ``args.config`` is repointed at the user's custom config file when they
-    supplied one, and cleared when the config was generated from the add-on
-    options — there is no file the web UI could show in that case.
+    ``--addon`` takes the settings from the Home Assistant add-on options (and
+    the Supervisor); otherwise they come from the ``--config`` file.
     """
-    if not args.addon:
-        cfg = new_config_parser()
-        cfg.read(args.config)
-        return cfg
-
-    cfg, path = addon.load_config(addon.load_options() if options is None else options)
-    args.config = path
-    addon.log_config(cfg)
-    return cfg
+    if args.addon:
+        return addon.load_config(addon.load_options() if options is None else options)
+    return IniAppConfig.from_file(args.config)
 
 
 def main():
@@ -905,22 +783,22 @@ def main():
             "Git commit not logged (set GIT_COMMIT_SHA at image build for CI images)"
         )
 
-    cfg = _load_config(args, addon_options)
+    config = _load_config(args, addon_options)
 
     if args.addon:
         # Home Assistant is the power source, so give it a chance to finish
         # booting before the first reading is attempted.
         addon.wait_for_home_assistant(addon.SupervisorClient())
 
-    device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
-
-    _apply_cli_overrides(cfg, args)
+    general = _apply_cli_overrides(config.general(), args)
+    logger.info("Effective configuration: %s", general)
+    device_types, device_ids, skip_test = _resolve_device_config(config, general, args)
 
     # Optional Marstek cloud registration for managed fake CT devices (sync, before event loop).
     # When registration succeeds, the returned MAC is captured per device
     # type so the Marstek MQTT responder in MQTT Insights uses the same
     # MAC that hame-relay will route back to the Marstek app.
-    managed_marstek = _build_managed_marstek(cfg, device_types)
+    managed_marstek = _build_managed_marstek(config.marstek(), device_types)
 
     # Map SIGTERM to KeyboardInterrupt so asyncio.run cancels tasks and
     # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).
@@ -943,7 +821,12 @@ def main():
         try:
             asyncio.run(
                 async_main(
-                    cfg, args, device_types, device_ids, skip_test, managed_marstek
+                    config,
+                    general,
+                    device_types,
+                    device_ids,
+                    skip_test,
+                    managed_marstek,
                 )
             )
             break  # clean exit
@@ -951,10 +834,12 @@ def main():
             if not restart_requested:
                 break
             logger.info("Restarting service…")
-            cfg = _load_config(args)
-            _apply_cli_overrides(cfg, args)
-            device_types, device_ids, skip_test = _resolve_device_config(cfg, args)
-            managed_marstek = _build_managed_marstek(cfg, device_types)
+            config = _load_config(args)
+            general = _apply_cli_overrides(config.general(), args)
+            device_types, device_ids, skip_test = _resolve_device_config(
+                config, general, args
+            )
+            managed_marstek = _build_managed_marstek(config.marstek(), device_types)
         except RuntimeError as exc:
             logger.error("%s", exc)
             exit(1)
