@@ -880,7 +880,12 @@ def main():
             args.loglevel = options["log_level"]
         setLogLevel(args.loglevel)
         if options:
-            args.config = bootstrap(options).path
+            try:
+                args.config = bootstrap(options).path
+            except RuntimeError as exc:
+                # An unreadable config is a user-fixable mistake, not a crash.
+                logger.error("%s", exc)
+                exit(1)
         else:
             logger.warning(
                 "--addon was given but %s holds no options; falling back to %s",

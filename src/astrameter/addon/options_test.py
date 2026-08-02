@@ -56,8 +56,13 @@ def read_block(block: str, path: str = CONFIG_YAML) -> dict[str, object]:
         if not inside:
             continue
         match = _ENTRY.match(line)
-        if match:
-            out[match["key"]] = _scalar(match["value"])
+        # Loudly, rather than dropping it: a silently unparsed entry would
+        # make the drift test below pass for an option nothing reads.
+        assert match, (
+            f"{path}: cannot parse {line!r} in the '{block}:' block. "
+            "read_block only understands flat 'key: value' entries."
+        )
+        out[match["key"]] = _scalar(match["value"])
     return out
 
 

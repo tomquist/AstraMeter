@@ -104,15 +104,19 @@ def _mqtt_insights(
     if is_set(options.get("mqtt_uri")):
         pairs.append(("URI", render(options["mqtt_uri"])))
     elif mqtt_service:
-        pairs.extend(
-            [
-                ("BROKER", render(mqtt_service.get("host", ""))),
-                ("PORT", render(mqtt_service.get("port", ""))),
-                ("USERNAME", render(mqtt_service.get("username", ""))),
-                ("PASSWORD", render(mqtt_service.get("password", ""))),
-                ("TLS", render(mqtt_service.get("ssl", False))),
-            ]
-        )
+        # Only what the Supervisor actually gave us. An empty `PORT=` is worse
+        # than no PORT at all: the loader has a default for the missing key,
+        # but cannot parse "" as an integer.
+        for key, field in (
+            ("BROKER", "host"),
+            ("PORT", "port"),
+            ("USERNAME", "username"),
+            ("PASSWORD", "password"),
+            ("TLS", "ssl"),
+        ):
+            value = mqtt_service.get(field)
+            if is_set(value):
+                pairs.append((key, render(value)))
     else:
         return []
     pairs.append(("HA_DISCOVERY", "True"))

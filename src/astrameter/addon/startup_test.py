@@ -137,6 +137,10 @@ def test_bootstrap_reports_an_unreadable_config(tmp_path, monkeypatch):
         ("MAILBOX = user@example.com", "MAILBOX = REDACTED"),
         ("password=hunter2", "password = REDACTED"),
         ("ACCESSTOKEN=abc", "ACCESSTOKEN = REDACTED"),
+        # Compound names a user's own config.ini may well use.
+        ("ACCESS_TOKEN=abc", "ACCESS_TOKEN = REDACTED"),
+        ("MQTT_PASSWORD=pw", "MQTT_PASSWORD = REDACTED"),
+        ("API_KEY_ID=k", "API_KEY_ID = REDACTED"),
         ("URI=mqtt://user:pw@broker:1883", "URI=mqtt://***:***@broker:1883"),
         ("BROKER=core-mosquitto", "BROKER=core-mosquitto"),
         ("DEVICE_TYPE=ct002", "DEVICE_TYPE=ct002"),

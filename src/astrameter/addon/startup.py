@@ -42,8 +42,14 @@ GENERATED_CONFIG_PATH = os.environ.get(
 SUPERVISOR_URL = "http://supervisor"
 CORE_READY_URL = f"{SUPERVISOR_URL}/core/api/"
 
+# Substring matching, not an exact word list: in custom_config mode the file
+# being logged is the user's own and can hold anything — ACCESS_TOKEN,
+# MQTT_PASSWORD, API_KEY_ID.  Same vocabulary as the log filter in run.sh, so
+# the two redaction layers agree on what counts as a secret.
 _SECRET_LINE = re.compile(
-    r"^\s*(MAILBOX|USERNAME|PASSWORD|ACCESSTOKEN|TOKEN|SECRET|API_KEY)\s*=.*$",
+    r"^\s*[A-Za-z0-9_]*"
+    r"(?:PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|USERNAME|MAILBOX)"
+    r"[A-Za-z0-9_]*\s*=.*$",
     re.IGNORECASE,
 )
 _URI_USERINFO = re.compile(r"(://)[^/@\s:]+:[^/@\s]+@")

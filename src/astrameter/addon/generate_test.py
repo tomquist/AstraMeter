@@ -195,6 +195,17 @@ def test_missing_addon_slug_just_omits_the_link():
     assert "ADDON_SLUG" not in cfg["MQTT_INSIGHTS"]
 
 
+def test_broker_fields_the_supervisor_withheld_are_omitted():
+    """`PORT=` is worse than no PORT: the loader cannot parse "" as an int."""
+    mqtt = parse(
+        generate_config(addon_defaults(), mqtt_service={"host": "b", "ssl": False})
+    )["MQTT_INSIGHTS"]
+    assert mqtt["BROKER"] == "b"
+    assert mqtt["TLS"] == "false"
+    for absent in ("PORT", "USERNAME", "PASSWORD"):
+        assert absent not in mqtt
+
+
 def test_pasted_values_cannot_break_the_ini():
     """A trailing newline in a free-text field used to split the line."""
     cfg = parse(
