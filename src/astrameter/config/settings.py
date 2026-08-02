@@ -188,3 +188,16 @@ class AppConfig(ABC):
         *general* is passed in (rather than read again) so command-line
         overrides applied to it also reach the power sources.
         """
+
+    def render_powermeters_ini(self) -> str:
+        """The power-source sections of an equivalent ``config.ini``.
+
+        Only needed by a backend with no file of its own, so that the
+        dashboard can hand its user a config file to take over from. Power
+        sources are the one part of the configuration that never becomes
+        settings — :meth:`powermeters` goes straight from the source to built
+        objects — so unlike the rest they cannot be rendered generically.
+        Deleting this hook is the natural follow-up to giving them a settings
+        type of their own.
+        """
+        return ""

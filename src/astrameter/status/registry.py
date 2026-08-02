@@ -57,6 +57,9 @@ class StatusRegistry:
     log_level: str
     version: str
     git_commit: str
+    #: The configuration backend currently running, so the mode switch can
+    #: write out what it holds. Replaced (not mutated) on a config restart.
+    app_config: Any = None
     config_mode: str = "standalone"
     addon_slug: str | None = None
     web_port: int = 52500

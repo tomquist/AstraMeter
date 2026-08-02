@@ -517,7 +517,7 @@ class WebServer:
         if target == "file":
             filename = (body.get("filename") or "astrameter.ini").strip()
             try:
-                materialize_config(self.config_path, filename)
+                materialize_config(self.status.app_config, filename)
             except OSError as exc:
                 return _json({"error": f"Cannot write config file: {exc}"}, status=500)
             options = {"custom_config": filename}

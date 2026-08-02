@@ -8,6 +8,7 @@ their own source and answer the same :class:`AppConfig` interface.
 from __future__ import annotations
 
 import configparser
+import dataclasses
 from typing import TYPE_CHECKING
 
 from astrameter.config.config_loader import (
@@ -278,3 +279,97 @@ class IniAppConfig(AppConfig):
 
 def _split(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+# -- rendering: the dual of the readers above -------------------------------
+#
+# Turning settings back into a ``config.ini`` is what lets the dashboard hand
+# a guided-setup user a file to take over from. It is the inverse of the
+# reading above and lives beside it deliberately: `ini_config_test.py` asserts
+# the round trip, so a key that is read one way and written another fails
+# there rather than handing someone a config that quietly loses a setting.
+#
+# Every key below is its field name uppercased; the exceptions are the two
+# maps. If that ever stops being true for a new field, the round-trip test is
+# what tells you.
+
+#: Fields whose INI key is not simply the uppercased field name.
+_GENERAL_KEY_OVERRIDES = {
+    "device_types": "DEVICE_TYPE",
+    "dashboard": "DASHBOARD_ENABLED",
+}
+_SIGNAL_KEY_OVERRIDES = {
+    "smooth_alpha": "SMOOTH_TARGET_ALPHA",
+    "offsets": "POWER_OFFSET",
+    "multipliers": "POWER_MULTIPLIER",
+}
+
+
+def _render_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def _changed(
+    settings: object, defaults: object, overrides: dict[str, str]
+) -> list[tuple[str, str]]:
+    """The keys whose value differs from the dataclass default.
+
+    Only writing what the user actually changed keeps the file short enough to
+    read, and leaves the defaults in one place — ``settings.py`` — rather than
+    freezing today's values into everybody's config file.
+    """
+    out: list[tuple[str, str]] = []
+    for f in dataclasses.fields(settings):  # type: ignore[arg-type]
+        if f.name == "signal":
+            continue
+        value = getattr(settings, f.name)
+        if value is None or value == getattr(defaults, f.name):
+            continue
+        out.append((overrides.get(f.name, f.name.upper()), _render_value(value)))
+    return out
+
+
+def _section(
+    name: str, pairs: list[tuple[str, str]], *, always: bool = False
+) -> list[str]:
+    if not pairs and not always:
+        return []
+    return [f"[{name}]", *(f"{key} = {value}" for key, value in pairs), ""]
+
+
+def render_ini(config: AppConfig, device_types: list[str] | None = None) -> str:
+    """Render *config*'s settings as a ``config.ini`` the reader accepts.
+
+    Round-trips: reading the result back yields the same settings. What it
+    cannot carry is the power sources — those are built objects rather than
+    settings (see ``AppConfig.powermeters``), so a caller that knows how its
+    source was configured appends that section itself.
+    """
+    general = config.general()
+    lines = _section(
+        GENERAL_SECTION,
+        _changed(general, GeneralSettings(), _GENERAL_KEY_OVERRIDES)
+        + _changed(general.signal, SignalSettings(), _SIGNAL_KEY_OVERRIDES),
+    )
+
+    for device_type in device_types or general.device_types:
+        if device_type not in ("ct002", "ct003"):
+            continue
+        # Emitted even when every value is a default: `ct_section` falls back
+        # to [CT002] for a missing [CT003], so leaving an all-default CT003
+        # out would silently hand it CT002's settings on the way back in.
+        lines += _section(
+            device_type.upper(),
+            _changed(config.ct(device_type), CtSettings(), {}),
+            always=True,
+        )
+
+    marstek = config.marstek()
+    if marstek.enable:
+        lines += _section(MARSTEK_SECTION, _changed(marstek, MarstekSettings(), {}))
+
+    return "\n".join(lines)

@@ -1,7 +1,8 @@
+import dataclasses
 from io import StringIO
 
 from astrameter.config.config_loader import new_config_parser
-from astrameter.config.ini_config import IniAppConfig
+from astrameter.config.ini_config import IniAppConfig, render_ini
 from astrameter.config.settings import CtSettings, GeneralSettings
 
 
@@ -118,3 +119,137 @@ IP = 192.168.1.10
     )
     meter, _, _ = cfg.powermeters(cfg.general())[0]
     assert type(meter.wrapped_powermeter).__name__ == "ThrottledPowermeter"
+
+
+# -- rendering ---------------------------------------------------------------
+#
+# The reader is the oracle: whatever render_ini writes has to come back as the
+# settings it was given. That is what stops the dashboard's "switch to a config
+# file" from handing someone a file that silently drops a setting.
+
+
+def _round_trip(cfg: IniAppConfig, device_types: list[str] | None = None):
+    return config(render_ini(cfg, device_types))
+
+
+def _sample(field: dataclasses.Field) -> str:
+    """A value for *field* that is not its default, so writing it is visible."""
+    default = field.default
+    if isinstance(default, bool):
+        return "false" if default else "true"
+    if isinstance(default, int):
+        return str(default + 7)
+    if isinstance(default, float):
+        return str(round(default + 0.25, 4))
+    return f"{default}-changed" if default else "changed"
+
+
+def test_rendering_the_defaults_writes_nothing_to_carry():
+    """Only what the user changed is worth putting in their file."""
+    cfg = config("")
+    assert render_ini(cfg).strip() == ""
+    assert _round_trip(cfg).general() == GeneralSettings()
+
+
+def test_general_settings_survive_the_round_trip():
+    cfg = config(
+        """
+[GENERAL]
+DEVICE_TYPE = ct002, ct003
+DEVICE_IDS = one, two
+SKIP_POWERMETER_TEST = true
+DEDUPE_TIME_WINDOW = 1.5
+ENABLE_WEB_SERVER = false
+WEB_CONFIG_ENABLED = true
+WEB_SERVER_PORT = 8080
+DASHBOARD_ENABLED = true
+DASHBOARD_ALLOW_WRITE = true
+DASHBOARD_DIRECT_ACCESS = true
+THROTTLE_INTERVAL = 2.5
+WAIT_FOR_NEXT_MESSAGE = false
+SMOOTH_TARGET_ALPHA = 0.4
+MAX_SMOOTH_STEP = 250
+DEADBAND = 8
+HAMPEL_WINDOW = 5
+HAMPEL_N_SIGMA = 2.5
+HAMPEL_MIN_THRESHOLD = 30
+PID_KP = 0.8
+PID_KI = 0.1
+PID_KD = 0.2
+PID_OUTPUT_MAX = 900
+PID_MODE = replace
+"""
+    )
+    assert _round_trip(cfg).general() == cfg.general()
+
+
+def test_ct_settings_survive_the_round_trip():
+    """Every CT field, so a key written under the wrong name is caught."""
+    body = "\n".join(
+        f"{f.name.upper()} = {_sample(f)}"
+        for f in dataclasses.fields(CtSettings)
+        if f.name != "consumer_ttl"
+    )
+    cfg = config(f"[GENERAL]\nDEVICE_TYPE = ct002\n\n[CT002]\n{body}\n")
+    assert _round_trip(cfg).ct("ct002") == cfg.ct("ct002")
+
+
+def test_both_ct_sections_are_rendered():
+    cfg = config(
+        """
+[GENERAL]
+DEVICE_TYPE = ct002, ct003
+
+[CT002]
+BALANCE_GAIN = 0.4
+
+[CT003]
+BALANCE_GAIN = 0.6
+"""
+    )
+    written = _round_trip(cfg)
+    assert written.ct("ct002").balance_gain == 0.4
+    assert written.ct("ct003").balance_gain == 0.6
+
+
+def test_marstek_credentials_survive_the_round_trip():
+    cfg = config(
+        """
+[MARSTEK]
+ENABLE = true
+MAILBOX = user@example.com
+PASSWORD = secret
+BASE_URL = https://us.hamedata.com
+TIMEZONE = Europe/Madrid
+"""
+    )
+    assert _round_trip(cfg).marstek() == cfg.marstek()
+
+
+def test_a_disabled_marstek_section_is_not_written():
+    """Credentials that are not in use do not get copied into a new file."""
+    cfg = config("[MARSTEK]\nENABLE = false\nPASSWORD = secret\n")
+    assert "secret" not in render_ini(cfg)
+
+
+def test_the_device_types_to_render_can_be_given():
+    """The add-on backend answers ct() for a type its own list may not name."""
+    cfg = config("")
+    assert "[CT003]" in render_ini(cfg, ["ct003"])
+
+
+def test_an_all_default_ct003_does_not_inherit_ct002s_settings():
+    """`ct_section` falls back to [CT002], so [CT003] has to be written."""
+    cfg = config(
+        """
+[GENERAL]
+DEVICE_TYPE = ct002, ct003
+
+[CT002]
+BALANCE_GAIN = 0.44
+
+[CT003]
+"""
+    )
+    assert cfg.ct("ct003") == CtSettings()
+    assert _round_trip(cfg).ct("ct003") == CtSettings()

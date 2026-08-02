@@ -834,6 +834,7 @@ def main():
         log_level=log_level,
         version=get_version(),
         git_commit=_sha,
+        app_config=config,
         config_mode=detect_config_mode(addon=args.addon, config_path=config.path),
         addon_slug=_addon_slug(args),
         web_port=general.web_server_port,
@@ -954,6 +955,7 @@ async def _supervise(
             general = _apply_cli_overrides(config.general(), args)
             # The dashboard can add or remove `custom_config`, so the source
             # the next cycle runs from may not be the one this one used.
+            registry.app_config = config
             registry.config_path = config.path
             registry.config_mode = detect_config_mode(
                 addon=args.addon, config_path=config.path

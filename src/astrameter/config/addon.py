@@ -468,6 +468,42 @@ class AddonAppConfig(AppConfig):
             )
         ]
 
+    def render_powermeters_ini(self) -> str:
+        """``[HOMEASSISTANT]`` matching what :meth:`powermeters` builds.
+
+        Mirrors that method key for key. The two are pinned together by
+        ``addon_test.py``; when power sources grow a settings type this can be
+        rendered generically and both this and the hook go away.
+        """
+        power_input = self._entities("power_input_alias")
+        power_output = self._entities("power_output_alias")
+        supervisor = urlparse(self._supervisor.base_url)
+        lines = [
+            "[HOMEASSISTANT]",
+            f"IP = {supervisor.hostname or 'supervisor'}",
+            f"PORT = {supervisor.port or 80}",
+            "API_PATH_PREFIX = /core",
+            "# The add-on authenticates with its own Supervisor token; a standalone",
+            "# install needs a long-lived access token here instead.",
+            "ACCESSTOKEN =",
+        ]
+        if power_output:
+            lines += [
+                "POWER_CALCULATE = True",
+                f"POWER_INPUT_ALIAS = {', '.join(power_input)}",
+                f"POWER_OUTPUT_ALIAS = {', '.join(power_output)}",
+            ]
+        else:
+            lines += [
+                "POWER_CALCULATE = False",
+                f"CURRENT_POWER_ENTITY = {', '.join(power_input)}",
+            ]
+        for key in ("power_offset", "power_multiplier"):
+            value = self._option(key)
+            if value not in (None, ""):
+                lines.append(f"{key.upper()} = {value}")
+        return "\n".join(lines) + "\n"
+
     def _entities(self, key: str) -> list[str]:
         """Entity ids of an option; one per phase for three-phase setups."""
         raw = self._option(key, "")
