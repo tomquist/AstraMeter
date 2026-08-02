@@ -135,3 +135,72 @@ async def test_restart_treats_reset_as_success(stub: _StubSupervisor) -> None:
 async def test_restart_accepts_a_reply_that_does_arrive(stub: _StubSupervisor) -> None:
     await _client(stub).restart()
     assert stub.requests == [("/addons/self/restart", None)]
+
+
+class _StatesClient(SupervisorClient):
+    """A client whose Core-proxy call returns a canned /states payload."""
+
+    def __init__(self, states):
+        super().__init__(base_url="http://supervisor", token="t")
+        self._states = states
+
+    async def _request_raw(self, method, path):
+        assert path == "/core/api/states"
+        return self._states
+
+
+async def test_power_entities_keep_unclassed_watt_sensors():
+    """Plenty of real installs expose grid power as a plain sensor in W or kW
+    with no device_class; excluding those would make the picker useless for
+    exactly the people who need it."""
+    client = _StatesClient(
+        [
+            {
+                "entity_id": "sensor.grid",
+                "state": "412.8",
+                "attributes": {
+                    "friendly_name": "Grid power",
+                    "device_class": "power",
+                    "unit_of_measurement": "W",
+                },
+            },
+            {
+                "entity_id": "sensor.p1",
+                "state": "1.24",
+                "attributes": {"unit_of_measurement": "kW"},
+            },
+            {
+                "entity_id": "sensor.energy_today",
+                "state": "12.4",
+                "attributes": {
+                    "device_class": "energy",
+                    "unit_of_measurement": "kWh",
+                },
+            },
+            {
+                "entity_id": "sensor.outside_temp",
+                "state": "18.1",
+                "attributes": {
+                    "device_class": "temperature",
+                    "unit_of_measurement": "°C",
+                },
+            },
+            {"entity_id": "light.kitchen", "state": "on", "attributes": {}},
+        ]
+    )
+    entities = await client.list_power_entities()
+    assert [e["entity_id"] for e in entities] == ["sensor.grid", "sensor.p1"]
+    assert entities[0]["name"] == "Grid power"
+    assert entities[0]["state"] == "412.8"
+    # An id with no friendly name still needs something to render.
+    assert entities[1]["name"] == "sensor.p1"
+
+
+async def test_power_entities_tolerate_a_junk_payload():
+    client = _StatesClient(["not a dict", {"no_entity_id": True}, None])
+    assert await client.list_power_entities() == []
+
+
+async def test_power_entities_empty_when_core_returns_an_object():
+    client = _StatesClient({"message": "unauthorized"})
+    assert await client.list_power_entities() == []

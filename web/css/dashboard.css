@@ -701,3 +701,134 @@ label.row input[type="checkbox"] {
     margin-bottom: 6px;
   }
 }
+
+/* ── config.ini editor ───────────────────────────────────────────── */
+
+details.section {
+  padding: 0;
+}
+
+details.section > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+}
+
+details.section[open] > summary {
+  border-bottom: 1px solid var(--divider);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+details.section > summary:hover {
+  background: var(--bg-sunken);
+}
+
+.sec-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--ha-primary);
+}
+
+.sec-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.keyrows {
+  display: grid;
+  gap: 6px;
+  padding: 12px 16px 0;
+}
+
+/* Key, value, remove. The key column is fixed so the value inputs line up
+ * into a readable column instead of stepping with each key's length. */
+.keyrow {
+  display: grid;
+  grid-template-columns: minmax(140px, 260px) 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.keyname {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  padding: 5px 6px;
+}
+
+.keyname:hover,
+.keyname:focus {
+  background: var(--bg);
+  border-color: var(--divider);
+}
+
+.keyval {
+  font-size: 0.82rem;
+  padding: 5px 8px;
+}
+
+.iconbtn {
+  padding: 4px 8px;
+  line-height: 1;
+  color: var(--text-dim);
+  border-color: transparent;
+}
+
+.iconbtn:hover:not(:disabled) {
+  color: var(--err-fg);
+  border-color: var(--divider);
+}
+
+button.btn.danger {
+  color: var(--err-fg);
+}
+
+.sec-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 14px;
+}
+
+.sec-actions .btn.danger {
+  margin-left: auto;
+}
+
+.hint {
+  margin: 0 0 4px;
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+details.section .hint {
+  padding: 12px 16px 0;
+}
+
+@container (max-width: 560px) {
+  .keyrow {
+    grid-template-columns: 1fr auto;
+  }
+
+  .keyname {
+    grid-column: 1 / -1;
+    background: var(--bg);
+    border-color: var(--divider);
+  }
+}
+
+/* Entity picker: flag a configured entity Home Assistant does not know. */
+.warn-input {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--divider));
+}
+
+.warn-text {
+  color: var(--warn-fg);
+}

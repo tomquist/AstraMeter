@@ -48,6 +48,8 @@ interface Meta {
   label: string;
   group: string;
   help?: string;
+  /** Render as a Home Assistant entity picker rather than a text box. */
+  entity?: boolean;
 }
 
 const GRID = "Grid measurement";
@@ -61,11 +63,13 @@ export const OPTION_META: Record<string, Meta> = {
     label: "Grid power sensor",
     group: GRID,
     help: "The Home Assistant entity holding your grid power in watts.",
+    entity: true,
   },
   power_output_alias: {
     label: "Export power sensor",
     group: GRID,
     help: "Only if import and export are two separate sensors.",
+    entity: true,
   },
   power_offset: { label: "Power offset (W)", group: GRID },
   power_multiplier: { label: "Power multiplier", group: GRID },

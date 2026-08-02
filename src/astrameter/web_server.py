@@ -170,6 +170,7 @@ class WebServer:
                 "POST", app, "/api/addon/options", self._handle_addon_options_post
             )
             self._add("POST", app, "/api/addon/restart", self._handle_addon_restart)
+            self._add("GET", app, "/api/ha/entities", self._handle_ha_entities)
             self._add("POST", app, "/api/config-mode", self._handle_config_mode_post)
 
         # The INI editor is reachable either from the dashboard or from the
@@ -459,6 +460,29 @@ class WebServer:
             await client.restart()
             return _json({"saved": True, "restart": "supervisor"})
         return _json({"saved": True, "restart": "none"})
+
+    async def _handle_ha_entities(self, request):
+        """Home Assistant sensors that could be a grid-power source.
+
+        Powers the entity picker in the guided form: typing a raw entity id
+        from memory is the single easiest way to misconfigure AstraMeter, and
+        a wrong id fails at start-up rather than here.
+        """
+        from astrameter.addon_client import SupervisorClient
+
+        if not self._trusted(request):
+            return _json({"error": "Forbidden"}, status=403)
+        client = SupervisorClient()
+        if not client.available():
+            return _json({"error": "Not running as a Home Assistant add-on"}, 409)
+        try:
+            entities = await client.list_power_entities()
+        except Exception as exc:
+            # A failed lookup must not block the form — the field stays a
+            # plain text input and the user can still type an id.
+            logger.warning("Could not list Home Assistant entities: %s", exc)
+            return _json({"entities": [], "error": str(exc)})
+        return _json({"entities": entities}, **{"Cache-Control": "max-age=30"})
 
     async def _handle_addon_restart(self, request):
         client, error = self._supervisor(request)

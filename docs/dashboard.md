@@ -90,9 +90,23 @@ the Supervisor and restarts the add-on, which can take a minute.
 The form is generated from the add-on's live option schema, so a new option
 appears here as soon as the add-on gains it.
 
+**Grid power sensor** and **Export power sensor** are entity pickers rather
+than text boxes: they list the Home Assistant sensors that could plausibly
+carry grid power — anything with `device_class: power`, plus any sensor
+reading in W or kW — showing each one's friendly name and current value. Type
+to filter. You can still enter an entity id by hand, and if the configured one
+is not currently known to Home Assistant the field says so instead of letting
+you find out at the next restart.
+
 ### Config file
 
-With a custom `config.ini` — or in Docker — the tab shows the file itself.
+With a custom `config.ini` — or in Docker — the tab shows a structured editor
+for that file: one collapsible card per `[SECTION]`, and a control per setting
+chosen from its type, so a boolean is a dropdown, a number is a number field
+and a choice is a list. Settings and whole sections can be added and removed,
+and the name box suggests the settings AstraMeter knows for that section. It is
+the same editor as the standalone one at `/config`.
+
 Saving validates the whole file before replacing it: if it would not load, the
 change is rejected and the running configuration is left alone.
 

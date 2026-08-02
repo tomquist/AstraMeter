@@ -93,9 +93,22 @@ const actions: Actions = {
         const data = await transport.getAddonOptions();
         config.options = data.options || {};
         config.schema = data.schema || {};
+        // Best-effort: a failed entity lookup leaves the picker as a plain
+        // text box rather than blocking the whole form.
+        try {
+          config.entities = await transport.listPowerEntities();
+        } catch {
+          config.entities = [];
+        }
+        config.entitiesLoaded = true;
       } else {
-        const data = await transport.getConfig();
-        config.iniText = renderIni(data.sections, data.order);
+        const [data, keyTypes] = await Promise.all([
+          transport.getConfig(),
+          transport.getKeyTypes(),
+        ]);
+        config.sections = data.sections || {};
+        config.order = data.order || Object.keys(config.sections);
+        config.keyTypes = keyTypes as ConfigState["keyTypes"];
         config.iniLoaded = true;
       }
       config.dirty = false;
@@ -115,11 +128,58 @@ const actions: Actions = {
     render();
   },
 
-  editIni(text) {
-    config.iniText = text;
-    config.dirty = true;
-    config.message = null;
-    render();
+  setKey(section, key, value) {
+    const pairs = config.sections[section];
+    if (!pairs) return;
+    pairs[key] = value;
+    touch();
+  },
+
+  renameKey(section, from, to) {
+    const pairs = config.sections[section];
+    const name = to.trim().toUpperCase();
+    if (!pairs || !name || name === from) return;
+    if (name in pairs) {
+      config.error = `${section} already has a setting called ${name}.`;
+      render();
+      return;
+    }
+    // Rebuild so the renamed key keeps its position rather than jumping to
+    // the end of the section.
+    config.sections[section] = Object.fromEntries(
+      Object.entries(pairs).map(([k, v]) => (k === from ? [name, v] : [k, v])),
+    );
+    touch();
+  },
+
+  removeKey(section, key) {
+    const pairs = config.sections[section];
+    if (!pairs) return;
+    delete pairs[key];
+    touch();
+  },
+
+  addKey(section) {
+    const pairs = config.sections[section];
+    if (!pairs) return;
+    let name = "NEW_SETTING";
+    for (let i = 2; name in pairs; i++) name = `NEW_SETTING_${i}`;
+    pairs[name] = "";
+    touch();
+  },
+
+  addSection() {
+    let name = "NEW_SECTION";
+    for (let i = 2; name in config.sections; i++) name = `NEW_SECTION_${i}`;
+    config.sections[name] = {};
+    config.order = [...config.order, name];
+    touch();
+  },
+
+  removeSection(section) {
+    delete config.sections[section];
+    config.order = config.order.filter((s) => s !== section);
+    touch();
   },
 
   async saveConfig(restart) {
@@ -135,8 +195,7 @@ const actions: Actions = {
           ? "Saved. The add-on is restarting — this can take a minute."
           : "Saved. Restart the add-on to apply.";
       } else {
-        const { sections, order } = parseIni(config.iniText);
-        await transport.saveConfig(sections, order);
+        await transport.saveConfig(config.sections, config.order);
         if (restart) await transport.restart();
         config.message = restart
           ? "Saved. AstraMeter is reloading."
@@ -178,56 +237,18 @@ const actions: Actions = {
   },
 };
 
+/** Mark the config document edited and re-render. */
+function touch(): void {
+  config.dirty = true;
+  config.message = null;
+  config.error = null;
+  render();
+}
+
 function describe(err: unknown): string {
   if (err instanceof TransportError) return err.message;
   if (err instanceof Error) return err.message;
   return String(err);
-}
-
-// ── config.ini text round-trip ──────────────────────────────────────
-
-export function renderIni(
-  sections: Record<string, Record<string, string>>,
-  order: string[],
-): string {
-  const names = [...order, ...Object.keys(sections).filter((s) => !order.includes(s))];
-  return names
-    .map((name) => {
-      const pairs = sections[name] || {};
-      const body = Object.entries(pairs)
-        .map(([k, v]) => `${k} = ${v}`)
-        .join("\n");
-      return `[${name}]\n${body}`;
-    })
-    .join("\n\n")
-    .concat("\n");
-}
-
-export function parseIni(text: string): {
-  sections: Record<string, Record<string, string>>;
-  order: string[];
-} {
-  const sections: Record<string, Record<string, string>> = {};
-  const order: string[] = [];
-  let current: string | null = null;
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
-    const header = /^\[(.+)\]$/.exec(line);
-    if (header) {
-      current = header[1].trim();
-      if (!sections[current]) {
-        sections[current] = {};
-        order.push(current);
-      }
-      continue;
-    }
-    if (!current) continue;
-    const eq = line.indexOf("=");
-    if (eq === -1) continue;
-    sections[current][line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-  }
-  return { sections, order };
 }
 
 // ── poll loop ───────────────────────────────────────────────────────

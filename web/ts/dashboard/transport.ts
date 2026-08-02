@@ -14,6 +14,14 @@ import type { StatusSnapshot } from "./types.js";
 
 export type ConnectionState = "connecting" | "live" | "offline";
 
+export interface HaEntity {
+  entity_id: string;
+  name?: string;
+  unit?: string;
+  device_class?: string;
+  state?: string;
+}
+
 export interface Transport {
   /** Latest snapshot, or null when nothing changed since the last poll. */
   fetchStatus(): Promise<StatusSnapshot | null>;
@@ -32,6 +40,8 @@ export interface Transport {
     sections: Record<string, Record<string, string>>,
     order: string[],
   ): Promise<void>;
+  /** Per-section key type metadata, so the editor can render typed controls. */
+  getKeyTypes(): Promise<Record<string, Record<string, unknown>>>;
   /** Add-on options plus the schema to render them from. */
   getAddonOptions(): Promise<{
     options: Record<string, unknown>;
@@ -42,6 +52,8 @@ export interface Transport {
     options: Record<string, unknown>,
     restart: boolean,
   ): Promise<void>;
+  /** Home Assistant sensors that could be a grid-power source. */
+  listPowerEntities(): Promise<HaEntity[]>;
   switchConfigMode(mode: "file" | "options", filename?: string): Promise<void>;
   restart(): Promise<void>;
 }
@@ -148,6 +160,13 @@ export class PollTransport implements Transport {
     });
   }
 
+  async getKeyTypes() {
+    const { data } = await request<Record<string, Record<string, unknown>>>(
+      "api/key-types",
+    );
+    return data ?? {};
+  }
+
   async getAddonOptions() {
     const { data } = await request<{
       options: Record<string, unknown>;
@@ -165,6 +184,11 @@ export class PollTransport implements Transport {
       method: "POST",
       body: JSON.stringify({ options, restart }),
     });
+  }
+
+  async listPowerEntities(): Promise<HaEntity[]> {
+    const { data } = await request<{ entities: HaEntity[] }>("api/ha/entities");
+    return data?.entities ?? [];
   }
 
   async switchConfigMode(mode: "file" | "options", filename?: string) {

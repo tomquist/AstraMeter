@@ -29,7 +29,7 @@ import {
 } from "./model.js";
 import { parseAddonSchema } from "./option-meta.js";
 import { view } from "./view.js";
-import { initialConfigState } from "./config-view.js";
+import { initialConfigState, knownKeys, specFor } from "./config-view.js";
 import type { StatusSnapshot } from "./types.js";
 
 let failures = 0;
@@ -263,6 +263,115 @@ ok(parseAddonSchema("password?").type === "password", "password? parses");
 ok(parseAddonSchema("int(0,)?").min === 0, "int(0,) parses an open upper bound");
 ok(parseAddonSchema("").type === "str", "an empty spec falls back to text");
 ok(parseAddonSchema("weird_type").type === "weird_type", "unknown types survive");
+
+// ── config.ini editor: typed controls from the backend's key metadata ──
+const KEY_TYPES = {
+  GENERAL: {
+    DEVICE_TYPE: { type: "select", options: ["ct002", "ct003"] },
+    DASHBOARD_ENABLED: { type: "boolean" },
+    WEB_SERVER_PORT: { type: "integer" },
+  },
+  SHELLY: { PASS: { type: "password" }, IP: {} },
+  CT002: { BALANCE_GAIN: { type: "float", min: 0, max: 1 } },
+} as any;
+
+ok(specFor(KEY_TYPES, "GENERAL", "DEVICE_TYPE").type === "select", "exact section match");
+ok(specFor(KEY_TYPES, "general", "device_type").type === "select", "section/key match is case-insensitive");
+// A second meter of the same kind is configured as [SHELLY_2]; it must inherit
+// the SHELLY types rather than fall back to plain text.
+ok(specFor(KEY_TYPES, "SHELLY_2", "PASS").type === "password", "suffixed section inherits its base types");
+ok(specFor(KEY_TYPES, "UNKNOWN", "FOO").type === undefined, "unknown key falls back to text");
+ok(knownKeys(KEY_TYPES, "SHELLY_BACK").includes("IP"), "known keys resolve through a suffix");
+ok(knownKeys(KEY_TYPES, "NOPE").length === 0, "no suggestions for an unknown section");
+
+const iniConfig = {
+  ...initialConfigState(),
+  iniLoaded: true,
+  keyTypes: KEY_TYPES,
+  order: ["GENERAL", "SHELLY"],
+  sections: {
+    GENERAL: { DEVICE_TYPE: "ct002", DASHBOARD_ENABLED: "True", WEB_SERVER_PORT: "52500" },
+    SHELLY: { IP: "192.168.1.50", PASS: "••••••••" },
+  },
+};
+const iniHtml = renderToString(
+  h("div", null, ...view({ ...live, tab: "config" }, actions, iniConfig)),
+);
+has(iniHtml, "[GENERAL]", "the editor renders a card per section");
+has(iniHtml, "[SHELLY]", "every section appears");
+has(iniHtml, '<select', "a select-typed key renders a dropdown");
+has(iniHtml, 'type="password"', "a password-typed key renders masked");
+has(iniHtml, 'type="number"', "an integer-typed key renders a number input");
+has(iniHtml, "+ Add setting", "keys can be added");
+has(iniHtml, "Remove section", "sections can be removed");
+has(iniHtml, "<datalist", "known keys are offered as suggestions");
+has(iniHtml, 'aria-label="Setting name: DEVICE_TYPE"', "each key input names its own key");
+has(iniHtml, 'aria-label="DEVICE_TYPE value"', "each value control names its key");
+lacks(iniHtml, "<textarea", "the raw text box is gone");
+
+// An unrecognised stored value must stay selectable, or merely opening the
+// editor would silently rewrite it to the first option.
+const oddValue = {
+  ...iniConfig,
+  sections: { GENERAL: { DEVICE_TYPE: "ct999" } },
+  order: ["GENERAL"],
+};
+const oddHtml = renderToString(
+  h("div", null, ...view({ ...live, tab: "config" }, actions, oddValue)),
+);
+has(oddHtml, "ct999 (current)", "an unknown select value is preserved");
+
+const emptyIni = { ...iniConfig, sections: {}, order: [] };
+const emptyHtml = renderToString(
+  h("div", null, ...view({ ...live, tab: "config" }, actions, emptyIni)),
+);
+has(emptyHtml, "This config file is empty", "an empty file explains itself");
+
+// ── Home Assistant entity picker ──
+const HA_SCHEMA = { power_input_alias: "str", device_types: "str" };
+const withEntities = {
+  ...initialConfigState(),
+  loadedMode: "ha_simple",
+  schema: HA_SCHEMA,
+  options: { power_input_alias: "sensor.current_power_in", device_types: "ct002" },
+  entitiesLoaded: true,
+  entities: [
+    { entity_id: "sensor.current_power_in", name: "Grid power", unit: "W", state: "412.8" },
+    { entity_id: "sensor.p1_meter", name: "P1 meter", unit: "kW", state: "1.24" },
+  ],
+};
+const haState: AppState = {
+  ...live,
+  tab: "config",
+  snapshot: { ...snapshot, capabilities: { ...snapshot.capabilities, config_mode: "ha_simple", ha_options: true } },
+};
+const pickerHtml = renderToString(h("div", null, ...view(haState, actions, withEntities)));
+has(pickerHtml, 'list="ha-entities-power_input_alias"', "the sensor field is a combobox");
+has(pickerHtml, 'value="sensor.p1_meter"', "every applicable sensor is offered");
+has(pickerHtml, "Grid power · 412.8 W", "suggestions show the friendly name and live value");
+has(pickerHtml, "Grid power — currently 412.8 W", "the chosen sensor resolves to a readable line");
+has(pickerHtml, "Switch to a config file", "the mode switch is offered in the add-on");
+
+// A configured entity Home Assistant does not know must be called out — a
+// typo here otherwise only surfaces as a start-up failure much later.
+const typo = { ...withEntities, options: { ...withEntities.options, power_input_alias: "sensor.nope" } };
+const typoHtml = renderToString(h("div", null, ...view(haState, actions, typo)));
+has(typoHtml, "Not found in Home Assistant right now.", "an unknown entity is flagged");
+has(typoHtml, "warn-input", "and the field is visually marked");
+
+// Before the lookup returns, nothing is claimed either way.
+const pending = { ...withEntities, entitiesLoaded: false, entities: [] };
+const pendingHtml = renderToString(h("div", null, ...view(haState, actions, pending)));
+lacks(pendingHtml, "Not found in Home Assistant", "no false alarm before the list loads");
+
+// The lookup is best-effort: with no entities the field still accepts typing.
+const noEntities = { ...withEntities, entities: [] };
+const noneHtml = renderToString(h("div", null, ...view(haState, actions, noEntities)));
+has(noneHtml, "No power sensors found", "an empty list explains itself");
+has(noneHtml, 'aria-label="Grid power sensor"', "the field is still usable");
+
+// Simple mode must never offer the raw file editor.
+lacks(pickerHtml, "+ Add section", "the INI editor is hidden in guided mode");
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);

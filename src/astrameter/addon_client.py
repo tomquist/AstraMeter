@@ -24,7 +24,11 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-SUPERVISOR_BASE_URL = "http://supervisor"
+# Overridable so the add-on flows can be exercised against a stand-in
+# Supervisor; inside a real add-on the default is the only correct value.
+SUPERVISOR_BASE_URL = os.environ.get(
+    "ASTRAMETER_SUPERVISOR_URL", "http://supervisor"
+).rstrip("/")
 
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 # A restart tears down the container serving us, so waiting out the full
@@ -52,10 +56,14 @@ class SupervisorClient:
     def __init__(
         self,
         *,
-        base_url: str = SUPERVISOR_BASE_URL,
+        base_url: str | None = None,
         token: str | None = None,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
+        self._base_url = (
+            base_url
+            or os.environ.get("ASTRAMETER_SUPERVISOR_URL")
+            or SUPERVISOR_BASE_URL
+        ).rstrip("/")
         self._token = token if token is not None else os.environ.get("SUPERVISOR_TOKEN")
 
     def available(self) -> bool:
@@ -124,6 +132,71 @@ class SupervisorClient:
             )
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as exc:
             logger.debug("restart response never arrived (%s); assuming success", exc)
+
+    async def list_power_entities(self) -> list[dict[str, Any]]:
+        """Home Assistant entities that could plausibly be a grid-power sensor.
+
+        Reached through the Supervisor's Core proxy (``/core/api/states``),
+        which is what ``homeassistant_api: true`` grants — the same route the
+        HOMEASSISTANT powermeter already uses.
+
+        "Applicable" is deliberately generous: a `device_class: power` sensor
+        is the obvious case, but plenty of real installs expose grid power as
+        a plain sensor in W or kW with no device class, and excluding those
+        would make the picker useless exactly for the people who need it.
+        Unavailable entities are kept — a sensor can be briefly unavailable at
+        add-on start and still be the right choice.
+        """
+        states = await self._request_raw("GET", "/core/api/states")
+        if not isinstance(states, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for state in states:
+            if not isinstance(state, dict):
+                continue
+            entity_id = str(state.get("entity_id", ""))
+            if not entity_id.startswith("sensor."):
+                continue
+            attrs = state.get("attributes") or {}
+            device_class = attrs.get("device_class")
+            unit = str(attrs.get("unit_of_measurement") or "")
+            if device_class != "power" and unit not in ("W", "kW"):
+                continue
+            out.append(
+                {
+                    "entity_id": entity_id,
+                    "name": attrs.get("friendly_name") or entity_id,
+                    "unit": unit,
+                    "device_class": device_class,
+                    "state": state.get("state"),
+                }
+            )
+        out.sort(key=lambda e: e["entity_id"])
+        return out
+
+    async def _request_raw(self, method: str, path: str) -> Any:
+        """A Core-proxy call whose body is not the Supervisor result envelope."""
+        if not self._token:
+            raise SupervisorError("Not running as a Home Assistant add-on")
+        async with (
+            aiohttp.ClientSession() as session,
+            session.request(
+                method,
+                f"{self._base_url}{path}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=_TIMEOUT,
+            ) as resp,
+        ):
+            body = await resp.text()
+            status = resp.status
+        if status >= 400:
+            raise SupervisorError(
+                f"Home Assistant returned HTTP {status}", status=status
+            )
+        try:
+            return json.loads(body) if body else None
+        except ValueError:
+            return None
 
     async def _request(
         self,
