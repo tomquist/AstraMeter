@@ -32,7 +32,20 @@ docker build -f ha_addon/Dockerfile -t astrameter-addon:test .
 uv run pytest tests/test_addon_container.py
 ```
 
-CI does the same in the `addon-container` job.
+CI does the same in the `addon-container` job — the durable path, since a
+sandboxed agent session may not be able to run these locally:
+
+- **The daemon is usually not running.** Docker is installed in Claude Code's
+  remote environment, but nothing starts it; `dockerd &` (as root) works, and
+  it does not survive into the next session.
+- **The build fails behind a TLS-intercepting proxy.** `apk add` in the
+  builder stage cannot verify the proxy's certificate. Build with
+  `--network host` and the proxy CA added to the image (the environment's
+  proxy notes — `/root/.ccr/README.md` on Claude Code — describe how). Do this
+  in a copy of the Dockerfile: the real one must stay proxy-free for CI.
+
+When neither is possible, leave the container tests to CI and say so rather
+than reporting the image as untested.
 
 ## Python ↔ ESPHome parity (REQUIRED)
 
