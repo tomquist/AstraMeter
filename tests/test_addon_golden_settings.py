@@ -10,6 +10,11 @@ changes these values and fails here.
 
 Regenerating the fixture is only correct when an option is *meant* to change
 meaning, and that is a user-visible change.
+
+Options newer than the add-on 2.x — the ``dashboard*`` ones — have no run.sh
+behaviour to record. They are carried here anyway, each set to something other
+than its default, so the same assertion still fails if one stops reaching its
+field.
 """
 
 from __future__ import annotations

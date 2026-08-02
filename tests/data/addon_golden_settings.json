@@ -42,6 +42,9 @@
     "wifi_rssi": -50
   },
   "general": {
+    "dashboard": false,
+    "dashboard_allow_write": false,
+    "dashboard_direct_access": true,
     "dedupe_time_window": 1.25,
     "device_ids": [],
     "device_types": [
@@ -106,6 +109,9 @@
     "cloud_reporting_interval": 45,
     "concentrate_deadband": 44,
     "ct_mac": "AA:BB:CC:DD:EE:FF",
+    "dashboard": false,
+    "dashboard_allow_write": false,
+    "dashboard_direct_access": true,
     "deadband": 6,
     "dedupe_time_window": 1.25,
     "device_types": "ct002",

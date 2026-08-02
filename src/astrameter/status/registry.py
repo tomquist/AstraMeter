@@ -51,7 +51,9 @@ class StatusRegistry:
     the single asyncio loop.
     """
 
-    config_path: str
+    #: File backing the configuration, or ``None`` in add-on options mode
+    #: where the settings come straight from the Supervisor.
+    config_path: str | None
     log_level: str
     version: str
     git_commit: str
@@ -213,9 +215,11 @@ class StatusRegistry:
         return out
 
 
-def _mtime(path: str) -> float | None:
+def _mtime(path: str | None) -> float | None:
     import os
 
+    if path is None:
+        return None
     try:
         return os.stat(path).st_mtime
     except OSError:

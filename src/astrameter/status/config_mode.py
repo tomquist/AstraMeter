@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 
-from astrameter.addon.startup import ADDON_CONFIG_DIR
+from astrameter.config.addon import ADDON_CONFIG_DIR
 from astrameter.config.logger import logger
 
 __all__ = ["ADDON_CONFIG_DIR", "materialize_config", "target_path"]
