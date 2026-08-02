@@ -19,6 +19,21 @@ uv run pytest
 
 CI runs the same steps (see `.github/workflows/ci.yml`).
 
+## Home Assistant add-on image
+
+`tests/test_addon_container.py` runs the built add-on image against a stand-in
+Supervisor (`tests/_fake_supervisor.py`) — the only test that covers
+`ha_addon/run.sh`, the venv path and `SUPERVISOR_TOKEN` reaching the app. It
+skips unless the image exists, so build it first when touching the add-on's
+container or launch path:
+
+```bash
+docker build -f ha_addon/Dockerfile -t astrameter-addon:test .
+uv run pytest tests/test_addon_container.py
+```
+
+CI does the same in the `addon-container` job.
+
 ## Python ↔ ESPHome parity (REQUIRED)
 
 `esphome/components/ct002/` is a C++ mirror of the Python CT002 stack. Any change to shared behavior must land on **both** sides in the same change. See `CONTRIBUTING.md` for the file mapping and what has no C++ counterpart. Verify with `uv run pytest tests/components/ct002/`.

@@ -163,6 +163,50 @@ jobs:
       - name: Run ct002 codegen unit tests (esphome schema validators)
         run: uv run --no-sync pytest tests/components/ct002/test_codegen.py -v
 
+  # The add-on image, exercised the way the Supervisor starts it: the app
+  # reads its configuration from the add-on options and the Supervisor API,
+  # with no config file involved, so nothing but a real container run covers
+  # run.sh, the venv path and SUPERVISOR_TOKEN reaching the app.
+  addon-container:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Loaded into the local daemon (single platform) so the tests can run it.
+      - name: Build the add-on image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./ha_addon/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: astrameter-addon:test
+          build-args: |
+            BUILD_FROM=ghcr.io/hassio-addons/base:17.0.1
+          cache-from: type=gha,scope=addon-container
+          cache-to: type=gha,mode=max,scope=addon-container
+
+      - name: Run the add-on container tests
+        run: uv run pytest tests/test_addon_container.py -v
+
   validate:
     needs: [ lint ]
     runs-on: ubuntu-latest

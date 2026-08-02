@@ -22,6 +22,7 @@ from dataclasses import replace
 
 import pytest
 from _ct002_e2e_backend import find_free_ports
+from _fake_supervisor import DEFAULT_TOKEN, GRID_SENSOR, SupervisorState, build_app
 from aiohttp import web
 
 from astrameter.config.addon import AddonAppConfig, SupervisorClient, load_options
@@ -29,28 +30,21 @@ from astrameter.config.settings import CtSettings
 from astrameter.ct002.protocol import RESPONSE_LABELS, build_payload, parse_request
 from astrameter.main import async_main
 
-SUPERVISOR_TOKEN = "test-supervisor-token"
-GRID_SENSOR = "sensor.grid_power"
+SUPERVISOR_TOKEN = DEFAULT_TOKEN
 BATTERY_MAC = "AABBCCDDEEFF"
 CT_MAC = "112233445566"
 
 
 class FakeSupervisor:
-    """The Supervisor endpoints the add-on uses, plus the HA websocket proxy.
+    """Runs the stand-in Supervisor (see ``_fake_supervisor``) for one test.
 
-    Mirrors what an add-on really sees: everything is served under the
-    Supervisor host, Home Assistant behind the ``/core`` prefix, and every call
-    must carry the add-on's token.
-
-    Served from its own thread and event loop, because the add-on's Supervisor
-    client is a blocking one — a test awaiting it on the main loop would
-    otherwise deadlock against this server.
+    On its own thread and event loop, because the add-on's Supervisor client is
+    a blocking one — a test awaiting it on the main loop would otherwise
+    deadlock against this server.
     """
 
-    def __init__(self, watts: float, mqtt: dict | None = None) -> None:
-        self.watts = watts
-        self.mqtt = mqtt
-        self.unauthorized = 0
+    def __init__(self, watts: float = 321.0, mqtt: dict | None = None) -> None:
+        self.state = SupervisorState(watts=watts, token=SUPERVISOR_TOKEN, mqtt=mqtt)
         self.port = 0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -73,13 +67,7 @@ class FakeSupervisor:
         loop.run_forever()
 
     async def _start_site(self) -> None:
-        app = web.Application()
-        app.router.add_get("/core/api/", self._core_api)
-        app.router.add_get("/services/mqtt", self._mqtt_service)
-        app.router.add_get("/addons/self/info", self._addon_info)
-        app.router.add_get("/core/api/websocket", self._websocket)
-        app.router.add_get("/core/api/states/{entity}", self._state)
-        self._runner = web.AppRunner(app)
+        self._runner = web.AppRunner(build_app(self.state))
         await self._runner.setup()
         self.port = find_free_ports(2)[1]
         await web.TCPSite(self._runner, "127.0.0.1", self.port).start()
@@ -97,60 +85,17 @@ class FakeSupervisor:
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
-    def _authorized(self, request: web.Request) -> bool:
-        if request.headers.get("Authorization") == f"Bearer {SUPERVISOR_TOKEN}":
-            return True
-        self.unauthorized += 1
-        return False
+    @property
+    def unauthorized(self) -> int:
+        return self.state.unauthorized
 
-    async def _core_api(self, request: web.Request) -> web.Response:
-        if not self._authorized(request):
-            return web.json_response({"message": "unauthorized"}, status=401)
-        return web.json_response({"message": "API running."})
+    @property
+    def mqtt(self) -> dict | None:
+        return self.state.mqtt
 
-    async def _mqtt_service(self, request: web.Request) -> web.Response:
-        if self.mqtt is None:
-            return web.json_response({"result": "error"}, status=400)
-        return web.json_response({"result": "ok", "data": self.mqtt})
-
-    async def _addon_info(self, request: web.Request) -> web.Response:
-        return web.json_response(
-            {"result": "ok", "data": {"slug": "a0ef98c5_b2500_meter"}}
-        )
-
-    async def _state(self, request: web.Request) -> web.Response:
-        if not self._authorized(request):
-            return web.json_response({"message": "unauthorized"}, status=401)
-        return web.json_response(
-            {"entity_id": request.match_info["entity"], "state": str(self.watts)}
-        )
-
-    async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        await ws.send_json({"type": "auth_required", "ha_version": "2024.1.0"})
-        async for message in ws:
-            payload = json.loads(message.data)
-            kind = payload.get("type")
-            if kind == "auth":
-                if payload.get("access_token") != SUPERVISOR_TOKEN:
-                    self.unauthorized += 1
-                    await ws.send_json({"type": "auth_invalid"})
-                    await ws.close()
-                    return ws
-                await ws.send_json({"type": "auth_ok", "ha_version": "2024.1.0"})
-            elif kind == "subscribe_entities":
-                await ws.send_json(
-                    {"id": payload["id"], "type": "result", "success": True}
-                )
-                await ws.send_json(
-                    {
-                        "id": payload["id"],
-                        "type": "event",
-                        "event": {"a": {GRID_SENSOR: {"s": str(self.watts)}}},
-                    }
-                )
-        return ws
+    @mqtt.setter
+    def mqtt(self, value: dict | None) -> None:
+        self.state.mqtt = value
 
 
 def poll_ct002(port: int, ct_mac: str = CT_MAC, timeout: float = 1.0) -> dict[str, str]:
