@@ -45,13 +45,19 @@ if TYPE_CHECKING:
     from astrameter.config.settings import ConfiguredPowermeter
     from astrameter.mqtt_insights import MqttInsightsConfig
 
-OPTIONS_PATH = "/data/options.json"
-"""Where the Supervisor stores the add-on's user options."""
+OPTIONS_PATH = os.environ.get("ASTRAMETER_ADDON_OPTIONS", "/data/options.json")
+"""Where the Supervisor stores the add-on's user options.
 
-ADDON_CONFIG_DIR = "/config"
+The three locations below are fixed inside a real add-on container. Each takes
+an environment override so the add-on path can be driven from outside one — by
+the browser E2E, which runs the app as a subprocess against a stand-in
+Supervisor, and by anyone debugging the add-on backend on their own machine.
+"""
+
+ADDON_CONFIG_DIR = os.environ.get("ASTRAMETER_ADDON_CONFIG_DIR", "/config")
 """The ``addon_config`` mount that may hold a user-supplied config file."""
 
-SUPERVISOR_BASE_URL = "http://supervisor"
+SUPERVISOR_BASE_URL = os.environ.get("ASTRAMETER_SUPERVISOR_URL", "http://supervisor")
 """Base URL of the Supervisor API inside the add-on container."""
 
 REQUEST_TIMEOUT = 10.0

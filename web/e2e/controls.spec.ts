@@ -167,7 +167,11 @@ test("an in-flight write is not snapped back by the next poll", async ({ page })
   expect(await active.isChecked(), "the switch reverted mid-write").toBe(false);
   await page.unroute("**/api/control/consumer");
   await expect.poll(async () => (await battery(BATTERY)).active).toBe(false);
+  // Wait for the restore to land, not just to be sent: these tests share one
+  // stack, and a write still in flight re-renders the panel under the next
+  // test while it is reaching for a control.
   await active.check();
+  await expect.poll(async () => (await battery(BATTERY)).active).toBe(true);
 });
 
 test("a rejected write surfaces the reason", async ({ page }) => {

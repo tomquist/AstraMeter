@@ -16,14 +16,70 @@ Used two ways:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import json
+import re
+from pathlib import Path
 from typing import Any
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 DEFAULT_TOKEN = "test-supervisor-token"
 DEFAULT_SLUG = "a0ef98c5_b2500_meter"
 GRID_SENSOR = "sensor.grid_power"
+CONFIG_YAML = Path(__file__).parents[1] / "ha_addon" / "config.yaml"
+
+#: How often a subscribed websocket client is told the readings changed. Fast
+#: enough that a browser test sees the batteries steer without waiting.
+PUSH_INTERVAL = 0.5
+
+
+def _yaml_block(name: str, path: Path = CONFIG_YAML) -> dict[str, Any]:
+    """The flat ``key: value`` pairs under a top-level block of config.yaml.
+
+    Hand-parsed for the same reason the rest of the suite does it: both blocks
+    this needs are flat, and a YAML dependency for that would be silly. Serving
+    the add-on's *real* options and schema is the point — the guided form is
+    then rendered from what Home Assistant would actually show, not a fixture
+    that can drift away from it.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out: dict[str, Any] = {}
+    inside = False
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            inside = line.rstrip() == f"{name}:"
+            continue
+        if not inside:
+            continue
+        match = re.match(r"\s{2}([a-z0-9_]+):\s*(.*?)\s*$", line)
+        if match:
+            out[match.group(1)] = _scalar(match.group(2))
+    return out
+
+
+def _friendly(entity: str, total: int) -> str:
+    """What Home Assistant would show for one of the served power sensors."""
+    if total == 1:
+        return "Grid power"
+    return f"Grid power {entity.rsplit('_', 1)[-1].upper()}"
+
+
+def _scalar(raw: str) -> Any:
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        return raw[1:-1]
+    if raw in ("true", "false"):
+        return raw == "true"
+    for cast in (int, float):
+        try:
+            return cast(raw)
+        except ValueError:
+            continue
+    return raw
 
 
 class SupervisorState:
@@ -36,14 +92,65 @@ class SupervisorState:
         mqtt: dict[str, Any] | None = None,
         slug: str = DEFAULT_SLUG,
         sensor: str = GRID_SENSOR,
+        power_url: str | None = None,
+        phase_sensors: list[str] | None = None,
+        options_path: Path | None = None,
     ) -> None:
         self.watts = watts
         self.token = token
         self.mqtt = mqtt
         self.slug = slug
         self.sensor = sensor
+        #: Poll this for live per-phase readings instead of serving a constant.
+        #: The browser E2E points it at the battery simulator, so the readings
+        #: the add-on sees are the ones the simulated house is producing.
+        self.power_url = power_url
+        self.phase_sensors = phase_sensors or []
+        #: Where the options this Supervisor stores are mirrored, so the app
+        #: under test reads back what the dashboard wrote — the Supervisor
+        #: rewrites /data/options.json on every change.
+        self.options_path = options_path
+        #: The add-on's stored options, as the Configuration tab would show.
+        self.options: dict[str, Any] = {}
+        self.schema: dict[str, Any] = {}
+        self.ingress_panel = True
+        self.restarts = 0
         #: Calls that arrived without the add-on's token.
         self.unauthorized = 0
+
+    async def phase_watts(self) -> list[float]:
+        """Current per-phase readings."""
+        if not self.power_url:
+            return [self.watts, self.watts, self.watts]
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    self.power_url, timeout=aiohttp.ClientTimeout(total=2)
+                ) as r,
+            ):
+                body = await r.json()
+        except Exception:
+            return [self.watts, self.watts, self.watts]
+        return [float(body.get(f"phase_{p}", 0.0)) for p in ("a", "b", "c")]
+
+    async def entity_states(self) -> dict[str, float]:
+        """Entity id -> reading, for whichever sensors this run advertises.
+
+        One sensor gets the whole-house total, which is what a single signed
+        grid-power sensor reads; several get a phase each.
+        """
+        if not self.phase_sensors:
+            return {self.sensor: self.watts}
+        phases = await self.phase_watts()
+        if len(self.phase_sensors) == 1:
+            return {self.phase_sensors[0]: round(sum(phases), 1)}
+        return dict(zip(self.phase_sensors, phases, strict=False))
+
+    def store_options(self, options: dict[str, Any]) -> None:
+        self.options = options
+        if self.options_path is not None:
+            self.options_path.write_text(json.dumps(options), encoding="utf-8")
 
     def authorized(self, request: web.Request) -> bool:
         if request.headers.get("Authorization") == f"Bearer {self.token}":
@@ -68,20 +175,148 @@ def build_app(state: SupervisorState) -> web.Application:
     async def addon_info(request: web.Request) -> web.Response:
         if not state.authorized(request):
             return web.json_response({"message": "unauthorized"}, status=401)
-        return web.json_response({"result": "ok", "data": {"slug": state.slug}})
+        return web.json_response(
+            {
+                "result": "ok",
+                "data": {
+                    "slug": state.slug,
+                    "version": "next",
+                    "state": "started",
+                    "ingress_panel": state.ingress_panel,
+                    "ingress_url": f"/api/hassio_ingress/{state.slug}/",
+                    "options": state.options,
+                    "schema": state.schema,
+                },
+            }
+        )
+
+    async def addon_options(request: web.Request) -> web.Response:
+        """Store the options, the way the Supervisor does: a full replace.
+
+        It validates too, and a rejection is a message the dashboard shows
+        verbatim — so a range the schema declares is enforced here rather than
+        quietly accepted.
+        """
+        if not state.authorized(request):
+            return web.json_response({"message": "unauthorized"}, status=401)
+        payload = await request.json()
+        if "ingress_panel" in payload:
+            state.ingress_panel = bool(payload["ingress_panel"])
+            return web.json_response({"result": "ok"})
+        options = payload.get("options") or {}
+        for key, value in options.items():
+            spec = str(state.schema.get(key, ""))
+            if spec.startswith("float(0,1)") and not 0 <= float(value) <= 1:
+                return web.json_response(
+                    {
+                        "result": "error",
+                        "message": (
+                            "expected float in range [0, 1] for dictionary value "
+                            f"@ data['{key}']. Got {json.dumps(value)}"
+                        ),
+                    },
+                    status=400,
+                )
+        state.store_options(options)
+        return web.json_response({"result": "ok"})
+
+    async def addon_restart(request: web.Request) -> web.Response:
+        if not state.authorized(request):
+            return web.json_response({"message": "unauthorized"}, status=401)
+        state.restarts += 1
+        return web.json_response({"result": "ok"})
 
     async def entity_state(request: web.Request) -> web.Response:
         if not state.authorized(request):
             return web.json_response({"message": "unauthorized"}, status=401)
+        entity = request.match_info["entity"]
+        states = await state.entity_states()
         return web.json_response(
-            {"entity_id": request.match_info["entity"], "state": str(state.watts)}
+            {"entity_id": entity, "state": str(states.get(entity, state.watts))}
         )
+
+    async def entity_states(request: web.Request) -> web.Response:
+        """Every entity, which is what the dashboard's sensor picker lists.
+
+        A realistic mix, so the picker is seen filtering rather than just
+        echoing: power sensors with and without a device class, plus entities
+        that must not be offered.
+        """
+        if not state.authorized(request):
+            return web.json_response({"message": "unauthorized"}, status=401)
+        live = await state.entity_states()
+        body = [
+            {
+                "entity_id": entity,
+                "state": str(watts),
+                "attributes": {
+                    "friendly_name": _friendly(entity, len(live)),
+                    "device_class": "power",
+                    "unit_of_measurement": "W",
+                },
+            }
+            for entity, watts in live.items()
+        ]
+        body += [
+            {
+                "entity_id": "sensor.p1_meter_active_power",
+                "state": "1.24",
+                "attributes": {
+                    "friendly_name": "P1 meter active power",
+                    "unit_of_measurement": "kW",
+                },
+            },
+            {
+                "entity_id": "sensor.house_energy_today",
+                "state": "12.4",
+                "attributes": {
+                    "friendly_name": "Energy today",
+                    "device_class": "energy",
+                    "unit_of_measurement": "kWh",
+                },
+            },
+            {
+                "entity_id": "sensor.outside_temperature",
+                "state": "18.1",
+                "attributes": {
+                    "friendly_name": "Outside temperature",
+                    "device_class": "temperature",
+                    "unit_of_measurement": "°C",
+                },
+            },
+            {
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"friendly_name": "Kitchen light"},
+            },
+        ]
+        return web.json_response(body)
+
+    async def push_updates(ws: web.WebSocketResponse, sub_id: int) -> None:
+        """Keep a subscriber up to date with a source that keeps moving."""
+        while not ws.closed:
+            await asyncio.sleep(PUSH_INTERVAL)
+            states = await state.entity_states()
+            with contextlib.suppress(Exception):
+                await ws.send_json(
+                    {
+                        "id": sub_id,
+                        "type": "event",
+                        "event": {
+                            "c": {
+                                entity: {"+": {"s": str(watts)}}
+                                for entity, watts in states.items()
+                            }
+                        },
+                    }
+                )
 
     async def websocket(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.send_json({"type": "auth_required", "ha_version": "2024.1.0"})
         authenticated = False
+        pusher: asyncio.Task | None = None
         async for message in ws:
             if message.type is not WSMsgType.TEXT:
                 # An ERROR frame carries the exception, not JSON; anything
@@ -107,20 +342,37 @@ def build_app(state: SupervisorState) -> web.Application:
                 await ws.send_json(
                     {"id": payload["id"], "type": "result", "success": True}
                 )
+                states = await state.entity_states()
                 await ws.send_json(
                     {
                         "id": payload["id"],
                         "type": "event",
-                        "event": {"a": {state.sensor: {"s": str(state.watts)}}},
+                        "event": {
+                            "a": {
+                                entity: {"s": str(watts)}
+                                for entity, watts in states.items()
+                            }
+                        },
                     }
                 )
+                if state.power_url and pusher is None:
+                    # A live source keeps changing, and the subscriber only
+                    # hears about it through this socket.
+                    pusher = asyncio.create_task(push_updates(ws, payload["id"]))
+        if pusher is not None:
+            pusher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pusher
         return ws
 
     app = web.Application()
     app.router.add_get("/core/api/", core_api)
     app.router.add_get("/services/mqtt", mqtt_service)
     app.router.add_get("/addons/self/info", addon_info)
+    app.router.add_post("/addons/self/options", addon_options)
+    app.router.add_post("/addons/self/restart", addon_restart)
     app.router.add_get("/core/api/websocket", websocket)
+    app.router.add_get("/core/api/states", entity_states)
     app.router.add_get("/core/api/states/{entity}", entity_state)
     return app
 
@@ -131,9 +383,42 @@ def main() -> None:
     parser.add_argument("--watts", type=float, default=321.0)
     parser.add_argument("--token", default=DEFAULT_TOKEN)
     parser.add_argument("--sensor", default=GRID_SENSOR)
+    parser.add_argument(
+        "--power-url",
+        help="Poll this for live per-phase readings (the simulator's /power) "
+        "instead of serving a constant",
+    )
+    parser.add_argument(
+        "--phase-sensors",
+        help="Comma-separated entity ids to serve the phases as",
+    )
+    parser.add_argument(
+        "--options",
+        help="Mirror the stored add-on options to this file, so the app under "
+        "test reads back what was written through the Supervisor",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Address to listen on",
+    )
     args = parser.parse_args()
-    state = SupervisorState(watts=args.watts, token=args.token, sensor=args.sensor)
-    web.run_app(build_app(state), host="0.0.0.0", port=args.port)
+    state = SupervisorState(
+        watts=args.watts,
+        token=args.token,
+        sensor=args.sensor,
+        power_url=args.power_url,
+        phase_sensors=[s.strip() for s in (args.phase_sensors or "").split(",") if s],
+        options_path=Path(args.options) if args.options else None,
+    )
+    # The real Supervisor serves the add-on's own manifest; so does this, so a
+    # guided form is rendered from the options Home Assistant would show.
+    state.schema = _yaml_block("schema")
+    state.options = _yaml_block("options")
+    if state.options_path is not None and state.options_path.exists():
+        state.options.update(json.loads(state.options_path.read_text()))
+    state.store_options(state.options)
+    web.run_app(build_app(state), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

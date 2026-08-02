@@ -130,7 +130,7 @@ test("the grid sensor is an entity picker listing only power sensors", async ({
 
   // Power sensors, including one with no device_class but a W/kW unit —
   // plenty of real installs look like that.
-  expect(suggestions).toContain("sensor.current_power_in");
+  expect(suggestions).toContain("sensor.grid_power");
   expect(suggestions).toContain("sensor.p1_meter_active_power");
   // Everything that could not be grid power stays out.
   expect(suggestions).not.toContain("sensor.house_energy_today");

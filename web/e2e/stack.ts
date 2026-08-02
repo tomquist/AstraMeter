@@ -16,10 +16,17 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = resolve(HERE, "../..");
 
-export const DASHBOARD_PORT = 52599;
+export const DASHBOARD_PORT = 52500;
 export const SIM_HTTP_PORT = 8188;
-export const SIM_CT_PORT = 12399;
+export const SIM_CT_PORT = 12345;
 export const SUPERVISOR_PORT = 8199;
+export const SUPERVISOR_TOKEN = "e2e-token";
+
+/**
+ * The Home Assistant sensor the add-on reads, served from the simulator.
+ * One signed whole-house sensor, which is what most installs have.
+ */
+export const PHASE_SENSORS = ["sensor.grid_power"];
 
 export const BASE_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`;
 
@@ -91,8 +98,11 @@ async function waitFor(
   throw new Error(`timed out waiting for ${what}`);
 }
 
-const ok = (url: string) => async () => {
-  const r = await fetch(url, { signal: AbortSignal.timeout(2000) });
+const ok = (url: string, token?: string) => async () => {
+  const r = await fetch(url, {
+    signal: AbortSignal.timeout(2000),
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   return r.ok;
 };
 
@@ -138,29 +148,23 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
   };
 
   if (options.homeAssistant) {
-    spawnChild("node", [join(HERE, "fake-supervisor.mjs")], {
-      FAKE_SUPERVISOR_PORT: String(SUPERVISOR_PORT),
-      FAKE_SUPERVISOR_STATE: join(dir, "addon-options.json"),
-      FAKE_SUPERVISOR_CONFIG_DIR: dir,
-    });
-    await waitFor(
-      ok(`http://127.0.0.1:${SUPERVISOR_PORT}/addons/self/info`),
-      "the stand-in Supervisor",
-      20_000,
-    );
-  }
-
-  spawnChild("uv", ["run", "astra-sim", "run", "--no-tui", "-c", join(dir, "sim.json")]);
-  await waitFor(ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`), "the simulator");
-
-  if (options.homeAssistant) {
-    // What the Supervisor would have written to /data/options.json. The
-    // service reads it through the real `--addon` path: the dashboard
-    // settings, the add-on slug and the config mode all come from here, not
-    // from test-only environment variables.
+    // What the Supervisor would have written to /data/options.json. The whole
+    // add-on path then runs for real: the grid comes from Home Assistant
+    // sensors, and the config mode, slug and dashboard settings are the ones
+    // production computes.
     writeFileSync(
       join(dir, "options.json"),
       JSON.stringify({
+        device_types: "ct002",
+        power_input_alias: PHASE_SENSORS.join(","),
+        wait_for_next_message: false,
+        active_control: true,
+        fair_distribution: true,
+        // Non-zero so efficiency rotation is on and its controls appear.
+        min_efficient_power: 100,
+        // A stored credential, so the secret sentinel's round trip through
+        // the browser is exercised against a real one.
+        marstek_password: "super-secret-pw",
         dashboard: true,
         dashboard_allow_write: true,
         // Requests come from 127.0.0.1, not the ingress peer, so the gate
@@ -169,31 +173,47 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
         log_level: "warning",
       }),
     );
+
+    // The same stand-in Supervisor the Python add-on tests use, so there is
+    // one of them rather than two that can drift. It serves the repository's
+    // real ha_addon/config.yaml, so the guided form is rendered from the
+    // options Home Assistant would actually show, and it proxies the
+    // simulator as Home Assistant power sensors — which is how the add-on
+    // gets its readings, since `--addon` takes no config file.
+    spawnChild("uv", [
+      "run", "python", join(REPO, "tests", "_fake_supervisor.py"),
+      "--host", "127.0.0.1",
+      "--port", String(SUPERVISOR_PORT),
+      "--token", SUPERVISOR_TOKEN,
+      "--power-url", `http://127.0.0.1:${SIM_HTTP_PORT}/power`,
+      "--phase-sensors", PHASE_SENSORS.join(","),
+      "--options", join(dir, "options.json"),
+    ]);
+    await waitFor(
+      ok(`http://127.0.0.1:${SUPERVISOR_PORT}/core/api/`, SUPERVISOR_TOKEN),
+      "the stand-in Supervisor",
+      30_000,
+    );
   }
+
+  spawnChild("uv", ["run", "astra-sim", "run", "--no-tui", "-c", join(dir, "sim.json")]);
+  await waitFor(ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`), "the simulator");
 
   spawnChild(
     "uv",
-    [
-      "run",
-      "astrameter",
-      // The add-on options cannot express "read the simulator over HTTP on
-      // this port", so the running config stays the hand-written one while
-      // everything else goes through the add-on path for real.
-      ...(options.homeAssistant ? ["--addon"] : []),
-      "-c",
-      configPath,
-      "--loglevel",
-      "warning",
-    ],
+    options.homeAssistant
+      // `--addon` takes its whole configuration from the add-on options and
+      // the Supervisor; a config file is not part of that path.
+      ? ["run", "astrameter", "--addon"]
+      : ["run", "astrameter", "-c", configPath, "--loglevel", "warning"],
     {
       ...(options.homeAssistant
         ? {
-            SUPERVISOR_TOKEN: "e2e-token",
+            SUPERVISOR_TOKEN: SUPERVISOR_TOKEN,
             ASTRAMETER_SUPERVISOR_URL: `http://127.0.0.1:${SUPERVISOR_PORT}`,
             ASTRAMETER_ADDON_OPTIONS: join(dir, "options.json"),
             // Keep the mode switch's materialized file inside the test dir.
             ASTRAMETER_ADDON_CONFIG_DIR: dir,
-            ASTRAMETER_ADDON_GENERATED_CONFIG: join(dir, "generated.ini"),
           }
         : {}),
     },
@@ -225,5 +245,5 @@ export function readIni(stack: Stack): string {
 }
 
 export function readAddonOptions(stack: Stack): Record<string, unknown> {
-  return JSON.parse(readFileSync(join(stack.dir, "addon-options.json"), "utf8"));
+  return JSON.parse(readFileSync(join(stack.dir, "options.json"), "utf8"));
 }
