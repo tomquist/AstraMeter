@@ -2,8 +2,6 @@
 
 import dataclasses
 import inspect
-import os
-from unittest import mock
 
 import pytest
 
@@ -174,24 +172,14 @@ def test_reset_cycle_clears_per_run_state():
 # -- config mode ------------------------------------------------------
 
 
-def test_mode_is_declared_by_run_sh_never_inferred():
-    with mock.patch.dict(os.environ, {}, clear=True):
-        assert detect_config_mode() == "standalone"
-    with mock.patch.dict(
-        os.environ,
-        {"SUPERVISOR_TOKEN": "x", "ASTRAMETER_CONFIG_SOURCE": "custom_config"},
-        clear=True,
-    ):
-        assert detect_config_mode() == "ha_advanced"
-    with mock.patch.dict(
-        os.environ,
-        {"SUPERVISOR_TOKEN": "x", "ASTRAMETER_CONFIG_SOURCE": "addon_options"},
-        clear=True,
-    ):
-        assert detect_config_mode() == "ha_simple"
-    # An older run.sh does not declare the mode; assume the common one.
-    with mock.patch.dict(os.environ, {"SUPERVISOR_TOKEN": "x"}, clear=True):
-        assert detect_config_mode() == "ha_simple"
+def test_mode_comes_from_the_loaded_backend_never_from_the_filesystem():
+    # Outside the add-on it makes no difference whether a file backs the
+    # config — a Docker install is standalone either way.
+    assert detect_config_mode(addon=False, config_path=None) == "standalone"
+    assert detect_config_mode(addon=False, config_path="/app/x.ini") == "standalone"
+    # In the add-on, a file behind the config means the user supplied one.
+    assert detect_config_mode(addon=True, config_path=None) == "ha_simple"
+    assert detect_config_mode(addon=True, config_path="/config/x.ini") == "ha_advanced"
 
 
 def test_target_path_rejects_traversal(tmp_path):

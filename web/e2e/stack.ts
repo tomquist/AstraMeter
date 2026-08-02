@@ -150,21 +150,48 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
   spawnChild("uv", ["run", "astra-sim", "run", "--no-tui", "-c", join(dir, "sim.json")]);
   await waitFor(ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`), "the simulator");
 
+  if (options.homeAssistant) {
+    // What the Supervisor would have written to /data/options.json. The
+    // service reads it through the real `--addon` path: the dashboard
+    // settings, the add-on slug and the config mode all come from here, not
+    // from test-only environment variables.
+    writeFileSync(
+      join(dir, "options.json"),
+      JSON.stringify({
+        dashboard: true,
+        dashboard_allow_write: true,
+        // Requests come from 127.0.0.1, not the ingress peer, so the gate
+        // has to be opened explicitly — the same opt-in a LAN user makes.
+        dashboard_direct_access: true,
+        log_level: "warning",
+      }),
+    );
+  }
+
   spawnChild(
     "uv",
-    ["run", "astrameter", "-c", configPath, "--loglevel", "warning"],
+    [
+      "run",
+      "astrameter",
+      // The add-on options cannot express "read the simulator over HTTP on
+      // this port", so the running config stays the hand-written one while
+      // everything else goes through the add-on path for real.
+      ...(options.homeAssistant ? ["--addon"] : []),
+      "-c",
+      configPath,
+      "--loglevel",
+      "warning",
+    ],
     {
-      // Requests come from 127.0.0.1, not the ingress peer, so the gate has
-      // to be opened explicitly — the same opt-in a LAN user would make.
       ASTRAMETER_DASHBOARD_DIRECT_ACCESS: "1",
       ...(options.homeAssistant
         ? {
             SUPERVISOR_TOKEN: "e2e-token",
-            ASTRAMETER_CONFIG_SOURCE: "addon_options",
             ASTRAMETER_SUPERVISOR_URL: `http://127.0.0.1:${SUPERVISOR_PORT}`,
-            ASTRAMETER_ADDON_SLUG: "a0ef98c5_b2500_meter",
+            ASTRAMETER_ADDON_OPTIONS: join(dir, "options.json"),
             // Keep the mode switch's materialized file inside the test dir.
             ASTRAMETER_ADDON_CONFIG_DIR: dir,
+            ASTRAMETER_ADDON_GENERATED_CONFIG: join(dir, "generated.ini"),
           }
         : {}),
     },

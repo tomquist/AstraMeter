@@ -61,6 +61,10 @@ const server = http.createServer((req, res) => {
       console.log(`  ${req.method} ${req.url}`);
     }
 
+    if (req.url === "/core/api/") {
+      // The readiness probe the add-on waits on before it starts.
+      return send(200, { message: "API running." });
+    }
     if (req.url === "/addons/self/info") {
       return send(200, {
         result: "ok",

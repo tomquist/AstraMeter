@@ -6,7 +6,7 @@ a sentinel on the way out; a value that comes back still equal to the
 sentinel means "keep what is stored".  Plaintext credentials therefore never
 cross the wire in either direction.
 
-The key patterns mirror what ``ha_addon/run.sh`` already redacts from the
+The key patterns mirror what the add-on already redacts from the
 add-on log, so the two agree on what counts as a secret.
 """
 
