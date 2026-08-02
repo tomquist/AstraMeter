@@ -15,7 +15,12 @@ from astrameter.config import addon
 from astrameter.config.config_loader import ClientFilter
 from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.logger import logger, setLogLevel
-from astrameter.config.settings import AppConfig, GeneralSettings, MarstekSettings
+from astrameter.config.settings import (
+    AppConfig,
+    CtSettings,
+    GeneralSettings,
+    MarstekSettings,
+)
 from astrameter.ct002 import CT002
 from astrameter.marstek_api import (
     MarstekApiError,
@@ -126,6 +131,58 @@ def _reset_all_powermeters(
         pm.reset()
 
 
+def _build_ct002(
+    ct: CtSettings,
+    ct_type: str,
+    device_id: str,
+    debug_status: bool,
+    reset_fn,
+) -> CT002:
+    """Create the emulator a :class:`CtSettings` describes."""
+    return CT002(
+        udp_port=ct.udp_port,
+        ct_type=ct_type,
+        ct_mac=ct.ct_mac,
+        wifi_rssi=ct.wifi_rssi,
+        dedupe_time_window=ct.dedupe_time_window,
+        consumer_ttl=ct.consumer_ttl,
+        debug_status=debug_status,
+        active_control=ct.active_control,
+        fair_distribution=ct.fair_distribution,
+        balance_gain=ct.balance_gain,
+        error_boost_threshold=ct.error_boost_threshold,
+        error_boost_max=ct.error_boost_max,
+        error_reduce_threshold=ct.error_reduce_threshold,
+        balance_deadband=ct.balance_deadband,
+        max_correction_per_step=ct.max_correction_per_step,
+        max_target_step=ct.max_target_step,
+        pace_base_step=ct.pace_base_step,
+        pace_max_step=ct.pace_max_step,
+        osc_damp_max=ct.osc_damp_max,
+        osc_damp_alpha=ct.osc_damp_alpha,
+        osc_damp_decay=ct.osc_damp_decay,
+        osc_damp_threshold=ct.osc_damp_threshold,
+        grid_predict_trust=ct.grid_predict_trust,
+        concentrate_deadband=ct.concentrate_deadband,
+        import_trim_w=ct.import_trim_w,
+        saturation_detection=ct.saturation_detection,
+        saturation_alpha=ct.saturation_alpha,
+        min_target_for_saturation=ct.min_target_for_saturation,
+        saturation_grace_seconds=ct.saturation_grace_seconds,
+        saturation_stall_timeout_seconds=ct.saturation_stall_timeout_seconds,
+        min_efficient_power=ct.min_efficient_power,
+        probe_min_power=ct.probe_min_power,
+        efficiency_rotation_interval=ct.efficiency_rotation_interval,
+        efficiency_fade_alpha=ct.efficiency_fade_alpha,
+        efficiency_saturation_threshold=ct.efficiency_saturation_threshold,
+        efficiency_demand_alpha=ct.efficiency_demand_alpha,
+        min_dc_output=ct.min_dc_output,
+        saturation_decay_factor=ct.saturation_decay_factor,
+        device_id=device_id,
+        reset_fn=reset_fn,
+    )
+
+
 async def run_device(
     device_type: str,
     config: AppConfig,
@@ -181,47 +238,12 @@ async def run_device(
                 " + " + " + ".join(extras) if extras else "",
             )
 
-        device = CT002(
-            udp_port=ct.udp_port,
-            ct_type=ct_type,
-            ct_mac=ct.ct_mac,
-            wifi_rssi=ct.wifi_rssi,
-            dedupe_time_window=ct.dedupe_time_window,
-            consumer_ttl=ct.consumer_ttl,
-            debug_status=debug_status,
-            active_control=ct.active_control,
-            fair_distribution=ct.fair_distribution,
-            balance_gain=ct.balance_gain,
-            error_boost_threshold=ct.error_boost_threshold,
-            error_boost_max=ct.error_boost_max,
-            error_reduce_threshold=ct.error_reduce_threshold,
-            balance_deadband=ct.balance_deadband,
-            max_correction_per_step=ct.max_correction_per_step,
-            max_target_step=ct.max_target_step,
-            pace_base_step=ct.pace_base_step,
-            pace_max_step=ct.pace_max_step,
-            osc_damp_max=ct.osc_damp_max,
-            osc_damp_alpha=ct.osc_damp_alpha,
-            osc_damp_decay=ct.osc_damp_decay,
-            osc_damp_threshold=ct.osc_damp_threshold,
-            grid_predict_trust=ct.grid_predict_trust,
-            concentrate_deadband=ct.concentrate_deadband,
-            import_trim_w=ct.import_trim_w,
-            saturation_detection=ct.saturation_detection,
-            saturation_alpha=ct.saturation_alpha,
-            min_target_for_saturation=ct.min_target_for_saturation,
-            saturation_grace_seconds=ct.saturation_grace_seconds,
-            saturation_stall_timeout_seconds=ct.saturation_stall_timeout_seconds,
-            min_efficient_power=ct.min_efficient_power,
-            probe_min_power=ct.probe_min_power,
-            efficiency_rotation_interval=ct.efficiency_rotation_interval,
-            efficiency_fade_alpha=ct.efficiency_fade_alpha,
-            efficiency_saturation_threshold=ct.efficiency_saturation_threshold,
-            efficiency_demand_alpha=ct.efficiency_demand_alpha,
-            min_dc_output=ct.min_dc_output,
-            saturation_decay_factor=ct.saturation_decay_factor,
-            device_id=device_id or "",
-            reset_fn=lambda: _reset_all_powermeters(powermeters),
+        device = _build_ct002(
+            ct,
+            ct_type,
+            device_id or "",
+            debug_status,
+            lambda: _reset_all_powermeters(powermeters),
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
@@ -789,6 +811,10 @@ def main():
         # Home Assistant is the power source, so give it a chance to finish
         # booting before the first reading is attempted.
         addon.wait_for_home_assistant(addon.SupervisorClient())
+
+    # Resolve whatever the config source has to fetch remotely while we are
+    # still outside the event loop.
+    config.prefetch()
 
     general = _apply_cli_overrides(config.general(), args)
     logger.info("Effective configuration: %s", general)

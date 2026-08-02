@@ -14,6 +14,8 @@ from astrameter.powermeter import HomeAssistant
 class FakeSupervisor:
     """Stand-in for :class:`addon.SupervisorClient`."""
 
+    base_url = addon.SUPERVISOR_BASE_URL
+
     def __init__(
         self,
         mqtt: dict[str, Any] | None = None,

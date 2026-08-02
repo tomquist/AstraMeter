@@ -147,6 +147,14 @@ class AppConfig(ABC):
     #: its editor only for a real file.
     path: str | None = None
 
+    def prefetch(self) -> None:  # noqa: B027 - an opt-in hook, not abstract
+        """Do any slow lookups now, before the event loop starts.
+
+        A backend that has to ask a remote service for part of its
+        configuration resolves it here, so it never blocks the running loop
+        later. Sources that only read local files need not override this.
+        """
+
     @abstractmethod
     def general(self) -> GeneralSettings:
         """Emulation, web UI and power-source defaults."""

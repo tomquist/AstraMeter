@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from ipaddress import IPv4Network
 from typing import TYPE_CHECKING, Any, TypeVar, cast
+from urllib.parse import urlparse
 
 import requests
 
@@ -75,10 +76,10 @@ _GENERAL_FIELDS: dict[str, str] = {
 
 _GLOBAL_SIGNAL_FIELDS: dict[str, str] = {
     "throttle_interval": "throttle_interval",
-    "wait_for_next_message": "wait_for_next_message",
 }
 
 _SOURCE_SIGNAL_FIELDS: dict[str, str] = {
+    "wait_for_next_message": "wait_for_next_message",
     "smooth_alpha": "smooth_target_alpha",
     "max_smooth_step": "max_smooth_step",
     "deadband": "deadband",
@@ -339,6 +340,16 @@ class AddonAppConfig(AppConfig):
             self._slug = self._supervisor.addon_slug()
         return self._slug
 
+    def prefetch(self) -> None:
+        """Ask the Supervisor for the MQTT broker and the add-on slug now.
+
+        Both are HTTP round trips behind a blocking client, and both are
+        remembered, so resolving them before the event loop starts keeps them
+        off it.
+        """
+        self._mqtt_service()
+        self._addon_slug()
+
     def general(self) -> GeneralSettings:
         defaults = GeneralSettings()
         device_types = [
@@ -368,14 +379,12 @@ class AddonAppConfig(AppConfig):
         return _apply_options(settings, self._options, _CT_FIELDS)
 
     def marstek(self) -> MarstekSettings:
+        # Without the auto-register opt-in the account is not used at all, so
+        # the credentials are not handed out either.
+        if not self._option("marstek_auto_register_ct_device"):
+            return MarstekSettings()
         settings = _apply_options(MarstekSettings(), self._options, _MARSTEK_FIELDS)
-        # Credentials are only used with the auto-register opt-in.
-        enable = bool(
-            self._option("marstek_auto_register_ct_device")
-            and settings.mailbox
-            and settings.password
-        )
-        return replace(settings, enable=enable)
+        return replace(settings, enable=bool(settings.mailbox and settings.password))
 
     def mqtt_insights(self) -> MqttInsightsConfig | None:
         from astrameter.mqtt_insights import MqttInsightsConfig
@@ -420,9 +429,12 @@ class AddonAppConfig(AppConfig):
         power_input = self._entities("power_input_alias")
         power_output = self._entities("power_output_alias")
         calculated = bool(power_output)
+        # Same host as the REST calls, so there is one definition of where the
+        # Supervisor is (and tests can point both at a stand-in).
+        supervisor = urlparse(self._supervisor.base_url)
         meter = HomeAssistant(
-            "supervisor",
-            "80",
+            supervisor.hostname or "supervisor",
+            str(supervisor.port or 80),
             False,
             lambda: os.environ.get("SUPERVISOR_TOKEN", ""),
             current_power_entity=[] if calculated else power_input,
