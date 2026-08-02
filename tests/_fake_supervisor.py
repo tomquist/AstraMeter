@@ -19,7 +19,7 @@ import argparse
 import json
 from typing import Any
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
 
 DEFAULT_TOKEN = "test-supervisor-token"
 DEFAULT_SLUG = "a0ef98c5_b2500_meter"
@@ -59,11 +59,15 @@ def build_app(state: SupervisorState) -> web.Application:
         return web.json_response({"message": "API running."})
 
     async def mqtt_service(request: web.Request) -> web.Response:
+        if not state.authorized(request):
+            return web.json_response({"message": "unauthorized"}, status=401)
         if state.mqtt is None:
             return web.json_response({"result": "error"}, status=400)
         return web.json_response({"result": "ok", "data": state.mqtt})
 
     async def addon_info(request: web.Request) -> web.Response:
+        if not state.authorized(request):
+            return web.json_response({"message": "unauthorized"}, status=401)
         return web.json_response({"result": "ok", "data": {"slug": state.slug}})
 
     async def entity_state(request: web.Request) -> web.Response:
@@ -77,7 +81,13 @@ def build_app(state: SupervisorState) -> web.Application:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.send_json({"type": "auth_required", "ha_version": "2024.1.0"})
+        authenticated = False
         async for message in ws:
+            if message.type is not WSMsgType.TEXT:
+                # An ERROR frame carries the exception, not JSON; anything
+                # else is not something Home Assistant would send.
+                await ws.close()
+                return ws
             payload = json.loads(message.data)
             kind = payload.get("type")
             if kind == "auth":
@@ -86,7 +96,13 @@ def build_app(state: SupervisorState) -> web.Application:
                     await ws.send_json({"type": "auth_invalid"})
                     await ws.close()
                     return ws
+                authenticated = True
                 await ws.send_json({"type": "auth_ok", "ha_version": "2024.1.0"})
+            elif not authenticated:
+                # Home Assistant answers nothing before the auth handshake.
+                state.unauthorized += 1
+                await ws.close()
+                return ws
             elif kind == "subscribe_entities":
                 await ws.send_json(
                     {"id": payload["id"], "type": "result", "success": True}

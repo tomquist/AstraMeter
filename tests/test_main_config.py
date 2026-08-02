@@ -8,10 +8,17 @@ from astrameter.config.ini_config import IniAppConfig
 class NoSupervisor:
     """Supervisor that offers nothing, so no network is touched."""
 
+    base_url = "http://supervisor"
+
+    def __init__(self):
+        self.lookups = 0
+
     def mqtt_service(self):
+        self.lookups += 1
         return None
 
     def addon_slug(self):
+        self.lookups += 1
         return ""
 
 
@@ -74,6 +81,24 @@ def test_load_config_rereads_the_addon_options_on_restart(monkeypatch):
     config = main_module._load_config(args)
 
     assert config.general().device_types == ["ct003"]
+
+
+def test_load_config_resolves_the_supervisor_lookups_up_front(monkeypatch):
+    """Both startup and the restart branch load through here, so the blocking
+    Supervisor lookups can never be left to the running event loop."""
+    supervisor = NoSupervisor()
+    monkeypatch.setattr(
+        main_module.addon, "SupervisorClient", lambda *a, **k: supervisor
+    )
+
+    args = argparse.Namespace(addon=True, config="config.ini")
+    config = main_module._load_config(args, {"device_types": "ct002"})
+
+    assert supervisor.lookups == 2  # the MQTT service and the add-on slug
+
+    # Asking again is answered from what was already fetched.
+    config.mqtt_insights()
+    assert supervisor.lookups == 2
 
 
 def test_cli_throttle_override_reaches_the_power_sources(tmp_path):

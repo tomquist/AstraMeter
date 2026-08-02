@@ -78,3 +78,42 @@ def test_mqtt_settings_match_the_add_on_2x_behaviour(config):
     insights = config.mqtt_insights()
     assert insights is not None
     assert asdict(insights) == GOLDEN["mqtt"]
+
+
+def test_power_source_conditioning_matches_the_add_on_2x_behaviour(config):
+    """The signal options land on the power source, not in the global defaults.
+
+    Offsets, smoothing, the Hampel filter and the PID are applied where the
+    meter is built, so asserting `general()` alone would leave their meaning
+    unpinned.
+    """
+    meter, _, wait_for_next_message = config.powermeters(config.general())[0]
+    expected = GOLDEN["power_source_signal"]
+
+    assert wait_for_next_message == expected["wait_for_next_message"]
+    stack = {}
+    current = meter
+    while hasattr(current, "wrapped_powermeter"):
+        stack[type(current).__name__] = current
+        current = current.wrapped_powermeter
+
+    transform = stack["TransformedPowermeter"]
+    assert transform.offsets == expected["offsets"]
+    assert transform.multipliers == expected["multipliers"]
+    assert (
+        stack["ThrottledPowermeter"].throttle_interval == expected["throttle_interval"]
+    )
+    hampel = stack["HampelPowermeter"]
+    assert hampel._window_size == expected["hampel_window"]
+    assert hampel._n_sigma == expected["hampel_n_sigma"]
+    assert hampel._min_threshold == expected["hampel_min_threshold"]
+    smoothed = stack["SmoothedPowermeter"]
+    assert smoothed._alpha == expected["smooth_alpha"]
+    assert smoothed._max_step == expected["max_smooth_step"]
+    assert stack["DeadbandPowermeter"]._deadband == expected["deadband"]
+    pid = stack["PidPowermeter"]
+    assert pid.kp == expected["pid_kp"]
+    assert pid.ki == expected["pid_ki"]
+    assert pid.kd == expected["pid_kd"]
+    assert pid.output_max == expected["pid_output_max"]
+    assert pid.mode == expected["pid_mode"]

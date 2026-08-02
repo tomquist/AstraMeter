@@ -740,10 +740,19 @@ def _load_config(
 
     ``--addon`` takes the settings from the Home Assistant add-on options (and
     the Supervisor); otherwise they come from the ``--config`` file.
+
+    Whatever the backend has to fetch remotely is resolved here, while we are
+    still outside the event loop — this runs at startup *and* on a config
+    restart, so neither path can leave a blocking lookup to the running loop.
     """
     if args.addon:
-        return addon.load_config(addon.load_options() if options is None else options)
-    return IniAppConfig.from_file(args.config)
+        config: AppConfig = addon.load_config(
+            addon.load_options() if options is None else options
+        )
+    else:
+        config = IniAppConfig.from_file(args.config)
+    config.prefetch()
+    return config
 
 
 def main():
@@ -811,10 +820,6 @@ def main():
         # Home Assistant is the power source, so give it a chance to finish
         # booting before the first reading is attempted.
         addon.wait_for_home_assistant(addon.SupervisorClient())
-
-    # Resolve whatever the config source has to fetch remotely while we are
-    # still outside the event loop.
-    config.prefetch()
 
     general = _apply_cli_overrides(config.general(), args)
     logger.info("Effective configuration: %s", general)

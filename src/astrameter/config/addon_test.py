@@ -333,6 +333,29 @@ def test_unknown_custom_config_falls_back_to_the_options(tmp_path, caplog):
     assert "missing.ini" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["/etc/passwd", "../outside.ini", "nested/../../outside.ini"],
+)
+def test_custom_config_cannot_escape_the_addon_config_mount(tmp_path, caplog, name):
+    """The option names a file in the add-on's config mount, nothing else."""
+    (tmp_path.parent / "outside.ini").write_text("[GENERAL]\n", encoding="utf-8")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    with caplog.at_level("WARNING"):
+        cfg = addon.load_config(
+            {**BASE_OPTIONS, "custom_config": name},
+            FakeSupervisor(),
+            config_dir=str(config_dir),
+        )
+
+    # Refused, so the add-on options still apply.
+    assert isinstance(cfg, addon.AddonAppConfig)
+    assert cfg.path is None
+    assert "outside" in caplog.text or "not found" in caplog.text
+
+
 def test_custom_config_warns_about_ignored_ui_options(tmp_path, caplog):
     (tmp_path / "my.ini").write_text("[GENERAL]\n", encoding="utf-8")
     with caplog.at_level("WARNING"):

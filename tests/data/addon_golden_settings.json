@@ -146,5 +146,28 @@
     "smooth_target_alpha": 0.35,
     "throttle_interval": 2.5,
     "wait_for_next_message": false
+  },
+  "power_source_signal": {
+    "deadband": 6.0,
+    "hampel_min_threshold": 25.0,
+    "hampel_n_sigma": 2.5,
+    "hampel_window": 9,
+    "max_smooth_step": 55.0,
+    "multipliers": [
+      1.5
+    ],
+    "offsets": [
+      10.0,
+      20.0,
+      30.0
+    ],
+    "pid_kd": 0.03,
+    "pid_ki": 0.02,
+    "pid_kp": 0.4,
+    "pid_mode": "replace",
+    "pid_output_max": 950.0,
+    "smooth_alpha": 0.35,
+    "throttle_interval": 2.5,
+    "wait_for_next_message": false
   }
 }

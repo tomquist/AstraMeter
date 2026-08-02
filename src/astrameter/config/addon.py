@@ -474,11 +474,25 @@ class AddonAppConfig(AppConfig):
 def custom_config_path(
     options: Options, config_dir: str = ADDON_CONFIG_DIR
 ) -> str | None:
-    """Path of the user's own config file, when they configured a usable one."""
+    """Path of the user's own config file, when they configured a usable one.
+
+    The option is a file name inside the add-on's config mount, so anything
+    that resolves outside it — an absolute path, or one climbing out with
+    ``..`` — is refused rather than read from somewhere else on the host.
+    """
     name = get_option(options, "custom_config")
     if name is None:
         return None
-    path = os.path.join(config_dir, str(name).strip())
+    base = os.path.realpath(config_dir)
+    path = os.path.realpath(os.path.join(base, str(name).strip()))
+    if base != path and not path.startswith(base + os.sep):
+        logger.warning(
+            "Custom config file '%s' resolves outside %s; using the add-on "
+            "configuration options instead",
+            name,
+            config_dir,
+        )
+        return None
     if not os.path.isfile(path):
         logger.warning(
             "Custom config file '%s' not found in %s; using the add-on "

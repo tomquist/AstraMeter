@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from dataclasses import fields, replace
 
+import pytest
+
 from astrameter.config.settings import CtSettings
 from astrameter.main import _build_ct002
 
@@ -84,8 +86,21 @@ def _saturation(ct002):
     return ct002._balancer._saturation
 
 
+def boolean_fields() -> list[str]:
+    return [
+        field.name
+        for field in fields(CtSettings)
+        if isinstance(getattr(CtSettings(), field.name), bool)
+    ]
+
+
 def distinct_settings() -> CtSettings:
-    """CtSettings where no two fields share a value, so a swap cannot hide."""
+    """CtSettings where no two fields share a value, so a swap cannot hide.
+
+    Booleans are the exception — flipping the default gives every flag with
+    the same default the same value — so they are covered one at a time by
+    ``test_each_boolean_setting_reaches_only_its_own_destination``.
+    """
     values: dict[str, object] = {}
     for index, field in enumerate(fields(CtSettings), start=1):
         default = getattr(CtSettings(), field.name)
@@ -131,3 +146,23 @@ def test_debug_status_is_passed_separately_from_the_setting():
     """The DEBUG_STATUS env escape hatch can turn it on for either backend."""
     ct002 = _build_ct002(CtSettings(debug_status=False), "HME-4", "dev", True, None)
     assert ct002.debug_status is True
+
+
+@pytest.mark.parametrize("name", boolean_fields())
+def test_each_boolean_setting_reaches_only_its_own_destination(name):
+    """Flags cannot be told apart by value, so flip exactly one at a time.
+
+    Two swapped flags with the same default would survive the sweep above;
+    here only the flipped one may change at its destination.
+    """
+    defaults = CtSettings()
+    flipped = replace(defaults, **{name: not getattr(defaults, name)})
+    ct002 = _build_ct002(flipped, "HME-4", "device-1", flipped.debug_status, None)
+
+    for other in boolean_fields():
+        if other not in DESTINATIONS:  # not passed to the emulator at all
+            continue
+        expected = getattr(flipped, other)
+        assert DESTINATIONS[other](ct002) == expected, (
+            f"flipping {name} changed where {other} landed"
+        )

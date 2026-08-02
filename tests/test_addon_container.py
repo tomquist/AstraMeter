@@ -231,8 +231,8 @@ def addon(tmp_path) -> Iterator[RunningAddon]:
         },
         tmp_path,
     )
-    instance.start()
     try:
+        instance.start()
         yield instance
     finally:
         instance.stop()
@@ -289,8 +289,8 @@ def test_credentials_never_reach_the_log(tmp_path):
         },
         tmp_path,
     )
-    instance.start()
     try:
+        instance.start()
         instance.wait_for_health()
         logs = instance.logs()
     finally:
