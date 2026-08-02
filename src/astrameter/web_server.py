@@ -24,6 +24,26 @@ from astrameter.version_info import get_git_commit_sha
 # host-networked port directly.
 INGRESS_PEER = "172.30.32.2"
 
+# Only reachable in the add-on, where ingress is the intended way in. Kept to
+# plain inline markup: the bundle is exactly what this response is refusing to
+# hand out.
+_REFUSED_HTML = b"""<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AstraMeter \xe2\x80\x94 not reachable from here</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem}
+code{background:#8883;padding:.1em .35em;border-radius:.25em}
+</style>
+<h1>Not reachable from here</h1>
+<p>The AstraMeter dashboard opens from the <strong>Home Assistant sidebar</strong>,
+which is what authenticates you. This port has no login of its own, so it is
+refused by default.</p>
+<p>To use this address instead, turn on <code>dashboard_direct_access</code> in the
+add-on's configuration &mdash; understanding that anyone on your network can then
+open it.</p>
+"""
+
 
 def _health_json_bytes():
     """Return the JSON health-check response body as UTF-8 bytes."""
@@ -127,12 +147,14 @@ class WebServer:
     def _trusted(self, request) -> bool:
         """True when this request may see or change anything sensitive.
 
-        Fail-closed: under ``host_network: true`` the port is on the LAN
-        unauthenticated, so direct access must be opted into explicitly.
+        Fail-closed under the add-on: with ``host_network: true`` the port is
+        on the LAN unauthenticated, so serving it must be opted into. Outside
+        the add-on there is no ingress and the plain port is the only way in
+        (see ``StatusRegistry.serves_direct``).
         """
         if self.status is None:
             return False
-        return self._is_ingress(request) or self.status.direct_access
+        return self._is_ingress(request) or self.status.serves_direct()
 
     def _may_write(self, request) -> bool:
         return bool(
@@ -239,11 +261,21 @@ class WebServer:
             return
         mode = self.status.config_mode if self.status else "unknown"
         logger.info("Dashboard enabled (config mode: %s)", mode)
-        if self.status is not None and self.status.direct_access:
+        if self.status is None or not self.status.serves_direct():
+            return
+        if self.status.under_supervisor():
             logger.warning(
                 "Dashboard direct access is ENABLED: %s:%s is reachable without "
                 "Home Assistant authentication. Only enable this on a trusted "
                 "network.",
+                self.bind_address,
+                self.port,
+            )
+        else:
+            # Not an opt-in here — it is the only way in — but the page is
+            # still unauthenticated, which the operator should know.
+            logger.info(
+                "Dashboard is served on %s:%s with no authentication.",
                 self.bind_address,
                 self.port,
             )
@@ -276,7 +308,15 @@ class WebServer:
     async def _handle_dashboard(self, request):
         """Serve the single-page dashboard."""
         if not self._trusted(request):
-            return _json({"error": "Forbidden"}, status=403)
+            # A person typed this into a browser, so answer in prose. The
+            # frontend carries the same explanation for a refused poll, but it
+            # never loads when the page itself is the thing being refused.
+            return web.Response(
+                body=_REFUSED_HTML,
+                status=403,
+                content_type="text/html",
+                charset="utf-8",
+            )
         from astrameter.status.assets import dashboard_html
 
         html = dashboard_html()

@@ -17,6 +17,11 @@ SKIP_POWERMETER_TEST = False
 # Leave it off to keep the dashboard read-only.  There is NO authentication on
 # this port, so only enable it on a network you trust.
 # DASHBOARD_ALLOW_WRITE = False
+# Only relevant when this file is used BY the Home Assistant add-on: there the
+# dashboard opens from the sidebar and port 52500 is refused unless you opt in
+# here.  Running AstraMeter yourself (Docker or Python), the port is the only
+# way in and DASHBOARD_ENABLED above is all you need.
+# DASHBOARD_DIRECT_ACCESS = False
 # Port for the embedded web server (health check + dashboard + config editor). Default: 52500
 # WEB_SERVER_PORT = 52500
 # Global throttling configuration (in seconds) - applies to all powermeters unless overridden

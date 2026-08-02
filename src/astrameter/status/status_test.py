@@ -164,9 +164,20 @@ def test_snapshot_carries_no_credentials():
 
 
 def test_capabilities_are_fail_closed_without_ingress():
-    registry = _registry(allow_write=True, direct_access=False)
+    registry = _registry(
+        allow_write=True, direct_access=False, config_mode="ha_advanced"
+    )
     assert registry.capabilities(ingress=False)["controls"] is False
     assert registry.capabilities(ingress=True)["controls"] is True
+
+
+def test_standalone_needs_no_direct_access_opt_in():
+    """There is no ingress outside the add-on, so the flag would be one the
+    user could never usefully leave off."""
+    registry = _registry(
+        allow_write=True, direct_access=False, config_mode="standalone"
+    )
+    assert registry.capabilities(ingress=False)["controls"] is True
 
 
 def test_simple_mode_is_never_config_writable():

@@ -70,7 +70,10 @@ DASHBOARD_ENABLED = True
 DASHBOARD_ALLOW_WRITE = True
 ```
 
-Then open `http://<host>:52500/`. The port follows `WEB_SERVER_PORT`.
+Then open `http://<host>:52500/`. The port follows `WEB_SERVER_PORT`. Nothing
+else is needed: outside the add-on there is no Home Assistant in front of the
+page, so this address is the dashboard, unauthenticated — see
+[Security](#security).
 
 ## Changing your configuration
 
@@ -136,10 +139,14 @@ from:
 | Docker / standalone | with `DASHBOARD_ENABLED` | **nothing** |
 
 Because the add-on runs with host networking, port 52500 is on your LAN
-whether or not you use it. Everything except `/health` is therefore refused
+whether or not you use it. There, everything except `/health` is refused
 unless the request arrives through ingress or you explicitly opt in to direct
 access. The check is the connection's source address, not a header, so it
 cannot be faked by a client on your network.
+
+Running AstraMeter yourself there is no ingress, so that port is the only way
+in and `DASHBOARD_ENABLED` is the whole opt-in — `DASHBOARD_DIRECT_ACCESS`
+does not apply (it is only read when the add-on runs from a config file).
 
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.
@@ -149,10 +156,11 @@ every configuration change and battery command.
 **The sidebar panel is missing.** Restart the add-on; the panel is registered
 at start-up.
 
-**"This dashboard is not reachable from here."** You opened
+**"Not reachable from here."** In the add-on you opened
 `http://<host>:52500` directly rather than through the sidebar. Either use the
 sidebar or turn on `dashboard_direct_access`, understanding that it is
-unauthenticated.
+unauthenticated. Running AstraMeter yourself this does not apply — if that
+address is refused, `DASHBOARD_ENABLED` is off.
 
 **"Lost contact with AstraMeter."** The page could not reach the service for
 two polls. It keeps retrying, dims the values and switches every relative time

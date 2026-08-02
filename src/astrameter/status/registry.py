@@ -125,10 +125,25 @@ class StatusRegistry:
         bucket = int(time.monotonic() // _ETAG_BUCKET_SECONDS)
         return f'W/"{self.revision()}-{bucket}"'
 
+    def under_supervisor(self) -> bool:
+        """Whether Home Assistant is in front of us, i.e. ingress exists."""
+        return self.config_mode.startswith("ha_")
+
+    def serves_direct(self) -> bool:
+        """Whether a request that did not arrive through ingress is served.
+
+        Under the add-on the sidebar is the normal way in and the LAN port is
+        extra exposure, so it stays an explicit opt-in.  Outside it there is
+        no ingress peer and never will be, so the plain port is the *only*
+        way in: requiring a second flag there would make ``DASHBOARD_ENABLED``
+        do nothing on its own.
+        """
+        return self.direct_access or not self.under_supervisor()
+
     def capabilities(self, *, ingress: bool) -> dict[str, Any]:
         """What this deployment can do, so the UI never branches on identity."""
-        supervisor = self.config_mode.startswith("ha_")
-        writable = self.allow_write and (ingress or self.direct_access)
+        supervisor = self.under_supervisor()
+        writable = self.allow_write and (ingress or self.serves_direct())
         return {
             "backend": "python",
             # Reserved: there is no push transport today, and the field

@@ -56,18 +56,49 @@ async def test_health_is_always_reachable(tmp_path):
 
 
 @pytest.mark.parametrize("path", ["/", "/api/status", "/api/config"])
-async def test_direct_access_is_refused_by_default(tmp_path, path):
+async def test_direct_access_is_refused_by_default_under_the_addon(tmp_path, path):
     """Under host networking the port is on the LAN with no authentication,
     so anything sensitive must fail closed."""
-    client = await _client(_registry(tmp_path, direct_access=False))
+    client = await _client(
+        _registry(tmp_path, direct_access=False, config_mode="ha_advanced")
+    )
     assert (await client.get(path)).status == 403
+    await client.close()
+
+
+async def test_a_refused_page_explains_itself_in_prose(tmp_path):
+    """Someone typed the address into a browser. A raw JSON error tells them
+    nothing about the sidebar or the option that would let this port work."""
+    client = await _client(
+        _registry(tmp_path, direct_access=False, config_mode="ha_advanced")
+    )
+    response = await client.get("/")
+    assert response.status == 403
+    assert response.content_type == "text/html"
+    body = await response.text()
+    assert "sidebar" in body
+    assert "dashboard_direct_access" in body
+    await client.close()
+
+
+@pytest.mark.parametrize("path", ["/", "/api/status"])
+async def test_standalone_serves_without_a_second_opt_in(tmp_path, path):
+    """Outside the add-on there is no ingress peer, so the plain port is the
+    only way in. Gating it behind a further flag would make DASHBOARD_ENABLED
+    on its own do nothing at all — which is what a standalone user sets."""
+    client = await _client(
+        _registry(tmp_path, direct_access=False, config_mode="standalone")
+    )
+    assert (await client.get(path)).status == 200
     await client.close()
 
 
 async def test_forged_ingress_headers_do_not_grant_access(tmp_path):
     """The gate is the peer address precisely because a LAN client can set
     any header it likes."""
-    client = await _client(_registry(tmp_path, direct_access=False))
+    client = await _client(
+        _registry(tmp_path, direct_access=False, config_mode="ha_advanced")
+    )
     response = await client.get(
         "/api/status",
         headers={

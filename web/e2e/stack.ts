@@ -70,7 +70,6 @@ function configIni(shelly = false): string {
       `WEB_SERVER_PORT = ${DASHBOARD_PORT}`,
       "DASHBOARD_ENABLED = True",
       "DASHBOARD_ALLOW_WRITE = True",
-      "DASHBOARD_DIRECT_ACCESS = True",
       "",
       "[JSON_HTTP]",
       `URL = http://127.0.0.1:${SIM_HTTP_PORT}/power`,
@@ -86,9 +85,8 @@ function configIni(shelly = false): string {
     `WEB_SERVER_PORT = ${DASHBOARD_PORT}`,
     "DASHBOARD_ENABLED = True",
     "DASHBOARD_ALLOW_WRITE = True",
-    // Requests come from 127.0.0.1, not the ingress peer, so the gate has to
-    // be opened explicitly — the same opt-in a LAN user would make.
-    "DASHBOARD_DIRECT_ACCESS = True",
+    // No DASHBOARD_DIRECT_ACCESS: outside the add-on this is the whole
+    // opt-in, and the browser suite is what proves it.
     "",
     "[CT002]",
     `UDP_PORT = ${SIM_CT_PORT}`,
