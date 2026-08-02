@@ -859,15 +859,42 @@ def main():
         type=float,
         help="Throttling interval in seconds to prevent control instability",
     )
+    parser.add_argument(
+        "--addon",
+        action="store_true",
+        help="Run as a Home Assistant add-on: take the configuration from the "
+        "add-on options instead of --config",
+    )
 
     args = parser.parse_args()
+
+    if args.addon:
+        # Imported lazily: a standalone Docker or pip install never runs this.
+        from astrameter.addon import bootstrap, read_options
+        from astrameter.addon.startup import OPTIONS_PATH
+
+        options = read_options()
+        # The add-on UI owns the log level, so apply it before the bootstrap
+        # logs anything — including the effective configuration.
+        if options.get("log_level"):
+            args.loglevel = options["log_level"]
+        setLogLevel(args.loglevel)
+        if options:
+            args.config = bootstrap(options).path
+        else:
+            logger.warning(
+                "--addon was given but %s holds no options; falling back to %s",
+                OPTIONS_PATH,
+                args.config,
+            )
+    else:
+        setLogLevel(args.loglevel)
+
     # Disable interpolation so literal '%' in credentials (e.g. MARSTEK.PASSWORD)
     # is read as-is from config.ini.
     cfg = configparser.ConfigParser(dict_type=OrderedDict, interpolation=None)
     cfg.read(args.config)
 
-    # configure logger
-    setLogLevel(args.loglevel)
     logger.info("started astrameter application")
     _sha = get_git_commit_sha()
     if _sha:

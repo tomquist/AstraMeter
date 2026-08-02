@@ -81,7 +81,7 @@ Any **user-facing config option** must be wired into **every** config surface, n
 2. **`config.ini.example`** — a commented example with a short rationale.
 3. **Web config editor** — register typed keys in `SECTION_KEY_TYPES` in `src/astrameter/web_config.py`.
 4. **Web config generator (ALWAYS)** — add the field to the matching group in `web/ts/schema.ts` (e.g. a `CT_*` group or a `POWERMETERS` entry), emit it from `web/ts/generate.ts` for **every** target it applies to (`config.ini`, the Home Assistant add-on options, and ESPHome **only if** it has an ESPHome counterpart — Python-only options carry no `ey` key and must be excluded from the `ct002:` block), surface it in `web/ts/app.ts`, and add `web/ts/generate.test.ts` assertions. Run `cd web && npm run check`.
-5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it to the generated `config.ini` in `ha_addon/run.sh`, and describe it in `ha_addon/translations/en.yaml`.
+5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it to a `config.ini` key in `OPTION_MAP` in `src/astrameter/addon/options.py` (or list it in `HANDLED_SEPARATELY` when the generator consumes it some other way — a drift test fails if you do neither), and describe it in `ha_addon/translations/en.yaml`. `ha_addon/run.sh` is only a launcher; it needs no changes.
 6. **Docs** — the relevant `docs/*.md` (and `README.md` if it belongs in the quick reference).
 
 The web config generator is **not optional** — a new option that the generator can't produce is incomplete.
