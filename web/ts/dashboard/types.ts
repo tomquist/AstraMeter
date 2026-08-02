@@ -76,6 +76,8 @@ export interface ConsumerStatus {
   target_w?: { l1?: number; l2?: number; l3?: number };
   last_seen_at?: string;
   last_seen_age_s?: number;
+  /** Set only for a placeholder holding a setting for an absent battery. */
+  never_reported?: boolean;
   poll_interval_s?: number;
   ttl_s?: number;
   expired?: boolean;

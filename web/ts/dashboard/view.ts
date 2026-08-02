@@ -17,16 +17,17 @@ import {
   watts,
 } from "./format.js";
 import {
-  allConsumers,
   batteryHealth,
   contribution,
   ctDevices,
   gridTotal,
+  hasReported,
   health,
   meterHealth,
   overallHealth,
   pendingOr,
   railScale,
+  reportingConsumers,
   shellyBatteries,
   shellyDevices,
   type AppState,
@@ -92,7 +93,7 @@ function card(title: string | null, ...body: VChild[]): VNode {
 function balanceRail(state: AppState, offline: boolean): VNode {
   const snapshot = state.snapshot;
   const grid = gridTotal(snapshot);
-  const consumers = allConsumers(snapshot).filter((c) => !c.expired);
+  const consumers = reportingConsumers(snapshot).filter((c) => !c.expired);
   const scale = railScale(grid, consumers);
 
   const importing = (grid ?? 0) > 0;
@@ -229,7 +230,7 @@ function overview(state: AppState, offline: boolean, actions: Actions): VChild[]
   const snapshot = state.snapshot;
   if (!snapshot) return [coldStart()];
   const devices = ctDevices(snapshot);
-  const consumers = allConsumers(snapshot);
+  const consumers = reportingConsumers(snapshot);
 
   const shelly = shellyDevices(snapshot);
   const polling = shellyBatteries(snapshot);
@@ -291,7 +292,9 @@ function deviceCard(
   actions: Actions,
 ): VNode {
   const grid = device.grid;
-  const reporting = (device.consumers || []).filter((c) => !c.expired).length;
+  const reporting = (device.consumers || []).filter(
+    (c) => hasReported(c) && !c.expired,
+  ).length;
   return card(
     device.ct_type ? `${device.ct_type} emulator` : "Meter emulator",
     h(
@@ -509,6 +512,11 @@ function batteryCard(
   const power = consumer.reported_power_w;
   const charging = (power ?? 0) < 0;
   const saturation = consumer.balancer?.saturation;
+  // Nothing has reported under this address, so every figure below would be
+  // a default dressed up as a measurement — 0 W "discharging" on phase A.
+  // Say what it actually is instead, and keep the controls so the setting
+  // can be cleared from here.
+  const reported = hasReported(consumer);
 
   return h(
     "section",
@@ -521,29 +529,40 @@ function batteryCard(
       chip(status),
     ),
     h("div", { class: "mono" }, macLabel(consumer.consumer_id) ?? ""),
-    h(
-      "div",
-      { class: "batt-figure" },
-      h(
-        "span",
-        { class: `n ${charging ? "charge" : "discharge"}` },
-        signedWatts(power) ?? "—",
-      ),
-      h(
-        "span",
-        { class: "rail-label" },
-        power == null ? "no report" : charging ? "charging" : "discharging",
-      ),
-    ),
-    h(
-      "dl",
-      { class: "kv" },
-      ...row("Phase", phaseLabel(consumer.phase)),
-      ...row("Target", signedWatts(consumer.balancer?.last_target_w)),
-      ...row("Last seen", ago(consumer.last_seen_age_s)),
-      ...row("Polls every", seconds(consumer.poll_interval_s)),
-    ),
-    saturation == null
+    reported
+      ? h(
+          "div",
+          { class: "batt-figure" },
+          h(
+            "span",
+            { class: `n ${charging ? "charge" : "discharge"}` },
+            signedWatts(power) ?? "—",
+          ),
+          h(
+            "span",
+            { class: "rail-label" },
+            power == null ? "no report" : charging ? "charging" : "discharging",
+          ),
+        )
+      : h(
+          "p",
+          { class: "hint" },
+          "No battery has ever reported at this address. A saved setting is " +
+            "holding the slot — from a retained MQTT command, or a control " +
+            "changed while the battery was away. It is not steered, and it " +
+            "goes away once the setting is cleared.",
+        ),
+    reported
+      ? h(
+          "dl",
+          { class: "kv" },
+          ...row("Phase", phaseLabel(consumer.phase)),
+          ...row("Target", signedWatts(consumer.balancer?.last_target_w)),
+          ...row("Last seen", ago(consumer.last_seen_age_s)),
+          ...row("Polls every", seconds(consumer.poll_interval_s)),
+        )
+      : null,
+    saturation == null || !reported
       ? null
       : h(
           "div",

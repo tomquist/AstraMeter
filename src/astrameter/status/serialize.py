@@ -129,6 +129,13 @@ def consumer_to_wire(consumer) -> dict[str, Any]:
             "target_w": _phase_triple(consumer.target, suffix=""),
             "last_seen_at": iso(consumer.last_seen_at),
             "last_seen_age_s": round_or_none(consumer.last_seen_age),
+            # Stated, not inferred from the absence of the two fields above.
+            # A retained MQTT command creates a consumer to hold its setting
+            # before any battery reports, and the UI must tell that apart from
+            # a real battery; keying it on a missing timestamp would turn every
+            # battery into a placeholder on a backend that serves a reduced
+            # document.  Emitted only when true, so absence means "a battery".
+            "never_reported": True if not consumer.last_seen_at else None,
             "poll_interval_s": round_or_none(consumer.poll_interval),
             "ttl_s": round_or_none(consumer.ttl),
             "expired": consumer.expired,

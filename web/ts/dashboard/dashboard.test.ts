@@ -20,11 +20,13 @@ import {
   batteryHealth,
   contribution,
   gridTotal,
+  hasReported,
   initialState,
   meterHealth,
   overallHealth,
   pollInterval,
   railScale,
+  reportingConsumers,
   type AppState,
 } from "./model.js";
 import { parseAddonSchema } from "./option-meta.js";
@@ -579,6 +581,96 @@ ok(
   // word, so a bare substring search would match the prose instead.
   ok(!/\.innerHTML/.test(src), "vdom never writes .innerHTML");
 }
+
+// ── a consumer that has never reported is not a battery ──
+//
+// A retained MQTT command — or a control changed while a battery was away —
+// creates a placeholder consumer to hold that setting until the battery turns
+// up, and the emulator deliberately never expires it. Rendered like any other
+// consumer it becomes a phantom device: default phase A, 0 W "discharging",
+// a healthy Auto chip, and a battery count of two for a one-battery install.
+const phantomSnapshot: StatusSnapshot = {
+  schema_version: 1,
+  generated_at: "2026-08-01T12:00:00+00:00",
+  capabilities: { controls: true },
+  devices: [
+    {
+      kind: "ct002",
+      device_id: "ct-1",
+      ct_type: "HME-4",
+      running: true,
+      grid: { grid_total_w: -13 },
+      consumers: [
+        {
+          consumer_id: "682499eeef07",
+          device_type: "VNSD-0",
+          phase: "0",
+          reported_power_w: 0,
+          last_seen_at: "2026-08-01T11:59:59+00:00",
+          last_seen_age_s: 1,
+          poll_interval_s: 2,
+          active: true,
+        },
+        // What the backend emits for a placeholder: no liveness at all, and
+        // never_reported to say so rather than leaving it to be inferred.
+        {
+          consumer_id: "7ce712af5ef0",
+          phase: "A",
+          reported_power_w: 0,
+          never_reported: true,
+          active: true,
+        },
+      ],
+    },
+  ],
+};
+const phantomState: AppState = {
+  ...initialState(),
+  snapshot: phantomSnapshot,
+  connection: "live",
+};
+
+ok(allConsumers(phantomSnapshot).length === 2, "both consumers are in the document");
+ok(
+  reportingConsumers(phantomSnapshot).length === 1,
+  "only the one that has reported counts as a battery",
+);
+ok(
+  hasReported(phantomSnapshot.devices![0].consumers![1]) === false,
+  "a missing last_seen_at means it has never reported",
+);
+ok(
+  batteryHealth(phantomSnapshot.devices![0].consumers![1]).label ===
+    "Never reported",
+  "the placeholder does not claim to be steering happily",
+);
+
+const phantomHtml = renderToString(
+  h("div", null, ...view(phantomState, actions, initialConfigState())),
+);
+// The emulator card counts one battery, and the rail plots one bar.
+has(phantomHtml, "<dt>Batteries</dt><dd>1</dd>", "the phantom is not counted");
+ok(
+  (phantomHtml.match(/contrib-row/g) || []).length === 1,
+  "the phantom gets no bar on the contribution rail",
+);
+
+const phantomBatteries = renderToString(
+  h("div", null, ...view({ ...phantomState, tab: "batteries" }, actions, initialConfigState())),
+);
+// It is still listed, so the stale setting can be found and cleared...
+has(phantomBatteries, "7C:E7:12:AF:5E:F0", "the placeholder is still listed");
+has(phantomBatteries, "No battery has ever reported", "and it says what it is");
+// ...but none of the defaults are dressed up as measurements.
+lacks(
+  phantomBatteries,
+  "<dt>Phase</dt><dd>Phase A</dd>",
+  "a default phase is not reported as a measured one",
+);
+ok(
+  (phantomBatteries.match(/batt-figure/g) || []).length === 1,
+  "only the real battery gets a power figure",
+);
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);

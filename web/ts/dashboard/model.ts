@@ -88,7 +88,7 @@ export function overallHealth(state: AppState): Health {
   if (devices.some((d) => d.grid?.meter_failed)) {
     return health("err", "Meter unavailable");
   }
-  const consumers = allConsumers(state.snapshot);
+  const consumers = reportingConsumers(state.snapshot);
   const polling = shellyBatteries(state.snapshot);
   if (consumers.length === 0 && polling.length === 0) {
     return health("warn", "No batteries reporting");
@@ -106,6 +106,29 @@ export function overallHealth(state: AppState): Health {
 export function allConsumers(snapshot: StatusSnapshot | null): ConsumerStatus[] {
   if (!snapshot) return [];
   return (snapshot.devices || []).flatMap((d) => d.consumers || []);
+}
+
+/**
+ * Whether the emulator has ever heard from this battery.
+ *
+ * A consumer can exist without one: a retained MQTT command — or a control
+ * written while the battery was away — creates a placeholder to hold that
+ * setting until the battery turns up, and the emulator deliberately never
+ * expires it. It is a saved preference, not hardware, and the steering loop
+ * already ignores it. Counting it as a battery invents a device the user
+ * does not have.
+ */
+export function hasReported(consumer: ConsumerStatus): boolean {
+  // The backend states this; absence means "a battery", so a reduced document
+  // that omits it does not turn every battery into a placeholder.
+  return consumer.never_reported !== true;
+}
+
+/** The batteries actually on the network. */
+export function reportingConsumers(
+  snapshot: StatusSnapshot | null,
+): ConsumerStatus[] {
+  return allConsumers(snapshot).filter(hasReported);
 }
 
 /** Devices that actually steer batteries (CT002/CT003). */
@@ -197,6 +220,9 @@ export function railScale(
 }
 
 export function batteryHealth(consumer: ConsumerStatus): Health {
+  // Dominates everything below: with no report there is no power, no phase
+  // and no balancer state to describe — only a setting waiting for hardware.
+  if (!hasReported(consumer)) return health("idle", "Never reported");
   if (consumer.expired) return health("err", "Not reporting");
   if (consumer.active === false) return health("idle", "Disabled");
   if (consumer.manual_enabled) return health("warn", "Manual");

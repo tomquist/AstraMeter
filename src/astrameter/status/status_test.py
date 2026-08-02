@@ -94,6 +94,34 @@ def test_relay_mode_reports_the_grid_it_served_not_zero():
     assert device.status_snapshot().grid_total == pytest.approx(-11.0)
 
 
+def test_a_consumer_created_by_a_retained_command_is_marked_as_such():
+    """Every consumer setter materializes the consumer, because a retained MQTT
+    command has to hold its setting until the battery turns up.  That
+    placeholder carries Consumer's defaults — phase "A", 0 W, no timestamp —
+    and the emulator never expires it, so without a flag saying what it is the
+    dashboard shows a second battery that does not exist."""
+    device = _ct()
+    # Exactly what the retained-command replay does for an absent battery.
+    device.set_consumer_manual_target("7ce712af5ef0", 0.0)
+    registry = _registry()
+    registry.register_device("ct-1", "ct002", device)
+
+    (wire,) = registry.snapshot(ingress=False)["devices"]
+    real, placeholder = sorted(wire["consumers"], key=lambda c: c["consumer_id"])
+
+    assert real["consumer_id"] == "02b250000001"
+    assert "never_reported" not in real, "a real battery carries no flag at all"
+    assert real["last_seen_at"]
+
+    assert placeholder["consumer_id"] == "7ce712af5ef0"
+    assert placeholder["never_reported"] is True
+    # The absences the flag exists to explain: no liveness of any kind, and
+    # `expired` stays False because the emulator must not reap the setting.
+    assert "last_seen_at" not in placeholder
+    assert "last_seen_age_s" not in placeholder
+    assert placeholder["expired"] is False
+
+
 def test_a_shelly_device_reaches_the_wire_with_its_batteries():
     """The Shelly emulator is the default device type, so the document has to
     carry it as a first-class device — not as an unrecognised shape the UI
