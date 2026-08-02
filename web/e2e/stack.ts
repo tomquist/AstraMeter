@@ -319,14 +319,25 @@ export async function pollShelly(timeoutMs = 5000): Promise<any> {
   const socket = createSocket("udp4");
   try {
     return await new Promise((resolve, reject) => {
+      // Every exit goes through done(), so no path leaves the timer armed to
+      // fire minutes later — and a malformed reply fails the test with its
+      // parse error rather than escaping the handler as an uncaught throw.
       const timer = setTimeout(
-        () => reject(new Error("the Shelly emulator did not answer")),
+        () => done(new Error("the Shelly emulator did not answer")),
         timeoutMs,
       );
-      socket.on("error", reject);
-      socket.on("message", (message) => {
+      const done = (err: unknown, value?: any) => {
         clearTimeout(timer);
-        resolve(JSON.parse(message.toString()));
+        if (err) reject(err);
+        else resolve(value);
+      };
+      socket.on("error", done);
+      socket.on("message", (message) => {
+        try {
+          done(null, JSON.parse(message.toString()));
+        } catch (err) {
+          done(err);
+        }
       });
       socket.send(
         JSON.stringify({
@@ -337,7 +348,7 @@ export async function pollShelly(timeoutMs = 5000): Promise<any> {
         }),
         SHELLY_UDP_PORT,
         "127.0.0.1",
-        (err) => err && reject(err),
+        (err) => err && done(err),
       );
     });
   } finally {
