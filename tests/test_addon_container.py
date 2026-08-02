@@ -42,6 +42,11 @@ BATTERY_MAC = "AABBCCDDEEFF"
 CT_UDP_PORT = 12345  # the emulator's fixed port inside the container
 WEB_PORT = 52500
 REPO_ROOT = Path(__file__).resolve().parents[1]
+#: Where the repository is mounted inside the stand-in Supervisor's container.
+#: It reads sibling files (the add-on manifest) relative to its own location,
+#: so the two have to keep the layout they have here.
+REPO_MOUNT = "/repo"
+FAKE_SUPERVISOR = f"{REPO_MOUNT}/tests/_fake_supervisor.py"
 
 
 def docker(*args: str, check: bool = True, timeout: float = 120) -> str:
@@ -109,7 +114,9 @@ class RunningAddon:
 
         docker("network", "create", self.network)
         # The stand-in Supervisor answers to the hostname the add-on uses. It
-        # runs from the add-on image itself, which already has aiohttp.
+        # runs from the add-on image itself, which already has aiohttp. Both it
+        # and the add-on manifest it serves are mounted at their repository
+        # paths, because it finds the manifest relative to its own file.
         docker(
             "run",
             "-d",
@@ -120,11 +127,13 @@ class RunningAddon:
             "--network-alias",
             "supervisor",
             "-v",
-            f"{REPO_ROOT / 'tests' / '_fake_supervisor.py'}:/fake_supervisor.py:ro",
+            f"{REPO_ROOT / 'tests' / '_fake_supervisor.py'}:{FAKE_SUPERVISOR}:ro",
+            "-v",
+            f"{REPO_ROOT / 'ha_addon' / 'config.yaml'}:{REPO_MOUNT}/ha_addon/config.yaml:ro",
             "--entrypoint",
             "/app/.venv/bin/python",
             IMAGE,
-            "/fake_supervisor.py",
+            FAKE_SUPERVISOR,
             "--port",
             "80",
             "--watts",
