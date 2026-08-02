@@ -496,19 +496,21 @@ lacks(dashOff, "DASHBOARD_ENABLED", "dashboard: absent when off");
 // those defaults is worth emitting into the options.
 const haDashDefault = generateHomeAssistant({
   target: "homeassistant",
-  general: { deviceTypes: ["ct002"], dashboardEnabled: true, dashboardAllowWrite: true },
+  general: { deviceTypes: ["ct002"], dashboardAllowWrite: true },
   meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
   ct: { fields: {} },
 });
-lacks(haDashDefault, "dashboard", "ha-opts: nothing emitted when both match the add-on defaults");
+lacks(haDashDefault, "dashboard", "ha-opts: nothing emitted when writes match the add-on default");
 
+// The add-on's sidebar panel *is* the dashboard, so it cannot be turned off
+// there — no `dashboard` option exists to emit, whatever the form says.
 const haDashOff = generateHomeAssistant({
   target: "homeassistant",
-  general: { deviceTypes: ["ct002"], dashboardEnabled: false },
+  general: { deviceTypes: ["ct002"], dashboardEnabled: false, dashboardAllowWrite: true },
   meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
   ct: { fields: {} },
 });
-has(haDashOff, "dashboard: false", "ha-opts: explicit opt-out is emitted");
+lacks(haDashOff, "dashboard:", "ha-opts: the add-on has no option to disable the dashboard");
 
 const haDashReadOnly = generateHomeAssistant({
   target: "homeassistant",

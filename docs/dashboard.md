@@ -47,15 +47,15 @@ an empty field always means "not reported" rather than "measured as zero".
 
 ### Home Assistant add-on
 
-It is **on by default**. Open **AstraMeter** in the Home Assistant sidebar — the
+It is **always on** — the add-on's sidebar panel *is* the dashboard, so there is
+no option to turn it off. Open **AstraMeter** in the Home Assistant sidebar; the
 page is served through Home Assistant ingress, so it needs no extra port and is
 covered by your normal Home Assistant login.
 
-Three add-on options control it:
+Two add-on options control it:
 
 | Option | Default | What it does |
 |---|---|---|
-| `dashboard` | `true` | Adds the sidebar panel. Turn it off to remove it. |
 | `dashboard_allow_write` | `true` | Lets the dashboard change configuration and control batteries. Turn it off for a read-only dashboard. |
 | `dashboard_direct_access` | `false` | Also serves the page on `http://<host>:52500` **with no authentication**. See [Security](#security). |
 
@@ -71,10 +71,6 @@ DASHBOARD_ALLOW_WRITE = True
 ```
 
 Then open `http://<host>:52500/`. The port follows `WEB_SERVER_PORT`.
-
-Both keys can also be set with the `ASTRAMETER_DASHBOARD` and
-`ASTRAMETER_DASHBOARD_ALLOW_WRITE` environment variables, which win over the
-file.
 
 ## Changing your configuration
 
@@ -150,8 +146,8 @@ every configuration change and battery command.
 
 ## Troubleshooting
 
-**The sidebar panel is missing.** Check that the `dashboard` option is on and
-restart the add-on; the panel is registered at start-up.
+**The sidebar panel is missing.** Restart the add-on; the panel is registered
+at start-up.
 
 **"This dashboard is not reachable from here."** You opened
 `http://<host>:52500` directly rather than through the sidebar. Either use the

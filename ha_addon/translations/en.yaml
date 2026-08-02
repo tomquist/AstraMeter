@@ -41,9 +41,6 @@ configuration:
   grid_predict_trust:
     name: Grid Prediction
     description: "Keeps the grid closer to zero — less import, less export, less overshoot and hunting — by adapting automatically to your power meter, including meters that report with a delay (e.g. a Home Assistant push sensor). 0.5 (default) is recommended and needs no tuning; lower values react more cautiously and 0 turns the feature off (steer directly on the raw meter reading). Only applies to CT002/CT003 device types."
-  dashboard:
-    name: Live Dashboard
-    description: "Adds an AstraMeter panel to the Home Assistant sidebar showing live grid power, every battery's target and reported power, power-source health and the balancer's internal state. Opened through Home Assistant ingress, so it needs no extra port and is covered by your normal Home Assistant login. On by default."
   dashboard_allow_write:
     name: Allow Changes From The Dashboard
     description: "Lets the dashboard change your configuration and control individual batteries (enable/disable, manual target). Turn this off to make the dashboard read-only. Only applies to the dashboard opened from the sidebar. On by default."

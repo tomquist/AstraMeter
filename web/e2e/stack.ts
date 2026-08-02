@@ -165,7 +165,7 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
         // A stored credential, so the secret sentinel's round trip through
         // the browser is exercised against a real one.
         marstek_password: "super-secret-pw",
-        dashboard: true,
+        // No `dashboard` option: the add-on always serves it.
         dashboard_allow_write: true,
         // Requests come from 127.0.0.1, not the ingress peer, so the gate
         // has to be opened explicitly — the same opt-in a LAN user makes.

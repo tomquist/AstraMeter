@@ -679,11 +679,10 @@ export function generateHomeAssistant(state: State): string {
   add("wait_for_next_message", !isBlank(g.waitForNextMessage) ? g.waitForNextMessage : tuning.WAIT_FOR_NEXT_MESSAGE);
   add("dedupe_time_window", g.dedupeTimeWindow);
 
-  // The dashboard is on by default in the add-on, so only an explicit opt-out
-  // is worth emitting; the write flag is emitted whenever it differs from the
-  // add-on default of on.
-  if (!g.dashboardEnabled) add("dashboard", false);
-  else if (!g.dashboardAllowWrite) add("dashboard_allow_write", false);
+  // The add-on always serves the dashboard — it is the sidebar panel — so
+  // there is no option to emit for that. Only a read-only dashboard deviates
+  // from the add-on default.
+  if (!g.dashboardAllowWrite) add("dashboard_allow_write", false);
 
   // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};

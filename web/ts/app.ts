@@ -232,6 +232,14 @@ function targetCard(): HTMLElement {
         class: "choice" + (active ? " active" : ""),
         type: "button",
         onclick: () => {
+          if (state.target !== value) {
+            // The two targets ship opposite defaults for dashboard writes: the
+            // add-on has them on, because Home Assistant authenticates every
+            // ingress request, while a config.ini has them off, because that
+            // port does not. Move the box to the new target's default so the
+            // form shows what that target actually ships.
+            state.general.dashboardAllowWrite = value === "homeassistant";
+          }
           state.target = value;
           if (value === "homeassistant") coerceHaMeter();
           rerenderAll();
@@ -322,8 +330,10 @@ function deviceCard(): HTMLElement {
         state.target === "homeassistant" ? null : fieldControl({ key: "deviceIds", label: "Device IDs", help: "Optional fixed IDs (comma-separated, same order as the meters above). Leave blank to auto-generate.", type: "text", placeholder: "shellypro3em-c59b15461a21" }, g, {}),
         state.target === "homeassistant" ? null : fieldControl({ key: "skipPowermeterTest", label: "Skip power meter test on startup", help: "Skip the connection check when AstraMeter starts.", type: "checkbox" }, g, {}),
         state.target === "homeassistant" ? null : fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }),
-        fieldControl({ key: "dashboardEnabled", label: "Enable live status dashboard", help: state.target === "homeassistant" ? "On by default in the add-on; opens from the Home Assistant sidebar. Untick to turn it off." : "Live status page at http://<host>:<port>/.", type: "checkbox" }, g, { structural: true }),
-        g.dashboardEnabled ? fieldControl({ key: "dashboardAllowWrite", label: "Allow changes from the dashboard", help: "Lets the dashboard edit your configuration and control batteries. Leave off for a read-only dashboard.", type: "checkbox" }, g, {}) : null,
+        // The add-on always serves the dashboard — it is the sidebar panel —
+        // so there is nothing to enable there, only the write flag to relax.
+        state.target === "homeassistant" ? null : fieldControl({ key: "dashboardEnabled", label: "Enable live status dashboard", help: "Live status page at http://<host>:<port>/.", type: "checkbox" }, g, { structural: true }),
+        state.target === "homeassistant" || g.dashboardEnabled ? fieldControl({ key: "dashboardAllowWrite", label: "Allow changes from the dashboard", help: "Lets the dashboard edit your configuration and control batteries. Leave off for a read-only dashboard.", type: "checkbox" }, g, {}) : null,
         state.target !== "homeassistant" && (g.webConfigEnabled || g.dashboardEnabled) ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
         fieldControl({ key: "waitForNextMessage", label: "Wait for fresh push (global)", help: "Wait up to 2s for the newest reading from push-based meters.", type: "select", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] }, g, {}),

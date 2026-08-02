@@ -78,7 +78,6 @@ Options = dict[str, Any]
 # untouched are skipped, so the settings defaults apply.
 _GENERAL_FIELDS: dict[str, str] = {
     "dedupe_time_window": "dedupe_time_window",
-    "dashboard": "dashboard",
     "dashboard_allow_write": "dashboard_allow_write",
     "dashboard_direct_access": "dashboard_direct_access",
 }
@@ -373,10 +372,11 @@ class AddonAppConfig(AppConfig):
             # served; its config editor is for config files only.
             enable_web_server=True,
             web_config_enabled=False,
-            # Home Assistant authenticates every ingress request, so the
-            # dashboard is on by default here — unlike a bare Docker run.
-            # config.yaml declares the same defaults; these apply if an older
-            # options.json predates the options.
+            # The add-on's sidebar panel *is* the dashboard, so there is no
+            # option to turn it off: doing so would leave a panel that opens
+            # onto nothing. Unlike a bare Docker run it costs nothing to serve
+            # either, because Home Assistant authenticates every ingress
+            # request. Writing is on by default and can be turned off.
             dashboard=True,
             dashboard_allow_write=True,
             signal=_apply_options(
