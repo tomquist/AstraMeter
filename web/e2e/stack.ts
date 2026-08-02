@@ -53,6 +53,9 @@ function configIni(): string {
     `WEB_SERVER_PORT = ${DASHBOARD_PORT}`,
     "DASHBOARD_ENABLED = True",
     "DASHBOARD_ALLOW_WRITE = True",
+    // Requests come from 127.0.0.1, not the ingress peer, so the gate has to
+    // be opened explicitly — the same opt-in a LAN user would make.
+    "DASHBOARD_DIRECT_ACCESS = True",
     "",
     "[CT002]",
     `UDP_PORT = ${SIM_CT_PORT}`,
@@ -183,7 +186,6 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
       "warning",
     ],
     {
-      ASTRAMETER_DASHBOARD_DIRECT_ACCESS: "1",
       ...(options.homeAssistant
         ? {
             SUPERVISOR_TOKEN: "e2e-token",
