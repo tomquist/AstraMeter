@@ -69,8 +69,21 @@ export function renderToString(node: VChild): string {
 
 // -- browser backend --------------------------------------------------
 
-function setProp(el: HTMLElement, key: string, value: any): void {
+// Attributes the *user* owns once the element exists: the browser writes
+// `open` when a <details> is toggled, so a re-render must neither remove it
+// nor force it back. Treated as a create-time default only — otherwise a
+// 1 Hz poll would slam every disclosure shut (or hold it open) under the
+// user's cursor.
+const UNCONTROLLED = new Set(["open"]);
+
+function setProp(
+  el: HTMLElement,
+  key: string,
+  value: any,
+  creating = false,
+): void {
   if (key === "key") return;
+  if (UNCONTROLLED.has(key) && !creating) return;
   if (isEventProp(key)) {
     const type = key.slice(2).toLowerCase();
     const prev = (el as any)["__" + key];
@@ -106,24 +119,33 @@ function create(node: VChild): Node {
     return document.createTextNode(String(node));
   }
   const el = document.createElement(node.tag);
-  for (const [key, value] of Object.entries(node.props)) setProp(el, key, value);
+  for (const [key, value] of Object.entries(node.props)) {
+    setProp(el, key, value, true);
+  }
   for (const child of node.children) el.appendChild(create(child));
   return el;
 }
 
-/** Reconcile `parent`'s children against `next`, reusing nodes in place. */
+/**
+ * Reconcile `parent`'s children against `next`, reusing nodes in place.
+ *
+ * Absent children keep their slot as a comment placeholder rather than being
+ * filtered out. Dropping them would renumber every following sibling the
+ * moment a conditional control appeared, so this loop would compare a slider
+ * against a text box, replace it, and destroy the element the user was
+ * dragging — along with its focus and its scroll position.
+ */
 export function patch(parent: HTMLElement, next: VChild[]): void {
-  const nodes = next.filter((n) => n != null && n !== false) as VChild[];
-  for (let i = 0; i < nodes.length; i++) {
+  for (let i = 0; i < next.length; i++) {
     const existing = parent.childNodes[i];
-    const desired = nodes[i];
+    const desired = next[i];
     if (!existing) {
       parent.appendChild(create(desired));
       continue;
     }
-    patchNode(parent, existing, desired, i);
+    patchNode(parent, existing, desired);
   }
-  while (parent.childNodes.length > nodes.length) {
+  while (parent.childNodes.length > next.length) {
     parent.removeChild(parent.lastChild!);
   }
 }
@@ -132,8 +154,14 @@ function patchNode(
   parent: HTMLElement,
   existing: ChildNode,
   desired: VChild,
-  index: number,
 ): void {
+  if (desired == null || desired === false) {
+    // Hold the slot so later siblings keep their index.
+    if (existing.nodeType !== Node.COMMENT_NODE) {
+      parent.replaceChild(document.createComment(""), existing);
+    }
+    return;
+  }
   const isText = typeof desired === "string" || typeof desired === "number";
   if (isText) {
     if (existing.nodeType === Node.TEXT_NODE) {
@@ -155,9 +183,10 @@ function patchNode(
   const el = existing as HTMLElement;
   const seen = new Set(Object.keys(vnode.props));
   for (const attr of Array.from(el.attributes)) {
-    if (!seen.has(attr.name)) el.removeAttribute(attr.name);
+    if (!seen.has(attr.name) && !UNCONTROLLED.has(attr.name)) {
+      el.removeAttribute(attr.name);
+    }
   }
   for (const [key, value] of Object.entries(vnode.props)) setProp(el, key, value);
   patch(el, vnode.children);
-  void index;
 }

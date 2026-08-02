@@ -481,6 +481,8 @@ function sectionCard(
   const keys = Object.keys(pairs);
   return h(
     "details",
+    // Open by default on first render; the user's later toggling is theirs
+    // to keep (see UNCONTROLLED in vdom.ts).
     { class: "card section", open: true },
     h(
       "summary",
@@ -554,6 +556,12 @@ function keyRow(
   );
 }
 
+// Mirrors the backend's secret-key rule (status/secrets.py). The type table
+// only covers known sections, but the *backend* redacts by key name anywhere
+// — so without this a password in an unrecognised section would be sent back
+// as bullets in a plain, visible text box.
+const SECRET_KEY = /(password|passwd|secret|token|api[_-]?key|accesstoken|mailbox)/i;
+
 function valueControl(
   section: string,
   key: string,
@@ -611,7 +619,7 @@ function valueControl(
     });
   }
 
-  if (spec.type === "password") {
+  if (spec.type === "password" || (!spec.type && SECRET_KEY.test(key))) {
     return h("input", {
       class: "keyval",
       type: "password",

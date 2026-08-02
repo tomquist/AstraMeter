@@ -107,8 +107,11 @@ and a choice is a list. Settings and whole sections can be added and removed,
 and the name box suggests the settings AstraMeter knows for that section. It is
 the same editor as the standalone one at `/config`.
 
-Saving validates the whole file before replacing it: if it would not load, the
-change is rejected and the running configuration is left alone.
+Saving trial-loads the whole file before replacing it, so a file that cannot
+be parsed — or whose power-source sections cannot be built — is rejected and
+the running configuration is left untouched. This is a load check, not a full
+schema validation: a setting that parses but is wrong for your hardware is
+still accepted here and will show up in the log at the next restart.
 
 Passwords and tokens are shown as `••••••••`. Leave them untouched to keep the
 stored value; the real secret is never sent to your browser and never has to be

@@ -10,9 +10,12 @@
     "build": "node build.mjs",
     "build:dashboard": "node tools/gen-dashboard-assets.mjs",
     "check:dashboard": "node tools/gen-dashboard-assets.mjs --check",
-    "check": "npm run typecheck && npm test && npm run check:dashboard"
+    "check": "npm run typecheck && npm test && npm run check:dashboard",
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2e:ui": "playwright test -c e2e/playwright.config.ts --ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "tsx": "^4.19.0",

@@ -53,6 +53,9 @@ const actions: Actions = {
   async setConsumer(deviceId, consumerId, field, value) {
     const key = `${consumerId}:${field}`;
     state.busy[key] = true;
+    // Hold the requested value until the server has confirmed it, so an
+    // in-flight poll cannot re-render the control back to the old one.
+    state.pending[key] = value;
     render();
     try {
       await transport.controlConsumer(deviceId, consumerId, field, value);
@@ -61,16 +64,24 @@ const actions: Actions = {
       state.error = describe(err);
     } finally {
       delete state.busy[key];
+      delete state.pending[key];
       render();
     }
   },
 
   async setDevice(deviceId, field, value) {
+    const key = `${deviceId}:${field}`;
+    state.busy[key] = true;
+    if (field !== "force_rotation") state.pending[key] = value;
+    render();
     try {
       await transport.controlDevice(deviceId, field, value);
       await poll();
     } catch (err) {
       state.error = describe(err);
+    } finally {
+      delete state.busy[key];
+      delete state.pending[key];
       render();
     }
   },

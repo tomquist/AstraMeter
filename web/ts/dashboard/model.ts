@@ -24,6 +24,14 @@ export interface AppState {
   notice: string | null;
   /** Controls awaiting a server round trip, keyed `consumerId:field`. */
   busy: Record<string, boolean>;
+  /**
+   * The value the user just asked for, held until the server confirms it.
+   *
+   * Without this the next poll — up to a full interval later — re-renders the
+   * control with the server's *old* value and visibly snaps the switch back
+   * under the user's finger.
+   */
+  pending: Record<string, unknown>;
 }
 
 export function initialState(): AppState {
@@ -36,7 +44,13 @@ export function initialState(): AppState {
     error: null,
     notice: null,
     busy: {},
+    pending: {},
   };
+}
+
+/** The user's in-flight value for a control, else the reported one. */
+export function pendingOr<T>(state: AppState, key: string, actual: T): T {
+  return (key in state.pending ? (state.pending[key] as T) : actual);
 }
 
 export type Severity = "ok" | "warn" | "err" | "idle";

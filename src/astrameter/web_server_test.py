@@ -179,7 +179,7 @@ async def test_control_write_applies_through_the_validated_setter(tmp_path):
         ("manual_target", -99999),
         ("manual_target", "abc"),
         ("distribution_weight", 50),
-        ("efficiency_window_weight", 500),
+        ("efficiency_window_weight", 101),
         ("min_dc_output", 5000),
         ("active", "yes"),
     ],
@@ -256,4 +256,115 @@ async def test_simple_mode_refuses_config_writes(tmp_path):
     )
     assert response.status == 403
     assert "add-on options" in (await response.json())["error"]
+    await client.close()
+
+
+# -- device-wide controls (the MQTT switch + button) ------------------
+
+
+async def test_active_control_can_be_toggled(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+    client = await _client(registry)
+    response = await client.post(
+        "/api/control/device",
+        json={"device_id": "ct-1", "field": "active_control", "value": False},
+    )
+    assert response.status == 200
+    assert device.active_control is False
+    await client.close()
+
+
+async def test_force_rotation_is_accepted(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    response = await client.post(
+        "/api/control/device",
+        json={"device_id": "ct-1", "field": "force_rotation", "value": True},
+    )
+    assert response.status == 200
+    assert (await response.json())["applied"] is True
+    await client.close()
+
+
+async def test_unknown_device_field_is_404(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    assert (
+        await client.post(
+            "/api/control/device",
+            json={"device_id": "ct-1", "field": "nope", "value": True},
+        )
+    ).status == 404
+    await client.close()
+
+
+async def test_device_control_needs_the_write_flag(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=False)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    assert (
+        await client.post(
+            "/api/control/device",
+            json={"device_id": "ct-1", "field": "force_rotation", "value": True},
+        )
+    ).status == 403
+    await client.close()
+
+
+# -- units match the MQTT entity, not the setter ----------------------
+
+
+async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
+    """The MQTT entity is a 0-100 percentage while the setter takes a 0-1
+    fraction, and the two must not disagree: 50 over HTTP has to mean the
+    same thing as 50 over MQTT."""
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+    client = await _client(registry)
+
+    response = await client.post(
+        "/api/control/consumer",
+        json={
+            "device_id": "ct-1",
+            "consumer_id": "02b250000001",
+            "field": "efficiency_window_weight",
+            "value": 50,
+        },
+    )
+    assert response.status == 200
+    consumer = device.snapshot_consumer("02b250000001")
+    assert consumer is not None
+    assert consumer.efficiency_window_weight == pytest.approx(0.5)
+
+    # ...and it reads back in the same unit it was written in.
+    body = await (await client.get("/api/status")).json()
+    row = body["devices"][0]["consumers"][0]
+    assert row["efficiency_window_weight_pct"] == pytest.approx(50.0)
+    await client.close()
+
+
+async def test_full_efficiency_window_is_accepted(tmp_path):
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+    client = await _client(registry)
+    assert (
+        await client.post(
+            "/api/control/consumer",
+            json={
+                "device_id": "ct-1",
+                "consumer_id": "02b250000001",
+                "field": "efficiency_window_weight",
+                "value": 100,
+            },
+        )
+    ).status == 200
+    consumer = device.snapshot_consumer("02b250000001")
+    assert consumer is not None
+    assert consumer.efficiency_window_weight == pytest.approx(1.0)
     await client.close()

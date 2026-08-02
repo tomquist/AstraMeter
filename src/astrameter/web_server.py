@@ -67,6 +67,10 @@ _CONTROL_RANGES = {
 
 _CONTROL_BOOLS = ("active", "auto_target")
 
+# Fields the wire carries in different units from the setter, mirroring the
+# MQTT handlers: the entity is a percentage, the setter takes a fraction.
+_CONTROL_SCALE = {"efficiency_window_weight": 0.01}
+
 
 def _coerce_control_value(field, value):
     """Validate and coerce a control value, mirroring the MQTT bounds."""
@@ -83,7 +87,7 @@ def _coerce_control_value(field, value):
         raise ValueError(f"{field} must be a number") from exc
     if not math.isfinite(number) or not low <= number <= high:
         raise ValueError(f"{field} must be between {low:g} and {high:g}")
-    return number
+    return number * _CONTROL_SCALE.get(field, 1.0)
 
 
 class WebServer:

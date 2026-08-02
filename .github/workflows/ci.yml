@@ -241,6 +241,60 @@ jobs:
           gz=$(gzip -9 -c ../src/astrameter/static/dashboard.html | wc -c)
           echo "dashboard.html: $(wc -c < ../src/astrameter/static/dashboard.html) B raw, ${gz} B gzipped" >> "$GITHUB_STEP_SUMMARY"
 
+  # Browser-level tests against the real stack: the battery simulator speaking
+  # CT002 UDP, a real AstraMeter, and the committed dashboard bundle. These
+  # catch what the string-rendered unit tests structurally cannot — a control
+  # destroyed by a re-render, a disclosure that snaps shut, a write that never
+  # reaches the device.
+  dashboard-e2e:
+    needs: [ lint, web ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Python dependencies
+        run: uv sync --frozen --extra dev --extra sim
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run dashboard end-to-end tests
+        working-directory: web
+        run: npm run e2e
+
+      - name: Upload the report on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-e2e-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
   validate:
     needs: [ lint, web ]
     runs-on: ubuntu-latest

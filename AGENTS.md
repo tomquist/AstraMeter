@@ -66,6 +66,11 @@ blanket exemption:
 - The **configuration half** is permanently waived. An ESPHome device's config
   is compiled into its firmware, so there is nothing for a dashboard to write.
 
+Browser-level tests live in `web/e2e/` (`cd web && npm run e2e`) and boot the
+real stack. Anything touching the live DOM — the reconciler, a control's write
+path, a disclosure — needs a test there, because the unit tests render views
+to a string and cannot see those failures.
+
 The bundle at `src/astrameter/static/dashboard.html` is a **committed generated
 artifact** — neither the Docker build nor `esphome compile` has Node. After
 touching anything under `web/`, run `cd web && npm run build:dashboard` and

@@ -138,8 +138,14 @@ def consumer_to_wire(consumer) -> dict[str, Any]:
             "manual_enabled": consumer.manual_enabled,
             "manual_target_w": round_or_none(consumer.manual_target),
             "distribution_weight": round_or_none(consumer.distribution_weight, 3),
-            "efficiency_window_weight": round_or_none(
-                consumer.efficiency_window_weight, 3
+            # As a percentage, matching the "Efficiency Window Weight" MQTT
+            # entity's unit — the dashboard and the user's HA entity list must
+            # not disagree about what the number means.
+            "efficiency_window_weight_pct": round_or_none(
+                consumer.efficiency_window_weight * 100
+                if consumer.efficiency_window_weight is not None
+                else None,
+                1,
             ),
             "min_dc_output_w": round_or_none(consumer.min_dc_output),
             "min_dc_output_applicable": consumer.min_dc_output_applicable,

@@ -24,6 +24,7 @@ import {
   gridTotal,
   meterHealth,
   overallHealth,
+  pendingOr,
   railScale,
   type AppState,
   type Health,
@@ -216,7 +217,7 @@ function contributionRow(
 
 // ── overview ────────────────────────────────────────────────────────
 
-function overview(state: AppState, offline: boolean): VChild[] {
+function overview(state: AppState, offline: boolean, actions: Actions): VChild[] {
   const snapshot = state.snapshot;
   if (!snapshot) return [coldStart()];
   const devices = ctDevices(snapshot);
@@ -227,7 +228,9 @@ function overview(state: AppState, offline: boolean): VChild[] {
     h(
       "div",
       { class: "grid" },
-      ...devices.map((d) => deviceCard(d, offline)),
+      ...devices.map((d) =>
+        deviceCard(d, offline, Boolean(snapshot.capabilities?.controls), state, actions),
+      ),
       ...(snapshot.powermeters || []).map((m) => meterCard(m, offline)),
     ),
     consumers.length === 0 ? noBatteries() : null,
@@ -259,7 +262,13 @@ function noBatteries(): VNode {
   );
 }
 
-function deviceCard(device: DeviceStatus, offline: boolean): VNode {
+function deviceCard(
+  device: DeviceStatus,
+  offline: boolean,
+  writable: boolean,
+  state: AppState,
+  actions: Actions,
+): VNode {
   const grid = device.grid;
   const reporting = (device.consumers || []).filter((c) => !c.expired).length;
   return card(
@@ -289,6 +298,60 @@ function deviceCard(device: DeviceStatus, offline: boolean): VNode {
         offline ? clockTime(grid?.sample_at) : ago(secondsSince(grid?.sample_at)),
       ),
       ...row("CT MAC", macLabel(device.ct_mac)),
+    ),
+    writable ? deviceControls(device, state, actions) : null,
+  );
+}
+
+/**
+ * The device-wide controls the MQTT integration already exposes: the Active
+ * Control switch and the Force Rotation button.
+ *
+ * Rotation is only offered when the balancer says rotation is enabled —
+ * pressing it otherwise does nothing, exactly as the MQTT button would.
+ */
+function deviceControls(
+  device: DeviceStatus,
+  state: AppState,
+  actions: Actions,
+): VNode {
+  const deviceId = device.device_id || "";
+  const active = pendingOr(
+    state,
+    `${deviceId}:active_control`,
+    device.control?.active_control ?? false,
+  );
+  const rotationOn = Boolean(device.balancer?.efficiency_rotation_enabled);
+  return h(
+    "div",
+    { class: "controls" },
+    h(
+      "label",
+      { class: "row" },
+      h("input", {
+        type: "checkbox",
+        checked: active,
+        disabled: Boolean(state.busy[`${deviceId}:active_control`]),
+        onchange: (e: Event) =>
+          actions.setDevice(
+            deviceId,
+            "active_control",
+            (e.target as HTMLInputElement).checked,
+          ),
+      }),
+      h("span", null, "Active control"),
+    ),
+    h(
+      "button",
+      {
+        class: "btn sm",
+        disabled: !rotationOn || Boolean(state.busy[`${deviceId}:force_rotation`]),
+        title: rotationOn
+          ? "Swap which batteries take the load now"
+          : "Efficiency rotation is off — set a minimum efficient power to enable it",
+        onclick: () => actions.setDevice(deviceId, "force_rotation", true),
+      },
+      "Force rotation",
     ),
   );
 }
@@ -351,9 +414,6 @@ function batteryCard(
   const status = batteryHealth(consumer);
   const power = consumer.reported_power_w;
   const charging = (power ?? 0) < 0;
-  const deviceId = device.device_id || "";
-  const consumerId = consumer.consumer_id || "";
-  const busy = (field: string) => Boolean(state.busy[`${consumerId}:${field}`]);
   const saturation = consumer.balancer?.saturation;
 
   return h(
@@ -388,7 +448,6 @@ function batteryCard(
       ...row("Target", signedWatts(consumer.balancer?.last_target_w)),
       ...row("Last seen", ago(consumer.last_seen_age_s)),
       ...row("Polls every", seconds(consumer.poll_interval_s)),
-      ...row("Distribution weight", fmtWeight(consumer.distribution_weight)),
     ),
     saturation == null
       ? null
@@ -409,45 +468,195 @@ function batteryCard(
             }),
           ),
         ),
-    writable
-      ? h(
-          "div",
-          { style: "margin-top:12px;display:flex;gap:8px;flex-wrap:wrap" },
-          h(
-            "button",
-            {
-              class: "btn sm",
-              disabled: busy("active"),
-              onclick: () =>
-                actions.setConsumer(
-                  deviceId,
-                  consumerId,
-                  "active",
-                  !(consumer.active ?? true),
-                ),
-            },
-            consumer.active === false ? "Enable" : "Disable",
+    writable ? consumerControls(device, consumer, state, actions) : null,
+  );
+}
+
+/**
+ * Every per-battery control the MQTT integration exposes, with the same
+ * ranges and the same conditions on when each one applies.
+ *
+ * Folded into a disclosure: the common case is reading, and four numeric
+ * controls open by default would bury the reading they exist to change.
+ */
+function consumerControls(
+  device: DeviceStatus,
+  consumer: ConsumerStatus,
+  state: AppState,
+  actions: Actions,
+): VNode {
+  const deviceId = device.device_id || "";
+  const consumerId = consumer.consumer_id || "";
+  const busy = (field: string) => Boolean(state.busy[`${consumerId}:${field}`]);
+  const set = (field: string, value: unknown) =>
+    actions.setConsumer(deviceId, consumerId, field, value);
+  const pend = <T,>(field: string, actual: T): T =>
+    pendingOr(state, `${consumerId}:${field}`, actual);
+  // auto_target is the inverse of manual_enabled on the wire.
+  const autoPending = pend<boolean | undefined>("auto_target", undefined);
+  const manual =
+    autoPending === undefined ? Boolean(consumer.manual_enabled) : !autoPending;
+
+  return h(
+    "details",
+    { class: "controls-fold" },
+    h("summary", null, "Controls"),
+
+    h(
+      "label",
+      { class: "row" },
+      h("input", {
+        type: "checkbox",
+        checked: pend("active", consumer.active ?? true),
+        disabled: busy("active"),
+        onchange: (e: Event) =>
+          set("active", (e.target as HTMLInputElement).checked),
+      }),
+      h("span", null, "Active"),
+    ),
+
+    // "Auto target" on means the balancer owns this battery; off hands it to
+    // the manual setpoint. Same semantics as the MQTT switch.
+    h(
+      "label",
+      { class: "row" },
+      h("input", {
+        type: "checkbox",
+        checked: !manual,
+        disabled: busy("auto_target"),
+        onchange: (e: Event) =>
+          set("auto_target", (e.target as HTMLInputElement).checked),
+      }),
+      h("span", null, "Automatic target"),
+    ),
+
+    manual
+      ? numberControl({
+          label: "Manual target",
+          unit: "W",
+          value: pend("manual_target", consumer.manual_target_w),
+          min: -10000,
+          max: 10000,
+          step: 10,
+          busy: busy("manual_target"),
+          onCommit: (v) => set("manual_target", v),
+        })
+      : null,
+
+    sliderControl({
+      label: "Distribution weight",
+      value: pend("distribution_weight", consumer.distribution_weight ?? 1),
+      min: 0,
+      max: 10,
+      step: 0.1,
+      digits: 1,
+      busy: busy("distribution_weight"),
+      onCommit: (v) => set("distribution_weight", v),
+    }),
+
+    // Only meaningful while efficiency rotation is running, exactly as the
+    // MQTT entity is only published then.
+    device.balancer?.efficiency_rotation_enabled
+      ? sliderControl({
+          label: "Efficiency window",
+          unit: "%",
+          value: pend(
+            "efficiency_window_weight",
+            consumer.efficiency_window_weight_pct ?? 100,
           ),
-          consumer.manual_enabled
-            ? h(
-                "button",
-                {
-                  class: "btn sm",
-                  disabled: busy("auto_target"),
-                  onclick: () =>
-                    actions.setConsumer(deviceId, consumerId, "auto_target", true),
-                },
-                "Return to automatic",
-              )
-            : null,
-        )
+          min: 0,
+          max: 100,
+          step: 5,
+          digits: 0,
+          busy: busy("efficiency_window_weight"),
+          onCommit: (v) => set("efficiency_window_weight", v),
+        })
+      : null,
+
+    // DC-coupled batteries only — the MQTT entity is conditional the same way.
+    consumer.min_dc_output_applicable
+      ? numberControl({
+          label: "Min DC output",
+          unit: "W",
+          value: pend("min_dc_output", consumer.min_dc_output_w),
+          min: 0,
+          max: 1000,
+          step: 1,
+          busy: busy("min_dc_output"),
+          onCommit: (v) => set("min_dc_output", v),
+        })
       : null,
   );
 }
 
-function fmtWeight(value: number | undefined): string | null {
-  if (value == null) return null;
-  return value === 1 ? "1.0 (neutral)" : value.toFixed(2);
+interface ControlSpec {
+  label: string;
+  unit?: string;
+  value: number | undefined;
+  min: number;
+  max: number;
+  step: number;
+  busy: boolean;
+  onCommit(value: number): void;
+}
+
+/**
+ * A number box that commits on `change`, not on every keystroke.
+ *
+ * Committing per keystroke would send "1", "10", "100" on the way to 1000 —
+ * each one a real command to a real battery.
+ */
+function numberControl(spec: ControlSpec): VNode {
+  return h(
+    "label",
+    { class: "field control" },
+    h(
+      "span",
+      { class: "name" },
+      spec.unit ? `${spec.label} (${spec.unit})` : spec.label,
+    ),
+    h("input", {
+      type: "number",
+      value: spec.value == null ? "" : String(spec.value),
+      min: spec.min,
+      max: spec.max,
+      step: spec.step,
+      disabled: spec.busy,
+      "aria-label": spec.label,
+      onchange: (e: Event) => {
+        const parsed = Number((e.target as HTMLInputElement).value);
+        if (Number.isFinite(parsed)) spec.onCommit(parsed);
+      },
+    }),
+  );
+}
+
+/** A slider that shows its value and commits on release, for the same reason. */
+function sliderControl(spec: ControlSpec & { digits: number }): VNode {
+  const shown = spec.value == null ? "—" : spec.value.toFixed(spec.digits);
+  return h(
+    "div",
+    { class: "control slider" },
+    h(
+      "div",
+      { class: "slider-head" },
+      h("span", { class: "name" }, spec.label),
+      h("span", { class: "slider-val" }, spec.unit ? `${shown}${spec.unit}` : shown),
+    ),
+    h("input", {
+      type: "range",
+      value: spec.value == null ? spec.min : String(spec.value),
+      min: spec.min,
+      max: spec.max,
+      step: spec.step,
+      disabled: spec.busy,
+      "aria-label": spec.label,
+      onchange: (e: Event) => {
+        const parsed = Number((e.target as HTMLInputElement).value);
+        if (Number.isFinite(parsed)) spec.onCommit(parsed);
+      },
+    }),
+  );
 }
 
 // ── sources ─────────────────────────────────────────────────────────
@@ -560,7 +769,7 @@ export function view(
 
   const body =
     state.tab === "overview"
-      ? overview(state, offline)
+      ? overview(state, offline, actions)
       : state.tab === "batteries"
         ? batteries(state, actions)
         : state.tab === "sources"

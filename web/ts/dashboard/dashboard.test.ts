@@ -31,6 +31,7 @@ import { parseAddonSchema } from "./option-meta.js";
 import { view } from "./view.js";
 import { initialConfigState, knownKeys, specFor } from "./config-view.js";
 import type { StatusSnapshot } from "./types.js";
+import { readFileSync } from "node:fs";
 
 let failures = 0;
 function ok(cond: boolean, msg: string) {
@@ -248,11 +249,11 @@ const readOnly: AppState = {
 const readOnlyHtml = renderToString(
   h("div", null, ...view(readOnly, actions, initialConfigState())),
 );
-lacks(readOnlyHtml, ">Disable<", "no write controls without the capability");
+lacks(readOnlyHtml, ">Controls<", "no write controls without the capability");
 const writable = renderToString(
   h("div", null, ...view({ ...live, tab: "batteries" }, actions, initialConfigState())),
 );
-has(writable, ">Disable<", "write controls appear with the capability");
+has(writable, ">Controls<", "write controls appear with the capability");
 
 // ── add-on schema parsing ──
 const f = parseAddonSchema("float(0,1)?");
@@ -301,6 +302,20 @@ has(iniHtml, "[GENERAL]", "the editor renders a card per section");
 has(iniHtml, "[SHELLY]", "every section appears");
 has(iniHtml, '<select', "a select-typed key renders a dropdown");
 has(iniHtml, 'type="password"', "a password-typed key renders masked");
+// The backend redacts by key name in ANY section, so an unknown section's
+// secret must not be shown in a visible text box.
+{
+  const odd = {
+    ...iniConfig,
+    order: ["MYSTERY"],
+    sections: { MYSTERY: { ACCESSTOKEN: "••••••••", NOTE: "hello" } },
+  };
+  const oddHtml = renderToString(
+    h("div", null, ...view({ ...live, tab: "config" }, actions, odd)),
+  );
+  has(oddHtml, 'type="password"', "a secret key is masked even in an unknown section");
+  has(oddHtml, 'aria-label="NOTE value"', "ordinary keys stay text");
+}
 has(iniHtml, 'type="number"', "an integer-typed key renders a number input");
 has(iniHtml, "+ Add setting", "keys can be added");
 has(iniHtml, "Remove section", "sections can be removed");
@@ -372,6 +387,126 @@ has(noneHtml, 'aria-label="Grid power sensor"', "the field is still usable");
 
 // Simple mode must never offer the raw file editor.
 lacks(pickerHtml, "+ Add section", "the INI editor is hidden in guided mode");
+
+// ── live controls mirror the MQTT control surface ──
+const controllable: StatusSnapshot = {
+  ...snapshot,
+  devices: [
+    {
+      ...snapshot.devices![0],
+      balancer: { efficiency_rotation_enabled: true },
+      consumers: [
+        {
+          ...snapshot.devices![0].consumers![0],
+          manual_enabled: true,
+          manual_target_w: -250,
+          distribution_weight: 1.5,
+          efficiency_window_weight_pct: 60,
+          min_dc_output_w: 80,
+          min_dc_output_applicable: true,
+        },
+      ],
+    },
+  ],
+};
+const ctrlState: AppState = { ...live, tab: "batteries", snapshot: controllable };
+const ctrlHtml = renderToString(h("div", null, ...view(ctrlState, actions, initialConfigState())));
+has(ctrlHtml, 'aria-label="Manual target"', "manual target is offered");
+has(ctrlHtml, 'aria-label="Distribution weight"', "distribution weight is offered");
+has(ctrlHtml, 'aria-label="Efficiency window"', "efficiency window is offered");
+has(ctrlHtml, 'aria-label="Min DC output"', "min DC output is offered");
+has(ctrlHtml, ">Active<", "the active switch is offered");
+has(ctrlHtml, "Automatic target", "the auto/manual switch is offered");
+// Ranges must match the MQTT entities exactly, or a value valid in one
+// surface is rejected by the other.
+has(ctrlHtml, 'min="0" max="10" step="0.1"', "distribution weight keeps the MQTT range");
+has(ctrlHtml, 'min="0" max="100" step="5"', "efficiency window keeps the MQTT range");
+has(ctrlHtml, 'min="0" max="1000" step="1"', "min DC output keeps the MQTT range");
+has(ctrlHtml, "60%", "the slider shows its value");
+
+// Conditional visibility must match when the MQTT entity is published.
+const noRotation: StatusSnapshot = {
+  ...controllable,
+  devices: [{ ...controllable.devices![0], balancer: { efficiency_rotation_enabled: false } }],
+};
+const noRotHtml = renderToString(
+  h("div", null, ...view({ ...ctrlState, snapshot: noRotation }, actions, initialConfigState())),
+);
+lacks(noRotHtml, 'aria-label="Efficiency window"', "no efficiency window without rotation");
+
+const acOnly: StatusSnapshot = {
+  ...controllable,
+  devices: [
+    {
+      ...controllable.devices![0],
+      consumers: [{ ...controllable.devices![0].consumers![0], min_dc_output_applicable: false }],
+    },
+  ],
+};
+const acHtml = renderToString(
+  h("div", null, ...view({ ...ctrlState, snapshot: acOnly }, actions, initialConfigState())),
+);
+lacks(acHtml, 'aria-label="Min DC output"', "no DC floor on an AC-only battery");
+
+// A battery on automatic must not show a manual setpoint box.
+const manual: StatusSnapshot = {
+  ...controllable,
+  devices: [
+    {
+      ...controllable.devices![0],
+      consumers: [{ ...controllable.devices![0].consumers![0], manual_enabled: false }],
+    },
+  ],
+};
+const autoHtml = renderToString(
+  h("div", null, ...view({ ...ctrlState, snapshot: manual }, actions, initialConfigState())),
+);
+lacks(autoHtml, 'aria-label="Manual target"', "no manual box while on automatic");
+
+// Device-wide: the Active Control switch and Force Rotation button.
+const overviewHtml = renderToString(
+  h("div", null, ...view({ ...ctrlState, tab: "overview" }, actions, initialConfigState())),
+);
+has(overviewHtml, "Force rotation", "force rotation is reachable");
+has(overviewHtml, "Active control", "active control is reachable");
+
+// Read-only deployments must offer none of it.
+const ro: AppState = {
+  ...ctrlState,
+  snapshot: { ...controllable, capabilities: { ...controllable.capabilities, controls: false } },
+};
+const roHtml = renderToString(h("div", null, ...view(ro, actions, initialConfigState())));
+lacks(roHtml, 'aria-label="Distribution weight"', "no controls without the capability");
+const roOverview = renderToString(
+  h("div", null, ...view({ ...ro, tab: "overview" }, actions, initialConfigState())),
+);
+lacks(roOverview, "Force rotation", "no device controls without the capability");
+
+// ── the vdom must not clobber user-owned UI state ──
+// Regression: a <details> the user opened was slammed shut by the next 1 Hz
+// re-render, because the attribute pruning removed the `open` the *browser*
+// had set. That made every collapsed control panel impossible to use.
+ok(
+  renderToString(h("details", { class: "x" }, h("summary", null, "s"))) ===
+    '<details class="x"><summary>s</summary></details>',
+  "a details with no open prop renders closed",
+);
+ok(
+  renderToString(h("details", { open: true }, h("summary", null, "s"))) ===
+    "<details open><summary>s</summary></details>",
+  "open is a create-time default",
+);
+{
+  const src = readFileSync(new URL("./vdom.ts", import.meta.url), "utf8");
+  ok(src.includes("UNCONTROLLED"), "vdom keeps an uncontrolled-attribute set");
+  ok(
+    /UNCONTROLLED\.has\(attr\.name\)/.test(src),
+    "the prune loop skips uncontrolled attributes",
+  );
+  // `.innerHTML` as a property access — the header comment mentions the
+  // word, so a bare substring search would match the prose instead.
+  ok(!/\.innerHTML/.test(src), "vdom never writes .innerHTML");
+}
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);

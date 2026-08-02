@@ -96,3 +96,30 @@ The page ships as a committed, generated single-file bundle at
 build:dashboard` after any change under `web/`, and commit it; the `web` CI job
 fails if the committed file does not match its source or exceeds the size
 budget.
+
+### Dashboard end-to-end tests
+
+`web/e2e/` holds Playwright tests that boot the real stack — the battery
+simulator speaking CT002 UDP, a real AstraMeter reading it, and the committed
+dashboard bundle — and drive the page in a browser:
+
+```bash
+cd web
+npm ci
+npx playwright install --with-deps chromium   # first run only
+npm run e2e            # or: npm run e2e:ui
+```
+
+They exist because a whole class of defect is invisible to the string-rendered
+unit tests: a control destroyed by a re-render, a disclosure that snaps shut on
+the next poll, a write that reaches the server but never the device. Several
+such bugs were found this way, and each has a named regression test.
+
+The Home Assistant specs run against `web/e2e/fake-supervisor.mjs`, a stand-in
+Supervisor that serves the repository's **own** `ha_addon/config.yaml` options
+and schema — so the guided form is exercised against the add-on's real option
+definitions. It is the only stand-in; everything below that boundary is the
+actual software.
+
+If Chromium is already on the machine, point the tests at it with
+`ASTRAMETER_E2E_CHROMIUM=/path/to/chrome`.

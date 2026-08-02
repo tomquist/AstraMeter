@@ -1,2 +1,7 @@
 node_modules/
 dist/
+
+# Playwright
+/playwright-report/
+/test-results/
+/e2e/addon-options.json

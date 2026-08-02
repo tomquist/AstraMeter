@@ -832,3 +832,82 @@ details.section .hint {
 .warn-text {
   color: var(--warn-fg);
 }
+
+/* ── live controls ───────────────────────────────────────────────── */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--divider);
+}
+
+details.controls-fold {
+  margin-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+
+details.controls-fold > summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 9px 0 2px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+details.controls-fold > summary:hover {
+  color: var(--text);
+}
+
+details.controls-fold[open] > summary {
+  margin-bottom: 8px;
+}
+
+.control {
+  margin-bottom: 10px;
+}
+
+.control input[type="number"] {
+  padding: 5px 8px;
+  font-size: 0.82rem;
+}
+
+.slider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.8rem;
+}
+
+.slider-head .name {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.slider-val {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+input[type="range"] {
+  width: 100%;
+  padding: 0;
+  margin: 4px 0 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--ha-primary);
+}
+
+/* A control mid-write is dimmed rather than removed: the row must not
+ * collapse and reflow the card while the server answers. */
+.control input:disabled,
+.controls input:disabled {
+  opacity: 0.5;
+}
