@@ -11,7 +11,9 @@ import { defineConfig, devices } from "@playwright/test";
  * and were caught here.
  *
  * Each spec boots the real stack: the battery simulator speaking CT002 UDP,
- * a real AstraMeter reading it, and the committed dashboard bundle.
+ * a real AstraMeter reading it, and the committed dashboard bundle. The
+ * Shelly spec is the exception only in who polls — the simulator has no
+ * Shelly client, so the spec sends the datagrams itself.
  */
 
 // This container ships Chromium at a fixed path and blocks downloads, while

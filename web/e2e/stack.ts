@@ -8,6 +8,7 @@
 // add-on's real option schema rather than a fixture.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createSocket } from "node:dgram";
 import { mkdtempSync, openSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -21,6 +22,14 @@ export const SIM_HTTP_PORT = 8188;
 export const SIM_CT_PORT = 12345;
 export const SUPERVISOR_PORT = 8199;
 export const SUPERVISOR_TOKEN = "e2e-token";
+
+/**
+ * The UDP port the Shelly EM Gen3 emulator listens on (main.py fixes it per
+ * device type). `shellypro3em` — the default — would be closer to what most
+ * users run, but its "old" firmware variant binds port 1010, which an
+ * unprivileged CI runner cannot have. The emulator itself is the same class.
+ */
+export const SHELLY_UDP_PORT = 2222;
 
 /**
  * The Home Assistant sensor the add-on reads, served from the simulator.
@@ -51,7 +60,24 @@ const SIM_CONFIG = {
   log_interval: 600,
 };
 
-function configIni(): string {
+function configIni(shelly = false): string {
+  if (shelly) {
+    return [
+      "[GENERAL]",
+      "DEVICE_TYPE = shellyemg3",
+      "SKIP_POWERMETER_TEST = True",
+      "ENABLE_WEB_SERVER = True",
+      `WEB_SERVER_PORT = ${DASHBOARD_PORT}`,
+      "DASHBOARD_ENABLED = True",
+      "DASHBOARD_ALLOW_WRITE = True",
+      "DASHBOARD_DIRECT_ACCESS = True",
+      "",
+      "[JSON_HTTP]",
+      `URL = http://127.0.0.1:${SIM_HTTP_PORT}/power`,
+      "JSON_PATHS = $.phase_a,$.phase_b,$.phase_c",
+      "",
+    ].join("\n");
+  }
   return [
     "[GENERAL]",
     "DEVICE_TYPE = ct002",
@@ -129,12 +155,21 @@ export async function battery(consumerId: string): Promise<any> {
 export interface StartOptions {
   /** Run as a Home Assistant add-on against the stand-in Supervisor. */
   homeAssistant?: boolean;
+  /**
+   * Emulate a Shelly meter instead of a CT002.
+   *
+   * This is the other half of the device matrix: batteries poll the emulator
+   * over UDP rather than being steered by it, so the page has no consumers,
+   * no balancer and no controls to render. The simulator has no Shelly
+   * client, so a spec drives the polling itself (see shelly.spec.ts).
+   */
+  shelly?: boolean;
 }
 
 export async function startStack(options: StartOptions = {}): Promise<Stack> {
   const dir = mkdtempSync(join(tmpdir(), "astrameter-e2e-"));
   const configPath = join(dir, "config.ini");
-  writeFileSync(configPath, configIni());
+  writeFileSync(configPath, configIni(options.shelly));
   writeFileSync(join(dir, "sim.json"), JSON.stringify(SIM_CONFIG, null, 2));
 
   const children: ChildProcess[] = [];
@@ -231,13 +266,27 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
     },
   );
   await waitFor(ok(`${BASE_URL}health`), "AstraMeter", 90_000, dir);
-  // The page is only meaningful once batteries have actually reported.
-  await waitFor(
-    async () => (await reportingBatteries()) >= 2,
-    "battery reports",
-    90_000,
-    dir,
-  );
+  if (options.shelly) {
+    // Nothing polls a Shelly emulator until a spec does, so the readiness
+    // signal is the emulator itself being up and in the document.
+    await waitFor(
+      async () =>
+        ((await statusSnapshot()).devices ?? []).some(
+          (d: any) => d.kind === "shelly",
+        ),
+      "the Shelly emulator",
+      90_000,
+      dir,
+    );
+  } else {
+    // The page is only meaningful once batteries have actually reported.
+    await waitFor(
+      async () => (await reportingBatteries()) >= 2,
+      "battery reports",
+      90_000,
+      dir,
+    );
+  }
 
   return {
     dir,
@@ -255,6 +304,45 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
       await new Promise((r) => setTimeout(r, 1500));
     },
   };
+}
+
+/**
+ * Poll the Shelly emulator the way a Marstek battery does, and return the
+ * reading it answers with.
+ *
+ * A real datagram over the real socket, so the whole path a Shelly install
+ * depends on runs: the emulator registers the caller as a battery, reads the
+ * powermeter and replies. Resolves once the reply arrives — the caller can
+ * then assert the dashboard reflects it.
+ */
+export async function pollShelly(timeoutMs = 5000): Promise<any> {
+  const socket = createSocket("udp4");
+  try {
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("the Shelly emulator did not answer")),
+        timeoutMs,
+      );
+      socket.on("error", reject);
+      socket.on("message", (message) => {
+        clearTimeout(timer);
+        resolve(JSON.parse(message.toString()));
+      });
+      socket.send(
+        JSON.stringify({
+          id: 1,
+          src: "e2e-battery",
+          method: "EM.GetStatus",
+          params: { id: 0 },
+        }),
+        SHELLY_UDP_PORT,
+        "127.0.0.1",
+        (err) => err && reject(err),
+      );
+    });
+  } finally {
+    socket.close();
+  }
 }
 
 export function readIni(stack: Stack): string {
