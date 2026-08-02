@@ -128,9 +128,18 @@ export interface DeviceStatus {
   balancer?: Record<string, any>;
   consumers?: ConsumerStatus[];
   orphan_overrides?: Record<string, any>[];
-  // Shelly only
-  batteries?: Record<string, any>[];
+  // Shelly only. A Shelly emulator steers nothing, so its batteries carry
+  // liveness rather than power: it serves the meter reading and they poll it.
+  batteries?: ShellyBatteryStatus[];
   inactive_timeout_s?: number;
+}
+
+export interface ShellyBatteryStatus {
+  ip?: string;
+  last_seen_at?: string;
+  last_seen_age_s?: number;
+  poll_interval_s?: number;
+  active?: boolean;
 }
 
 export interface StatusSnapshot {

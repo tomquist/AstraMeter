@@ -300,3 +300,38 @@ def ct002_to_wire(device) -> dict[str, Any]:
             or None,
         }
     )
+
+
+def shelly_to_wire(device) -> dict[str, Any]:
+    """A :class:`ShellySnapshot` as its wire object.
+
+    A Shelly emulator has no balancer and no per-battery targets — batteries
+    poll it and read the meter, nothing is steered — so its wire object is
+    deliberately much smaller than :func:`ct002_to_wire`'s. It still goes
+    through this layer rather than a generic dataclass dump, so timestamps are
+    ISO and durations carry their unit like everywhere else.
+    """
+    return compact(
+        {
+            "kind": "shelly",
+            "device_id": device.device_id or None,
+            "device_type": device.device_type or None,
+            "udp_port": device.udp_port,
+            "running": device.running,
+            "started_at": iso(device.started_at),
+            "inactive_timeout_s": device.inactive_timeout,
+            "batteries": [
+                compact(
+                    {
+                        "ip": battery.ip,
+                        "last_seen_at": iso(battery.last_seen_at),
+                        "last_seen_age_s": round_or_none(battery.last_seen_age),
+                        "poll_interval_s": round_or_none(battery.poll_interval),
+                        "active": battery.active,
+                    }
+                )
+                for battery in device.batteries
+            ]
+            or None,
+        }
+    )

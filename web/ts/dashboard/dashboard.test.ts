@@ -255,6 +255,78 @@ const writable = renderToString(
 );
 has(writable, ">Controls<", "write controls appear with the capability");
 
+// ── the Shelly emulator, which is the default DEVICE_TYPE ──
+//
+// Regression: the views filtered on kind === "ct002", so a Shelly install
+// rendered no device card, an empty hero and "no batteries have reported"
+// while batteries were actively polling it.
+const shellySnapshot: StatusSnapshot = {
+  schema_version: 1,
+  generated_at: "2026-08-01T12:00:00+00:00",
+  capabilities: { controls: true },
+  powermeters: [
+    { name: "JSON_HTTP", kind: "JsonHttpPowermeter", last_read_ok: true, last_total_w: 848.6 },
+  ],
+  devices: [
+    {
+      kind: "shelly",
+      device_id: "shellypro3em-ec4609c439c1",
+      device_type: "shellypro3em_new",
+      udp_port: 2220,
+      running: true,
+      inactive_timeout_s: 120,
+      batteries: [
+        { ip: "10.0.0.31", last_seen_age_s: 2.1, poll_interval_s: 1.0, active: true },
+        { ip: "10.0.0.32", last_seen_age_s: 3.4, poll_interval_s: 1.1, active: true },
+      ],
+    },
+  ],
+};
+const shellyState: AppState = {
+  ...initialState(),
+  snapshot: shellySnapshot,
+  connection: "live",
+};
+
+ok(
+  gridTotal(shellySnapshot) === 848.6,
+  "with no CT device the hero falls back to the power source total",
+);
+ok(
+  overallHealth(shellyState).label === "Serving readings",
+  "a polled Shelly emulator is healthy, and does not claim to be steering",
+);
+
+const shellyHtml = renderToString(
+  h("div", null, ...view(shellyState, actions, initialConfigState())),
+);
+has(shellyHtml, "shellypro3em_new emulator", "the Shelly emulator gets its own card");
+has(shellyHtml, "Batteries polling", "the card says how many batteries poll it");
+has(shellyHtml, "+849 W", "the hero shows the grid reading rather than a dash");
+lacks(shellyHtml, "Waiting for a grid reading", "the hero is not left empty");
+lacks(shellyHtml, "No batteries have reported yet", "polling batteries are not called absent");
+lacks(shellyHtml, "undefined", "no undefined leaks into the Shelly page");
+
+const shellyBatteriesHtml = renderToString(
+  h("div", null, ...view({ ...shellyState, tab: "batteries" }, actions, initialConfigState())),
+);
+has(shellyBatteriesHtml, "10.0.0.31", "each polling battery is listed by address");
+has(shellyBatteriesHtml, "Polls every", "with the cadence it polls at");
+// A Shelly emulator steers nothing, so offering per-battery controls would
+// promise writes the device cannot make.
+lacks(shellyBatteriesHtml, ">Controls<", "no steering controls for a Shelly battery");
+
+// The empty state must name the meter the user is actually emulating.
+const shellyEmpty = renderToString(
+  h("div", null, ...view(
+    { ...shellyState, snapshot: { ...shellySnapshot, devices: [{ kind: "shelly", batteries: [] }] } },
+    actions,
+    initialConfigState(),
+  )),
+);
+has(shellyEmpty, "select this Shelly meter", "the empty state names the Shelly meter");
+lacks(shellyEmpty, "AstraMeter CT as its meter", "it does not send them looking for a CT");
+
 // ── add-on schema parsing ──
 const f = parseAddonSchema("float(0,1)?");
 ok(f.type === "float" && f.min === 0 && f.max === 1 && f.optional, "float(0,1)? parses");

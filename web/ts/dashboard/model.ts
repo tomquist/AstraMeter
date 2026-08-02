@@ -7,6 +7,7 @@ import type {
   ConsumerStatus,
   DeviceStatus,
   PowermeterStatus,
+  ShellyBatteryStatus,
   StatusSnapshot,
 } from "./types.js";
 import type { ConnectionState } from "./transport.js";
@@ -87,9 +88,18 @@ export function overallHealth(state: AppState): Health {
   if (devices.some((d) => d.grid?.meter_failed)) {
     return health("err", "Meter unavailable");
   }
-  const batteries = allConsumers(state.snapshot);
-  if (batteries.length === 0) return health("warn", "No batteries reporting");
-  if (batteries.some((c) => c.expired)) return health("warn", "Battery missing");
+  const consumers = allConsumers(state.snapshot);
+  const polling = shellyBatteries(state.snapshot);
+  if (consumers.length === 0 && polling.length === 0) {
+    return health("warn", "No batteries reporting");
+  }
+  if (consumers.some((c) => c.expired)) return health("warn", "Battery missing");
+  if (polling.some((b) => b.active === false)) {
+    return health("warn", "Battery missing");
+  }
+  // A Shelly emulator serves readings; it does not steer anything, so saying
+  // "Steering" there would claim a behaviour this device does not have.
+  if (consumers.length === 0) return health("ok", "Serving readings");
   return health("ok", "Steering");
 }
 
@@ -102,6 +112,25 @@ export function allConsumers(snapshot: StatusSnapshot | null): ConsumerStatus[] 
 export function ctDevices(snapshot: StatusSnapshot | null): DeviceStatus[] {
   if (!snapshot) return [];
   return (snapshot.devices || []).filter((d) => d.kind === "ct002");
+}
+
+/**
+ * Shelly emulators, which serve a meter reading and steer nothing.
+ *
+ * They report their batteries as liveness (`batteries`), not as steerable
+ * consumers, so they are deliberately a separate list from `ctDevices` rather
+ * than something the CT views try to render.
+ */
+export function shellyDevices(snapshot: StatusSnapshot | null): DeviceStatus[] {
+  if (!snapshot) return [];
+  return (snapshot.devices || []).filter((d) => d.kind === "shelly");
+}
+
+/** Batteries polling a Shelly emulator, across every such device. */
+export function shellyBatteries(
+  snapshot: StatusSnapshot | null,
+): ShellyBatteryStatus[] {
+  return shellyDevices(snapshot).flatMap((d) => d.batteries || []);
 }
 
 /** Whole-house grid power: + import, − export.
@@ -123,6 +152,15 @@ export function gridTotal(snapshot: StatusSnapshot | null): number | undefined {
       value = phases.length ? phases.reduce((a, b) => a + b, 0) : undefined;
     }
     if (value != null) total = (total ?? 0) + value;
+  }
+  if (total != null) return total;
+  // No CT emulator served a reading — either none is configured (a Shelly
+  // install) or none has answered yet. The power source measured the same
+  // quantity, summed the same way, so the hero can show the house total
+  // instead of a dash.
+  for (const meter of snapshot?.powermeters || []) {
+    if (meter.last_read_ok === false) continue;
+    if (meter.last_total_w != null) total = (total ?? 0) + meter.last_total_w;
   }
   return total;
 }

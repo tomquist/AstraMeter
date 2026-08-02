@@ -22,15 +22,23 @@ import {
   contribution,
   ctDevices,
   gridTotal,
+  health,
   meterHealth,
   overallHealth,
   pendingOr,
   railScale,
+  shellyBatteries,
+  shellyDevices,
   type AppState,
   type Health,
   type Tab,
 } from "./model.js";
-import type { ConsumerStatus, DeviceStatus, StatusSnapshot } from "./types.js";
+import type {
+  ConsumerStatus,
+  DeviceStatus,
+  ShellyBatteryStatus,
+  StatusSnapshot,
+} from "./types.js";
 import { configView, type ConfigActions, type ConfigState } from "./config-view.js";
 
 export interface Actions extends ConfigActions {
@@ -223,6 +231,9 @@ function overview(state: AppState, offline: boolean, actions: Actions): VChild[]
   const devices = ctDevices(snapshot);
   const consumers = allConsumers(snapshot);
 
+  const shelly = shellyDevices(snapshot);
+  const polling = shellyBatteries(snapshot);
+
   return [
     balanceRail(state, offline),
     h(
@@ -231,9 +242,10 @@ function overview(state: AppState, offline: boolean, actions: Actions): VChild[]
       ...devices.map((d) =>
         deviceCard(d, offline, Boolean(snapshot.capabilities?.controls), state, actions),
       ),
+      ...shelly.map((d) => shellyCard(d, offline)),
       ...(snapshot.powermeters || []).map((m) => meterCard(m, offline)),
     ),
-    consumers.length === 0 ? noBatteries() : null,
+    consumers.length === 0 && polling.length === 0 ? noBatteries(snapshot) : null,
   ];
 }
 
@@ -249,15 +261,24 @@ function coldStart(): VNode {
   );
 }
 
-function noBatteries(): VNode {
+/**
+ * The empty state names the meter the user is actually emulating. Telling a
+ * Shelly user to pick "the AstraMeter CT" sends them looking for a device
+ * this install does not pretend to be.
+ */
+function noBatteries(snapshot: StatusSnapshot | null): VNode {
+  const shelly = shellyDevices(snapshot).length > 0;
   return card(
     null,
     h(
       "div",
       { class: "empty" },
       h("strong", null, "No batteries have reported yet"),
-      "AstraMeter is listening. In the Marstek app, set the battery's mode to " +
-        "Automatic and select the AstraMeter CT as its meter.",
+      shelly
+        ? "AstraMeter is listening. In the Marstek app, set the battery's " +
+            "mode to Automatic and select this Shelly meter."
+        : "AstraMeter is listening. In the Marstek app, set the battery's " +
+            "mode to Automatic and select the AstraMeter CT as its meter.",
     ),
   );
 }
@@ -391,18 +412,90 @@ function meterCard(
 function batteries(state: AppState, actions: Actions): VChild[] {
   const snapshot = state.snapshot;
   const devices = ctDevices(snapshot);
-  const any = devices.some((d) => (d.consumers || []).length > 0);
-  if (!any) return [noBatteries()];
+  const shelly = shellyDevices(snapshot);
+  const anyCt = devices.some((d) => (d.consumers || []).length > 0);
+  const anyShelly = shelly.some((d) => (d.batteries || []).length > 0);
+  if (!anyCt && !anyShelly) return [noBatteries(snapshot)];
   const writable = Boolean(snapshot?.capabilities?.controls);
-  return devices.flatMap((device) => [
-    h(
-      "div",
-      { class: "grid" },
-      ...(device.consumers || []).map((c) =>
-        batteryCard(device, c, writable, state, actions),
+  return [
+    ...devices.map((device) =>
+      h(
+        "div",
+        { class: "grid" },
+        ...(device.consumers || []).map((c) =>
+          batteryCard(device, c, writable, state, actions),
+        ),
       ),
     ),
-  ]);
+    // A Shelly emulator knows only that a battery polled it — no power, no
+    // target, nothing to steer — so these are liveness rows, not the control
+    // cards a CT battery gets.
+    ...shelly.map((device) =>
+      h("div", { class: "grid" }, ...(device.batteries || []).map(shellyBatteryCard)),
+    ),
+  ];
+}
+
+/**
+ * A Shelly emulator: what it is, and who is polling it.
+ *
+ * There is no grid triple, no balancer and no controls here — this device
+ * serves the meter reading and takes no part in steering, and the card says
+ * so rather than leaving CT-shaped holes.
+ */
+function shellyCard(device: DeviceStatus, offline: boolean): VNode {
+  const polling = (device.batteries || []).filter((b) => b.active !== false).length;
+  return card(
+    device.device_type ? `${device.device_type} emulator` : "Meter emulator",
+    h(
+      "div",
+      { class: "batt-head" },
+      chip(
+        device.running === false
+          ? health("err", "Stopped")
+          : polling > 0
+            ? health("ok", "Serving readings")
+            : health("warn", "No batteries polling"),
+      ),
+      h("span", { style: "flex:1" }),
+      h("span", { class: "mono" }, `UDP ${device.udp_port ?? "—"}`),
+    ),
+    h(
+      "dl",
+      { class: "kv" },
+      ...row("Batteries polling", `${polling}`),
+      ...row("Drops after", seconds(device.inactive_timeout_s)),
+      ...row(
+        offline ? "Started at" : "Up for",
+        offline ? clockTime(device.started_at) : duration(secondsSince(device.started_at)),
+      ),
+    ),
+  );
+}
+
+/** One battery polling a Shelly emulator: address and liveness only. */
+function shellyBatteryCard(battery: ShellyBatteryStatus): VNode {
+  return h(
+    "section",
+    { class: "card" },
+    h(
+      "div",
+      { class: "batt-head" },
+      h("h3", null, battery.ip || "Unknown address"),
+      h("span", { style: "flex:1" }),
+      chip(
+        battery.active === false
+          ? health("err", "Not reporting")
+          : health("ok", "Polling"),
+      ),
+    ),
+    h(
+      "dl",
+      { class: "kv" },
+      ...row("Last seen", ago(battery.last_seen_age_s)),
+      ...row("Polls every", seconds(battery.poll_interval_s)),
+    ),
+  );
 }
 
 function batteryCard(

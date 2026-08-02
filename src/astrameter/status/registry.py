@@ -24,6 +24,7 @@ from astrameter.status.serialize import (
     iso,
     powermeter_to_wire,
     round_or_none,
+    shelly_to_wire,
 )
 
 SCHEMA_VERSION = 1
@@ -157,7 +158,7 @@ class StatusRegistry:
             wire = (
                 ct002_to_wire(snap)
                 if getattr(snap, "consumers", None) is not None
-                else _shelly_to_wire(snap)
+                else shelly_to_wire(snap)
             )
             devices.append(wire)
 
@@ -255,8 +256,3 @@ def _as_wire_dict(snapshot: Any) -> dict[str, Any]:
         else:
             out[field.name] = value
     return out
-
-
-def _shelly_to_wire(snapshot: Any) -> dict[str, Any]:
-    """A Shelly device snapshot as its wire object."""
-    return compact({"kind": "shelly", **_as_wire_dict(snapshot)})

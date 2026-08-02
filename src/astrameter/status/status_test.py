@@ -94,6 +94,36 @@ def test_relay_mode_reports_the_grid_it_served_not_zero():
     assert device.status_snapshot().grid_total == pytest.approx(-11.0)
 
 
+def test_a_shelly_device_reaches_the_wire_with_its_batteries():
+    """The Shelly emulator is the default device type, so the document has to
+    carry it as a first-class device — not as an unrecognised shape the UI
+    quietly drops."""
+    from astrameter.shelly.shelly import Shelly
+
+    device = Shelly(
+        [],
+        udp_port=2220,
+        device_id="sh-1",
+        device_type="shellypro3em_new",
+    )
+    device._track_battery_seen(("10.0.0.31", 1010))
+    registry = _registry()
+    registry.register_device("sh-1", "shellypro3em", device)
+
+    (wire,) = registry.snapshot(ingress=False)["devices"]
+    assert wire["kind"] == "shelly"
+    assert wire["device_id"] == "sh-1"
+    assert wire["udp_port"] == 2220
+    # Names and units match the rest of the document, not the raw dataclass:
+    # an ISO timestamp and an explicitly-united duration.
+    assert wire["inactive_timeout_s"] == 120
+    (battery,) = wire["batteries"]
+    assert battery["ip"] == "10.0.0.31"
+    assert battery["last_seen_at"].startswith("20")
+    assert isinstance(battery["last_seen_age_s"], float)
+    assert battery["active"] is True
+
+
 # -- absence is not zero ----------------------------------------------
 
 
