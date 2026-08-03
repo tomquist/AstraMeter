@@ -232,8 +232,12 @@ const actions: Actions = {
     render();
   },
 
-  moveEntityPicker(delta) {
-    config.pickerIndex = Math.max(-1, config.pickerIndex + delta);
+  moveEntityPicker(index, count) {
+    // Absolute, not a delta on the stored value: typing filters the list, and
+    // an index left pointing past the end of the new one is only clamped for
+    // display — so the next arrow press would move a number nobody can see
+    // and the highlight would sit still for several keys.
+    config.pickerIndex = Math.max(-1, Math.min(index, count - 1));
     render();
   },
 

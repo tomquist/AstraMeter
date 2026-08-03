@@ -65,7 +65,7 @@ export interface ConfigActions {
   removeSection(section: string): void;
   saveConfig(restart: boolean): void;
   openEntityPicker(rowId: string | null): void;
-  moveEntityPicker(delta: number): void;
+  moveEntityPicker(index: number, count: number): void;
   askSwitchMode(mode: "file" | "options" | null): void;
   switchMode(mode: "file" | "options"): void;
   restart(): void;
@@ -623,6 +623,11 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
             : "sensor.your_grid_power",
         "aria-label": name,
         onfocus: () => ctx.actions.openEntityPicker(rowId),
+        // Focus alone is not enough to reopen it: Escape closes the list but
+        // leaves the caret in the field, so clicking the field again fires no
+        // focus event and the suggestions would stay gone until the user
+        // tabbed away and back.
+        onclick: () => ctx.actions.openEntityPicker(rowId),
         oninput: (e: Event) => {
           ctx.write(index, (e.target as HTMLInputElement).value, false);
           ctx.actions.openEntityPicker(rowId);
@@ -677,7 +682,10 @@ function onPickerKey(
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     // Otherwise the caret jumps to one end of the text instead.
     event.preventDefault();
-    actions.moveEntityPicker(event.key === "ArrowDown" ? 1 : -1);
+    actions.moveEntityPicker(
+      active + (event.key === "ArrowDown" ? 1 : -1),
+      suggestions.length,
+    );
     return;
   }
   if (event.key === "Enter" && active >= 0 && suggestions[active]) {

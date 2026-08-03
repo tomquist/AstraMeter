@@ -693,6 +693,29 @@ lacks(pickerHtml, "+ Add section", "the INI editor is hidden in guided mode");
   );
   recordSnapshot(hist, null);
   ok(seriesOf(hist, GRID_SERIES).length === 2, "a missing snapshot records nothing");
+
+  // One sample per snapshot, not one per CT device: two of them each carry a
+  // share of the house, so recording both would put two points on the trend
+  // for one moment and each would be a fraction of the total.
+  const twoCt: SeriesHistory = {};
+  recordSnapshot(twoCt, {
+    ...snapshot,
+    devices: [
+      { ...snapshot.devices![0], grid: { grid_total_w: -13 } },
+      { ...snapshot.devices![0], device_id: "ct-2", grid: { grid_total_w: 7 } },
+    ],
+  });
+  ok(seriesOf(twoCt, GRID_SERIES).length === 1, "two CT devices are one sample");
+  ok(seriesOf(twoCt, GRID_SERIES)[0] === -6, "summed the way the headline sums");
+
+  // Through gridTotal, so the trend cannot disagree with the number above it:
+  // that brings the per-phase and power-source fallbacks with it.
+  const phases: SeriesHistory = {};
+  recordSnapshot(phases, {
+    ...snapshot,
+    devices: [{ ...snapshot.devices![0], grid: { l1_w: 12, l2_w: -30, l3_w: 5 } }],
+  });
+  ok(seriesOf(phases, GRID_SERIES)[0] === -13, "a per-phase reading still counts");
   ok(seriesOf(hist, "nope").length === 0, "an unseen series is empty, not undefined");
 
   // A tab left open all day must not grow without bound.

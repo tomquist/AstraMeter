@@ -203,6 +203,46 @@ test("a suggestion can be typed for and picked", async ({ page }) => {
   await page.reload();
 });
 
+test("the suggestion list is drivable from the keyboard", async ({ page }) => {
+  await page.goto(`${BASE_URL}#/config`);
+  const input = page.getByLabel("Grid power sensor", { exact: true });
+  await input.click();
+  const list = page.locator(".combo-list").first();
+  await expect(list).toBeVisible();
+  const selected = list.locator('.combo-opt[aria-selected="true"]');
+
+  // Nothing is highlighted until asked for, so Enter on half-typed text keeps
+  // the text rather than taking whatever happened to be first.
+  await expect(selected).toHaveCount(0);
+  await input.press("ArrowDown");
+  await expect(selected).toHaveCount(1);
+
+  // Past the end and back. The highlight has to move on the very next press:
+  // when the index was a counter of its own rather than the row on screen, it
+  // ran off the end and sat still for as many presses as it had overshot.
+  const count = await list.locator(".combo-opt").count();
+  for (let i = 0; i < count + 3; i++) await input.press("ArrowDown");
+  const atEnd = (await selected.textContent()) || "";
+  await input.press("ArrowUp");
+  await expect(selected).not.toHaveText(atEnd);
+
+  // Escape gives up on the list and leaves the field alone.
+  const before = await input.inputValue();
+  await input.press("Escape");
+  await expect(page.locator(".combo-list")).toHaveCount(0);
+  await expect(input).toHaveValue(before);
+
+  // Enter takes the highlighted one.
+  await input.click();
+  await input.press("ArrowDown");
+  await input.press("Enter");
+  await expect(input).not.toHaveValue(before);
+  await expect(page.locator(".combo-list")).toHaveCount(0);
+
+  // Nothing saved; leave the form as it was found.
+  await page.reload();
+});
+
 test("an entity Home Assistant does not know is flagged in place", async ({
   page,
 }) => {

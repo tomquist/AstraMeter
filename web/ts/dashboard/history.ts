@@ -8,6 +8,7 @@
 // The trade is honest and worth stating: the line starts empty on every load
 // and only covers as long as the tab has been open.
 
+import { gridTotal } from "./model.js";
 import type { ConsumerStatus, StatusSnapshot } from "./types.js";
 
 /**
@@ -47,10 +48,18 @@ function push(history: SeriesHistory, id: string, value: number | null | undefin
  * revision comes back as a 304 with no body, and recording the previous value
  * again would draw a flat line through a gap where nothing was measured.
  */
-export function recordSnapshot(history: SeriesHistory, snapshot: StatusSnapshot | null): void {
+export function recordSnapshot(
+  history: SeriesHistory,
+  snapshot: StatusSnapshot | null,
+): void {
   if (!snapshot) return;
+  // Through the same helper the headline reads, not a second summing rule of
+  // its own: two CT devices each carry a share of the house, so taking one
+  // device's figure would record a fraction and taking both would record two
+  // samples for one moment. It also brings the per-phase and power-source
+  // fallbacks, so the trend cannot disagree with the number above it.
+  push(history, GRID_SERIES, gridTotal(snapshot));
   for (const device of snapshot.devices || []) {
-    push(history, GRID_SERIES, device.grid?.grid_total_w);
     for (const consumer of device.consumers || []) {
       push(history, batterySeries(consumer), consumer.reported_power_w);
     }
