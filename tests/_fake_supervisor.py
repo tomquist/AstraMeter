@@ -298,6 +298,18 @@ def build_app(state: SupervisorState) -> web.Application:
                 "state": "on",
                 "attributes": {"friendly_name": "Kitchen light"},
             },
+            # Not a `sensor.`, but readings come from /api/states/<id>, which
+            # does not care — so this is a usable grid source and the picker
+            # has to offer it.
+            {
+                "entity_id": "number.verbrauch_15",
+                "state": "812.0",
+                "attributes": {
+                    "friendly_name": "Verbrauch",
+                    "device_class": "power",
+                    "unit_of_measurement": "W",
+                },
+            },
         ]
         return web.json_response(body)
 

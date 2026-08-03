@@ -140,7 +140,7 @@ test("Supervisor's own rejection message is shown verbatim", async ({ page }) =>
   await expect(page.locator(".banner.err")).toContainText("expected float in range");
 });
 
-test("the grid sensor is an entity picker listing only power sensors", async ({
+test("the grid sensor is an entity picker listing only power entities", async ({
   page,
 }) => {
   await page.goto(`${BASE_URL}#/config`);
@@ -156,6 +156,9 @@ test("the grid sensor is an entity picker listing only power sensors", async ({
   // plenty of real installs look like that.
   expect(suggestions).toContain("sensor.grid_power");
   expect(suggestions).toContain("sensor.p1_meter_active_power");
+  // Not a `sensor.`, but a working grid source all the same: readings are
+  // fetched from /api/states/<id>, which is domain-agnostic.
+  expect(suggestions).toContain("number.verbrauch_15");
   // Everything that could not be grid power stays out.
   expect(suggestions).not.toContain("sensor.house_energy_today");
   expect(suggestions).not.toContain("sensor.outside_temperature");

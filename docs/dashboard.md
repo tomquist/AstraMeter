@@ -90,9 +90,10 @@ The form is generated from the add-on's live option schema, so a new option
 appears here as soon as the add-on gains it.
 
 **Grid power sensor** and **Export power sensor** are entity pickers rather
-than text boxes: they list the Home Assistant sensors that could plausibly
-carry grid power — anything with `device_class: power`, plus any sensor
-reading in W or kW — showing each one's friendly name and current value. Type
+than text boxes: they list the Home Assistant entities that could plausibly
+carry grid power — anything with `device_class: power`, plus anything reading
+in W or kW — showing each one's friendly name and current value. The domain is
+not part of the test, so a `number.` entity carrying watts is offered too. Type
 to filter. You can still enter an entity id by hand, and if the configured one
 is not currently known to Home Assistant the field says so instead of letting
 you find out at the next restart.

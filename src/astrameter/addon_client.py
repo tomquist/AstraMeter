@@ -158,6 +158,13 @@ class SupervisorClient:
         would make the picker useless exactly for the people who need it.
         Unavailable entities are kept — a sensor can be briefly unavailable at
         add-on start and still be the right choice.
+
+        The domain is not part of the test.  Readings are fetched per entity
+        from ``/api/states/<entity_id>``, which does not care what domain the
+        id is in, so a `number.` or `input_number.` entity carrying watts is a
+        working configuration — and filtering to `sensor.` told those users
+        their entity was "not found in Home Assistant" while it was feeding
+        the controller perfectly well.
         """
         states = await self._request_raw("GET", "/core/api/states")
         if not isinstance(states, list):
@@ -167,7 +174,7 @@ class SupervisorClient:
             if not isinstance(state, dict):
                 continue
             entity_id = str(state.get("entity_id", ""))
-            if not entity_id.startswith("sensor."):
+            if "." not in entity_id:
                 continue
             attrs = state.get("attributes") or {}
             device_class = attrs.get("device_class")
