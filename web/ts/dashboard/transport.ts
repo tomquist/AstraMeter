@@ -23,6 +23,15 @@ export interface HaEntity {
   unit?: string;
   device_class?: string;
   state?: string;
+  /**
+   * Whether AstraMeter can read this entity as power.
+   *
+   * False for a `device_class: power` entity whose unit is not one it
+   * converts (a template sensor mislabelled `power` is the usual cause).
+   * Offered anyway, because hiding it makes the entity someone is hunting
+   * for simply disappear — but every read of it would fail.
+   */
+  readable?: boolean;
 }
 
 export interface Transport {

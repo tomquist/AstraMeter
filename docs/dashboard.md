@@ -97,12 +97,20 @@ appears here as soon as the add-on gains it.
 **Grid power sensor** and **Export power sensor** are entity pickers rather
 than text boxes: they list the Home Assistant entities that could plausibly
 carry grid power — anything with `device_class: power`, plus anything reading
-in W or kW — showing each one's friendly name and current value. The picker
-does not restrict the domain, so a `number.` entity carrying watts is offered
-too. Type to filter the list, then click or tap the one you want — the same
-list on a phone as on a desktop. You can still enter an entity id by hand, and
-if the configured one is not currently known to Home Assistant the field says
-so instead of letting you find out at the next restart.
+in a unit AstraMeter converts (`W`, `kW`, `MW`, `mW`) — showing each one's
+friendly name and current value. The picker does not restrict the domain, so a
+`number.` entity carrying watts is offered too. Type to filter the list, then
+click or tap the one you want — the same list on a phone as on a desktop. You
+can still enter an entity id by hand, and if the configured one is not
+currently known to Home Assistant the field says so instead of letting you find
+out at the next restart.
+
+A `kW`, `MW` or `mW` sensor is converted to watts for you, so **do not** set
+`POWER_MULTIPLIER = 1000` to compensate — if you did that before AstraMeter
+read units, remove it or the reading is scaled twice. An entity marked
+`device_class: power` whose unit is none of those is still listed, but flagged
+**not a power unit**: AstraMeter refuses to read it, and the sensor's own unit
+is usually the thing to fix.
 
 Both take **one sensor per phase**: a single sensor for a whole-house total, or
 up to three for a three-phase meter. An empty picker for the next phase is

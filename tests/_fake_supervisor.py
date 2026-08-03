@@ -412,6 +412,28 @@ def build_app(state: SupervisorState) -> web.Application:
                 "state": "on",
                 "attributes": {"friendly_name": "Kitchen light"},
             },
+            # Megawatts is a real unit the meter converts, so a sensor
+            # reading in it belongs in the picker like any other.
+            {
+                "entity_id": "sensor.substation_load",
+                "state": "0.0021",
+                "attributes": {
+                    "friendly_name": "Substation load",
+                    "unit_of_measurement": "MW",
+                },
+            },
+            # Says it is power, reads in energy — a template sensor with the
+            # wrong device class. Offered (someone is looking for it) but
+            # marked, because the meter refuses to read it.
+            {
+                "entity_id": "sensor.pv_yield_total",
+                "state": "1284.5",
+                "attributes": {
+                    "friendly_name": "PV yield total",
+                    "device_class": "power",
+                    "unit_of_measurement": "kWh",
+                },
+            },
             # Not a `sensor.`, but readings come from /api/states/<id>, which
             # does not care — so this is a usable grid source and the picker
             # has to offer it.

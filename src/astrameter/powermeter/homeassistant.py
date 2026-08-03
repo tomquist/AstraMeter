@@ -7,6 +7,8 @@ from typing import Any
 
 import aiohttp
 
+from astrameter.power_units import POWER_UNIT_SCALE, POWER_UNITS
+
 from .base import Powermeter
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
@@ -20,18 +22,6 @@ _HA_LC = "lc"
 _HA_DIFF_ADD = "+"
 
 _ATTR_UNIT_OF_MEASUREMENT = "unit_of_measurement"
-
-# Power units the entity state is auto-converted to watts from. Case matters:
-# "mW" is milliwatts, "MW" megawatts. An entity without a unit attribute is
-# assumed to already report watts (the historical behavior); any *other*
-# declared unit (°C, %, kWh, ...) is not a power reading and is rejected —
-# see issues #39 / #572 (kW values silently misread as W).
-_POWER_UNIT_SCALE = {
-    "W": 1.0,
-    "kW": 1000.0,
-    "MW": 1_000_000.0,
-    "mW": 0.001,
-}
 
 # WebSocket heartbeat (seconds) — same rationale as HomeWizard.
 WS_HEARTBEAT_SECONDS = 30.0
@@ -359,7 +349,7 @@ class HomeAssistant(Powermeter):
         self._entity_units[entity_id] = unit
         if unit is None or unit == "W":
             return
-        if unit in _POWER_UNIT_SCALE:
+        if unit in POWER_UNIT_SCALE:
             logger.info(
                 f"Home Assistant sensor {entity_id} reports {unit}; "
                 f"converting to W automatically"
@@ -367,8 +357,8 @@ class HomeAssistant(Powermeter):
         else:
             logger.error(
                 f"Home Assistant sensor {entity_id} reports unit "
-                f"'{unit}', which is not a power unit — expected W or kW. "
-                f"Its values will be rejected."
+                f"'{unit}', which is not a power unit — expected one of "
+                f"{', '.join(POWER_UNITS)}. Its values will be rejected."
             )
 
     def _check_entities_ready(self) -> None:
@@ -387,11 +377,12 @@ class HomeAssistant(Powermeter):
         unit = self._entity_units.get(entity_id)
         if unit is None:
             return val
-        scale = _POWER_UNIT_SCALE.get(unit)
+        scale = POWER_UNIT_SCALE.get(unit)
         if scale is None:
             raise ValueError(
                 f"Home Assistant sensor {entity_id} reports unit '{unit}', "
-                f"which is not a power unit — expected W or kW"
+                f"which is not a power unit — expected one of "
+                f"{', '.join(POWER_UNITS)}"
             )
         return val * scale
 

@@ -574,6 +574,9 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
   // single easiest way to misconfigure AstraMeter, and it otherwise only
   // surfaces as a start-up failure much later.
   const unknown = entity && config.entitiesLoaded && !match;
+  // A sensor AstraMeter cannot read is as broken a choice as one that does
+  // not exist, so it earns the same marking rather than looking resolved.
+  const unusable = unknown || match?.readable === false;
   // Named per phase only once there is more than one, so a single whole-house
   // sensor is not mislabelled as a phase of something.
   const name =
@@ -607,7 +610,7 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
       { class: "combo" },
       h("input", {
         type: "text",
-        class: unknown ? "warn-input" : false,
+        class: unusable ? "warn-input" : false,
         value: entity,
         spellcheck: "false",
         autocomplete: "off",
@@ -655,15 +658,23 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
           "✕",
         )
       : null,
-    match
+    match && match.readable === false
       ? h(
           "span",
-          { class: "help" },
-          `${match.name}${match.state != null ? ` — currently ${match.state} ${match.unit || ""}`.trimEnd() : ""}`,
+          { class: "help warn-text" },
+          `${match.name} reports ${match.unit || "no power unit"}, which is not a ` +
+            "power unit — AstraMeter cannot read it. Fix the sensor's unit, or " +
+            "pick another entity.",
         )
-      : unknown
-        ? h("span", { class: "help warn-text" }, "Not found in Home Assistant right now.")
-        : null,
+      : match
+        ? h(
+            "span",
+            { class: "help" },
+            `${match.name}${match.state != null ? ` — currently ${match.state} ${match.unit || ""}`.trimEnd() : ""}`,
+          )
+        : unknown
+          ? h("span", { class: "help warn-text" }, "Not found in Home Assistant right now.")
+          : null,
   );
 }
 
@@ -735,7 +746,14 @@ function suggestionList(
             choose(entity, box ? box.querySelector("input") : null);
           },
         },
-        h("span", { class: "combo-name" }, entity.name || entity.entity_id),
+        h(
+          "span",
+          { class: "combo-name" },
+          entity.name || entity.entity_id,
+          entity.readable === false
+            ? h("span", { class: "combo-warn" }, "not a power unit")
+            : null,
+        ),
         h(
           "span",
           { class: "combo-id" },

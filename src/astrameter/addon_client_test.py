@@ -222,6 +222,77 @@ async def test_power_entities_keep_unclassed_watt_sensors():
     assert entities[3]["name"] == "sensor.p1"
 
 
+async def test_power_entities_offer_every_unit_the_meter_converts():
+    """The picker's list has to be the powermeter's list.
+
+    When MW and mW were added to the converter the picker still said "W or
+    kW", so a sensor that read perfectly was hidden — and a configured one was
+    flagged "not found in Home Assistant".
+    """
+    client = _StatesClient(
+        [
+            {
+                "entity_id": "sensor.megawatts",
+                "state": "0.0004",
+                "attributes": {"unit_of_measurement": "MW"},
+            },
+            {
+                "entity_id": "sensor.milliwatts",
+                "state": "412800",
+                "attributes": {"unit_of_measurement": "mW"},
+            },
+        ]
+    )
+    entities = await client.list_power_entities()
+    assert [e["entity_id"] for e in entities] == [
+        "sensor.megawatts",
+        "sensor.milliwatts",
+    ]
+    assert all(e["readable"] for e in entities)
+
+
+async def test_a_mislabelled_power_sensor_is_offered_but_marked():
+    """`device_class: power` with a unit the meter refuses is a common
+    mistake in a template sensor. Hiding it makes the entity the user is
+    hunting for vanish; offering it silently makes every read fail."""
+    client = _StatesClient(
+        [
+            {
+                "entity_id": "sensor.grid_energy",
+                "state": "12.4",
+                "attributes": {
+                    "friendly_name": "Grid energy",
+                    "device_class": "power",
+                    "unit_of_measurement": "kWh",
+                },
+            },
+            {
+                "entity_id": "sensor.grid_power",
+                "state": "412.8",
+                "attributes": {"device_class": "power", "unit_of_measurement": "W"},
+            },
+        ]
+    )
+    by_id = {e["entity_id"]: e for e in await client.list_power_entities()}
+    assert by_id["sensor.grid_energy"]["readable"] is False
+    assert by_id["sensor.grid_power"]["readable"] is True
+
+
+async def test_a_unit_free_entity_is_readable_when_it_claims_to_be_power():
+    """No unit attribute means "assume watts" to the powermeter, so a
+    device_class that says power must not be marked unreadable."""
+    client = _StatesClient(
+        [
+            {
+                "entity_id": "sensor.bare",
+                "state": "412.8",
+                "attributes": {"device_class": "power"},
+            }
+        ]
+    )
+    assert (await client.list_power_entities())[0]["readable"] is True
+
+
 async def test_power_entities_tolerate_a_junk_payload():
     client = _StatesClient(["not a dict", {"no_entity_id": True}, None])
     assert await client.list_power_entities() == []

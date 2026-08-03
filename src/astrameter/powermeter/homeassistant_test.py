@@ -250,7 +250,7 @@ async def test_non_power_unit_rejected():
     assert (
         str(exc_info.value)
         == "Home Assistant sensor sensor.current_power reports unit '°C', "
-        "which is not a power unit — expected W or kW"
+        "which is not a power unit — expected one of W, kW, MW, mW"
     )
 
 

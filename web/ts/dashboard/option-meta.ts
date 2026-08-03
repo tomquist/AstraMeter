@@ -177,8 +177,21 @@ export const OPTION_META: Record<string, OptionMeta> = {
     entity: true,
     entityPeer: "power_input_alias",
   },
-  power_offset: { label: "Power offset (W)", group: GRID },
-  power_multiplier: { label: "Power multiplier", group: GRID },
+  power_offset: {
+    label: "Power offset (W)",
+    group: GRID,
+    help: "Added to the reading, in watts. One value, or one per phase.",
+  },
+  power_multiplier: {
+    label: "Power multiplier",
+    group: GRID,
+    // The upgrade trap: a kW sensor used to need 1000 here, and since units
+    // are converted automatically that same 1000 now scales it twice.
+    help:
+      "Usually 1. A kW sensor is converted to watts on its own — if you set " +
+      "1000 to work around that, remove it or the reading is scaled twice. " +
+      "Use −1 to flip a backwards CT.",
+  },
   throttle_interval: {
     label: "Throttle interval (s)",
     group: GRID,

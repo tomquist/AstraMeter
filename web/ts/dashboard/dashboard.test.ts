@@ -599,6 +599,39 @@ const typoHtml = renderToString(h("div", null, ...view(haState, actions, typo)))
 has(typoHtml, "Not found in Home Assistant right now.", "an unknown entity is flagged");
 has(typoHtml, "warn-input", "and the field is visually marked");
 
+// An entity that claims `device_class: power` but reads in something the
+// powermeter refuses is offered — hiding it makes the sensor a user is hunting
+// for simply vanish — but marked, because every read of it would fail.
+const mislabelled = {
+  ...withEntities,
+  openPicker: "power_input_alias:0",
+  options: { ...withEntities.options, power_input_alias: "sensor.house_energy" },
+  entities: [
+    ...withEntities.entities,
+    {
+      entity_id: "sensor.house_energy",
+      name: "House energy",
+      unit: "kWh",
+      device_class: "power",
+      state: "1284.5",
+      readable: false,
+    },
+  ],
+};
+const mislabelledHtml = renderToString(
+  h("div", null, ...view(haState, actions, mislabelled)),
+);
+has(mislabelledHtml, "sensor.house_energy", "a mislabelled sensor is still offered");
+has(mislabelledHtml, "not a power unit", "but the suggestion is marked");
+has(mislabelledHtml, "AstraMeter cannot read it", "and choosing it explains why");
+has(mislabelledHtml, "warn-input", "with the field marked as it is for a typo");
+// The good one next to it must not be tarred with the same brush.
+lacks(
+  renderToString(h("div", null, ...view(haState, actions, withEntities))),
+  "not a power unit",
+  "a readable sensor carries no warning",
+);
+
 // Before the lookup returns, nothing is claimed either way.
 const pending = { ...withEntities, entitiesLoaded: false, entities: [] };
 const pendingHtml = renderToString(h("div", null, ...view(haState, actions, pending)));

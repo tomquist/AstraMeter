@@ -637,6 +637,17 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* A suggestion AstraMeter cannot actually read. Offered rather than hidden —
+ * a mislabelled sensor is the one people go looking for — but never silently. */
+.combo-warn {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 0.66rem;
+  color: var(--warn-fg);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
 .combo-empty {
   padding: 7px 8px;
   font-size: 0.78rem;

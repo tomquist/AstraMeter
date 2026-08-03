@@ -173,6 +173,9 @@ test("the grid sensor is an entity picker listing only power entities", async ({
   // Not a `sensor.`, but a working grid source all the same: readings are
   // fetched from /api/states/<id>, which is domain-agnostic.
   expect(suggestions.join("|")).toContain("number.verbrauch_15");
+  // Every unit the meter converts, not just W and kW — the picker used to
+  // carry its own shorter list and hid sensors that read perfectly.
+  expect(suggestions.join("|")).toContain("sensor.substation_load");
   // Everything that could not be grid power stays out.
   expect(suggestions.join("|")).not.toContain("sensor.house_energy_today");
   expect(suggestions.join("|")).not.toContain("sensor.outside_temperature");
@@ -254,6 +257,32 @@ test("an entity Home Assistant does not know is flagged in place", async ({
     page.locator(".entity-field", { hasText: "Grid power sensor" }),
   ).toContainText("Not found in Home Assistant right now.");
   await expect(input).toHaveClass(/warn-input/);
+});
+
+test("a sensor labelled power that reads energy is offered but marked", async ({
+  page,
+}) => {
+  await page.goto(`${BASE_URL}#/config`);
+  const input = page.getByLabel("Grid power sensor", { exact: true });
+  await input.click();
+  await input.fill("pv yield");
+
+  // Still offered: hiding it makes the entity someone is hunting for simply
+  // vanish, with nothing to say why.
+  const list = page.locator(".combo-list").first();
+  await expect(list).toContainText("sensor.pv_yield_total");
+  await expect(list.locator(".combo-warn")).toHaveText("not a power unit");
+
+  // Choosing it says what is wrong with it rather than looking resolved.
+  await list.locator(".combo-opt").first().click();
+  await expect(input).toHaveValue("sensor.pv_yield_total");
+  await expect(input).toHaveClass(/warn-input/);
+  await expect(
+    page.locator(".entity-field", { hasText: "Grid power sensor" }),
+  ).toContainText("AstraMeter cannot read it");
+
+  // Nothing saved; leave the form as it was found.
+  await page.reload();
 });
 
 test("a three-phase meter can be entered one sensor per phase", async ({ page }) => {

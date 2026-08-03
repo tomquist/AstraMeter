@@ -21,6 +21,8 @@ from typing import Any
 
 import aiohttp
 
+from astrameter.power_units import POWER_UNIT_SCALE, is_power_unit
+
 logger = logging.getLogger(__name__)
 
 # Overridable so the add-on flows can be exercised against a stand-in
@@ -154,10 +156,22 @@ class SupervisorClient:
 
         "Applicable" is deliberately generous: a `device_class: power` sensor
         is the obvious case, but plenty of real installs expose grid power as
-        a plain sensor in W or kW with no device class, and excluding those
-        would make the picker useless exactly for the people who need it.
-        Unavailable entities are kept — a sensor can be briefly unavailable at
-        add-on start and still be the right choice.
+        a plain sensor in a power unit with no device class, and excluding
+        those would make the picker useless exactly for the people who need
+        it. Unavailable entities are kept — a sensor can be briefly
+        unavailable at add-on start and still be the right choice.
+
+        The unit test is :func:`~astrameter.power_units.is_power_unit`, shared
+        with the powermeter rather than a list kept here: when MW and mW were
+        added there this one still said "W or kW", so the picker hid sensors
+        that read perfectly and flagged a configured one as "not found in Home
+        Assistant".
+
+        A `device_class: power` entity whose unit is *not* readable is still
+        offered — a template sensor mislabelled `power` is a common mistake,
+        and hiding it only makes the entity the user is looking for vanish —
+        but it is marked ``readable: False`` so the picker can say why rather
+        than let it fail on every read once chosen.
 
         The domain is not part of the test.  Readings are fetched per entity
         from ``/api/states/<entity_id>``, which does not care what domain the
@@ -179,7 +193,13 @@ class SupervisorClient:
             attrs = state.get("attributes") or {}
             device_class = attrs.get("device_class")
             unit = str(attrs.get("unit_of_measurement") or "")
-            if device_class != "power" and unit not in ("W", "kW"):
+            # Two different questions. Offering one needs a *declared* power
+            # unit or a device class saying so — "no unit" is readable (it is
+            # assumed to be watts) but it describes every numeric entity in
+            # the house, so it is not something to suggest. Readability is
+            # only about whether the powermeter would accept it once chosen.
+            readable = is_power_unit(unit or None)
+            if device_class != "power" and unit not in POWER_UNIT_SCALE:
                 continue
             out.append(
                 {
@@ -188,6 +208,7 @@ class SupervisorClient:
                     "unit": unit,
                     "device_class": device_class,
                     "state": state.get("state"),
+                    "readable": readable,
                 }
             )
         out.sort(key=lambda e: e["entity_id"])
