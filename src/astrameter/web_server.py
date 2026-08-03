@@ -128,6 +128,8 @@ class WebServer:
         self.enable_web_config = enable_web_config
         self.status = status
         self._runner = None
+        #: Whether an unrenderable add-on schema has already been reported.
+        self._logged_schema_shape = False
 
     # -- gating --------------------------------------------------------
 
@@ -464,14 +466,47 @@ class WebServer:
         except Exception as exc:
             return _json({"error": str(exc)}, status=502)
         options = dict(info.get("options") or {})
+        schema = info.get("schema") or {}
+        self._log_unrenderable_schema(schema)
         return _json(
             {
                 "options": redact_sections({"o": options})["o"],
-                "schema": info.get("schema") or {},
+                "schema": schema,
                 "slug": info.get("slug"),
                 "ingress_panel": info.get("ingress_panel"),
             }
         )
+
+    def _log_unrenderable_schema(self, schema) -> None:
+        """Name any schema entry the guided form cannot turn into a control.
+
+        The form expects a mapping of option name to bashio validator string.
+        Anything else — a repeated or nested option, or a shape Supervisor
+        grows later — renders read-only, and without this the only clue is a
+        greyed-out field. Says it once: the log is where an operator looks,
+        and the route is hit on every visit to the tab.  Types and option
+        names only, never a value.
+        """
+        if self._logged_schema_shape:
+            return
+        if not isinstance(schema, dict):
+            self._logged_schema_shape = True
+            logger.warning(
+                "Supervisor returned the add-on schema as %s, not an object; "
+                "the guided form cannot build controls from it. Please report "
+                "this with your Home Assistant version.",
+                type(schema).__name__,
+            )
+            return
+        odd = {k: type(v).__name__ for k, v in schema.items() if not isinstance(v, str)}
+        if odd:
+            self._logged_schema_shape = True
+            logger.warning(
+                "Add-on options the guided form cannot edit (non-string schema "
+                "entries): %s. They are shown read-only; change them on the "
+                "add-on's own Configuration page.",
+                ", ".join(f"{k} ({t})" for k, t in sorted(odd.items())),
+            )
 
     async def _handle_addon_options_post(self, request):
         """Write add-on options through Supervisor.

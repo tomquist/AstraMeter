@@ -66,6 +66,33 @@ async def test_direct_access_is_refused_by_default_under_the_addon(tmp_path, pat
     await client.close()
 
 
+def test_an_unrenderable_schema_is_named_in_the_log(tmp_path, caplog):
+    """The guided form shows such an option read-only, which on its own is a
+    greyed-out box with no explanation anywhere an operator looks."""
+    server = WebServer(config_path=None, status=_registry(tmp_path))
+
+    with caplog.at_level("WARNING"):
+        server._log_unrenderable_schema({"a": "str?", "extra_hosts": ["str"]})
+    assert "extra_hosts (list)" in caplog.text
+    assert "a (" not in caplog.text, "a normal option is not reported"
+
+    # Said once: the route is hit on every visit to the Configuration tab.
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        server._log_unrenderable_schema({"extra_hosts": ["str"]})
+    assert caplog.text == ""
+
+
+def test_a_schema_that_is_not_an_object_is_reported_by_type(tmp_path, caplog):
+    """If Supervisor ever answers with a list of field descriptors instead of
+    a mapping, the form can build nothing at all — and the log has to say so
+    rather than leaving an empty page to explain itself."""
+    server = WebServer(config_path=None, status=_registry(tmp_path))
+    with caplog.at_level("WARNING"):
+        server._log_unrenderable_schema([{"name": "power_input_alias"}])
+    assert "as list, not an object" in caplog.text
+
+
 async def test_a_refused_page_explains_itself_in_prose(tmp_path):
     """Someone typed the address into a browser. A raw JSON error tells them
     nothing about the sidebar or the option that would let this port work."""

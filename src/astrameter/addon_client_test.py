@@ -198,18 +198,28 @@ async def test_power_entities_keep_unclassed_watt_sensors():
                     "unit_of_measurement": "W",
                 },
             },
+            # The other arm of the same test: outside `sensor.` *and* with no
+            # device class, so only the unit says this is power.
+            {
+                "entity_id": "input_number.grid_watts",
+                "state": "0.81",
+                "attributes": {"unit_of_measurement": "kW"},
+            },
         ]
     )
     entities = await client.list_power_entities()
     assert [e["entity_id"] for e in entities] == [
+        "input_number.grid_watts",
         "number.verbrauch",
         "sensor.grid",
         "sensor.p1",
     ]
-    assert entities[1]["name"] == "Grid power"
-    assert entities[1]["state"] == "412.8"
+    assert entities[0]["name"] == "input_number.grid_watts"
+    assert entities[0]["device_class"] is None
+    assert entities[2]["name"] == "Grid power"
+    assert entities[2]["state"] == "412.8"
     # An id with no friendly name still needs something to render.
-    assert entities[2]["name"] == "sensor.p1"
+    assert entities[3]["name"] == "sensor.p1"
 
 
 async def test_power_entities_tolerate_a_junk_payload():
