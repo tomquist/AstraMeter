@@ -62,6 +62,116 @@ def _yaml_block(name: str, path: Path = CONFIG_YAML) -> dict[str, Any]:
     return out
 
 
+#: The grammar Supervisor accepts for an add-on option, copied from
+#: ``supervisor/validate.py`` so the rendering below matches it group for group.
+_SCHEMA_ELEMENT = re.compile(
+    r"^(?:"
+    r"|bool"
+    r"|email"
+    r"|url"
+    r"|port"
+    r"|device(?:\((?P<filter>subsystem=[a-z]+)\))?"
+    r"|str(?:\((?P<s_min>\d+)?,(?P<s_max>\d+)?\))?"
+    r"|password(?:\((?P<p_min>\d+)?,(?P<p_max>\d+)?\))?"
+    r"|int(?:\((?P<i_min>\d+)?,(?P<i_max>\d+)?\))?"
+    r"|float(?:\((?P<f_min>[\d.]+)?,(?P<f_max>[\d.]+)?\))?"
+    r"|match\((?P<match>.*)\)"
+    r"|list\((?P<list>.+)\)"
+    r")\??$"
+)
+_LENGTH_PARTS = ("i_min", "i_max", "f_min", "f_max", "s_min", "s_max", "p_min", "p_max")
+
+
+def ui_schema(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Render config.yaml's validator strings the way Supervisor's API does.
+
+    Supervisor never serves the ``key: "float(0,1)?"`` mapping an add-on
+    declares. ``/addons/self/info`` returns a *list* of field descriptors
+    rendered from it — ``{"name": "grid_predict_trust", "lengthMin": 0,
+    "lengthMax": 1, "optional": true, "type": "float"}`` — and that list is
+    the only shape a dashboard ever sees. Serving the mapping here is why a
+    guided form that passed every test rendered fields named 0, 1, 2 against
+    a real Home Assistant.
+
+    Mirrors ``UiOptions`` in ``supervisor/addons/options.py``.
+    """
+    out: list[dict[str, Any]] = []
+    for key, value in raw.items():
+        if isinstance(value, list):
+            # A repeated option: the single element describes every entry.
+            if not value:
+                continue
+            if isinstance(value[0], dict):
+                out.append(_nested_node(key, value[0], multiple=True))
+            else:
+                _single_node(out, value[0], key, multiple=True)
+        elif isinstance(value, dict):
+            out.append(_nested_node(key, value, multiple=False))
+        else:
+            _single_node(out, value, key)
+    return out
+
+
+def _nested_node(key: str, block: dict[str, Any], multiple: bool) -> dict[str, Any]:
+    """A nested option block, described by the schema of its members."""
+    nested: list[dict[str, Any]] = []
+    for c_key, c_value in block.items():
+        if isinstance(c_value, list):
+            if c_value:
+                _single_node(nested, c_value[0], c_key, multiple=True)
+        else:
+            _single_node(nested, c_value, c_key)
+    return {
+        "name": key,
+        "type": "schema",
+        "optional": True,
+        "multiple": multiple,
+        "schema": nested,
+    }
+
+
+def _single_node(
+    out: list[dict[str, Any]], value: Any, key: str, multiple: bool = False
+) -> None:
+    """One field descriptor, in Supervisor's own key order."""
+    spec = str(value)
+    node: dict[str, Any] = {"name": key}
+    if multiple:
+        node["multiple"] = True
+    match = _SCHEMA_ELEMENT.match(spec)
+    if not match:
+        # Supervisor drops an option it cannot parse rather than serving it.
+        return
+    for part in _LENGTH_PARTS:
+        bound = match.group(part)
+        if bound:
+            node["lengthMin" if part.endswith("min") else "lengthMax"] = float(bound)
+    node["optional" if spec.endswith("?") else "required"] = True
+    if spec.startswith("str"):
+        node["type"] = "string"
+    elif spec.startswith("password"):
+        node["type"] = "string"
+        node["format"] = "password"
+    elif spec.startswith("int") or spec.startswith("port"):
+        node["type"] = "integer"
+    elif spec.startswith("float"):
+        node["type"] = "float"
+    elif spec.startswith("bool"):
+        node["type"] = "boolean"
+    elif spec.startswith("email") or spec.startswith("url"):
+        node["type"] = "string"
+        node["format"] = "email" if spec.startswith("email") else "url"
+    elif spec.startswith("match"):
+        node["type"] = "string"
+    elif spec.startswith("list"):
+        node["type"] = "select"
+        node["options"] = match.group("list").split("|")
+    elif spec.startswith("device"):
+        node["type"] = "select"
+        node["options"] = []
+    out.append(node)
+
+
 def _friendly(entity: str, total: int) -> str:
     """What Home Assistant would show for one of the served power sensors."""
     if total == 1:
@@ -112,6 +222,9 @@ class SupervisorState:
         self.options_path = options_path
         #: The add-on's stored options, as the Configuration tab would show.
         self.options: dict[str, Any] = {}
+        #: The add-on's declared schema, in config.yaml's validator-string
+        #: form. Served through :func:`ui_schema`, which is what Supervisor
+        #: puts on the wire; kept raw here because validation reads it.
         self.schema: dict[str, Any] = {}
         self.ingress_panel = True
         self.restarts = 0
@@ -185,7 +298,8 @@ def build_app(state: SupervisorState) -> web.Application:
                     "ingress_panel": state.ingress_panel,
                     "ingress_url": f"/api/hassio_ingress/{state.slug}/",
                     "options": state.options,
-                    "schema": state.schema,
+                    # Rendered, not raw: Supervisor serves field descriptors.
+                    "schema": ui_schema(state.schema),
                 },
             }
         )

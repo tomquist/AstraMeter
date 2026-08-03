@@ -64,6 +64,78 @@ export function parseAddonSchema(spec: unknown): OptionSpec {
   };
 }
 
+/** Supervisor's descriptor type names, mapped onto the ones used above. */
+const DESCRIPTOR_TYPES: Record<string, string> = {
+  string: "str",
+  integer: "int",
+  float: "float",
+  boolean: "bool",
+  select: "list",
+};
+
+/**
+ * One field descriptor from Supervisor's rendered schema.
+ *
+ * Shape: `{"name": "grid_predict_trust", "lengthMin": 0, "lengthMax": 1,
+ * "optional": true, "type": "float"}`. `lengthMin`/`lengthMax` carry the
+ * bounds for a number and the length limits for a string, so they are only
+ * read as bounds for the numeric types.
+ */
+function specFromDescriptor(node: Record<string, unknown>): OptionSpec {
+  const optional = node.optional === true || node.required !== true;
+  // A repeated option or a nested block holds a list or an object; editing
+  // one in a text box here would write a string back over the real value.
+  if (node.multiple === true || node.type === "schema") {
+    return {
+      type: "unsupported",
+      optional: true,
+      unsupported: node.type === "schema" ? "a nested block" : "a repeated value",
+    };
+  }
+  const kind = typeof node.type === "string" ? node.type : "string";
+  const type =
+    node.format === "password" ? "password" : (DESCRIPTOR_TYPES[kind] ?? "str");
+  const spec: OptionSpec = { type, optional };
+  if (type === "list") {
+    spec.options = Array.isArray(node.options) ? node.options.map(String) : [];
+  }
+  if (type === "int" || type === "float") {
+    if (typeof node.lengthMin === "number") spec.min = node.lengthMin;
+    if (typeof node.lengthMax === "number") spec.max = node.lengthMax;
+  }
+  return spec;
+}
+
+/**
+ * Supervisor's add-on schema as `{option name: spec}`, whichever shape it is.
+ *
+ * `/addons/self/info` does not return the `name: validator` mapping an add-on
+ * declares in config.yaml — Supervisor renders that into a *list* of field
+ * descriptors first, and the list is what a dashboard sees. Reading it as a
+ * mapping keyed the whole form by array index, so every control came out
+ * labelled 0, 1, 2 with the descriptor printed underneath. The mapping form
+ * is still accepted: it is what the add-on itself declares, and what an
+ * older or differently-shaped Supervisor may hand back.
+ */
+export function normalizeAddonSchema(raw: unknown): Record<string, OptionSpec> {
+  const specs: Record<string, OptionSpec> = {};
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const node = entry as Record<string, unknown>;
+      if (typeof node.name !== "string" || !node.name) continue;
+      specs[node.name] = specFromDescriptor(node);
+    }
+    return specs;
+  }
+  if (raw && typeof raw === "object") {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      specs[key] = parseAddonSchema(value);
+    }
+  }
+  return specs;
+}
+
 interface Meta {
   label: string;
   group: string;

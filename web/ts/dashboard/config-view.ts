@@ -13,7 +13,7 @@
 
 import { h, type VChild, type VNode } from "./vdom.js";
 import type { AppState } from "./model.js";
-import { OPTION_META, parseAddonSchema, type OptionSpec } from "./option-meta.js";
+import { OPTION_META, type OptionSpec } from "./option-meta.js";
 import type { HaEntity } from "./transport.js";
 
 /** Type metadata for one INI key, from GET /api/key-types. */
@@ -30,10 +30,10 @@ export interface ConfigState {
   loadedMode: string | null;
   /** Add-on options, as edited. */
   options: Record<string, unknown>;
-  /** Supervisor's own schema. Values are validator strings for the options
-   *  this form can edit, but a repeated or nested option arrives as a list
-   *  or an object — so this is deliberately not typed as a string map. */
-  schema: Record<string, unknown>;
+  /** Supervisor's own schema, per option, as `normalizeAddonSchema` reads it
+   *  off the wire — Supervisor's shape there is a list of field descriptors,
+   *  not a mapping, and normalizing at the boundary keeps that out of here. */
+  schema: Record<string, OptionSpec>;
   /** config.ini as a structured document, as edited. */
   sections: Record<string, Record<string, string>>;
   order: string[];
@@ -117,6 +117,12 @@ export function knownKeys(
   }
   return [];
 }
+
+// Mirrors the backend's secret-key rule (status/secrets.py). Neither the INI
+// type table nor Supervisor's schema marks every one of these, but the
+// *backend* redacts by key name anywhere — so without this a password would
+// be sent back as bullets in a plain, visible text box.
+const SECRET_KEY = /(password|passwd|secret|token|api[_-]?key|accesstoken|mailbox)/i;
 
 function card(title: string | null, ...body: VChild[]): VNode {
   return h("section", { class: "card" }, title ? h("h2", null, title) : null, ...body);
@@ -262,12 +268,11 @@ function guidedForm(config: ConfigState, actions: ConfigActions): VNode {
 
 function optionField(
   key: string,
-  rawSpec: unknown,
+  spec: OptionSpec,
   value: unknown,
   config: ConfigState,
   actions: ConfigActions,
 ): VNode {
-  const spec = parseAddonSchema(rawSpec);
   const meta = OPTION_META[key];
   const label = meta?.label ?? titleCase(key);
 
@@ -326,7 +331,7 @@ function optionField(
           ),
         )
       : h("input", {
-          type: inputType(spec),
+          type: inputType(spec, key),
           value: value == null ? "" : String(value),
           min: spec.min,
           max: spec.max,
@@ -414,8 +419,14 @@ function entityField(
   );
 }
 
-function inputType(spec: OptionSpec): string {
-  if (spec.type === "password") return "password";
+function inputType(spec: OptionSpec, key: string): string {
+  // The backend replaces a secret with bullets by key name, so anything it
+  // redacts has to be masked here too — otherwise a Supervisor that describes
+  // a password as a plain string (no `format`) puts the bullets in an open
+  // text box, and the field stops reading as a credential at all.
+  if (spec.type === "password" || (spec.type === "str" && SECRET_KEY.test(key))) {
+    return "password";
+  }
   if (spec.type === "int" || spec.type === "float" || spec.type === "port") {
     return "number";
   }
@@ -585,12 +596,6 @@ function keyRow(
     ),
   );
 }
-
-// Mirrors the backend's secret-key rule (status/secrets.py). The type table
-// only covers known sections, but the *backend* redacts by key name anywhere
-// — so without this a password in an unrecognised section would be sent back
-// as bullets in a plain, visible text box.
-const SECRET_KEY = /(password|passwd|secret|token|api[_-]?key|accesstoken|mailbox)/i;
 
 function valueControl(
   section: string,

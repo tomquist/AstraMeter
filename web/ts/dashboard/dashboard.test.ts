@@ -29,7 +29,7 @@ import {
   reportingConsumers,
   type AppState,
 } from "./model.js";
-import { parseAddonSchema } from "./option-meta.js";
+import { normalizeAddonSchema, parseAddonSchema } from "./option-meta.js";
 import { view } from "./view.js";
 import { initialConfigState, knownKeys, specFor } from "./config-view.js";
 import type { StatusSnapshot } from "./types.js";
@@ -350,6 +350,57 @@ for (const spec of [["str"], { inner: "str" }, 5, true] as unknown[]) {
 ok(parseAddonSchema(null).type === "str", "an absent spec still falls back to text");
 ok(parseAddonSchema(undefined).type === "str", "so does an undefined one");
 
+// What Supervisor actually puts on the wire. The `name: validator` mapping an
+// add-on declares in config.yaml is rendered into a *list* of field
+// descriptors before any dashboard sees it; reading that list as a mapping
+// keyed the whole form by array index, so every control came out labelled
+// 0, 1, 2 with the descriptor printed underneath it.
+const SUPERVISOR_SCHEMA: unknown[] = [
+  { name: "power_input_alias", required: true, type: "string" },
+  {
+    name: "grid_predict_trust",
+    lengthMin: 0,
+    lengthMax: 1,
+    optional: true,
+    type: "float",
+  },
+  { name: "efficiency_rotation_interval", lengthMin: 1, optional: true, type: "integer" },
+  { name: "active_control", optional: true, type: "boolean" },
+  { name: "marstek_password", optional: true, type: "string", format: "password" },
+  {
+    name: "log_level",
+    required: true,
+    type: "select",
+    options: ["critical", "error", "info"],
+  },
+  { name: "extra_hosts", multiple: true, required: true, type: "string" },
+  { name: "ports", type: "schema", optional: true, multiple: false, schema: [] },
+];
+const rendered = normalizeAddonSchema(SUPERVISOR_SCHEMA);
+ok(rendered.power_input_alias.type === "str", "a descriptor list keys by option name");
+ok(!("0" in rendered), "and never by array index");
+const trust = rendered.grid_predict_trust;
+ok(
+  trust.type === "float" && trust.min === 0 && trust.max === 1 && trust.optional,
+  "lengthMin/lengthMax become the bounds of a number",
+);
+ok(rendered.efficiency_rotation_interval.type === "int", "integer is a number control");
+ok(rendered.active_control.type === "bool", "boolean is a checkbox");
+ok(rendered.marstek_password.type === "password", "a password keeps its masking");
+ok(
+  rendered.log_level.type === "list" && rendered.log_level.options?.length === 3,
+  "a select carries its own options",
+);
+ok(!rendered.power_input_alias.optional, "a required option is marked required");
+ok(rendered.extra_hosts.type === "unsupported", "a repeated option is not edited here");
+ok(rendered.ports.type === "unsupported", "nor is a nested block");
+// Whatever else arrives, the form must render — a throw here froze the page.
+for (const junk of [null, undefined, 42, "str", [1, "two", { noName: 1 }]] as unknown[]) {
+  ok(Object.keys(normalizeAddonSchema(junk)).length === 0, "a fieldless shape is empty");
+}
+// The add-on's own declared form still parses: it is what config.yaml holds.
+ok(normalizeAddonSchema({ ct_mac: "str?" }).ct_mac.optional, "the mapping form parses");
+
 // The field renders, read-only: a text box over a list would write a string
 // back and flatten the real value on save.
 {
@@ -365,9 +416,17 @@ ok(parseAddonSchema(undefined).type === "str", "so does an undefined one");
   };
   const cfg = initialConfigState();
   cfg.loadedMode = "ha_simple";
-  cfg.options = { power_input_alias: "sensor.grid", extra_hosts: ["a", "b"] };
-  cfg.schema = { power_input_alias: "str", extra_hosts: ["str"] };
+  cfg.options = {
+    power_input_alias: "sensor.grid",
+    grid_predict_trust: 0.5,
+    extra_hosts: ["a", "b"],
+  };
+  cfg.schema = rendered;
   const html = renderToString(h("div", null, ...view(state, actions, cfg)));
+  has(html, "Grid power sensor", "a descriptor-built field gets its own label");
+  has(html, "Grid measurement", "and lands in its group, not a numbered pile");
+  has(html, 'max="1"', "the float's bounds reach the control");
+  has(html, 'type="password"', "the secret is masked");
   has(html, "Extra Hosts", "the unsupported option is still shown");
   has(html, "disabled", "but not editable here");
   has(html, "Configuration page", "and it says where to edit it");
@@ -452,7 +511,10 @@ const emptyHtml = renderToString(
 has(emptyHtml, "This config file is empty", "an empty file explains itself");
 
 // ── Home Assistant entity picker ──
-const HA_SCHEMA = { power_input_alias: "str", device_types: "str" };
+const HA_SCHEMA = normalizeAddonSchema([
+  { name: "power_input_alias", required: true, type: "string" },
+  { name: "device_types", required: true, type: "string" },
+]);
 const withEntities = {
   ...initialConfigState(),
   loadedMode: "ha_simple",

@@ -11,6 +11,7 @@ import {
 } from "./model.js";
 import { view, pageTitle, type Actions } from "./view.js";
 import { initialConfigState, type ConfigState } from "./config-view.js";
+import { normalizeAddonSchema } from "./option-meta.js";
 
 const THEME_KEY = "astrameter.theme";
 const THEMES = ["auto", "light", "dark"] as const;
@@ -103,7 +104,7 @@ const actions: Actions = {
       if (mode === "ha_simple") {
         const data = await transport.getAddonOptions();
         config.options = data.options || {};
-        config.schema = data.schema || {};
+        config.schema = normalizeAddonSchema(data.schema);
         // Best-effort: a failed entity lookup leaves the picker as a plain
         // text box rather than blocking the whole form.
         try {

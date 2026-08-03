@@ -110,6 +110,49 @@ def _coerce_control_value(field, value):
     return number * _CONTROL_SCALE.get(field, 1.0)
 
 
+def addon_option_names(schema) -> set[str]:
+    """Every option name in an add-on schema, whichever shape it arrived in.
+
+    Supervisor renders the add-on's declared schema before serving it: what
+    ``/addons/self/info`` returns is a *list* of field descriptors
+    (``{"name": "ct_mac", "optional": true, "type": "string"}``), not the
+    ``name: validator`` mapping config.yaml declares. Both are read here so
+    the same code works against either — and so a list cannot reach ``set()``,
+    where its unhashable entries used to abort the save with a 500.
+    """
+    if isinstance(schema, list):
+        return {
+            entry["name"]
+            for entry in schema
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+        }
+    if isinstance(schema, dict):
+        return {key for key in schema if isinstance(key, str)}
+    return set()
+
+
+def _unrenderable_descriptors(schema: list) -> dict[str, str]:
+    """Field descriptors the guided form has to show read-only, by name.
+
+    A repeated option (``multiple``) or a nested block (``type: "schema"``)
+    holds a list or an object; a text box over one would write a string back
+    and flatten it.
+    """
+    odd: dict[str, str] = {}
+    for index, entry in enumerate(schema):
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            odd[f"#{index}"] = type(entry).__name__
+            continue
+        kind = entry.get("type")
+        if kind == "schema":
+            odd[entry["name"]] = (
+                "repeated nested block" if entry.get("multiple") else "nested block"
+            )
+        elif entry.get("multiple"):
+            odd[entry["name"]] = f"repeated {kind}"
+    return odd
+
+
 class WebServer:
     """Async HTTP server exposing health, dashboard, config and API routes."""
 
@@ -483,33 +526,36 @@ class WebServer:
     def _log_unrenderable_schema(self, schema) -> None:
         """Name any schema entry the guided form cannot turn into a control.
 
-        The form expects a mapping of option name to bashio validator string.
-        Anything else — a repeated or nested option, or a shape Supervisor
-        grows later — renders read-only, and without this the only clue is a
-        greyed-out field. Says it once: the log is where an operator looks,
-        and the route is hit on every visit to the tab.  Types and option
-        names only, never a value.
+        A repeated or nested option renders read-only, and without this the
+        only clue is a greyed-out field. Says it once: the log is where an
+        operator looks, and the route is hit on every visit to the tab.
+        Types and option names only, never a value.
         """
         # `null` is documented and means the add-on declares no schema; the
         # form says so on its own and there is nothing wrong to report.
         if self._logged_schema_shape or schema is None:
             return
-        if not isinstance(schema, dict):
+        if isinstance(schema, list):
+            odd = _unrenderable_descriptors(schema)
+        elif isinstance(schema, dict):
+            odd = {
+                k: type(v).__name__ for k, v in schema.items() if not isinstance(v, str)
+            }
+        else:
             self._logged_schema_shape = True
             logger.warning(
-                "Supervisor returned the add-on schema as %s, not an object; "
-                "the guided form cannot build controls from it. Please report "
-                "this with your Home Assistant version.",
+                "Supervisor returned the add-on schema as %s, which is neither "
+                "a list of fields nor an object; the guided form cannot build "
+                "controls from it. Please report this with your Home Assistant "
+                "version.",
                 type(schema).__name__,
             )
             return
-        odd = {k: type(v).__name__ for k, v in schema.items() if not isinstance(v, str)}
         if odd:
             self._logged_schema_shape = True
             logger.warning(
-                "Add-on options the guided form cannot edit (non-string schema "
-                "entries): %s. They are shown read-only; change them on the "
-                "add-on's own Configuration page.",
+                "Add-on options the guided form cannot edit: %s. They are shown "
+                "read-only; change them on the add-on's own Configuration page.",
                 ", ".join(f"{k} ({t})" for k, t in sorted(odd.items())),
             )
 
@@ -535,8 +581,7 @@ class WebServer:
             info = await client.get_info()
         except Exception as exc:
             return _json({"error": str(exc)}, status=502)
-        schema = info.get("schema") or {}
-        unknown = sorted(set(options) - set(schema))
+        unknown = sorted(set(options) - addon_option_names(info.get("schema")))
         if unknown:
             return _json(
                 {"error": f"Unknown add-on option(s): {', '.join(unknown)}"}, status=400

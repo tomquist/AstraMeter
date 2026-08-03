@@ -48,7 +48,8 @@ export interface Transport {
   /** Add-on options plus the schema to render them from. */
   getAddonOptions(): Promise<{
     options: Record<string, unknown>;
-    schema: Record<string, string>;
+    /** Supervisor's rendered field descriptors; normalized before use. */
+    schema: unknown;
     slug?: string;
   }>;
   saveAddonOptions(
@@ -183,7 +184,7 @@ export class PollTransport implements Transport {
   async getAddonOptions() {
     const { data } = await request<{
       options: Record<string, unknown>;
-      schema: Record<string, string>;
+      schema: unknown;
       slug?: string;
     }>("api/addon/options");
     return data ?? { options: {}, schema: {} };

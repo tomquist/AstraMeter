@@ -72,6 +72,13 @@ test("renders the guided form from the add-on's own schema", async ({ page }) =>
   const secret = page.locator('input[type="password"]').first();
   await expect(secret).toBeVisible();
 
+  // Supervisor serves the schema as a list of field descriptors, not as the
+  // `name: validator` mapping config.yaml declares. Reading that list as a
+  // mapping labelled every field by its array index and printed the raw
+  // descriptor underneath it as help text.
+  await expect(form(page)).not.toContainText('{"name":');
+  await expect(form(page).locator("label.field .name").first()).not.toHaveText("0");
+
   // The raw file editor must not be offered in this mode.
   await expect(page.locator('button:text("+ Add section")')).toHaveCount(0);
 });

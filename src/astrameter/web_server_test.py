@@ -71,12 +71,20 @@ class _FakeSupervisor:
 
     def __init__(self, info):
         self._info = info
+        self.written = None
+        self.restarts = 0
 
     def available(self):
         return True
 
     async def get_info(self):
         return self._info
+
+    async def set_options(self, options):
+        self.written = options
+
+    async def restart(self):
+        self.restarts += 1
 
 
 async def _addon_options(monkeypatch, tmp_path, info):
@@ -92,23 +100,78 @@ async def _addon_options(monkeypatch, tmp_path, info):
     return await _client(registry)
 
 
+#: What Supervisor puts on the wire: the `name: validator` mapping an add-on
+#: declares is rendered into a list of field descriptors before it is served.
+SUPERVISOR_SCHEMA = [
+    {"name": "ct_mac", "optional": True, "type": "string"},
+    {
+        "name": "grid_predict_trust",
+        "lengthMin": 0,
+        "lengthMax": 1,
+        "optional": True,
+        "type": "float",
+    },
+]
+
+
+async def test_supervisors_own_schema_shape_is_served_and_not_flagged(
+    monkeypatch, tmp_path, caplog
+):
+    """A list of field descriptors is what a real Home Assistant sends, so it
+    is the normal case — warning about it would cry wolf on every install."""
+    client = await _addon_options(
+        monkeypatch,
+        tmp_path,
+        {"options": {"ct_mac": "AABB"}, "schema": SUPERVISOR_SCHEMA},
+    )
+    with caplog.at_level("WARNING"):
+        response = await client.get("/api/addon/options")
+    assert response.status == 200
+    assert (await response.json())["schema"] == SUPERVISOR_SCHEMA
+    assert caplog.text == ""
+    await client.close()
+
+
+async def test_saving_validates_against_supervisors_schema_shape(monkeypatch, tmp_path):
+    """The unknown-key check used to feed the schema straight to `set()`,
+    which a list of descriptors cannot go through — so every save against a
+    real Supervisor died with a 500 before it reached the write."""
+    client = await _addon_options(
+        monkeypatch, tmp_path, {"options": {}, "schema": SUPERVISOR_SCHEMA}
+    )
+    response = await client.post(
+        "/api/addon/options", json={"options": {"grid_predict_trust": 0.5}}
+    )
+    assert response.status == 200, await response.text()
+    assert (await response.json())["saved"] is True
+
+    refused = await client.post("/api/addon/options", json={"options": {"nope": 1}})
+    assert refused.status == 400
+    assert "nope" in (await refused.json())["error"]
+    await client.close()
+
+
 async def test_an_unrenderable_option_is_named_in_the_log(
     monkeypatch, tmp_path, caplog
 ):
     """The guided form shows such an option read-only, which on its own is a
     greyed-out box with no explanation anywhere an operator looks."""
+    repeated = {"name": "extra_hosts", "multiple": True, "type": "string"}
     client = await _addon_options(
         monkeypatch,
         tmp_path,
-        {"options": {"a": 1}, "schema": {"a": "int?", "extra_hosts": ["str"]}},
+        {
+            "options": {"ct_mac": "AABB"},
+            "schema": [SUPERVISOR_SCHEMA[0], repeated],
+        },
     )
     with caplog.at_level("WARNING"):
         response = await client.get("/api/addon/options")
     assert response.status == 200
     # The schema still reaches the browser; the log is an addition, not a filter.
-    assert (await response.json())["schema"]["extra_hosts"] == ["str"]
-    assert "extra_hosts (list)" in caplog.text
-    assert "a (" not in caplog.text, "a normal option is not reported"
+    assert repeated in (await response.json())["schema"]
+    assert "extra_hosts (repeated string)" in caplog.text
+    assert "ct_mac (" not in caplog.text, "a normal option is not reported"
 
     # Said once: the route is hit on every visit to the Configuration tab.
     caplog.clear()
@@ -118,17 +181,36 @@ async def test_an_unrenderable_option_is_named_in_the_log(
     await client.close()
 
 
-async def test_a_schema_that_is_not_an_object_survives_to_be_diagnosed(
+async def test_the_add_ons_own_declared_schema_is_still_understood(
+    monkeypatch, tmp_path, caplog
+):
+    """config.yaml's mapping form, in case a Supervisor ever serves it raw."""
+    client = await _addon_options(
+        monkeypatch,
+        tmp_path,
+        {"options": {"a": 1}, "schema": {"a": "int?", "extra_hosts": ["str"]}},
+    )
+    with caplog.at_level("WARNING"):
+        response = await client.get("/api/addon/options")
+    assert (await response.json())["schema"]["extra_hosts"] == ["str"]
+    assert "extra_hosts (list)" in caplog.text
+    assert "a (" not in caplog.text
+    await client.close()
+
+
+async def test_a_schema_that_is_neither_shape_survives_to_be_diagnosed(
     monkeypatch, tmp_path, caplog
 ):
     """`or {}` would turn this into an empty object before anything looked at
     it — flattening precisely the malformed shape worth reporting, and hiding
     from the browser what Supervisor actually sent."""
-    client = await _addon_options(monkeypatch, tmp_path, {"options": {}, "schema": []})
+    client = await _addon_options(
+        monkeypatch, tmp_path, {"options": {}, "schema": "str"}
+    )
     with caplog.at_level("WARNING"):
         response = await client.get("/api/addon/options")
-    assert (await response.json())["schema"] == []
-    assert "as list, not an object" in caplog.text
+    assert (await response.json())["schema"] == "str"
+    assert "as str, which is neither" in caplog.text
     await client.close()
 
 
