@@ -357,6 +357,78 @@ async def test_unit_change_via_attribute_diff():
     assert await pm.get_powermeter_watts() == [200.0]
 
 
+async def test_reconnect_snapshot_without_unit_resets_to_watts():
+    """A unit learned before a reconnect must not survive a fresh snapshot
+    that no longer declares one (e.g. the entity was reconfigured):
+    ``_reset_for_reconnect`` keeps ``_entity_units``, so the complete
+    post-reconnect snapshot must replace — here clear — the stale kW scale.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "0.5",
+                "attributes": {"unit_of_measurement": "kW"},
+            }
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [500.0]
+
+    pm._reset_for_reconnect()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "500",
+                "attributes": {},
+            }
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [500.0]
+
+
+async def test_full_snapshot_without_unit_clears_cached_unit():
+    """A complete attributes payload that omits unit_of_measurement clears
+    the recorded unit (back to the watts default) — unlike a partial ``+``
+    diff, which leaves it untouched.
+    """
+    pm = _create_powermeter()
+    await _simulate_auth_and_states(
+        pm,
+        [
+            {
+                "entity_id": "sensor.current_power",
+                "state": "0.5",
+                "attributes": {"unit_of_measurement": "kW"},
+            }
+        ],
+    )
+    assert await pm.get_powermeter_watts() == [500.0]
+
+    # Same connection: a fresh full snapshot (event.a) without the unit key.
+    ws = AsyncMock()
+    await pm._handle_message(
+        ws,
+        json.dumps(
+            {
+                "type": "event",
+                "event": {
+                    "a": {
+                        "sensor.current_power": {
+                            "s": "300",
+                            "a": {"friendly_name": "Grid"},
+                        }
+                    }
+                },
+            }
+        ),
+    )
+    assert await pm.get_powermeter_watts() == [300.0]
+
+
 async def test_power_calculate_mode_converts_per_entity():
     """Mixed units in calculate mode: each alias converts independently."""
     pm = _create_powermeter(

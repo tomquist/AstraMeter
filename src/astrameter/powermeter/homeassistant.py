@@ -212,7 +212,7 @@ class HomeAssistant(Powermeter):
                 if _HA_A in plus:
                     # Partial attribute diff — only touches the recorded
                     # unit when unit_of_measurement itself changed.
-                    self._update_entity_unit(eid, plus.get(_HA_A))
+                    self._update_entity_unit(eid, plus.get(_HA_A), partial=True)
                 if _HA_S in plus:
                     self._update_entity_value(eid, plus.get(_HA_S))
                 elif (_HA_LU in plus or _HA_LC in plus) and self._entity_values.get(
@@ -330,17 +330,28 @@ class HomeAssistant(Powermeter):
         self._check_entities_ready()
         self._message_event.set()
 
-    def _update_entity_unit(self, entity_id: str, attributes: object) -> None:
-        """Record the entity's ``unit_of_measurement`` from an attributes dict
-        (full attributes from a snapshot/REST fetch, or a partial ``+`` diff —
-        a diff without the key leaves the recorded unit untouched).
+    def _update_entity_unit(
+        self, entity_id: str, attributes: object, *, partial: bool = False
+    ) -> None:
+        """Record the entity's ``unit_of_measurement`` from an attributes dict.
+
+        ``partial=True`` marks a ``+`` attribute diff: it only touches the
+        recorded unit when the key itself is present. A full attributes
+        payload (snapshot / REST fetch) *replaces* the recorded unit —
+        including clearing it back to the watts default when the entity no
+        longer declares one, so a stale unit can't survive a reconnect or
+        an entity reconfiguration.
         """
-        if not isinstance(attributes, dict) or (
-            _ATTR_UNIT_OF_MEASUREMENT not in attributes
-            and entity_id in self._entity_units
+        if partial and (
+            not isinstance(attributes, dict)
+            or _ATTR_UNIT_OF_MEASUREMENT not in attributes
         ):
             return
-        unit = attributes.get(_ATTR_UNIT_OF_MEASUREMENT)
+        unit = (
+            attributes.get(_ATTR_UNIT_OF_MEASUREMENT)
+            if isinstance(attributes, dict)
+            else None
+        )
         if not isinstance(unit, str) or not unit:
             unit = None
         if entity_id in self._entity_units and self._entity_units[entity_id] == unit:
