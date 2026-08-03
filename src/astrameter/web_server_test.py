@@ -66,31 +66,85 @@ async def test_direct_access_is_refused_by_default_under_the_addon(tmp_path, pat
     await client.close()
 
 
-def test_an_unrenderable_schema_is_named_in_the_log(tmp_path, caplog):
+class _FakeSupervisor:
+    """Stands in for SupervisorClient, answering one canned /addons/self/info."""
+
+    def __init__(self, info):
+        self._info = info
+
+    def available(self):
+        return True
+
+    async def get_info(self):
+        return self._info
+
+
+async def _addon_options(monkeypatch, tmp_path, info):
+    """Drive the real route with a canned Supervisor response."""
+    import astrameter.addon_client as addon_client
+
+    monkeypatch.setattr(
+        addon_client, "SupervisorClient", lambda *a, **k: _FakeSupervisor(info)
+    )
+    registry = _registry(
+        tmp_path, allow_write=True, direct_access=True, config_mode="ha_simple"
+    )
+    return await _client(registry)
+
+
+async def test_an_unrenderable_option_is_named_in_the_log(
+    monkeypatch, tmp_path, caplog
+):
     """The guided form shows such an option read-only, which on its own is a
     greyed-out box with no explanation anywhere an operator looks."""
-    server = WebServer(config_path=None, status=_registry(tmp_path))
-
+    client = await _addon_options(
+        monkeypatch,
+        tmp_path,
+        {"options": {"a": 1}, "schema": {"a": "int?", "extra_hosts": ["str"]}},
+    )
     with caplog.at_level("WARNING"):
-        server._log_unrenderable_schema({"a": "str?", "extra_hosts": ["str"]})
+        response = await client.get("/api/addon/options")
+    assert response.status == 200
+    # The schema still reaches the browser; the log is an addition, not a filter.
+    assert (await response.json())["schema"]["extra_hosts"] == ["str"]
     assert "extra_hosts (list)" in caplog.text
     assert "a (" not in caplog.text, "a normal option is not reported"
 
     # Said once: the route is hit on every visit to the Configuration tab.
     caplog.clear()
     with caplog.at_level("WARNING"):
-        server._log_unrenderable_schema({"extra_hosts": ["str"]})
+        await client.get("/api/addon/options")
     assert caplog.text == ""
+    await client.close()
 
 
-def test_a_schema_that_is_not_an_object_is_reported_by_type(tmp_path, caplog):
-    """If Supervisor ever answers with a list of field descriptors instead of
-    a mapping, the form can build nothing at all — and the log has to say so
-    rather than leaving an empty page to explain itself."""
-    server = WebServer(config_path=None, status=_registry(tmp_path))
+async def test_a_schema_that_is_not_an_object_survives_to_be_diagnosed(
+    monkeypatch, tmp_path, caplog
+):
+    """`or {}` would turn this into an empty object before anything looked at
+    it — flattening precisely the malformed shape worth reporting, and hiding
+    from the browser what Supervisor actually sent."""
+    client = await _addon_options(monkeypatch, tmp_path, {"options": {}, "schema": []})
     with caplog.at_level("WARNING"):
-        server._log_unrenderable_schema([{"name": "power_input_alias"}])
+        response = await client.get("/api/addon/options")
+    assert (await response.json())["schema"] == []
     assert "as list, not an object" in caplog.text
+    await client.close()
+
+
+async def test_a_null_schema_is_not_reported_as_malformed(
+    monkeypatch, tmp_path, caplog
+):
+    """Supervisor documents `schema: null` for an add-on that declares none.
+    The form says so on its own; a warning would be crying wolf."""
+    client = await _addon_options(
+        monkeypatch, tmp_path, {"options": {}, "schema": None}
+    )
+    with caplog.at_level("WARNING"):
+        response = await client.get("/api/addon/options")
+    assert (await response.json())["schema"] == {}
+    assert caplog.text == ""
+    await client.close()
 
 
 async def test_a_refused_page_explains_itself_in_prose(tmp_path):

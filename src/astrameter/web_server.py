@@ -466,12 +466,15 @@ class WebServer:
         except Exception as exc:
             return _json({"error": str(exc)}, status=502)
         options = dict(info.get("options") or {})
-        schema = info.get("schema") or {}
+        # Not `or {}`: that flattens exactly the malformed shapes worth
+        # reporting — `[]` would arrive here as an object and the diagnostic
+        # would say nothing. `None` is Supervisor's documented "no schema".
+        schema = info.get("schema")
         self._log_unrenderable_schema(schema)
         return _json(
             {
                 "options": redact_sections({"o": options})["o"],
-                "schema": schema,
+                "schema": {} if schema is None else schema,
                 "slug": info.get("slug"),
                 "ingress_panel": info.get("ingress_panel"),
             }
@@ -487,7 +490,9 @@ class WebServer:
         and the route is hit on every visit to the tab.  Types and option
         names only, never a value.
         """
-        if self._logged_schema_shape:
+        # `null` is documented and means the add-on declares no schema; the
+        # form says so on its own and there is nothing wrong to report.
+        if self._logged_schema_shape or schema is None:
             return
         if not isinstance(schema, dict):
             self._logged_schema_shape = True
