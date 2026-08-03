@@ -662,7 +662,7 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
       ? h(
           "span",
           { class: "help warn-text" },
-          `${match.name} reports ${match.unit || "no power unit"}, which is not a ` +
+          `${match.name || match.entity_id} reports ${match.unit || "no power unit"}, which is not a ` +
             "power unit — AstraMeter cannot read it. Fix the sensor's unit, or " +
             "pick another entity.",
         )
@@ -670,7 +670,7 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
         ? h(
             "span",
             { class: "help" },
-            `${match.name}${match.state != null ? ` — currently ${match.state} ${match.unit || ""}`.trimEnd() : ""}`,
+            `${match.name || match.entity_id}${match.state != null ? ` — currently ${match.state} ${match.unit || ""}`.trimEnd() : ""}`,
           )
         : unknown
           ? h("span", { class: "help warn-text" }, "Not found in Home Assistant right now.")
