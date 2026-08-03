@@ -65,6 +65,11 @@ export function recordSnapshot(
     }
   }
   for (const meter of snapshot.powermeters || []) {
+    // A failed read leaves the previous value in place, so recording it would
+    // draw a flat line across a moment nothing was measured — the same reason
+    // an unchanged revision is not re-recorded above. gridTotal skips these
+    // for the same reason; the two must agree on what counts as a reading.
+    if (meter.last_read_ok === false) continue;
     push(history, meterSeries(meter.name), meter.last_total_w);
   }
 }

@@ -745,6 +745,32 @@ lacks(pickerHtml, "+ Add section", "the INI editor is hidden in guided mode");
   ok(seriesOf(hist, meterSeries("M")).length === 0, "nor is a missing reading");
 }
 
+// A failed read leaves the last value in place; charting it would draw a flat
+// line across a moment nothing was measured. gridTotal already skips these, so
+// recording them would also put the trend at odds with the headline.
+{
+  const hist: SeriesHistory = {};
+  recordSnapshot(hist, {
+    ...snapshot,
+    devices: [],
+    powermeters: [{ name: "M", last_read_ok: false, last_total_w: 240 }],
+  });
+  ok(seriesOf(hist, meterSeries("M")).length === 0, "a failed read is not a sample");
+  recordSnapshot(hist, {
+    ...snapshot,
+    devices: [],
+    powermeters: [{ name: "M", last_read_ok: true, last_total_w: 240 }],
+  });
+  ok(seriesOf(hist, meterSeries("M")).length === 1, "a good one still is");
+  // Unknown is not failed: a pull meter reports neither until it is read.
+  recordSnapshot(hist, {
+    ...snapshot,
+    devices: [],
+    powermeters: [{ name: "M", last_total_w: 250 }],
+  });
+  ok(seriesOf(hist, meterSeries("M")).length === 2, "an unstated outcome counts");
+}
+
 ok(sparkGeometry([1, 2], 100, 26) === null, "two points are not a trend");
 ok(sparkGeometry([], 100, 26) === null, "and neither is nothing");
 {
