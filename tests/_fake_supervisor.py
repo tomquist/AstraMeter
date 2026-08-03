@@ -424,6 +424,12 @@ def main() -> None:
     # guided form is rendered from the options Home Assistant would show.
     state.schema = _yaml_block("schema")
     state.options = _yaml_block("options")
+    # Supervisor describes a repeated option as a list, not a validator
+    # string. The add-on has none today, so the only way the guided form ever
+    # meets that shape is here — and it used to throw inside render and freeze
+    # the whole page on "Loading add-on options...".
+    state.schema["extra_hosts"] = ["str"]
+    state.options["extra_hosts"] = ["alpha", "beta"]
     if state.options_path is not None and state.options_path.exists():
         state.options.update(json.loads(state.options_path.read_text()))
     state.store_options(state.options)

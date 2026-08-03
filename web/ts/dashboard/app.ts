@@ -304,9 +304,35 @@ function schedule(): void {
 
 function render(): void {
   root.dataset.conn = state.connection;
-  patch(root, view(state, actions, config));
+  try {
+    patch(root, view(state, actions, config));
+  } catch (err) {
+    // A render that throws used to take the whole page with it: every later
+    // poll died at the same place, so the last painted frame froze on screen
+    // — including tabs that had nothing to do with the fault. One bad value
+    // from Supervisor or a device must not cost the user their dashboard.
+    renderFailure(err);
+    return;
+  }
   const title = pageTitle(state.snapshot);
   if (document.title !== title) document.title = title;
+}
+
+/** Last resort: hand-built DOM, so a bug in the view cannot recurse here. */
+function renderFailure(err: unknown): void {
+  console.error("dashboard render failed", err);
+  root.textContent = "";
+  const box = document.createElement("section");
+  box.className = "card";
+  const title = document.createElement("strong");
+  title.textContent = "The dashboard could not draw this state";
+  const detail = document.createElement("p");
+  detail.className = "hint";
+  detail.textContent =
+    `${err instanceof Error ? err.message : String(err)} — reload to retry. ` +
+    "Please report this with the message above.";
+  box.append(title, detail);
+  root.append(box);
 }
 
 function routeFromHash(): Tab {

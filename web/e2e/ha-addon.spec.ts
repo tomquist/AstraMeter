@@ -76,6 +76,25 @@ test("renders the guided form from the add-on's own schema", async ({ page }) =>
   await expect(page.locator('button:text("+ Add section")')).toHaveCount(0);
 });
 
+test("an option type the form cannot edit does not break it", async ({ page }) => {
+  // Supervisor sends a repeated option as a list. Parsing it as a validator
+  // string threw inside render, which froze the page on its loading state —
+  // and took every other tab's repaint with it.
+  await page.goto(`${BASE_URL}#/config`);
+  await expect(form(page)).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("Loading add-on options");
+
+  const field = page.locator("label.field", { hasText: "Extra Hosts" });
+  await expect(field).toContainText("Configuration page");
+  await expect(field.locator("input")).toBeDisabled();
+
+  // Saving must round-trip it untouched rather than flattening it to a string.
+  await page.getByLabel("Grid prediction trust").fill("0.55");
+  await page.locator('button:text("Save only")').click();
+  await expect(page.locator(".banner")).toContainText("Saved");
+  expect(readAddonOptions(stack).extra_hosts).toEqual(["alpha", "beta"]);
+});
+
 test("saving writes the options back through the Supervisor", async ({ page }) => {
   await page.goto(`${BASE_URL}#/config`);
   await expect(form(page)).toBeVisible();

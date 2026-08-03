@@ -14,6 +14,12 @@ export interface OptionSpec {
   max?: number;
   options?: string[];
   optional: boolean;
+  /**
+   * The spec was not a validator string — Supervisor describes a repeated or
+   * nested option as a list or an object. Shown, never edited: a text box
+   * over one of those would write back a string and flatten the real value.
+   */
+  unsupported?: string;
 }
 
 /**
@@ -22,8 +28,22 @@ export interface OptionSpec {
  * Grammar: `type[(min,max)|(a|b|c)][?]`, e.g. `float(0,1)?`,
  * `list(critical|error|info)`, `int(0,)?`, `password?`.
  * An unknown type falls back to a text input rather than dropping the field.
+ *
+ * Takes `unknown` because the schema is Supervisor's, not ours: an option
+ * declared as a list or a nested block arrives as an array or an object, and
+ * assuming a string there threw inside render — which killed not just this
+ * field but every later repaint of the whole page.
  */
-export function parseAddonSchema(spec: string): OptionSpec {
+export function parseAddonSchema(spec: unknown): OptionSpec {
+  if (spec != null && typeof spec !== "string") {
+    let shown: string;
+    try {
+      shown = JSON.stringify(spec) ?? String(spec);
+    } catch {
+      shown = String(spec);
+    }
+    return { type: "unsupported", optional: true, unsupported: shown };
+  }
   const raw = (spec || "str").trim();
   const optional = raw.endsWith("?");
   const body = optional ? raw.slice(0, -1) : raw;

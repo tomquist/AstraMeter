@@ -30,7 +30,10 @@ export interface ConfigState {
   loadedMode: string | null;
   /** Add-on options, as edited. */
   options: Record<string, unknown>;
-  schema: Record<string, string>;
+  /** Supervisor's own schema. Values are validator strings for the options
+   *  this form can edit, but a repeated or nested option arrives as a list
+   *  or an object — so this is deliberately not typed as a string map. */
+  schema: Record<string, unknown>;
   /** config.ini as a structured document, as edited. */
   sections: Record<string, Record<string, string>>;
   order: string[];
@@ -259,7 +262,7 @@ function guidedForm(config: ConfigState, actions: ConfigActions): VNode {
 
 function optionField(
   key: string,
-  rawSpec: string,
+  rawSpec: unknown,
   value: unknown,
   config: ConfigState,
   actions: ConfigActions,
@@ -267,6 +270,29 @@ function optionField(
   const spec = parseAddonSchema(rawSpec);
   const meta = OPTION_META[key];
   const label = meta?.label ?? titleCase(key);
+
+  // A repeated or nested option. Editing it here would write a string back
+  // over a list, so it is shown and left to the add-on's own Configuration
+  // page — which does understand the shape.
+  if (spec.unsupported) {
+    return h(
+      "label",
+      { class: "field" },
+      h("span", { class: "name" }, label),
+      h("input", {
+        type: "text",
+        value: value == null ? "" : JSON.stringify(value),
+        readonly: true,
+        disabled: true,
+      }),
+      h(
+        "span",
+        { class: "help" },
+        `Type ${spec.unsupported} — edit this one on the add-on's ` +
+          "Configuration page.",
+      ),
+    );
+  }
 
   if (meta?.entity) return entityField(key, label, value, meta.help, config, actions);
 

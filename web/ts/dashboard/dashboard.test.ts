@@ -338,6 +338,41 @@ ok(parseAddonSchema("password?").type === "password", "password? parses");
 ok(parseAddonSchema("int(0,)?").min === 0, "int(0,) parses an open upper bound");
 ok(parseAddonSchema("").type === "str", "an empty spec falls back to text");
 ok(parseAddonSchema("weird_type").type === "weird_type", "unknown types survive");
+// The schema is Supervisor's, not ours: a repeated option arrives as a list
+// and a nested one as an object. Assuming a string here threw inside render,
+// which froze the whole page — not just the field — on "Loading add-on
+// options…" forever.
+for (const spec of [["str"], { inner: "str" }, 5, true] as unknown[]) {
+  const parsed = parseAddonSchema(spec);
+  ok(parsed.type === "unsupported", `a ${typeof spec} spec does not throw`);
+  ok(Boolean(parsed.unsupported), "and it carries the raw shape for the UI");
+}
+ok(parseAddonSchema(null).type === "str", "an absent spec still falls back to text");
+ok(parseAddonSchema(undefined).type === "str", "so does an undefined one");
+
+// The field renders, read-only: a text box over a list would write a string
+// back and flatten the real value on save.
+{
+  const state: AppState = {
+    ...initialState(),
+    snapshot: {
+      schema_version: 1,
+      generated_at: "2026-08-01T12:00:00+00:00",
+      capabilities: { config_mode: "ha_simple", ha_options: true, controls: true },
+    },
+    connection: "live",
+    tab: "config",
+  };
+  const cfg = initialConfigState();
+  cfg.loadedMode = "ha_simple";
+  cfg.options = { power_input_alias: "sensor.grid", extra_hosts: ["a", "b"] };
+  cfg.schema = { power_input_alias: "str", extra_hosts: ["str"] };
+  const html = renderToString(h("div", null, ...view(state, actions, cfg)));
+  has(html, "Extra Hosts", "the unsupported option is still shown");
+  has(html, "disabled", "but not editable here");
+  has(html, "Configuration page", "and it says where to edit it");
+  lacks(html, "undefined", "no undefined leaks into the guided form");
+}
 
 // ── config.ini editor: typed controls from the backend's key metadata ──
 const KEY_TYPES = {
