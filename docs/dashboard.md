@@ -98,6 +98,12 @@ too. Type to filter. You can still enter an entity id by hand, and if the config
 is not currently known to Home Assistant the field says so instead of letting
 you find out at the next restart.
 
+Both take **one sensor per phase**: a single sensor for a whole-house total, or
+up to three for a three-phase meter. An empty picker for the next phase is
+offered until you have three, and each phase can be removed again. If you use
+separate import and export sensors, give both the same number of phases — they
+are paired up, and a mismatch stops AstraMeter from starting.
+
 ### Config file
 
 With a custom `config.ini` — or in Docker — the tab shows a structured editor

@@ -13,7 +13,7 @@
 
 import { h, type VChild, type VNode } from "./vdom.js";
 import type { AppState } from "./model.js";
-import { OPTION_META, type OptionSpec } from "./option-meta.js";
+import { OPTION_META, type OptionMeta, type OptionSpec } from "./option-meta.js";
 import type { HaEntity } from "./transport.js";
 
 /** Type metadata for one INI key, from GET /api/key-types. */
@@ -299,7 +299,7 @@ function optionField(
     );
   }
 
-  if (meta?.entity) return entityField(key, label, value, meta.help, config, actions);
+  if (meta?.entity) return entityField(key, label, value, meta, config, actions);
 
   if (spec.type === "bool") {
     return h(
@@ -345,48 +345,82 @@ function optionField(
 }
 
 /**
- * A Home Assistant entity picker: a searchable combobox listing only sensors
- * that could plausibly carry grid power.
+ * How many sensors one of these options holds: one per phase.
+ *
+ * The option is a comma-separated list — one entity for a whole-house total,
+ * or one per phase for a three-phase meter (`config/addon.py::_entities`).
+ */
+const MAX_PHASES = 3;
+
+/**
+ * The entity ids in a stored option, by position.
+ *
+ * Blanks in the middle are kept: they are a row the user has just cleared,
+ * and dropping one here would slide every later phase up under their cursor.
+ * A trailing blank is dropped — that is only ever the empty row this control
+ * offers for the next phase.
+ */
+export function entityList(value: unknown): string[] {
+  const parts = String(value ?? "")
+    .split(",")
+    .map((part) => part.trim());
+  while (parts.length && !parts[parts.length - 1]) parts.pop();
+  return parts;
+}
+
+/**
+ * A Home Assistant entity picker: searchable comboboxes listing only sensors
+ * that could plausibly carry grid power, one per phase.
  *
  * A native `<input list=…>` rather than a custom dropdown: the browser gives
  * substring search, keyboard navigation and mobile behaviour for free, and a
  * hand-typed id still works — which matters because the list is best-effort
  * and an entity can be missing when Home Assistant is still starting.
+ *
+ * One row per configured sensor, plus an empty one while under the cap — so a
+ * three-phase meter can be entered here at all, and so the fact that it takes
+ * more than one sensor is visible rather than hidden in a comma-separated
+ * string a picker would overwrite on the next selection.
  */
 function entityField(
   key: string,
   label: string,
   value: unknown,
-  help: string | undefined,
+  meta: OptionMeta,
   config: ConfigState,
   actions: ConfigActions,
 ): VNode {
-  const current = value == null ? "" : String(value);
+  const entities = entityList(value);
+  const rows = entities.length < MAX_PHASES ? [...entities, ""] : entities;
+  const perPhase = entities.length > 1;
   const listId = `ha-entities-${key}`;
-  const match = config.entities.find((e) => e.entity_id === current);
-  // Say when a configured entity is not in the list: a typo here is the
-  // single easiest way to misconfigure AstraMeter, and it otherwise only
-  // surfaces as a start-up failure much later.
-  const unknown = current && config.entitiesLoaded && !match;
+
+  // Positions are held while typing (see entityList) and compacted on blur,
+  // so clearing a row cannot pull the next phase up mid-edit.
+  const write = (index: number, next: string, compact: boolean) => {
+    const merged = rows.map((entity, i) => (i === index ? next.trim() : entity));
+    actions.editOption(
+      key,
+      (compact ? merged.filter(Boolean) : merged).join(", ").trimEnd(),
+    );
+  };
 
   return h(
-    "label",
-    { class: "field" },
+    "div",
+    { class: "field entity-field" },
     h("span", { class: "name" }, label),
-    h("input", {
-      type: "text",
-      class: unknown ? "warn-input" : false,
-      value: current,
-      list: listId,
-      spellcheck: "false",
-      autocomplete: "off",
-      placeholder: config.entitiesLoaded
-        ? "Search sensors — type to filter"
-        : "sensor.your_grid_power",
-      "aria-label": label,
-      oninput: (e: Event) =>
-        actions.editOption(key, (e.target as HTMLInputElement).value),
-    }),
+    ...rows.map((entity, index) =>
+      entityRow(entity, index, {
+        key,
+        label,
+        listId,
+        perPhase,
+        rows,
+        config,
+        write,
+        actions,
+      }),
+    ),
     h(
       "datalist",
       { id: listId },
@@ -402,6 +436,100 @@ function entityField(
         ),
       ),
     ),
+    phaseMismatch(entities, meta, config),
+    meta.help ? h("span", { class: "help" }, meta.help) : null,
+    config.entitiesLoaded && config.entities.length === 0
+      ? h("span", { class: "help" }, "No power sensors found — type an entity id.")
+      : null,
+  );
+}
+
+/**
+ * Warn when two paired entity options hold a different number of phases.
+ *
+ * Import and export are zipped per phase, so a mismatch is rejected at
+ * start-up — which is a crash on the next restart rather than a message on
+ * the page that caused it. Only ever a warning: the other option may simply
+ * not be filled in yet.
+ */
+function phaseMismatch(
+  entities: string[],
+  meta: OptionMeta,
+  config: ConfigState,
+): VChild {
+  if (!meta.entityPeer || !entities.length) return null;
+  const peer = entityList(config.options[meta.entityPeer]);
+  if (!peer.length || peer.length === entities.length) return null;
+  const peerLabel = OPTION_META[meta.entityPeer]?.label ?? meta.entityPeer;
+  return h(
+    "span",
+    { class: "help warn-text" },
+    `${entities.length} sensor${entities.length === 1 ? "" : "s"} here against ` +
+      `${peer.length} for ${peerLabel} — they are paired per phase, so the ` +
+      "counts have to match.",
+  );
+}
+
+interface RowContext {
+  key: string;
+  label: string;
+  listId: string;
+  perPhase: boolean;
+  rows: string[];
+  config: ConfigState;
+  write(index: number, next: string, compact: boolean): void;
+  actions: ConfigActions;
+}
+
+/** One phase's combobox, with what it currently resolves to underneath. */
+function entityRow(entity: string, index: number, ctx: RowContext): VNode {
+  const { config } = ctx;
+  const match = config.entities.find((e) => e.entity_id === entity);
+  // Say when a configured entity is not in the list: a typo here is the
+  // single easiest way to misconfigure AstraMeter, and it otherwise only
+  // surfaces as a start-up failure much later.
+  const unknown = entity && config.entitiesLoaded && !match;
+  // Named per phase only once there is more than one, so a single whole-house
+  // sensor is not mislabelled as a phase of something.
+  const name =
+    ctx.perPhase || index > 0 ? `${ctx.label} phase ${index + 1}` : ctx.label;
+  const removable = ctx.rows.filter(Boolean).length > 1 && Boolean(entity);
+
+  return h(
+    "div",
+    { class: "entity-row" },
+    h("input", {
+      type: "text",
+      class: unknown ? "warn-input" : false,
+      value: entity,
+      list: ctx.listId,
+      spellcheck: "false",
+      autocomplete: "off",
+      placeholder: index > 0
+        ? `Another sensor for phase ${index + 1} — optional`
+        : config.entitiesLoaded
+          ? "Search sensors — type to filter"
+          : "sensor.your_grid_power",
+      "aria-label": name,
+      oninput: (e: Event) => ctx.write(index, (e.target as HTMLInputElement).value, false),
+      // Blur is the safe moment to close a gap: the input the user is in is
+      // never rewritten by a repaint (see UNCONTROLLED in vdom.ts), so
+      // compacting while it has focus would leave the DOM and the value
+      // disagreeing about which row holds what.
+      onchange: (e: Event) => ctx.write(index, (e.target as HTMLInputElement).value, true),
+    }),
+    removable
+      ? h(
+          "button",
+          {
+            class: "btn sm iconbtn",
+            title: `Remove ${name}`,
+            "aria-label": `Remove ${name}`,
+            onclick: () => ctx.write(index, "", true),
+          },
+          "✕",
+        )
+      : null,
     match
       ? h(
           "span",
@@ -410,12 +538,7 @@ function entityField(
         )
       : unknown
         ? h("span", { class: "help warn-text" }, "Not found in Home Assistant right now.")
-        : help
-          ? h("span", { class: "help" }, help)
-          : null,
-    config.entitiesLoaded && config.entities.length === 0
-      ? h("span", { class: "help" }, "No power sensors found — type an entity id.")
-      : null,
+        : null,
   );
 }
 

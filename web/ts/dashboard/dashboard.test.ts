@@ -31,7 +31,7 @@ import {
 } from "./model.js";
 import { normalizeAddonSchema, parseAddonSchema } from "./option-meta.js";
 import { view } from "./view.js";
-import { initialConfigState, knownKeys, specFor } from "./config-view.js";
+import { entityList, initialConfigState, knownKeys, specFor } from "./config-view.js";
 import type { StatusSnapshot } from "./types.js";
 import { readFileSync } from "node:fs";
 
@@ -555,6 +555,67 @@ const noEntities = { ...withEntities, entities: [] };
 const noneHtml = renderToString(h("div", null, ...view(haState, actions, noEntities)));
 has(noneHtml, "No power sensors found", "an empty list explains itself");
 has(noneHtml, 'aria-label="Grid power sensor"', "the field is still usable");
+
+// ── one sensor per phase ──
+// The option is a comma-separated list: one entity for a whole-house total,
+// or one per phase. Rendered as a single box, a three-phase value showed as
+// one unreadable string that the picker overwrote on the next selection.
+ok(
+  entityList("sensor.l1, sensor.l2 ,sensor.l3").join("|") ===
+    "sensor.l1|sensor.l2|sensor.l3",
+  "a per-phase option parses into one entity per phase",
+);
+ok(entityList("").length === 0, "an unset option holds nothing");
+ok(entityList("sensor.a, ").length === 1, "the empty row this control adds is not a phase");
+// A cleared middle row keeps its place until the edit ends — compacting it
+// mid-edit would slide the next phase up under the user's cursor.
+ok(entityList("sensor.a, , sensor.c").length === 3, "a cleared row holds its position");
+
+const threePhase = {
+  ...withEntities,
+  schema: normalizeAddonSchema([
+    { name: "power_input_alias", required: true, type: "string" },
+    { name: "power_output_alias", optional: true, type: "string" },
+  ]),
+  options: { power_input_alias: "sensor.current_power_in, sensor.p1_meter" },
+};
+const phaseHtml = renderToString(h("div", null, ...view(haState, actions, threePhase)));
+has(phaseHtml, 'value="sensor.current_power_in"', "phase 1 gets its own box");
+has(phaseHtml, 'aria-label="Grid power sensor phase 2"', "and phase 2 is named as one");
+has(phaseHtml, 'aria-label="Grid power sensor phase 3"', "with an empty box for the third");
+has(phaseHtml, "Grid power — currently 412.8 W", "each row resolves on its own");
+has(phaseHtml, "P1 meter — currently 1.24 kW", "including the second phase");
+has(phaseHtml, "Remove Grid power sensor phase 1", "a phase can be taken back out");
+
+// Three sensors is the cap — a fourth box would only invite a bad value.
+const full = {
+  ...threePhase,
+  options: { power_input_alias: "sensor.a, sensor.b, sensor.c" },
+};
+const fullHtml = renderToString(h("div", null, ...view(haState, actions, full)));
+has(fullHtml, 'aria-label="Grid power sensor phase 3"', "the third phase is editable");
+lacks(fullHtml, "phase 4", "and there is no fourth");
+
+// Import and export are zipped per phase, so a mismatch aborts start-up. Say
+// so here rather than on the next restart.
+const mismatched = {
+  ...threePhase,
+  options: {
+    power_input_alias: "sensor.a, sensor.b, sensor.c",
+    power_output_alias: "sensor.out",
+  },
+};
+const mismatchHtml = renderToString(h("div", null, ...view(haState, actions, mismatched)));
+has(mismatchHtml, "the counts have to match", "a phase-count mismatch is flagged");
+const matched = {
+  ...threePhase,
+  options: { power_input_alias: "sensor.a", power_output_alias: "sensor.out" },
+};
+const matchedHtml = renderToString(h("div", null, ...view(haState, actions, matched)));
+lacks(matchedHtml, "the counts have to match", "matching counts say nothing");
+const unpaired = { ...threePhase, options: { power_input_alias: "sensor.a, sensor.b" } };
+const unpairedHtml = renderToString(h("div", null, ...view(haState, actions, unpaired)));
+lacks(unpairedHtml, "the counts have to match", "an empty export sensor is not a mismatch");
 
 // Simple mode must never offer the raw file editor.
 lacks(pickerHtml, "+ Add section", "the INI editor is hidden in guided mode");

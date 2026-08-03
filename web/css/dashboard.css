@@ -552,18 +552,39 @@ textarea {
   outline-offset: 2px;
 }
 
-label.field {
+.field {
   display: grid;
   gap: 3px;
   font-size: 0.8rem;
 }
 
-label.field > .name {
+.field > .name {
   color: var(--text-dim);
   font-weight: 500;
 }
 
-label.field > .help {
+.field > .help {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+/* An entity option holds one sensor per phase, so it is a list of rows rather
+ * than a single box: the combobox and its remove button on one line, what the
+ * entity currently resolves to underneath. Spans the field grid because entity
+ * ids are long and there can be three of them. */
+.entity-field {
+  grid-column: 1 / -1;
+}
+
+.entity-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 8px;
+  align-items: center;
+}
+
+.entity-row > .help {
+  grid-column: 1 / -1;
   color: var(--text-faint);
   font-size: 0.72rem;
 }

@@ -151,7 +151,9 @@ test("the grid sensor is an entity picker listing only power entities", async ({
   page,
 }) => {
   await page.goto(`${BASE_URL}#/config`);
-  const input = page.getByLabel("Grid power sensor");
+  // Exact: the option takes one sensor per phase, so the field holds several
+  // comboboxes and "Grid power sensor phase 2" would match a loose label.
+  const input = page.getByLabel("Grid power sensor", { exact: true });
   await expect(input).toBeVisible();
 
   const listId = await input.getAttribute("list");
@@ -173,7 +175,7 @@ test("the grid sensor is an entity picker listing only power entities", async ({
 
   // The chosen entity resolves to something a human recognises.
   await expect(
-    page.locator("label.field", { hasText: "Grid power sensor" }),
+    page.locator(".entity-field", { hasText: "Grid power sensor" }),
   ).toContainText("Grid power — currently");
 });
 
@@ -181,13 +183,53 @@ test("an entity Home Assistant does not know is flagged in place", async ({
   page,
 }) => {
   await page.goto(`${BASE_URL}#/config`);
-  const input = page.getByLabel("Grid power sensor");
+  const input = page.getByLabel("Grid power sensor", { exact: true });
   await expect(input).toBeVisible();
   await input.fill("sensor.definitely_not_real");
   await expect(
-    page.locator("label.field", { hasText: "Grid power sensor" }),
+    page.locator(".entity-field", { hasText: "Grid power sensor" }),
   ).toContainText("Not found in Home Assistant right now.");
   await expect(input).toHaveClass(/warn-input/);
+});
+
+test("a three-phase meter can be entered one sensor per phase", async ({ page }) => {
+  // The option is a comma-separated list, one entity per phase. As a single
+  // box it could not be filled in here at all: the picker overwrote the whole
+  // string on the next selection, and the joined value read as one unknown
+  // entity.
+  await page.goto(`${BASE_URL}#/config`);
+  await expect(form(page)).toBeVisible();
+
+  // By role, not by label: each row's remove button is named after the row it
+  // removes, so a label lookup would match both.
+  const phase = (n: number) =>
+    page.getByRole("combobox", { name: `Grid power sensor phase ${n}` });
+  await expect(phase(2)).toBeVisible();
+  await phase(2).fill("sensor.p1_meter_active_power");
+
+  // Naming follows the count: with more than one, they are phases.
+  await expect(phase(1)).toHaveValue("sensor.grid_power");
+  await expect(phase(3)).toHaveValue("");
+  await expect(phase(4)).toHaveCount(0);
+
+  await page.locator('button:text("Save only")').click();
+  await expect(page.locator(".banner")).toContainText("Saved");
+  expect(readAddonOptions(stack).power_input_alias).toBe(
+    "sensor.grid_power, sensor.p1_meter_active_power",
+  );
+
+  // And back out again, leaving the whole-house sensor the rest of the run
+  // expects.
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Remove Grid power sensor phase 2" })
+    .click();
+  await expect(page.getByLabel("Grid power sensor", { exact: true })).toHaveValue(
+    "sensor.grid_power",
+  );
+  await page.locator('button:text("Save only")').click();
+  await expect(page.locator(".banner")).toContainText("Saved");
+  expect(readAddonOptions(stack).power_input_alias).toBe("sensor.grid_power");
 });
 
 test("switching to a config file materializes what is running", async ({ page }) => {

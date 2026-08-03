@@ -136,12 +136,20 @@ export function normalizeAddonSchema(raw: unknown): Record<string, OptionSpec> {
   return specs;
 }
 
-interface Meta {
+export interface OptionMeta {
   label: string;
   group: string;
   help?: string;
   /** Render as a Home Assistant entity picker rather than a text box. */
   entity?: boolean;
+  /**
+   * The entity option this one must have the same number of sensors as.
+   *
+   * With import and export on separate sensors the two lists are zipped per
+   * phase, and a length mismatch aborts start-up
+   * (`powermeter/homeassistant.py`) — long after the page that caused it.
+   */
+  entityPeer?: string;
 }
 
 const GRID = "Grid measurement";
@@ -150,18 +158,24 @@ const CONTROL = "Battery control";
 const TUNING = "Fine tuning";
 const ADVANCED = "Advanced";
 
-export const OPTION_META: Record<string, Meta> = {
+export const OPTION_META: Record<string, OptionMeta> = {
   power_input_alias: {
     label: "Grid power sensor",
     group: GRID,
-    help: "The Home Assistant entity holding your grid power in watts.",
+    help:
+      "The Home Assistant entity holding your grid power in watts. " +
+      "One sensor for a whole-house total, or one per phase for a " +
+      "three-phase meter.",
     entity: true,
   },
   power_output_alias: {
     label: "Export power sensor",
     group: GRID,
-    help: "Only if import and export are two separate sensors.",
+    help:
+      "Only if import and export are two separate sensors. Give the same " +
+      "number of sensors as the grid power above — they are paired per phase.",
     entity: true,
+    entityPeer: "power_input_alias",
   },
   power_offset: { label: "Power offset (W)", group: GRID },
   power_multiplier: { label: "Power multiplier", group: GRID },
