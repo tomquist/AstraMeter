@@ -11,6 +11,7 @@ import type {
   StatusSnapshot,
 } from "./types.js";
 import type { ConnectionState } from "./transport.js";
+import type { SeriesHistory } from "./history.js";
 
 export type Tab = "overview" | "batteries" | "sources" | "config" | "diagnostics";
 
@@ -33,6 +34,13 @@ export interface AppState {
    * under the user's finger.
    */
   pending: Record<string, unknown>;
+  /**
+   * Trailing samples per series, for the trend lines on the cards.
+   *
+   * Accumulated in the browser from the polls the page already makes — the
+   * backend keeps no history (see history.ts).
+   */
+  history: SeriesHistory;
 }
 
 export function initialState(): AppState {
@@ -46,6 +54,7 @@ export function initialState(): AppState {
     notice: null,
     busy: {},
     pending: {},
+    history: {},
   };
 }
 

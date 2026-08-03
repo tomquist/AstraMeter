@@ -59,9 +59,10 @@ test("the hero shows the house total the emulator is serving", async ({ page }) 
   // No CT device reports a grid triple here, so the total comes from the
   // power source — a dash would be wrong when a reading exists.
   await expect(page.locator(".rail-value")).toHaveText(/[−+]?\d/);
-  await expect(page.locator(".card", { hasText: "POWER SOURCE" })).toContainText(
-    "JsonHttpPowermeter",
-  );
+  // Named without the class suffix every one of them carries.
+  const source = page.locator(".card", { hasText: "POWER SOURCE" });
+  await expect(source).toContainText("JsonHttp");
+  await expect(source).not.toContainText("Powermeter");
 });
 
 test("nothing this device cannot do is offered", async ({ page }) => {

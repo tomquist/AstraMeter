@@ -34,9 +34,12 @@ test("shows live grid and battery state from real UDP reports", async ({ page })
   await expect(page.locator(".card", { hasText: "EMULATOR" })).toContainText(
     "Active control",
   );
-  await expect(page.locator(".card", { hasText: "POWER SOURCE" })).toContainText(
-    "JsonHttpPowermeter",
-  );
+  // Named without the class suffix every one of them carries: a filter chain
+  // reading "Hampel → Smoothed → Deadband" says the same thing as one
+  // repeating "Powermeter" after each.
+  const source = page.locator(".card", { hasText: "POWER SOURCE" });
+  await expect(source).toContainText("JsonHttp");
+  await expect(source).not.toContainText("Powermeter");
 });
 
 test("values keep updating as the batteries steer", async ({ page }) => {
@@ -46,6 +49,25 @@ test("values keep updating as the batteries steer", async ({ page }) => {
   await expect.poll(seq, { timeout: 20_000 }).toBeGreaterThan(first);
   // A live page must reflect that without a reload.
   await expect(page.locator(".rail-value")).toBeVisible();
+});
+
+test("a trend line fills in from the polls the page makes", async ({ page }) => {
+  // No backend series: the samples are the ones the page has already received,
+  // so the line appears only after a few polls rather than on first paint.
+  await page.goto(`${BASE_URL}#/sources`);
+  const spark = page.locator(".spark-line").first();
+  await expect(spark).toBeVisible({ timeout: 30_000 });
+  // Points, not an empty element: a broken geometry renders as an SVG that is
+  // there but draws nothing.
+  const points = await spark.getAttribute("points");
+  expect((points || "").split(" ").length).toBeGreaterThanOrEqual(3);
+  // In the SVG namespace, which is not what createElement gives you:
+  // document.createElement("svg") makes an HTMLUnknownElement, so every
+  // attribute lands and the aria-label still reads while nothing is drawn.
+  expect(await spark.evaluate((el) => el.namespaceURI)).toBe(
+    "http://www.w3.org/2000/svg",
+  );
+  await expect(page.locator(".spark-range").first()).toContainText("W");
 });
 
 test("every tab renders without a page error", async ({ page }) => {

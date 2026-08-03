@@ -1,6 +1,7 @@
 """Tests for the dashboard's HTTP surface: the access gate, the routes and
 the control-write validation."""
 
+import asyncio
 import json
 
 import pytest
@@ -73,6 +74,7 @@ class _FakeSupervisor:
         self._info = info
         self.written = None
         self.restarts = 0
+        self.restart_error: Exception | None = None
 
     def available(self):
         return True
@@ -85,15 +87,20 @@ class _FakeSupervisor:
 
     async def restart(self):
         self.restarts += 1
+        if self.restart_error is not None:
+            raise self.restart_error
 
 
-async def _addon_options(monkeypatch, tmp_path, info):
-    """Drive the real route with a canned Supervisor response."""
+async def _addon_options(monkeypatch, tmp_path, info, supervisor=None):
+    """Drive the real route with a canned Supervisor response.
+
+    One stand-in for every call, so a test can assert on what the route asked
+    it to do.
+    """
     import astrameter.addon_client as addon_client
 
-    monkeypatch.setattr(
-        addon_client, "SupervisorClient", lambda *a, **k: _FakeSupervisor(info)
-    )
+    fake = supervisor if supervisor is not None else _FakeSupervisor(info)
+    monkeypatch.setattr(addon_client, "SupervisorClient", lambda *a, **k: fake)
     registry = _registry(
         tmp_path, allow_write=True, direct_access=True, config_mode="ha_simple"
     )
@@ -148,6 +155,53 @@ async def test_saving_validates_against_supervisors_schema_shape(monkeypatch, tm
     refused = await client.post("/api/addon/options", json={"options": {"nope": 1}})
     assert refused.status == 400
     assert "nope" in (await refused.json())["error"]
+    await client.close()
+
+
+async def test_the_restart_waits_for_the_answer_to_go_out(monkeypatch, tmp_path):
+    """Supervisor tears down the container as part of the restart, so awaiting
+    it in the handler killed us mid-response: the browser saw a 502 from the
+    ingress proxy for a switch that had in fact worked, and the page showed an
+    error for it."""
+    import astrameter.web_server as web_server
+
+    monkeypatch.setattr(web_server, "RESTART_GRACE_S", 0.01)
+    fake = _FakeSupervisor({"options": {}, "schema": SUPERVISOR_SCHEMA})
+    client = await _addon_options(monkeypatch, tmp_path, None, supervisor=fake)
+
+    response = await client.post(
+        "/api/addon/options", json={"options": {}, "restart": 1}
+    )
+    assert response.status == 200
+    assert (await response.json())["restart"] == "supervisor"
+    # The point of the fix: the answer is complete and the restart has not
+    # started yet.
+    assert fake.restarts == 0
+
+    await asyncio.sleep(0.1)
+    assert fake.restarts == 1
+    await client.close()
+
+
+async def test_a_failed_deferred_restart_is_logged_not_lost(
+    monkeypatch, tmp_path, caplog
+):
+    """Nothing is left to answer to by then, so the log is the only place it
+    can surface."""
+    import astrameter.web_server as web_server
+
+    monkeypatch.setattr(web_server, "RESTART_GRACE_S", 0.01)
+    fake = _FakeSupervisor({"options": {}, "schema": SUPERVISOR_SCHEMA})
+    fake.restart_error = RuntimeError("supervisor said no")
+    client = await _addon_options(monkeypatch, tmp_path, None, supervisor=fake)
+
+    with caplog.at_level("ERROR"):
+        response = await client.post(
+            "/api/addon/options", json={"options": {}, "restart": 1}
+        )
+        assert response.status == 200
+        await asyncio.sleep(0.1)
+    assert "supervisor said no" in caplog.text
     await client.close()
 
 

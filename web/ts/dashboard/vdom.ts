@@ -114,16 +114,36 @@ function setProp(
   }
 }
 
-function create(node: VChild): Node {
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * Tags that must be created in the SVG namespace.
+ *
+ * `document.createElement("svg")` makes an HTMLUnknownElement, not a drawing:
+ * the attributes land, a screen reader still reads the label, and the graphic
+ * simply never appears — a failure with no error anywhere. Only the tags the
+ * dashboard actually draws with are listed; an unlisted one would silently
+ * take the HTML path again, so add to this when adding a shape.
+ */
+const SVG_TAGS = new Set(["svg", "polyline", "line", "path", "circle", "g", "text"]);
+
+function create(node: VChild, svg = false): Node {
   if (node == null || node === false) return document.createComment("");
   if (typeof node === "string" || typeof node === "number") {
     return document.createTextNode(String(node));
   }
-  const el = document.createElement(node.tag);
+  // Everything inside an <svg> is in that namespace too, not just the tags
+  // named above — <text> and <title> are shared with HTML.
+  const inSvg = svg || SVG_TAGS.has(node.tag);
+  const el = (
+    inSvg
+      ? document.createElementNS(SVG_NS, node.tag)
+      : document.createElement(node.tag)
+  ) as HTMLElement;
   for (const [key, value] of Object.entries(node.props)) {
     setProp(el, key, value, true);
   }
-  for (const child of node.children) el.appendChild(create(child));
+  for (const child of node.children) el.appendChild(create(child, inSvg));
   return el;
 }
 
@@ -137,14 +157,17 @@ function create(node: VChild): Node {
  * dragging — along with its focus and its scroll position.
  */
 export function patch(parent: HTMLElement, next: VChild[]): void {
+  // Replacements inside a drawing have to be made in the SVG namespace too,
+  // or the repaint quietly turns a shape into an HTMLUnknownElement.
+  const svg = parent.namespaceURI === SVG_NS;
   for (let i = 0; i < next.length; i++) {
     const existing = parent.childNodes[i];
     const desired = next[i];
     if (!existing) {
-      parent.appendChild(create(desired));
+      parent.appendChild(create(desired, svg));
       continue;
     }
-    patchNode(parent, existing, desired);
+    patchNode(parent, existing, desired, svg);
   }
   while (parent.childNodes.length > next.length) {
     parent.removeChild(parent.lastChild!);
@@ -155,6 +178,7 @@ function patchNode(
   parent: HTMLElement,
   existing: ChildNode,
   desired: VChild,
+  svg = false,
 ): void {
   if (desired == null || desired === false) {
     // Hold the slot so later siblings keep their index.
@@ -169,7 +193,7 @@ function patchNode(
       const text = String(desired);
       if (existing.textContent !== text) existing.textContent = text;
     } else {
-      parent.replaceChild(create(desired), existing);
+      parent.replaceChild(create(desired, svg), existing);
     }
     return;
   }
@@ -178,7 +202,7 @@ function patchNode(
     existing.nodeType !== Node.ELEMENT_NODE ||
     (existing as HTMLElement).tagName.toLowerCase() !== vnode.tag
   ) {
-    parent.replaceChild(create(vnode), existing);
+    parent.replaceChild(create(vnode, svg), existing);
     return;
   }
   const el = existing as HTMLElement;

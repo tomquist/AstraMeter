@@ -31,7 +31,23 @@ import {
 } from "./model.js";
 import { normalizeAddonSchema, parseAddonSchema } from "./option-meta.js";
 import { view } from "./view.js";
-import { entityList, initialConfigState, knownKeys, specFor } from "./config-view.js";
+import {
+  entityList,
+  initialConfigState,
+  knownKeys,
+  matchEntities,
+  specFor,
+} from "./config-view.js";
+import {
+  GRID_SERIES,
+  HISTORY_LIMIT,
+  batterySeries,
+  meterSeries,
+  recordSnapshot,
+  seriesOf,
+  sparkGeometry,
+  type SeriesHistory,
+} from "./history.js";
 import type { StatusSnapshot } from "./types.js";
 import { readFileSync } from "node:fs";
 
@@ -532,11 +548,49 @@ const haState: AppState = {
   snapshot: { ...snapshot, capabilities: { ...snapshot.capabilities, config_mode: "ha_simple", ha_options: true } },
 };
 const pickerHtml = renderToString(h("div", null, ...view(haState, actions, withEntities)));
-has(pickerHtml, 'list="ha-entities-power_input_alias"', "the sensor field is a combobox");
-has(pickerHtml, 'value="sensor.p1_meter"', "every applicable sensor is offered");
-has(pickerHtml, "Grid power · 412.8 W", "suggestions show the friendly name and live value");
+has(pickerHtml, 'role="combobox"', "the sensor field is a combobox");
 has(pickerHtml, "Grid power — currently 412.8 W", "the chosen sensor resolves to a readable line");
 has(pickerHtml, "Switch to a config file", "the mode switch is offered in the add-on");
+// Closed until the field is focused, so a form of them is not a wall of lists.
+lacks(pickerHtml, "combo-list", "the suggestions stay closed until asked for");
+has(pickerHtml, 'aria-expanded="false"', "and the field says so");
+
+// The suggestions are ours, not a native <datalist>: Safari on iOS does not
+// implement one, so on a phone the field was a plain text box with no way to
+// discover an entity id at all.
+lacks(pickerHtml, "<datalist", "no datalist is relied on");
+const openPicker = { ...withEntities, openPicker: "power_input_alias:0", pickerIndex: -1 };
+const openHtml = renderToString(h("div", null, ...view(haState, actions, openPicker)));
+has(openHtml, 'role="listbox"', "the open field draws its own list");
+has(openHtml, 'aria-expanded="true"', "and says it is open");
+has(openHtml, "sensor.p1_meter", "every applicable sensor is offered");
+has(openHtml, "P1 meter", "by the name a human recognises");
+has(openHtml, "1.24 kW", "with what it currently reads");
+
+// Filtering is on the id and the name, since a user knows one or the other.
+ok(
+  matchEntities(withEntities.entities, "p1").length === 1,
+  "typing filters the suggestions by entity id",
+);
+ok(
+  matchEntities(withEntities.entities, "grid POWER")[0]?.entity_id ===
+    "sensor.current_power_in",
+  "and by friendly name, case-insensitively",
+);
+ok(matchEntities(withEntities.entities, "").length === 2, "an empty box offers everything");
+// A row already holding a full id keeps the whole list, so the choice can
+// still be changed without clearing the box first.
+ok(
+  matchEntities(withEntities.entities, "sensor.current_power_in").length === 2,
+  "an exact match does not filter the list down to itself",
+);
+ok(matchEntities(withEntities.entities, "nope").length === 0, "a miss offers nothing");
+const noMatch = { ...openPicker, options: { ...withEntities.options, power_input_alias: "zzz" } };
+has(
+  renderToString(h("div", null, ...view(haState, actions, noMatch))),
+  "No power sensor matches",
+  "and says so rather than showing an empty box",
+);
 
 // A configured entity Home Assistant does not know must be called out — a
 // typo here otherwise only surfaces as a start-up failure much later.
@@ -619,6 +673,87 @@ lacks(unpairedHtml, "the counts have to match", "an empty export sensor is not a
 
 // Simple mode must never offer the raw file editor.
 lacks(pickerHtml, "+ Add section", "the INI editor is hidden in guided mode");
+
+// ── trend lines, accumulated in the browser ──
+// No backend series: the page already polls every couple of seconds, so the
+// samples it needs are the ones it has received.
+{
+  const hist: SeriesHistory = {};
+  recordSnapshot(hist, snapshot);
+  recordSnapshot(hist, snapshot);
+  ok(seriesOf(hist, GRID_SERIES).length === 2, "each new snapshot adds one sample");
+  ok(seriesOf(hist, GRID_SERIES)[0] === -13, "and it is the grid total");
+  ok(
+    seriesOf(hist, batterySeries({ consumer_id: "02b250000001" })).length === 2,
+    "batteries are tracked per consumer",
+  );
+  ok(
+    seriesOf(hist, meterSeries("JSON_HTTP"))[0] === 240,
+    "so is each power source's total",
+  );
+  recordSnapshot(hist, null);
+  ok(seriesOf(hist, GRID_SERIES).length === 2, "a missing snapshot records nothing");
+  ok(seriesOf(hist, "nope").length === 0, "an unseen series is empty, not undefined");
+
+  // A tab left open all day must not grow without bound.
+  const long: SeriesHistory = {};
+  for (let i = 0; i < HISTORY_LIMIT + 25; i++) {
+    recordSnapshot(long, {
+      ...snapshot,
+      devices: [{ ...snapshot.devices![0], grid: { grid_total_w: i } }],
+    });
+  }
+  const capped = seriesOf(long, GRID_SERIES);
+  ok(capped.length === HISTORY_LIMIT, "the window is capped");
+  ok(capped[capped.length - 1] === HISTORY_LIMIT + 24, "and it keeps the newest");
+  ok(capped[0] === 25, "dropping the oldest");
+}
+
+// A reading that is not a number would render as an "NaN,NaN" point and take
+// the whole line with it.
+{
+  const hist: SeriesHistory = {};
+  recordSnapshot(hist, {
+    ...snapshot,
+    devices: [{ ...snapshot.devices![0], grid: { grid_total_w: NaN } }],
+    powermeters: [{ name: "M", last_total_w: undefined }],
+  });
+  ok(seriesOf(hist, GRID_SERIES).length === 0, "NaN is not a sample");
+  ok(seriesOf(hist, meterSeries("M")).length === 0, "nor is a missing reading");
+}
+
+ok(sparkGeometry([1, 2], 100, 26) === null, "two points are not a trend");
+ok(sparkGeometry([], 100, 26) === null, "and neither is nothing");
+{
+  // Signed watts: the range always spans zero, so a window holding only
+  // export cannot read as a climb from a baseline that is not zero.
+  const g = sparkGeometry([-100, -50, -20], 100, 26)!;
+  ok(g.min === -100 && g.max === 0, "the range always includes zero");
+  ok(g.zeroY === 0, "so the zero line is drawn at the top here");
+  ok(g.points.split(" ").length === 3, "one point per sample");
+  ok(g.points.startsWith("0.0,"), "starting at the left edge");
+  ok(g.points.split(" ")[2].startsWith("100.0,"), "and ending at the right");
+  const flat = sparkGeometry([0, 0, 0], 100, 26)!;
+  ok(flat.points.includes("13.0"), "a flat series is centred, not divided by zero");
+}
+
+// The card only draws a line once it has something to draw.
+{
+  const withHistory: AppState = {
+    ...live,
+    tab: "sources",
+    history: { [meterSeries("JSON_HTTP")]: [10, 240, 500] },
+  };
+  const sparkHtml = renderToString(
+    h("div", null, ...view(withHistory, actions, initialConfigState())),
+  );
+  has(sparkHtml, "spark-line", "the power source card plots its total");
+  has(sparkHtml, "+500 W", "and says how far it swung");
+  const noHistory = renderToString(
+    h("div", null, ...view({ ...live, tab: "sources" }, actions, initialConfigState())),
+  );
+  lacks(noHistory, "spark-line", "with no samples yet there is no line");
+}
 
 // ── live controls mirror the MQTT control surface ──
 const controllable: StatusSnapshot = {

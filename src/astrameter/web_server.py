@@ -6,6 +6,7 @@ Home Assistant addon watchdog) and, when enabled, the live status
 dashboard plus a browser-based configuration editor.
 """
 
+import asyncio
 import errno
 import json
 import os
@@ -23,6 +24,10 @@ from astrameter.version_info import get_git_commit_sha
 # X-Hass-Source it cannot be forged by a LAN client hitting the
 # host-networked port directly.
 INGRESS_PEER = "172.30.32.2"
+
+#: How long a deferred Supervisor restart waits before firing, so the response
+#: that asked for it is on the wire before the container goes down.
+RESTART_GRACE_S = 0.5
 
 # Only reachable in the add-on, where ingress is the intended way in. Kept to
 # plain inline markup: the bundle is exactly what this response is refusing to
@@ -173,6 +178,8 @@ class WebServer:
         self._runner = None
         #: Whether an unrenderable add-on schema has already been reported.
         self._logged_schema_shape = False
+        #: Deferred restarts, held so the loop cannot collect them mid-flight.
+        self._pending_restarts: set = set()
 
     # -- gating --------------------------------------------------------
 
@@ -596,7 +603,7 @@ class WebServer:
             return _json({"error": str(exc)}, status=400)
         logger.info("Add-on options updated by %s", self._actor(request))
         if body.get("restart"):
-            await client.restart()
+            self._restart_after_response(client)
             return _json({"saved": True, "restart": "supervisor"})
         return _json({"saved": True, "restart": "none"})
 
@@ -623,12 +630,36 @@ class WebServer:
             return _json({"entities": [], "error": str(exc)})
         return _json({"entities": entities}, **{"Cache-Control": "max-age=30"})
 
+    def _restart_after_response(self, client) -> None:
+        """Ask Supervisor to restart us, once this response is on the wire.
+
+        The restart tears down the container serving the request, so awaiting
+        it inside the handler kills the process before the reply is flushed:
+        the browser gets a 502 from the ingress proxy for a call that in fact
+        succeeded, and the page shows an error for a switch that worked.
+        Deferring it by a beat lets the reply land first — the dashboard then
+        shows its own "restarting" state and reconnects when we come back.
+        """
+
+        async def restart() -> None:
+            await asyncio.sleep(RESTART_GRACE_S)
+            try:
+                await client.restart()
+            except Exception:
+                # Nothing is left to answer to: the reply went out long ago.
+                logger.exception("Add-on restart failed")
+
+        task = asyncio.get_running_loop().create_task(restart())
+        # A task nothing holds can be collected before it runs.
+        self._pending_restarts.add(task)
+        task.add_done_callback(self._pending_restarts.discard)
+
     async def _handle_addon_restart(self, request):
         client, error = self._supervisor(request)
         if error:
             return error
         logger.info("Add-on restart requested by %s", self._actor(request))
-        await client.restart()
+        self._restart_after_response(client)
         return _json({"restarting": True}, status=202)
 
     async def _handle_config_mode_post(self, request):
@@ -673,7 +704,7 @@ class WebServer:
         logger.info(
             "Configuration mode switched to %r by %s", target, self._actor(request)
         )
-        await client.restart()
+        self._restart_after_response(client)
         return _json({"switched": True, "mode": target, "restart": "supervisor"})
 
     # -- config.ini editor ---------------------------------------------

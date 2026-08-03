@@ -44,6 +44,12 @@ export interface ConfigState {
   iniLoaded: boolean;
   dirty: boolean;
   saving: boolean;
+  /** The mode switch the user has been asked to confirm, if any. */
+  confirmMode: "file" | "options" | null;
+  /** Which entity row has its suggestion list open, as `option:index`. */
+  openPicker: string | null;
+  /** Highlighted suggestion in that list; -1 when none is. */
+  pickerIndex: number;
   message: string | null;
   error: string | null;
 }
@@ -58,6 +64,9 @@ export interface ConfigActions {
   addSection(): void;
   removeSection(section: string): void;
   saveConfig(restart: boolean): void;
+  openEntityPicker(rowId: string | null): void;
+  moveEntityPicker(delta: number): void;
+  askSwitchMode(mode: "file" | "options" | null): void;
   switchMode(mode: "file" | "options"): void;
   restart(): void;
 }
@@ -76,6 +85,9 @@ export function initialConfigState(): ConfigState {
     iniLoaded: false,
     dirty: false,
     saving: false,
+    confirmMode: null,
+    openPicker: null,
+    pickerIndex: -1,
     message: null,
     error: null,
   };
@@ -138,7 +150,7 @@ export function configView(
   // The mode switch writes, so a read-only dashboard must not offer it: the
   // backend refuses the call and the user gets an error for a button we drew.
   const cards: VChild[] = [
-    modeCard(mode, Boolean(caps?.ha_options && caps?.controls), actions),
+    modeCard(mode, Boolean(caps?.ha_options && caps?.controls), config, actions),
   ];
 
   if (config.error) {
@@ -170,10 +182,12 @@ export function configView(
 function modeCard(
   mode: string,
   haOptions: boolean,
+  config: ConfigState,
   actions: ConfigActions,
 ): VNode {
   const isSimple = mode === "ha_simple";
   const isAddon = mode.startsWith("ha_");
+  const target = isSimple ? "file" : "options";
   return card(
     "Configuration mode",
     h(
@@ -188,26 +202,84 @@ function modeCard(
           : "Config file — AstraMeter reads the config.ini mounted into this container.",
     ),
     isAddon && haOptions
-      ? h(
-          "div",
-          { style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
-          h(
-            "button",
-            {
-              class: "btn sm",
-              onclick: () => actions.switchMode(isSimple ? "file" : "options"),
-            },
-            isSimple ? "Switch to a config file" : "Switch to guided setup",
-          ),
-          h(
-            "span",
-            { class: "help", style: "color:var(--text-faint);font-size:.75rem" },
-            isSimple
-              ? "Copies what is running now into /config/astrameter.ini, then restarts."
-              : "Goes back to the add-on options. Your config file is kept, not deleted.",
-          ),
-        )
+      ? config.confirmMode === target
+        ? confirmSwitch(isSimple, config, actions)
+        : h(
+            "div",
+            { style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
+            h(
+              "button",
+              {
+                class: "btn sm",
+                disabled: config.saving,
+                onclick: () => actions.askSwitchMode(target),
+              },
+              isSimple ? "Switch to a config file" : "Switch to guided setup",
+            ),
+            h(
+              "span",
+              { class: "help", style: "color:var(--text-faint);font-size:.75rem" },
+              isSimple
+                ? "Copies what is running now into /config/astrameter.ini, then restarts."
+                : "Goes back to the add-on options. Your config file is kept, not deleted.",
+            ),
+          )
       : null,
+  );
+}
+
+/**
+ * The switch, asked about before it happens.
+ *
+ * It changes where every setting comes from and restarts the add-on, which
+ * takes it off the air for a minute — too much to hang off one stray tap,
+ * and on a phone the button sits under the thumb.
+ */
+function confirmSwitch(
+  isSimple: boolean,
+  config: ConfigState,
+  actions: ConfigActions,
+): VNode {
+  return h(
+    "div",
+    { class: "confirm" },
+    h(
+      "p",
+      { class: "confirm-what" },
+      isSimple
+        ? "Copy what is running now into /config/astrameter.ini and read your " +
+            "settings from that file from now on? The add-on options stop " +
+            "having any effect."
+        : "Go back to reading your settings from the add-on options? Your " +
+            "config file is kept, but AstraMeter stops reading it.",
+    ),
+    h(
+      "p",
+      { class: "confirm-what" },
+      "The add-on restarts either way — the dashboard goes quiet for up to a minute.",
+    ),
+    h(
+      "div",
+      { style: "display:flex;gap:8px;flex-wrap:wrap" },
+      h(
+        "button",
+        {
+          class: "btn primary sm",
+          disabled: config.saving,
+          onclick: () => actions.switchMode(isSimple ? "file" : "options"),
+        },
+        config.saving ? "Switching…" : "Yes, switch and restart",
+      ),
+      h(
+        "button",
+        {
+          class: "btn sm",
+          disabled: config.saving,
+          onclick: () => actions.askSwitchMode(null),
+        },
+        "Cancel",
+      ),
+    ),
   );
 }
 
@@ -372,10 +444,11 @@ export function entityList(value: unknown): string[] {
  * A Home Assistant entity picker: searchable comboboxes listing only sensors
  * that could plausibly carry grid power, one per phase.
  *
- * A native `<input list=…>` rather than a custom dropdown: the browser gives
- * substring search, keyboard navigation and mobile behaviour for free, and a
- * hand-typed id still works — which matters because the list is best-effort
- * and an entity can be missing when Home Assistant is still starting.
+ * The suggestions are drawn here rather than left to a native `<input
+ * list=…>`. A datalist is less code and gives search and keyboard handling
+ * for free, but Safari on iOS does not implement it at all: on a phone the
+ * field was a plain text box with no way to discover a single entity id, and
+ * nothing said so. A list we render works the same everywhere.
  *
  * One row per configured sensor, plus an empty one while under the cap — so a
  * three-phase meter can be entered here at all, and so the fact that it takes
@@ -393,7 +466,6 @@ function entityField(
   const entities = entityList(value);
   const rows = entities.length < MAX_PHASES ? [...entities, ""] : entities;
   const perPhase = entities.length > 1;
-  const listId = `ha-entities-${key}`;
 
   // Positions are held while typing (see entityList) and compacted on blur,
   // so clearing a row cannot pull the next phase up mid-edit.
@@ -413,7 +485,6 @@ function entityField(
       entityRow(entity, index, {
         key,
         label,
-        listId,
         perPhase,
         rows,
         config,
@@ -421,27 +492,42 @@ function entityField(
         actions,
       }),
     ),
-    h(
-      "datalist",
-      { id: listId },
-      ...config.entities.map((entity) =>
-        h(
-          "option",
-          { value: entity.entity_id },
-          // The friendly name and live reading are what a user actually
-          // recognises; the id alone is often unreadable.
-          [entity.name, entity.state != null ? `${entity.state} ${entity.unit || ""}`.trim() : null]
-            .filter(Boolean)
-            .join(" · "),
-        ),
-      ),
-    ),
     phaseMismatch(entities, meta, config),
     meta.help ? h("span", { class: "help" }, meta.help) : null,
     config.entitiesLoaded && config.entities.length === 0
       ? h("span", { class: "help" }, "No power sensors found — type an entity id.")
       : null,
   );
+}
+
+/** How many suggestions are drawn at once; a long list is a scroll, not a page. */
+const MAX_SUGGESTIONS = 50;
+
+/**
+ * The entities worth offering for what has been typed so far.
+ *
+ * Matches the id and the friendly name, because a user knows the sensor by
+ * one or the other and rarely by both. An exact hit is not filtered down to
+ * itself: once a row holds a full entity id, the list stays open on the whole
+ * set so the choice can still be changed.
+ */
+export function matchEntities(entities: HaEntity[], typed: string): HaEntity[] {
+  const needle = typed.trim().toLowerCase();
+  const exact = entities.some((e) => e.entity_id.toLowerCase() === needle);
+  if (!needle || exact) return entities.slice(0, MAX_SUGGESTIONS);
+  return entities
+    .filter(
+      (e) =>
+        e.entity_id.toLowerCase().includes(needle) ||
+        (e.name || "").toLowerCase().includes(needle),
+    )
+    .slice(0, MAX_SUGGESTIONS);
+}
+
+/** What an entity currently reads, as one short phrase. */
+function reading(entity: HaEntity): string | null {
+  if (entity.state == null) return null;
+  return `${entity.state} ${entity.unit || ""}`.trim();
 }
 
 /**
@@ -473,7 +559,6 @@ function phaseMismatch(
 interface RowContext {
   key: string;
   label: string;
-  listId: string;
   perPhase: boolean;
   rows: string[];
   config: ConfigState;
@@ -495,29 +580,64 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
     ctx.perPhase || index > 0 ? `${ctx.label} phase ${index + 1}` : ctx.label;
   const removable = ctx.rows.filter(Boolean).length > 1 && Boolean(entity);
 
+  const rowId = `${ctx.key}:${index}`;
+  const listId = `ha-entities-${ctx.key}-${index}`;
+  const open = config.openPicker === rowId && config.entities.length > 0;
+  const suggestions = open ? matchEntities(config.entities, entity) : [];
+  const active =
+    suggestions.length === 0
+      ? -1
+      : Math.min(Math.max(config.pickerIndex, -1), suggestions.length - 1);
+
+  // Writing the box directly is not belt-and-braces: a repaint never
+  // overwrites the input the user is in (UNCONTROLLED in vdom.ts), and
+  // picking a suggestion keeps focus there on purpose — so without this the
+  // value would change underneath while the box still showed what was typed.
+  const choose = (picked: HaEntity, input: HTMLInputElement | null) => {
+    if (input) input.value = picked.entity_id;
+    ctx.write(index, picked.entity_id, true);
+    ctx.actions.openEntityPicker(null);
+  };
+
   return h(
     "div",
     { class: "entity-row" },
-    h("input", {
-      type: "text",
-      class: unknown ? "warn-input" : false,
-      value: entity,
-      list: ctx.listId,
-      spellcheck: "false",
-      autocomplete: "off",
-      placeholder: index > 0
-        ? `Another sensor for phase ${index + 1} — optional`
-        : config.entitiesLoaded
-          ? "Search sensors — type to filter"
-          : "sensor.your_grid_power",
-      "aria-label": name,
-      oninput: (e: Event) => ctx.write(index, (e.target as HTMLInputElement).value, false),
-      // Blur is the safe moment to close a gap: the input the user is in is
-      // never rewritten by a repaint (see UNCONTROLLED in vdom.ts), so
-      // compacting while it has focus would leave the DOM and the value
-      // disagreeing about which row holds what.
-      onchange: (e: Event) => ctx.write(index, (e.target as HTMLInputElement).value, true),
-    }),
+    h(
+      "div",
+      { class: "combo" },
+      h("input", {
+        type: "text",
+        class: unknown ? "warn-input" : false,
+        value: entity,
+        spellcheck: "false",
+        autocomplete: "off",
+        role: "combobox",
+        "aria-expanded": open ? "true" : "false",
+        "aria-controls": listId,
+        "aria-autocomplete": "list",
+        "aria-activedescendant": active >= 0 ? `${listId}-${active}` : false,
+        placeholder: index > 0
+          ? `Another sensor for phase ${index + 1} — optional`
+          : config.entitiesLoaded
+            ? "Search sensors — type to filter"
+            : "sensor.your_grid_power",
+        "aria-label": name,
+        onfocus: () => ctx.actions.openEntityPicker(rowId),
+        oninput: (e: Event) => {
+          ctx.write(index, (e.target as HTMLInputElement).value, false);
+          ctx.actions.openEntityPicker(rowId);
+        },
+        onkeydown: (e: Event) =>
+          onPickerKey(e as KeyboardEvent, suggestions, active, choose, ctx.actions),
+        // Blur is the safe moment to close a gap: the input the user is in is
+        // never rewritten by a repaint (see UNCONTROLLED in vdom.ts), so
+        // compacting while it has focus would leave the DOM and the value
+        // disagreeing about which row holds what.
+        onchange: (e: Event) => ctx.write(index, (e.target as HTMLInputElement).value, true),
+        onblur: () => ctx.actions.openEntityPicker(null),
+      }),
+      open ? suggestionList(listId, suggestions, active, entity, choose) : null,
+    ),
     removable
       ? h(
           "button",
@@ -539,6 +659,82 @@ function entityRow(entity: string, index: number, ctx: RowContext): VNode {
       : unknown
         ? h("span", { class: "help warn-text" }, "Not found in Home Assistant right now.")
         : null,
+  );
+}
+
+/** Arrow keys move the highlight, Enter takes it, Escape gives up on the list. */
+function onPickerKey(
+  event: KeyboardEvent,
+  suggestions: HaEntity[],
+  active: number,
+  choose: (entity: HaEntity, input: HTMLInputElement | null) => void,
+  actions: ConfigActions,
+): void {
+  if (event.key === "Escape") {
+    actions.openEntityPicker(null);
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    // Otherwise the caret jumps to one end of the text instead.
+    event.preventDefault();
+    actions.moveEntityPicker(event.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (event.key === "Enter" && active >= 0 && suggestions[active]) {
+    // Enter on a highlighted suggestion takes it rather than submitting
+    // whatever half-typed text is in the box.
+    event.preventDefault();
+    choose(suggestions[active], event.target as HTMLInputElement);
+  }
+}
+
+function suggestionList(
+  listId: string,
+  suggestions: HaEntity[],
+  active: number,
+  typed: string,
+  choose: (entity: HaEntity, input: HTMLInputElement | null) => void,
+): VNode {
+  if (!suggestions.length) {
+    return h(
+      "ul",
+      { class: "combo-list", id: listId, role: "listbox" },
+      h(
+        "li",
+        { class: "combo-empty" },
+        typed ? `No power sensor matches “${typed}”.` : "No power sensors found.",
+      ),
+    );
+  }
+  return h(
+    "ul",
+    { class: "combo-list", id: listId, role: "listbox" },
+    ...suggestions.map((entity, i) =>
+      h(
+        "li",
+        {
+          class: "combo-opt",
+          id: `${listId}-${i}`,
+          role: "option",
+          "aria-selected": i === active ? "true" : "false",
+          // Pointerdown, not click: it lands before the input's blur would
+          // close the list, and covers touch as well as mouse. Preventing
+          // the default keeps focus in the field, so picking a suggestion
+          // does not shut the keyboard on a phone.
+          onpointerdown: (e: Event) => {
+            e.preventDefault();
+            const box = (e.currentTarget as HTMLElement).closest(".combo");
+            choose(entity, box ? box.querySelector("input") : null);
+          },
+        },
+        h("span", { class: "combo-name" }, entity.name || entity.entity_id),
+        h(
+          "span",
+          { class: "combo-id" },
+          [entity.entity_id, reading(entity)].filter(Boolean).join(" · "),
+        ),
+      ),
+    ),
   );
 }
 

@@ -10,6 +10,7 @@ import {
   clockTime,
   duration,
   macLabel,
+  meterClass,
   percent,
   phaseLabel,
   seconds,
@@ -41,6 +42,13 @@ import type {
   StatusSnapshot,
 } from "./types.js";
 import { configView, type ConfigActions, type ConfigState } from "./config-view.js";
+import {
+  batterySeries,
+  meterSeries,
+  seriesOf,
+  sparkGeometry,
+  type SeriesHistory,
+} from "./history.js";
 
 export interface Actions extends ConfigActions {
   selectTab(tab: Tab): void;
@@ -68,6 +76,50 @@ function chip(status: Health): VNode {
     { class: `chip ${status.severity}` },
     h("span", { class: "glyph", "aria-hidden": "true" }, status.glyph),
     status.label,
+  );
+}
+
+// A sparkline's viewBox. Fixed units, scaled by CSS: the drawing has no idea
+// how wide the card it lands in is.
+const SPARK_W = 100;
+const SPARK_H = 26;
+
+/**
+ * A trend line for one series, or nothing while there is too little to say.
+ *
+ * Drawn from what the page has already polled (see history.ts), so it starts
+ * empty on a fresh load and fills in over the next few reads. Labelled with
+ * its own range rather than an axis: at this size a scale would be unreadable,
+ * but "how far did it swing" is the question the line is answering.
+ */
+function sparkline(values: number[], label: string): VChild {
+  const geometry = sparkGeometry(values, SPARK_W, SPARK_H);
+  if (!geometry) return null;
+  const range = `${signedWatts(geometry.min) ?? ""} to ${signedWatts(geometry.max) ?? ""}`;
+  return h(
+    "div",
+    { class: "spark-wrap" },
+    h(
+      "svg",
+      {
+        class: "spark",
+        viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
+        preserveAspectRatio: "none",
+        role: "img",
+        "aria-label": `${label} over the last ${values.length} readings, ${range}`,
+      },
+      geometry.zeroY == null
+        ? null
+        : h("line", {
+            class: "spark-zero",
+            x1: 0,
+            y1: geometry.zeroY,
+            x2: SPARK_W,
+            y2: geometry.zeroY,
+          }),
+      h("polyline", { class: "spark-line", points: geometry.points }),
+    ),
+    h("span", { class: "spark-range" }, range),
   );
 }
 
@@ -244,7 +296,7 @@ function overview(state: AppState, offline: boolean, actions: Actions): VChild[]
         deviceCard(d, offline, Boolean(snapshot.capabilities?.controls), state, actions),
       ),
       ...shelly.map((d) => shellyCard(d, offline)),
-      ...(snapshot.powermeters || []).map((m) => meterCard(m, offline)),
+      ...(snapshot.powermeters || []).map((m) => meterCard(m, offline, state.history)),
     ),
     consumers.length === 0 && polling.length === 0 ? noBatteries(snapshot) : null,
   ];
@@ -391,21 +443,29 @@ function secondsSince(iso: string | undefined): number | undefined {
 function meterCard(
   meter: import("./types.js").PowermeterStatus,
   offline: boolean,
+  history: SeriesHistory,
 ): VNode {
   const status = meterHealth(meter);
   return card(
     meter.name ? `Power source · ${meter.name}` : "Power source",
     h("div", { class: "batt-head" }, chip(status)),
+    sparkline(seriesOf(history, meterSeries(meter.name)), "Power source total"),
     h(
       "dl",
       { class: "kv" },
-      ...row("Reads via", meter.kind),
+      ...row("Reads via", meterClass(meter.kind)),
       ...row("Total", signedWatts(meter.last_total_w)),
       ...row(
         offline ? "Last read at" : "Last read",
         offline ? null : ago(meter.last_read_age_s),
       ),
-      ...row("Filters", (meter.pipeline || []).join(" → ") || null),
+      ...row(
+        "Filters",
+        (meter.pipeline || [])
+          .map(meterClass)
+          .filter(Boolean)
+          .join(" → ") || null,
+      ),
     ),
   );
 }
@@ -552,6 +612,9 @@ function batteryCard(
             "changed while the battery was away. It is not steered, and it " +
             "goes away once the setting is cleared.",
         ),
+    reported
+      ? sparkline(seriesOf(state.history, batterySeries(consumer)), "Battery power")
+      : null,
     reported
       ? h(
           "dl",
@@ -799,7 +862,9 @@ function sources(state: AppState, offline: boolean): VChild[] {
       ),
     ];
   }
-  return [h("div", { class: "grid" }, ...meters.map((m) => meterCard(m, offline)))];
+  return [
+    h("div", { class: "grid" }, ...meters.map((m) => meterCard(m, offline, state.history))),
+  ];
 }
 
 // ── diagnostics ─────────────────────────────────────────────────────

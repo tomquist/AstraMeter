@@ -589,6 +589,60 @@ textarea {
   font-size: 0.72rem;
 }
 
+/* The suggestion list is drawn here rather than left to a native <datalist>,
+ * which Safari on iOS does not implement — on a phone the field was a plain
+ * text box with no way to discover an entity id. */
+.combo {
+  position: relative;
+}
+
+.combo-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 15rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--card);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.combo-opt {
+  display: grid;
+  gap: 1px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.combo-opt[aria-selected="true"],
+.combo-opt:hover {
+  background: color-mix(in srgb, var(--ha-primary) 16%, transparent);
+}
+
+.combo-name {
+  font-size: 0.82rem;
+}
+
+.combo-id {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.combo-empty {
+  padding: 7px 8px;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
 label.row {
   display: flex;
   align-items: center;
@@ -605,6 +659,63 @@ label.row input[type="checkbox"] {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+/* An action asked about before it happens: the question, then the two ways
+ * out of it. Marked like a warning banner so it reads as a stop, not a step. */
+.confirm {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--divider));
+  background: color-mix(in srgb, var(--warn) 10%, var(--card));
+}
+
+.confirm-what {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+/* A trend line for one card's own figure, drawn from what the page has
+ * already polled. Sized by the card, not by the drawing: the viewBox is
+ * fixed and preserveAspectRatio is off, so the line stretches to fit. */
+.spark-wrap {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 2px;
+}
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 26px;
+  overflow: visible;
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--ha-primary);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* The viewBox is stretched to the card's width, which would smear the
+   * stroke with it. */
+  vector-effect: non-scaling-stroke;
+}
+
+.spark-zero {
+  stroke: var(--divider);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.spark-range {
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── banners ─────────────────────────────────────────────────────── */

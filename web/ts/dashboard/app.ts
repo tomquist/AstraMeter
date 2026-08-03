@@ -12,6 +12,7 @@ import {
 import { view, pageTitle, type Actions } from "./view.js";
 import { initialConfigState, type ConfigState } from "./config-view.js";
 import { normalizeAddonSchema } from "./option-meta.js";
+import { recordSnapshot } from "./history.js";
 
 const THEME_KEY = "astrameter.theme";
 const THEMES = ["auto", "light", "dark"] as const;
@@ -222,14 +223,40 @@ const actions: Actions = {
     }
   },
 
+  openEntityPicker(rowId) {
+    if (config.openPicker === rowId) return;
+    config.openPicker = rowId;
+    // A fresh list starts with nothing highlighted, so Enter on typed text
+    // keeps that text rather than taking whatever happened to be first.
+    config.pickerIndex = -1;
+    render();
+  },
+
+  moveEntityPicker(delta) {
+    config.pickerIndex = Math.max(-1, config.pickerIndex + delta);
+    render();
+  },
+
+  askSwitchMode(mode) {
+    config.confirmMode = mode;
+    config.error = null;
+    config.message = null;
+    render();
+  },
+
   async switchMode(mode) {
     config.saving = true;
     config.error = null;
     render();
     try {
       await transport.switchConfigMode(mode);
+      config.confirmMode = null;
       config.message =
         "Configuration mode changed. The add-on is restarting — this can take a minute.";
+      // The surface for the new mode is a different one, and the old mode's
+      // data is now wrong. Drop it so the tab reloads once we are back.
+      config.loadedMode = null;
+      config.dirty = false;
     } catch (err) {
       config.error = describe(err);
     } finally {
@@ -271,6 +298,10 @@ async function poll(): Promise<void> {
     if (snapshot) {
       state.snapshot = snapshot;
       state.lastFrameAt = Date.now();
+      // Only on a new revision: an unchanged one comes back as a 304 with no
+      // body, and re-recording the last value would draw a flat line across
+      // a stretch where nothing was actually measured.
+      recordSnapshot(state.history, snapshot);
     }
     state.connection = "live";
     state.failures = 0;
@@ -350,6 +381,14 @@ function routeFromHash(): Tab {
  */
 function setTab(tab: Tab): void {
   state.tab = tab;
+  // Leaving the tab drops anything that was mid-interaction there: a
+  // confirmation left armed would still be one tap from restarting the add-on
+  // when the user came back for something else, and an open suggestion list
+  // would be drawn over a field nobody is in.
+  if (state.tab !== "config") {
+    config.confirmMode = null;
+    config.openPicker = null;
+  }
   if (tab === "config") actions.loadConfig();
   render();
 }

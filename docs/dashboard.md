@@ -32,13 +32,18 @@ asked for, the phase it reported, how long ago it last polled, its distribution
 weight and its saturation. If changes are allowed you can disable a battery or
 return one to automatic control from here.
 
-**Power source** — every configured meter, what class reads it, the filter
-chain applied to it (smoothing, spike rejection, PID) and when it was last read.
+**Power source** — every configured meter, what reads it, the filter chain
+applied to it (smoothing, spike rejection, PID) and when it was last read.
 
 **Diagnostics** — service version, uptime, config file and mode, plus the
 balancer's internals: predicted grid power, prediction trust, pool output,
 import trim, the demand average and the efficiency rotation state. MQTT
 Insights connection state appears here when it is configured.
+
+The battery and power-source cards each carry a small **trend line** of their
+own figure, with the range it covered underneath. It is built in your browser
+from the readings the page has already polled — nothing is stored, so it starts
+empty on every load and covers only as long as the tab has been open.
 
 Values a backend cannot supply are **omitted**, never shown as `0` or `—`, so
 an empty field always means "not reported" rather than "measured as zero".
@@ -94,9 +99,10 @@ than text boxes: they list the Home Assistant entities that could plausibly
 carry grid power — anything with `device_class: power`, plus anything reading
 in W or kW — showing each one's friendly name and current value. The picker
 does not restrict the domain, so a `number.` entity carrying watts is offered
-too. Type to filter. You can still enter an entity id by hand, and if the configured one
-is not currently known to Home Assistant the field says so instead of letting
-you find out at the next restart.
+too. Type to filter the list, then click or tap the one you want — the same
+list on a phone as on a desktop. You can still enter an entity id by hand, and
+if the configured one is not currently known to Home Assistant the field says
+so instead of letting you find out at the next restart.
 
 Both take **one sensor per phase**: a single sensor for a whole-house total, or
 up to three for a three-phase meter. An empty picker for the next phase is
@@ -133,6 +139,9 @@ In the add-on the Configuration Mode card can move you between the two:
   An existing file with that name is never overwritten.
 - **Switch to guided setup** clears `custom_config` and goes back to the add-on
   options. Your config file is left on disk, not deleted.
+
+Either way you are asked to confirm first, and the add-on then restarts — the
+dashboard goes quiet for up to a minute and reconnects on its own.
 
 ## Security
 

@@ -100,3 +100,20 @@ export function batteryName(
   if (tail) return `Battery ·${tail.toUpperCase()}`;
   return "Battery";
 }
+
+/**
+ * A powermeter class name as something worth reading.
+ *
+ * The status API reports the implementing class — `HampelPowermeter`,
+ * `JsonHttpPowermeter` — because that is what identifies it unambiguously.
+ * Every one of them ends in the same word, so on the page the suffix is pure
+ * noise: a filter chain read as "Hampel → Smoothed → Deadband" says the same
+ * thing as one repeating "Powermeter" four times.
+ */
+export function meterClass(name: string | undefined): string | null {
+  if (!name) return null;
+  const stripped = name.replace(/Powermeter$/, "");
+  // Not every name is a class name, and one that is *only* the suffix would
+  // otherwise come out empty.
+  return stripped || name;
+}

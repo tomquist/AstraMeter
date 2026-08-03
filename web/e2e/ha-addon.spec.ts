@@ -156,27 +156,51 @@ test("the grid sensor is an entity picker listing only power entities", async ({
   const input = page.getByLabel("Grid power sensor", { exact: true });
   await expect(input).toBeVisible();
 
-  const listId = await input.getAttribute("list");
-  const suggestions = await page
-    .locator(`#${listId} option`)
-    .evaluateAll((els) => els.map((e) => e.getAttribute("value")));
+  // The list is ours, not a native <datalist>: Safari on iOS implements none,
+  // so on a phone this field had no discoverable suggestions at all.
+  await expect(page.locator(".combo-list")).toHaveCount(0);
+  await input.click();
+  const list = page.locator(".combo-list").first();
+  await expect(list).toBeVisible();
+  const suggestions = await list
+    .locator(".combo-id")
+    .evaluateAll((els) => els.map((e) => e.textContent || ""));
 
   // Power sensors, including one with no device_class but a W/kW unit —
   // plenty of real installs look like that.
-  expect(suggestions).toContain("sensor.grid_power");
-  expect(suggestions).toContain("sensor.p1_meter_active_power");
+  expect(suggestions.join("|")).toContain("sensor.grid_power");
+  expect(suggestions.join("|")).toContain("sensor.p1_meter_active_power");
   // Not a `sensor.`, but a working grid source all the same: readings are
   // fetched from /api/states/<id>, which is domain-agnostic.
-  expect(suggestions).toContain("number.verbrauch_15");
+  expect(suggestions.join("|")).toContain("number.verbrauch_15");
   // Everything that could not be grid power stays out.
-  expect(suggestions).not.toContain("sensor.house_energy_today");
-  expect(suggestions).not.toContain("sensor.outside_temperature");
-  expect(suggestions).not.toContain("light.kitchen");
+  expect(suggestions.join("|")).not.toContain("sensor.house_energy_today");
+  expect(suggestions.join("|")).not.toContain("sensor.outside_temperature");
+  expect(suggestions.join("|")).not.toContain("light.kitchen");
 
   // The chosen entity resolves to something a human recognises.
   await expect(
     page.locator(".entity-field", { hasText: "Grid power sensor" }),
   ).toContainText("Grid power — currently");
+});
+
+test("a suggestion can be typed for and picked", async ({ page }) => {
+  await page.goto(`${BASE_URL}#/config`);
+  const input = page.getByLabel("Grid power sensor", { exact: true });
+  await input.click();
+  await input.fill("verbrauch");
+
+  const list = page.locator(".combo-list").first();
+  await expect(list.locator(".combo-opt")).toHaveCount(1);
+  await expect(list).toContainText("number.verbrauch_15");
+
+  await list.locator(".combo-opt").first().click();
+  await expect(input).toHaveValue("number.verbrauch_15");
+  // Taken, so the list closes rather than sitting over the rest of the form.
+  await expect(page.locator(".combo-list")).toHaveCount(0);
+
+  // Nothing is saved, so leave the form as it was found.
+  await page.reload();
 });
 
 test("an entity Home Assistant does not know is flagged in place", async ({
@@ -237,7 +261,31 @@ test("switching to a config file materializes what is running", async ({ page })
   const button = page.locator('button:text("Switch to a config file")');
   await expect(button).toBeVisible();
   await button.click();
+
+  // Asked about first: it changes where every setting comes from and takes
+  // the add-on off the air for a minute.
+  const confirm = page.locator(".confirm");
+  await expect(confirm).toContainText("/config/astrameter.ini");
+  await expect(page.locator('button:text("Yes, switch and restart")')).toBeVisible();
+  // Backing out leaves everything alone.
+  await page.locator('button:text("Cancel")').click();
+  await expect(page.locator(".confirm")).toHaveCount(0);
+  expect(readAddonOptions(stack).custom_config).toBeFalsy();
+
+  // Nor does it survive leaving the tab: coming back to change something else
+  // must not land on a primed restart button.
+  await button.click();
+  await expect(page.locator(".confirm")).toBeVisible();
+  await page.goto(`${BASE_URL}#/overview`);
+  await page.goto(`${BASE_URL}#/config`);
+  await expect(page.locator(".confirm")).toHaveCount(0);
+
+  await button.click();
+  await page.locator('button:text("Yes, switch and restart")').click();
   await expect(page.locator(".banner")).toContainText("Configuration mode changed");
+  // The restart is deferred until after this response, so the call the page
+  // made must have succeeded rather than dying with the container.
+  await expect(page.locator(".banner.err")).toHaveCount(0);
 
   // The add-on is pointed at the new file...
   await expect
