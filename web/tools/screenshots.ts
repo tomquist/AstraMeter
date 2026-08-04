@@ -24,7 +24,7 @@
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Page } from "@playwright/test";
+import { type Browser, chromium, type Page } from "@playwright/test";
 import {
   BASE_URL,
   REPO,
@@ -282,12 +282,15 @@ async function waitForGoodMoment(opts: Options, label: string): Promise<void> {
       return;
     }
     if (Date.now() > deadline) {
-      console.warn(
-        `! ${label}: no settled moment within 90 s ` +
-          `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery ${quietest.toFixed(0)} W) — ` +
-          "shooting anyway",
+      // Refuse rather than shoot. A warning here is how the first pass came to
+      // commit images reading +72 W under a caption claiming zero: it scrolls
+      // past in an eight-minute run and the PNG lands anyway. If the house
+      // cannot reach a settled moment, the scenario is wrong and the fix
+      // belongs in SHOWCASE — not in a caption written around a bad shot.
+      throw new Error(
+        `${label}: no settled moment within 90 s ` +
+          `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery ${quietest.toFixed(0)} W)`,
       );
-      return;
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
@@ -368,11 +371,16 @@ async function main(): Promise<void> {
   // outlier, and the reading freezes at the pre-change value indefinitely —
   // which froze the control loop and flattened every trend line with it.
   const stack = await startStack({ sim: SHOWCASE, configDir: opts.stackDir });
-  const browser = await chromium.launch({
-    executablePath: process.env.ASTRAMETER_E2E_CHROMIUM || undefined,
-  });
+  // Launch inside the block that stops the stack: the simulator and AstraMeter
+  // are already running by now, so a failure here — a missing Chromium, most
+  // likely — would otherwise leave them holding the dashboard port, and the
+  // next run would refuse to start against the leftovers.
+  let browser: Browser | undefined;
 
   try {
+    browser = await chromium.launch({
+      executablePath: process.env.ASTRAMETER_E2E_CHROMIUM || undefined,
+    });
     const context = await browser.newContext({
       viewport: { width: opts.width, height: opts.height },
       deviceScaleFactor: opts.scale,
@@ -394,22 +402,28 @@ async function main(): Promise<void> {
     await openTab(page, "batteries");
     await warmUp(page, opts);
 
-    for (const theme of opts.themes) {
-      await setTheme(page, theme);
-      for (const tab of opts.tabs) {
-        await openTab(page, tab);
-        await fitToContent(page, opts);
-        await waitForGoodMoment(opts, `${tab}/${theme}`);
-        // Straight after the wait, and after one more poll has painted what
-        // the wait saw — the check reads the API, the image reads the DOM.
-        await page.waitForTimeout(2200);
+    // Tab outside, theme inside: both variants of a tab come off the same
+    // settled moment, seconds apart, so the docs can offer them as one image
+    // that follows the reader's theme without the numbers changing when it
+    // switches. Waiting once per tab rather than once per image is the reason
+    // that holds — the other order re-waits between the pair and shoots each
+    // at a different instant.
+    for (const tab of opts.tabs) {
+      await openTab(page, tab);
+      await fitToContent(page, opts);
+      await waitForGoodMoment(opts, tab);
+      // Straight after the wait, and after one more poll has painted what
+      // the wait saw — the check reads the API, the image reads the DOM.
+      await page.waitForTimeout(2200);
+      for (const theme of opts.themes) {
+        await setTheme(page, theme);
         const file = join(opts.out, `dashboard-${tab}-${theme}.png`);
         await page.screenshot({ path: file });
         log(`wrote ${file}`);
       }
     }
   } finally {
-    await browser.close();
+    await browser?.close();
     await stack.stop();
   }
 }
