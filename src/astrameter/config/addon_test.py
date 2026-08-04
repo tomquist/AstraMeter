@@ -373,6 +373,59 @@ def test_custom_config_warns_about_ignored_ui_options(tmp_path, caplog):
     assert "mqtt_uri is ignored" in caplog.text
 
 
+def _custom(tmp_path, caplog, body, level="WARNING"):
+    """Load *body* as the add-on's custom config file and return its general()."""
+    (tmp_path / "my.ini").write_text(body, encoding="utf-8")
+    with caplog.at_level(level):
+        cfg = addon.load_config(
+            {**BASE_OPTIONS, "custom_config": "my.ini"},
+            FakeSupervisor(),
+            config_dir=str(tmp_path),
+        )
+        return cfg.general()
+
+
+def test_custom_config_still_serves_the_dashboard(tmp_path, caplog):
+    """A file predating the dashboard must not leave the panel on a 404.
+
+    ``DASHBOARD_ENABLED`` is off by default for a bare Docker run, where the
+    web port is unauthenticated. Under the add-on the panel and the watchdog
+    both depend on it, so the file's default cannot be allowed to decide.
+    """
+    general = _custom(tmp_path, caplog, "[GENERAL]\nDEVICE_TYPE = ct003\n")
+
+    assert general.dashboard is True
+    assert general.enable_web_server is True
+    # The file never mentioned either key, so there is nothing to warn about.
+    assert "Ignoring" not in caplog.text
+
+
+def test_custom_config_cannot_turn_the_dashboard_or_web_server_off(tmp_path, caplog):
+    general = _custom(
+        tmp_path,
+        caplog,
+        "[GENERAL]\nDASHBOARD_ENABLED = False\nENABLE_WEB_SERVER = False\n",
+    )
+
+    assert general.dashboard is True
+    assert general.enable_web_server is True
+    # Named so the user can find them, and told what to reach for instead.
+    assert "ENABLE_WEB_SERVER and DASHBOARD_ENABLED" in caplog.text
+    assert "DASHBOARD_ALLOW_WRITE" in caplog.text
+
+
+def test_custom_config_keeps_the_rest_of_its_dashboard_settings(tmp_path, caplog):
+    """Only *whether* it runs is forced — what it may do stays the file's."""
+    general = _custom(
+        tmp_path,
+        caplog,
+        "[GENERAL]\nDASHBOARD_ALLOW_WRITE = True\nDASHBOARD_DIRECT_ACCESS = True\n",
+    )
+
+    assert general.dashboard_allow_write is True
+    assert general.dashboard_direct_access is True
+
+
 def test_wait_for_home_assistant_returns_once_the_api_answers():
     class LateSupervisor(FakeSupervisor):
         def home_assistant_ready(self) -> bool:

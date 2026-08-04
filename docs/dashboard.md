@@ -84,6 +84,13 @@ Two add-on options control it:
 | `dashboard_allow_write` | `true` | Lets the dashboard change configuration and control batteries. Turn it off for a read-only dashboard. |
 | `dashboard_direct_access` | `false` | Also serves the page on `http://<host>:52500` **with no authentication**. See [Security](#security). |
 
+This holds for a `custom_config` file too: `DASHBOARD_ENABLED` and
+`ENABLE_WEB_SERVER` in that file are ignored, because the sidebar panel and the
+Supervisor's health check both depend on them. The file's
+`DASHBOARD_ALLOW_WRITE` and `DASHBOARD_DIRECT_ACCESS` still apply — note that
+both default to `False`, so a custom config file gives you a **read-only**
+dashboard unless you set `DASHBOARD_ALLOW_WRITE = True`.
+
 ### Docker / standalone
 
 Off by default. Add to `[GENERAL]` in your `config.ini`:

@@ -10,8 +10,8 @@ SKIP_POWERMETER_TEST = False
 # WEB_CONFIG_ENABLED = False
 # Enable the live status dashboard at http://<host>:<port>/ (opt-in, default False).
 # Shows grid power, every battery's target and reported power, power-source
-# health and the balancer's internal state.  In the Home Assistant add-on this
-# is on by default and opens from the sidebar instead.
+# health and the balancer's internal state.  Ignored by the Home Assistant
+# add-on, where the dashboard always runs and opens from the sidebar.
 # DASHBOARD_ENABLED = False
 # Let the dashboard change this file and control batteries (default False).
 # Leave it off to keep the dashboard read-only.  There is NO authentication on

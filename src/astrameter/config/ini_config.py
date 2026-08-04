@@ -48,6 +48,16 @@ class IniAppConfig(AppConfig):
         config.read(path)
         return cls(config, path)
 
+    def declared_general_keys(self, *fields: str) -> list[str]:
+        """Which of *fields* the file actually sets, named as its INI keys.
+
+        A backend that overrides a setting uses this to tell a user their
+        value is being ignored, without also nagging the majority whose file
+        never mentioned it.
+        """
+        keys = [general_key(field) for field in fields]
+        return [key for key in keys if self._config.has_option(GENERAL_SECTION, key)]
+
     def general(self) -> GeneralSettings:
         config = self._config
         defaults = GeneralSettings()
@@ -298,6 +308,17 @@ _GENERAL_KEY_OVERRIDES = {
     "device_types": "DEVICE_TYPE",
     "dashboard": "DASHBOARD_ENABLED",
 }
+
+
+def general_key(field: str) -> str:
+    """The ``[GENERAL]`` key backing *field* of :class:`GeneralSettings`.
+
+    Lets another backend name a key in a message without hardcoding it, so a
+    rename here cannot leave that message pointing at a key nobody reads.
+    """
+    return _GENERAL_KEY_OVERRIDES.get(field, field.upper())
+
+
 _SIGNAL_KEY_OVERRIDES = {
     "smooth_alpha": "SMOOTH_TARGET_ALPHA",
     "offsets": "POWER_OFFSET",

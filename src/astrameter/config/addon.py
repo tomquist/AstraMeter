@@ -150,6 +150,27 @@ _IGNORED_WITH_CUSTOM_CONFIG: tuple[tuple[tuple[str, ...], str], ...] = (
     ),
 )
 
+
+def _serve_the_panel(general: GeneralSettings) -> GeneralSettings:
+    """Force the two settings the add-on's manifest already commits to.
+
+    ``ha_addon/config.yaml`` declares ingress on the web port and points the
+    Supervisor watchdog at ``/health`` there. Neither is conditional on the
+    configuration, so a source that turned either off would leave the sidebar
+    panel opening onto a 404 and the watchdog restarting the add-on for being
+    unreachable. Under the add-on this is a property of the deployment rather
+    than a choice, so it is applied to *every* configuration source.
+
+    Serving the dashboard costs nothing here: Home Assistant authenticates
+    every ingress request, and the plain port stays refused unless
+    ``dashboard_direct_access`` opts into it. That is what makes it safe to
+    override the user, and why the equivalent setting is still off by default
+    for a bare Docker run, where the port is the only way in and is
+    unauthenticated.
+    """
+    return replace(general, enable_web_server=True, dashboard=True)
+
+
 SettingsT = TypeVar("SettingsT")
 
 
@@ -365,23 +386,19 @@ class AddonAppConfig(AppConfig):
             for device_type in str(self._option("device_types", "")).split(",")
             if device_type.strip()
         ]
-        general = replace(
-            defaults,
-            device_types=device_types or defaults.device_types,
-            # The add-on panel links to the built-in web UI, so it is always
-            # served; its config editor is for config files only.
-            enable_web_server=True,
-            web_config_enabled=False,
-            # The add-on's sidebar panel *is* the dashboard, so there is no
-            # option to turn it off: doing so would leave a panel that opens
-            # onto nothing. Unlike a bare Docker run it costs nothing to serve
-            # either, because Home Assistant authenticates every ingress
-            # request. Writing is on by default and can be turned off.
-            dashboard=True,
-            dashboard_allow_write=True,
-            signal=_apply_options(
-                defaults.signal, self._options, _GLOBAL_SIGNAL_FIELDS
-            ),
+        general = _serve_the_panel(
+            replace(
+                defaults,
+                device_types=device_types or defaults.device_types,
+                # The config editor is for config files only, and in this mode
+                # there is none.
+                web_config_enabled=False,
+                # Writing is on by default and can be turned off.
+                dashboard_allow_write=True,
+                signal=_apply_options(
+                    defaults.signal, self._options, _GLOBAL_SIGNAL_FIELDS
+                ),
+            )
         )
         return _apply_options(general, self._options, _GENERAL_FIELDS)
 
@@ -561,6 +578,36 @@ def _warn_ignored_options(options: Options) -> None:
             logger.warning(message)
 
 
+class AddonIniAppConfig(IniAppConfig):
+    """A user's own ``config.ini``, read with the add-on's web settings.
+
+    The file decides everything except whether the web server and dashboard
+    run — see :func:`_serve_the_panel`. Without this the file's defaults
+    applied, and since ``DASHBOARD_ENABLED`` defaults off for a bare Docker
+    run, every add-on user with a custom config file got a sidebar panel
+    serving ``{"error": "Not Found"}``.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._warned = False
+
+    def general(self) -> GeneralSettings:
+        general = _serve_the_panel(super().general())
+        overridden = self.declared_general_keys("enable_web_server", "dashboard")
+        if overridden and not self._warned:
+            self._warned = True
+            logger.warning(
+                "Ignoring %s from %s: the add-on serves the dashboard on its "
+                "sidebar panel and the Supervisor watchdog polls the same "
+                "port, so neither can be turned off here. Set "
+                "DASHBOARD_ALLOW_WRITE = False for a read-only dashboard.",
+                " and ".join(overridden),
+                self.path,
+            )
+        return general
+
+
 def load_config(
     options: Options,
     supervisor: SupervisorClient | None = None,
@@ -569,7 +616,8 @@ def load_config(
     """Pick the add-on's configuration source.
 
     The add-on options unless the user pointed the add-on at their own config
-    file, in which case that file takes over completely.
+    file, in which case that file takes over — everything except the web
+    settings the add-on's manifest depends on.
     """
     path = custom_config_path(options, config_dir)
     if path is None:
@@ -577,4 +625,4 @@ def load_config(
 
     logger.info("Using custom config file: %s", path)
     _warn_ignored_options(options)
-    return IniAppConfig.from_file(path)
+    return AddonIniAppConfig.from_file(path)

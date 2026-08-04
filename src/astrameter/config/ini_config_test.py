@@ -253,3 +253,14 @@ BALANCE_GAIN = 0.44
     )
     assert cfg.ct("ct003") == CtSettings()
     assert _round_trip(cfg).ct("ct003") == CtSettings()
+
+
+def test_declared_general_keys_reports_only_what_the_file_sets():
+    """`dashboard` is not `DASHBOARD`, so the lookup goes through the map."""
+    cfg = config("[GENERAL]\nDASHBOARD_ENABLED = False\n")
+
+    assert cfg.declared_general_keys("dashboard") == ["DASHBOARD_ENABLED"]
+    assert cfg.declared_general_keys("enable_web_server") == []
+    assert cfg.declared_general_keys("enable_web_server", "dashboard") == [
+        "DASHBOARD_ENABLED"
+    ]
