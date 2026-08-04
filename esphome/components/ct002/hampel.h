@@ -15,12 +15,27 @@ namespace ct002 {
 // median (with a floor of `min_threshold` watts to handle the constant-
 // signal MAD=0 degenerate case), the sample is treated as an outlier: the
 // reported total is replaced by the median and per-phase values are
-// redistributed proportionally (equal split when |raw_total| is near zero).
-// The window entry itself is mutated to the median so a single spike does
-// not poison future detections.
+// redistributed proportionally (equal split when |raw_total| is too small to
+// scale from -- see MAX_SCALE_RATIO).
+//
+// The window always holds the raw totals, including rejected ones -- what the
+// canonical Hampel identifier does, and what lets the filter follow a real
+// change. Writing the median back over a rejected sample instead, as this
+// once did, makes the window converge to a constant, which drives MAD to
+// zero, which pins the threshold at min_threshold, after which every sample
+// more than that from the old median is rejected: a sustained change froze
+// the reading at its pre-change value indefinitely.
 class HampelPowermeter : public PowermeterWrapper {
  public:
   static constexpr double MAD_SCALE = 1.4826;
+
+  // How far the per-phase values may be scaled up to make their sum equal the
+  // median. Beyond this the split is not worth preserving: a rejected sample
+  // whose total is near zero would otherwise be multiplied by
+  // median / raw_total, turning a phase reading a couple of watts into tens
+  // of kilowatts. Only ever reached on the dropout side -- a spike scales
+  // down -- so the cap costs nothing in the normal case.
+  static constexpr double MAX_SCALE_RATIO = 4.0;
 
   HampelPowermeter(Powermeter *wrapped, size_t window, float n_sigma, float min_threshold);
 

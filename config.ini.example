@@ -526,6 +526,11 @@ THROTTLE_INTERVAL = 0
 ## EMA smoothing.  This is orthogonal to the EMA: Hampel rejects impulse noise,
 ## the EMA smooths the cleaned signal.
 ##
+## A *sustained* change (solar arriving, an oven switching on) is held back
+## for about half a window before it is adopted — it is indistinguishable
+## from a spike until enough samples agree.  A bigger window rejects noise
+## better and adopts real changes more slowly; that is the whole trade.
+##
 ## Recommended starting point for flaky HTTP/MQTT sources:
 ##   HAMPEL_WINDOW        = 5    # odd sizes recommended; 5–7 works well
 ##   HAMPEL_N_SIGMA       = 3.0  # reject beyond ~3σ (MAD-derived)

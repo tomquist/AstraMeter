@@ -63,11 +63,10 @@ std::vector<float> HampelPowermeter::get_powermeter_watts() {
     return raw_values;
   }
 
-  // Outlier: write the median back into the window so a single spike does
-  // not poison future detections (canonical Hampel identifier behavior).
-  this->window_.back() = median;
-
-  if (std::fabs(raw_total) < 1e-9) {
+  // Outlier. The window keeps the raw total (see hampel.h): overwriting it
+  // with the median is what made a sustained change latch forever.
+  if (std::fabs(raw_total) * MAX_SCALE_RATIO < std::fabs(median) ||
+      std::fabs(raw_total) < 1e-9) {
     const float share = static_cast<float>(median / raw_values.size());
     return std::vector<float>(raw_values.size(), share);
   }

@@ -74,23 +74,62 @@ class TestHampelPowermeter:
         assert result[0] != 10000.0
 
     @pytest.mark.asyncio
-    async def test_roll_forward_evicts_mutated_entry(self):
-        """After a replacement, the mutated (median) entry is what rolls out,
-        not the original outlier — so the outlier doesn't return to the window.
+    async def test_spike_in_window_does_not_stop_later_detection(self):
+        """A rejected sample stays in the window, and that is fine: the median
+        is what the filter reads, and one outlier in five cannot move it.
         """
         fake = FakePowermeter()
-        hp = HampelPowermeter(fake, window=3, n_sigma=3.0)
-        # Fill window
-        await _push(hp, fake, [100.0])
-        await _push(hp, fake, [100.0])
-        await _push(hp, fake, [100.0])
-        # Inject spike — window is [100, 100, 10000] before detection; after
-        # replacement the stored window is [100, 100, 100].
-        await _push(hp, fake, [10000.0])
-        # Next clean sample: window becomes [100, 100, 100] after evicting the
-        # oldest 100, and the new sample 101 is within threshold.
-        result = await _push(hp, fake, [101.0])
-        assert result == [101.0]
+        hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
+        for _ in range(5):
+            await _push(hp, fake, [100.0])
+        # Spike is rejected, and is still sitting in the window afterwards.
+        assert await _push(hp, fake, [10000.0]) == pytest.approx([100.0])
+        # A clean sample still passes, and a second spike is still caught —
+        # the first one did not blind the filter.
+        assert await _push(hp, fake, [101.0]) == pytest.approx([101.0])
+        assert await _push(hp, fake, [9000.0]) != [9000.0]
+
+    @pytest.mark.asyncio
+    async def test_sustained_change_is_followed_not_latched(self):
+        """The regression this filter was rewritten for.
+
+        Rejecting a *spike* is the job; rejecting the new normal is not. When
+        the median was written back over rejected samples the window converged
+        to a constant, MAD went to zero, the threshold stuck at min_threshold
+        and every later sample was an outlier — the reading froze at its
+        pre-change value for as long as the process ran.
+        """
+        fake = FakePowermeter()
+        hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
+        for _ in range(5):
+            await _push(hp, fake, [1100.0])
+
+        # Solar arrives: the house genuinely moves to -600 W and stays there.
+        outputs = [(await _push(hp, fake, [-600.0]))[0] for _ in range(5)]
+        # The first samples are held back — indistinguishable from a spike at
+        # the time — but the window fills and the filter follows.
+        assert outputs[-1] == pytest.approx(-600.0)
+        assert any(o == pytest.approx(1100.0) for o in outputs), (
+            "the change should still be resisted at first"
+        )
+
+    @pytest.mark.asyncio
+    async def test_near_zero_total_does_not_amplify_phases(self):
+        """Scaling phases so their sum matches the median must stay bounded.
+
+        With only an exact-zero guard, a dropout whose phases nearly cancel
+        was multiplied by ``median / raw_total`` — an unbounded ratio that
+        turned single-digit watts into tens of kilowatts on every phase.
+        """
+        fake = FakePowermeter()
+        hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
+        for _ in range(5):
+            await _push(hp, fake, [400.0, 400.0, 300.0])
+
+        result = await _push(hp, fake, [2.0, -1.0, 0.5])
+        assert sum(result) == pytest.approx(1100.0), "the total is still the median"
+        # No phase may exceed the total being redistributed.
+        assert max(abs(v) for v in result) <= 1100.0
 
     @pytest.mark.asyncio
     async def test_constant_signal_mad_zero_no_floor(self):

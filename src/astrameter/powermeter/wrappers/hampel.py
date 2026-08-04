@@ -19,10 +19,19 @@ class HampelPowermeter(PowermeterWrapper):
     median (with a floor of ``min_threshold`` watts to handle the constant-
     signal MAD=0 degenerate case), the sample is treated as an outlier: the
     reported total is replaced by the median and per-phase values are
-    redistributed proportionally (equal split when ``|raw_total|`` is near
-    zero). The window entry itself is mutated to the median so a single spike
-    does not poison future detections — this is the canonical Hampel
-    identifier formulation used in control literature.
+    redistributed proportionally (equal split when ``|raw_total|`` is too
+    small to scale from — see :attr:`MAX_SCALE_RATIO`).
+
+    **The window always holds the raw totals**, including rejected ones. That
+    is what the canonical Hampel identifier does, and it is what lets the
+    filter follow a real change: writing the median back over a rejected
+    sample instead — as this once did — makes the window converge to a
+    constant, which drives MAD to zero, which pins the threshold at
+    ``min_threshold``, after which *every* sample more than that from the old
+    median is rejected. A sustained change (solar arriving, an oven switching
+    on) then froze the reading at its pre-change value indefinitely rather
+    than for a few samples. A spike does sit in the window for ``window``
+    samples now, but that is precisely what a median is robust to.
 
     Operates on the sum of phases, mirroring :class:`SmoothedPowermeter`.
     A phase-cancelling outlier (e.g. +1000 W on L1 and -1000 W on L2) is
@@ -31,6 +40,14 @@ class HampelPowermeter(PowermeterWrapper):
     """
 
     MAD_SCALE = 1.4826
+
+    #: How far the per-phase values may be scaled up to make their sum equal
+    #: the median. Beyond this the split is not worth preserving: a rejected
+    #: sample whose total is near zero would otherwise be multiplied by
+    #: ``median / raw_total``, turning a phase reading a couple of watts into
+    #: tens of kilowatts. Only ever reached on the dropout side — a spike
+    #: scales *down* — so the cap costs nothing in the normal case.
+    MAX_SCALE_RATIO = 4.0
 
     def __init__(
         self,
@@ -74,7 +91,6 @@ class HampelPowermeter(PowermeterWrapper):
         if threshold <= 0 or abs(raw_total - median) <= threshold:
             return list(raw_values)
 
-        self._window[-1] = median
         logger.debug(
             "HampelPowermeter: outlier rejected raw=%.2f median=%.2f threshold=%.2f",
             raw_total,
@@ -82,7 +98,7 @@ class HampelPowermeter(PowermeterWrapper):
             threshold,
         )
 
-        if abs(raw_total) < 1e-9:
+        if abs(raw_total) * self.MAX_SCALE_RATIO < abs(median) or abs(raw_total) < 1e-9:
             return [median / len(raw_values)] * len(raw_values)
         ratio = median / raw_total
         return [v * ratio for v in raw_values]

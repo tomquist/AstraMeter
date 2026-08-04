@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -99,6 +100,48 @@ TEST(Hampel, RedistributesProportionally) {
   EXPECT_NEAR(out[0], 50.0f, 1e-3);
   EXPECT_NEAR(out[1], 30.0f, 1e-3);
   EXPECT_NEAR(out[2], 20.0f, 1e-3);
+}
+
+TEST(Hampel, FollowsSustainedChangeInsteadOfLatching) {
+  StubSource src;
+  HampelPowermeter h(&src, /*window=*/5, /*n_sigma=*/3.0f, /*min_threshold=*/50.0f);
+  for (int i = 0; i < 5; ++i) {
+    src.current = {1100.0f, 0.0f, 0.0f};
+    h.get_powermeter_watts();
+  }
+  // Solar arrives: the house genuinely moves to -600 W and stays there.
+  // Rejecting a spike is the job; rejecting the new normal is not. When the
+  // median was written back over rejected samples the window converged to a
+  // constant, MAD went to zero, the threshold stuck at min_threshold and the
+  // reading froze at 1100 W indefinitely.
+  float last = 0.0f;
+  bool resisted = false;
+  for (int i = 0; i < 5; ++i) {
+    src.current = {-600.0f, 0.0f, 0.0f};
+    last = vsum(h.get_powermeter_watts());
+    if (std::fabs(last - 1100.0f) < 1e-3)
+      resisted = true;
+  }
+  EXPECT_TRUE(resisted) << "the change should still be resisted at first";
+  EXPECT_NEAR(last, -600.0f, 1e-3);
+}
+
+TEST(Hampel, DoesNotAmplifyPhasesWhenTotalNearZero) {
+  StubSource src;
+  HampelPowermeter h(&src, /*window=*/5, /*n_sigma=*/3.0f, /*min_threshold=*/50.0f);
+  for (int i = 0; i < 5; ++i) {
+    src.current = {400.0f, 400.0f, 300.0f};
+    h.get_powermeter_watts();
+  }
+  // A dropout whose phases nearly cancel. With only an exact-zero guard this
+  // was scaled by median / raw_total, turning single-digit watts into tens of
+  // kilowatts on every phase.
+  src.current = {2.0f, -1.0f, 0.5f};
+  auto out = h.get_powermeter_watts();
+  ASSERT_EQ(out.size(), 3u);
+  EXPECT_NEAR(vsum(out), 1100.0f, 1e-2) << "the total is still the median";
+  for (float v : out)
+    EXPECT_LE(std::fabs(v), 1100.0f) << "no phase may exceed the redistributed total";
 }
 
 // ---- Smoothing ----
