@@ -76,13 +76,11 @@ const SHOWCASE: SimConfig = {
       { name: "Heat pump", power: 900, phase: "B" },
       { name: "Dishwasher", power: 1100, phase: "C" },
     ],
-    // Deliberately under what the house typically draws. Bigger solar is
-    // realistic, but it puts the fleet into charging for minutes at a time,
-    // and the docs caption these images "three batteries between them supply
-    // what the house is drawing" — a claim the gate now enforces, so the sun
-    // has to leave something for the batteries to cover. It still moves
-    // enough to give the trend lines their shape.
-    solar_max: 1500,
+    // Under the base load plus a typical appliance, so a sunny moment swings
+    // the fleet into charging without erasing the house entirely. The capture
+    // gate waits those moments out, since the captions describe the fleet
+    // supplying the house.
+    solar_max: 3000,
     solar_phases: ["A", "B", "C"],
   },
   // A mixed fleet, as most people's is — but sized so that together they can
@@ -299,13 +297,16 @@ interface Moment {
 async function settledNow(opts: Options): Promise<Moment> {
   const snapshot = await statusSnapshot();
   const grid = gridWatts(snapshot);
-  // Negated, so this is what each battery is *supplying* to the house. The
-  // direction matters: the docs caption both images with "three batteries
+  // What each battery is supplying to the house. `reported_power_w` is
+  // positive discharging and negative charging (see the `charging` test in
+  // ts/dashboard/view.ts) — the Overview rail shows the negation of it,
+  // because that column is each battery's *effect on the grid*, so do not
+  // take the sign from the screenshots.
+  //
+  // The direction matters: the docs caption both images with "three batteries
   // between them supply what the house is drawing", and a fleet soaking up
-  // solar is equally real but illustrates the opposite. Accepting either
-  // would put a charging shot under a discharging caption, which is the
-  // caption-fits-the-picture failure this gate exists to prevent.
-  const supplying = batteryWatts(snapshot).map((w) => -w);
+  // solar is equally real but illustrates the opposite.
+  const supplying = batteryWatts(snapshot);
   const quietest = supplying.length ? Math.min(...supplying) : 0;
   const ok =
     grid != null && Math.abs(grid) <= opts.settleW && quietest >= opts.workingW;
