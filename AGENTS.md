@@ -84,27 +84,29 @@ page (`web/build.mjs` copies them to `dist/assets/screenshots/`). Refresh them
 with:
 
 ```bash
-cd web && npm run screenshots     # ~4 minutes; takes all 8
+cd web && npm run screenshots     # ~8 minutes; takes all 8
 ```
 
 `web/tools/screenshots.ts` boots the same stack the browser tests use — via a
-`sim`/`configDir`/`meterOptions` override on `startStack` — against a bigger
-house (three batteries, five appliances, solar) and drives a real browser. It
-is deliberately patient: the trend lines are built in the browser from polls,
-so it waits for real samples, and it waits for a moment when the grid is near
-zero with every battery working before each shot. `--tabs`, `--themes`,
+`sim`/`configDir` override on `startStack` — against a bigger house (three
+batteries, five appliances, solar) and drives a real browser. It is
+deliberately patient: the trend lines are built in the browser from polls, so
+it waits for real samples, and it waits for a moment when the grid is actually
+at zero with every battery working before each shot. `--tabs`, `--themes`,
 `--warmup` and `--out` narrow a re-run. There is **no CI check** for staleness —
 the values are live, so every run differs and a diff would always be dirty;
 refresh them when a UI change makes them wrong.
 
-Because every run differs, two things around the images must not assume a
-particular one:
+Two things to hold onto when refreshing them:
 
-- **Captions and alt text must not quote a reading.** "Holds the grid at zero"
-  was written against a shot that read +72 W. Describe the relationship the
-  script actually guarantees — the grid held to a fraction of the house while
-  the fleet carries the rest — not a number. The gate is `--settle` (default
-  250 W) and `--working` (150 W); a caption may only claim what those allow.
+- **The captions claim the grid sits at zero, and the images have to earn
+  it.** If a shot comes out tens of watts off, the scenario is wrong, not the
+  caption — do not reword the caption to match a bad run. Two settings decide
+  this: `base_noise` is re-rolled every read, so it is a hard floor under how
+  close to zero the grid can be held, and `auto_interval` must stay longer
+  than the loop takes to settle (~35 s mean, ~62 s p95 per the steering
+  evaluation) or the house is never settled at all. `--settle` (default 30 W,
+  the balancer's own band) is the guard that catches both.
 - **`web/index.html` states each image's intrinsic `width`/`height`** to
   reserve layout space. The crop height follows the tab's content, so re-check
   those attributes after a refresh that changes a tab's height.

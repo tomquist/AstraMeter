@@ -60,7 +60,12 @@ const SHOWCASE: SimConfig = {
     // battery and parks the other two at 0 W: correct behaviour, but it
     // documents the efficiency rule rather than the balancing.
     base_load: [300, 260, 240],
-    base_noise: 25,
+    // Meter jitter, not a disturbance. This is re-rolled every read, so the
+    // balancer cannot cancel it — whatever is set here is a floor under how
+    // close to zero the grid can be held, and at 25 W/phase that floor was
+    // ~±75 W on the total. The dashboard then showed a house AstraMeter was
+    // visibly failing to zero out.
+    base_noise: 6,
     // Sized so the fleet can still cover the house with everything on. A
     // bigger house is not a better advert: it just parks the grid bar at the
     // end of its scale, which is AstraMeter saturated, not AstraMeter working.
@@ -86,11 +91,12 @@ const SHOWCASE: SimConfig = {
     { mac: "02B250000003", phase: "C", max_charge_power: 2500, max_discharge_power: 2500, capacity_wh: 5120, initial_soc: 0.38 },
   ],
   auto_mode: true,
-  // Something switches every ten to twenty seconds — often enough that the
-  // trend lines have shape by the time the warm-up ends, slow enough that the
-  // balancer has caught up before the next change. Push this much faster and
-  // the loop never converges, so every shot lands mid-chase.
-  auto_interval: [10, 20],
+  // Longer than the loop takes to converge. The steering evaluation puts
+  // settling at ~35 s mean and ~62 s p95, so a house that switched every
+  // 10-20 s was never settled at all — it was permanently chasing, and the
+  // grid sat 70-140 W away from zero in every shot. Events this far apart
+  // leave the trend lines a visible step *and* the recovery after it.
+  auto_interval: [45, 95],
   log_interval: 600,
 } as SimConfig;
 
@@ -119,13 +125,16 @@ function parseArgs(argv: string[]): Options {
     height: 900,
     // Retina: the docs render these at roughly half their pixel width.
     scale: 2,
-    // Enough of a line to read as a trend. At the 2 s poll that is ~80 s of
-    // watching, and the warm-up budget below is the ceiling on waiting for it.
-    minPoints: 40,
-    warmupMs: 240_000,
-    // What "a good moment" means, in watts: the grid held near zero, and
-    // every battery visibly the reason why.
-    settleW: 250,
+    // ~3 minutes of watching at the 2 s poll. Enough to cover a couple of
+    // the house's changes and the settling after each, which is what gives a
+    // trend line its shape now that events are further apart.
+    minPoints: 90,
+    warmupMs: 420_000,
+    // What "a good moment" means, in watts: the grid genuinely at zero — the
+    // balancer's own settle band is ±25 W — and every battery visibly the
+    // reason why. A loose gate here is not a small sin: it admits shots of
+    // AstraMeter mid-correction and presents them as AstraMeter working.
+    settleW: 30,
     workingW: 150,
     tabs: [...TABS],
     themes: [...THEMES],

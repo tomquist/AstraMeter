@@ -12,7 +12,7 @@ net-zero grid exchange.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-overview-dark.png">
-  <img alt="AstraMeter's live status dashboard: the grid held to a fraction of what the house is drawing, while three batteries between them supply the rest" src="docs/images/dashboard-overview-light.png">
+  <img alt="AstraMeter's live status dashboard: the grid held within a few watts of zero while three batteries between them supply what the house is drawing" src="docs/images/dashboard-overview-light.png">
 </picture>
 
 <p align="center"><em>The built-in <a href="docs/dashboard.md">live status dashboard</a> — three batteries sharing one house.</em></p>

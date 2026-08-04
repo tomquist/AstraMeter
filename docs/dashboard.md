@@ -29,7 +29,7 @@ and the power source's health.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-overview-dark.png">
-  <img alt="The Overview tab: the grid held to a fraction of what the house is drawing, while three batteries between them supply the rest" src="images/dashboard-overview-light.png">
+  <img alt="The Overview tab: the grid held within a few watts of zero while three batteries between them supply what the house is drawing" src="images/dashboard-overview-light.png">
 </picture>
 
 **Batteries** — one card per battery: reported power, the target AstraMeter
