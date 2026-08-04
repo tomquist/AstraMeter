@@ -1253,6 +1253,11 @@ class CT002:
                 addr,
                 consumer_id,
             )
+            # The report above moved liveness and poll_interval on, and this
+            # path never reaches the increment at the end of a served poll.
+            # Without this a status client that skips unchanged revisions
+            # would show a deduped battery frozen at its last answered poll.
+            self._rev += 1
             return
 
         # Coalesce concurrent polls from the same battery.  If a handler for

@@ -395,9 +395,17 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     socklen_t to_len = socket::set_sockaddr(reinterpret_cast<struct sockaddr *>(&to), sizeof(to),
                                             addr_ip, addr_port);
     if (to_len > 0) {
-      this->socket_->sendto(payload.data(), payload.size(), 0,
-                            reinterpret_cast<struct sockaddr *>(&to), to_len);
-      this->track_answer_(consumer_id);
+      const ssize_t sent = this->socket_->sendto(payload.data(), payload.size(), 0,
+                                                 reinterpret_cast<struct sockaddr *>(&to), to_len);
+      // Only an actually-delivered datagram counts as an answer: sendto()
+      // returns -1 when the stack rejects it (ENOMEM under load is the common
+      // one), and the battery is no better off than if we had deduped it.
+      if (sent >= 0 && static_cast<size_t>(sent) == payload.size()) {
+        this->track_answer_(consumer_id);
+      } else {
+        ESP_LOGW(TAG, "CT002 response to %s was not sent (%d of %u bytes)", addr_ip.c_str(),
+                 static_cast<int>(sent), static_cast<unsigned>(payload.size()));
+      }
     }
   }
 

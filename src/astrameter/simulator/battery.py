@@ -289,6 +289,13 @@ class BatterySimulator:
     async def _send_request(self) -> list[str] | None:
         request_fields = self._request_fields()
         phase_field = request_fields[4]
+        # Claim the sequence number now, not after the reply lands. `run()`
+        # fires polls without awaiting them, so counting on receipt would let
+        # concurrent polls read the same value and repeat the inspection phase
+        # — and a poll that is never answered (dedupe drop, lost datagram)
+        # would leave the battery stuck in inspection forever. A real device
+        # counts the polls it sent.
+        self._request_count += 1
         payload = protocol.build_payload(request_fields)
 
         loop = asyncio.get_running_loop()
@@ -309,8 +316,6 @@ class BatterySimulator:
         finally:
             if transport is not None:
                 transport.close()
-
-        self._request_count += 1
 
         response_fields, err = protocol.parse_message(data)
         if err:
@@ -465,8 +470,14 @@ class BatterySimulator:
                 # accumulate drift into the polling schedule.
                 await asyncio.sleep(max(0.0, next_poll - time.monotonic()))
         finally:
-            for task in list(self._poll_tasks):
+            # cancel() only *requests* cancellation; without the await the
+            # detached polls never reach their `finally` and their transports
+            # leak past shutdown.
+            tasks = list(self._poll_tasks)
+            for task in tasks:
                 task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     # -- serialisation -----------------------------------------------------
 

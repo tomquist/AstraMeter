@@ -94,6 +94,24 @@ def test_answer_interval_matches_poll_interval_without_dedupe() -> None:
     assert len(transport.sent) == 6
 
 
+def test_deduped_poll_advances_the_status_revision() -> None:
+    """A suppressed poll still moves state, so it must move `rev` with it.
+
+    The status API's revision is how a client decides whether to re-render;
+    leaving it untouched would freeze a deduped battery at its last answered
+    poll even though its liveness and poll interval just changed.
+    """
+    clock = FakeClock()
+    clock.now = 1000.0
+    ct = CT002(ct_mac="", dedupe_time_window=0.6, clock=clock)
+    _drive_polls(ct, clock, [0.0])
+    after_first = ct._rev
+
+    clock.now += 0.1  # inside the window → suppressed
+    _drive_polls(ct, clock, [0.0])
+    assert ct._rev > after_first
+
+
 def test_deduped_poll_refreshes_liveness() -> None:
     """A suppressed poll still keeps the consumer out of the eviction sweep."""
     clock = FakeClock()
