@@ -345,6 +345,50 @@ async function setTheme(page: Page, theme: Theme): Promise<void> {
   await page.waitForTimeout(200);
 }
 
+/** The poll the dashboard makes to refresh itself. */
+const STATUS_ROUTE = "**/api/status*";
+
+/**
+ * Take both themes of one tab, on a page frozen at a settled moment.
+ *
+ * The gate reads the status API, but the image reads the DOM, and the page
+ * polls on its own schedule — so without care a poll can repaint the page
+ * between the check passing and the shutter, putting a state nobody checked
+ * into the picture. Two things close that gap:
+ *
+ * Polls are answered `304 Not Modified` for the duration of the capture. That
+ * is the same answer the server gives when nothing has changed, so the page
+ * takes its normal "no new data" path and simply holds what it has — no error,
+ * no offline banner, and nothing that can repaint under the shutter.
+ *
+ * The paint being frozen is bracketed by two passing checks, one either side
+ * of the poll interval. For the frozen render to be unsettled, the grid would
+ * have to leave the band and return inside those ~2 s, which is far quicker
+ * than the loop can move (settling runs ~35 s, and the house changes every
+ * 45-95 s) — so a paint between two settled checks is itself settled.
+ *
+ * The freeze is also what makes the pair identical: with the page held still,
+ * the two themes are the same instant by construction rather than by luck.
+ */
+async function captureSettled(page: Page, opts: Options, tab: Tab): Promise<void> {
+  await waitForGoodMoment(opts, tab);
+  // One poll interval, so the page has repainted what the check just saw.
+  await page.waitForTimeout(2200);
+  await waitForGoodMoment(opts, `${tab} (after repaint)`);
+
+  await page.route(STATUS_ROUTE, (route) => route.fulfill({ status: 304 }));
+  try {
+    for (const theme of opts.themes) {
+      await setTheme(page, theme);
+      const file = join(opts.out, `dashboard-${tab}-${theme}.png`);
+      await page.screenshot({ path: file });
+      log(`wrote ${file}`);
+    }
+  } finally {
+    await page.unroute(STATUS_ROUTE);
+  }
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   mkdirSync(opts.out, { recursive: true });
@@ -402,29 +446,20 @@ async function main(): Promise<void> {
     await openTab(page, "batteries");
     await warmUp(page, opts);
 
-    // Tab outside, theme inside: both variants of a tab come off the same
-    // settled moment, seconds apart, so the docs can offer them as one image
-    // that follows the reader's theme without the numbers changing when it
-    // switches. Waiting once per tab rather than once per image is the reason
-    // that holds — the other order re-waits between the pair and shoots each
-    // at a different instant.
     for (const tab of opts.tabs) {
       await openTab(page, tab);
       await fitToContent(page, opts);
-      await waitForGoodMoment(opts, tab);
-      // Straight after the wait, and after one more poll has painted what
-      // the wait saw — the check reads the API, the image reads the DOM.
-      await page.waitForTimeout(2200);
-      for (const theme of opts.themes) {
-        await setTheme(page, theme);
-        const file = join(opts.out, `dashboard-${tab}-${theme}.png`);
-        await page.screenshot({ path: file });
-        log(`wrote ${file}`);
-      }
+      await captureSettled(page, opts, tab);
     }
   } finally {
-    await browser?.close();
-    await stack.stop();
+    // Nested, not sequential: a rejecting browser.close() must not carry off
+    // the stack.stop() with it, or the simulator and AstraMeter keep the
+    // dashboard port and the next run refuses to start.
+    try {
+      await browser?.close();
+    } finally {
+      await stack.stop();
+    }
   }
 }
 
