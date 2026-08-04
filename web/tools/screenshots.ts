@@ -271,16 +271,28 @@ function batteryWatts(snapshot: any): number[] {
  * concentrates on fewer of them, and a shot of one battery working beside two
  * parked at 0 W documents the efficiency rule instead of the balancing.
  */
+interface Moment {
+  ok: boolean;
+  grid: number | undefined;
+  quietest: number;
+}
+
+/** Whether the grid is at zero and the whole fleet is holding it there. */
+async function settledNow(opts: Options): Promise<Moment> {
+  const snapshot = await statusSnapshot();
+  const grid = gridWatts(snapshot);
+  const batteries = batteryWatts(snapshot).map(Math.abs);
+  const quietest = batteries.length ? Math.min(...batteries) : 0;
+  const ok =
+    grid != null && Math.abs(grid) <= opts.settleW && quietest >= opts.workingW;
+  return { ok, grid, quietest };
+}
+
 async function waitForGoodMoment(opts: Options, label: string): Promise<void> {
   const deadline = Date.now() + 90_000;
   for (;;) {
-    const snapshot = await statusSnapshot();
-    const grid = gridWatts(snapshot);
-    const batteries = batteryWatts(snapshot).map(Math.abs);
-    const quietest = batteries.length ? Math.min(...batteries) : 0;
-    if (grid != null && Math.abs(grid) <= opts.settleW && quietest >= opts.workingW) {
-      return;
-    }
+    const { ok, grid, quietest } = await settledNow(opts);
+    if (ok) return;
     if (Date.now() > deadline) {
       // Refuse rather than shoot. A warning here is how the first pass came to
       // commit images reading +72 W under a caption claiming zero: it scrolls
@@ -371,28 +383,46 @@ const STATUS_ROUTE = "**/api/status*";
  * the two themes are the same instant by construction rather than by luck.
  */
 async function captureSettled(page: Page, opts: Options, tab: Tab): Promise<void> {
-  await waitForGoodMoment(opts, tab);
+  for (let attempt = 1; ; attempt++) {
+    await waitForGoodMoment(opts, tab);
 
-  // Freeze *before* the second check, not after. `route` only intercepts
-  // requests that start once it is installed, so a poll already in flight when
-  // it goes on still delivers a real snapshot — and a paint arriving after the
-  // last check is exactly the unchecked repaint this is here to prevent.
-  await page.route(STATUS_ROUTE, (route) => route.fulfill({ status: 304 }));
-  try {
-    // Long enough for that in-flight poll to land; every later one is 304.
-    await page.waitForTimeout(2200);
-    // Bracket closed: the page's last real paint happened between this check
-    // and the one above, and nothing can repaint after it.
-    await waitForGoodMoment(opts, `${tab} (frozen)`);
+    // Freeze *before* the confirming check, not after. `route` only intercepts
+    // requests that start once it is installed, so a poll already in flight
+    // when it goes on still delivers a real snapshot — and a paint arriving
+    // after the last check is exactly the unchecked repaint this prevents.
+    await page.route(STATUS_ROUTE, (route) => route.fulfill({ status: 304 }));
+    try {
+      // Long enough for that in-flight poll to land; every later one is 304.
+      await page.waitForTimeout(2200);
+      const { ok, grid, quietest } = await settledNow(opts);
+      if (!ok) {
+        // The house moved while the page was being frozen, so the paint under
+        // the freeze is not one that passed. Thaw and wait for a fresh moment
+        // rather than holding the freeze until it settles again: the page ages
+        // while frozen, and a long hold puts a stale "Reading 45 s ago" into a
+        // picture whose whole job is to look live.
+        if (attempt >= 5) {
+          throw new Error(
+            `${tab}: could not hold a settled moment across the freeze ` +
+              `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery ${quietest.toFixed(0)} W)`,
+          );
+        }
+        log(`${tab}: house moved while freezing, waiting for another moment`);
+        continue;
+      }
 
-    for (const theme of opts.themes) {
-      await setTheme(page, theme);
-      const file = join(opts.out, `dashboard-${tab}-${theme}.png`);
-      await page.screenshot({ path: file });
-      log(`wrote ${file}`);
+      // Bracket closed: the page's last real paint happened between this check
+      // and the one above, and nothing can repaint after it.
+      for (const theme of opts.themes) {
+        await setTheme(page, theme);
+        const file = join(opts.out, `dashboard-${tab}-${theme}.png`);
+        await page.screenshot({ path: file });
+        log(`wrote ${file}`);
+      }
+      return;
+    } finally {
+      await page.unroute(STATUS_ROUTE);
     }
-  } finally {
-    await page.unroute(STATUS_ROUTE);
   }
 }
 
