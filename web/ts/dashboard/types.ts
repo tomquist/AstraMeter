@@ -27,7 +27,7 @@ export interface ServiceInfo {
   log_level?: string;
   config_path?: string;
   config_mtime_at?: string;
-  runtime?: "docker" | "ha_addon";
+  runtime?: "docker" | "ha_addon" | "esphome";
   addon_slug?: string;
   restart_pending?: boolean;
   started_at?: string;

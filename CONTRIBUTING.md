@@ -61,6 +61,7 @@ When you fix a bug in:
 - `src/astrameter/mqtt_insights/discovery.py` → `esphome/components/ct002/ha_discovery.{h,cpp}`. Keep `node_id`/`unique_id`/`value_template` strings identical so HA dedupe across the Python and ESPHome paths works correctly when both happen to share a broker. **Exception:** the top-level **AstraMeter hub device** (`build_addon_device_discovery`, the retained `{base}/bridge` state, and the `via_device` links on the meter devices) is **Python-only**. The hub is published whenever HA discovery is on — identified by `ADDON_SLUG` on the Supervisor add-on, or a base-topic fallback (`MqttInsightsService._hub_identifier`) in standalone/Docker — and groups the per-meter devices under it. It has no ESPHome equivalent, so the ESPHome CT002 device stands alone with no `via_device`. **Exception:** the per-powermeter **Online** diagnostic device (`build_powermeter_device_discovery` and the retained `{base}/powermeter/<section>` state) is **Python-only** — powermeters have no ESPHome counterpart (the ESPHome component reads grid power from a native sensor), so there is nothing to mirror.
 - `src/astrameter/mqtt_insights/service.py` → `esphome/components/ct002/mqtt_insights.{h,cpp}`. The ESPHome port intentionally omits the asyncio queue and the reconnect loop — see the header for the documented architectural diff. The whole file is gated by `#ifdef USE_MQTT` so it's a no-op on builds without `mqtt:` configured. **Exception:** the powermeter health loop (`_powermeter_health_loop` and the `stream_online()` hooks it reads) is **Python-only**, since it tracks Python powermeter backends that the firmware doesn't have.
 - `src/astrameter/marstek_api.py` → `esphome/components/ct002/marstek_registration.{h,cpp}`. Keep the URL paths (`/app/Solar/v2_get_device.php`, `/ems/api/v1/getDeviceList`, `/app/Solar/v2_add_device.php`), the User-Agent (`Dart/2.19 (dart:io)`), the password MD5 hashing, and the `02b250` managed-MAC prefix in lockstep — the cloud API responses depend on a specific payload shape. The ESPHome port's only architectural change is running the Python helper's linear flow as a state machine in `loop()` so the watchdog stays fed between HTTPS calls. Gated by `#ifdef USE_CT002_MARSTEK_REGISTRATION` (defined from `_to_code_marstek_registration` in ct002/__init__.py).
+- `src/astrameter/status/serialize.py` → `esphome/components/ct002/status_json.{h,cpp}` (the wire layer of the dashboard's status document), and `CT002.status_snapshot` / `LoadBalancer.status_snapshot` → their C++ namesakes in `status_snapshot.cpp` / `balancer.{h,cpp}`. Both stacks serve the **same** schema to the **same** page (`web/ts/dashboard/`), so a field belongs on both sides under the same name and unit; the firmware serves a reduced document, which the schema allows (every field optional at every level). `tests/components/ct002/host_status_json_test.cpp` guards the wire format. The HTTP component around it (`dashboard.{h,cpp}`) is ESPHome-only and gated by `#ifdef USE_CT002_DASHBOARD` (from `_to_code_dashboard` in ct002/__init__.py); the dashboard's **configuration** endpoints are Python-only and stay that way — an ESPHome device's config lives in its firmware.
 - `src/astrameter/cloud_reporting.py` → `esphome/components/ct002/cloud_reporting.{h,cpp}` plus the pure URL builders in `cloud_reporting_url.{h,cpp}`. The `getDateInfoeu.php` / `setCtReporting` query strings must stay byte-identical between the Python `build_*_url` helpers and the C++ ones — `tests/components/ct002/host_cloud_reporting_test.cpp` mirrors `cloud_reporting_test.py` and guards the wire format (incl. the model differences and the HME-3 missing-`&` quirk). The runtime component runs the handshake-then-report flow as a `loop()` state machine; gated by `#ifdef USE_CT002_CLOUD_REPORTING` (from `_to_code_cloud_reporting` in ct002/__init__.py). The CT data it reads is exposed by `CT002Component::reporting_phase_buckets()` (mirror of Python's `CT002.reporting_phase_buckets()`).
 
 Fixes to `src/astrameter/powermeter/wrappers/{transform,throttling}.py` have **no** C++ counterpart — those wrappers are delegated to ESPHome's standard `sensor: filters:` (`offset:`, `multiply:`, `throttle:`) on the upstream sensor. `src/astrameter/powermeter/wrappers/health.py` (the outermost `HealthTrackingPowermeter` feeding the MQTT Insights Online sensor) likewise has **no** C++ counterpart — it tracks Python powermeter reads, which the firmware doesn't have.
@@ -95,17 +96,22 @@ For user-visible changes, add or update **the bullet for your change** under **`
 
 ## Web dashboard
 
-`src/astrameter/status/`, the dashboard routes in `src/astrameter/web_server.py`
-and `web/ts/dashboard/` have no C++ counterpart, so the Python ↔ ESPHome parity
-rule does not apply to them — see the "Dashboard / web UI" section in
-`AGENTS.md` for why, and for what to preserve so an ESPHome build stays
-possible later.
+`web/ts/dashboard/` is **one page served by both stacks** — the Python service
+and the ESPHome component — so a UI change lands on both at once. The status
+document behind it does follow the parity rule
+(`src/astrameter/status/serialize.py` ↔
+`esphome/components/ct002/status_json.{h,cpp}`, and the `status_snapshot`
+methods on each side); the *configuration* half is Python-only, because an
+ESPHome device's config is compiled into its firmware. See the
+"Dashboard / web UI" section in `AGENTS.md` for the full split and for the
+constraints the firmware puts on the page.
 
 The page ships as a committed, generated single-file bundle at
-`src/astrameter/static/dashboard.html`. Rebuild it with `cd web && npm run
-build:dashboard` after any change under `web/`, and commit it; the `web` CI job
-fails if the committed file does not match its source or exceeds the size
-budget.
+`src/astrameter/static/dashboard.html`, plus the gzipped copy the ESP32 serves
+from flash at `esphome/components/ct002/dashboard_asset.h`. Rebuild **both**
+with `cd web && npm run build:dashboard` after any change under `web/`, and
+commit them; the `web` CI job fails if a committed file does not match its
+source or exceeds the size budget.
 
 ### Dashboard end-to-end tests
 

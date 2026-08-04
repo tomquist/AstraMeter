@@ -12,14 +12,19 @@ schema accepts grid-power sensor IDs and the cross-phase filter pipeline
   Marstek cloud on first boot; persist the MAC via ESPPreferences;
   apply it to this `ct002:` so UDP responses + MQTT topics use the
   cloud-side identity. Requires an upstream `http_request:` block.
+* `dashboard:` — serve AstraMeter's live status dashboard from the ESP32
+  itself. Off unless present; `dashboard: false` turns it off again
+  without deleting the block.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
-from esphome.components import http_request, sensor
+from esphome.components import http_request, sensor, web_server_base
 from esphome.const import (
     CONF_ALPHA,
     CONF_ID,
@@ -27,18 +32,12 @@ from esphome.const import (
     CONF_PASSWORD,
     CONF_TIMEZONE,
     CONF_UNIT_OF_MEASUREMENT,
+    PLATFORM_ESP32,
 )
 from esphome.core import CORE
 
 CODEOWNERS = ["@tomquist"]
 DEPENDENCIES = ["sensor"]
-# json / md5 are auto-loaded so users don't need to add empty `json:` or
-# `md5:` blocks to enable the sub-block infrastructure (they're cheap and
-# only the sub-blocks ever reference them). mqtt / http_request have
-# user-facing config of their own (broker, timeout, etc.) so we enforce
-# user-declared blocks via `cv.requires_component` on the sub-schema
-# instead of auto-loading them.
-AUTO_LOAD = ["socket", "json", "md5"]
 MULTI_CONF = False
 
 ct002_ns = cg.esphome_ns.namespace("ct002")
@@ -61,6 +60,8 @@ cloud_reporting_ns = ct002_ns.namespace("cloud_reporting")
 CloudReportingComponent = cloud_reporting_ns.class_(
     "CloudReportingComponent", cg.Component
 )
+dashboard_ns = ct002_ns.namespace("dashboard")
+DashboardComponent = dashboard_ns.class_("DashboardComponent", cg.Component)
 
 # Parent fields
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
@@ -193,20 +194,43 @@ def _validate_power_unit(conf_key: str, sensor_id, unit: str | None) -> None:
         )
 
 
-def _final_validate_power_units(config):
-    """Reject power_sensor_lX references whose declared unit is not a power
-    unit (e.g. °C, %, kWh) at config time — a wrong-unit sensor otherwise
-    fails silently at runtime (issue #572).
+def _final_validate_dashboard_path(config, full):
+    """Reject a dashboard mounted where ESPHome's own web UI already lives.
+
+    Both mount on the shared HTTP server, and the first handler that claims a
+    URL wins — so two pages at `/` would resolve to whichever component
+    happened to register first. Which one that is depends on codegen ordering,
+    i.e. it would look like a coin flip. Say so instead, with the fix.
     """
+    dashboard = config.get(CONF_DASHBOARD)
+    if dashboard is None or dashboard[CONF_PATH] != "":
+        return
+    if "web_server" not in full:
+        return
+    raise cv.Invalid(
+        "`web_server:` already serves ESPHome's own page at '/', so the "
+        "AstraMeter dashboard cannot also be mounted there. Give it a path of "
+        "its own — set `path: /astrameter` (or any other) on this dashboard "
+        "block, and the page will be served from there",
+        path=[CONF_DASHBOARD, CONF_PATH],
+    )
+
+
+def _final_validate(config):
+    """Cross-component checks that need the whole validated configuration."""
     full = fv.full_config.get()
+    # Reject power_sensor_lX references whose declared unit is not a power
+    # unit (e.g. °C, %, kWh) — a wrong-unit sensor otherwise fails silently
+    # at runtime (issue #572).
     for conf_key in _POWER_SENSOR_KEYS:
         if conf_key in config:
             _validate_power_unit(
                 conf_key, config[conf_key], _declared_unit(full, config[conf_key])
             )
+    _final_validate_dashboard_path(config, full)
 
 
-FINAL_VALIDATE_SCHEMA = _final_validate_power_units
+FINAL_VALIDATE_SCHEMA = _final_validate
 
 
 def _validate_three_phase_sensors(config):
@@ -459,7 +483,102 @@ CLOUD_REPORTING_SCHEMA = cv.All(
 )
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: dashboard (opt-in live status web UI served from the ESP32)
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_DASHBOARD = "dashboard"
+CONF_PATH = "path"
+CONF_WEB_SERVER_BASE_ID = "web_server_base_id"
+
+
+def _validate_dashboard_path(value):
+    """Mount prefix, normalized to '' (root) or '/segment' with no trailing slash."""
+    path = cv.string_strict(value)
+    if not path.startswith("/"):
+        raise cv.Invalid(f"{CONF_PATH!r} must start with '/'; got {value!r}")
+    if "?" in path or "#" in path:
+        raise cv.Invalid(f"{CONF_PATH!r} must be a plain path; got {value!r}")
+    return path.rstrip("/")
+
+
+def _dashboard_shorthand(value):
+    """`dashboard:` and `dashboard: true` mean "on, with the defaults".
+
+    Turning it on should not require knowing a single option name, and the
+    dict form stays available for the rare setup that needs one.
+    """
+    if value is None or value is True:
+        return {}
+    return value
+
+
+DASHBOARD_SCHEMA = cv.All(
+    _dashboard_shorthand,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(DashboardComponent),
+            # ESPHome's shared HTTP server — the same one `web_server:` and
+            # `captive_portal:` mount on, so they can coexist on one port.
+            cv.GenerateID(CONF_WEB_SERVER_BASE_ID): cv.use_id(
+                web_server_base.WebServerBase
+            ),
+            cv.Optional(CONF_PATH, default="/"): _validate_dashboard_path,
+        }
+    ).extend(cv.COMPONENT_SCHEMA),
+    # The page plus its status document need the flash and the heap of an
+    # ESP32; the smaller targets ct002 builds for would not fit it.
+    cv.only_on([PLATFORM_ESP32]),
+)
+
+
+def _drop_disabled_dashboard(config):
+    """`dashboard: false` means exactly what leaving the block out means.
+
+    Handled before the schema so a disabled dashboard pulls in nothing at
+    all — no HTTP server, no page in flash — and flipping the feature stays
+    a one-word edit.
+    """
+    if isinstance(config, dict) and config.get(CONF_DASHBOARD) is False:
+        del config[CONF_DASHBOARD]
+    return config
+
+
+def AUTO_LOAD(config):
+    """Components pulled in on the user's behalf.
+
+    json / md5 are always loaded so nobody has to add empty `json:` or `md5:`
+    blocks for the sub-block infrastructure (they're cheap and only the
+    sub-blocks reference them). web_server_base only when `dashboard:` asks
+    for it, so a build without one carries no HTTP server. mqtt /
+    http_request have user-facing config of their own (broker, timeout, ...)
+    so those stay `cv.requires_component` on the sub-schema instead.
+    """
+    loads = ["socket", "json", "md5"]
+    if isinstance(config, dict) and CONF_DASHBOARD in config:
+        loads.append("web_server_base")
+    return loads
+
+
+def _astrameter_version() -> str:
+    """AstraMeter's version, read from the repo this component ships in.
+
+    External components are fetched as a whole repo checkout, so pyproject.toml
+    sits three levels up. Best-effort: an unusual layout just means the page
+    shows no version rather than a wrong one.
+    """
+    pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    try:
+        for line in pyproject.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version = "):
+                return line.split('"')[1]
+    except (OSError, IndexError):
+        pass
+    return ""
+
+
 CONFIG_SCHEMA = cv.All(
+    _drop_disabled_dashboard,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(CT002Component),
@@ -499,6 +618,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_MQTT_INSIGHTS): MQTT_INSIGHTS_SCHEMA,
             cv.Optional(CONF_MARSTEK_REGISTRATION): MARSTEK_REGISTRATION_SCHEMA,
             cv.Optional(CONF_CLOUD_REPORTING): CLOUD_REPORTING_SCHEMA,
+            cv.Optional(CONF_DASHBOARD): DASHBOARD_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_three_phase_sensors,
@@ -630,6 +750,8 @@ async def to_code(config):
         await _to_code_marstek_registration(config, var)
     if CONF_CLOUD_REPORTING in config:
         await _to_code_cloud_reporting(config, var)
+    if CONF_DASHBOARD in config:
+        await _to_code_dashboard(config, var)
 
 
 async def _to_code_mqtt_insights(config, ct002_var):
@@ -710,3 +832,27 @@ async def _to_code_cloud_reporting(config, ct002_var):
     cg.add(var.set_fcv(sub[CONF_FCV]))
     cg.add(var.set_sv(sub[CONF_SV]))
     cg.add(var.set_interval_ms(int(sub[CONF_INTERVAL].total_milliseconds)))
+
+
+async def _to_code_dashboard(config, ct002_var):
+    """Codegen for the optional `dashboard:` sub-block.
+
+    Mounts the status page + `api/status` on ESPHome's shared HTTP server.
+    The define gates dashboard.cpp, status_snapshot.cpp and the embedded page
+    (~21 KiB of flash), so a build without this block carries none of it.
+    """
+    sub = config[CONF_DASHBOARD]
+    cg.add_define("USE_CT002_DASHBOARD")
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+
+    base = await cg.get_variable(sub[CONF_WEB_SERVER_BASE_ID])
+    cg.add(var.set_base(base))
+    cg.add(var.set_path(sub[CONF_PATH]))
+
+    # Shown on the page's Diagnostics tab, so a user can tell which build
+    # they are looking at without reading the firmware log.
+    cg.add(var.set_version(_astrameter_version()))
+    logger_config = CORE.config.get("logger") or {}
+    cg.add(var.set_log_level(str(logger_config.get("level", ""))))

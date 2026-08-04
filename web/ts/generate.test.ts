@@ -569,6 +569,27 @@ const dashOff = generateConfigIni({
 });
 lacks(dashOff, "DASHBOARD_ENABLED", "dashboard: absent when off");
 
+// On an ESP32 the same switch produces the bare `dashboard:` sub-block —
+// no options, and nothing else in the YAML has to change.
+const eyDash = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], dashboardEnabled: true },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+has(eyDash, "  dashboard:", "esp/dashboard: bare sub-block under ct002:");
+
+const eyNoDash = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+lacks(eyNoDash, "dashboard", "esp/dashboard: absent when off");
+
 // The add-on ships the dashboard on and writable, so only a deviation from
 // those defaults is worth emitting into the options.
 const haDashDefault = generateHomeAssistant({

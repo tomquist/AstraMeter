@@ -11,6 +11,7 @@ editing files by hand.
 - [Enabling it](#enabling-it)
   - [Home Assistant add-on](#home-assistant-add-on)
   - [Docker / standalone](#docker--standalone)
+  - [ESPHome on an ESP32](#esphome-on-an-esp32)
 - [Changing your configuration](#changing-your-configuration)
   - [Guided setup](#guided-setup)
   - [Config file](#config-file)
@@ -111,9 +112,54 @@ else is needed: outside the add-on there is no Home Assistant in front of the
 page, so this address is the dashboard, unauthenticated — see
 [Security](#security).
 
+### ESPHome on an ESP32
+
+Off by default. Add one line to your `ct002:` block:
+
+```yaml
+ct002:
+  power_sensor_l1: grid_l1
+  dashboard:
+```
+
+Then open `http://<device>/` — the same page, served straight from the ESP32's
+flash. `dashboard: true` means the same thing, and `dashboard: false` (or
+removing the line) turns it back off, taking the web server and the page out of
+the firmware with it.
+
+The board serves a **reduced version** of the page. Everything it can measure
+is there — grid power, every battery with its target and saturation, the
+balancer's internals, the health of the grid-power sensor — but:
+
+- **There is no Configuration tab.** An ESPHome device's settings are compiled
+  into its firmware, so there would be nothing to save; change your YAML and
+  re-flash instead.
+- **Batteries cannot be steered from the page** (no manual target, no
+  disable). Use the [MQTT Insights](mqtt-insights.md) entities for that.
+- **Times are relative** ("4 s ago") rather than clock times until the device
+  has a synced clock; add ESPHome's [`time:`](https://esphome.io/components/time/)
+  component if you want absolute timestamps.
+
+Two options, both rarely needed:
+
+| Option | Default | What it does |
+|---|---|---|
+| `path` | `/` | Where the page is mounted, e.g. `/astrameter`. |
+| `id` | generated | The usual ESPHome component id. |
+
+The dashboard shares ESPHome's HTTP server with `web_server:` and
+`captive_portal:`, so they all use one port. If you also run `web_server:`,
+both would claim `/` — give the dashboard a `path:` of its own and the
+configuration check will tell you so rather than letting the two race.
+
+Turning it on costs about 55 KiB of flash — the compressed page plus ESPHome's
+HTTP server — and no measurable RAM while nobody is watching. An ESP32 with
+4 MB is comfortable; ESP8266 is not supported.
+
 ## Changing your configuration
 
-The Configuration tab adapts to how AstraMeter is configured.
+The Configuration tab adapts to how AstraMeter is configured. It is absent
+entirely on ESPHome, where the configuration lives in the firmware.
 
 ### Guided setup
 
@@ -216,6 +262,7 @@ from:
 | Add-on, sidebar (ingress) | yes | your Home Assistant login |
 | Add-on, `http://<host>:52500` | only with `dashboard_direct_access` | **nothing** |
 | Docker / standalone | with `DASHBOARD_ENABLED` | **nothing** |
+| ESPHome, `http://<device>/` | with `dashboard:` | **nothing** |
 
 Because the add-on runs with host networking, port 52500 is on your LAN
 whether or not you use it. There, everything except `/health` is refused
@@ -226,6 +273,13 @@ cannot be faked by a client on your network.
 Running AstraMeter yourself there is no ingress, so that port is the only way
 in and `DASHBOARD_ENABLED` is the whole opt-in — `DASHBOARD_DIRECT_ACCESS`
 does not apply (it is only read when the add-on runs from a config file).
+
+On ESPHome the page is read-only — it exposes no configuration and no battery
+controls — but it is still an unauthenticated view of your household's power
+on the LAN. If that matters, leave `dashboard:` out, or add ESPHome's
+[`web_server:`](https://esphome.io/components/web_server/) with its `auth:`
+block and give the dashboard a `path:` of its own: both mount on the same HTTP
+server, so that login covers the dashboard too.
 
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.

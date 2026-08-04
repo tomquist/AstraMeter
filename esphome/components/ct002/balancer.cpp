@@ -879,6 +879,63 @@ std::optional<float> LoadBalancer::get_last_intent(const std::string &consumer_i
   return (it != this->consumers_.end()) ? it->second.last_intent : std::optional<float>{};
 }
 
+// Mirrors balancer.py LoadBalancer.snapshot_consumer.
+std::optional<BalancerConsumerSnapshot> LoadBalancer::snapshot_consumer(
+    const std::string &consumer_id) const {
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) return {};
+  const BalancerConsumerState &state = it->second;
+  double grace_remaining = 0.0;
+  if (state.saturation_grace_until > 0.0)
+    grace_remaining = std::max(0.0, state.saturation_grace_until - this->clock_());
+  BalancerConsumerSnapshot out;
+  out.last_target = state.last_target;
+  out.last_intent = state.last_intent;
+  out.last_intent_reading = state.last_intent_reading;
+  out.saturation = state.saturation_score;
+  out.saturation_grace_remaining = grace_remaining;
+  out.fade_weight = state.fade_weight;
+  out.deprioritized = this->deprioritized_.count(consumer_id) > 0;
+  out.pace_cap = state.pace_cap;
+  out.pace_sign = state.pace_sign;
+  out.osc_score = state.osc_score;
+  out.osc_last_sign = state.osc_last_sign;
+  return out;
+}
+
+// Mirrors balancer.py LoadBalancer.status_snapshot.
+BalancerSnapshot LoadBalancer::status_snapshot() const {
+  const double now = this->clock_();
+  BalancerSnapshot out;
+  out.config = this->cfg_;
+  out.efficiency_rotation_enabled = this->efficiency_rotation_enabled();
+  out.predictor.grid_estimate = this->pred_grid_;
+  out.predictor.trust = this->pred_trust_;
+  out.predictor.innovation_sign = this->pred_innov_sign_;
+  out.predictor.pool_output = this->pred_pool_output_;
+  out.import_trim.dwell = this->steady_import_dwell_;
+  out.import_trim.engaged = this->steady_import_dwell_ >= IMPORT_TRIM_DWELL;
+  out.efficiency.demand_ema = this->demand_ema_;
+  out.efficiency.priority_order = this->priority_;
+  out.efficiency.deprioritized.assign(this->deprioritized_.begin(), this->deprioritized_.end());
+  std::sort(out.efficiency.deprioritized.begin(), out.efficiency.deprioritized.end());
+  out.efficiency.last_rotation_age = std::max(0.0, now - this->last_rotation_);
+  out.efficiency.all_dc_under_surplus = this->all_dc_surplus_warned_;
+  if (this->probe_state_.has_value()) {
+    const ProbeState &probe = *this->probe_state_;
+    ProbeSnapshot snap;
+    snap.candidate_id = probe.candidate_id;
+    snap.active_ids = probe.active_ids;
+    snap.backup_ids = probe.backup_ids;
+    snap.proof_samples = probe.proof_samples;
+    snap.requested_power_abs = probe.requested_power_abs;
+    snap.started_age = std::max(0.0, now - probe.started_at);
+    snap.deadline_in = probe.deadline - now;
+    out.probe = snap;
+  }
+  return out;
+}
+
 // -------------------------------------------------------------------------
 // Auto-target pipeline
 // -------------------------------------------------------------------------

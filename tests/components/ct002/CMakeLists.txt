@@ -82,9 +82,23 @@ target_include_directories(host_cloud_reporting_test PRIVATE
 )
 target_link_libraries(host_cloud_reporting_test PRIVATE GTest::gtest_main)
 
+# Dashboard status document: the wire layer between the runtime snapshots and
+# the schema the page reads (shared with src/astrameter/status/serialize.py).
+# Only balancer.h (std-only) is needed, so it compiles clean against host-gcc.
+add_executable(host_status_json_test
+  host_status_json_test.cpp
+  ${REPO_ROOT}/esphome/components/ct002/status_json.cpp
+)
+target_include_directories(host_status_json_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(host_status_json_test PRIVATE GTest::gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(host_protocol_test)
 gtest_discover_tests(host_wrappers_test)
 gtest_discover_tests(host_balancer_test)
 gtest_discover_tests(host_marstek_responder_test)
 gtest_discover_tests(host_cloud_reporting_test)
+gtest_discover_tests(host_status_json_test)

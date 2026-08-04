@@ -597,6 +597,10 @@ export function generateEsphome(state: State): string {
   if (fb) ctLines.push(fb);
   for (const b of ct002OptionalBlocks(state.ct)) ctLines.push(b);
 
+  // The live status dashboard, served by the board itself. Needs no options
+  // and no other block — the bare key is the whole opt-in.
+  if (state.general && state.general.dashboardEnabled) ctLines.push(`${IND}dashboard:`);
+
   if (wantInsights) {
     const mf = state.mqttInsights.fields || {};
     const sub = [`${IND}mqtt_insights:`];

@@ -255,6 +255,53 @@ has(minimalHtml, "AstraMeter", "the shell renders with almost no data");
 has(minimalHtml, "No batteries have reported yet", "an empty state explains itself");
 lacks(minimalHtml, "undefined", "absent fields do not print undefined");
 
+// A backend with no configuration surface — an ESPHome device, whose settings
+// are compiled into its firmware — must not be offered a Configuration tab:
+// there is nothing behind it and nothing that could ever be saved.
+const esphomeSnapshot: StatusSnapshot = {
+  schema_version: 1,
+  generated_at: "2026-08-01T12:00:00+00:00",
+  capabilities: {
+    backend: "esphome",
+    poll_interval_ms: 2000,
+    controls: false,
+    config_writable: false,
+    balancer_internals: true,
+  },
+  service: { runtime: "esphome", version: "2.2.4" },
+};
+const esphomeState: AppState = {
+  ...initialState(),
+  snapshot: esphomeSnapshot,
+  connection: "live",
+};
+const esphomeHtml = renderToString(
+  h("div", null, ...view(esphomeState, actions, initialConfigState())),
+);
+lacks(esphomeHtml, ">Configuration<", "no config tab without a config surface");
+has(esphomeHtml, ">Diagnostics<", "the other tabs are untouched");
+has(esphomeHtml, "v2.2.4", "the firmware's version still names itself");
+
+// ...and a deep link into that tab lands somewhere real rather than on an
+// empty shell nothing can fill.
+const esphomeDeepLink = renderToString(
+  h("div", null, ...view({ ...esphomeState, tab: "config" }, actions, initialConfigState())),
+);
+has(
+  esphomeDeepLink,
+  "No batteries have reported yet",
+  "a stale #/config link falls back to Overview",
+);
+
+// The tab stays for a backend that does have one, and while the first
+// snapshot is still in flight — it must not appear late on those.
+has(html, ">Configuration<", "the config tab is there when the backend has one");
+has(
+  renderToString(h("div", null, ...view(initialState(), actions, initialConfigState()))),
+  ">Configuration<",
+  "the config tab is not withdrawn before the first snapshot",
+);
+
 // Offline swaps every relative age for an absolute clock time, because a
 // frozen "0.4 s ago" is indistinguishable from a fresh one.
 const offlineHtml = renderToString(

@@ -69,3 +69,11 @@ def test_host_balancer(cmake_build: Path) -> None:
 
 def test_host_marstek_responder(cmake_build: Path) -> None:
     subprocess.run([str(cmake_build / "host_marstek_responder_test")], check=True)
+
+
+def test_host_cloud_reporting(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_cloud_reporting_test")], check=True)
+
+
+def test_host_status_json(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_status_json_test")], check=True)

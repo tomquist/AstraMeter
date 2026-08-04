@@ -71,6 +71,19 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "diagnostics", label: "Diagnostics" },
 ];
 
+/**
+ * Whether this backend has a configuration to edit at all.
+ *
+ * `config_mode` names which surface to show, so a backend that omits it has
+ * none: an ESPHome device's settings are compiled into its firmware, and a
+ * tab offering to change them would be a promise nothing can keep. Kept while
+ * the first snapshot is still in flight so the tab does not appear late on
+ * the backends that do have one.
+ */
+function hasConfigSurface(snapshot: StatusSnapshot | null): boolean {
+  return !snapshot || Boolean(snapshot.capabilities?.config_mode);
+}
+
 function chip(status: Health): VNode {
   return h(
     "span",
@@ -1030,15 +1043,19 @@ export function view(
   const offline = state.connection === "offline";
   const status = overallHealth(state);
   const snapshot = state.snapshot;
+  const tabs = TABS.filter((tab) => tab.id !== "config" || hasConfigSurface(snapshot));
+  // A deep link into a tab this backend does not have would otherwise render
+  // an empty shell nothing can ever fill.
+  const active = tabs.some((tab) => tab.id === state.tab) ? state.tab : "overview";
 
   const body =
-    state.tab === "overview"
+    active === "overview"
       ? overview(state, offline, actions)
-      : state.tab === "batteries"
+      : active === "batteries"
         ? batteries(state, actions)
-        : state.tab === "sources"
+        : active === "sources"
           ? sources(state, offline)
-          : state.tab === "config"
+          : active === "config"
             ? configView(state, config, actions)
             : diagnostics(state);
 
@@ -1065,12 +1082,12 @@ export function view(
     h(
       "nav",
       { class: "tabs" },
-      ...TABS.map((tab) =>
+      ...tabs.map((tab) =>
         h(
           "button",
           {
             class: "tab",
-            "aria-current": state.tab === tab.id ? "page" : false,
+            "aria-current": active === tab.id ? "page" : false,
             onclick: () => actions.selectTab(tab.id),
           },
           tab.label,

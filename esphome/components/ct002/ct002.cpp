@@ -69,6 +69,8 @@ int parse_int_strict(const std::string &s, int default_value) {
   return static_cast<int>(parsed);
 }
 
+}  // namespace
+
 // Mirror of Python's _bucket_for_phase: A/B/C → their buckets, "D" → the
 // combined ABC bucket, anything else (the normalized "0") → x.
 size_t bucket_index_for_phase(const std::string &phase) {
@@ -78,8 +80,6 @@ size_t bucket_index_for_phase(const std::string &phase) {
   if (phase == "D") return BUCKET_ABC;
   return BUCKET_X;
 }
-
-}  // namespace
 
 // Wall-clock seconds for balancer/saturation accounting. Uses ESPHome's
 // monotonic millis() because absolute wall time isn't available on bare

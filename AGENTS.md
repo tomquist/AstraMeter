@@ -69,30 +69,49 @@ and both are obtainable — don't skip them:
   cmake --build /tmp/ct002_build -j && (cd /tmp/ct002_build && for t in host_*_test; do ./$t; done)
   ```
 
-### Dashboard / web UI (parity DEFERRED, not waived)
+### Dashboard / web UI (one page, two backends)
 
-`src/astrameter/status/`, the dashboard routes in `src/astrameter/web_server.py`
-and `web/ts/dashboard/` have **no C++ counterpart today**, so the parity rule
-above does not block a change to them. This is deliberate, and it is not a
-blanket exemption:
+**The same page** — `web/ts/dashboard/`, built into one self-contained HTML
+file — is served by the Python stack and by the ESPHome component, so a UI
+change lands on both at once and there is no second frontend to keep in sync.
+What differs is the document behind it:
 
-- The **status half** is deferred. The state the page renders already exists on
-  the C++ side, so an ESPHome build could serve a reduced version of the same
-  document later. Keep that possible: every field in the status schema is
-  optional at every level, the frontend renders only what it receives, and the
-  bundle stays inside the size budget enforced by `npm run check:dashboard`.
-- The **configuration half** is permanently waived. An ESPHome device's config
+- The **status half has parity**: `src/astrameter/status/serialize.py` ↔
+  `esphome/components/ct002/status_json.{h,cpp}` (the wire layer), and
+  `CT002.status_snapshot` / `LoadBalancer.status_snapshot` ↔ their C++
+  namesakes. A field added to one side belongs on the other, under the same
+  name and unit. The firmware serves a genuinely **reduced** document, which
+  the schema is built for: every field is optional at every level, the frontend
+  renders only what it receives, and it must never substitute 0 or "—" for
+  something absent.
+- The **configuration half is permanently waived.** An ESPHome device's config
   is compiled into its firmware, so there is nothing for a dashboard to write.
+  The page hides its Configuration tab when the backend reports no
+  `config_mode`.
+- **Controls are not implemented on the firmware** (`capabilities.controls:
+  false`): the ESP-IDF HTTP server does not hand JSON request bodies to
+  handlers, so the write endpoints have no way in. MQTT Insights is the write
+  path there.
+
+Two things the ESPHome half constrains, so keep them true:
+
+- The bundle stays inside the gzipped budget enforced by `npm run
+  check:dashboard` — it lives in the ESP32's flash.
+- The HTTP handler runs on the httpd task, **not** the main loop, so it must
+  never walk live state. `dashboard.cpp` builds the document from `loop()` and
+  hands it over as a finished string under a mutex.
 
 Browser-level tests live in `web/e2e/` (`cd web && npm run e2e`) and boot the
 real stack. Anything touching the live DOM — the reconciler, a control's write
 path, a disclosure — needs a test there, because the unit tests render views
-to a string and cannot see those failures.
+to a string and cannot see those failures. The wire layer has a host gtest
+(`tests/components/ct002/host_status_json_test.cpp`).
 
-The bundle at `src/astrameter/static/dashboard.html` is a **committed generated
-artifact** — neither the Docker build nor `esphome compile` has Node. After
-touching anything under `web/`, run `cd web && npm run build:dashboard` and
-commit the result; CI fails on a stale bundle.
+`src/astrameter/static/dashboard.html` and
+`esphome/components/ct002/dashboard_asset.h` (the same page gzipped, for the
+ESP32's flash) are **committed generated artifacts** — neither the Docker build
+nor `esphome compile` has Node. After touching anything under `web/`, run
+`cd web && npm run build:dashboard` and commit **both**; CI fails on a stale one.
 
 ### Screenshots (docs + website)
 

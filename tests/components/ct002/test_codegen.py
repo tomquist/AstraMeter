@@ -160,3 +160,95 @@ def test_mqtt_insights_schema_device_id_blank_by_default():
         )
         == "device-1"
     )
+
+
+# ── dashboard sub-block ────────────────────────────────────────────────
+
+
+def test_dashboard_shorthand_accepts_bare_key_and_true():
+    # Turning the dashboard on must not require knowing an option name:
+    # `dashboard:` and `dashboard: true` both mean "on, with the defaults".
+    assert ct002_component._dashboard_shorthand(None) == {}
+    assert ct002_component._dashboard_shorthand(True) == {}
+
+
+def test_dashboard_shorthand_passes_a_block_through():
+    block = {"path": "/astrameter"}
+    assert ct002_component._dashboard_shorthand(block) is block
+
+
+def test_dashboard_false_is_the_same_as_leaving_it_out():
+    # ...and it must drop the key entirely, so a disabled dashboard pulls in
+    # no HTTP server and no page in flash.
+    config = {"power_sensor_l1": "grid_l1", "dashboard": False}
+    assert ct002_component._drop_disabled_dashboard(config) == {
+        "power_sensor_l1": "grid_l1"
+    }
+
+
+def test_dashboard_absent_config_is_untouched():
+    config = {"power_sensor_l1": "grid_l1"}
+    assert ct002_component._drop_disabled_dashboard(config) == config
+
+
+def test_dashboard_path_normalizes_to_a_prefix():
+    # The mount prefix is concatenated with "/api/status" at runtime, so it
+    # must never carry a trailing slash; the root becomes the empty prefix.
+    assert ct002_component._validate_dashboard_path("/") == ""
+    assert ct002_component._validate_dashboard_path("/astrameter") == "/astrameter"
+    assert ct002_component._validate_dashboard_path("/astrameter/") == "/astrameter"
+
+
+def test_dashboard_path_requires_a_leading_slash():
+    import esphome.config_validation as cv
+
+    with pytest.raises(cv.Invalid):
+        ct002_component._validate_dashboard_path("astrameter")
+
+
+def test_dashboard_path_rejects_a_query_string():
+    import esphome.config_validation as cv
+
+    with pytest.raises(cv.Invalid):
+        ct002_component._validate_dashboard_path("/astrameter?x=1")
+
+
+def test_auto_load_pulls_the_web_server_only_when_asked():
+    # A build without a dashboard must not gain an HTTP server.
+    assert "web_server_base" not in ct002_component.AUTO_LOAD({})
+    assert "web_server_base" in ct002_component.AUTO_LOAD({"dashboard": {}})
+
+
+def test_auto_load_always_carries_the_sub_block_infrastructure():
+    for component in ("socket", "json", "md5"):
+        assert component in ct002_component.AUTO_LOAD({})
+
+
+def test_dashboard_at_the_root_conflicts_with_esphome_web_server():
+    # Both mount on the shared HTTP server and the first handler to claim a
+    # URL wins, so "/" for two pages would resolve on codegen order alone.
+    import esphome.config_validation as cv
+
+    config = {ct002_component.CONF_DASHBOARD: {ct002_component.CONF_PATH: ""}}
+    with pytest.raises(cv.Invalid) as exc_info:
+        ct002_component._final_validate_dashboard_path(config, {"web_server": {}})
+    assert "path: /astrameter" in str(exc_info.value)
+
+
+def test_dashboard_on_its_own_path_coexists_with_the_web_server():
+    config = {
+        ct002_component.CONF_DASHBOARD: {ct002_component.CONF_PATH: "/astrameter"}
+    }
+    ct002_component._final_validate_dashboard_path(config, {"web_server": {}})
+
+
+def test_dashboard_at_the_root_is_fine_without_the_web_server():
+    config = {ct002_component.CONF_DASHBOARD: {ct002_component.CONF_PATH: ""}}
+    ct002_component._final_validate_dashboard_path(config, {})
+
+
+def test_astrameter_version_is_read_from_the_repo():
+    # The page shows this on its Diagnostics tab; an unusual layout must show
+    # nothing rather than something wrong.
+    version = ct002_component._astrameter_version()
+    assert version and version[0].isdigit()

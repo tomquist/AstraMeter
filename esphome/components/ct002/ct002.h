@@ -11,16 +11,23 @@
 #include <vector>
 
 #include "esphome/core/component.h"
+#include "esphome/core/defines.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/socket/socket.h"
 
 #include "balancer.h"
 #include "pid.h"
 #include "sensor_backed.h"
+#include "status_json.h"
 #include "wrapper_base.h"
 
 namespace esphome {
 namespace ct002 {
+
+// Mirror of Python's _bucket_for_phase: A/B/C → their buckets, "D" → the
+// combined ABC bucket, anything else (the normalized "0") → x. Indexes both
+// the PhaseBucket enum below and status::BUCKET_NAMES.
+size_t bucket_index_for_phase(const std::string &phase);
 
 // Cross-talk aggregation bucket indices, mirroring Python's PHASE_BUCKETS
 // ("x", "A", "B", "C", "ABC"): x collects unassigned/inspection ("0")
@@ -167,6 +174,19 @@ class CT002Component : public Component {
 
   // Observability (MQTT insights and future automation hooks read these).
   size_t reporting_consumer_count() const;
+
+#ifdef USE_CT002_DASHBOARD
+  // ── Dashboard status API (status_snapshot.cpp) ───────────────────────
+  // Mirrors CT002.status_snapshot() and the powermeter health snapshot in
+  // the Python stack. Plain synchronous attribute reads: the dashboard
+  // builds these from loop(), between UDP handlers, so nothing can tear.
+  //
+  // *wall_now* is the current wall-clock epoch, or 0 when the clock has not
+  // synced — the one place that decides whether a mark can be emitted as a
+  // timestamp or has to stay an age.
+  status::DeviceStatus status_snapshot(double wall_now) const;
+  status::PowermeterStatus powermeter_status() const;
+#endif
 
   // ── MQTT-insights integration API ────────────────────────────────────
   // Snapshot of one consumer's state for publish-time JSON building.
