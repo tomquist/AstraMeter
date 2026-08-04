@@ -1,6 +1,8 @@
 """Tests for the steering-evaluation harness."""
 
 import socket
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -39,10 +41,35 @@ class TestReserveUdpPort:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
             listener.bind(("0.0.0.0", port))
 
-    def test_concurrent_reservations_are_distinct(self):
+    def test_live_reservations_are_distinct(self):
         """Two live reservations cannot name the same port — the property the
         parallel workers actually depend on."""
         reservations = [_reserve_udp_port() for _ in range(16)]
+        try:
+            ports = [r.getsockname()[1] for r in reservations]
+            assert len(set(ports)) == len(ports)
+        finally:
+            for r in reservations:
+                r.close()
+
+    def test_simultaneous_reservations_are_distinct(self):
+        """The same property when the calls genuinely overlap in time.
+
+        The workers are separate processes rather than threads, but a barrier
+        makes every ``bind`` land in the same instant, which is the condition
+        the sequential test above cannot create.
+        """
+        workers = 16
+        barrier = threading.Barrier(workers)
+
+        def reserve():
+            barrier.wait()
+            return _reserve_udp_port()
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            reservations = [
+                f.result() for f in [pool.submit(reserve) for _ in range(workers)]
+            ]
         try:
             ports = [r.getsockname()[1] for r in reservations]
             assert len(set(ports)) == len(ports)

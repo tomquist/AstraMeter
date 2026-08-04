@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import functools
 import itertools
 import json
@@ -273,10 +274,11 @@ def _reserve_udp_port() -> socket.socket:
     two workers were routinely handed the same one, and the loser died partway
     through a CI run with ``OSError: [Errno 98] Address already in use``.
 
-    While this socket is open the OS will not hand the port to anyone else, so
-    the caller must keep it until the real listener is about to bind — and must
-    close it first, because that listener binds the wildcard address, which
-    conflicts with this loopback bind on the same port.
+    While this socket is open the OS will not hand that port to anyone else.
+    The caller must close it before the real listener binds, because that
+    listener binds the wildcard address, which conflicts with this loopback
+    bind on the same port — so keep the hold as short as possible and see
+    ``_start_ct002`` for what covers the remaining gap.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -285,6 +287,36 @@ def _reserve_udp_port() -> socket.socket:
         sock.close()
         raise
     return sock
+
+
+async def _start_ct002(
+    ct002: CT002, batteries: list[BatterySimulator], attempts: int = 10
+) -> None:
+    """Bind the CT listener on a free port and point *batteries* at it.
+
+    The port is picked here rather than at the top of the set-up because a
+    reservation cannot be handed to the listener atomically: ``CT002`` binds
+    the wildcard address, which conflicts with the loopback reservation, so the
+    reservation has to be released a moment before the real bind. Choosing at
+    bind time narrows that window to a couple of syscalls instead of the whole
+    scenario set-up, and losing it anyway costs one retry on a fresh port
+    rather than aborting the entire run.
+
+    The batteries are re-pointed on every attempt; they only read ``ct_port``
+    when they first send, which is after this returns.
+    """
+    for attempt in range(attempts):
+        with _reserve_udp_port() as reservation:
+            ct002.udp_port = int(reservation.getsockname()[1])
+        for battery in batteries:
+            battery.ct_port = ct002.udp_port
+        try:
+            await ct002.start()
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE or attempt == attempts - 1:
+                raise
+        else:
+            return
 
 
 async def run_scenario(
@@ -307,17 +339,14 @@ async def run_scenario(
         loads=[Load(ld.name, ld.power, ld.phase) for ld in scenario.loads],
     )
     ct_mac = "112233445566"
-    # Held across the whole set-up below and released immediately before
-    # ``ct002.start()`` — see _reserve_udp_port.
-    ct_port_reservation = _reserve_udp_port()
-    ct_port = int(ct_port_reservation.getsockname()[1])
     batteries = [
         BatterySimulator(
             mac=f"02B250{i + 1:06X}",
             phase=spec.phase,
             ct_mac=ct_mac,
             ct_host="127.0.0.1",
-            ct_port=ct_port,
+            # Real port assigned by _start_ct002 once the CT has bound it.
+            ct_port=0,
             meter_dev_type=spec.device_type,
             max_charge_power=spec.max_charge_power,
             max_discharge_power=spec.max_discharge_power,
@@ -338,7 +367,7 @@ async def run_scenario(
     ct_kwargs: dict[str, float] = dict(scenario.ct_kwargs)
     ct_kwargs.update(overrides or {})
     ct002 = CT002(
-        udp_port=ct_port,
+        udp_port=0,  # assigned by _start_ct002 below
         ct_mac=ct_mac,
         active_control=True,
         clock=clock,
@@ -398,11 +427,7 @@ async def run_scenario(
         ]
 
     ct002.before_send = before_send
-    # Hand the port over: the reservation has kept it out of every other
-    # worker's reach until exactly here, so the bind below cannot lose a race
-    # it could previously lose at any point during set-up.
-    ct_port_reservation.close()
-    await ct002.start()
+    await _start_ct002(ct002, batteries)
     try:
         # Event-driven schedule: each battery polls on its own cadence
         # (staggered starts), scripted events fire in between.
