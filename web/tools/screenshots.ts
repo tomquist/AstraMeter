@@ -372,12 +372,19 @@ const STATUS_ROUTE = "**/api/status*";
  */
 async function captureSettled(page: Page, opts: Options, tab: Tab): Promise<void> {
   await waitForGoodMoment(opts, tab);
-  // One poll interval, so the page has repainted what the check just saw.
-  await page.waitForTimeout(2200);
-  await waitForGoodMoment(opts, `${tab} (after repaint)`);
 
+  // Freeze *before* the second check, not after. `route` only intercepts
+  // requests that start once it is installed, so a poll already in flight when
+  // it goes on still delivers a real snapshot — and a paint arriving after the
+  // last check is exactly the unchecked repaint this is here to prevent.
   await page.route(STATUS_ROUTE, (route) => route.fulfill({ status: 304 }));
   try {
+    // Long enough for that in-flight poll to land; every later one is 304.
+    await page.waitForTimeout(2200);
+    // Bracket closed: the page's last real paint happened between this check
+    // and the one above, and nothing can repaint after it.
+    await waitForGoodMoment(opts, `${tab} (frozen)`);
+
     for (const theme of opts.themes) {
       await setTheme(page, theme);
       const file = join(opts.out, `dashboard-${tab}-${theme}.png`);
