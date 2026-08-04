@@ -216,113 +216,9 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
     return child;
   };
 
-  if (options.homeAssistant) {
-    // What the Supervisor would have written to /data/options.json. The whole
-    // add-on path then runs for real: the grid comes from Home Assistant
-    // sensors, and the config mode, slug and dashboard settings are the ones
-    // production computes.
-    writeFileSync(
-      join(dir, "options.json"),
-      JSON.stringify({
-        device_types: "ct002",
-        power_input_alias: PHASE_SENSORS.join(","),
-        wait_for_next_message: false,
-        active_control: true,
-        fair_distribution: true,
-        // Non-zero so efficiency rotation is on and its controls appear.
-        min_efficient_power: 100,
-        // A stored credential, so the secret sentinel's round trip through
-        // the browser is exercised against a real one.
-        marstek_password: "super-secret-pw",
-        // No `dashboard` option: the add-on always serves it.
-        dashboard_allow_write: true,
-        // Requests come from 127.0.0.1, not the ingress peer, so the gate
-        // has to be opened explicitly — the same opt-in a LAN user makes.
-        dashboard_direct_access: true,
-        log_level: "warning",
-      }),
-    );
-
-    // The same stand-in Supervisor the Python add-on tests use, so there is
-    // one of them rather than two that can drift. It serves the repository's
-    // real ha_addon/config.yaml, so the guided form is rendered from the
-    // options Home Assistant would actually show, and it proxies the
-    // simulator as Home Assistant power sensors — which is how the add-on
-    // gets its readings, since `--addon` takes no config file.
-    spawnChild("uv", [
-      "run", "python", join(REPO, "tests", "_fake_supervisor.py"),
-      "--host", "127.0.0.1",
-      "--port", String(SUPERVISOR_PORT),
-      "--token", SUPERVISOR_TOKEN,
-      "--power-url", `http://127.0.0.1:${SIM_HTTP_PORT}/power`,
-      "--phase-sensors", PHASE_SENSORS.join(","),
-      "--options", join(dir, "options.json"),
-    ]);
-    await waitFor(
-      ok(`http://127.0.0.1:${SUPERVISOR_PORT}/core/api/`, SUPERVISOR_TOKEN),
-      "the stand-in Supervisor",
-      30_000,
-      dir,
-    );
-  }
-
-  spawnChild("uv", ["run", "astra-sim", "run", "--no-tui", "-c", join(dir, "sim.json")]);
-  await waitFor(
-    ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`),
-    "the simulator",
-    90_000,
-    dir,
-  );
-
-  spawnChild(
-    "uv",
-    options.homeAssistant
-      // `--addon` takes its whole configuration from the add-on options and
-      // the Supervisor; a config file is not part of that path.
-      ? ["run", "astrameter", "--addon"]
-      : ["run", "astrameter", "-c", configPath, "--loglevel", "warning"],
-    {
-      ...(options.homeAssistant
-        ? {
-            SUPERVISOR_TOKEN: SUPERVISOR_TOKEN,
-            ASTRAMETER_SUPERVISOR_URL: `http://127.0.0.1:${SUPERVISOR_PORT}`,
-            ASTRAMETER_ADDON_OPTIONS: join(dir, "options.json"),
-            // Keep the mode switch's materialized file inside the test dir.
-            ASTRAMETER_ADDON_CONFIG_DIR: dir,
-          }
-        : {}),
-    },
-  );
-  await waitFor(ok(`${BASE_URL}health`), "AstraMeter", 90_000, dir);
-  if (options.shelly) {
-    // Nothing polls a Shelly emulator until a spec does, so the readiness
-    // signal is the emulator itself being up and in the document.
-    await waitFor(
-      async () =>
-        ((await statusSnapshot()).devices ?? []).some(
-          (d: any) => d.kind === "shelly",
-        ),
-      "the Shelly emulator",
-      90_000,
-      dir,
-    );
-  } else {
-    // The page is only meaningful once batteries have actually reported —
-    // all of them, or a screenshot catches the fleet half-assembled.
-    await waitFor(
-      async () => (await reportingBatteries()) >= sim.batteries.length,
-      "battery reports",
-      90_000,
-      dir,
-    );
-  }
-
-  return {
-    dir,
-    configPath,
-    async stop() {
-      for (const child of children) {
-        try {
+  const killAll = async () => {
+    for (const child of children) {
+      try {
           // Killing the group also reaps the `uv run` wrapper's child.
           process.kill(-child.pid!, "SIGKILL");
         } catch {
@@ -331,8 +227,121 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
       }
       // Give the OS a moment to release the ports for the next spec file.
       await new Promise((r) => setTimeout(r, 1500));
-    },
-  };
+    };
+
+    try {
+
+    if (options.homeAssistant) {
+      // What the Supervisor would have written to /data/options.json. The whole
+      // add-on path then runs for real: the grid comes from Home Assistant
+      // sensors, and the config mode, slug and dashboard settings are the ones
+      // production computes.
+      writeFileSync(
+        join(dir, "options.json"),
+        JSON.stringify({
+          device_types: "ct002",
+          power_input_alias: PHASE_SENSORS.join(","),
+          wait_for_next_message: false,
+          active_control: true,
+          fair_distribution: true,
+          // Non-zero so efficiency rotation is on and its controls appear.
+          min_efficient_power: 100,
+          // A stored credential, so the secret sentinel's round trip through
+          // the browser is exercised against a real one.
+          marstek_password: "super-secret-pw",
+          // No `dashboard` option: the add-on always serves it.
+          dashboard_allow_write: true,
+          // Requests come from 127.0.0.1, not the ingress peer, so the gate
+          // has to be opened explicitly — the same opt-in a LAN user makes.
+          dashboard_direct_access: true,
+          log_level: "warning",
+        }),
+      );
+
+      // The same stand-in Supervisor the Python add-on tests use, so there is
+      // one of them rather than two that can drift. It serves the repository's
+      // real ha_addon/config.yaml, so the guided form is rendered from the
+      // options Home Assistant would actually show, and it proxies the
+      // simulator as Home Assistant power sensors — which is how the add-on
+      // gets its readings, since `--addon` takes no config file.
+      spawnChild("uv", [
+        "run", "python", join(REPO, "tests", "_fake_supervisor.py"),
+        "--host", "127.0.0.1",
+        "--port", String(SUPERVISOR_PORT),
+        "--token", SUPERVISOR_TOKEN,
+        "--power-url", `http://127.0.0.1:${SIM_HTTP_PORT}/power`,
+        "--phase-sensors", PHASE_SENSORS.join(","),
+        "--options", join(dir, "options.json"),
+      ]);
+      await waitFor(
+        ok(`http://127.0.0.1:${SUPERVISOR_PORT}/core/api/`, SUPERVISOR_TOKEN),
+        "the stand-in Supervisor",
+        30_000,
+        dir,
+      );
+    }
+
+    spawnChild("uv", ["run", "astra-sim", "run", "--no-tui", "-c", join(dir, "sim.json")]);
+    await waitFor(
+      ok(`http://127.0.0.1:${SIM_HTTP_PORT}/status`),
+      "the simulator",
+      90_000,
+      dir,
+    );
+
+    spawnChild(
+      "uv",
+      options.homeAssistant
+        // `--addon` takes its whole configuration from the add-on options and
+        // the Supervisor; a config file is not part of that path.
+        ? ["run", "astrameter", "--addon"]
+        : ["run", "astrameter", "-c", configPath, "--loglevel", "warning"],
+      {
+        ...(options.homeAssistant
+          ? {
+              SUPERVISOR_TOKEN: SUPERVISOR_TOKEN,
+              ASTRAMETER_SUPERVISOR_URL: `http://127.0.0.1:${SUPERVISOR_PORT}`,
+              ASTRAMETER_ADDON_OPTIONS: join(dir, "options.json"),
+              // Keep the mode switch's materialized file inside the test dir.
+              ASTRAMETER_ADDON_CONFIG_DIR: dir,
+            }
+          : {}),
+      },
+    );
+    await waitFor(ok(`${BASE_URL}health`), "AstraMeter", 90_000, dir);
+    if (options.shelly) {
+      // Nothing polls a Shelly emulator until a spec does, so the readiness
+      // signal is the emulator itself being up and in the document.
+      await waitFor(
+        async () =>
+          ((await statusSnapshot()).devices ?? []).some(
+            (d: any) => d.kind === "shelly",
+          ),
+        "the Shelly emulator",
+        90_000,
+        dir,
+      );
+    } else {
+      // The page is only meaningful once batteries have actually reported —
+      // all of them, or a screenshot catches the fleet half-assembled.
+      await waitFor(
+        async () => (await reportingBatteries()) >= sim.batteries.length,
+        "battery reports",
+        90_000,
+        dir,
+      );
+    }
+
+    return { dir, configPath, stop: killAll };
+  } catch (err) {
+    // A readiness wait that times out rejects before the caller ever holds a
+    // Stack, so there is no `stop()` for it to call — and the processes are
+    // already up, holding the dashboard and simulator ports. The next run
+    // then either binds against the leftovers or refuses to start. Reap them
+    // here and let the original failure through unchanged.
+    await killAll();
+    throw err;
+  }
 }
 
 /**

@@ -28,6 +28,7 @@ import { type Browser, chromium, type Page } from "@playwright/test";
 import {
   BASE_URL,
   REPO,
+  SIM_HTTP_PORT,
   SIM_CONFIG,
   startStack,
   statusSnapshot,
@@ -465,6 +466,17 @@ async function main(): Promise<void> {
     throw new Error(
       `something already answers on ${BASE_URL} — stop it first ` +
         "(a leftover AstraMeter would be screenshotted instead of this one)",
+    );
+  }
+  // Same trap one layer down. startStack's simulator probe is "something
+  // answers on /status", so a leftover simulator passes it too — and then the
+  // house in the picture is the *previous* run's, with whatever loads and
+  // batteries it was configured for, while the new simulator dies on the bind.
+  const simStatus = `http://127.0.0.1:${SIM_HTTP_PORT}/status`;
+  if (await answers(simStatus)) {
+    throw new Error(
+      `something already answers on ${simStatus} — stop it first ` +
+        "(a leftover simulator would drive the house instead of this one)",
     );
   }
 

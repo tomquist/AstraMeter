@@ -106,7 +106,8 @@ Two things to hold onto when refreshing them:
   close to zero the grid can be held, and `auto_interval` must stay longer
   than the loop takes to settle (~35 s mean, ~62 s p95 per the steering
   evaluation) or the house is never settled at all. `--settle` (default 30 W,
-  the balancer's own band) is the guard that catches both.
+  a little wider than the balancer's own ±25 W settling band) is the guard
+  that catches both.
 - **`web/index.html` states each image's intrinsic `width`/`height`** to
   reserve layout space. The crop height follows the tab's content, so re-check
   those attributes after a refresh that changes a tab's height.
