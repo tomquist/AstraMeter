@@ -9,7 +9,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createSocket } from "node:dgram";
-import { mkdtempSync, openSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, openSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,7 +39,14 @@ export const PHASE_SENSORS = ["sensor.grid_power"];
 
 export const BASE_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`;
 
-const SIM_CONFIG = {
+/**
+ * The house every spec runs against.
+ *
+ * Two batteries and no auto_mode: assertions want a scene that holds still.
+ * A caller wanting something livelier passes `sim` to {@link startStack} —
+ * see `tools/screenshots.ts`, which needs a house that keeps moving.
+ */
+export const SIM_CONFIG = {
   ct: { mac: "AABBCCDDEEFF", host: "127.0.0.1", port: SIM_CT_PORT },
   http: { host: "127.0.0.1", port: SIM_HTTP_PORT },
   powermeter: {
@@ -59,6 +66,9 @@ const SIM_CONFIG = {
   auto_mode: false,
   log_interval: 600,
 };
+
+/** Anything astra-sim accepts; only the keys a caller overrides are typed. */
+export type SimConfig = typeof SIM_CONFIG;
 
 function configIni(shelly = false): string {
   if (shelly) {
@@ -162,13 +172,33 @@ export interface StartOptions {
    * client, so a spec drives the polling itself (see shelly.spec.ts).
    */
   shelly?: boolean;
+  /**
+   * A different house than {@link SIM_CONFIG} — more batteries, other loads.
+   *
+   * Replaces the default outright rather than merging into it: a partial
+   * merge of `batteries` or `loads` would silently keep entries the caller
+   * meant to replace.
+   */
+  sim?: SimConfig;
+  /**
+   * Where the generated config, options and child logs go.
+   *
+   * Defaults to a fresh temp directory, which is what a spec wants. A caller
+   * whose output *shows* the path wants to choose it: the Diagnostics tab
+   * prints the config file it loaded, and `astrameter-e2e-NcTJZb` in a
+   * screenshot reads as a test artefact rather than an install.
+   */
+  configDir?: string;
 }
 
 export async function startStack(options: StartOptions = {}): Promise<Stack> {
-  const dir = mkdtempSync(join(tmpdir(), "astrameter-e2e-"));
+  const dir = options.configDir
+    ? (mkdirSync(options.configDir, { recursive: true }), options.configDir)
+    : mkdtempSync(join(tmpdir(), "astrameter-e2e-"));
   const configPath = join(dir, "config.ini");
+  const sim = options.sim ?? SIM_CONFIG;
   writeFileSync(configPath, configIni(options.shelly));
-  writeFileSync(join(dir, "sim.json"), JSON.stringify(SIM_CONFIG, null, 2));
+  writeFileSync(join(dir, "sim.json"), JSON.stringify(sim, null, 2));
 
   const children: ChildProcess[] = [];
   // Each child's output goes to a file in `dir`. Discarding it makes a CI
@@ -277,9 +307,10 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
       dir,
     );
   } else {
-    // The page is only meaningful once batteries have actually reported.
+    // The page is only meaningful once batteries have actually reported —
+    // all of them, or a screenshot catches the fleet half-assembled.
     await waitFor(
-      async () => (await reportingBatteries()) >= 2,
+      async () => (await reportingBatteries()) >= sim.batteries.length,
       "battery reports",
       90_000,
       dir,

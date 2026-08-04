@@ -12,6 +12,7 @@
     "check:dashboard": "node tools/gen-dashboard-assets.mjs --check",
     "check": "npm run typecheck && npm test && npm run check:dashboard",
     "e2e": "playwright test -c e2e/playwright.config.ts",
+    "screenshots": "tsx tools/screenshots.ts",
     "e2e:ui": "playwright test -c e2e/playwright.config.ts --ui"
   },
   "devDependencies": {

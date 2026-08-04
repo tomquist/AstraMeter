@@ -39,6 +39,7 @@ GitHub ref the site links to is injected at build time (see *Deploying*).
 | `ts/state.test.ts` | Tests for the state model + untrusted-input sanitisation. |
 | `ts/generate.test.ts` | Assertions for the generators. |
 | `build.mjs` | esbuild build: copies static files + bundles the entry points into `dist/`. |
+| `tools/screenshots.ts` | Regenerates the dashboard screenshots in `docs/images/` (`npm run screenshots`). Boots the real stack against a three-battery house and drives a browser; see *Screenshots* below. |
 
 ## Develop locally
 
@@ -53,6 +54,27 @@ python3 -m http.server 8000 --directory dist
 ```
 
 To preview the links for another ref: `GH_REF=main npm run build`.
+
+## Screenshots
+
+The dashboard screenshots embedded by the landing page, `README.md` and
+`docs/dashboard.md` are generated, not hand-captured:
+
+```bash
+cd web && npm run screenshots        # ~4 minutes, writes 8 PNGs to docs/images/
+npm run screenshots -- --help       # narrow it: --tabs, --themes, --warmup, --out
+```
+
+They live in `docs/images/` — one copy, referenced by the docs directly and
+copied into `dist/assets/screenshots/` by `build.mjs` for the landing page.
+Nothing is staged: the script boots the same stack `npm run e2e` uses (the
+battery simulator speaking real CT002 UDP to a real AstraMeter) with three
+batteries, five switchable appliances and solar, waits for the trend lines to
+fill from actual polls, and shoots each tab at a moment when the grid is held
+near zero with every battery working.
+
+Every run produces different numbers, so there is no staleness check — refresh
+them when a UI change makes them wrong, and commit the result.
 
 ## Test & type-check
 

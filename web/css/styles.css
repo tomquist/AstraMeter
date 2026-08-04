@@ -888,6 +888,33 @@ code {
   line-height: 1.55;
 }
 
+/* ── product screenshots ── */
+/* The images are 2× and generated at 1280 CSS px wide (web/tools/screenshots.ts),
+ * so they are capped at their own logical width: past that they only get soft.
+ * Intrinsic width/height are on the <img> so the page does not reflow around
+ * them as they load. */
+.shot {
+  margin: 0 auto 32px;
+  max-width: 1000px;
+}
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.shot figcaption {
+  margin-top: 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.shot:last-of-type {
+  margin-bottom: 0;
+}
+
 /* ── two-column panels ── */
 .two-col {
   display: grid;

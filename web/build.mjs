@@ -23,6 +23,11 @@ for (const item of ["css", "assets", "CNAME", "robots.txt"]) {
   await cp(item, `${outdir}/${item}`, { recursive: true });
 }
 
+// Dashboard screenshots live with the docs that also embed them (one copy,
+// referenced by both) and are published under assets/ for the landing page.
+// Regenerate with `npm run screenshots`; see web/tools/screenshots.ts.
+await cp("../docs/images", `${outdir}/assets/screenshots`, { recursive: true });
+
 // HTML pages: inject a noindex meta into non-production builds.
 for (const item of ["index.html", "generator.html"]) {
   let html = await readFile(item, "utf8");

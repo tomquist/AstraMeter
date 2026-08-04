@@ -10,6 +10,13 @@ meter. Your storage system sees a meter it understands; AstraMeter reads your
 actual grid power from a source of your choosing and steers the batteries toward
 net-zero grid exchange.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-overview-dark.png">
+  <img alt="AstraMeter's live status dashboard: the grid held within a few watts of zero while three batteries each supply several hundred watts" src="docs/images/dashboard-overview-light.png">
+</picture>
+
+<p align="center"><em>The built-in <a href="docs/dashboard.md">live status dashboard</a> — three batteries sharing one house.</em></p>
+
 <!-- marstek-family:start -->
 **🔋 The Marstek ecosystem.** This repo is part of a family of open-source tools for Marstek batteries (B2500, Venus, Jupiter, …):
 

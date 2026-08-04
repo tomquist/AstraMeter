@@ -17,6 +17,8 @@ on:
     branches: [main, develop]
     paths:
       - "web/**"
+      # The landing page publishes these; the build copies them into dist/.
+      - "docs/images/**"
       - ".github/workflows/pr-preview.yml"
 
 permissions:

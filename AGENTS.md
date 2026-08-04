@@ -76,6 +76,27 @@ artifact** — neither the Docker build nor `esphome compile` has Node. After
 touching anything under `web/`, run `cd web && npm run build:dashboard` and
 commit the result; CI fails on a stale bundle.
 
+### Screenshots (docs + website)
+
+`docs/images/dashboard-<tab>-<light|dark>.png` are **committed generated
+artifacts** too — embedded by `docs/dashboard.md`, `README.md` and the landing
+page (`web/build.mjs` copies them to `dist/assets/screenshots/`). Refresh them
+with:
+
+```bash
+cd web && npm run screenshots     # ~4 minutes; takes all 8
+```
+
+`web/tools/screenshots.ts` boots the same stack the browser tests use — via a
+`sim`/`configDir`/`meterOptions` override on `startStack` — against a bigger
+house (three batteries, five appliances, solar) and drives a real browser. It
+is deliberately patient: the trend lines are built in the browser from polls,
+so it waits for real samples, and it waits for a moment when the grid is near
+zero with every battery working before each shot. `--tabs`, `--themes`,
+`--warmup` and `--out` narrow a re-run. There is **no CI check** for staleness —
+the values are live, so every run differs and a diff would always be dirty;
+refresh them when a UI change makes them wrong.
+
 ## Steering-quality evaluation (run when touching balancer behavior)
 
 `uv run python -m astrameter.simulator.evaluation` simulates hours of

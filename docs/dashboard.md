@@ -27,18 +27,38 @@ the batteries are what pull the grid back to zero. Beside it are the emulator's
 state (active control or relay mode, batteries connected, per-phase readings)
 and the power source's health.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-overview-dark.png">
+  <img alt="The Overview tab: a house importing a few watts from the grid while three batteries each contribute several hundred watts" src="images/dashboard-overview-light.png">
+</picture>
+
 **Batteries** — one card per battery: reported power, the target AstraMeter
 asked for, the phase it reported, how long ago it last polled, its distribution
 weight and its saturation. If changes are allowed you can disable a battery or
 return one to automatic control from here.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-batteries-dark.png">
+  <img alt="The Batteries tab: three battery cards side by side, each with its own trend line, phase, target and saturation" src="images/dashboard-batteries-light.png">
+</picture>
+
 **Power source** — every configured meter, what reads it, the filter chain
 applied to it (smoothing, spike rejection, PID) and when it was last read.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-sources-dark.png">
+  <img alt="The Power source tab: one meter card showing what reads it, its total, and the filter chain applied" src="images/dashboard-sources-light.png">
+</picture>
 
 **Diagnostics** — service version, uptime, config file and mode, plus the
 balancer's internals: predicted grid power, prediction trust, pool output,
 import trim, the demand average and the efficiency rotation state. MQTT
 Insights connection state appears here when it is configured.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-diagnostics-dark.png">
+  <img alt="The Diagnostics tab: a service card beside the balancer's internal state" src="images/dashboard-diagnostics-light.png">
+</picture>
 
 The battery and power-source cards each carry a small **trend line** of their
 own figure, with the range it covered underneath. It is built in your browser
