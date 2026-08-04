@@ -219,18 +219,17 @@ export async function startStack(options: StartOptions = {}): Promise<Stack> {
   const killAll = async () => {
     for (const child of children) {
       try {
-          // Killing the group also reaps the `uv run` wrapper's child.
-          process.kill(-child.pid!, "SIGKILL");
-        } catch {
-          /* already gone */
-        }
+        // Killing the group also reaps the `uv run` wrapper's child.
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        /* already gone */
       }
-      // Give the OS a moment to release the ports for the next spec file.
-      await new Promise((r) => setTimeout(r, 1500));
-    };
+    }
+    // Give the OS a moment to release the ports for the next spec file.
+    await new Promise((r) => setTimeout(r, 1500));
+  };
 
-    try {
-
+  try {
     if (options.homeAssistant) {
       // What the Supervisor would have written to /data/options.json. The whole
       // add-on path then runs for real: the grid comes from Home Assistant
