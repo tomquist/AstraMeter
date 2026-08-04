@@ -264,10 +264,27 @@ class _Sample:
     dc_input: float = 0.0
 
 
-def _free_udp_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+def _reserve_udp_port() -> socket.socket:
+    """Claim a free UDP port and *hold* it, returning the holding socket.
+
+    Asking the OS for port 0 and closing the socket straight away returns a
+    number, not a reservation: the port goes back in the pool immediately. The
+    evaluation runs scenarios in parallel across cores (see ``_run_tasks``), so
+    two workers were routinely handed the same one, and the loser died partway
+    through a CI run with ``OSError: [Errno 98] Address already in use``.
+
+    While this socket is open the OS will not hand the port to anyone else, so
+    the caller must keep it until the real listener is about to bind — and must
+    close it first, because that listener binds the wildcard address, which
+    conflicts with this loopback bind on the same port.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+    except BaseException:
+        sock.close()
+        raise
+    return sock
 
 
 async def run_scenario(
@@ -290,7 +307,10 @@ async def run_scenario(
         loads=[Load(ld.name, ld.power, ld.phase) for ld in scenario.loads],
     )
     ct_mac = "112233445566"
-    ct_port = _free_udp_port()
+    # Held across the whole set-up below and released immediately before
+    # ``ct002.start()`` — see _reserve_udp_port.
+    ct_port_reservation = _reserve_udp_port()
+    ct_port = int(ct_port_reservation.getsockname()[1])
     batteries = [
         BatterySimulator(
             mac=f"02B250{i + 1:06X}",
@@ -378,6 +398,10 @@ async def run_scenario(
         ]
 
     ct002.before_send = before_send
+    # Hand the port over: the reservation has kept it out of every other
+    # worker's reach until exactly here, so the bind below cannot lose a race
+    # it could previously lose at any point during set-up.
+    ct_port_reservation.close()
     await ct002.start()
     try:
         # Event-driven schedule: each battery polls on its own cadence
