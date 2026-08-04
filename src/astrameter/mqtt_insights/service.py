@@ -657,6 +657,7 @@ class MqttInsightsService:
             "last_target": data.get("last_target"),
             "active": data.get("active", True),
             "poll_interval": data.get("poll_interval"),
+            "answer_interval": data.get("answer_interval"),
             "last_seen": data.get("last_seen", ""),
             "manual_target": data.get("manual_target"),
             "auto_target": data.get("auto_target", True),

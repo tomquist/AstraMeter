@@ -157,10 +157,19 @@ stale numbers, overshoots, and ends up swinging back and forth. The fix is to sl
 things down and smooth out the readings. Try these one at a time, and watch how the
 battery behaves for a few minutes after each change before moving on:
 
-1. **Don't re-read the meter too often.** Set `THROTTLE_INTERVAL = 1` so
-   AstraMeter waits at least one second between readings, and
-   `DEDUPE_TIME_WINDOW = 0.9` so it ignores duplicate readings that arrive in that
-   window.
+1. **Answer once per fresh reading.** Leave `WAIT_FOR_NEXT_MESSAGE = true` (the
+   default) so each battery is answered with a *new* meter reading rather than
+   the same cached one twice. This is the setting that matters most here: the
+   battery adds each answer to its current output, so being handed the same
+   reading twice makes it apply the same correction twice — which is exactly
+   what an overshoot looks like. If your meter is polled rather than pushed, set
+   `THROTTLE_INTERVAL = 1` so AstraMeter re-reads it at most once a second.
+
+   Reach for `DEDUPE_TIME_WINDOW` only if a battery genuinely floods you with
+   repeat polls. It works by leaving the extra polls **unanswered**, so raising
+   it does not slow a battery down smoothly — the answered rate can only drop to
+   half, a third, a quarter of the battery's own poll rate, which is why nudging
+   the value often changes nothing and then changes a lot.
 2. **Ignore tiny wobbles.** Raise `DEADBAND` to around `10`–`20` (watts) so small
    fluctuations near zero are treated as "close enough" and don't trigger a
    correction.

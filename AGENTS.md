@@ -51,6 +51,24 @@ than reporting the image as untested.
 
 `esphome/components/ct002/` is a C++ mirror of the Python CT002 stack. Any change to shared behavior must land on **both** sides in the same change. See `CONTRIBUTING.md` for the file mapping and what has no C++ counterpart. Verify with `uv run pytest tests/components/ct002/`.
 
+Both halves of that suite need something the sandbox does not have by default,
+and both are obtainable — don't skip them:
+
+- **`test_shared_e2e.py` skips without the ESPHome CLI.** `uv tool install
+  esphome` (~2 min) turns ~40 skips into real `[esphome]` runs, which is the
+  half that actually proves parity.
+- **`test_host_protocol.py` fails to build behind a TLS-intercepting proxy.**
+  CMake fetches googletest as a GitHub tarball and the proxy answers 403. `git
+  clone` is allowed, so clone it once and point FetchContent at it — no repo
+  change needed:
+
+  ```bash
+  git clone --depth 1 --branch v1.14.0 https://github.com/google/googletest.git /tmp/googletest
+  cmake -S tests/components/ct002 -B /tmp/ct002_build -DCMAKE_BUILD_TYPE=Release \
+        -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/tmp/googletest
+  cmake --build /tmp/ct002_build -j && (cd /tmp/ct002_build && for t in host_*_test; do ./$t; done)
+  ```
+
 ### Dashboard / web UI (parity DEFERRED, not waived)
 
 `src/astrameter/status/`, the dashboard routes in `src/astrameter/web_server.py`

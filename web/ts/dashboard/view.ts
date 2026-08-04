@@ -623,6 +623,13 @@ function batteryCard(
           ...row("Target", signedWatts(consumer.balancer?.last_target_w)),
           ...row("Last seen", ago(consumer.last_seen_age_s)),
           ...row("Polls every", seconds(consumer.poll_interval_s)),
+          // Redundant while the two agree, which is the normal case — show it
+          // only when a dedupe window is holding replies back.
+          ...(consumer.answer_interval_s != null &&
+          consumer.poll_interval_s != null &&
+          consumer.answer_interval_s > consumer.poll_interval_s
+            ? row("Answered every", seconds(consumer.answer_interval_s))
+            : []),
         )
       : null,
     saturation == null || !reported

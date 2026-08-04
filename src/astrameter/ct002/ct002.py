@@ -75,6 +75,16 @@ ADAPTIVE_TTL_MIN_SECONDS = 5.0
 ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0
 
 
+def _ema_interval(previous: float | None, raw: float) -> float:
+    """Fold *raw* into an EMA-smoothed interval, rounded to a tenth."""
+    if previous is None:
+        return round(raw, 1)
+    return round(
+        POLL_INTERVAL_EMA_ALPHA * raw + (1 - POLL_INTERVAL_EMA_ALPHA) * previous,
+        1,
+    )
+
+
 def _bucket_for_phase(phase: str) -> str:
     """Map a stored consumer phase to its aggregation bucket."""
     p = (phase or "").strip().upper()
@@ -120,9 +130,19 @@ class Consumer:
     # populate cross-talk *_dchrg / *_chrg fields in responses to other
     # batteries — see _collect_reports_by_phase.
     last_instructed_power: float = 0.0
+    # Wall-clock of the last request *received* — every poll, whether or not
+    # the dedupe window suppressed our reply — and the EMA of those gaps: the
+    # battery's own polling cadence.  Liveness (TTL) hangs off this, because a
+    # battery whose polls we deliberately drop is still very much alive.
     timestamp: float = 0.0
     device_type: str = ""
     poll_interval: float | None = None
+    # Wall-clock of the last request we actually *answered*, and the EMA of
+    # those gaps — how often this consumer gets a reply, i.e. how often active
+    # control updates it.  Equal to `poll_interval` unless a dedupe window is
+    # dropping polls, which is precisely when the difference matters.
+    last_answer_at: float = 0.0
+    answer_interval: float | None = None
     # "Participate" flag from the request's optional 7th field. ``0`` on the
     # wire means "do not aggregate me"; defaults to ``True`` when the field is
     # absent (older senders send only 6 fields).
@@ -205,6 +225,7 @@ class ConsumerSnapshot:
     last_seen_at: float
     last_seen_age: float | None
     poll_interval: float | None
+    answer_interval: float | None
     ttl: float
     expired: bool
     in_flight: bool
@@ -428,6 +449,23 @@ class CT002:
             self._consumers[consumer_id] = consumer
         return consumer
 
+    def _track_answer(self, consumer_id: str) -> None:
+        """Record that we just replied to *consumer_id*.
+
+        Paired with ``poll_interval`` (which counts every poll), this is the
+        rate at which the battery actually receives an instruction — the
+        thing a dedupe window changes.
+        """
+        consumer = self._consumers.get(consumer_id)
+        if consumer is None:
+            return
+        now = self._clock()
+        if consumer.last_answer_at > 0:
+            consumer.answer_interval = _ema_interval(
+                consumer.answer_interval, now - consumer.last_answer_at
+            )
+        consumer.last_answer_at = now
+
     def _apply_override(self, consumer: Consumer) -> None:
         """Seed a freshly created consumer with any saved user overrides."""
         override = self._consumer_overrides.get(consumer.consumer_id)
@@ -598,15 +636,9 @@ class CT002:
         previous_phase = consumer.phase if consumer.timestamp > 0 else None
         now = self._clock()
         if consumer.timestamp > 0:
-            raw_interval = now - consumer.timestamp
-            if consumer.poll_interval is None:
-                consumer.poll_interval = round(raw_interval, 1)
-            else:
-                consumer.poll_interval = round(
-                    POLL_INTERVAL_EMA_ALPHA * raw_interval
-                    + (1 - POLL_INTERVAL_EMA_ALPHA) * consumer.poll_interval,
-                    1,
-                )
+            consumer.poll_interval = _ema_interval(
+                consumer.poll_interval, now - consumer.timestamp
+            )
         consumer.phase = normalized_phase
         consumer.power = parse_int(power, 0)
         consumer.timestamp = now
@@ -831,6 +863,7 @@ class CT002:
             if consumer.timestamp > 0
             else None,
             poll_interval=consumer.poll_interval,
+            answer_interval=consumer.answer_interval,
             ttl=self._consumer_ttl_seconds(consumer),
             expired=self._consumer_expired(consumer, now),
             in_flight=consumer_id in self._inflight_consumers,
@@ -1191,17 +1224,14 @@ class CT002:
             " in inspection mode" if in_inspection_mode else "",
         )
 
-        # Deduplication check (keyed by consumer id so repeats from the
-        # same battery are suppressed regardless of source UDP port).
-        if not self._dedup.should_process(consumer_id):
-            logger.debug(
-                "Ignoring request from %s (consumer=%s) due to dedupe window",
-                addr,
-                consumer_id,
-            )
-            return
-
         meter_dev_type = fields[0] if len(fields) > 0 else ""
+        # Record the report for *every* poll, before the dedupe decision: the
+        # window suppresses our reply, it does not mean the battery went quiet.
+        # Booking it here keeps `poll_interval` measuring the battery's real
+        # cadence (rather than our answer rate), keeps the adaptive TTL from
+        # evicting a live battery whose polls we are deliberately dropping, and
+        # lets cross-talk aggregation use the freshest reported power.
+        #
         # Store the phase exactly as reported: "D" selects the combined ABC
         # bucket and any inspection marker is normalized to "0" (the x bucket)
         # by _update_consumer_report — forcing "A" here would mis-count
@@ -1214,6 +1244,16 @@ class CT002:
             source_ip=str(addr[0]),
             participates=participates,
         )
+
+        # Deduplication check (keyed by consumer id so repeats from the
+        # same battery are suppressed regardless of source UDP port).
+        if not self._dedup.should_process(consumer_id):
+            logger.debug(
+                "Ignoring request from %s (consumer=%s) due to dedupe window",
+                addr,
+                consumer_id,
+            )
+            return
 
         # Coalesce concurrent polls from the same battery.  If a handler for
         # this consumer is already parked awaiting the next meter reading, the
@@ -1336,6 +1376,7 @@ class CT002:
                     self._format_status(values, phase_values, consumer_id, meter_value),
                 )
             transport.sendto(response, addr)
+            self._track_answer(consumer_id)
 
             # Record what we just served for the read-only status surface.
             # This is the one point where the raw meter reading, the emitted
@@ -1374,6 +1415,9 @@ class CT002:
                         "last_target": self._balancer.get_last_target(consumer_id),
                         "active": is_active,
                         "poll_interval": consumer.poll_interval if consumer else None,
+                        "answer_interval": (
+                            consumer.answer_interval if consumer else None
+                        ),
                         "last_seen": datetime.now(timezone.utc).isoformat(),
                         "smooth_target": self._last_smooth_target,
                         "manual_target": consumer.manual_target if consumer else None,

@@ -105,6 +105,7 @@ Example payload:
   "last_target": -50.0,
   "active": true,
   "poll_interval": 1.0,
+  "answer_interval": 1.0,
   "last_seen": "2026-06-22T10:15:00+00:00",
   "manual_target": null,
   "auto_target": true,
@@ -126,7 +127,8 @@ Example payload:
 | `saturation` | number | 0–1 estimate of how saturated (maxed-out) the battery is; 1 = can't absorb/deliver more. |
 | `last_target` | number/null | Previous target sent, for rate-of-change context. |
 | `active` | bool | `false` when this battery is paused (steered to 0 W). |
-| `poll_interval` | number/null | Measured seconds between this battery's polls. |
+| `poll_interval` | number/null | Measured seconds between this battery's polls, counting every poll it sends. |
+| `answer_interval` | number/null | Measured seconds between the replies it actually receives. Matches `poll_interval` unless `DEDUPE_TIME_WINDOW` is suppressing replies. |
 | `last_seen` | string | ISO-8601 UTC timestamp of this update. |
 | `manual_target` | number/null | Active manual override in watts, or `null` when on automatic. |
 | `auto_target` | bool | `true` = automatic control; `false` = manual override in effect. |

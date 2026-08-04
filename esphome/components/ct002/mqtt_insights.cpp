@@ -221,6 +221,11 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     } else {
       root["poll_interval"] = nullptr;
     }
+    if (snap.answer_interval.has_value()) {
+      root["answer_interval"] = *snap.answer_interval;
+    } else {
+      root["answer_interval"] = nullptr;
+    }
     // Last seen timestamp — HA's `device_class: timestamp` wants Unix
     // epoch seconds (or ISO 8601). snap.timestamp is millis()-derived
     // (monotonic seconds since boot), which HA would render as ~1970+uptime

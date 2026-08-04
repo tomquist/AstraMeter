@@ -137,6 +137,9 @@ def consumer_to_wire(consumer) -> dict[str, Any]:
             # document.  Emitted only when true, so absence means "a battery".
             "never_reported": True if not consumer.last_seen_at else None,
             "poll_interval_s": round_or_none(consumer.poll_interval),
+            # Only worth showing when it diverges from the poll interval, i.e.
+            # when a dedupe window is actually suppressing replies.
+            "answer_interval_s": round_or_none(consumer.answer_interval),
             "ttl_s": round_or_none(consumer.ttl),
             "expired": consumer.expired,
             "in_flight": consumer.in_flight,

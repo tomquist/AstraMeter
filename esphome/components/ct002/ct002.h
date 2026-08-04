@@ -56,8 +56,15 @@ struct Consumer {
   float power{0.0f};
   std::string device_type;
   std::string last_ip;
+  // Last request *received* (every poll, whether or not the dedupe window
+  // suppressed the reply) and the EMA of those gaps: the battery's own
+  // cadence. Liveness/TTL keys off this. Mirrors Python's Consumer.
   double timestamp{0.0};
   std::optional<float> poll_interval;
+  // Last request we actually *answered*, and the EMA of those gaps — how
+  // often this consumer receives an instruction.
+  double last_answer_at{0.0};
+  std::optional<float> answer_interval;
   // Cached input value(s) from before_send-style hooks (manual injection
   // path used by MQTT insights). When unset the SensorBackedPowermeter feed
   // is used directly.
@@ -179,6 +186,7 @@ class CT002Component : public Component {
     float efficiency_window_weight{1.0f};
     std::optional<float> min_dc_output;
     std::optional<float> poll_interval;
+    std::optional<float> answer_interval;
     double timestamp{0.0};
     // Cross-phase grid power last observed at the pipeline head (post-
     // filters, pre-balancer). Mirrors Python's `grid_power.{l1,l2,l3}`.
@@ -299,6 +307,10 @@ class CT002Component : public Component {
   // from the last ACCEPTED request (dropped polls don't refresh the
   // timestamp), matching RequestDeduplicator.should_process.
   bool dedup_should_process_(const std::string &consumer_id);
+
+  // Folds the gap since the previous reply to this consumer into its
+  // answer_interval. Called right after a response goes out.
+  void track_answer_(const std::string &consumer_id);
   void update_consumer_report_(const std::string &consumer_id, const std::string &phase,
                               float power, const std::string &device_type,
                               const std::string &source_ip, bool participates = true);
@@ -350,10 +362,6 @@ class CT002Component : public Component {
   // Last-accepted-poll timestamp (monotonic seconds) per consumer_id,
   // for the dedup gate. Purged alongside consumer eviction.
   std::unordered_map<std::string, double> dedup_last_;
-  // Per-consumer EMA alpha for the poll_interval diagnostic (Python:
-  // POLL_INTERVAL_EMA_ALPHA=0.3). Same value here so the published
-  // MQTT-insights poll_interval matches between stacks.
-  static constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
   BalancerConfig balancer_cfg_;
   // double (matching Python) so the saturation EMA bit-matches across stacks.
   double saturation_alpha_{0.15};

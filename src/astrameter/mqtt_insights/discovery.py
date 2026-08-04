@@ -160,6 +160,20 @@ def build_ct002_consumer_discovery(
         "entity_category": "diagnostic",
     }
 
+    # Answer interval — how often this battery actually gets a reply.  Equal to
+    # the poll interval unless DEDUPE_TIME_WINDOW is suppressing replies, which
+    # is exactly when the difference is worth seeing.
+    components["answer_interval"] = {
+        "platform": "sensor",
+        "unique_id": f"{uid_prefix}_answer_interval",
+        "name": "Answer Interval",
+        "device_class": "duration",
+        "unit_of_measurement": "s",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.answer_interval }}",
+        "entity_category": "diagnostic",
+    }
+
     # Per-consumer controllable entities each use their own command topic with
     # ``retain: true``.  Home Assistant then publishes the set-command retained,
     # so on an AstraMeter restart the broker redelivers it as soon as we

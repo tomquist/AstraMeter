@@ -37,6 +37,20 @@ long round_half_even(double v) {
   return (fll % 2 == 0) ? fll : fll + 1;  // tie → nearest even
 }
 
+// Fold a fresh gap into an EMA-smoothed interval, rounded to a tenth.
+// Mirrors src/astrameter/ct002/ct002.py::_ema_interval — including the
+// banker's rounding, so poll_interval / answer_interval published to MQTT
+// match between the two stacks.
+constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
+
+std::optional<float> ema_interval(std::optional<float> previous, float raw) {
+  const auto round_tenth = [](float v) {
+    return static_cast<float>(round_half_even(static_cast<double>(v) * 10.0)) / 10.0f;
+  };
+  if (!previous.has_value()) return round_tenth(raw);
+  return round_tenth(POLL_INTERVAL_EMA_ALPHA * raw + (1.0f - POLL_INTERVAL_EMA_ALPHA) * *previous);
+}
+
 // Mirror of src/astrameter/ct002/protocol.py::parse_int → Python int():
 // strips surrounding whitespace and requires the ENTIRE remaining string
 // to be a valid base-10 integer, else returns the default. strtol alone
@@ -298,17 +312,14 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     participates = p.empty() || parse_int_strict(p, 1) != 0;
   }
 
-  // Deduplication — drop repeat polls from the same consumer inside the
-  // configured window (keyed by consumer_id so retransmits are suppressed
-  // regardless of source UDP port). Mirrors ct002.py:636-644. Disabled
-  // (default window 0) means every datagram is processed.
-  if (!this->dedup_should_process_(consumer_id)) {
-    ESP_LOGD(TAG, "Ignoring duplicate request from %s (consumer=%s) — dedupe window",
-             addr_ip.c_str(), consumer_id.c_str());
-    return;
-  }
-
   const std::string meter_dev_type = fields[0];
+  // Record the report for *every* poll, before the dedupe decision: the window
+  // suppresses our reply, it does not mean the battery went quiet. Booking it
+  // here keeps poll_interval measuring the battery's real cadence (rather than
+  // our answer rate), keeps the adaptive TTL from evicting a live battery whose
+  // polls we deliberately drop, and lets cross-talk aggregation use the
+  // freshest reported power. Mirrors ct002.py's _handle_request ordering.
+  //
   // Store the phase exactly as reported: "D" selects the combined ABC bucket
   // and any inspection marker is normalized to "0" (the x bucket) inside
   // update_consumer_report_ — forcing "A" here would mis-count inspection
@@ -316,6 +327,16 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   this->update_consumer_report_(consumer_id, reported_phase,
                                 static_cast<float>(reported_power), meter_dev_type, addr_ip,
                                 participates);
+
+  // Deduplication — drop repeat polls from the same consumer inside the
+  // configured window (keyed by consumer_id so retransmits are suppressed
+  // regardless of source UDP port). Disabled (default window 0) means every
+  // datagram is answered.
+  if (!this->dedup_should_process_(consumer_id)) {
+    ESP_LOGD(TAG, "Ignoring duplicate request from %s (consumer=%s) — dedupe window",
+             addr_ip.c_str(), consumer_id.c_str());
+    return;
+  }
 
   // Read the filter pipeline → balancer.
   std::vector<float> values;
@@ -376,6 +397,7 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
     if (to_len > 0) {
       this->socket_->sendto(payload.data(), payload.size(), 0,
                             reinterpret_cast<struct sockaddr *>(&to), to_len);
+      this->track_answer_(consumer_id);
     }
   }
 
@@ -458,18 +480,8 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   // (ct002.py:298-307). Seeded on the second poll; round-trip to 0.1s
   // resolution to match what the Python service publishes to MQTT.
   if (consumer.timestamp > 0.0) {
-    const float raw_interval = static_cast<float>(now - consumer.timestamp);
-    // Python rounds poll_interval to 1 decimal with round(x, 1) — banker's.
-    auto round_tenth = [](float v) {
-      return static_cast<float>(round_half_even(static_cast<double>(v) * 10.0)) / 10.0f;
-    };
-    if (!consumer.poll_interval.has_value()) {
-      consumer.poll_interval = round_tenth(raw_interval);
-    } else {
-      consumer.poll_interval = round_tenth(POLL_INTERVAL_EMA_ALPHA * raw_interval +
-                                           (1.0f - POLL_INTERVAL_EMA_ALPHA) *
-                                               *consumer.poll_interval);
-    }
+    consumer.poll_interval =
+        ema_interval(consumer.poll_interval, static_cast<float>(now - consumer.timestamp));
   }
   consumer.phase = normalized_phase;
   consumer.power = power;
@@ -785,6 +797,7 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.efficiency_window_weight = c.efficiency_window_weight;
   snap.min_dc_output = c.min_dc_output;
   snap.poll_interval = c.poll_interval;
+  snap.answer_interval = c.answer_interval;
   snap.timestamp = c.timestamp;
   snap.grid_power = this->last_grid_power_;
   snap.target = this->last_target_;
@@ -953,6 +966,18 @@ void CT002Component::evict_stale_consumers_() {
       else ++it;
     }
   }
+}
+
+void CT002Component::track_answer_(const std::string &consumer_id) {
+  auto it = this->consumers_.find(consumer_id);
+  if (it == this->consumers_.end()) return;
+  Consumer &c = it->second;
+  const double now = now_seconds_();
+  if (c.last_answer_at > 0.0) {
+    c.answer_interval =
+        ema_interval(c.answer_interval, static_cast<float>(now - c.last_answer_at));
+  }
+  c.last_answer_at = now;
 }
 
 bool CT002Component::dedup_should_process_(const std::string &consumer_id) {

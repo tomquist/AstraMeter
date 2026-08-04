@@ -273,6 +273,34 @@ const writable = renderToString(
 );
 has(writable, ">Controls<", "write controls appear with the capability");
 
+// "Answered every" is redundant while it equals the poll interval, so it only
+// earns a row when a dedupe window is actually holding replies back.
+lacks(writable, "Answered every", "no answer-rate row when nothing is deduped");
+const dedupedState: AppState = {
+  ...live,
+  tab: "batteries",
+  snapshot: {
+    ...snapshot,
+    devices: snapshot.devices.map((d) =>
+      d.kind === "ct002"
+        ? {
+            ...d,
+            consumers: (d.consumers ?? []).map((c) => ({
+              ...c,
+              poll_interval_s: 0.5,
+              answer_interval_s: 4,
+            })),
+          }
+        : d,
+    ),
+  },
+};
+const dedupedHtml = renderToString(
+  h("div", null, ...view(dedupedState, actions, initialConfigState())),
+);
+has(dedupedHtml, "Answered every", "the answer rate shows once it diverges from the poll rate");
+has(dedupedHtml, ">4 s<", "and reports the answered cadence, not the poll cadence");
+
 // ── the Shelly emulator, which is the default DEVICE_TYPE ──
 //
 // Regression: the views filtered on kind === "ct002", so a Shelly install

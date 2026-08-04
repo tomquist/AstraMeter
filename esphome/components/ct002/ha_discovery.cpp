@@ -198,6 +198,19 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     pi["value_template"] = "{{ value_json.poll_interval }}";
     pi["entity_category"] = "diagnostic";
 
+    // Answer interval — how often this battery actually gets a reply. Equal to
+    // the poll interval unless dedupe_window is suppressing replies, which is
+    // exactly when the difference is worth seeing.
+    JsonObject ai = components["answer_interval"].to<JsonObject>();
+    ai["platform"] = "sensor";
+    ai["unique_id"] = uid_prefix + "_answer_interval";
+    ai["name"] = "Answer Interval";
+    ai["device_class"] = "duration";
+    ai["unit_of_measurement"] = "s";
+    ai["state_topic"] = state_topic;
+    ai["value_template"] = "{{ value_json.answer_interval }}";
+    ai["entity_category"] = "diagnostic";
+
     // Per-consumer controllable entities each use their own command topic with
     // retain=true, so Home Assistant persists the value across restarts (the
     // broker redelivers the retained command on re-subscribe). A dedicated

@@ -476,6 +476,37 @@ def test_clock_gated_dedup(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
+def test_deduped_poll_still_counts_as_alive(backend) -> None:
+    """A poll the dedup window suppressed still proves the battery is there.
+
+    The window suppresses the *reply*, not the battery: booking the report
+    before the gate is what keeps the adaptive TTL (and the poll_interval it
+    is derived from) measuring the battery's real cadence.  Answer-gated
+    bookkeeping would evict a battery that never stopped polling.
+    """
+    backend.set_clock(5000)
+    backend.set_consumer_ttl(None)  # adaptive eviction
+    backend.set_dedupe(100)  # wide enough that the second poll is dropped
+    backend.set_grid(100)
+
+    assert backend.poll("CCDDEEFF0022", "A", 0) is not None
+
+    # Second poll lands well past the adaptive fallback TTL (30 s) but is
+    # dropped by the dedup window — it must still refresh liveness.
+    backend.advance_clock(40)
+    assert backend.poll("CCDDEEFF0022", "A", 0) is None, (
+        f"[{backend.name}] poll inside the dedup window should not be answered"
+    )
+
+    backend.advance_clock(1)
+    backend.evict_now()
+    assert "ccddeeff0022" in backend.dump(), (
+        f"[{backend.name}] a battery polling every 40 s was evicted after 1 s of "
+        "silence — the dedup window must not gate liveness"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
 @pytest.mark.parametrize("phase,idx", [("A", 4), ("B", 5), ("C", 6)])
 def test_phase_routing(backend, phase, idx) -> None:
     """A single battery's target lands only on the phase it reports.

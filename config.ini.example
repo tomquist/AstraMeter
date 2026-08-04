@@ -43,6 +43,9 @@ THROTTLE_INTERVAL = 0
 # Ignore repeated requests from the same emulator client within this window
 # (seconds). Applies to CT002/CT003 (keyed by consumer id) and Shelly (keyed
 # by battery IP). Can be overridden in the [CT002]/[CT003] section. 0 disables.
+# A suppressed request is left UNANSWERED, so a battery's answered rate can only
+# fall to a whole fraction of its own poll rate (half, a third, ...) — the value
+# is honoured exactly, but its effect changes in steps, not smoothly.
 # DEDUPE_TIME_WINDOW = 0
 
 # [CT002]
