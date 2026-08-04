@@ -132,8 +132,9 @@ function parseArgs(argv: string[]): Options {
     warmupMs: 420_000,
     // What "a good moment" means, in watts: the grid genuinely at zero — the
     // balancer's own settle band is ±25 W — and every battery visibly the
-    // reason why. A loose gate here is not a small sin: it admits shots of
-    // AstraMeter mid-correction and presents them as AstraMeter working.
+    // reason why, each discharging at least this much into the house. A loose
+    // gate here is not a small sin: it admits shots of AstraMeter
+    // mid-correction and presents them as AstraMeter working.
     settleW: 30,
     workingW: 150,
     tabs: [...TABS],
@@ -270,6 +271,10 @@ function batteryWatts(snapshot: any): number[] {
  * Every battery, not the busiest: under a light load AstraMeter deliberately
  * concentrates on fewer of them, and a shot of one battery working beside two
  * parked at 0 W documents the efficiency rule instead of the balancing.
+ *
+ * And every battery *discharging*, because that is what the captions claim.
+ * A sunny moment with the fleet absorbing surplus is just as real, but it
+ * would sit under alt text promising the opposite.
  */
 interface Moment {
   ok: boolean;
@@ -281,8 +286,14 @@ interface Moment {
 async function settledNow(opts: Options): Promise<Moment> {
   const snapshot = await statusSnapshot();
   const grid = gridWatts(snapshot);
-  const batteries = batteryWatts(snapshot).map(Math.abs);
-  const quietest = batteries.length ? Math.min(...batteries) : 0;
+  // Negated, so this is what each battery is *supplying* to the house. The
+  // direction matters: the docs caption both images with "three batteries
+  // between them supply what the house is drawing", and a fleet soaking up
+  // solar is equally real but illustrates the opposite. Accepting either
+  // would put a charging shot under a discharging caption, which is the
+  // caption-fits-the-picture failure this gate exists to prevent.
+  const supplying = batteryWatts(snapshot).map((w) => -w);
+  const quietest = supplying.length ? Math.min(...supplying) : 0;
   const ok =
     grid != null && Math.abs(grid) <= opts.settleW && quietest >= opts.workingW;
   return { ok, grid, quietest };
@@ -301,7 +312,7 @@ async function waitForGoodMoment(opts: Options, label: string): Promise<void> {
       // belongs in SHOWCASE — not in a caption written around a bad shot.
       throw new Error(
         `${label}: no settled moment within 90 s ` +
-          `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery ${quietest.toFixed(0)} W)`,
+          `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery supplying ${quietest.toFixed(0)} W)`,
       );
     }
     await new Promise((r) => setTimeout(r, 1000));
@@ -404,7 +415,7 @@ async function captureSettled(page: Page, opts: Options, tab: Tab): Promise<void
         if (attempt >= 5) {
           throw new Error(
             `${tab}: could not hold a settled moment across the freeze ` +
-              `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery ${quietest.toFixed(0)} W)`,
+              `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery supplying ${quietest.toFixed(0)} W)`,
           );
         }
         log(`${tab}: house moved while freezing, waiting for another moment`);
