@@ -76,9 +76,13 @@ const SHOWCASE: SimConfig = {
       { name: "Heat pump", power: 900, phase: "B" },
       { name: "Dishwasher", power: 1100, phase: "C" },
     ],
-    // Under the base load plus a typical appliance, so a sunny moment swings
-    // the fleet into charging without erasing the house entirely.
-    solar_max: 3000,
+    // Deliberately under what the house typically draws. Bigger solar is
+    // realistic, but it puts the fleet into charging for minutes at a time,
+    // and the docs caption these images "three batteries between them supply
+    // what the house is drawing" — a claim the gate now enforces, so the sun
+    // has to leave something for the batteries to cover. It still moves
+    // enough to give the trend lines their shape.
+    solar_max: 1500,
     solar_phases: ["A", "B", "C"],
   },
   // A mixed fleet, as most people's is — but sized so that together they can
@@ -276,6 +280,15 @@ function batteryWatts(snapshot: any): number[] {
  * A sunny moment with the fleet absorbing surplus is just as real, but it
  * would sit under alt text promising the opposite.
  */
+/**
+ * How long to wait for a settled moment before giving up.
+ *
+ * Generous because the sun moves: a stretch where solar covers the house
+ * outright leaves the fleet charging, and the gate is waiting for it to be
+ * supplying. That passes on its own, so waiting beats failing the run.
+ */
+const PATIENCE_MS = 300_000;
+
 interface Moment {
   ok: boolean;
   grid: number | undefined;
@@ -300,7 +313,7 @@ async function settledNow(opts: Options): Promise<Moment> {
 }
 
 async function waitForGoodMoment(opts: Options, label: string): Promise<void> {
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + PATIENCE_MS;
   for (;;) {
     const { ok, grid, quietest } = await settledNow(opts);
     if (ok) return;
@@ -311,7 +324,7 @@ async function waitForGoodMoment(opts: Options, label: string): Promise<void> {
       // cannot reach a settled moment, the scenario is wrong and the fix
       // belongs in SHOWCASE — not in a caption written around a bad shot.
       throw new Error(
-        `${label}: no settled moment within 90 s ` +
+        `${label}: no settled moment within ${PATIENCE_MS / 1000} s ` +
           `(grid ${grid?.toFixed(0) ?? "?"} W, quietest battery supplying ${quietest.toFixed(0)} W)`,
       );
     }
