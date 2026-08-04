@@ -97,6 +97,18 @@ zero with every battery working before each shot. `--tabs`, `--themes`,
 the values are live, so every run differs and a diff would always be dirty;
 refresh them when a UI change makes them wrong.
 
+Because every run differs, two things around the images must not assume a
+particular one:
+
+- **Captions and alt text must not quote a reading.** "Holds the grid at zero"
+  was written against a shot that read +72 W. Describe the relationship the
+  script actually guarantees — the grid held to a fraction of the house while
+  the fleet carries the rest — not a number. The gate is `--settle` (default
+  250 W) and `--working` (150 W); a caption may only claim what those allow.
+- **`web/index.html` states each image's intrinsic `width`/`height`** to
+  reserve layout space. The crop height follows the tab's content, so re-check
+  those attributes after a refresh that changes a tab's height.
+
 ## Steering-quality evaluation (run when touching balancer behavior)
 
 `uv run python -m astrameter.simulator.evaluation` simulates hours of
