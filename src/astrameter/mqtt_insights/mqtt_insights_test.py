@@ -107,6 +107,11 @@ def test_ct002_consumer_discovery_structure():
     # Primary entity has name: null
     assert comps["grid_power_total"]["name"] is None
 
+    # The phase enum lists every phase a consumer payload can carry, including
+    # "D" (combined / whole-home mode); a missing option makes Home Assistant
+    # discard the state and log "Ignoring invalid option" (issue #580).
+    assert comps["phase"]["options"] == ["A", "B", "C", "D"]
+
     # Power sensors carry state_class measurement so they are usable as
     # power source entities in the Home Assistant energy dashboard.
     for power_key in (

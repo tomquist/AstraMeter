@@ -294,15 +294,16 @@ export function parseChannels(raw: unknown): number[] | null {
   return ids;
 }
 
+/** Join channel ids as a comma-separated CHANNELS value. */
 export function formatChannels(ids: number[]): string {
   return ids.join(",");
 }
 
-/** Resolve CHANNELS for ESPHome / defaults: valid prefix of length fallback, else fallback. */
+/** Resolve CHANNELS for ESPHome / defaults: exact id count, else fallback. */
 export function refossChannelIds(raw: FieldValue, fallback: number[]): number[] {
   const ids = parseChannels(raw);
-  if (!ids || ids.length < fallback.length) return fallback;
-  return ids.slice(0, fallback.length);
+  if (!ids || ids.length !== fallback.length) return fallback;
+  return ids;
 }
 
 export const POWERMETERS: Powermeter[] = [
@@ -741,7 +742,7 @@ export const POWERMETERS: Powermeter[] = [
       "A Refoss or Meross EM01P / EM06P / EM16P via the local Open API (Em.Status.Get). Same hardware under either brand. Cleartext HTTP — trusted LAN only.",
     docPython: "docs/powermeters.md#refoss--meross-energy-monitor",
     fields: [
-      { key: "IP", label: "Device IP", type: "text", placeholder: "192.168.1.150", required: true, help: "Prefer a numeric IP — Docker bridge often cannot resolve *.local mDNS names. Device API is cleartext HTTP; keep it on a trusted LAN." },
+      { key: "IP", label: "Device IP", type: "text", placeholder: "192.168.1.150", required: true, help: "Numeric IP always works. LAN DNS hostnames work in Docker bridge if Compose sets dns: to your router/DNS. *.local mDNS often still fails. Device API is cleartext HTTP; keep it on a trusted LAN." },
       { key: "CHANNELS", label: "CT channel(s)", type: "text", default: "1", placeholder: "1", help: "One channel id for single-phase (e.g. 1). For three-phase use three ids for L1/L2/L3 (e.g. 1,2,3 or 4,5,6)." },
     ],
     // Default only when three-phase is on and CHANNELS is not already three ids.
@@ -749,7 +750,7 @@ export const POWERMETERS: Powermeter[] = [
     esphome: {
       kind: "http",
       tier: "generic",
-      note: "Polls Em.Status.Get?id=65535 over cleartext HTTP (trusted LAN only) and reads status[N].power (channel id minus one). Prefer a numeric IP.",
+      note: "Polls Em.Status.Get?id=65535 over cleartext HTTP (trusted LAN only) and reads status[N].power (channel id minus one). Prefer a numeric IP or LAN DNS name.",
       url1: (f) => `http://${f.IP || "192.168.1.150"}/rpc/Em.Status.Get?id=65535`,
       url3: (f) => `http://${f.IP || "192.168.1.150"}/rpc/Em.Status.Get?id=65535`,
       lambda1: (f) => {

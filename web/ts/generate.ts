@@ -111,14 +111,14 @@ function meterSection(meter: Meter, opts: { multi: boolean }): string {
 
   // CHANNELS: positive decimal ints only (same rules as Python parse_channels).
   // Three-phase keeps a valid 3-id list or falls back to phaseChannelsValue;
-  // single-phase keeps a valid list or defaults to "1".
+  // single-phase keeps a single valid id or defaults to "1".
   if (pm.fields.some((f) => f.key === "CHANNELS")) {
     let ids = parseChannels(fields.CHANNELS);
     if (pm.phaseChannelsValue && meter.phases === 3) {
       if (!ids || ids.length !== 3) {
         ids = parseChannels(pm.phaseChannelsValue) ?? [1, 2, 3];
       }
-    } else if (!ids || ids.length < 1) {
+    } else if (!ids || ids.length !== 1) {
       ids = [1];
     }
     lines.push(`CHANNELS = ${formatChannels(ids)}`);

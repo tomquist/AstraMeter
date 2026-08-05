@@ -168,6 +168,9 @@ check(formatChannels([4, 5, 6]) === "4,5,6", "formatChannels: joins");
 check(JSON.stringify(refossChannelIds("1.0", [1])) === "[1]", "refossChannelIds: falls back on 1.0");
 check(JSON.stringify(refossChannelIds("1e2", [1, 2, 3])) === "[1,2,3]", "refossChannelIds: falls back on 1e2");
 check(JSON.stringify(refossChannelIds("4,5,6", [1, 2, 3])) === "[4,5,6]", "refossChannelIds: keeps valid 3-id list");
+check(JSON.stringify(refossChannelIds("4,5,6,7", [1, 2, 3])) === "[1,2,3]", "refossChannelIds: rejects 4-id list for 3-phase");
+check(JSON.stringify(refossChannelIds("4,5", [1, 2, 3])) === "[1,2,3]", "refossChannelIds: rejects 2-id list for 3-phase");
+check(JSON.stringify(refossChannelIds("4,5,6", [1])) === "[1]", "refossChannelIds: rejects 3-id list for single-phase");
 
 if (failures) {
   console.error(`\n${failures} schema problem(s) found`);

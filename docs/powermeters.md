@@ -527,9 +527,18 @@ IP = 192.168.1.150
 CHANNELS = 1,2,3
 ```
 
-**Docker / DNS.** Prefer a numeric IP (or a real LAN DNS name). mDNS hostnames
-like `meross-em06p-….local` usually do **not** resolve inside Docker bridge
-networks.
+**Docker / DNS.** A numeric IP always works. Hostnames that your **LAN DNS**
+knows (router / Pi-hole / AdGuard, etc.) also work on Docker **bridge** networks
+if the container uses that resolver — for example in Compose:
+
+```yaml
+dns:
+  - 192.168.1.1   # your LAN DNS / router
+```
+
+Default Docker DNS often cannot resolve LAN names. **mDNS** hostnames
+(`meross-em06p-….local`) usually still fail in bridge mode unless you add
+mDNS support or `extra_hosts`; prefer a numeric IP or a real DNS name.
 
 **Security.** The Refoss / Meross local Open API is **cleartext HTTP** (no TLS
 on the device). Power readings can be observed or altered by anyone on the

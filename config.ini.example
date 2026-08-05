@@ -461,7 +461,9 @@ THROTTLE_INTERVAL = 0
 # IP = 192.168.1.150
 ## CT channel id(s). One id for single-phase; three for L1/L2/L3 (e.g. 1,2,3).
 # CHANNELS = 1
-## Prefer a numeric IP in Docker — *.local mDNS often does not resolve in bridge mode.
+## Prefer a numeric IP, or a LAN DNS hostname with Compose dns: pointing at your
+## router/DNS (Docker's default resolver often cannot resolve LAN names).
+## *.local mDNS usually still fails in bridge mode without extra setup.
 # POWER_MULTIPLIER = -1
 
 # [TIBBER_PULSE]

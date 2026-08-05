@@ -751,6 +751,7 @@ def create_fronius_powermeter(
 def create_refoss_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    """Build a Refoss/Meross powermeter from a ``[REFOSS]`` / ``[MEROSS]`` section."""
     from astrameter.powermeter.refoss import parse_channels
 
     return Refoss(

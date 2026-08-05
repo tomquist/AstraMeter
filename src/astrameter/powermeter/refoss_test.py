@@ -33,6 +33,7 @@ def test_parse_channels():
         parse_channels("0")
 
 
+@pytest.mark.asyncio
 async def test_get_powermeter_watts_single_channel(mock_aiohttp_session):
     mock_aiohttp_session.set_json(_status_response({1: 421.5, 2: 10.0}))
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
@@ -42,9 +43,12 @@ async def test_get_powermeter_watts_single_channel(mock_aiohttp_session):
         await meter.stop()
 
 
+@pytest.mark.asyncio
 async def test_get_powermeter_watts_three_phase(mock_aiohttp_session):
+    # Deliberately out of channel-id order so we catch implementations that
+    # return response order instead of configured CHANNELS order.
     mock_aiohttp_session.set_json(
-        _status_response({1: 100.0, 2: -50.0, 3: 25.5, 4: 999.0})
+        _status_response({3: 25.5, 1: 100.0, 2: -50.0, 4: 999.0})
     )
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         meter = Refoss("192.168.1.150", [1, 2, 3])
@@ -53,6 +57,7 @@ async def test_get_powermeter_watts_three_phase(mock_aiohttp_session):
         await meter.stop()
 
 
+@pytest.mark.asyncio
 async def test_get_powermeter_watts_missing_channel(mock_aiohttp_session):
     mock_aiohttp_session.set_json(_status_response({1: 10.0}))
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
@@ -63,6 +68,7 @@ async def test_get_powermeter_watts_missing_channel(mock_aiohttp_session):
         await meter.stop()
 
 
+@pytest.mark.asyncio
 async def test_get_powermeter_watts_missing_power_field(mock_aiohttp_session):
     mock_aiohttp_session.set_json(
         {"status": [{"id": 1, "current": 0.0, "voltage": 230.0}]}
@@ -75,7 +81,30 @@ async def test_get_powermeter_watts_missing_power_field(mock_aiohttp_session):
         await meter.stop()
 
 
-async def test_requires_ip():
+@pytest.mark.asyncio
+async def test_get_powermeter_watts_rejects_non_object_json(mock_aiohttp_session):
+    mock_aiohttp_session.set_json([{"id": 1, "power": 10.0}])
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+        meter = Refoss("192.168.1.150", [1])
+        await meter.start()
+        with pytest.raises(ValueError, match="must be an object"):
+            await meter.get_powermeter_watts()
+        await meter.stop()
+
+
+@pytest.mark.asyncio
+async def test_get_powermeter_watts_rejects_non_finite_power(mock_aiohttp_session):
+    for bad in ("NaN", "inf", "-inf"):
+        mock_aiohttp_session.set_json({"status": [{"id": 1, "power": bad}]})
+        with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+            meter = Refoss("192.168.1.150", [1])
+            await meter.start()
+            with pytest.raises(ValueError, match="non-finite power"):
+                await meter.get_powermeter_watts()
+            await meter.stop()
+
+
+def test_requires_ip():
     with pytest.raises(ValueError, match="IP"):
         Refoss("", [1])
     with pytest.raises(ValueError, match="IP"):

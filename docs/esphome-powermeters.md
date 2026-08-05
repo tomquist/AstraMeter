@@ -1018,8 +1018,9 @@ ct002:
 
 For three-phase, publish `status[0]` / `status[1]` / `status[2]` into
 `grid_l1` / `grid_l2` / `grid_l3` (or indices 3–5 for the EM06P second CT group)
-and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`. Prefer a numeric IP;
-mDNS `*.local` names often fail on ESPHome as well.
+and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`. Prefer a numeric IP
+(or a name your LAN DNS resolves); mDNS `*.local` names often fail on ESPHome
+as well.
 
 ## Tibber Pulse
 

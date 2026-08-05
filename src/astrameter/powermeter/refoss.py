@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import aiohttp
 from aiohttp import ClientTimeout
 
@@ -42,6 +44,7 @@ class Refoss(Powermeter):
     """
 
     def __init__(self, ip: str, channels: list[int]):
+        """Create a meter for ``ip`` reading the given CT ``channels`` (1-based)."""
         ip = ip.strip()
         if not ip:
             raise ValueError("IP is required")
@@ -52,6 +55,7 @@ class Refoss(Powermeter):
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
+        """Open the shared HTTP session used to poll the device."""
         if self.session:
             return
         # Fail fast: the battery polls ~1/s, so a slow source should error
@@ -59,11 +63,13 @@ class Refoss(Powermeter):
         self.session = aiohttp.ClientSession(timeout=ClientTimeout(total=2, connect=1))
 
     async def stop(self) -> None:
+        """Close the HTTP session if one is open."""
         if self.session:
             await self.session.close()
             self.session = None
 
     async def get_json(self, path: str):
+        """GET ``path`` on the device and return the decoded JSON body."""
         if not self.session:
             raise RuntimeError("Session not started; call start() first")
         url = f"http://{self.ip}{path}"
@@ -72,7 +78,10 @@ class Refoss(Powermeter):
             return await resp.json(content_type=None)
 
     async def get_powermeter_watts(self) -> list[float]:
+        """Return watts for each configured channel, in CHANNELS order."""
         response = await self.get_json("/rpc/Em.Status.Get?id=65535")
+        if not isinstance(response, dict):
+            raise ValueError("Refoss Em.Status.Get response must be an object")
         status = response.get("status")
         if not isinstance(status, list):
             raise ValueError("Refoss Em.Status.Get response missing status array")
@@ -85,9 +94,12 @@ class Refoss(Powermeter):
                 raise ValueError(f"Refoss status entry missing power field: {entry!r}")
             try:
                 channel_id = int(entry["id"])
-                by_id[channel_id] = float(entry["power"])
+                power = float(entry["power"])
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"Invalid Refoss status entry: {entry!r}") from exc
+            if not math.isfinite(power):
+                raise ValueError(f"Refoss status entry has non-finite power: {entry!r}")
+            by_id[channel_id] = power
 
         watts: list[float] = []
         for channel_id in self.channels:

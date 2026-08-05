@@ -108,13 +108,17 @@ def build_ct002_consumer_discovery(
         "value_template": "{{ (value_json.saturation * 100) | round(1) }}",
     }
 
-    # Phase sensor (enum)
+    # Phase sensor (enum).  The options must cover every phase a consumer
+    # payload can carry, or Home Assistant drops the state and logs "Ignoring
+    # invalid option" on every poll (issue #580): "D" is combined/whole-home
+    # mode on newer Marstek firmware.  Inspection reporters ("0") never reach
+    # this topic — their polls fire no event — so "0" is deliberately absent.
     components["phase"] = {
         "platform": "sensor",
         "unique_id": f"{uid_prefix}_phase",
         "name": "Phase",
         "device_class": "enum",
-        "options": ["A", "B", "C"],
+        "options": ["A", "B", "C", "D"],
         "state_topic": state_topic,
         "value_template": "{{ value_json.phase }}",
         "entity_category": "diagnostic",

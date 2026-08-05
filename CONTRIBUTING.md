@@ -81,6 +81,14 @@ The `esphome` backend uses a "test-hooks" binary (`test.e2e.host.yaml`) that com
 - Base feature work on **`develop`** and open PRs against **`develop`**.
 - Releases are merged to **`main`** as appropriate for the project maintainer.
 
+`main` is the repository default branch — Home Assistant's Supervisor clones
+the add-on from there, so it has to stay the branch a fresh install sees. That
+also means GitHub prefills `main` as the base of every new pull request, which
+is the wrong one for feature work. Change the base to `develop` when you open
+the PR; if you forget, `.github/workflows/pr-base-guard.yml` moves it for you
+and leaves a comment. Maintainers are exempt — `main` still takes release
+merges and the occasional hotfix from them.
+
 ## Changelog
 
 For user-visible changes, add or update **the bullet for your change** under **`## Next`** in [CHANGELOG.md](CHANGELOG.md). The unit is the **change, not the branch or PR** — a change that spans several branches or PRs edits the *same* bullet rather than adding one each. `## Next` accumulates **one bullet per change** (so it normally holds several at once); add yours once, edit it on later iterations, and never consolidate or remove a bullet belonging to a *different* change (see [AGENTS.md](AGENTS.md) — Changelog).

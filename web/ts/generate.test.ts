@@ -113,6 +113,7 @@ const refoss1 = generateConfigIni({
   meters: [{ type: "refoss", phases: 1, fields: { IP: "192.168.1.150", CHANNELS: "1" }, tuning: {} }],
 });
 has(refoss1, "[REFOSS]", "refoss: section header");
+has(refoss1, "IP = 192.168.1.150", "refoss: IP emitted");
 has(refoss1, "CHANNELS = 1", "refoss: single-phase CHANNELS");
 const refoss3 = generateConfigIni({
   target: "python",
@@ -131,6 +132,11 @@ const eyRefoss456 = generateEsphome({
   esphome: {},
   meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "4,5,6" }, tuning: {} }],
 });
+has(
+  eyRefoss456,
+  "url: http://192.168.1.150/rpc/Em.Status.Get?id=65535",
+  "esp/refoss: polls configured IP",
+);
 has(eyRefoss456, 'root["status"][3]["power"]', "esp/refoss: L1 uses selected channel 4");
 has(eyRefoss456, 'root["status"][4]["power"]', "esp/refoss: L2 uses selected channel 5");
 has(eyRefoss456, 'root["status"][5]["power"]', "esp/refoss: L3 uses selected channel 6");
@@ -162,6 +168,22 @@ const eyRefossFloat = generateEsphome({
 has(eyRefossFloat, 'root["status"][0]["power"]', "esp/refoss: 1.0 falls back to status[0]");
 has(eyRefossFloat, 'root["status"][1]["power"]', "esp/refoss: 1.0 falls back to status[1]");
 has(eyRefossFloat, 'root["status"][2]["power"]', "esp/refoss: 1.0 falls back to status[2]");
+const refossFour = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "4,5,6,7" }, tuning: {} }],
+});
+has(refossFour, "CHANNELS = 1,2,3", "refoss: four-id three-phase falls back to 1,2,3");
+lacks(refossFour, "CHANNELS = 4,5,6,7", "refoss: does not emit four-id CHANNELS for three-phase");
+const eyRefossFour = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "4,5,6,7" }, tuning: {} }],
+});
+has(eyRefossFour, 'root["status"][0]["power"]', "esp/refoss: four-id falls back to status[0]");
+has(eyRefossFour, 'root["status"][1]["power"]', "esp/refoss: four-id falls back to status[1]");
+has(eyRefossFour, 'root["status"][2]["power"]', "esp/refoss: four-id falls back to status[2]");
+lacks(eyRefossFour, 'root["status"][3]["power"]', "esp/refoss: four-id does not use truncated 4,5,6");
 
 // ── config.ini: Tibber Pulse timeout (#551) ──────────────────────────────────
 const tibber = generateConfigIni({
