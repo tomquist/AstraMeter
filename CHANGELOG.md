@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Removed** the per-battery **Last Seen** sensor, which changed on every poll and buried the Home Assistant logbook under one entry per second. Use the Online sensor, Poll Interval, or any battery entity's own last-updated time instead ([#576](https://github.com/tomquist/astrameter/issues/576)).
+- **Removed** the per-battery **Last Seen** sensor, which changed on every poll and buried the Home Assistant logbook under one entry per second. A battery that stops reporting still turns all of its entities *unavailable*, and [docs/mqtt-insights.md](docs/mqtt-insights.md#is-a-battery-still-reporting-home-assistant) shows how to read the timestamp itself ([#576](https://github.com/tomquist/astrameter/issues/576)).
 
 - **Fixed** the per-battery **Phase** sensor staying empty, and the Home Assistant log filling with "invalid option" warnings, for batteries in combined / whole-home mode ([#580](https://github.com/tomquist/astrameter/issues/580), [#596](https://github.com/tomquist/astrameter/pull/596)).
 

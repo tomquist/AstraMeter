@@ -129,7 +129,7 @@ Example payload:
 | `active` | bool | `false` when this battery is paused (steered to 0 W). |
 | `poll_interval` | number/null | Measured seconds between this battery's polls, counting every poll it sends. |
 | `answer_interval` | number/null | Measured seconds between the replies it actually receives. Matches `poll_interval` unless `DEDUPE_TIME_WINDOW` is suppressing replies. |
-| `last_seen` | string | ISO-8601 UTC timestamp of this update. No Home Assistant entity: it changes on every poll, and HA logs a timestamp sensor's every change to the logbook. HA already records the same thing as each entity's own last-updated time. |
+| `last_seen` | string | ISO-8601 UTC timestamp of this update. No Home Assistant entity — see [Is a battery still reporting?](#is-a-battery-still-reporting-home-assistant). |
 | `manual_target` | number/null | Active manual override in watts, or `null` when on automatic. |
 | `auto_target` | bool | `true` = automatic control; `false` = manual override in effect. |
 | `distribution_weight` | number | Relative share of demand when splitting across batteries (ratio-based; `1.0` neutral). |
@@ -171,7 +171,7 @@ Availability companion:
 | `grid_power` | object | Per-phase grid power forwarded to this battery plus `total` (watts; + = import). |
 | `active` | bool | `false` when the battery is marked inactive. |
 | `poll_interval` | number/null | Measured seconds between polls. |
-| `last_seen` | string | ISO-8601 UTC timestamp. No Home Assistant entity — see the note on the CT002 field above. |
+| `last_seen` | string | ISO-8601 UTC timestamp. No Home Assistant entity — see [Is a battery still reporting?](#is-a-battery-still-reporting-home-assistant). |
 
 | Topic | Retain | Payload |
 |---|---|---|
@@ -304,6 +304,69 @@ The CT device itself also exposes a config switch:
 
 Each of these controls publishes its set-command **retained**, so Home Assistant
 restores your values across an AstraMeter restart without any extra configuration.
+
+## Is a battery still reporting? (Home Assistant)
+
+There is deliberately **no "Last Seen" entity**. Its value changed on every poll,
+and Home Assistant records a timestamp sensor's every change in the logbook, so a
+battery polling once a second buried the logbook under its own heartbeat. Home
+Assistant already tracks the same thing for you.
+
+**Unavailable means "not reporting".** When a battery stops polling, AstraMeter
+drops it — by default after it misses ~2 of its own poll cycles, or after
+`CONSUMER_TTL` seconds if you set a fixed window
+([CT002 basic configuration](ct002.md#basic-configuration); 120 s for a Shelly
+battery) — publishes `offline` on its availability topic, and
+**every entity of that battery turns Unavailable**. That is the signal to alert
+on, and it needs no template:
+
+```yaml
+alias: AstraMeter – battery stopped reporting
+triggers:
+  - trigger: state
+    entity_id: sensor.astrameter_consumer_hmj_2_aabbccddeeff_poll_interval  # replace with yours
+    to: unavailable
+    for:
+      minutes: 5
+actions:
+  - action: notify.persistent_notification
+    data:
+      message: The battery has not reported to AstraMeter for five minutes.
+```
+
+**The timestamp itself is on every entity.** Home Assistant stamps each state
+write with `last_reported`, which advances even when the value is unchanged —
+exactly what Last Seen used to publish. Any entity of the battery will do:
+
+```jinja
+{{ states.sensor.astrameter_consumer_hmj_2_aabbccddeeff_poll_interval.last_reported }}
+```
+
+Seconds since the battery was last heard from:
+
+```jinja
+{{ (now() - states.sensor.astrameter_consumer_hmj_2_aabbccddeeff_poll_interval.last_reported).total_seconds() | round }}
+```
+
+Two things to know when you use these:
+
+- `last_changed` / `last_updated` — the **Last changed** line in an entity's
+  more-info dialog — only move when the value itself changes, so a battery
+  reporting the same wattage twice does not bump them. `last_reported` is the one
+  that follows every poll.
+- A template re-renders when an entity's state **changes**, not when it merely
+  re-reports the same value. Including `now()` (as above) also refreshes the
+  template at the start of every minute, which is what keeps an age calculation
+  live.
+
+**For the polling rate rather than recency**, use the **Poll Interval** and
+**Answer Interval** sensors. They carry a unit, so Home Assistant treats them as
+continuous and keeps them out of the logbook however fast they change.
+
+If you still want a Last Seen entity of your own, a
+[template sensor](https://www.home-assistant.io/integrations/template/) over
+`last_reported` gives you one — but exclude it under `recorder:` → `exclude:`,
+or it floods your logbook exactly as the built-in one did.
 
 ## Optional: Marstek mobile app (live MQTT)
 
