@@ -176,7 +176,9 @@ For user-facing work, contribute **exactly one bullet under `## Next`** that sum
 
 Do **not** expand `CHANGELOG.md` with every internal or tooling-only follow-up. If the change's bullet already states the high-level theme, leave it unless the **user-visible** story changes.
 
-Write each bullet for the **user**, not the implementer: describe what changed for them and why it matters, and keep it **compact and clear**. **No implementation details in the changelog** — leave out internal symbol/function/class/file names, config knob mechanics, data structures, parity-mirror notes, and the like, unless a user genuinely needs them (e.g. a config option or env var they set). State the user-visible problem and outcome, not *how* it was fixed. Prefer one tight sentence over an exhaustive list of everything touched.
+Write each bullet for the **user**, not the implementer: the user-visible problem and outcome, not *how* it was fixed. **Keep it to one sentence of roughly 30 words.** Add a second sentence only when the user has to *do* something — set a new option, undo a workaround, adapt to a breaking change. Anything else gets cut: log excerpts, retellings of the symptom, why it happened, everything the change touched. Err on the side of too short — a bullet that reads as terse is right; a paragraph never is.
+
+**No implementation details** — internal symbol/function/class/file names, config-knob mechanics, data structures, parity-mirror notes — unless the user genuinely needs them (a config option or env var *they* set).
 
 **Link the bullet to its PR once the number is known** — append a `([#<pr>](https://github.com/tomquist/astrameter/pull/<pr>))` reference (alongside any issue links already cited) so the changelog points back to the change. The PR number usually isn't known when you first write the bullet, so add the link on the follow-up iteration after the PR exists. **Always do this as soon as you learn the PR number** (e.g. the moment a PR is opened for the branch, or a number is shared with you) — don't wait to be asked: add the reference and push it in your next commit.
 

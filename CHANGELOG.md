@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** the per-battery **Phase** sensor staying empty in Home Assistant for batteries running in combined / whole-home mode, while the log filled up with "Ignoring invalid option received on topic ..., got 'D'" — one entry per poll. Combined mode is now an accepted value, so the sensor shows it and the log stays quiet ([#580](https://github.com/tomquist/astrameter/issues/580)).
+- **Fixed** the per-battery **Phase** sensor staying empty, and the Home Assistant log filling with "invalid option" warnings, for batteries in combined / whole-home mode ([#580](https://github.com/tomquist/astrameter/issues/580)).
 
 - **Changed** the CT002/CT003 **Poll Interval** sensor to count every poll a battery sends rather than only the ones AstraMeter answered, and **added** an **Answer Interval** sensor for the reply rate. The two are identical until you set `DEDUPE_TIME_WINDOW`, which is exactly when you need both to tell a battery that slowed down apart from one that is simply being answered less often. A battery whose polls that window suppresses is also no longer at risk of being dropped as if it had gone silent. The dashboard and the ESPHome component report the same pair ([#589](https://github.com/tomquist/astrameter/issues/589), [#591](https://github.com/tomquist/astrameter/pull/591)).
 
