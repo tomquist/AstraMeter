@@ -1,0 +1,84 @@
+name: PR base guard
+
+# Retargets feature work opened against `main` onto `develop` (CONTRIBUTING.md
+# explains why they land there in the first place).
+#
+# `pull_request_target`, not `pull_request`, because fork pull requests get a
+# read-only token and could not retarget themselves. It only calls the API —
+# the PR's code is never checked out.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: pr-base-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  base-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Maintainers target main deliberately — release merges, hotfixes,
+            // repairs to CI that only take effect on the default branch.
+            const maintainer = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+            if (maintainer.includes(pr.author_association)) {
+              core.info(`Opened by ${pr.author_association} — base left alone.`);
+              return;
+            }
+
+            const target = 'develop';
+            core.info(`Retargeting #${pr.number} from main onto ${target}.`);
+            try {
+              await github.rest.pulls.update({
+                ...context.repo,
+                pull_number: pr.number,
+                base: target,
+              });
+            } catch (error) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: pr.number,
+                body: [
+                  `This pull request targets \`main\`, but feature work is merged into ` +
+                  `\`${target}\` (see [CONTRIBUTING.md](https://github.com/tomquist/AstraMeter/blob/develop/CONTRIBUTING.md)).`,
+                  '',
+                  `Retargeting it automatically failed: ${error.message}`,
+                  '',
+                  `Please change the base branch to \`${target}\` using the **Edit** ` +
+                  'button next to the pull request title.',
+                ].join('\n'),
+              });
+              core.setFailed(`Could not retarget onto ${target}: ${error.message}`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pr.number,
+              body: [
+                `I moved this pull request onto \`${target}\`, where feature work ` +
+                'lands — `main` only ever receives releases, and GitHub offers it ' +
+                'as the base by default, so this is nothing you did wrong.',
+                '',
+                'If you branched off `main`, the diff above now carries commits ' +
+                `that are not yours. Please rebase onto \`${target}\`:`,
+                '',
+                '```sh',
+                'git fetch origin',
+                `git rebase --onto origin/${target} origin/main`,
+                'git push --force-with-lease',
+                '```',
+                '',
+                'If you branched off `develop` to begin with, there is nothing to do.',
+              ].join('\n'),
+            });

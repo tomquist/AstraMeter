@@ -63,6 +63,17 @@ error (control quality, transients included), pairing with
 `battery_travel_w_per_h` as the effort term (the two LQR terms are kept separate,
 not fused with an arbitrary weight).
 
+## Branches and pull requests
+
+Open pull requests against **`develop`**, never `main` (see `CONTRIBUTING.md`).
+Tooling offers `main` as the base, so set it yourself;
+`.github/workflows/pr-base-guard.yml` retargets what slips through, at the cost
+of a round-trip.
+
+GitHub reads that workflow and `.github/pull_request_template.md` from the
+**default branch**, so edits to either do nothing until they reach `main` at the
+next release.
+
 ## Changelog
 
 For user-facing work, contribute **exactly one bullet under `## Next`** that summarizes the **overall** outcome of *that change*. The unit is the **change (feature/fix), not the branch or PR**: a single change may span several branches or PRs, and they all **edit the same bullet** rather than each adding their own. `## Next` accumulates **one bullet per change**, so it normally holds **several** bullets at once (one for each change heading into the next release) — multiple bullets under `## Next` are correct and expected, never a violation. What you must not do is author **more than one** bullet for **your own** change, or consolidate/remove a bullet belonging to a *different* change. **Add** your bullet when you first document the change; on **later iterations** (more commits, or a follow-up PR for the same change), **edit that same bullet** if the scope or wording shifts—do **not** append extra bullets for each follow-up. Skip `CHANGELOG.md` entirely when nothing users would notice changes (refactors, tests-only, etc.).
