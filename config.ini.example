@@ -453,6 +453,17 @@ THROTTLE_INTERVAL = 0
 ## If readings are reversed, flip the sign:
 # POWER_MULTIPLIER = -1
 
+# [REFOSS]
+## Refoss / Meross energy monitor (EM01P, EM06P, EM16P) via local Open API.
+## Polls Em.Status.Get and reads signed channel power (W): positive = import,
+## negative = feed-in. [MEROSS] is an alias for the same driver.
+## The device API is cleartext HTTP — use only on a trusted local network.
+# IP = 192.168.1.150
+## CT channel id(s). One id for single-phase; three for L1/L2/L3 (e.g. 1,2,3).
+# CHANNELS = 1
+## Prefer a numeric IP in Docker — *.local mDNS often does not resolve in bridge mode.
+# POWER_MULTIPLIER = -1
+
 # [TIBBER_PULSE]
 ## Tibber Pulse read locally via the Pulse Bridge HTTP API (no Tibber cloud).
 ## Decodes the meter's SML telegram from /data.json. Enable the bridge's local

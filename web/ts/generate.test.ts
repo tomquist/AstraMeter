@@ -107,6 +107,61 @@ const fronius3 = generateConfigIni({
   meters: [{ type: "fronius", phases: 3, fields: { IP: "10.0.0.9" }, tuning: {} }],
 });
 has(fronius3, "PER_PHASE = True", "fronius: PER_PHASE emitted in three-phase");
+const refoss1 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellyproem50"] },
+  meters: [{ type: "refoss", phases: 1, fields: { IP: "192.168.1.150", CHANNELS: "1" }, tuning: {} }],
+});
+has(refoss1, "[REFOSS]", "refoss: section header");
+has(refoss1, "CHANNELS = 1", "refoss: single-phase CHANNELS");
+const refoss3 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "1" }, tuning: {} }],
+});
+has(refoss3, "CHANNELS = 1,2,3", "refoss: three-phase defaults CHANNELS when not a three-id list");
+const refoss456 = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "4,5,6" }, tuning: {} }],
+});
+has(refoss456, "CHANNELS = 4,5,6", "refoss: three-phase preserves explicit CHANNELS");
+const eyRefoss456 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "4,5,6" }, tuning: {} }],
+});
+has(eyRefoss456, 'root["status"][3]["power"]', "esp/refoss: L1 uses selected channel 4");
+has(eyRefoss456, 'root["status"][4]["power"]', "esp/refoss: L2 uses selected channel 5");
+has(eyRefoss456, 'root["status"][5]["power"]', "esp/refoss: L3 uses selected channel 6");
+lacks(eyRefoss456, 'root["status"][0]["power"]', "esp/refoss: does not hardcode status[0] for 4,5,6");
+const refossFloat = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellyproem50"] },
+  meters: [{ type: "refoss", phases: 1, fields: { IP: "192.168.1.150", CHANNELS: "1.0" }, tuning: {} }],
+});
+has(refossFloat, "CHANNELS = 1", "refoss: rejects 1.0, defaults single-phase CHANNELS");
+lacks(refossFloat, "CHANNELS = 1.0", "refoss: does not emit float CHANNELS");
+const refossSci = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "1e2" }, tuning: {} }],
+});
+has(refossSci, "CHANNELS = 1,2,3", "refoss: rejects 1e2, defaults three-phase CHANNELS");
+const refossMixed = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "4,5,1.0" }, tuning: {} }],
+});
+has(refossMixed, "CHANNELS = 1,2,3", "refoss: rejects mixed invalid three-phase CHANNELS");
+const eyRefossFloat = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "refoss", phases: 3, fields: { IP: "192.168.1.150", CHANNELS: "1.0" }, tuning: {} }],
+});
+has(eyRefossFloat, 'root["status"][0]["power"]', "esp/refoss: 1.0 falls back to status[0]");
+has(eyRefossFloat, 'root["status"][1]["power"]', "esp/refoss: 1.0 falls back to status[1]");
+has(eyRefossFloat, 'root["status"][2]["power"]', "esp/refoss: 1.0 falls back to status[2]");
 
 // ── config.ini: Tibber Pulse timeout (#551) ──────────────────────────────────
 const tibber = generateConfigIni({

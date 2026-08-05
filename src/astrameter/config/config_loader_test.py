@@ -20,6 +20,7 @@ from astrameter.config.config_loader import (
     create_modbus_powermeter,
     create_mqtt_powermeter,
     create_powermeter,
+    create_refoss_powermeter,
     create_script_powermeter,
     create_shelly_powermeter,
     create_shrdzm_powermeter,
@@ -547,6 +548,19 @@ def test_create_fronius_powermeter():
     assert pm.per_phase is True
 
 
+def test_create_refoss_powermeter():
+    """Test Refoss/Meross powermeter creation and CHANNELS parsing."""
+    config = configparser.ConfigParser()
+    config["REFOSS"] = {"IP": "192.168.1.150"}
+    pm = create_refoss_powermeter("REFOSS", config)
+    assert pm.ip == "192.168.1.150"
+    assert pm.channels == [1]
+
+    config["MEROSS"] = {"IP": "192.168.1.150", "CHANNELS": "1,2,3"}
+    pm = create_refoss_powermeter("MEROSS", config)
+    assert pm.channels == [1, 2, 3]
+
+
 def test_create_tibber_pulse_powermeter():
     """Test Tibber Pulse powermeter creation, defaults, and OBIS overrides."""
     config = configparser.ConfigParser()
@@ -634,6 +648,8 @@ def test_create_powermeter():
         "AIN": "12345 0123456",
     }
     config["FRONIUS_TEST"] = {"IP": "127.0.0.1"}
+    config["REFOSS_TEST"] = {"IP": "127.0.0.1", "CHANNELS": "1"}
+    config["MEROSS_TEST"] = {"IP": "127.0.0.1", "CHANNELS": "1,2,3"}
     config["TIBBER_PULSE_TEST"] = {"IP": "127.0.0.1", "PASSWORD": "pw"}
     config["UNKNOWN_TEST"] = {"SOME_KEY": "some_value"}
 
