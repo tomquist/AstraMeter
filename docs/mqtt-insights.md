@@ -129,7 +129,7 @@ Example payload:
 | `active` | bool | `false` when this battery is paused (steered to 0 W). |
 | `poll_interval` | number/null | Measured seconds between this battery's polls, counting every poll it sends. |
 | `answer_interval` | number/null | Measured seconds between the replies it actually receives. Matches `poll_interval` unless `DEDUPE_TIME_WINDOW` is suppressing replies. |
-| `last_seen` | string | ISO-8601 UTC timestamp of this update. |
+| `last_seen` | string | ISO-8601 UTC timestamp of this update. No Home Assistant entity: it changes on every poll, and HA logs a timestamp sensor's every change to the logbook. HA already records the same thing as each entity's own last-updated time. |
 | `manual_target` | number/null | Active manual override in watts, or `null` when on automatic. |
 | `auto_target` | bool | `true` = automatic control; `false` = manual override in effect. |
 | `distribution_weight` | number | Relative share of demand when splitting across batteries (ratio-based; `1.0` neutral). |
@@ -171,7 +171,7 @@ Availability companion:
 | `grid_power` | object | Per-phase grid power forwarded to this battery plus `total` (watts; + = import). |
 | `active` | bool | `false` when the battery is marked inactive. |
 | `poll_interval` | number/null | Measured seconds between polls. |
-| `last_seen` | string | ISO-8601 UTC timestamp. |
+| `last_seen` | string | ISO-8601 UTC timestamp. No Home Assistant entity — see the note on the CT002 field above. |
 
 | Topic | Retain | Payload |
 |---|---|---|

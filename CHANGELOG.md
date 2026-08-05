@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Removed** the per-battery **Last Seen** sensor, which changed on every poll and buried the Home Assistant logbook under one entry per second. Use the Online sensor, Poll Interval, or any battery entity's own last-updated time instead ([#576](https://github.com/tomquist/astrameter/issues/576)).
+
 - **Fixed** the per-battery **Phase** sensor staying empty, and the Home Assistant log filling with "invalid option" warnings, for batteries in combined / whole-home mode ([#580](https://github.com/tomquist/astrameter/issues/580), [#596](https://github.com/tomquist/astrameter/pull/596)).
 
 - **Changed** the CT002/CT003 **Poll Interval** sensor to count every poll a battery sends rather than only the ones AstraMeter answered, and **added** an **Answer Interval** sensor for the reply rate. The two are identical until you set `DEDUPE_TIME_WINDOW`, which is exactly when you need both to tell a battery that slowed down apart from one that is simply being answered less often. A battery whose polls that window suppresses is also no longer at risk of being dropped as if it had gone silent. The dashboard and the ESPHome component report the same pair ([#589](https://github.com/tomquist/astrameter/issues/589), [#591](https://github.com/tomquist/astrameter/pull/591)).

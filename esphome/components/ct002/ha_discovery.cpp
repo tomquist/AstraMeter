@@ -89,7 +89,7 @@ void add_power_sensor(JsonObject components, const std::string &key, const std::
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type, bool efficiency_rotation) {
+    const std::string &device_type, bool efficiency_rotation, bool retire_removed) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string safe_cid = sanitize_id(consumer_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev + "_" + safe_cid;
@@ -182,15 +182,21 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
       c["entity_category"] = "diagnostic";
     }
 
-    // Last seen timestamp
-    JsonObject ls = components["last_seen"].to<JsonObject>();
-    ls["platform"] = "sensor";
-    ls["unique_id"] = uid_prefix + "_last_seen";
-    ls["name"] = "Last Seen";
-    ls["device_class"] = "timestamp";
-    ls["state_topic"] = state_topic;
-    ls["value_template"] = "{{ value_json.last_seen }}";
-    ls["entity_category"] = "diagnostic";
+    // Retired entities. HA keeps an entity that merely stops appearing in a
+    // later discovery payload, so a dropped component has to be published once
+    // with a platform-only config — which HA reads as "remove this entity" —
+    // before the payload omits it for good. Mirrors discovery.py's
+    // RETIRED_COMPONENTS / build_retirement_payload.
+    //
+    // "Last Seen" was a wall-clock timestamp stamped at publish time, so it
+    // changed on every poll, and a `timestamp` sensor carries neither a unit
+    // nor a state class — the two attributes HA's logbook uses to recognise a
+    // continuous sensor. Every poll became a logbook row (issue #576). The
+    // `last_seen` field stays in the state payload.
+    if (retire_removed) {
+      JsonObject ls = components["last_seen"].to<JsonObject>();
+      ls["platform"] = "sensor";
+    }
 
     // Poll interval
     JsonObject pi = components["poll_interval"].to<JsonObject>();

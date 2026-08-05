@@ -280,10 +280,22 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
         this->discovered_consumers_.find(consumer_id) == this->discovered_consumers_.end();
     if (first_sight) {
       this->discovered_consumers_.insert(consumer_id);
+      const bool rotation =
+          this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled();
+      // Retire entities this payload no longer carries first (issue #576) —
+      // HA keeps an entity that merely stops appearing — then publish the
+      // current payload, so the retained discovery message is the current one.
+      // Mirrors service.py::_publish_discovery. Scoped so the ~7 KB retirement
+      // payload is freed before the real one is built.
+      {
+        auto [retire_topic, retire_payload] = build_ct002_consumer_discovery(
+            this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
+            snap.device_type, rotation, /*retire_removed=*/true);
+        this->mqtt_->publish(retire_topic, retire_payload, 0, true);
+      }
       auto [topic, payload] = build_ct002_consumer_discovery(
           this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-          snap.device_type,
-          this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled());
+          snap.device_type, rotation);
       this->mqtt_->publish(topic, payload, 0, true);
     }
   }

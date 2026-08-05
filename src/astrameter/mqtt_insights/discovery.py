@@ -31,6 +31,31 @@ def _system_availability(base_topic: str) -> dict:
     }
 
 
+# ── Retired components ────────────────────────────────────────────────────
+# Home Assistant keeps an entity that merely stops appearing in a later device
+# discovery payload, so anything we drop has to be retired explicitly: a
+# component config that is empty apart from ``platform`` reads as "remove this
+# entity".  ``build_retirement_payload`` produces that update; the service
+# publishes it right before the current payload, whose omission of the key then
+# leaves the retained discovery message up to date.
+#
+# ``last_seen`` was a wall-clock timestamp stamped at publish time, so it
+# changed on every poll — and a ``timestamp`` sensor can carry neither a unit
+# nor a state class, the two attributes HA's logbook uses to recognise a
+# continuous sensor.  Every poll therefore became a logbook row and a recorder
+# state (issue #576).  The field stays in the MQTT payload, and HA's own
+# ``last_reported`` on any entity of the device carries the same information.
+RETIRED_COMPONENTS: dict[str, str] = {"last_seen": "sensor"}
+
+
+def build_retirement_payload(payload: dict) -> dict:
+    """Copy of a discovery *payload* that also removes retired components."""
+    components = dict(payload["components"])
+    for key, platform in RETIRED_COMPONENTS.items():
+        components[key] = {"platform": platform}
+    return {**payload, "components": components}
+
+
 # ── Command topics ────────────────────────────────────────────────────────
 # One definition shared by the discovery payloads below, the service's
 # subscription/replay path, and the dashboard write path — a dashboard write
@@ -141,16 +166,7 @@ def build_ct002_consumer_discovery(
         }
         components[key] = comp
 
-    # Last seen (timestamp)
-    components["last_seen"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_last_seen",
-        "name": "Last Seen",
-        "device_class": "timestamp",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.last_seen }}",
-        "entity_category": "diagnostic",
-    }
+    # No "Last Seen" sensor: see RETIRED_COMPONENTS above (issue #576).
 
     # Poll interval (EMA-smoothed seconds between consecutive polls)
     components["poll_interval"] = {
@@ -646,15 +662,7 @@ def build_shelly_battery_discovery(
         "entity_category": "diagnostic",
     }
 
-    components["last_seen"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_last_seen",
-        "name": "Last Seen",
-        "device_class": "timestamp",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.last_seen }}",
-        "entity_category": "diagnostic",
-    }
+    # No "Last Seen" sensor: see RETIRED_COMPONENTS above (issue #576).
 
     # Poll interval (EMA-smoothed seconds between consecutive polls)
     components["poll_interval"] = {

@@ -23,6 +23,7 @@ from .discovery import (
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
     build_powermeter_device_discovery,
+    build_retirement_payload,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
     consumer_command_topic,
@@ -627,6 +628,30 @@ class MqttInsightsService:
             except Exception:
                 logger.exception("Error publishing MQTT Insights event")
 
+    @staticmethod
+    async def _publish_discovery(
+        client: aiomqtt.Client,
+        topic: str,
+        payload: dict,
+        *,
+        retire: bool = False,
+    ) -> None:
+        """Publish a device discovery payload, retiring dropped entities first.
+
+        An entity that merely stops appearing in a discovery payload lives on in
+        Home Assistant, so payloads that used to carry one (see
+        ``RETIRED_COMPONENTS``) publish the retirement update first and the
+        current payload right after — the retained message the broker keeps is
+        then the current one.
+        """
+        if retire:
+            await client.publish(
+                topic,
+                payload=json.dumps(build_retirement_payload(payload)).encode(),
+                retain=True,
+            )
+        await client.publish(topic, payload=json.dumps(payload).encode(), retain=True)
+
     async def _handle_ct002_event(
         self,
         client: aiomqtt.Client,
@@ -711,9 +736,7 @@ class MqttInsightsService:
                     device_type=data.get("device_type", ""),
                     efficiency_rotation=bool(data.get("efficiency_rotation", False)),
                 )
-                await client.publish(
-                    topic, payload=json.dumps(payload).encode(), retain=True
-                )
+                await self._publish_discovery(client, topic, payload, retire=True)
 
     async def _handle_ct002_remove(
         self,
@@ -788,9 +811,7 @@ class MqttInsightsService:
                 topic, payload = build_shelly_battery_discovery(
                     base, did, ip_slug, cfg.ha_discovery_prefix
                 )
-                await client.publish(
-                    topic, payload=json.dumps(payload).encode(), retain=True
-                )
+                await self._publish_discovery(client, topic, payload, retire=True)
                 await self._publish_bridge(client, cfg)
 
     async def _handle_shelly_remove(

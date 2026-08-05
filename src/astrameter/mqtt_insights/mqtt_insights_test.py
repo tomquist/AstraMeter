@@ -27,6 +27,7 @@ from .discovery import (
     build_ct002_consumer_discovery,
     build_ct002_device_discovery,
     build_powermeter_device_discovery,
+    build_retirement_payload,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
 )
@@ -94,8 +95,11 @@ def test_ct002_consumer_discovery_structure():
     assert "battery_ip" in comps
     assert "ct_type" in comps
     assert "ct_mac" in comps
-    assert "last_seen" in comps
     assert "poll_interval" in comps
+    # No Last Seen entity: it changed on every poll and, being a timestamp
+    # sensor, HA's logbook could not treat it as continuous, so every poll
+    # became a logbook row (issue #576).
+    assert "last_seen" not in comps
 
     # Poll interval sensor
     poll = comps["poll_interval"]
@@ -341,8 +345,8 @@ def test_shelly_battery_discovery_structure():
     comps = payload["components"]
     assert "grid_power_total" in comps
     assert "active" in comps
-    assert "last_seen" in comps
     assert "poll_interval" in comps
+    assert "last_seen" not in comps  # issue #576
     for power_key in (
         "grid_power_total",
         "grid_power_l1",
@@ -356,6 +360,38 @@ def test_shelly_battery_discovery_structure():
     assert poll["unit_of_measurement"] == "s"
     assert payload["availability_mode"] == "all"
     assert len(payload["availability"]) == 2
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: build_ct002_consumer_discovery(
+            "astrameter", "dev1", "aabbccddeeff", "homeassistant", device_type="HMJ-2"
+        ),
+        lambda: build_shelly_battery_discovery(
+            "astrameter", "shelly1", "192.168.1.100", "homeassistant"
+        ),
+    ],
+    ids=["ct002_consumer", "shelly_battery"],
+)
+def test_retirement_payload_removes_retired_entities(build):
+    """The retirement variant deletes dropped entities, keeps the rest intact."""
+    _topic, payload = build()
+    retirement = build_retirement_payload(payload)
+
+    # A component config that is empty apart from ``platform`` is how HA is
+    # told to remove an entity — anything else and it would be re-created.
+    assert retirement["components"]["last_seen"] == {"platform": "sensor"}
+    # Every other component, and the rest of the payload, is unchanged: the
+    # retirement update is a normal discovery payload, so it must not drop the
+    # device, origin or availability blocks.
+    for key, comp in payload["components"].items():
+        assert retirement["components"][key] == comp
+    assert retirement["device"] == payload["device"]
+    assert retirement["origin"] == payload["origin"]
+    assert retirement["availability"] == payload["availability"]
+    # The source payload keeps its own components map.
+    assert "last_seen" not in payload["components"]
 
 
 def test_shelly_device_discovery_structure():
@@ -1106,13 +1142,15 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
                 sub,
                 discovery_msgs,
                 timeout=3,
-                stop=lambda _: len(discovery_msgs) >= 4,
+                stop=lambda _: len(discovery_msgs) >= 6,
             )
 
         # Expect: AstraMeter hub device (retained, now always published on
         # connect with a base-topic fallback id) + CT002 device discovery +
-        # consumer1 + consumer2 = 4 (no duplicate for the second consumer1 event)
-        assert len(discovery_msgs) == 4
+        # two publishes each for consumer1 and consumer2 (the retirement update
+        # for entities dropped in an upgrade, then the current payload) = 6 (no
+        # duplicate for the second consumer1 event)
+        assert len(discovery_msgs) == 6
         topics = [str(m.topic) for m in discovery_msgs]
         # Hub device discovery (retained, delivered on subscribe)
         assert any("astrameter_addon_" in t for t in topics)
@@ -1121,6 +1159,19 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
         # Consumer-level discoveries
         assert any("consumer1" in t for t in topics)
         assert any("consumer2" in t for t in topics)
+
+        # Each consumer gets the retirement update first and the current
+        # payload second, so the retained message the broker keeps — the one a
+        # restarting HA replays — is the one without the retired entity.
+        for consumer in ("consumer1", "consumer2"):
+            payloads = [
+                json.loads(m.payload)
+                for m in discovery_msgs
+                if consumer in str(m.topic)
+            ]
+            assert len(payloads) == 2
+            assert payloads[0]["components"]["last_seen"] == {"platform": "sensor"}
+            assert "last_seen" not in payloads[1]["components"]
     finally:
         await service.stop()
 
