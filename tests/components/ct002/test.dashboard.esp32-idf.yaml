@@ -37,4 +37,7 @@ ct002:
       alpha: 0.3
   # The whole opt-in: no options needed. `dashboard: true` is the same
   # thing, `dashboard: false` (or removing the key) turns it back off.
+  # `controls:` is off by default; on here so the write endpoints are in
+  # the compile matrix too.
   dashboard:
+    controls: true

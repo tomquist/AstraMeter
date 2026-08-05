@@ -4,6 +4,7 @@
 
 #include <ctime>
 
+#include "esphome/components/json/json_util.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
@@ -21,6 +22,10 @@ static const char *const TAG = "astrameter.dashboard";
 // reconnect, a long UDP burst) and keeps the httpd task from parking there.
 static constexpr uint32_t STATUS_WAIT_MS = 500;
 static constexpr uint32_t STATUS_POLL_MS = 5;
+
+// A control write is four short fields. Anything larger is not one of ours,
+// and reading it would only tie up the httpd task's buffer.
+static constexpr size_t MAX_CONTROL_BODY = 512;
 
 namespace {
 
@@ -55,6 +60,33 @@ void DashboardComponent::setup() {
 }
 
 void DashboardComponent::loop() {
+  // A write waiting on the httpd task. Applied here, on the loop that owns
+  // the consumer map, and only then reported back as done.
+  PendingWrite write;
+  bool have_write = false;
+  {
+    LockGuard guard(this->lock_);
+    if (this->pending_valid_) {
+      write = this->pending_;
+      have_write = true;
+    }
+  }
+  if (have_write) {
+    const bool applied =
+        write.consumer_id.empty()
+            ? apply_device_control(this->ct002_, write.field, write.value)
+            : apply_consumer_control(this->ct002_, write.consumer_id, write.field, write.value);
+    {
+      LockGuard guard(this->lock_);
+      this->pending_applied_ = applied;
+      this->pending_valid_ = false;
+    }
+    this->write_generation_++;
+    // The next poll should show what the user just did, not the frame that
+    // was built before it landed.
+    this->refresh_requested_ = true;
+  }
+
   // Built only when a request is waiting for one: with nobody watching, an
   // idle device should not be spending heap and CPU on a document that will
   // never be read.
@@ -74,16 +106,25 @@ void DashboardComponent::dump_config() {
 }
 
 bool DashboardComponent::canHandle(AsyncWebServerRequest *request) const {
-  if (request->method() != HTTP_GET) return false;
   const std::string url = request_url(request);
   if (url.compare(0, this->path_.size(), this->path_) != 0) return false;
   const std::string rest = url.substr(this->path_.size());
+  if (request->method() == HTTP_POST) {
+    // Claimed even with controls off, so the page gets a 403 that says why
+    // rather than a 404 that reads like a broken build.
+    return rest == "/api/control/consumer" || rest == "/api/control/device";
+  }
+  if (request->method() != HTTP_GET) return false;
   return rest.empty() || rest == "/" || rest == "/index.html" || rest == "/api/status";
 }
 
 void DashboardComponent::handleRequest(AsyncWebServerRequest *request) {
   const std::string url = request_url(request);
   const std::string rest = url.substr(this->path_.size());
+  if (rest == "/api/control/consumer" || rest == "/api/control/device") {
+    this->handle_control_(request, rest == "/api/control/device");
+    return;
+  }
   if (rest == "/api/status") {
     this->handle_status_(request);
     return;
@@ -132,6 +173,129 @@ void DashboardComponent::handle_status_(AsyncWebServerRequest *request) {
   request->send(200, "application/json", body.c_str());
 }
 
+void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool device_wide) {
+  if (!this->controls_) {
+    request->send(403, "application/json",
+                  "{\"error\":\"Controls are off. Set `controls: true` on this device's "
+                  "dashboard block to allow writes.\"}");
+    return;
+  }
+
+  // Read the body ourselves. The ESP-IDF shim only parses form-encoded POSTs
+  // into request params, and logs an "unsupported content type" warning for
+  // anything else — but it leaves the body unread on the socket, so the JSON
+  // the page sends is still here for us. Reading it keeps ONE wire format
+  // across both backends instead of a second encoding just for the firmware.
+  httpd_req_t *raw = *request;
+  const size_t length = raw->content_len;
+  if (length == 0 || length > MAX_CONTROL_BODY) {
+    request->send(400, "application/json", "{\"error\":\"Invalid request: bad body length\"}");
+    return;
+  }
+  std::string body(length, '\0');
+  size_t got = 0;
+  while (got < length) {
+    const int chunk = httpd_req_recv(raw, &body[got], length - got);
+    if (chunk <= 0) {
+      request->send(400, "application/json", "{\"error\":\"Invalid request: body not received\"}");
+      return;
+    }
+    got += static_cast<size_t>(chunk);
+  }
+
+  DashboardComponent::PendingWrite write;
+  std::string error;
+  const bool parsed = json::parse_json(body, [&](JsonObject root) -> bool {
+    if (!device_wide) {
+      if (!root["consumer_id"].is<const char *>()) {
+        error = "Invalid request: consumer_id";
+        return false;
+      }
+      write.consumer_id = root["consumer_id"].as<std::string>();
+    }
+    if (!root["field"].is<const char *>()) {
+      error = "Invalid request: field";
+      return false;
+    }
+    write.field = root["field"].as<std::string>();
+    JsonVariant value = root["value"];
+    if (value.is<bool>()) {
+      write.value.is_bool = true;
+      write.value.flag = value.as<bool>();
+    } else if (value.is<float>()) {
+      write.value.number = value.as<float>();
+    } else if (device_wide && value.isNull()) {
+      // `force_rotation` carries no value; the page posts it bare.
+      write.value.is_bool = true;
+      write.value.flag = true;
+    } else {
+      error = "Invalid request: value";
+      return false;
+    }
+    return true;
+  });
+  if (!parsed) {
+    request->send(400, "application/json",
+                  ("{\"error\":\"" + (error.empty() ? std::string("Invalid request") : error) +
+                   "\"}")
+                      .c_str());
+    return;
+  }
+
+  if (device_wide) {
+    if (!controls::is_device_field(write.field)) {
+      request->send(404, "application/json", "{\"error\":\"Unknown field\"}");
+      return;
+    }
+  } else {
+    // Same bounds as the MQTT command handlers and the Python dashboard: a
+    // value one of them would refuse must not be settable here, or the next
+    // retained-command replay would silently undo it.
+    const std::string message = controls::coerce_consumer_control(write.field, write.value);
+    if (!message.empty()) {
+      const bool unknown = !controls::is_consumer_field(write.field);
+      request->send(unknown ? 404 : 400, "application/json",
+                    ("{\"error\":\"" + message + "\"}").c_str());
+      return;
+    }
+  }
+
+  bool applied = false;
+  if (!this->submit_write_(write, &applied)) {
+    request->send(503, "application/json", "{\"error\":\"Device busy, try again\"}");
+    return;
+  }
+  if (!applied) {
+    request->send(404, "application/json", "{\"error\":\"Unknown device or field\"}");
+    return;
+  }
+  ESP_LOGI(TAG, "control: %s%s%s = %s", write.consumer_id.c_str(),
+           write.consumer_id.empty() ? "" : ".", write.field.c_str(),
+           write.value.is_bool ? (write.value.flag ? "true" : "false")
+                               : status::format_number(write.value.number, 3).c_str());
+  request->send(200, "application/json", "{\"applied\":true}");
+}
+
+bool DashboardComponent::submit_write_(const PendingWrite &write, bool *applied) {
+  const uint32_t start = this->write_generation_;
+  {
+    LockGuard guard(this->lock_);
+    // One write in flight at a time: these come from a user's tap, so a
+    // queue would only ever hold a duplicate of what is already going.
+    if (this->pending_valid_) return false;
+    this->pending_ = write;
+    this->pending_valid_ = true;
+  }
+  const uint32_t began_at = millis();
+  while (this->write_generation_ == start && millis() - began_at < STATUS_WAIT_MS) {
+    delay(STATUS_POLL_MS);
+  }
+  if (this->write_generation_ == start) return false;
+  LockGuard guard(this->lock_);
+  *applied = this->pending_applied_;
+  return true;
+}
+
 void DashboardComponent::rebuild_() {
   const double wall = wall_clock_epoch();
   const double uptime = static_cast<double>(millis()) / 1000.0;
@@ -141,6 +305,7 @@ void DashboardComponent::rebuild_() {
     doc.generated_at = wall;
     doc.service.started_at = wall - uptime;
   }
+  doc.capabilities.controls = this->controls_;
   doc.seq = ++this->seq_;
   doc.uptime_s = static_cast<float>(uptime);
   doc.service.version = this->version_;

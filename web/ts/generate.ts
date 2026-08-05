@@ -598,8 +598,15 @@ export function generateEsphome(state: State): string {
   for (const b of ct002OptionalBlocks(state.ct)) ctLines.push(b);
 
   // The live status dashboard, served by the board itself. Needs no options
-  // and no other block — the bare key is the whole opt-in.
-  if (state.general && state.general.dashboardEnabled) ctLines.push(`${IND}dashboard:`);
+  // and no other block — the bare key is the whole opt-in, and writes are the
+  // one thing it has to be told to allow.
+  if (state.general && state.general.dashboardEnabled) {
+    ctLines.push(
+      state.general.dashboardAllowWrite
+        ? `${IND}dashboard:\n${IND}${IND}controls: true`
+        : `${IND}dashboard:`,
+    );
+  }
 
   if (wantInsights) {
     const mf = state.mqttInsights.fields || {};

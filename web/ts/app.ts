@@ -541,12 +541,25 @@ function extrasCard(): HTMLElement {
             {
               key: "dashboardEnabled",
               label: "Serve the live status dashboard from the board",
-              help: "Optional. A status page at http://<device>/ showing grid power, every battery and the balancer's state. Read-only: an ESP32's configuration lives in this file, not on the page.",
+              help: "Optional. A status page at http://<device>/ showing grid power, every battery and the balancer's state. Configuration is not editable there — an ESP32's settings live in this file.",
               type: "checkbox",
             },
             state.general,
             { structural: true },
           ),
+          // The page has no login of its own, so writes stay opt-in.
+          state.general.dashboardEnabled
+            ? fieldControl(
+                {
+                  key: "dashboardAllowWrite",
+                  label: "Allow battery changes from the dashboard",
+                  help: "Lets anyone who can reach the device steer your batteries from the page. Leave off for a read-only dashboard.",
+                  type: "checkbox",
+                },
+                state.general,
+                {},
+              )
+            : null,
         ]
       : [];
 

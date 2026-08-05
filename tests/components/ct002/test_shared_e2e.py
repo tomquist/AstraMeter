@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import random
 import shutil
@@ -228,6 +229,31 @@ class EsphomeBackend:
 
     def evict_now(self) -> None:
         self._cmd("evict")
+
+    def status(self) -> dict:
+        """The dashboard's status document, built from live state.
+
+        The same JSON an ESP32 serves from `GET api/status` — the HTTP layer
+        around it cannot be built for the host platform (ESPHome has no web
+        server there), so the test channel hands over the document instead.
+        Needs a far roomier buffer than _cmd's: this is kilobytes.
+        """
+        self._ctrl.sendto(b"status", ("127.0.0.1", CONTROL_PORT))
+        reply = self._ctrl.recvfrom(65535)[0].decode()
+        assert reply.startswith("ok "), f"status failed: {reply!r}"
+        return json.loads(reply[3:])
+
+    def control(self, field: str, value, consumer_id: str = "-") -> str:
+        """A dashboard write, through the same validation and setters.
+
+        Returns the raw reply ("ok …" / "err …") rather than asserting, so a
+        test can assert on a refusal too.
+        """
+        self._ctrl.sendto(
+            f"control {field} {consumer_id} {value}".encode(),
+            ("127.0.0.1", CONTROL_PORT),
+        )
+        return self._ctrl.recvfrom(512)[0].decode()
 
     def dump(self) -> dict[str, dict]:
         # Parse the pipe-delimited `dump` reply (can exceed the 128-byte control

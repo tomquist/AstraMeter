@@ -16,10 +16,19 @@
 #include "esphome/components/socket/socket.h"
 
 #include "balancer.h"
+#include "controls.h"
 #include "pid.h"
 #include "sensor_backed.h"
 #include "status_json.h"
 #include "wrapper_base.h"
+
+// The dashboard's read/write state layer (dashboard_state.cpp) is compiled for
+// a `dashboard:` build and for the test-hooks build, which drives the same
+// document and the same setters over UDP because the host platform has no
+// ESPHome web server to serve them from.
+#if defined(USE_CT002_DASHBOARD) || defined(USE_CT002_TEST_HOOKS)
+#define USE_CT002_DASHBOARD_STATE
+#endif
 
 namespace esphome {
 namespace ct002 {
@@ -175,8 +184,8 @@ class CT002Component : public Component {
   // Observability (MQTT insights and future automation hooks read these).
   size_t reporting_consumer_count() const;
 
-#ifdef USE_CT002_DASHBOARD
-  // ── Dashboard status API (status_snapshot.cpp) ───────────────────────
+#ifdef USE_CT002_DASHBOARD_STATE
+  // ── Dashboard status API (dashboard_state.cpp) ───────────────────────
   // Mirrors CT002.status_snapshot() and the powermeter health snapshot in
   // the Python stack. Plain synchronous attribute reads: the dashboard
   // builds these from loop(), between UDP handlers, so nothing can tear.
@@ -469,6 +478,16 @@ class CT002Component : public Component {
   double mock_clock_seconds_{0.0};
 #endif
 };
+
+#ifdef USE_CT002_DASHBOARD_STATE
+// Apply one already-validated dashboard control (dashboard_state.cpp). False
+// means the field is not one this firmware knows. Main loop only — these walk
+// the consumer map, which the HTTP handler must never touch from its own task.
+bool apply_consumer_control(CT002Component *ct002, const std::string &consumer_id,
+                            const std::string &field, const controls::ControlValue &value);
+bool apply_device_control(CT002Component *ct002, const std::string &field,
+                          const controls::ControlValue &value);
+#endif
 
 }  // namespace ct002
 }  // namespace esphome

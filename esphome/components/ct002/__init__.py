@@ -489,6 +489,7 @@ CLOUD_REPORTING_SCHEMA = cv.All(
 
 CONF_DASHBOARD = "dashboard"
 CONF_PATH = "path"
+CONF_CONTROLS = "controls"
 CONF_WEB_SERVER_BASE_ID = "web_server_base_id"
 
 
@@ -513,21 +514,28 @@ def _dashboard_shorthand(value):
     return value
 
 
+DASHBOARD_OPTIONS_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.declare_id(DashboardComponent),
+        # ESPHome's shared HTTP server — the same one `web_server:` and
+        # `captive_portal:` mount on, so they can coexist on one port.
+        cv.GenerateID(CONF_WEB_SERVER_BASE_ID): cv.use_id(
+            web_server_base.WebServerBase
+        ),
+        cv.Optional(CONF_PATH, default="/"): _validate_dashboard_path,
+        # Off by default, like DASHBOARD_ALLOW_WRITE on the Python side:
+        # the page has no login of its own, so steering someone's
+        # batteries from the LAN stays an explicit choice.
+        cv.Optional(CONF_CONTROLS, default=False): cv.boolean,
+    }
+).extend(cv.COMPONENT_SCHEMA)
+
 DASHBOARD_SCHEMA = cv.All(
     _dashboard_shorthand,
-    cv.Schema(
-        {
-            cv.GenerateID(): cv.declare_id(DashboardComponent),
-            # ESPHome's shared HTTP server — the same one `web_server:` and
-            # `captive_portal:` mount on, so they can coexist on one port.
-            cv.GenerateID(CONF_WEB_SERVER_BASE_ID): cv.use_id(
-                web_server_base.WebServerBase
-            ),
-            cv.Optional(CONF_PATH, default="/"): _validate_dashboard_path,
-        }
-    ).extend(cv.COMPONENT_SCHEMA),
-    # The page plus its status document need the flash and the heap of an
-    # ESP32; the smaller targets ct002 builds for would not fit it.
+    DASHBOARD_OPTIONS_SCHEMA,
+    # ESPHome's HTTP server exists on ESP32 (and the other ESP-family targets)
+    # only — there is no implementation for `host`, and the smaller targets
+    # would not fit the page anyway.
     cv.only_on([PLATFORM_ESP32]),
 )
 
@@ -850,6 +858,7 @@ async def _to_code_dashboard(config, ct002_var):
     base = await cg.get_variable(sub[CONF_WEB_SERVER_BASE_ID])
     cg.add(var.set_base(base))
     cg.add(var.set_path(sub[CONF_PATH]))
+    cg.add(var.set_controls(sub[CONF_CONTROLS]))
 
     # Shown on the page's Diagnostics tab, so a user can tell which build
     # they are looking at without reading the firmware log.

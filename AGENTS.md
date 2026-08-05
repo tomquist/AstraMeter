@@ -88,24 +88,43 @@ What differs is the document behind it:
   is compiled into its firmware, so there is nothing for a dashboard to write.
   The page hides its Configuration tab when the backend reports no
   `config_mode`.
-- **Controls are not implemented on the firmware** (`capabilities.controls:
-  false`): the ESP-IDF HTTP server does not hand JSON request bodies to
-  handlers, so the write endpoints have no way in. MQTT Insights is the write
-  path there.
+- The **write path has parity too**: `esphome/components/ct002/controls.{h,cpp}`
+  mirrors `_CONTROL_RANGES` / `_CONTROL_SCALE` / `_coerce_control_value` in
+  `web_server.py`, and `apply_consumer_control` / `apply_device_control` mirror
+  its `_CONSUMER_SETTERS` table. The bounds MUST match: a value one stack
+  accepts and the other refuses would be settable from one dashboard and then
+  silently reverted by the next retained MQTT replay. It is opt-in on the
+  firmware (`controls:`, default off) because that page has no login.
 
-Two things the ESPHome half constrains, so keep them true:
+Three things the ESPHome half constrains, so keep them true:
 
 - The bundle stays inside the gzipped budget enforced by `npm run
   check:dashboard` — it lives in the ESP32's flash.
 - The HTTP handler runs on the httpd task, **not** the main loop, so it must
   never walk live state. `dashboard.cpp` builds the document from `loop()` and
-  hands it over as a finished string under a mutex.
+  hands writes to it, both across a mutex.
+- The ESP-IDF HTTP shim only parses **form-encoded** POST bodies into request
+  params. The page sends JSON, so `handle_control_` reads the body off the raw
+  `httpd_req_t` itself (the shim leaves it unread). Keep it that way rather
+  than inventing a second wire format for the firmware.
 
 Browser-level tests live in `web/e2e/` (`cd web && npm run e2e`) and boot the
 real stack. Anything touching the live DOM — the reconciler, a control's write
 path, a disclosure — needs a test there, because the unit tests render views
-to a string and cannot see those failures. The wire layer has a host gtest
-(`tests/components/ct002/host_status_json_test.cpp`).
+to a string and cannot see those failures.
+
+The firmware side is covered in three places, because **ESPHome has no web
+server for the `host` platform** (`web_server` is declared ESP-only and
+`web_server_base.h` falls back to `<ESPAsyncWebServer.h>` elsewhere), so
+`dashboard.cpp` cannot be built or run there:
+
+- `host_status_json_test.cpp` / `host_controls_test.cpp` — the wire format and
+  the write-path bounds, as pure host gtests.
+- `test_dashboard_e2e.py` — the document built from **live** state and the
+  writes applied back into it, driven against the compiled host binary over
+  the test-control channel (`status` / `control` commands in `test_hooks.cpp`,
+  which is why `dashboard_state.cpp` compiles for test-hook builds too).
+- The ESP32 compile matrix — everything HTTP.
 
 `src/astrameter/static/dashboard.html` and
 `esphome/components/ct002/dashboard_asset.h` (the same page gzipped, for the

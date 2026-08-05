@@ -95,6 +95,18 @@ target_include_directories(host_status_json_test PRIVATE
 )
 target_link_libraries(host_status_json_test PRIVATE GTest::gtest_main)
 
+# Dashboard write path: the bounds a control write must clear, held against
+# the ones src/astrameter/web_server.py enforces. No ESPHome deps.
+add_executable(host_controls_test
+  host_controls_test.cpp
+  ${REPO_ROOT}/esphome/components/ct002/controls.cpp
+)
+target_include_directories(host_controls_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(host_controls_test PRIVATE GTest::gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(host_protocol_test)
 gtest_discover_tests(host_wrappers_test)
@@ -102,3 +114,4 @@ gtest_discover_tests(host_balancer_test)
 gtest_discover_tests(host_marstek_responder_test)
 gtest_discover_tests(host_cloud_reporting_test)
 gtest_discover_tests(host_status_json_test)
+gtest_discover_tests(host_controls_test)

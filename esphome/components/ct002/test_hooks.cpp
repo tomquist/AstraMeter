@@ -180,6 +180,47 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     return;
   }
 
+  // `control <field> <consumer_id|-> <value>` runs a dashboard write through
+  // the same validation and the same setters the HTTP handler uses. The host
+  // platform has no ESPHome web server (web_server_base is ESP-only), so this
+  // is how the e2e suite covers that path on the compiled binary.
+  if (cmd.rfind("control ", 0) == 0) {
+    char field[32] = {0};
+    char cid[48] = {0};
+    char raw[32] = {0};
+    if (std::sscanf(cmd.c_str() + 8, "%31s %47s %31s", field, cid, raw) != 3) {
+      reply = "err control (parse)";
+    } else {
+      const std::string field_str(field);
+      const std::string raw_str(raw);
+      controls::ControlValue value;
+      if (raw_str == "true" || raw_str == "false") {
+        value.is_bool = true;
+        value.flag = raw_str == "true";
+      } else {
+        value.number = static_cast<float>(std::atof(raw));
+      }
+      const bool device_wide = std::strcmp(cid, "-") == 0;
+      std::string message;
+      if (device_wide) {
+        if (!controls::is_device_field(field_str)) message = "Unknown field";
+      } else {
+        message = controls::coerce_consumer_control(field_str, value);
+      }
+      if (!message.empty()) {
+        reply = "err control " + message;
+      } else {
+        const bool applied =
+            device_wide ? apply_device_control(this, field_str, value)
+                        : apply_consumer_control(this, std::string(cid), field_str, value);
+        reply = applied ? std::string("ok control ") + field : "err control (unknown field)";
+      }
+    }
+    this->control_socket_->sendto(reply.data(), reply.size(), 0,
+                                  reinterpret_cast<const struct sockaddr *>(&from), from_len);
+    return;
+  }
+
   char verb[24] = {0};
   double a = 0.0, b = 0.0, c = 0.0;
   const int matched = std::sscanf(cmd.c_str(), "%23s %lf %lf %lf", verb, &a, &b, &c);
@@ -244,6 +285,19 @@ void CT002Component::handle_control_command_(const std::string &cmd,
     // Mirror ct002.force_efficiency_rotation() for the rotation tests.
     this->force_balancer_rotation();
     reply = "ok force_rotation";
+  } else if (matched >= 1 && std::strcmp(verb, "status") == 0) {
+    // The dashboard's status document, built from live state exactly as the
+    // HTTP handler builds it — the JSON body an ESP32 would serve from
+    // `GET api/status`, minus the HTTP the host platform cannot compile.
+    // Lets the e2e suite assert the document against the same scenario the
+    // Python backend is asserted on.
+    status::StatusDocument doc;
+    doc.capabilities.controls = true;
+    doc.seq = 1;
+    doc.uptime_s = static_cast<float>(::esphome::millis()) / 1000.0f;
+    doc.powermeters.push_back(this->powermeter_status());
+    doc.devices.push_back(this->status_snapshot(0.0));
+    reply = "ok " + status::build_status_json(doc);
   } else if (matched >= 1 && std::strcmp(verb, "evict") == 0) {
     // Run the eviction pass synchronously (it otherwise fires on a real-time
     // interval) so the shared e2e suite can drive eviction deterministically

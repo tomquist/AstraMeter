@@ -1,9 +1,14 @@
+// The dashboard's view of the live component, and the writes back into it.
+//
+// Both halves run on the main loop only — the HTTP handler hands work here
+// rather than touching the consumer map from the httpd task (see dashboard.h).
 #include "ct002.h"
 
-#ifdef USE_CT002_DASHBOARD
-// Only compiled when the `dashboard:` sub-block is present. The reads here are
-// cheap, but the structs they fill are not free in flash, and a build without
-// a dashboard has nobody to serve them to.
+#ifdef USE_CT002_DASHBOARD_STATE
+// Compiled for a `dashboard:` build, and for the test-hooks build so the
+// host-platform e2e suite can exercise the same document and the same write
+// path without an HTTP server (there is no ESPHome web server for `host`).
+// A plain ct002 build carries none of it.
 
 #include <algorithm>
 #include <cmath>
@@ -186,7 +191,46 @@ status::PowermeterStatus CT002Component::powermeter_status() const {
   return out;
 }
 
+// ── write path ──────────────────────────────────────────────────────────
+//
+// Mirrors the _CONSUMER_SETTERS table and the device-wide branch of
+// src/astrameter/web_server.py: the same field names reach the same setters,
+// so a control behaves identically whichever stack is answering. The value has
+// already been validated and scaled by controls::coerce_consumer_control.
+
+bool apply_consumer_control(CT002Component *ct002, const std::string &consumer_id,
+                            const std::string &field, const controls::ControlValue &value) {
+  if (field == "manual_target") {
+    ct002->set_consumer_manual_target(consumer_id, value.number);
+  } else if (field == "auto_target") {
+    ct002->set_consumer_auto_target(consumer_id, value.flag);
+  } else if (field == "active") {
+    ct002->set_consumer_active(consumer_id, value.flag);
+  } else if (field == "distribution_weight") {
+    ct002->set_consumer_distribution_weight(consumer_id, value.number);
+  } else if (field == "efficiency_window_weight") {
+    ct002->set_consumer_efficiency_window_weight(consumer_id, value.number);
+  } else if (field == "min_dc_output") {
+    ct002->set_consumer_min_dc_output(consumer_id, value.number);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+bool apply_device_control(CT002Component *ct002, const std::string &field,
+                          const controls::ControlValue &value) {
+  if (field == "active_control") {
+    ct002->set_active_control(value.is_bool ? value.flag : value.number != 0.0f);
+  } else if (field == "force_rotation") {
+    ct002->force_balancer_rotation();
+  } else {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace ct002
 }  // namespace esphome
 
-#endif  // USE_CT002_DASHBOARD
+#endif  // USE_CT002_DASHBOARD_STATE

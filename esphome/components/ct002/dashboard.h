@@ -4,9 +4,11 @@
 // ESPHome's shared HTTP server (web_server_base, the same one `web_server:`
 // and `captive_portal:` use):
 //
-//   GET <path>/            the dashboard page — the exact same bundle the
-//                          Python add-on serves, embedded gzipped in flash
-//   GET <path>/api/status  the status document (status_json.h)
+//   GET  <path>/                    the dashboard page — the exact same bundle
+//                                   the Python add-on serves, gzipped in flash
+//   GET  <path>/api/status          the status document (status_json.h)
+//   POST <path>/api/control/consumer  per-battery writes, when `controls:` is on
+//   POST <path>/api/control/device    device-wide writes, likewise
 //
 // The page is the one shipped in src/astrameter/static/dashboard.html, so the
 // firmware and the add-on are never two different UIs. What differs is the
@@ -53,6 +55,10 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   void set_path(const std::string &path) { this->path_ = path; }
   void set_version(const std::string &version) { this->version_ = version; }
   void set_log_level(const std::string &level) { this->log_level_ = level; }
+  /// Whether the write endpoints exist at all. Off unless the YAML asks:
+  /// the page has no login of its own, so an unauthenticated LAN visitor
+  /// should not be able to re-target someone's batteries.
+  void set_controls(bool controls) { this->controls_ = controls; }
 
   // NOLINTNEXTLINE(readability-identifier-naming)
   bool canHandle(AsyncWebServerRequest *request) const override;
@@ -60,26 +66,45 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   void handleRequest(AsyncWebServerRequest *request) override;
 
  protected:
+  /// One validated control waiting for the main loop to apply it.
+  struct PendingWrite {
+    /// Empty for a device-wide control.
+    std::string consumer_id;
+    std::string field;
+    controls::ControlValue value;
+  };
+
   void handle_page_(AsyncWebServerRequest *request);
   void handle_status_(AsyncWebServerRequest *request);
+  void handle_control_(AsyncWebServerRequest *request, bool device_wide);
   /// Rebuild the cached document. Main loop only — it walks live state.
   void rebuild_();
+  /// Hand *write* to the main loop and wait for it. False = the loop never
+  /// got to it (the caller answers 503) — `*applied` says whether it landed.
+  bool submit_write_(const PendingWrite &write, bool *applied);
 
   CT002Component *ct002_{nullptr};
   web_server_base::WebServerBase *base_{nullptr};
   std::string path_;
   std::string version_;
   std::string log_level_;
+  bool controls_{false};
 
-  // Handover between the httpd task and the main loop. `document_` is only
-  // ever read under `lock_`; `refresh_requested_` is a one-way flag set by a
-  // request and cleared by the build, and `generation_` lets a waiting
-  // request tell "the loop has been round since I asked" from "still stale".
+  // Handover between the httpd task and the main loop. `document_` and
+  // `pending_` are only ever touched under `lock_`; the flags are one-way
+  // requests set by a handler and cleared by the loop, and the generation
+  // counters let a waiting handler tell "the loop has been round since I
+  // asked" from "still stale".
   Mutex lock_;
   std::string document_;
   volatile bool refresh_requested_{false};
   volatile uint32_t generation_{0};
   uint32_t seq_{0};
+
+  bool pending_valid_{false};
+  PendingWrite pending_;
+  bool pending_applied_{false};
+  volatile uint32_t write_generation_{0};
 };
 
 #endif  // USE_CT002_DASHBOARD

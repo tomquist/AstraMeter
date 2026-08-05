@@ -134,18 +134,29 @@ balancer's internals, the health of the grid-power sensor — but:
 - **There is no Configuration tab.** An ESPHome device's settings are compiled
   into its firmware, so there would be nothing to save; change your YAML and
   re-flash instead.
-- **Batteries cannot be steered from the page** (no manual target, no
-  disable). Use the [MQTT Insights](mqtt-insights.md) entities for that.
+- **The page is read-only until you say otherwise.** Add `controls: true` to
+  steer batteries from it — see below.
 - **Times are relative** ("4 s ago") rather than clock times until the device
   has a synced clock; add ESPHome's [`time:`](https://esphome.io/components/time/)
   component if you want absolute timestamps.
 
-Two options, both rarely needed:
-
 | Option | Default | What it does |
 |---|---|---|
+| `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
 | `path` | `/` | Where the page is mounted, e.g. `/astrameter`. |
 | `id` | generated | The usual ESPHome component id. |
+
+```yaml
+ct002:
+  power_sensor_l1: grid_l1
+  dashboard:
+    controls: true
+```
+
+Controls are off by default because the page has **no login of its own** — see
+[Security](#security). They accept exactly the values the MQTT entities and the
+Python dashboard accept, so a setting made here is not something a later MQTT
+reconnect will quietly revert.
 
 The dashboard shares ESPHome's HTTP server with `web_server:` and
 `captive_portal:`, so they all use one port. If you also run `web_server:`,
@@ -274,12 +285,14 @@ Running AstraMeter yourself there is no ingress, so that port is the only way
 in and `DASHBOARD_ENABLED` is the whole opt-in — `DASHBOARD_DIRECT_ACCESS`
 does not apply (it is only read when the add-on runs from a config file).
 
-On ESPHome the page is read-only — it exposes no configuration and no battery
-controls — but it is still an unauthenticated view of your household's power
-on the LAN. If that matters, leave `dashboard:` out, or add ESPHome's
+On ESPHome the page exposes no configuration, and no battery controls unless
+`controls: true` asks for them — but even read-only it is an unauthenticated
+view of your household's power on the LAN, and with controls on, anyone who can
+reach the device can re-target your batteries. If that matters, add ESPHome's
 [`web_server:`](https://esphome.io/components/web_server/) with its `auth:`
 block and give the dashboard a `path:` of its own: both mount on the same HTTP
-server, so that login covers the dashboard too.
+server, so that login covers the dashboard too. Otherwise leave `controls:`
+off, or leave `dashboard:` out entirely.
 
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.

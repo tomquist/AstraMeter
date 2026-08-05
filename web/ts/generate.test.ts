@@ -580,6 +580,17 @@ const eyDash = generateEsphome({
   ],
 });
 has(eyDash, "  dashboard:", "esp/dashboard: bare sub-block under ct002:");
+lacks(eyDash, "controls:", "esp/dashboard: read-only unless writes are asked for");
+
+const eyDashWritable = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], dashboardEnabled: true, dashboardAllowWrite: true },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+has(eyDashWritable, "    controls: true", "esp/dashboard: writes are opt-in and emitted");
 
 const eyNoDash = generateEsphome({
   target: "esphome",

@@ -252,3 +252,27 @@ def test_astrameter_version_is_read_from_the_repo():
     # nothing rather than something wrong.
     version = ct002_component._astrameter_version()
     assert version and version[0].isdigit()
+
+
+def _dashboard_default(key: str):
+    """The schema default for one dashboard option.
+
+    Read off the schema rather than by validating it: validation resolves
+    component ids and the target platform, neither of which exists outside a
+    real codegen run.
+    """
+    for marker in ct002_component.DASHBOARD_OPTIONS_SCHEMA.schema:
+        if str(marker) == key:
+            return marker.default()
+    raise AssertionError(f"{key} is not a dashboard option")
+
+
+def test_dashboard_controls_are_off_by_default():
+    # The page has no login of its own, so steering someone's batteries from
+    # the LAN has to be asked for — matching DASHBOARD_ALLOW_WRITE on the
+    # Python side, which also defaults to off outside the add-on.
+    assert _dashboard_default(ct002_component.CONF_CONTROLS) is False
+
+
+def test_dashboard_mounts_at_the_root_by_default():
+    assert _dashboard_default(ct002_component.CONF_PATH) == "/"

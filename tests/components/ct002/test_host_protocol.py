@@ -77,3 +77,7 @@ def test_host_cloud_reporting(cmake_build: Path) -> None:
 
 def test_host_status_json(cmake_build: Path) -> None:
     subprocess.run([str(cmake_build / "host_status_json_test")], check=True)
+
+
+def test_host_controls(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_controls_test")], check=True)

@@ -183,11 +183,14 @@ ct002:
   # Serves AstraMeter's live status dashboard from this board — the same
   # page the Home Assistant add-on shows, at http://<device>/. Grid power,
   # every battery with its target and saturation, the balancer's internals.
-  # Read-only: there is no configuration to change (it is compiled into
-  # this firmware) and no battery controls (use mqtt_insights for those).
-  # Needs no other block; uncommenting the one line below is the whole
-  # opt-in, and `dashboard: false` turns it off again.
+  # There is no configuration to change from it (that is compiled into this
+  # firmware), and it is read-only unless controls: is on. Needs no other
+  # block; uncommenting the one line below is the whole opt-in, and
+  # `dashboard: false` turns it off again.
   # dashboard:
+  #   controls: false                # true → steer batteries from the page.
+  #                                  # Off by default: the page has no login
+  #                                  # of its own (see docs/dashboard.md).
   #   path: /                        # mount point; give it one of its own
   #                                  # (e.g. /astrameter) if you also run
   #                                  # ESPHome's own `web_server:`

@@ -57,8 +57,8 @@ struct Capabilities {
   // future one is a capability flip rather than a redesign.
   bool stream{false};
   uint32_t poll_interval_ms{2000};
-  // Writes need a request body, and the ESP-IDF HTTP server hands JSON bodies
-  // to nobody, so the firmware serves a read-only document for now.
+  // Per-battery write endpoints. Off unless the YAML's `controls:` asks for
+  // them — the page carries no login of its own.
   bool controls{false};
   // An ESPHome device's configuration is compiled into its firmware; there is
   // nothing a dashboard could write, so the Configuration tab stays away.
