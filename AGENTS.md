@@ -66,6 +66,8 @@ not fused with an arbitrary weight).
 ## Branches and pull requests
 
 Open pull requests against **`develop`**, never `main` (see `CONTRIBUTING.md`).
+`main` takes release merges and maintainer hotfixes only — never agent work,
+and the guard below exempts maintainers, so nothing will catch it for you.
 Tooling offers `main` as the base, so set it yourself;
 `.github/workflows/pr-base-guard.yml` retargets what slips through, at the cost
 of a round-trip.
