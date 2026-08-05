@@ -95,7 +95,7 @@ Example payload:
 {
   "grid_power":  {"l1": 120.0, "l2": 0.0, "l3": -30.0, "total": 90.0},
   "target":      {"l1": -50.0, "l2": 0.0, "l3": 0.0},
-  "phase": "l1",
+  "phase": "A",
   "reported_power": 600,
   "device_type": "HMG-50",
   "battery_ip": "192.168.1.50",
@@ -119,7 +119,7 @@ Example payload:
 |---|---|---|
 | `grid_power` | object | Smoothed grid reading sent to this battery, per phase plus `total` (watts; **+ = import**, − = export). |
 | `target` | object | Per-phase charge/discharge target the balancer computed for this battery (watts; sign convention as reported to the battery). No `total` key. |
-| `phase` | string | Phase this battery is assigned to (`l1`/`l2`/`l3`), or its reported phase. |
+| `phase` | string | Phase the battery reports it is clamped to: `A`, `B` or `C`, or `D` for combined / whole-home mode. |
 | `reported_power` | number | Power the battery reported it is currently producing/consuming (watts). |
 | `device_type` | string | Battery model string it announced. |
 | `battery_ip` | string | Source IP of the battery's UDP poll. |

@@ -141,7 +141,11 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     sat["state_topic"] = state_topic;
     sat["value_template"] = "{{ (value_json.saturation * 100) | round(1) }}";
 
-    // Phase enum
+    // Phase enum.  The options must cover every phase a consumer payload can
+    // carry, or Home Assistant drops the state and logs "Ignoring invalid
+    // option" on every poll (issue #580): "D" is combined/whole-home mode on
+    // newer Marstek firmware.  Inspection reporters ("0") never reach this
+    // topic — their polls fire no event — so "0" is deliberately absent.
     JsonObject phase = components["phase"].to<JsonObject>();
     phase["platform"] = "sensor";
     phase["unique_id"] = uid_prefix + "_phase";
@@ -151,6 +155,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     opts.add("A");
     opts.add("B");
     opts.add("C");
+    opts.add("D");
     phase["state_topic"] = state_topic;
     phase["value_template"] = "{{ value_json.phase }}";
     phase["entity_category"] = "diagnostic";
