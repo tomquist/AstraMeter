@@ -29,6 +29,7 @@ from astrameter.powermeter import (
     MqttPowermeter,
     PidPowermeter,
     Powermeter,
+    Refoss,
     Script,
     Shelly1PM,
     Shelly3EMPro,
@@ -72,6 +73,8 @@ ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
 FRITZ_SECTION = "FRITZ"
 FRONIUS_SECTION = "FRONIUS"
+REFOSS_SECTION = "REFOSS"
+MEROSS_SECTION = "MEROSS"
 TIBBER_PULSE_SECTION = "TIBBER_PULSE"
 MQTT_INSIGHTS_SECTION = "MQTT_INSIGHTS"
 
@@ -388,6 +391,8 @@ def create_powermeter(
         return create_fritz_powermeter(section, config)
     elif section.startswith(FRONIUS_SECTION):
         return create_fronius_powermeter(section, config)
+    elif section.startswith(REFOSS_SECTION) or section.startswith(MEROSS_SECTION):
+        return create_refoss_powermeter(section, config)
     elif section.startswith(TIBBER_PULSE_SECTION):
         return create_tibber_pulse_powermeter(section, config)
     elif section.startswith("MQTT") and not section.startswith(MQTT_INSIGHTS_SECTION):
@@ -740,6 +745,18 @@ def create_fronius_powermeter(
         config.get(section, "IP", fallback=""),
         config.get(section, "DEVICE_ID", fallback="0"),
         per_phase=config.getboolean(section, "PER_PHASE", fallback=False),
+    )
+
+
+def create_refoss_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    """Build a Refoss/Meross powermeter from a ``[REFOSS]`` / ``[MEROSS]`` section."""
+    from astrameter.powermeter.refoss import parse_channels
+
+    return Refoss(
+        config.get(section, "IP", fallback=""),
+        parse_channels(config.get(section, "CHANNELS", fallback="1")),
     )
 
 

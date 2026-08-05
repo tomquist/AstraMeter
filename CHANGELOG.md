@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** Refoss / Meross energy monitors (EM01P, EM06P, EM16P) as a power source (`[REFOSS]` or `[MEROSS]`) ([#598](https://github.com/tomquist/astrameter/pull/598)).
+
 - **Breaking:** **removed** the per-battery **Last Seen** sensor — it changed on every poll and buried the Home Assistant logbook under one entry per second. Automations that used it should switch to the battery's entities going *unavailable*, or to `last_reported`; see [docs/mqtt-insights.md](docs/mqtt-insights.md#is-a-battery-still-reporting-home-assistant) ([#576](https://github.com/tomquist/astrameter/issues/576), [#597](https://github.com/tomquist/astrameter/pull/597)).
 
 - **Fixed** the per-battery **Phase** sensor staying empty, and the Home Assistant log filling with "invalid option" warnings, for batteries in combined / whole-home mode ([#580](https://github.com/tomquist/astrameter/issues/580), [#596](https://github.com/tomquist/astrameter/pull/596)).
@@ -15,7 +17,6 @@
 - **Fixed** grid-power sources reporting in kilowatts being silently misread as watts, which made typical household readings round to ~0 W and left batteries idle with no error anywhere. Both the ESPHome component and the Home Assistant powermeter now respect the sensor's declared unit: kW (and MW/mW) values are converted to watts automatically, a sensor with a non-power unit (e.g. °C or kWh) is rejected with an explicit error, and the ESPHome firmware warns when an undeclared-unit sensor's readings look like kilowatts. If you previously worked around this with a manual ×1000 multiplier on a kW sensor, remove it — the value would now be scaled twice ([#39](https://github.com/tomquist/astrameter/issues/39), [#572](https://github.com/tomquist/astrameter/issues/572), [#573](https://github.com/tomquist/astrameter/pull/573)).
 - **Fixed** **Tibber Pulse** readings frequently dropping with connection-timeout errors because the bridge's slow webserver couldn't answer within the old hardcoded 1-second connection limit: the default timeout is now a more forgiving 5 seconds and can be tuned with a new `TIMEOUT` option ([#551](https://github.com/tomquist/astrameter/issues/551), [#565](https://github.com/tomquist/astrameter/pull/565)).
 - **Fixed** active control silently breaking until a restart after a single invalid grid reading (a NaN value, e.g. from a briefly unavailable ESPHome sensor or a glitchy meter source): the controller could get stuck sending every battery a small constant discharge command regardless of the actual grid. An invalid reading is now treated like an unavailable meter — batteries hold their output for that poll and normal control resumes with the next good reading ([#548](https://github.com/tomquist/astrameter/issues/548), [#550](https://github.com/tomquist/astrameter/pull/550)).
-
 
 ## 2.2.4
 

@@ -4,6 +4,8 @@
 
 import {
   getPowermeter,
+  parseChannels,
+  formatChannels,
   PER_METER_TUNING,
   CT_BASIC,
   CT_ACTIVE,
@@ -86,6 +88,8 @@ function meterSection(meter: Meter, opts: { multi: boolean }): string {
   const phaseList = pm.phaseListKeys && meter.phases === 3 ? pm.phaseListKeys : null;
 
   for (const field of pm.fields) {
+    // CHANNELS is normalized below so Python and ESPHome share one grammar.
+    if (field.key === "CHANNELS") continue;
     let value = fields[field.key];
     if (phaseList && field.key === "TOPIC" && !isBlank(value)) {
       lines.push(`TOPICS = ${String(value).trim()}`);
@@ -103,6 +107,21 @@ function meterSection(meter: Meter, opts: { multi: boolean }): string {
   // PER_PHASE) rather than per-phase field lists.
   if (pm.phaseFlagKey && meter.phases === 3) {
     lines.push(`${pm.phaseFlagKey} = True`);
+  }
+
+  // CHANNELS: positive decimal ints only (same rules as Python parse_channels).
+  // Three-phase keeps a valid 3-id list or falls back to phaseChannelsValue;
+  // single-phase keeps a single valid id or defaults to "1".
+  if (pm.fields.some((f) => f.key === "CHANNELS")) {
+    let ids = parseChannels(fields.CHANNELS);
+    if (pm.phaseChannelsValue && meter.phases === 3) {
+      if (!ids || ids.length !== 3) {
+        ids = parseChannels(pm.phaseChannelsValue) ?? [1, 2, 3];
+      }
+    } else if (!ids || ids.length !== 1) {
+      ids = [1];
+    }
+    lines.push(`CHANNELS = ${formatChannels(ids)}`);
   }
 
   // Per-meter tuning (throttle, smoothing, transform, hampel, PID …)
@@ -312,7 +331,9 @@ function esphomeSensor(state: State) {
     const sensors = (use3 ? ids : ["grid_l1"]).map((id, i) => templateSensor(id) + phaseFilterBlock(i));
     const url = use3 ? esp.url3!(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
     const lambdaBody = use3
-      ? esp.lambda3
+      ? typeof esp.lambda3 === "function"
+        ? esp.lambda3(f)
+        : esp.lambda3
       : typeof esp.lambda1 === "function"
         ? esp.lambda1(f)
         : esp.lambda1;

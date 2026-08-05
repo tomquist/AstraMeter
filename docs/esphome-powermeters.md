@@ -68,6 +68,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [SMA Energy Meter](#sma-energy-meter) — 🔴 Not yet available
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
 - [Fronius Smart Meter](#fronius-smart-meter) — 🔵 Generic
+- [Refoss / Meross energy monitor](#refoss--meross-energy-monitor) — 🔵 Generic
 - [Tibber Pulse](#tibber-pulse) — 🟠 Alternate (native SML / community component)
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
@@ -972,6 +973,57 @@ per-phase power — some firmwares report it unsigned, which breaks export):
 ```
 
 …and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`.
+
+## Refoss / Meross energy monitor
+
+**Tier: 🔵 Generic.** Poll the local Open API
+`GET /rpc/Em.Status.Get?id=65535` and read `status[N].power` for the CT channel
+on the grid main (`N` is channel id minus one: channel 1 → index 0). The device
+API is **cleartext HTTP** — use only on a trusted local network.
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+  # Em.Status.Get returns a full JSON status object for all channels; raise the
+  # default buffer so the response body is complete before parse_json runs.
+  buffer_size_rx: 4096
+
+sensor:
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://192.168.1.150/rpc/Em.Status.Get?id=65535
+          capture_response: true
+          max_response_buffer_size: 4096
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    // Channel 1 → status[0]. Change index for another CT.
+                    id(grid_l1).publish_state(root["status"][0]["power"]);
+                    return true;
+                  });
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+For three-phase, publish `status[0]` / `status[1]` / `status[2]` into
+`grid_l1` / `grid_l2` / `grid_l3` (or indices 3–5 for the EM06P second CT group)
+and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`. Prefer a numeric IP;
+mDNS `*.local` names often fail on ESPHome as well.
 
 ## Tibber Pulse
 

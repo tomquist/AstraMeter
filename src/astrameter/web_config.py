@@ -392,6 +392,8 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         DEVICE_ID={"type": "integer"},
         PER_PHASE={"type": "boolean"},
     ),
+    "REFOSS": _pm(CHANNELS={}),
+    "MEROSS": _pm(CHANNELS={}),
     "TIBBER_PULSE": _pm(
         PASSWORD={"type": "password"},
         TIMEOUT={"type": "float"},

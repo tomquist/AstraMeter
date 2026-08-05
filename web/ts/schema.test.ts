@@ -16,6 +16,9 @@ import {
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   ESP_BOARDS,
+  parseChannels,
+  formatChannels,
+  refossChannelIds,
 } from "./schema.js";
 
 let failures = 0;
@@ -29,7 +32,7 @@ function check(cond, msg) {
 // Allowed shapes — anything outside these lists is almost certainly a typo.
 const FIELD_TYPES = new Set(["text", "number", "password", "select", "checkbox"]);
 const FIELD_PROPS = new Set(["key", "label", "help", "type", "default", "placeholder", "options", "required", "phase", "advanced", "ey"]);
-const PM_PROPS = new Set(["id", "label", "section", "blurb", "docPython", "fields", "esphome", "phaseListKeys", "phaseFlagKey"]);
+const PM_PROPS = new Set(["id", "label", "section", "blurb", "docPython", "fields", "esphome", "phaseListKeys", "phaseFlagKey", "phaseChannelsValue"]);
 const ESP_KINDS = new Set(["homeassistant", "mqtt", "sml", "modbus", "http", "unsupported"]);
 const ESP_TIERS = new Set(["native", "generic", "alternate", "unsupported"]);
 const ESP_PROPS = new Set(["kind", "tier", "note", "url1", "url3", "lambda1", "lambda3", "jsonRoot", "haEntity", "headersField", "warn"]);
@@ -112,6 +115,12 @@ for (const pm of POWERMETERS) {
   if (pm.phaseListKeys) {
     check(typeof pm.phaseListKeys.topic === "string" && typeof pm.phaseListKeys.jsonPath === "string", `${where}: phaseListKeys needs topic+jsonPath`);
   }
+  if (pm.phaseChannelsValue !== undefined) {
+    check(
+      typeof pm.phaseChannelsValue === "string" && pm.phaseChannelsValue.trim() !== "",
+      `${where}: phaseChannelsValue must be a non-empty string`,
+    );
+  }
 }
 
 // ── PHASE_CAPABLE references real meters ──
@@ -145,6 +154,27 @@ check(Array.isArray(ESP_BOARDS) && ESP_BOARDS.length > 0, "ESP_BOARDS: non-empty
 for (const b of ESP_BOARDS) {
   check(typeof b.value === "string" && typeof b.label === "string", `ESP_BOARDS: each entry needs value+label (${JSON.stringify(b)})`);
 }
+
+// ── parseChannels (shared Python / ESPHome CHANNELS grammar) ──
+check(JSON.stringify(parseChannels("1")) === "[1]", "parseChannels: single id");
+check(JSON.stringify(parseChannels("4,5,6")) === "[4,5,6]", "parseChannels: three ids");
+check(JSON.stringify(parseChannels(" 4 , 5 ")) === "[4,5]", "parseChannels: trims");
+check(parseChannels("1.0") === null, "parseChannels: rejects 1.0");
+check(parseChannels("1e2") === null, "parseChannels: rejects 1e2");
+check(parseChannels("4,5,1.0") === null, "parseChannels: rejects mixed invalid");
+check(parseChannels("0") === null, "parseChannels: rejects 0");
+check(parseChannels("a,2") === null, "parseChannels: rejects non-numeric");
+check(parseChannels("+1") === null, "parseChannels: rejects leading plus sign");
+check(parseChannels("-1") === null, "parseChannels: rejects leading minus sign");
+check(parseChannels("1,") === null, "parseChannels: rejects trailing comma");
+check(parseChannels(",1") === null, "parseChannels: rejects leading comma");
+check(parseChannels("1,,2") === null, "parseChannels: rejects empty middle token");
+check(formatChannels([4, 5, 6]) === "4,5,6", "formatChannels: joins");
+check(JSON.stringify(refossChannelIds("1.0", [1])) === "[1]", "refossChannelIds: falls back on 1.0");
+check(JSON.stringify(refossChannelIds("1e2", [1, 2, 3])) === "[1,2,3]", "refossChannelIds: falls back on 1e2");
+check(JSON.stringify(refossChannelIds("4,5,6", [1, 2, 3])) === "[4,5,6]", "refossChannelIds: keeps valid 3-id list");
+check(JSON.stringify(refossChannelIds("4,5,6,7", [1, 2, 3])) === "[1,2,3]", "refossChannelIds: rejects four-id list (exact length)");
+check(JSON.stringify(refossChannelIds("1,2", [1])) === "[1]", "refossChannelIds: rejects two-id for single-phase fallback");
 
 if (failures) {
   console.error(`\n${failures} schema problem(s) found`);

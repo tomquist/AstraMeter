@@ -37,6 +37,7 @@ Powermeters](configuration.md#multiple-powermeters) are documented in the
 - [SMA Energy Meter](#sma-energy-meter)
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
 - [Fronius Smart Meter](#fronius-smart-meter)
+- [Refoss / Meross energy monitor](#refoss--meross-energy-monitor)
 - [Tibber Pulse](#tibber-pulse)
 - [Script](#script)
 - [SML](#sml)
@@ -501,6 +502,52 @@ PER_PHASE = True
 > Several meter firmwares report `PowerReal_P_Phase_*` *unsigned* (always
 > positive), which would make exported power read as imported on each phase. If
 > in doubt, leave it off and use the always-signed sum.
+
+## Refoss / Meross energy monitor
+
+Reads a [Refoss](https://docs.refoss.net/open-api/) (or Meross-branded) energy
+monitor — EM01P, EM06P, EM16P — over the local Open API. AstraMeter polls
+`Em.Status.Get` and returns the signed `power` field (watts) for each configured
+CT channel: positive = grid import, negative = feed-in. No token or login is
+required on the LAN. `[MEROSS]` is an alias for `[REFOSS]` (same hardware API).
+
+```ini
+[REFOSS]
+IP = 192.168.1.150
+# Single-phase: one CT channel id (default 1)
+CHANNELS = 1
+```
+
+**Three-phase.** List three channel ids for L1/L2/L3 (typical EM06P first CT
+group is `1,2,3`; the second group is `4,5,6`):
+
+```ini
+[REFOSS]
+IP = 192.168.1.150
+CHANNELS = 1,2,3
+```
+
+**Docker / DNS.** A numeric IP always works. Hostnames that your **LAN DNS**
+knows (router / Pi-hole / AdGuard, etc.) also work on Docker **bridge** networks
+if the container uses that resolver — for example in Compose:
+
+```yaml
+dns:
+  - 192.168.1.1   # your LAN DNS / router
+```
+
+Default Docker DNS often cannot resolve LAN names. **mDNS** hostnames
+(`meross-em06p-….local`) usually still fail in bridge mode unless you add
+mDNS support or `extra_hosts`; prefer a numeric IP or a real DNS name.
+
+**Security.** The Refoss / Meross local Open API is **cleartext HTTP** (no TLS
+on the device). Power readings can be observed or altered by anyone on the
+network path between AstraMeter and the meter. Use this source only on an
+**explicitly trusted local network** (typical home LAN). Do not expose the
+meter's HTTP port to the internet or an untrusted VLAN. Prefer `[REFOSS]`
+**or** `[MEROSS]`, not both.
+
+**Sign.** If import/export looks reversed, flip with `POWER_MULTIPLIER = -1`.
 
 ## Tibber Pulse
 
