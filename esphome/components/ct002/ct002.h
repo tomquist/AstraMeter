@@ -268,6 +268,13 @@ class CT002Component : public Component {
     return this->balancer_cfg_.min_efficient_power > 0.0f;
   }
 
+  // How well the loop is holding the grid at zero (see ControlQualityTracker).
+  // Mirrors CT002's use of LoadBalancer.control_quality in the Python stack;
+  // read by mqtt_insights for the device-level status payload.
+  ControlQualitySnapshot control_quality() const {
+    return this->balancer_ ? this->balancer_->control_quality() : ControlQualitySnapshot{};
+  }
+
   // Listener registration — mqtt_insights subscribes once at setup() to
   // be notified after every successful UDP poll-reply round trip. Allows
   // the insights component to push fresh state without polling.

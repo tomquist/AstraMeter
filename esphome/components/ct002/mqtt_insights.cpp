@@ -268,6 +268,12 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     // (via YAML or the switch itself) rather than always reading "on".
     root["active_control"] = this->ct002_->active_control();
     root["consumer_count"] = this->ct002_->reporting_consumer_count();
+    // How well the loop is holding the grid at zero, plus a 0-100 score — the
+    // one pair of entities that answers "is this working?" without reading the
+    // balancer internals (mirrors service.py).
+    const auto quality = this->ct002_->control_quality();
+    root["control_quality"] = quality.verdict;
+    root["control_quality_score"] = std::round(quality.score * 10.0) / 10.0;
   });
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);

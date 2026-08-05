@@ -210,6 +210,100 @@ void SaturationTracker::clear(BalancerConsumerState &state) {
 }
 
 // -------------------------------------------------------------------------
+// ControlQualityTracker
+// -------------------------------------------------------------------------
+
+ControlQualityTracker::ControlQualityTracker(float band, std::function<double()> clock)
+    : clock_(std::move(clock)), band_(std::max(CONTROL_QUALITY_MIN_BAND_W, band)) {}
+
+void ControlQualityTracker::update(float grid, bool steering, bool limited) {
+  const double now = this->clock_();
+  double prev_t = this->last_update_;
+  if (prev_t <= 0.0) prev_t = now - CONTROL_QUALITY_REFERENCE_DT;
+  const double dt = std::max(0.0, now - prev_t);
+  this->last_update_ = now;
+  this->steering_ = steering;
+  this->limited_ = limited;
+  if (dt == 0.0) return;
+  if (dt > CONTROL_QUALITY_LONG_GAP_SECONDS) {
+    // The pool was away long enough that the old window describes a different
+    // house. Start over rather than blending across the gap.
+    this->reset_window_();
+    return;
+  }
+  // Nothing is being steered, so the meter is not evidence about a loop.
+  if (!steering) return;
+
+  const double error = std::fabs(static_cast<double>(grid));
+  const double in_band = (error <= static_cast<double>(this->band_)) ? 1.0 : 0.0;
+  if (this->samples_ == 0) {
+    // Seed from the first sample: a cold EMA reads as a perfectly held grid,
+    // which would report "stable" for the first minute of a loop that is not.
+    this->error_ema_ = error;
+    this->in_band_ema_ = in_band;
+  } else {
+    const double ratio = dt / CONTROL_QUALITY_REFERENCE_DT;
+    const double alpha = 1.0 - std::pow(1.0 - CONTROL_QUALITY_ALPHA, ratio);
+    this->error_ema_ += alpha * (error - this->error_ema_);
+    this->in_band_ema_ += alpha * (in_band - this->in_band_ema_);
+    double flip = 0.0;
+    if (in_band == 0.0) {
+      const int sign = (grid > 0.0f) ? 1 : -1;
+      if (this->last_sign_ != 0 && sign != this->last_sign_) flip = 1.0;
+      this->last_sign_ = sign;
+    }
+    this->reversal_ema_ += alpha * (flip - this->reversal_ema_);
+  }
+  this->samples_++;
+}
+
+ControlQualitySnapshot ControlQualityTracker::snapshot() const {
+  ControlQualitySnapshot snap;
+  snap.verdict = this->verdict_();
+  snap.score = this->score_();
+  snap.error_ema = this->error_ema_;
+  snap.in_band_fraction = this->in_band_ema_;
+  snap.reversal_rate = this->reversal_ema_;
+  snap.band = this->band_;
+  snap.samples = this->samples_;
+  return snap;
+}
+
+void ControlQualityTracker::reset_window_() {
+  this->error_ema_ = 0.0;
+  this->in_band_ema_ = 0.0;
+  this->reversal_ema_ = 0.0;
+  this->last_sign_ = 0;
+  this->samples_ = 0;
+}
+
+bool ControlQualityTracker::stale_() const {
+  // A device whose batteries all went away stops calling update() entirely,
+  // so without this the last verdict would hang around describing a pool that
+  // no longer exists.
+  if (this->last_update_ <= 0.0) return true;
+  return (this->clock_() - this->last_update_) > CONTROL_QUALITY_LONG_GAP_SECONDS;
+}
+
+std::string ControlQualityTracker::verdict_() const {
+  if (!this->steering_ || this->stale_()) return "idle";
+  if (this->samples_ < CONTROL_QUALITY_WARMUP_SAMPLES) return "warmup";
+  if (this->error_ema_ <= static_cast<double>(this->band_) * CONTROL_QUALITY_STABLE_BANDS)
+    return "stable";
+  if (this->limited_) return "limited";
+  if (this->reversal_ema_ >= CONTROL_QUALITY_HUNT_RATE) return "oscillating";
+  return "sluggish";
+}
+
+double ControlQualityTracker::score_() const {
+  const double excess = std::max(0.0, this->error_ema_ - static_cast<double>(this->band_));
+  const double accuracy =
+      std::max(0.0, 1.0 - excess / (static_cast<double>(this->band_) * CONTROL_QUALITY_ERROR_SCALE));
+  const double hunting = std::min(1.0, std::max(0.0, this->reversal_ema_));
+  return 100.0 * accuracy * (1.0 - CONTROL_QUALITY_HUNT_PENALTY * hunting);
+}
+
+// -------------------------------------------------------------------------
 // LoadBalancer
 // -------------------------------------------------------------------------
 
@@ -228,7 +322,10 @@ LoadBalancer::LoadBalancer(BalancerConfig config, double saturation_alpha,
       reset_fn_(std::move(reset_fn)),
       last_rotation_(this->clock_()),
       probe_timeout_seconds_(std::max(0.0f, saturation_grace_seconds)),
-      probe_success_threshold_(std::max(1.0f, saturation_min_target)) {
+      probe_success_threshold_(std::max(1.0f, saturation_min_target)),
+      // The tracker floors the band at CONTROL_QUALITY_MIN_BAND_W, so it does
+      // not matter that cfg_.clamp() has not run yet.
+      control_quality_(config.balance_deadband, [this]() { return this->clock_(); }) {
   this->cfg_.clamp();
 }
 
@@ -785,6 +882,14 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   // can never correct (e.g. through a probe handoff).
   const bool trim_fresh = sample_id != this->trim_sample_id_;
   this->trim_sample_id_ = sample_id;
+  // Control quality is judged on the raw meter, before any early return below,
+  // so a probe handoff or a fading transition doesn't leave holes in the
+  // window. Deliberately *not* gated on trim_fresh like the trim is: a loop
+  // holding the grid perfectly still repeats its reading, and skipping those
+  // samples would let the verdict go stale precisely when the answer is
+  // "stable". Feeding every poll is safe because the EMAs are time-weighted.
+  this->control_quality_.update(grid_total, !reports.empty(),
+                                this->pool_out_of_headroom_(reports, grid_total));
   const float control_grid = this->apply_import_trim_(
       this->predict_control_grid_(reports, grid_total, sample_id), trim_fresh);
 
@@ -1093,6 +1198,33 @@ float LoadBalancer::apply_import_trim_(float control_grid, bool fresh) {
   }
   if (this->steady_import_dwell_ >= IMPORT_TRIM_DWELL) return control_grid + trim;
   return control_grid;
+}
+
+// Whether the pool physically cannot close the remaining error: every battery
+// saturated (full, empty or clamped), or a surplus that not one reporting
+// battery can charge from AC. Either way the error is the pack's limit, not
+// the controller mis-steering. Deliberately conservative — with saturation
+// detection off the scores stay at zero and this returns false, so a limited
+// pack reads as "sluggish" rather than being excused without evidence.
+// Mirrors balancer.py LoadBalancer::_pool_out_of_headroom.
+bool LoadBalancer::pool_out_of_headroom_(const ReportMap &reports, float grid_total) const {
+  if (reports.empty()) return false;
+  if (grid_total < 0.0f) {
+    bool any_ac_chargeable = false;
+    for (const auto &r : reports) {
+      if (is_ac_chargeable(r.second.device_type)) {
+        any_ac_chargeable = true;
+        break;
+      }
+    }
+    if (!any_ac_chargeable) return true;
+  }
+  for (const auto &r : reports) {
+    const auto it = this->consumers_.find(r.first);
+    if (it == this->consumers_.end()) return false;
+    if (it->second.saturation_score < CONTROL_QUALITY_SATURATED) return false;
+  }
+  return true;
 }
 
 // Clamp the auto-path reading to the consumer's ramp-pacing cap (issue #458).

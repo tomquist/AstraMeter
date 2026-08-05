@@ -51,13 +51,16 @@ applied to it (smoothing, spike rejection, PID) and when it was last read.
 </picture>
 
 **Diagnostics** — service version, uptime, config file and mode, plus the
-balancer's internals: predicted grid power, prediction trust, pool output,
-import trim, the demand average and the efficiency rotation state. MQTT
-Insights connection state appears here when it is configured.
+balancer's internals. Each balancer card leads with its **control quality**:
+whether the grid is being held at zero, and how it misses when it is not (see
+[Control quality](ct002.md#control-quality)), followed by the predicted grid
+power, prediction trust, pool output, import trim, the demand average and the
+efficiency rotation state. MQTT Insights connection state appears here when it
+is configured.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-diagnostics-dark.png">
-  <img alt="The Diagnostics tab: a service card beside the balancer's internal state" src="images/dashboard-diagnostics-light.png">
+  <img alt="The Diagnostics tab: a service card beside the balancer's internal state, led by its control-quality verdict" src="images/dashboard-diagnostics-light.png">
 </picture>
 
 The battery and power-source cards each carry a small **trend line** of their

@@ -18,6 +18,7 @@ from astrameter.config.config_loader import (
     read_mqtt_insights_config,
 )
 from astrameter.conftest import needs_mosquitto
+from astrameter.ct002.balancer import CONTROL_QUALITY_STATES
 from astrameter.powermeter.base import Powermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
@@ -277,6 +278,21 @@ def test_ct002_device_discovery_structure():
     assert ac["state_off"] == "False"
     assert ac["retain"] is True
     assert ac["entity_category"] == "config"
+
+    # Control quality — the verdict as an enum sensor whose options match the
+    # tracker's vocabulary exactly (HA drops a state outside them), plus a
+    # trendable score.
+    cq = comps["control_quality"]
+    assert cq["platform"] == "sensor"
+    assert cq["device_class"] == "enum"
+    assert set(cq["options"]) == set(CONTROL_QUALITY_STATES)
+    assert cq["value_template"] == "{{ value_json.control_quality }}"
+    assert cq["entity_category"] == "diagnostic"
+    score = comps["control_quality_score"]
+    assert score["unit_of_measurement"] == "%"
+    assert score["state_class"] == "measurement"
+    assert score["value_template"] == "{{ value_json.control_quality_score }}"
+    assert score["entity_category"] == "diagnostic"
 
     # Force rotation button
     btn = comps["force_rotation"]
@@ -1048,6 +1064,8 @@ SAMPLE_CT002_DATA = {
     "smooth_target": 500.0,
     "active_control": True,
     "consumer_count": 2,
+    "control_quality": "oscillating",
+    "control_quality_score": 41.5,
 }
 
 SAMPLE_SHELLY_DATA = {
@@ -1113,6 +1131,41 @@ async def test_publishes_device_status(mqtt_broker):
         assert payload["smooth_target"] == 500.0
         assert payload["active_control"] is True
         assert payload["consumer_count"] == 2
+        assert payload["control_quality"] == "oscillating"
+        assert payload["control_quality_score"] == 41.5
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_device_status_defaults_control_quality_when_absent(mqtt_broker):
+    """An event from an older/reduced producer must not break the entity.
+
+    HA's enum sensor rejects a state outside its ``options``, so the fallback
+    has to be one of the documented verdicts rather than an empty string.
+    """
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        received = []
+        data = {
+            k: v
+            for k, v in SAMPLE_CT002_DATA.items()
+            if not k.startswith("control_quality")
+        }
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(f"{base}/ct002/+/status")
+            service.on_ct002_response("dev1", "consumer1", data)
+            await _collect_messages(sub, received)
+
+        payload = json.loads(received[0].payload)
+        assert payload["control_quality"] == "idle"
+        assert payload["control_quality_score"] == 0
     finally:
         await service.stop()
 

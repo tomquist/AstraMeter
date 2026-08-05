@@ -206,6 +206,21 @@ def _balancer_to_wire(balancer) -> dict[str, Any]:
                     "all_dc_under_surplus": balancer.efficiency.all_dc_under_surplus,
                 }
             ),
+            "control_quality": compact(
+                {
+                    "verdict": balancer.control_quality.verdict,
+                    "score_pct": round_or_none(balancer.control_quality.score),
+                    "error_w": round_or_none(balancer.control_quality.error_ema),
+                    "in_band_fraction": round_or_none(
+                        balancer.control_quality.in_band_fraction, 3
+                    ),
+                    "reversal_rate": round_or_none(
+                        balancer.control_quality.reversal_rate, 3
+                    ),
+                    "band_w": round_or_none(balancer.control_quality.band),
+                    "samples": balancer.control_quality.samples,
+                }
+            ),
             "probe": compact(
                 {
                     "candidate_id": probe.candidate_id,

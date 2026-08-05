@@ -60,6 +60,33 @@ inline constexpr float PRED_INNOVATION_GATE_W = 40.0f;
 inline constexpr float IMPORT_TRIM_GATE_W = 120.0f;
 inline constexpr int IMPORT_TRIM_DWELL = 6;
 
+// Control-quality assessment (see ControlQualityTracker). Everything is
+// derived from state the loop already keeps, so the verdict costs the user no
+// new setting: the accuracy band is the balancer's own settling deadband
+// (floored, so a deadband of 0 doesn't make every wobble a failure), and the
+// EMAs are time-weighted against CONTROL_QUALITY_REFERENCE_DT exactly like the
+// saturation ones, so pollers at different cadences reach the same verdict
+// under the same physical conditions. Mirrors balancer.py.
+inline constexpr double CONTROL_QUALITY_REFERENCE_DT = 1.0;
+inline constexpr double CONTROL_QUALITY_ALPHA = 0.02;
+inline constexpr double CONTROL_QUALITY_LONG_GAP_SECONDS = 60.0;
+inline constexpr int CONTROL_QUALITY_WARMUP_SAMPLES = 10;
+inline constexpr float CONTROL_QUALITY_MIN_BAND_W = 25.0f;
+// Mean error, in multiples of the band, up to which the loop still counts as
+// stable — deliberately well above the band, since a step lands on the meter
+// before any battery can answer it. Calibrated against the Python simulator's
+// scenarios; see balancer.py.
+inline constexpr double CONTROL_QUALITY_STABLE_BANDS = 4.0;
+inline constexpr double CONTROL_QUALITY_ERROR_SCALE = 20.0;
+inline constexpr double CONTROL_QUALITY_HUNT_RATE = 0.3;
+inline constexpr double CONTROL_QUALITY_HUNT_PENALTY = 0.5;
+inline constexpr double CONTROL_QUALITY_SATURATED = 0.6;
+
+// The verdict vocabulary, in the same order as balancer.py's
+// CONTROL_QUALITY_STATES, so the HA enum sensor's options match on both stacks.
+inline constexpr const char *CONTROL_QUALITY_STATES[] = {
+    "idle", "warmup", "stable", "oscillating", "sluggish", "limited"};
+
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
@@ -271,6 +298,52 @@ class SaturationTracker {
   float stall_timeout_seconds_;
 };
 
+// How well the loop is holding the grid at zero, and how it misses when it
+// doesn't. Mirrors balancer.py ControlQualitySnapshot; see that file for what
+// each verdict means. The verdict strings are the on-wire vocabulary the HA
+// enum sensor declares in its options, so they must not drift.
+struct ControlQualitySnapshot {
+  std::string verdict{"idle"};
+  double score{0.0};            // 0..100
+  double error_ema{0.0};        // W, mean |grid| over the recent window
+  double in_band_fraction{0.0}; // 0..1
+  double reversal_rate{0.0};    // 0..1
+  float band{CONTROL_QUALITY_MIN_BAND_W};
+  int samples{0};
+};
+
+// Judges the closed loop the way a user would: by what the meter shows. Two
+// independent numbers separate the failure modes — how far off the loop sits
+// (error_ema) says whether there is a problem, whether the error keeps
+// crossing zero (reversal_rate) says which one. A pool with no headroom left
+// is reported as "limited" rather than blamed. Mirrors balancer.py
+// ControlQualityTracker; unlike SaturationTracker it owns its state, which is
+// pool-level rather than per-consumer.
+class ControlQualityTracker {
+ public:
+  ControlQualityTracker(float band, std::function<double()> clock);
+
+  void update(float grid, bool steering, bool limited);
+  ControlQualitySnapshot snapshot() const;
+
+ private:
+  void reset_window_();
+  bool stale_() const;
+  std::string verdict_() const;
+  double score_() const;
+
+  std::function<double()> clock_;
+  float band_;
+  double error_ema_{0.0};
+  double in_band_ema_{0.0};
+  double reversal_ema_{0.0};
+  int last_sign_{0};
+  int samples_{0};
+  double last_update_{0.0};
+  bool steering_{false};
+  bool limited_{false};
+};
+
 class LoadBalancer {
  public:
   LoadBalancer(BalancerConfig config, double saturation_alpha,
@@ -290,6 +363,10 @@ class LoadBalancer {
   void detach_from_auto_pool(const std::string &consumer_id);
   void reset_consumer(const std::string &consumer_id);
   void force_rotation(const std::unordered_set<std::string> &current_pool);
+
+  // How well the loop is tracking zero (see ControlQualityTracker). Mirrors
+  // LoadBalancer.control_quality in the Python stack; read by mqtt_insights.
+  ControlQualitySnapshot control_quality() const { return this->control_quality_.snapshot(); }
 
   double get_saturation(const std::string &consumer_id) const;
   std::optional<float> get_last_target(const std::string &consumer_id) const;
@@ -348,6 +425,9 @@ class LoadBalancer {
   float predict_control_grid_(const ReportMap &reports, float grid_total,
                               const std::vector<float> &sample_id);
   float apply_import_trim_(float control_grid, bool fresh);
+  // Whether the pool physically cannot close the remaining error (every
+  // battery saturated, or a surplus no reporting battery can absorb).
+  bool pool_out_of_headroom_(const ReportMap &reports, float grid_total) const;
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
@@ -400,6 +480,9 @@ class LoadBalancer {
   // Low-pass-filtered household-demand estimate for the efficiency active-set
   // decision (see compute_efficiency_deprioritized_). Unset until the first poll.
   std::optional<float> demand_ema_{};
+  // Closed-loop quality verdict for HA (see ControlQualityTracker). Measured
+  // against the balancer's own settling deadband, so it needs no setting.
+  ControlQualityTracker control_quality_;
 };
 
 }  // namespace ct002

@@ -94,6 +94,34 @@ def test_relay_mode_reports_the_grid_it_served_not_zero():
     assert device.status_snapshot().grid_total == pytest.approx(-11.0)
 
 
+def test_control_quality_reaches_the_wire_with_its_evidence():
+    """The verdict is the one balancer figure aimed at a user, so it has to
+    survive the wire layer intact — with the numbers behind it, since "this
+    loop is oscillating" is worth little without how far off and how often."""
+    device = _ct()
+    registry = _registry()
+    registry.register_device("ct-1", "ct002", device)
+
+    (wire,) = registry.snapshot(ingress=False)["devices"]
+    quality = wire["balancer"]["control_quality"]
+
+    # Nothing has been steered yet, and absence must stay distinguishable from
+    # a real verdict.
+    assert quality["verdict"] == "idle"
+    assert quality["band_w"] == 25.0
+    assert quality["samples"] == 0
+
+    for _ in range(60):
+        device._balancer._control_quality.update(400.0, steering=True, limited=False)
+    quality = registry.snapshot(ingress=False)["devices"][0]["balancer"][
+        "control_quality"
+    ]
+    assert quality["verdict"] == "sluggish"
+    assert quality["error_w"] == pytest.approx(400.0, abs=1.0)
+    assert quality["score_pct"] < 100.0
+    assert quality["in_band_fraction"] == 0.0
+
+
 def test_a_consumer_created_by_a_retained_command_is_marked_as_such():
     """Every consumer setter materializes the consumer, because a retained MQTT
     command has to hold its setting until the battery turns up.  That

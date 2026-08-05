@@ -18,6 +18,9 @@ using esphome::ct002::BalancerConfig;
 using esphome::ct002::ConsumerMode;
 using esphome::ct002::ConsumerModeKind;
 using esphome::ct002::ConsumerReport;
+using esphome::ct002::CONTROL_QUALITY_MIN_BAND_W;
+using esphome::ct002::CONTROL_QUALITY_WARMUP_SAMPLES;
+using esphome::ct002::ControlQualityTracker;
 using esphome::ct002::is_ac_chargeable;
 using esphome::ct002::LoadBalancer;
 using esphome::ct002::needs_dc_output_floor;
@@ -263,6 +266,170 @@ TEST(LoadBalancer, RemoveConsumerClearsState) {
   EXPECT_TRUE(b.get_last_target("a").has_value());
   b.remove_consumer("a");
   EXPECT_FALSE(b.get_last_target("a").has_value());
+}
+
+// ── control quality ────────────────────────────────────────────────────────
+//
+// Mirrors tests/test_control_quality.py. The verdict is the one balancer
+// figure aimed at a user, so the C++ port has to name the same situations the
+// same way — the two stacks publish it to the same HA entity.
+
+namespace {
+
+ControlQualityTracker make_tracker(double *clock, float band = 25.0f) {
+  return ControlQualityTracker(band, [clock]() { return *clock; });
+}
+
+void feed(ControlQualityTracker &t, double *clock, int count, float grid,
+          bool limited = false, double dt = 1.0) {
+  for (int i = 0; i < count; i++) {
+    *clock += dt;
+    t.update(grid, /*steering=*/true, limited);
+  }
+}
+
+}  // namespace
+
+TEST(ControlQuality, IdleUntilSomethingIsSteered) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  EXPECT_EQ(t.snapshot().verdict, "idle");
+  for (int i = 0; i < 40; i++) {
+    clock += 1.0;
+    t.update(400.0f, /*steering=*/false, /*limited=*/false);
+  }
+  EXPECT_EQ(t.snapshot().verdict, "idle");
+}
+
+TEST(ControlQuality, WarmupThenStable) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  feed(t, &clock, CONTROL_QUALITY_WARMUP_SAMPLES - 1, 0.0f);
+  EXPECT_EQ(t.snapshot().verdict, "warmup");
+  feed(t, &clock, 1, 0.0f);
+  EXPECT_EQ(t.snapshot().verdict, "stable");
+  EXPECT_GT(t.snapshot().score, 95.0);
+}
+
+TEST(ControlQuality, OscillatingWhenTheErrorKeepsCrossingZero) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  for (int i = 0; i < 120; i++) {
+    clock += 1.0;
+    t.update(i % 2 == 0 ? 250.0f : -250.0f, true, false);
+  }
+  const auto snap = t.snapshot();
+  EXPECT_EQ(snap.verdict, "oscillating");
+  EXPECT_GT(snap.reversal_rate, 0.9);
+}
+
+TEST(ControlQuality, SluggishWhenTheErrorStaysOnOneSide) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  feed(t, &clock, 120, 250.0f);
+  const auto snap = t.snapshot();
+  EXPECT_EQ(snap.verdict, "sluggish");
+  EXPECT_LT(snap.reversal_rate, 0.05);
+  EXPECT_NEAR(snap.error_ema, 250.0, 1.0);
+}
+
+TEST(ControlQuality, LimitedOutranksSluggishButNotStable) {
+  double clock = 1000.0;
+  auto spent = make_tracker(&clock);
+  feed(spent, &clock, 120, 250.0f, /*limited=*/true);
+  EXPECT_EQ(spent.snapshot().verdict, "limited");
+
+  double held_clock = 1000.0;
+  auto held = make_tracker(&held_clock);
+  feed(held, &held_clock, 40, 4.0f, /*limited=*/true);
+  EXPECT_EQ(held.snapshot().verdict, "stable");
+}
+
+TEST(ControlQuality, ABusyHouseThatKeepsComingBackIsStillStable) {
+  // Calibration guard, mirroring tests/test_control_quality.py: a step lands
+  // on the meter before any battery can answer it, so the stable allowance
+  // sits well above the settling band.
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  for (int cycle = 0; cycle < 20; cycle++) {
+    feed(t, &clock, 9, 5.0f);
+    feed(t, &clock, 1, 800.0f);
+  }
+  feed(t, &clock, 5, 5.0f);
+  EXPECT_EQ(t.snapshot().verdict, "stable");
+  EXPECT_GT(t.snapshot().error_ema, 25.0);
+
+  double far_clock = 1000.0;
+  auto far = make_tracker(&far_clock);
+  feed(far, &far_clock, 200, 200.0f);
+  EXPECT_EQ(far.snapshot().verdict, "sluggish");
+}
+
+TEST(ControlQuality, BandFloorAndScoreBounds) {
+  double clock = 1000.0;
+  auto zero_band = make_tracker(&clock, 0.0f);
+  feed(zero_band, &clock, 60, 10.0f);
+  EXPECT_FLOAT_EQ(zero_band.snapshot().band, CONTROL_QUALITY_MIN_BAND_W);
+  EXPECT_EQ(zero_band.snapshot().verdict, "stable");
+
+  double far_clock = 1000.0;
+  auto far_off = make_tracker(&far_clock);
+  feed(far_off, &far_clock, 120, 50000.0f);
+  EXPECT_DOUBLE_EQ(far_off.snapshot().score, 0.0);
+}
+
+TEST(ControlQuality, VerdictIsIndependentOfPollCadence) {
+  double fast_clock = 1000.0;
+  auto fast = make_tracker(&fast_clock);
+  feed(fast, &fast_clock, 300, 250.0f, false, 0.45);
+  double slow_clock = 1000.0;
+  auto slow = make_tracker(&slow_clock);
+  feed(slow, &slow_clock, 45, 250.0f, false, 3.0);
+  EXPECT_EQ(fast.snapshot().verdict, "sluggish");
+  EXPECT_EQ(slow.snapshot().verdict, "sluggish");
+  EXPECT_NEAR(fast.snapshot().score, slow.snapshot().score, 1.0);
+}
+
+TEST(ControlQuality, LongGapStartsANewWindowAndGoesIdle) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  feed(t, &clock, 60, 400.0f);
+  EXPECT_EQ(t.snapshot().verdict, "sluggish");
+  // Every battery left: the last verdict must not hang around describing a
+  // pool that no longer exists.
+  clock += 600.0;
+  EXPECT_EQ(t.snapshot().verdict, "idle");
+  t.update(0.0f, true, false);
+  EXPECT_EQ(t.snapshot().verdict, "warmup");
+  EXPECT_DOUBLE_EQ(t.snapshot().error_ema, 0.0);
+}
+
+TEST(LoadBalancer, ControlQualityGradesEveryPollIncludingRepeatedReadings) {
+  double clock = 1000.0;
+  auto b = make_balancer({}, &clock);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 300.0f};
+  // A settled loop repeats its meter reading; the import trim skips those, the
+  // quality verdict must not.
+  for (int i = 0; i < 120; i++) {
+    clock += 1.0;
+    b.compute_target("a", ConsumerMode{}, reports, 0.0f, {}, {}, {});
+  }
+  const auto snap = b.control_quality();
+  EXPECT_EQ(snap.verdict, "stable");
+  EXPECT_GE(snap.samples, 100);
+}
+
+TEST(LoadBalancer, SurplusWithNoAcChargeableBatteryReadsAsLimited) {
+  double clock = 1000.0;
+  auto b = make_balancer({}, &clock);
+  ReportMap reports;
+  reports["hma"] = ConsumerReport{"HMA-2", "A", 0.0f};
+  for (int i = 0; i < 60; i++) {
+    clock += 1.0;
+    b.compute_target("hma", ConsumerMode{}, reports, -400.0f, {}, {}, {});
+  }
+  EXPECT_EQ(b.control_quality().verdict, "limited");
 }
 
 TEST(LoadBalancer, ResetConsumerClearsLastTarget) {

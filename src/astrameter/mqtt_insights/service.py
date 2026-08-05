@@ -703,6 +703,8 @@ class MqttInsightsService:
             "smooth_target": data.get("smooth_target", 0),
             "active_control": data.get("active_control", False),
             "consumer_count": data.get("consumer_count", 0),
+            "control_quality": data.get("control_quality", "idle"),
+            "control_quality_score": data.get("control_quality_score", 0),
         }
         await client.publish(
             f"{base}/ct002/{did}/status",

@@ -301,6 +301,63 @@ const dedupedHtml = renderToString(
 has(dedupedHtml, "Answered every", "the answer rate shows once it diverges from the poll rate");
 has(dedupedHtml, ">4 s<", "and reports the answered cadence, not the poll cadence");
 
+// ── control quality: the balancer's verdict leads its diagnostics card ──
+//
+// Every other figure on that card describes a mechanism; the verdict is the
+// answer those mechanisms exist to produce, so it has to be readable without
+// knowing what a predictor or a pace cap is.
+function diagnosticsHtml(control_quality: Record<string, unknown> | undefined) {
+  const state: AppState = {
+    ...live,
+    tab: "diagnostics",
+    snapshot: {
+      ...snapshot,
+      devices: [
+        {
+          ...snapshot.devices![0],
+          balancer: { predictor: { grid_estimate_w: -8 }, control_quality },
+        },
+      ],
+    },
+  };
+  return renderToString(h("div", null, ...view(state, actions, initialConfigState())));
+}
+
+const oscillating = diagnosticsHtml({
+  verdict: "oscillating",
+  score_pct: 43.2,
+  error_w: 214,
+  in_band_fraction: 0.11,
+  band_w: 25,
+  reversal_rate: 0.82,
+  samples: 400,
+});
+has(oscillating, "Oscillating", "the verdict is named, not left as a number");
+has(oscillating, "overshoots past zero", "and explained in a sentence");
+has(oscillating, "43%", "the score is shown as a percentage, not as 43.2");
+has(oscillating, "214 W", "with the mean error behind the verdict");
+has(oscillating, "11%", "and how much of the window sat inside the band");
+
+const stable = diagnosticsHtml({
+  verdict: "stable",
+  score_pct: 98,
+  error_w: 6,
+  in_band_fraction: 0.97,
+  band_w: 25,
+});
+has(stable, "Stable", "a settled loop says so");
+lacks(stable, "Oscillating", "and does not carry the other verdicts' wording");
+
+// A backend that serves a reduced document (the deferred ESPHome status) must
+// not blank the card, and an unknown future verdict must render rather than
+// print "undefined".
+const noQuality = diagnosticsHtml(undefined);
+has(noQuality, "Predicted grid", "the rest of the balancer card survives its absence");
+lacks(noQuality, "undefined", "an absent verdict prints nothing at all");
+const future = diagnosticsHtml({ verdict: "chattering" });
+has(future, "chattering", "an unrecognised verdict is still shown");
+lacks(future, "undefined", "with no undefined where its blurb would be");
+
 // ── the Shelly emulator, which is the default DEVICE_TYPE ──
 //
 // Regression: the views filtered on kind === "ct002", so a Shelly install

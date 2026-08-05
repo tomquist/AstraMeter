@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from astrameter.ct002.balancer import _needs_dc_output_floor
+from astrameter.ct002.balancer import CONTROL_QUALITY_STATES, _needs_dc_output_floor
 from astrameter.version_info import get_git_commit_sha
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -492,6 +492,31 @@ def build_ct002_device_discovery(
             "name": "Consumer Count",
             "state_topic": state_topic,
             "value_template": "{{ value_json.consumer_count }}",
+            "entity_category": "diagnostic",
+        },
+        # How well the loop is holding the grid at zero, and how it misses when
+        # it doesn't — the one entity that answers "is this working?" without
+        # reading the balancer internals. Verdict plus a 0-100 score so it can
+        # be trended and alerted on. Both come from the balancer's
+        # ControlQualityTracker; the states are its documented vocabulary.
+        "control_quality": {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_control_quality",
+            "name": "Control Quality",
+            "device_class": "enum",
+            "options": list(CONTROL_QUALITY_STATES),
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.control_quality }}",
+            "entity_category": "diagnostic",
+        },
+        "control_quality_score": {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_control_quality_score",
+            "name": "Control Quality Score",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.control_quality_score }}",
             "entity_category": "diagnostic",
         },
     }

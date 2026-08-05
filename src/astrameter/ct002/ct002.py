@@ -1396,6 +1396,7 @@ class CT002:
             # Fire event listener after response is sent
             if not in_inspection_mode:
                 consumer = self._consumers.get(consumer_id)
+                quality = self._balancer.control_quality()
                 self._call_event_listener(
                     consumer_id,
                     {
@@ -1443,6 +1444,8 @@ class CT002:
                         "consumer_count": sum(
                             1 for c in self._consumers.values() if c.timestamp > 0
                         ),
+                        "control_quality": quality.verdict,
+                        "control_quality_score": round(quality.score, 1),
                     },
                 )
         finally:

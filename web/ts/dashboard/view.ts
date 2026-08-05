@@ -33,6 +33,7 @@ import {
   shellyDevices,
   type AppState,
   type Health,
+  type Severity,
   type Tab,
 } from "./model.js";
 import type {
@@ -876,6 +877,54 @@ function sources(state: AppState, offline: boolean): VChild[] {
 
 // ── diagnostics ─────────────────────────────────────────────────────
 
+/**
+ * The balancer's own verdict on the loop, said in one line.
+ *
+ * Everything else on this card describes a mechanism; this is the answer the
+ * mechanisms exist to produce, so it leads the card and carries the severity.
+ * "limited" is deliberately not an error: the pack being full or empty is the
+ * house's state, not a fault in the controller.
+ */
+const CONTROL_QUALITY_BLURB: Record<string, string> = {
+  idle: "Nothing is being steered right now.",
+  warmup: "Watching the grid — not enough samples yet.",
+  stable: "The grid is being held inside the settling band.",
+  oscillating: "The loop overshoots past zero instead of settling.",
+  sluggish: "The loop is not closing the gap to zero.",
+  limited: "No headroom left — the batteries are full, empty or clamped.",
+};
+
+const CONTROL_QUALITY_SEVERITY: Record<string, Severity> = {
+  stable: "ok",
+  oscillating: "warn",
+  sluggish: "warn",
+  limited: "idle",
+  warmup: "idle",
+  idle: "idle",
+};
+
+const CONTROL_QUALITY_LABEL: Record<string, string> = {
+  stable: "Stable",
+  oscillating: "Oscillating",
+  sluggish: "Sluggish",
+  limited: "Limited",
+  warmup: "Warming up",
+  idle: "Idle",
+};
+
+/** A verdict this bundle predates is shown as-is rather than mislabelled. */
+function controlQualityHealth(verdict: string): Health {
+  return health(
+    CONTROL_QUALITY_SEVERITY[verdict] ?? "idle",
+    CONTROL_QUALITY_LABEL[verdict] ?? verdict,
+  );
+}
+
+/** The score crosses the wire as 0–100; `percent` wants a fraction. */
+function scoreFraction(value: number | undefined): number | null {
+  return value == null ? null : value / 100;
+}
+
 function diagnostics(state: AppState): VChild[] {
   const snapshot = state.snapshot;
   if (!snapshot) return [coldStart()];
@@ -900,12 +949,23 @@ function diagnostics(state: AppState): VChild[] {
   for (const device of ctDevices(snapshot)) {
     const b = device.balancer;
     if (!b) continue;
+    const quality = b.control_quality;
     cards.push(
       card(
         `Balancer · ${device.device_id || device.ct_type || "device"}`,
+        quality?.verdict
+          ? h("div", { class: "batt-head" }, chip(controlQualityHealth(quality.verdict)))
+          : null,
+        quality?.verdict && CONTROL_QUALITY_BLURB[quality.verdict]
+          ? h("p", { class: "hint" }, CONTROL_QUALITY_BLURB[quality.verdict])
+          : null,
         h(
           "dl",
           { class: "kv" },
+          ...row("Quality score", percent(scoreFraction(quality?.score_pct))),
+          ...row("Mean grid error", watts(quality?.error_w)),
+          ...row("Time inside band", percent(quality?.in_band_fraction)),
+          ...row("Settling band", watts(quality?.band_w)),
           ...row("Predicted grid", signedWatts(b.predictor?.grid_estimate_w)),
           ...row("Prediction trust", percent(b.predictor?.trust)),
           ...row("Pool output", signedWatts(b.predictor?.pool_output_w)),

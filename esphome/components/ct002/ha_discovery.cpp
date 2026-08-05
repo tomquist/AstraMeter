@@ -418,6 +418,31 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     cc["value_template"] = "{{ value_json.consumer_count }}";
     cc["entity_category"] = "diagnostic";
 
+    // Control quality — the verdict as an enum sensor whose options are the
+    // tracker's vocabulary (HA drops a state outside them), plus a trendable
+    // score. Mirrors discovery.py; the unique_ids must stay identical so HA
+    // dedupes across the Python and ESPHome paths on a shared broker.
+    JsonObject cq = components["control_quality"].to<JsonObject>();
+    cq["platform"] = "sensor";
+    cq["unique_id"] = uid_prefix + "_control_quality";
+    cq["name"] = "Control Quality";
+    cq["device_class"] = "enum";
+    JsonArray options = cq["options"].to<JsonArray>();
+    for (const auto &state : CONTROL_QUALITY_STATES) options.add(state);
+    cq["state_topic"] = state_topic;
+    cq["value_template"] = "{{ value_json.control_quality }}";
+    cq["entity_category"] = "diagnostic";
+
+    JsonObject cqs = components["control_quality_score"].to<JsonObject>();
+    cqs["platform"] = "sensor";
+    cqs["unique_id"] = uid_prefix + "_control_quality_score";
+    cqs["name"] = "Control Quality Score";
+    cqs["state_class"] = "measurement";
+    cqs["unit_of_measurement"] = "%";
+    cqs["state_topic"] = state_topic;
+    cqs["value_template"] = "{{ value_json.control_quality_score }}";
+    cqs["entity_category"] = "diagnostic";
+
     // The Force Rotation button only does anything when efficiency rotation is
     // enabled (min_efficient_power > 0); without it every battery stays active
     // and there's nothing to rotate, so don't surface the button (mirrors
