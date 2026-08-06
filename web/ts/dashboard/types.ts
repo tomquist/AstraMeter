@@ -105,17 +105,20 @@ export interface BucketStatus {
 /**
  * The balancer's verdict on how well the loop is holding the grid at zero.
  *
- * `verdict` is one of idle / warmup / stable / oscillating / sluggish /
- * limited, but it stays a plain string here: a backend serving a reduced
- * document may add a verdict this bundle predates, and the page must render
- * what it is given rather than drop the card.
+ * `verdict` is one of idle / warmup / stable / off_target / limited, but it
+ * stays a plain string here: a backend serving a reduced document may add a
+ * verdict this bundle predates, and the page must render what it is given
+ * rather than drop the card.
+ *
+ * `score_pct` is absent while there is nothing to score — the backend omits it
+ * rather than sending a 100 it has no evidence for.
  */
 export interface ControlQualityStatus {
   verdict?: string;
   score_pct?: number;
   error_w?: number;
   in_band_fraction?: number;
-  reversal_rate?: number;
+  crossings_per_min?: number;
   band_w?: number;
   samples?: number;
 }

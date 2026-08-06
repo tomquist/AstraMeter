@@ -1445,7 +1445,14 @@ class CT002:
                             1 for c in self._consumers.values() if c.timestamp > 0
                         ),
                         "control_quality": quality.verdict,
-                        "control_quality_score": round(quality.score, 1),
+                        # None until the window says something; published as
+                        # JSON null so the HA sensor reads "unknown" rather
+                        # than a flawless 100 it has no evidence for.
+                        "control_quality_score": (
+                            round(quality.score, 1)
+                            if quality.score is not None
+                            else None
+                        ),
                     },
                 )
         finally:

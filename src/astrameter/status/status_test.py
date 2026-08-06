@@ -97,7 +97,7 @@ def test_relay_mode_reports_the_grid_it_served_not_zero():
 def test_control_quality_reaches_the_wire_with_its_evidence():
     """The verdict is the one balancer figure aimed at a user, so it has to
     survive the wire layer intact — with the numbers behind it, since "this
-    loop is oscillating" is worth little without how far off and how often."""
+    loop is off target" is worth little without how far off and how often."""
     device = _ct()
     registry = _registry()
     registry.register_device("ct-1", "ct002", device)
@@ -110,13 +110,15 @@ def test_control_quality_reaches_the_wire_with_its_evidence():
     assert quality["verdict"] == "idle"
     assert quality["band_w"] == 25.0
     assert quality["samples"] == 0
+    # Absent, not a perfect 100 the backend has no evidence for.
+    assert "score_pct" not in quality
 
     for _ in range(60):
         device._balancer._control_quality.update(400.0, steering=True, limited=False)
     quality = registry.snapshot(ingress=False)["devices"][0]["balancer"][
         "control_quality"
     ]
-    assert quality["verdict"] == "sluggish"
+    assert quality["verdict"] == "off_target"
     assert quality["error_w"] == pytest.approx(400.0, abs=1.0)
     assert quality["score_pct"] < 100.0
     assert quality["in_band_fraction"] == 0.0

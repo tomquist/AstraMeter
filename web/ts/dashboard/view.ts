@@ -882,22 +882,22 @@ function sources(state: AppState, offline: boolean): VChild[] {
  *
  * Everything else on this card describes a mechanism; this is the answer the
  * mechanisms exist to produce, so it leads the card and carries the severity.
- * "limited" is deliberately not an error: the pack being full or empty is the
- * house's state, not a fault in the controller.
+ * The wording states what was measured and stops there — "off target" does not
+ * guess whether the loop is hunting or lagging, because the two have opposite
+ * fixes and nothing here can tell them apart. "limited" is deliberately not an
+ * error: a full or empty pack is the house's state, not a fault.
  */
 const CONTROL_QUALITY_BLURB: Record<string, string> = {
   idle: "Nothing is being steered right now.",
   warmup: "Watching the grid — not enough samples yet.",
-  stable: "The grid is being held inside the settling band.",
-  oscillating: "The loop overshoots past zero instead of settling.",
-  sluggish: "The loop is not closing the gap to zero.",
+  stable: "The grid is being held close to zero.",
+  off_target: "The grid is not being held at zero, and the batteries still have room.",
   limited: "No headroom left — the batteries are full, empty or clamped.",
 };
 
 const CONTROL_QUALITY_SEVERITY: Record<string, Severity> = {
   stable: "ok",
-  oscillating: "warn",
-  sluggish: "warn",
+  off_target: "warn",
   limited: "idle",
   warmup: "idle",
   idle: "idle",
@@ -905,8 +905,7 @@ const CONTROL_QUALITY_SEVERITY: Record<string, Severity> = {
 
 const CONTROL_QUALITY_LABEL: Record<string, string> = {
   stable: "Stable",
-  oscillating: "Oscillating",
-  sluggish: "Sluggish",
+  off_target: "Off target",
   limited: "Limited",
   warmup: "Warming up",
   idle: "Idle",
@@ -923,6 +922,11 @@ function controlQualityHealth(verdict: string): Health {
 /** The score crosses the wire as 0–100; `percent` wants a fraction. */
 function scoreFraction(value: number | undefined): number | null {
   return value == null ? null : value / 100;
+}
+
+function perMinute(value: number | undefined): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return `${value.toFixed(value < 10 ? 1 : 0)} / min`;
 }
 
 function diagnostics(state: AppState): VChild[] {
@@ -966,6 +970,11 @@ function diagnostics(state: AppState): VChild[] {
           ...row("Mean grid error", watts(quality?.error_w)),
           ...row("Time inside band", percent(quality?.in_band_fraction)),
           ...row("Settling band", watts(quality?.band_w)),
+          // Evidence, not a verdict: a high rate alongside "off target"
+          // points at a loop overshooting past zero rather than lagging
+          // behind — but a noisy meter produces the same reading, so the
+          // page shows the number and lets the reader judge.
+          ...row("Zero crossings", perMinute(quality?.crossings_per_min)),
           ...row("Predicted grid", signedWatts(b.predictor?.grid_estimate_w)),
           ...row("Prediction trust", percent(b.predictor?.trust)),
           ...row("Pool output", signedWatts(b.predictor?.pool_output_w)),

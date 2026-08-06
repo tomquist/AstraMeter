@@ -214,8 +214,10 @@ def _balancer_to_wire(balancer) -> dict[str, Any]:
                     "in_band_fraction": round_or_none(
                         balancer.control_quality.in_band_fraction, 3
                     ),
-                    "reversal_rate": round_or_none(
-                        balancer.control_quality.reversal_rate, 3
+                    # Per minute on the wire: per second reads as 0.002 in the
+                    # UI, and this is a number a human is meant to interpret.
+                    "crossings_per_min": round_or_none(
+                        balancer.control_quality.crossings_per_second * 60, 2
                     ),
                     "band_w": round_or_none(balancer.control_quality.band),
                     "samples": balancer.control_quality.samples,

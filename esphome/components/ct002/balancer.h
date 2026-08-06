@@ -78,14 +78,19 @@ inline constexpr float CONTROL_QUALITY_MIN_BAND_W = 25.0f;
 // scenarios; see balancer.py.
 inline constexpr double CONTROL_QUALITY_STABLE_BANDS = 4.0;
 inline constexpr double CONTROL_QUALITY_ERROR_SCALE = 20.0;
-inline constexpr double CONTROL_QUALITY_HUNT_RATE = 0.3;
-inline constexpr double CONTROL_QUALITY_HUNT_PENALTY = 0.5;
+// Share of the window the pool must have spent with no headroom before a
+// persistent error is blamed on the pack rather than on the loop. Time-
+// weighted so the two claims cover the same window; see balancer.py.
+inline constexpr double CONTROL_QUALITY_LIMITED_SHARE = 0.5;
 inline constexpr double CONTROL_QUALITY_SATURATED = 0.6;
 
 // The verdict vocabulary, in the same order as balancer.py's
 // CONTROL_QUALITY_STATES, so the HA enum sensor's options match on both stacks.
-inline constexpr const char *CONTROL_QUALITY_STATES[] = {
-    "idle", "warmup", "stable", "oscillating", "sluggish", "limited"};
+// A description of the grid, never a diagnosis of a cause: no signal
+// available here separates a hunting loop from a busy house or a noisy meter,
+// and the two would take opposite fixes. See balancer.py ControlQualityVerdict.
+inline constexpr const char *CONTROL_QUALITY_STATES[] = {"idle", "warmup", "stable",
+                                                         "off_target", "limited"};
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
@@ -304,10 +309,16 @@ class SaturationTracker {
 // enum sensor declares in its options, so they must not drift.
 struct ControlQualitySnapshot {
   std::string verdict{"idle"};
-  double score{0.0};            // 0..100
-  double error_ema{0.0};        // W, mean |grid| over the recent window
-  double in_band_fraction{0.0}; // 0..1
-  double reversal_rate{0.0};    // 0..1
+  double score{0.0};                 // 0..100, meaningful only if has_score
+  double error_ema{0.0};             // W, mean |grid| over the recent window
+  double in_band_fraction{0.0};      // 0..1
+  // Zero crossings per second among excursions large enough to matter — a
+  // rate, not a share of samples, so it describes the house rather than the
+  // poll cadence. Evidence only; it does not decide the verdict.
+  double crossings_per_second{0.0};
+  // Absent (unset) while there is nothing to score, so a fresh window cannot
+  // publish a flawless 100 it has no evidence for. Mirrors Python's None.
+  bool has_score{false};
   float band{CONTROL_QUALITY_MIN_BAND_W};
   int samples{0};
 };
@@ -329,6 +340,7 @@ class ControlQualityTracker {
  private:
   void reset_window_();
   bool stale_() const;
+  bool has_evidence_() const;
   std::string verdict_() const;
   double score_() const;
 
@@ -336,12 +348,12 @@ class ControlQualityTracker {
   float band_;
   double error_ema_{0.0};
   double in_band_ema_{0.0};
-  double reversal_ema_{0.0};
+  double crossings_ema_{0.0};
+  double limited_ema_{0.0};
   int last_sign_{0};
   int samples_{0};
   double last_update_{0.0};
   bool steering_{false};
-  bool limited_{false};
 };
 
 class LoadBalancer {

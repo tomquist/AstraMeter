@@ -223,7 +223,6 @@ void ControlQualityTracker::update(float grid, bool steering, bool limited) {
   const double dt = std::max(0.0, now - prev_t);
   this->last_update_ = now;
   this->steering_ = steering;
-  this->limited_ = limited;
   if (dt == 0.0) return;
   if (dt > CONTROL_QUALITY_LONG_GAP_SECONDS) {
     // The pool was away long enough that the old window describes a different
@@ -236,23 +235,30 @@ void ControlQualityTracker::update(float grid, bool steering, bool limited) {
 
   const double error = std::fabs(static_cast<double>(grid));
   const double in_band = (error <= static_cast<double>(this->band_)) ? 1.0 : 0.0;
+  const double limit_hit = limited ? 1.0 : 0.0;
   if (this->samples_ == 0) {
     // Seed from the first sample: a cold EMA reads as a perfectly held grid,
     // which would report "stable" for the first minute of a loop that is not.
     this->error_ema_ = error;
     this->in_band_ema_ = in_band;
+    this->limited_ema_ = limit_hit;
   } else {
     const double ratio = dt / CONTROL_QUALITY_REFERENCE_DT;
     const double alpha = 1.0 - std::pow(1.0 - CONTROL_QUALITY_ALPHA, ratio);
     this->error_ema_ += alpha * (error - this->error_ema_);
     this->in_band_ema_ += alpha * (in_band - this->in_band_ema_);
-    double flip = 0.0;
-    if (in_band == 0.0) {
+    this->limited_ema_ += alpha * (limit_hit - this->limited_ema_);
+    // Crossings per second (not per sample, which would track the poll
+    // cadence), counted only between excursions large enough to matter — a
+    // jittery meter crosses zero constantly at small amplitude. See
+    // balancer.py.
+    double flips_per_second = 0.0;
+    if (error > static_cast<double>(this->band_) * CONTROL_QUALITY_STABLE_BANDS) {
       const int sign = (grid > 0.0f) ? 1 : -1;
-      if (this->last_sign_ != 0 && sign != this->last_sign_) flip = 1.0;
+      if (this->last_sign_ != 0 && sign != this->last_sign_) flips_per_second = 1.0 / dt;
       this->last_sign_ = sign;
     }
-    this->reversal_ema_ += alpha * (flip - this->reversal_ema_);
+    this->crossings_ema_ += alpha * (flips_per_second - this->crossings_ema_);
   }
   this->samples_++;
 }
@@ -263,18 +269,24 @@ ControlQualitySnapshot ControlQualityTracker::snapshot() const {
   snap.score = this->score_();
   snap.error_ema = this->error_ema_;
   snap.in_band_fraction = this->in_band_ema_;
-  snap.reversal_rate = this->reversal_ema_;
+  snap.crossings_per_second = this->crossings_ema_;
   snap.band = this->band_;
   snap.samples = this->samples_;
+  snap.has_score = this->has_evidence_();
   return snap;
 }
 
 void ControlQualityTracker::reset_window_() {
   this->error_ema_ = 0.0;
   this->in_band_ema_ = 0.0;
-  this->reversal_ema_ = 0.0;
+  this->crossings_ema_ = 0.0;
+  this->limited_ema_ = 0.0;
   this->last_sign_ = 0;
   this->samples_ = 0;
+}
+
+bool ControlQualityTracker::has_evidence_() const {
+  return this->steering_ && !this->stale_() && this->samples_ >= CONTROL_QUALITY_WARMUP_SAMPLES;
 }
 
 bool ControlQualityTracker::stale_() const {
@@ -290,17 +302,17 @@ std::string ControlQualityTracker::verdict_() const {
   if (this->samples_ < CONTROL_QUALITY_WARMUP_SAMPLES) return "warmup";
   if (this->error_ema_ <= static_cast<double>(this->band_) * CONTROL_QUALITY_STABLE_BANDS)
     return "stable";
-  if (this->limited_) return "limited";
-  if (this->reversal_ema_ >= CONTROL_QUALITY_HUNT_RATE) return "oscillating";
-  return "sluggish";
+  if (this->limited_ema_ >= CONTROL_QUALITY_LIMITED_SHARE) return "limited";
+  return "off_target";
 }
 
 double ControlQualityTracker::score_() const {
   const double excess = std::max(0.0, this->error_ema_ - static_cast<double>(this->band_));
   const double accuracy =
       std::max(0.0, 1.0 - excess / (static_cast<double>(this->band_) * CONTROL_QUALITY_ERROR_SCALE));
-  const double hunting = std::min(1.0, std::max(0.0, this->reversal_ema_));
-  return 100.0 * accuracy * (1.0 - CONTROL_QUALITY_HUNT_PENALTY * hunting);
+  // Accuracy alone: discounting for a high crossing rate penalised a noisy
+  // meter far harder than a badly steered loop. See balancer.py.
+  return 100.0 * accuracy;
 }
 
 // -------------------------------------------------------------------------
@@ -1209,7 +1221,9 @@ float LoadBalancer::apply_import_trim_(float control_grid, bool fresh) {
 // Mirrors balancer.py LoadBalancer::_pool_out_of_headroom.
 bool LoadBalancer::pool_out_of_headroom_(const ReportMap &reports, float grid_total) const {
   if (reports.empty()) return false;
-  if (grid_total < 0.0f) {
+  // A *meaningful* surplus, not any negative reading: a meter dithering around
+  // zero on an all-DC pool would otherwise mark half of all samples limited.
+  if (grid_total < -this->cfg_.balance_deadband) {
     bool any_ac_chargeable = false;
     for (const auto &r : reports) {
       if (is_ac_chargeable(r.second.device_type)) {

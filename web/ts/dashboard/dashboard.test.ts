@@ -323,20 +323,23 @@ function diagnosticsHtml(control_quality: Record<string, unknown> | undefined) {
   return renderToString(h("div", null, ...view(state, actions, initialConfigState())));
 }
 
-const oscillating = diagnosticsHtml({
-  verdict: "oscillating",
+const offTarget = diagnosticsHtml({
+  verdict: "off_target",
   score_pct: 43.2,
   error_w: 214,
   in_band_fraction: 0.11,
   band_w: 25,
-  reversal_rate: 0.82,
+  crossings_per_min: 3.4,
   samples: 400,
 });
-has(oscillating, "Oscillating", "the verdict is named, not left as a number");
-has(oscillating, "overshoots past zero", "and explained in a sentence");
-has(oscillating, "43%", "the score is shown as a percentage, not as 43.2");
-has(oscillating, "214 W", "with the mean error behind the verdict");
-has(oscillating, "11%", "and how much of the window sat inside the band");
+has(offTarget, "Off target", "the verdict is named, not left as a number");
+has(offTarget, "still have room", "and explained in a sentence");
+has(offTarget, "43%", "the score is shown as a percentage, not as 43.2");
+has(offTarget, "214 W", "with the mean error behind the verdict");
+has(offTarget, "11%", "and how much of the window sat inside the band");
+// The crossing rate is the evidence that separates a hunting loop from a
+// lagging one — the verdict deliberately does not, so the number has to show.
+has(offTarget, "3.4 / min", "the zero-crossing rate is rendered, not just serialized");
 
 const stable = diagnosticsHtml({
   verdict: "stable",
@@ -346,7 +349,14 @@ const stable = diagnosticsHtml({
   band_w: 25,
 });
 has(stable, "Stable", "a settled loop says so");
-lacks(stable, "Oscillating", "and does not carry the other verdicts' wording");
+lacks(stable, "Off target", "and does not carry the other verdicts' wording");
+
+// The score is absent until the backend has evidence for it; the row must
+// disappear rather than render an empty or zero percentage.
+const warming = diagnosticsHtml({ verdict: "warmup", error_w: 0, band_w: 25 });
+has(warming, "Warming up", "the warm-up state is named");
+lacks(warming, "Quality score", "an absent score omits its row entirely");
+lacks(warming, "undefined", "and prints no undefined in its place");
 
 // A backend that serves a reduced document (the deferred ESPHome status) must
 // not blank the card, and an unknown future verdict must render rather than

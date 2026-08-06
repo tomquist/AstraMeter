@@ -516,7 +516,14 @@ def build_ct002_device_discovery(
             "state_class": "measurement",
             "unit_of_measurement": "%",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.control_quality_score }}",
+            # The score is null while the loop has nothing to be scored on
+            # (idle / warming up). Mapping that to HA's "unknown" keeps a
+            # "score below X" automation from firing on an absent reading —
+            # a plain `value_json.…` would render the string "None".
+            "value_template": (
+                "{{ value_json.control_quality_score "
+                "if value_json.control_quality_score is not none else 'unknown' }}"
+            ),
             "entity_category": "diagnostic",
         },
     }

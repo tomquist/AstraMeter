@@ -291,8 +291,12 @@ def test_ct002_device_discovery_structure():
     score = comps["control_quality_score"]
     assert score["unit_of_measurement"] == "%"
     assert score["state_class"] == "measurement"
-    assert score["value_template"] == "{{ value_json.control_quality_score }}"
     assert score["entity_category"] == "diagnostic"
+    # The score is null until the loop has been observed; the template has to
+    # turn that into HA's "unknown" rather than the string "None", or a
+    # "score below X" automation fires on an absent reading.
+    assert "control_quality_score is not none" in score["value_template"]
+    assert "'unknown'" in score["value_template"]
 
     # Force rotation button
     btn = comps["force_rotation"]
@@ -1064,7 +1068,7 @@ SAMPLE_CT002_DATA = {
     "smooth_target": 500.0,
     "active_control": True,
     "consumer_count": 2,
-    "control_quality": "oscillating",
+    "control_quality": "off_target",
     "control_quality_score": 41.5,
 }
 
@@ -1131,7 +1135,7 @@ async def test_publishes_device_status(mqtt_broker):
         assert payload["smooth_target"] == 500.0
         assert payload["active_control"] is True
         assert payload["consumer_count"] == 2
-        assert payload["control_quality"] == "oscillating"
+        assert payload["control_quality"] == "off_target"
         assert payload["control_quality_score"] == 41.5
     finally:
         await service.stop()
@@ -1165,7 +1169,9 @@ async def test_device_status_defaults_control_quality_when_absent(mqtt_broker):
 
         payload = json.loads(received[0].payload)
         assert payload["control_quality"] == "idle"
-        assert payload["control_quality_score"] == 0
+        # Null rather than 0: an absent score must not read as "as bad as it
+        # gets" on a graphed, alertable sensor.
+        assert payload["control_quality_score"] is None
     finally:
         await service.stop()
 

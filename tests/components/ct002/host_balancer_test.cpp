@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <string>
 #include <unordered_set>
 #include <utility>
 
@@ -27,6 +29,23 @@ using esphome::ct002::needs_dc_output_floor;
 using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
 using esphome::ct002::to_grid_reading;
+
+// Reaches the protected per-consumer state so a test can stage a full/empty
+// battery, the way the Python tests poke ``_get_consumer(...).saturation_score``.
+class TestableBalancer : public LoadBalancer {
+ public:
+  using LoadBalancer::LoadBalancer;
+  void set_saturation(const std::string &consumer_id, double score) {
+    this->get_consumer_(consumer_id).saturation_score = score;
+  }
+};
+
+TestableBalancer make_testable(double *clock, BalancerConfig cfg = {}) {
+  return TestableBalancer(cfg, /*sat_alpha=*/0.15f, /*sat_min_target=*/20.0f,
+                          /*sat_decay=*/0.995f, /*sat_grace=*/90.0f,
+                          /*sat_stall=*/60.0f, /*sat_enabled=*/false,
+                          [clock]() { return *clock; }, nullptr);
+}
 
 LoadBalancer make_balancer(BalancerConfig cfg = {}, double *clock = nullptr) {
   static double dummy = 0.0;
@@ -311,29 +330,56 @@ TEST(ControlQuality, WarmupThenStable) {
   EXPECT_GT(t.snapshot().score, 95.0);
 }
 
-TEST(ControlQuality, OscillatingWhenTheErrorKeepsCrossingZero) {
-  double clock = 1000.0;
-  auto t = make_tracker(&clock);
+TEST(ControlQuality, OffTargetWhetherTheErrorCrossesZeroOrNot) {
+  // The verdict describes the grid and does not guess at a cause: a limit
+  // cycle and a one-sided offset are both off_target, with the crossing rate
+  // published beside them as the evidence that separates them.
+  double hunt_clock = 1000.0;
+  auto hunting = make_tracker(&hunt_clock);
   for (int i = 0; i < 120; i++) {
-    clock += 1.0;
-    t.update(i % 2 == 0 ? 250.0f : -250.0f, true, false);
+    hunt_clock += 1.0;
+    hunting.update(i % 2 == 0 ? 250.0f : -250.0f, true, false);
   }
-  const auto snap = t.snapshot();
-  EXPECT_EQ(snap.verdict, "oscillating");
-  EXPECT_GT(snap.reversal_rate, 0.9);
+  double parked_clock = 1000.0;
+  auto parked = make_tracker(&parked_clock);
+  feed(parked, &parked_clock, 120, 250.0f);
+
+  EXPECT_EQ(hunting.snapshot().verdict, "off_target");
+  EXPECT_EQ(parked.snapshot().verdict, "off_target");
+  EXPECT_GT(hunting.snapshot().crossings_per_second, 0.4);
+  EXPECT_DOUBLE_EQ(parked.snapshot().crossings_per_second, 0.0);
+  EXPECT_NEAR(parked.snapshot().error_ema, 250.0, 1.0);
 }
 
-TEST(ControlQuality, SluggishWhenTheErrorStaysOnOneSide) {
+TEST(ControlQuality, CrossingRateIsPerSecondNotPerSample) {
+  // A per-sample fraction converges to 2*dt/T, so the same physical limit
+  // cycle would read differently for every battery count. Mirrors
+  // tests/test_control_quality.py.
+  const double period = 30.0;
+  for (double dt : {0.33, 1.0, 3.0}) {
+    double clock = 1000.0;
+    auto t = make_tracker(&clock);
+    const int n = static_cast<int>(1200.0 / dt);
+    for (int i = 0; i < n; i++) {
+      clock += dt;
+      const double phase = std::fmod(i * dt, period);
+      t.update(phase < period / 2 ? 250.0f : -250.0f, true, false);
+    }
+    EXPECT_NEAR(t.snapshot().crossings_per_second, 2.0 / period, 0.01) << "dt=" << dt;
+  }
+}
+
+TEST(ControlQuality, AJitteryMeterIsNotCountedAsCrossings) {
   double clock = 1000.0;
   auto t = make_tracker(&clock);
-  feed(t, &clock, 120, 250.0f);
-  const auto snap = t.snapshot();
-  EXPECT_EQ(snap.verdict, "sluggish");
-  EXPECT_LT(snap.reversal_rate, 0.05);
-  EXPECT_NEAR(snap.error_ema, 250.0, 1.0);
+  for (int i = 0; i < 200; i++) {
+    clock += 1.0;
+    t.update(i % 2 == 0 ? 60.0f : -60.0f, true, false);
+  }
+  EXPECT_DOUBLE_EQ(t.snapshot().crossings_per_second, 0.0);
 }
 
-TEST(ControlQuality, LimitedOutranksSluggishButNotStable) {
+TEST(ControlQuality, LimitedOutranksOffTargetButNotStable) {
   double clock = 1000.0;
   auto spent = make_tracker(&clock);
   feed(spent, &clock, 120, 250.0f, /*limited=*/true);
@@ -343,6 +389,29 @@ TEST(ControlQuality, LimitedOutranksSluggishButNotStable) {
   auto held = make_tracker(&held_clock);
   feed(held, &held_clock, 40, 4.0f, /*limited=*/true);
   EXPECT_EQ(held.snapshot().verdict, "stable");
+}
+
+TEST(ControlQuality, OneSaturatedSampleDoesNotExcuseAWholeWindow) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  feed(t, &clock, 120, 250.0f, /*limited=*/false);
+  feed(t, &clock, 1, 250.0f, /*limited=*/true);
+  EXPECT_EQ(t.snapshot().verdict, "off_target");
+}
+
+TEST(ControlQuality, ScoreHasNoValueUntilItHasEvidence) {
+  double clock = 1000.0;
+  auto t = make_tracker(&clock);
+  EXPECT_FALSE(t.snapshot().has_score) << "fresh tracker";
+  feed(t, &clock, 60, 400.0f);
+  EXPECT_TRUE(t.snapshot().has_score);
+  EXPECT_LT(t.snapshot().score, 50.0);
+  // A gap resets the window; the score must go absent rather than jumping
+  // back to a perfect 100.
+  clock += 120.0;
+  t.update(400.0f, true, false);
+  EXPECT_EQ(t.snapshot().verdict, "warmup");
+  EXPECT_FALSE(t.snapshot().has_score);
 }
 
 TEST(ControlQuality, ABusyHouseThatKeepsComingBackIsStillStable) {
@@ -362,7 +431,7 @@ TEST(ControlQuality, ABusyHouseThatKeepsComingBackIsStillStable) {
   double far_clock = 1000.0;
   auto far = make_tracker(&far_clock);
   feed(far, &far_clock, 200, 200.0f);
-  EXPECT_EQ(far.snapshot().verdict, "sluggish");
+  EXPECT_EQ(far.snapshot().verdict, "off_target");
 }
 
 TEST(ControlQuality, BandFloorAndScoreBounds) {
@@ -385,8 +454,8 @@ TEST(ControlQuality, VerdictIsIndependentOfPollCadence) {
   double slow_clock = 1000.0;
   auto slow = make_tracker(&slow_clock);
   feed(slow, &slow_clock, 45, 250.0f, false, 3.0);
-  EXPECT_EQ(fast.snapshot().verdict, "sluggish");
-  EXPECT_EQ(slow.snapshot().verdict, "sluggish");
+  EXPECT_EQ(fast.snapshot().verdict, "off_target");
+  EXPECT_EQ(slow.snapshot().verdict, "off_target");
   EXPECT_NEAR(fast.snapshot().score, slow.snapshot().score, 1.0);
 }
 
@@ -394,7 +463,7 @@ TEST(ControlQuality, LongGapStartsANewWindowAndGoesIdle) {
   double clock = 1000.0;
   auto t = make_tracker(&clock);
   feed(t, &clock, 60, 400.0f);
-  EXPECT_EQ(t.snapshot().verdict, "sluggish");
+  EXPECT_EQ(t.snapshot().verdict, "off_target");
   // Every battery left: the last verdict must not hang around describing a
   // pool that no longer exists.
   clock += 600.0;
@@ -418,6 +487,41 @@ TEST(LoadBalancer, ControlQualityGradesEveryPollIncludingRepeatedReadings) {
   const auto snap = b.control_quality();
   EXPECT_EQ(snap.verdict, "stable");
   EXPECT_GE(snap.samples, 100);
+}
+
+TEST(LoadBalancer, ASaturatedPoolReadsAsLimited) {
+  // The saturation half of pool_out_of_headroom_, which had no C++ coverage.
+  double clock = 1000.0;
+  auto b = make_testable(&clock);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  for (int i = 0; i < 60; i++) {
+    clock += 1.0;
+    b.compute_target("a", ConsumerMode{}, reports, 400.0f, {}, {}, {400.0f, 0.0f, 0.0f});
+  }
+  EXPECT_EQ(b.control_quality().verdict, "off_target");
+  for (int i = 0; i < 120; i++) {
+    clock += 1.0;
+    b.set_saturation("a", 1.0);
+    b.compute_target("a", ConsumerMode{}, reports, 400.0f, {}, {}, {400.0f, 0.0f, 0.0f});
+  }
+  EXPECT_EQ(b.control_quality().verdict, "limited");
+}
+
+TEST(LoadBalancer, OneHealthyBatteryKeepsThePoolAccountable) {
+  double clock = 1000.0;
+  auto b = make_testable(&clock);
+  ReportMap reports;
+  reports["a"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  reports["b"] = ConsumerReport{"HMG-50", "A", 0.0f};
+  for (int i = 0; i < 180; i++) {
+    clock += 1.0;
+    b.set_saturation("a", 1.0);
+    b.set_saturation("b", 0.0);
+    b.compute_target("a", ConsumerMode{}, reports, 400.0f, {}, {}, {400.0f, 0.0f, 0.0f});
+  }
+  // One battery still has headroom, so the pool is not excused.
+  EXPECT_EQ(b.control_quality().verdict, "off_target");
 }
 
 TEST(LoadBalancer, SurplusWithNoAcChargeableBatteryReadsAsLimited) {

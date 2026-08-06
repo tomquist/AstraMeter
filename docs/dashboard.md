@@ -52,7 +52,8 @@ applied to it (smoothing, spike rejection, PID) and when it was last read.
 
 **Diagnostics** — service version, uptime, config file and mode, plus the
 balancer's internals. Each balancer card leads with its **control quality**:
-whether the grid is being held at zero, and how it misses when it is not (see
+whether the grid is being held at zero, with the mean error, time inside the
+band and zero-crossing rate behind it (see
 [Control quality](ct002.md#control-quality)), followed by the predicted grid
 power, prediction trust, pool output, import trim, the demand average and the
 efficiency rotation state. MQTT Insights connection state appears here when it

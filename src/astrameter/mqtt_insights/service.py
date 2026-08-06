@@ -704,7 +704,9 @@ class MqttInsightsService:
             "active_control": data.get("active_control", False),
             "consumer_count": data.get("consumer_count", 0),
             "control_quality": data.get("control_quality", "idle"),
-            "control_quality_score": data.get("control_quality_score", 0),
+            # Null, not 0: the score is absent while the loop has nothing to
+            # be scored on, and a 0 would read as "as bad as it gets".
+            "control_quality_score": data.get("control_quality_score"),
         }
         await client.publish(
             f"{base}/ct002/{did}/status",

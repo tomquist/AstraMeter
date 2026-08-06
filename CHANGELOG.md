@@ -6,7 +6,7 @@
 
 - **Breaking:** **removed** the per-battery **Last Seen** sensor — it changed on every poll and buried the Home Assistant logbook under one entry per second. Automations that used it should switch to the battery's entities going *unavailable*, or to `last_reported`; see [docs/mqtt-insights.md](docs/mqtt-insights.md#is-a-battery-still-reporting-home-assistant) ([#576](https://github.com/tomquist/astrameter/issues/576), [#597](https://github.com/tomquist/astrameter/pull/597)).
 
-- **Added** a **control quality** reading that says whether AstraMeter is actually holding your grid at zero, and how it misses when it isn't — stable, oscillating, sluggish or limited by full/empty batteries — as two Home Assistant diagnostic sensors and on the dashboard's Diagnostics tab. See [docs/ct002.md](docs/ct002.md#control-quality) ([#599](https://github.com/tomquist/astrameter/pull/599)).
+- **Added** a **control quality** reading that says whether AstraMeter is actually holding your grid at zero — stable, off target, or limited by full/empty batteries — as two Home Assistant diagnostic sensors and on the dashboard's Diagnostics tab. See [docs/ct002.md](docs/ct002.md#control-quality) ([#599](https://github.com/tomquist/astrameter/pull/599)).
 
 - **Fixed** the per-battery **Phase** sensor staying empty, and the Home Assistant log filling with "invalid option" warnings, for batteries in combined / whole-home mode ([#580](https://github.com/tomquist/astrameter/issues/580), [#596](https://github.com/tomquist/astrameter/pull/596)).
 

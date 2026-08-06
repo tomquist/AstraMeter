@@ -132,3 +132,32 @@ test("serves no absolute URLs, so it works under an ingress prefix", async ({
   // One self-contained document: no subresource can resolve to the wrong place.
   expect(html).not.toMatch(/<(script|link)[^>]+(src|href)="\/(?!\/)/);
 });
+
+test("the control-quality verdict survives live updates", async ({ page }) => {
+  // The verdict chip and its blurb are conditional nodes: they appear only
+  // once the backend has a verdict, so each poll toggles them between absent
+  // and present. The unit tests render to a string and cannot see the
+  // reconciler renumbering siblings around that, which would corrupt the rest
+  // of the card.
+  await page.goto(`${BASE_URL}#/diagnostics`);
+  const card = page.locator(".card", { hasText: "BALANCER" });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+
+  const chip = card.locator(".chip");
+  await expect(chip).toHaveText(/Idle|Warming up|Stable|Off target|Limited/, {
+    timeout: 30_000,
+  });
+  // Whatever the loop is doing, the rows below the chip keep their pairing —
+  // a mis-patched card shows a label against the wrong value.
+  await expect(card).toContainText("Settling band");
+  await expect(card).toContainText("Predicted grid");
+
+  // Survives several polls without the card being torn down and rebuilt.
+  // Marked on the live node: a reconciler that replaces the element instead of
+  // patching it loses the mark, which is exactly the failure a string-rendered
+  // unit test cannot see.
+  await card.evaluate((el) => ((el as any).__mark = "kept"));
+  await page.waitForTimeout(6000);
+  await expect(chip).toBeVisible();
+  expect(await card.evaluate((el) => (el as any).__mark)).toBe("kept");
+});

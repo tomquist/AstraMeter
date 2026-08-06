@@ -1,9 +1,10 @@
-"""Control-quality verdict: does the loop hold zero, and how does it miss?
+"""Control-quality verdict: is the loop holding the grid at zero?
 
 The tracker is the one balancer diagnostic aimed at a user rather than at a
-maintainer, so these tests are written as the situations it has to name:
-a settled loop, a limit cycle, a loop that never closes the gap, and a pack
-with nothing left to give.
+maintainer, so these tests are written as the situations it has to name: a
+settled loop, one that is off target, and a pack with nothing left to give.
+The cases that pin *what it refuses to claim* matter just as much — see
+``ControlQualityVerdict`` for why no verdict names a cause.
 """
 
 import time
@@ -91,7 +92,7 @@ class TestControlQualityTracker:
         # allowance.
         far, far_clock = self._make()
         _feed(far, [200.0] * 200, clock=far_clock)
-        assert far.snapshot().verdict == "sluggish"
+        assert far.snapshot().verdict == "off_target"
 
     def test_score_stays_a_gradient_across_realistic_errors(self):
         """A score that pins at 0 for every imperfect house says nothing.
@@ -108,39 +109,105 @@ class TestControlQualityTracker:
         assert scores[0] > 95.0
         assert all(0.0 < s < 100.0 for s in scores[1:])
 
-    def test_oscillating_when_the_error_keeps_crossing_zero(self):
-        tracker, clock = self._make()
-        # A textbook limit cycle: large error, alternating sign every sample.
-        _feed(tracker, [250.0, -250.0] * 60, clock=clock)
-        snap = tracker.snapshot()
-        assert snap.verdict == "oscillating"
-        assert snap.reversal_rate > 0.9
-        assert snap.error_ema > 200.0
+    def test_off_target_whether_the_error_crosses_zero_or_not(self):
+        """The verdict describes the grid; it does not guess at a cause.
 
-    def test_sluggish_when_the_error_stays_on_one_side(self):
-        tracker, clock = self._make()
-        _feed(tracker, [250.0] * 120, clock=clock)
-        snap = tracker.snapshot()
-        assert snap.verdict == "sluggish"
-        assert snap.reversal_rate < 0.05
+        A limit cycle and a one-sided offset are both reported as
+        ``off_target``, because nothing available here tells them apart
+        reliably (see ``ControlQualityVerdict``) and their fixes are
+        opposites. The crossing rate is published beside the verdict so the
+        difference is still visible.
+        """
+        hunting, hunting_clock = self._make()
+        _feed(hunting, [250.0, -250.0] * 60, clock=hunting_clock)
+        parked, parked_clock = self._make()
+        _feed(parked, [250.0] * 120, clock=parked_clock)
+        assert hunting.snapshot().verdict == "off_target"
+        assert parked.snapshot().verdict == "off_target"
+        # ...and the evidence separates them even though the verdict doesn't.
+        assert hunting.snapshot().crossings_per_second > 0.4
+        assert parked.snapshot().crossings_per_second == 0.0
 
-    def test_limited_outranks_sluggish_when_the_pack_is_spent(self):
+    def test_crossing_rate_is_per_second_not_per_sample(self):
+        """The rate must describe the house, not the installation.
+
+        A CT is polled once per battery, so a per-sample reversal *fraction*
+        converges to 2*dt/T: the same physical limit cycle would read three
+        times lower with three batteries in the pool than with one, and no
+        real hunt would ever clear a fixed threshold at 1 Hz.
+        """
+        rates = []
+        for dt in (0.33, 1.0, 3.0):
+            tracker, clock = self._make()
+            period = 30.0
+            for i in range(int(1200 / dt)):
+                clock.advance(dt)
+                phase = (i * dt) % period
+                tracker.update(
+                    250.0 if phase < period / 2 else -250.0,
+                    steering=True,
+                    limited=False,
+                )
+            rates.append(tracker.snapshot().crossings_per_second)
+        # Two crossings per 30 s period, whatever the poll cadence.
+        for rate in rates:
+            assert abs(rate - 2.0 / 30.0) < 0.01, rates
+
+    def test_a_jittery_meter_is_not_counted_as_crossings(self):
+        """Small-amplitude dither crosses zero constantly and means nothing.
+
+        Counting it would score the noisiest installation worst rather than
+        the worst-steered one.
+        """
+        tracker, clock = self._make()
+        _feed(tracker, [60.0, -60.0] * 100, clock=clock)
+        assert tracker.snapshot().crossings_per_second == 0.0
+
+    def test_limited_needs_to_hold_for_the_window_it_excuses(self):
         tracker, clock = self._make()
         _feed(tracker, [250.0] * 120, limited=True, clock=clock)
-        # Same numbers as the sluggish case; the difference is whose fault it is.
+        # Same numbers as the off-target case; the difference is whose fault.
         assert tracker.snapshot().verdict == "limited"
+
+    def test_one_saturated_sample_does_not_excuse_a_whole_window(self):
+        """The error figure averages ~50 s, so the fault claim must too.
+
+        Otherwise a single saturated poll retroactively excuses a minute of
+        accumulated error, and the verdict flickers between two states whose
+        documented remedies are opposites.
+        """
+        tracker, clock = self._make()
+        _feed(tracker, [250.0] * 120, limited=False, clock=clock)
+        _feed(tracker, [250.0], limited=True, clock=clock)
+        assert tracker.snapshot().verdict == "off_target"
 
     def test_a_held_grid_reads_stable_even_with_no_headroom(self):
         tracker, clock = self._make()
         _feed(tracker, [4.0] * 40, limited=True, clock=clock)
         assert tracker.snapshot().verdict == "stable"
 
-    def test_hunting_costs_score_but_accuracy_costs_more(self):
-        hunting, hunting_clock = self._make()
-        _feed(hunting, [60.0, -60.0] * 60, clock=hunting_clock)
-        far_off, far_clock = self._make()
-        _feed(far_off, [400.0] * 120, clock=far_clock)
-        assert hunting.snapshot().score > far_off.snapshot().score
+    def test_the_score_has_no_value_until_it_has_evidence(self):
+        """Absent, not perfect.
+
+        The EMAs start at zero, which reads as a flawlessly held grid — so a
+        fresh window would publish 100, and a "score below X" automation would
+        clear itself every time the batteries dropped out for a minute.
+        """
+        tracker, clock = self._make()
+        assert tracker.snapshot().score is None, "fresh tracker"
+        _feed(tracker, [400.0] * 60, clock=clock)
+        scored = tracker.snapshot().score
+        assert scored is not None and scored < 50.0
+        # A gap resets the window; the score must go absent again rather than
+        # jumping back to a perfect 100.
+        clock.advance(120.0)
+        tracker.update(400.0, steering=True, limited=False)
+        assert tracker.snapshot().verdict == "warmup"
+        assert tracker.snapshot().score is None
+        # And once nothing is being steered at all.
+        clock.advance(600.0)
+        assert tracker.snapshot().verdict == "idle"
+        assert tracker.snapshot().score is None
 
     def test_score_bottoms_out_rather_than_going_negative(self):
         tracker, clock = self._make()
@@ -173,13 +240,13 @@ class TestControlQualityTracker:
         _feed(fast, [250.0] * 300, dt=0.45, clock=fast_clock)
         slow, slow_clock = self._make()
         _feed(slow, [250.0] * 45, dt=3.0, clock=slow_clock)
-        assert fast.snapshot().verdict == slow.snapshot().verdict == "sluggish"
+        assert fast.snapshot().verdict == slow.snapshot().verdict == "off_target"
         assert abs(fast.snapshot().score - slow.snapshot().score) < 1.0
 
     def test_a_long_gap_starts_a_new_window(self):
         tracker, clock = self._make()
         _feed(tracker, [400.0] * 60, clock=clock)
-        assert tracker.snapshot().verdict == "sluggish"
+        assert tracker.snapshot().verdict == "off_target"
         clock.advance(600.0)
         tracker.update(0.0, steering=True, limited=False)
         # The old window described a house that is 10 minutes gone.
@@ -200,8 +267,7 @@ class TestControlQualityTracker:
             "idle",
             "warmup",
             "stable",
-            "oscillating",
-            "sluggish",
+            "off_target",
             "limited",
         }
 
@@ -273,10 +339,13 @@ class TestControlQualityInBalancer:
         balancer, clock = self._make()
         for _ in range(60):
             self._poll(balancer, clock, 400.0)
-        assert balancer.control_quality().verdict == "sluggish"
-        # Empty battery: it is commanded hard but produces nothing.
-        balancer._get_consumer("a").saturation_score = CONTROL_QUALITY_SATURATED
-        self._poll(balancer, clock, 400.0)
+        assert balancer.control_quality().verdict == "off_target"
+        # Empty battery: commanded hard, producing nothing. It has to stay
+        # that way for most of the window before the error is excused — one
+        # saturated poll must not absolve the minute that preceded it.
+        for _ in range(120):
+            balancer._get_consumer("a").saturation_score = CONTROL_QUALITY_SATURATED
+            self._poll(balancer, clock, 400.0)
         assert balancer.control_quality().verdict == "limited"
 
     def test_one_healthy_battery_keeps_the_pool_accountable(self):
@@ -304,4 +373,4 @@ class TestControlQualityInBalancer:
         balancer._get_consumer("b").saturation_score = 0.0
         poll_pair()
         # One battery still has headroom, so the pool is not excused.
-        assert balancer.control_quality().verdict == "sluggish"
+        assert balancer.control_quality().verdict == "off_target"

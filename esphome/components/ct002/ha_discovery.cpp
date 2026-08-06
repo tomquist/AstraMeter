@@ -440,7 +440,11 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     cqs["state_class"] = "measurement";
     cqs["unit_of_measurement"] = "%";
     cqs["state_topic"] = state_topic;
-    cqs["value_template"] = "{{ value_json.control_quality_score }}";
+    // The score is null while the loop has nothing to be scored on; map that
+    // to HA's "unknown" rather than the string "None" (mirrors discovery.py).
+    cqs["value_template"] =
+        "{{ value_json.control_quality_score "
+        "if value_json.control_quality_score is not none else 'unknown' }}";
     cqs["entity_category"] = "diagnostic";
 
     // The Force Rotation button only does anything when efficiency rotation is

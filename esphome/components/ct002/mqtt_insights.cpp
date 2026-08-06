@@ -273,7 +273,13 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     // balancer internals (mirrors service.py).
     const auto quality = this->ct002_->control_quality();
     root["control_quality"] = quality.verdict;
-    root["control_quality_score"] = std::round(quality.score * 10.0) / 10.0;
+    // Null while there is nothing to score, so the HA sensor reads "unknown"
+    // rather than a flawless 100 it has no evidence for (mirrors service.py).
+    if (quality.has_score) {
+      root["control_quality_score"] = std::round(quality.score * 10.0) / 10.0;
+    } else {
+      root["control_quality_score"] = nullptr;
+    }
   });
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);

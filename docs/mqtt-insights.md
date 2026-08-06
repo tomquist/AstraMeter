@@ -152,12 +152,13 @@ Availability companion:
 - `active_control` — `true` when the emulator is computing per-battery targets;
   `false` in relay mode (raw aggregate forwarded).
 - `consumer_count` — number of batteries currently polling this device.
-- `control_quality` — whether the grid is being held at zero, and how it misses
-  when it is not: `stable`, `oscillating`, `sluggish`, `limited`, `warmup` or
-  `idle`. See [Control quality](ct002.md#control-quality) for what each verdict
-  means and what to change.
+- `control_quality` — whether the grid is being held at zero: `stable`,
+  `off_target`, `limited`, `warmup` or `idle`. See
+  [Control quality](ct002.md#control-quality) for what each verdict means and
+  what to change.
 - `control_quality_score` — the same judgement as a 0–100 % number, for trending
-  and alerting.
+  and alerting. `null` (HA: `unknown`) while the loop is idle or warming up, so
+  a "score below X" automation never fires on a reading that does not exist.
 
 Home Assistant gets both as diagnostic entities on the CT device: **Control
 Quality** (an enum sensor) and **Control Quality Score**.
