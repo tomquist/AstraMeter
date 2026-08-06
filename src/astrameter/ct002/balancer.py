@@ -141,7 +141,13 @@ CONTROL_QUALITY_REFERENCE_DT = 1.0
 # enough that a loop that starts hunting is called out within a minute.
 CONTROL_QUALITY_ALPHA = 0.02
 # A gap this long means the old window describes a different house; re-seed
-# rather than dosing the EMAs with minutes of rise or decay.
+# rather than dosing the EMAs with minutes of rise or decay.  Note the
+# consequence for a control loop that genuinely runs slower than this — a
+# ``DEDUPE_TIME_WINDOW`` above 60 s, since the tracker only sees answered
+# polls: every sample looks like a gap, the window never fills, and the
+# verdict stays "warmup".  Deliberate, and the same trade-off
+# ``SATURATION_LONG_GAP_SECONDS`` already makes at 30 s: a loop correcting
+# once a minute cannot be characterised at any finer grain than that.
 CONTROL_QUALITY_LONG_GAP_SECONDS = 60.0
 # Observation before the tracker commits to a verdict.  A *duration*, not a
 # sample count, for the same reason the crossing rate is a rate: a CT is polled

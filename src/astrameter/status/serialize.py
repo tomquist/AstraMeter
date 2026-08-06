@@ -164,6 +164,40 @@ def consumer_to_wire(consumer) -> dict[str, Any]:
     )
 
 
+def _control_quality_to_wire(quality) -> dict[str, Any]:
+    """A :class:`ControlQualitySnapshot` as its wire object.
+
+    The three measurements are omitted until the window holds a sample: the
+    EMAs start at zero, and "mean grid error 0 W, time inside band 0 %" beside
+    an ``idle`` verdict describes a perfectly held grid and a permanently
+    failing one at the same time — neither of which was measured.  The MQTT
+    payload publishes the same absence as ``null`` (see
+    ``ct002._control_quality_evidence``); the two surfaces must not disagree
+    about what is known.
+    """
+    measured = quality.samples > 0
+    return compact(
+        {
+            "verdict": quality.verdict,
+            "score_pct": round_or_none(quality.score),
+            "error_w": round_or_none(quality.error_ema) if measured else None,
+            "in_band_fraction": (
+                round_or_none(quality.in_band_fraction, 3) if measured else None
+            ),
+            # Per minute on the wire: per second reads as 0.002 in the UI, and
+            # this is a number a human is meant to interpret.
+            "crossings_per_min": (
+                round_or_none(quality.crossings_per_second * 60, 2)
+                if measured
+                else None
+            ),
+            # Configuration, not a measurement: always meaningful.
+            "band_w": round_or_none(quality.band),
+            "samples": quality.samples,
+        }
+    )
+
+
 def _balancer_to_wire(balancer) -> dict[str, Any]:
     probe = balancer.probe
     return compact(
@@ -206,23 +240,7 @@ def _balancer_to_wire(balancer) -> dict[str, Any]:
                     "all_dc_under_surplus": balancer.efficiency.all_dc_under_surplus,
                 }
             ),
-            "control_quality": compact(
-                {
-                    "verdict": balancer.control_quality.verdict,
-                    "score_pct": round_or_none(balancer.control_quality.score),
-                    "error_w": round_or_none(balancer.control_quality.error_ema),
-                    "in_band_fraction": round_or_none(
-                        balancer.control_quality.in_band_fraction, 3
-                    ),
-                    # Per minute on the wire: per second reads as 0.002 in the
-                    # UI, and this is a number a human is meant to interpret.
-                    "crossings_per_min": round_or_none(
-                        balancer.control_quality.crossings_per_second * 60, 2
-                    ),
-                    "band_w": round_or_none(balancer.control_quality.band),
-                    "samples": balancer.control_quality.samples,
-                }
-            ),
+            "control_quality": _control_quality_to_wire(balancer.control_quality),
             "probe": compact(
                 {
                     "candidate_id": probe.candidate_id,

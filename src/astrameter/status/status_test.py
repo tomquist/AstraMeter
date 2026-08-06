@@ -110,8 +110,13 @@ def test_control_quality_reaches_the_wire_with_its_evidence():
     assert quality["verdict"] == "idle"
     assert quality["band_w"] == 25.0
     assert quality["samples"] == 0
-    # Absent, not a perfect 100 the backend has no evidence for.
-    assert "score_pct" not in quality
+    # Absent, not a perfect 100 the backend has no evidence for — and the same
+    # for the measurements behind it. "0 W mean error, 0% inside band" beside
+    # an idle verdict describes a perfectly held grid and a permanently failing
+    # one at the same time; neither was measured. The MQTT payload publishes
+    # the same absence as null, and the two surfaces must agree.
+    for absent in ("score_pct", "error_w", "in_band_fraction", "crossings_per_min"):
+        assert absent not in quality, absent
 
     # A real clock: the tracker measures observation in seconds, so a tight
     # loop against wall time would never leave "warmup".

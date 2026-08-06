@@ -353,10 +353,17 @@ lacks(stable, "Off target", "and does not carry the other verdicts' wording");
 
 // The score is absent until the backend has evidence for it; the row must
 // disappear rather than render an empty or zero percentage.
-const warming = diagnosticsHtml({ verdict: "warmup", error_w: 0, band_w: 25 });
+// A window with nothing in it omits every measurement, not just the score:
+// the backend sends no key at all, because "0 W mean error / 0% in band"
+// would describe a perfectly held grid and a permanently failing one at once.
+const warming = diagnosticsHtml({ verdict: "warmup", band_w: 25, samples: 0 });
 has(warming, "Warming up", "the warm-up state is named");
 lacks(warming, "Quality score", "an absent score omits its row entirely");
-lacks(warming, "undefined", "and prints no undefined in its place");
+lacks(warming, "Mean grid error", "and so does an unmeasured error");
+lacks(warming, "Time inside band", "and an unmeasured in-band share");
+lacks(warming, "Zero crossings", "and an unmeasured crossing rate");
+has(warming, "Settling band", "but the configured band is still shown");
+lacks(warming, "undefined", "and prints no undefined in their place");
 
 // A backend that serves a reduced document (the deferred ESPHome status) must
 // not blank the card, and an unknown future verdict must render rather than

@@ -190,12 +190,10 @@ Availability companion:
 The three evidence fields are `null` (HA: `unknown`) until at least one reading
 has been folded in, for the same reason as the score.
 
-Home Assistant gets each of them as a diagnostic entity: **Control Quality Mean
-Error**, **Control Quality Time In Band** and **Control Quality Zero
-Crossings**.
-
-Home Assistant gets both as diagnostic entities on the CT device: **Control
-Quality** (an enum sensor) and **Control Quality Score**.
+Home Assistant gets all five as diagnostic entities on the CT device:
+**Control Quality** (an enum sensor), **Control Quality Score**, **Control
+Quality Mean Error**, **Control Quality Time In Band** and **Control Quality
+Zero Crossings**.
 
 ### Shelly — per-battery state
 
