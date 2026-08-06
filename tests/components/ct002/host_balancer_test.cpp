@@ -21,7 +21,7 @@ using esphome::ct002::ConsumerMode;
 using esphome::ct002::ConsumerModeKind;
 using esphome::ct002::ConsumerReport;
 using esphome::ct002::CONTROL_QUALITY_MIN_BAND_W;
-using esphome::ct002::CONTROL_QUALITY_WARMUP_SAMPLES;
+using esphome::ct002::CONTROL_QUALITY_WARMUP_SECONDS;
 using esphome::ct002::ControlQualityTracker;
 using esphome::ct002::is_ac_chargeable;
 using esphome::ct002::LoadBalancer;
@@ -323,11 +323,28 @@ TEST(ControlQuality, IdleUntilSomethingIsSteered) {
 TEST(ControlQuality, WarmupThenStable) {
   double clock = 1000.0;
   auto t = make_tracker(&clock);
-  feed(t, &clock, CONTROL_QUALITY_WARMUP_SAMPLES - 1, 0.0f);
+  feed(t, &clock, 9, 0.0f);
   EXPECT_EQ(t.snapshot().verdict, "warmup");
   feed(t, &clock, 1, 0.0f);
   EXPECT_EQ(t.snapshot().verdict, "stable");
   EXPECT_GT(t.snapshot().score, 95.0);
+}
+
+TEST(ControlQuality, WarmupIsADurationNotASampleCount) {
+  // A CT is polled once per battery, so counting samples would let a large
+  // pool commit to a verdict off a fraction of a second. Mirrors
+  // tests/test_control_quality.py.
+  EXPECT_DOUBLE_EQ(CONTROL_QUALITY_WARMUP_SECONDS, 10.0);
+  double fast_clock = 1000.0;
+  auto fast = make_tracker(&fast_clock);
+  feed(fast, &fast_clock, 30, 0.0f, /*limited=*/false, /*dt=*/0.075);
+  EXPECT_EQ(fast.snapshot().verdict, "warmup");
+  EXPECT_FALSE(fast.snapshot().has_score);
+
+  double slow_clock = 1000.0;
+  auto slow = make_tracker(&slow_clock);
+  feed(slow, &slow_clock, 4, 0.0f, /*limited=*/false, /*dt=*/3.0);
+  EXPECT_EQ(slow.snapshot().verdict, "stable");
 }
 
 TEST(ControlQuality, OffTargetWhetherTheErrorCrossesZeroOrNot) {
@@ -525,6 +542,7 @@ TEST(LoadBalancer, OneHealthyBatteryKeepsThePoolAccountable) {
 }
 
 TEST(LoadBalancer, SurplusWithNoAcChargeableBatteryReadsAsLimited) {
+  // Already at 0 W: it genuinely has nothing left with which to absorb.
   double clock = 1000.0;
   auto b = make_balancer({}, &clock);
   ReportMap reports;
@@ -534,6 +552,22 @@ TEST(LoadBalancer, SurplusWithNoAcChargeableBatteryReadsAsLimited) {
     b.compute_target("hma", ConsumerMode{}, reports, -400.0f, {}, {}, {});
   }
   EXPECT_EQ(b.control_quality().verdict, "limited");
+}
+
+TEST(LoadBalancer, ADischargingDcBatteryStillHasRoomForASurplus) {
+  // A B2500 cannot charge from AC, but it absorbs a surplus by discharging
+  // less. Excusing every surplus on device type alone reported a symmetric
+  // hunt as a full pack. Mirrors tests/test_control_quality.py.
+  double clock = 1000.0;
+  auto b = make_balancer({}, &clock);
+  ReportMap reports;
+  reports["hma"] = ConsumerReport{"HMA-2", "A", 300.0f};
+  for (int i = 0; i < 400; i++) {
+    clock += 1.0;
+    const float grid = (i % 2 == 0) ? 400.0f : -400.0f;
+    b.compute_target("hma", ConsumerMode{}, reports, grid, {}, {}, {grid, 0.0f, 0.0f});
+  }
+  EXPECT_EQ(b.control_quality().verdict, "off_target");
 }
 
 TEST(LoadBalancer, ResetConsumerClearsLastTarget) {

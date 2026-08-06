@@ -143,10 +143,14 @@ CONTROL_QUALITY_ALPHA = 0.02
 # A gap this long means the old window describes a different house; re-seed
 # rather than dosing the EMAs with minutes of rise or decay.
 CONTROL_QUALITY_LONG_GAP_SECONDS = 60.0
-# Fresh samples before the tracker commits to a verdict.  The EMAs are seeded
-# from the first sample, so this only guards against calling a single reading a
+# Observation before the tracker commits to a verdict.  A *duration*, not a
+# sample count, for the same reason the crossing rate is a rate: a CT is polled
+# once per battery, so a six-battery pool at 0.45 s would reach ten samples in
+# under a second and publish a verdict off a slice too short to mean anything,
+# while one battery at 3 s waited thirty times as long.  The EMAs are seeded
+# from the first sample, so this only guards against calling a brief glimpse a
 # trend.
-CONTROL_QUALITY_WARMUP_SAMPLES = 10
+CONTROL_QUALITY_WARMUP_SECONDS = 10.0
 # Floor under the accuracy band, so the verdict never demands tracking tighter
 # than the meter noise the loop deliberately ignores.
 CONTROL_QUALITY_MIN_BAND_W = 25.0
@@ -165,9 +169,9 @@ CONTROL_QUALITY_ERROR_SCALE = 20.0
 # Share of the window the pool must have spent with no headroom before a
 # persistent error is blamed on the pack rather than on the loop.  A majority,
 # so the two claims cover the same window: the error figure is an average over
-# ~50 s, and excusing it on the strength of one saturated sample would let the
-# verdict flicker between "limited" and "sluggish" — two states whose
-# documented remedies are opposites.
+# ~50 s, and excusing it on the strength of one saturated sample would flip the
+# verdict between "limited" and "off_target" poll by poll — and would absolve a
+# whole window of accumulated error on the evidence of a single reading.
 CONTROL_QUALITY_LIMITED_SHARE = 0.5
 # Saturation score above which a battery counts as out of headroom.  When every
 # battery in the pool is there, the remaining error is the pack's limit (full,
@@ -815,6 +819,9 @@ class ControlQualityTracker:
         self._limited_ema = 0.0
         self._last_sign = 0
         self._samples = 0
+        #: Seconds of steering actually observed in this window (see
+        #: CONTROL_QUALITY_WARMUP_SECONDS).
+        self._observed = 0.0
         self._last_update = 0.0
         self._steering = False
 
@@ -875,6 +882,7 @@ class ControlQualityTracker:
                 self._last_sign = sign
             self._crossings_ema += alpha * (flips_per_second - self._crossings_ema)
         self._samples += 1
+        self._observed += dt
 
     def snapshot(self) -> ControlQualitySnapshot:
         """Current verdict and its evidence.  Pure reads — no clock advance."""
@@ -897,6 +905,7 @@ class ControlQualityTracker:
         self._limited_ema = 0.0
         self._last_sign = 0
         self._samples = 0
+        self._observed = 0.0
 
     def _stale(self) -> bool:
         """Whether the last sample is old enough that there is no live loop.
@@ -914,13 +923,13 @@ class ControlQualityTracker:
         return (
             self._steering
             and not self._stale()
-            and self._samples >= CONTROL_QUALITY_WARMUP_SAMPLES
+            and self._observed >= CONTROL_QUALITY_WARMUP_SECONDS
         )
 
     def _verdict(self) -> ControlQualityVerdict:
         if not self._steering or self._stale():
             return "idle"
-        if self._samples < CONTROL_QUALITY_WARMUP_SAMPLES:
+        if self._observed < CONTROL_QUALITY_WARMUP_SECONDS:
             return "warmup"
         if self._error_ema <= self._band * CONTROL_QUALITY_STABLE_BANDS:
             return "stable"
@@ -1596,29 +1605,47 @@ class LoadBalancer:
         """Whether the pool physically cannot close the remaining error.
 
         Two ways that happens: every battery is saturated (full, empty, or
-        clamped so it can't follow its command), or there is a surplus and not
-        one reporting battery can charge from AC.  Either way the grid error
-        that remains is the pack's limit, not the controller mis-steering, and
-        the quality verdict says so instead of reporting a broken loop.
+        clamped so it can't follow its command), or there is a surplus that
+        nothing reporting is able to absorb.  Either way the grid error that
+        remains is the pack's limit, not the controller mis-steering, and the
+        quality verdict says so instead of reporting a broken loop.
 
         Deliberately conservative: with saturation detection off the scores
         stay at zero and this returns ``False``, so a genuinely limited pack
-        reads as ``sluggish`` rather than being excused without evidence.
+        reads as ``off_target`` rather than being excused without evidence.
         """
         if not reports:
             return False
-        # A *meaningful* surplus, not any negative reading: a meter dithering
-        # around zero on an all-DC pool would otherwise mark half of all
-        # samples as headroom-limited.
-        if grid_total < -self._cfg.balance_deadband and not any(
-            _is_ac_chargeable(r.get("device_type", "")) for r in reports.values()
-        ):
+        if grid_total < -self._cfg.balance_deadband and self._cannot_absorb(reports):
             return True
         return all(
             (state := self._consumers.get(cid)) is not None
             and state.saturation_score >= CONTROL_QUALITY_SATURATED
             for cid in reports
         )
+
+    def _cannot_absorb(self, reports: dict) -> bool:
+        """Whether a surplus is genuinely beyond what the pool can take.
+
+        Not simply "no AC-chargeable battery reporting".  A DC-only battery
+        (the B2500 family) cannot charge *from AC*, but while it is
+        discharging it absorbs a surplus perfectly well by discharging less —
+        it only runs out of room once it is already down at its
+        ``MIN_DC_OUTPUT`` floor.  Reading the device type alone excused every
+        surplus on an all-DC pool, so a loop hunting symmetrically about zero
+        (half its samples in surplus, battery mid-range, saturation score 0)
+        was reported as a full pack with "no headroom left" — the exact fault
+        the verdict exists to surface, labelled as nothing to fix.
+        """
+        for cid, report in reports.items():
+            if _is_ac_chargeable(report.get("device_type", "")):
+                return False
+            # Output it could still give back.  The floor is where the battery
+            # stops being able to reduce, so anything above it is headroom.
+            floor = self._effective_min_dc_output(cid, reports)
+            if parse_int(report.get("power", 0)) > floor + self._cfg.balance_deadband:
+                return False
+        return True
 
     def get_saturation(self, consumer_id: str) -> float:
         state = self._consumers.get(consumer_id)

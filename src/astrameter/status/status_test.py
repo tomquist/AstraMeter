@@ -113,8 +113,14 @@ def test_control_quality_reaches_the_wire_with_its_evidence():
     # Absent, not a perfect 100 the backend has no evidence for.
     assert "score_pct" not in quality
 
+    # A real clock: the tracker measures observation in seconds, so a tight
+    # loop against wall time would never leave "warmup".
+    tracker = device._balancer._control_quality
+    now = [1_770_000_000.0]
+    tracker._clock = lambda: now[0]
     for _ in range(60):
-        device._balancer._control_quality.update(400.0, steering=True, limited=False)
+        now[0] += 1.0
+        tracker.update(400.0, steering=True, limited=False)
     quality = registry.snapshot(ingress=False)["devices"][0]["balancer"][
         "control_quality"
     ]

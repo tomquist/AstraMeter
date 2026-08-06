@@ -261,6 +261,7 @@ void ControlQualityTracker::update(float grid, bool steering, bool limited) {
     this->crossings_ema_ += alpha * (flips_per_second - this->crossings_ema_);
   }
   this->samples_++;
+  this->observed_ += dt;
 }
 
 ControlQualitySnapshot ControlQualityTracker::snapshot() const {
@@ -283,10 +284,12 @@ void ControlQualityTracker::reset_window_() {
   this->limited_ema_ = 0.0;
   this->last_sign_ = 0;
   this->samples_ = 0;
+  this->observed_ = 0.0;
 }
 
 bool ControlQualityTracker::has_evidence_() const {
-  return this->steering_ && !this->stale_() && this->samples_ >= CONTROL_QUALITY_WARMUP_SAMPLES;
+  return this->steering_ && !this->stale_() &&
+         this->observed_ >= CONTROL_QUALITY_WARMUP_SECONDS;
 }
 
 bool ControlQualityTracker::stale_() const {
@@ -299,7 +302,7 @@ bool ControlQualityTracker::stale_() const {
 
 std::string ControlQualityTracker::verdict_() const {
   if (!this->steering_ || this->stale_()) return "idle";
-  if (this->samples_ < CONTROL_QUALITY_WARMUP_SAMPLES) return "warmup";
+  if (this->observed_ < CONTROL_QUALITY_WARMUP_SECONDS) return "warmup";
   if (this->error_ema_ <= static_cast<double>(this->band_) * CONTROL_QUALITY_STABLE_BANDS)
     return "stable";
   if (this->limited_ema_ >= CONTROL_QUALITY_LIMITED_SHARE) return "limited";
@@ -1213,30 +1216,37 @@ float LoadBalancer::apply_import_trim_(float control_grid, bool fresh) {
 }
 
 // Whether the pool physically cannot close the remaining error: every battery
-// saturated (full, empty or clamped), or a surplus that not one reporting
-// battery can charge from AC. Either way the error is the pack's limit, not
-// the controller mis-steering. Deliberately conservative — with saturation
-// detection off the scores stay at zero and this returns false, so a limited
-// pack reads as "sluggish" rather than being excused without evidence.
+// saturated (full, empty or clamped), or a surplus nothing reporting can
+// absorb. Either way the error is the pack's limit, not the controller
+// mis-steering. Deliberately conservative — with saturation detection off the
+// scores stay at zero and this returns false, so a limited pack reads as
+// "off_target" rather than being excused without evidence.
 // Mirrors balancer.py LoadBalancer::_pool_out_of_headroom.
 bool LoadBalancer::pool_out_of_headroom_(const ReportMap &reports, float grid_total) const {
   if (reports.empty()) return false;
-  // A *meaningful* surplus, not any negative reading: a meter dithering around
-  // zero on an all-DC pool would otherwise mark half of all samples limited.
-  if (grid_total < -this->cfg_.balance_deadband) {
-    bool any_ac_chargeable = false;
-    for (const auto &r : reports) {
-      if (is_ac_chargeable(r.second.device_type)) {
-        any_ac_chargeable = true;
-        break;
-      }
-    }
-    if (!any_ac_chargeable) return true;
-  }
+  if (grid_total < -this->cfg_.balance_deadband && this->cannot_absorb_(reports)) return true;
   for (const auto &r : reports) {
     const auto it = this->consumers_.find(r.first);
     if (it == this->consumers_.end()) return false;
     if (it->second.saturation_score < CONTROL_QUALITY_SATURATED) return false;
+  }
+  return true;
+}
+
+// A DC-only battery cannot charge from AC, but while it is discharging it
+// absorbs a surplus by discharging less — it only runs out of room at its
+// MIN_DC_OUTPUT floor. Reading the device type alone excused every surplus on
+// an all-DC pool, reporting a symmetric hunt as a full pack. Mirrors
+// balancer.py LoadBalancer::_cannot_absorb.
+bool LoadBalancer::cannot_absorb_(const ReportMap &reports) const {
+  for (const auto &r : reports) {
+    if (is_ac_chargeable(r.second.device_type)) return false;
+    const float floor = r.second.min_dc_output.has_value()
+                            ? std::max(0.0f, *r.second.min_dc_output)
+                            : (needs_dc_output_floor(r.second.device_type)
+                                   ? this->cfg_.min_dc_output
+                                   : 0.0f);
+    if (r.second.power > floor + this->cfg_.balance_deadband) return false;
   }
   return true;
 }

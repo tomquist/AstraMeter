@@ -12,7 +12,7 @@ import time
 from astrameter.ct002.balancer import (
     CONTROL_QUALITY_SATURATED,
     CONTROL_QUALITY_STATES,
-    CONTROL_QUALITY_WARMUP_SAMPLES,
+    CONTROL_QUALITY_WARMUP_SECONDS,
     BalancerConfig,
     ConsumerMode,
     ControlQualityTracker,
@@ -58,12 +58,28 @@ class TestControlQualityTracker:
         # failure — there is no loop to grade.
         assert tracker.snapshot().verdict == "idle"
 
-    def test_warmup_until_enough_samples(self):
+    def test_warmup_until_enough_has_been_observed(self):
         tracker, clock = self._make()
-        _feed(tracker, [0.0] * (CONTROL_QUALITY_WARMUP_SAMPLES - 1), clock=clock)
+        _feed(tracker, [0.0] * 9, clock=clock)
         assert tracker.snapshot().verdict == "warmup"
         _feed(tracker, [0.0], clock=clock)
         assert tracker.snapshot().verdict == "stable"
+
+    def test_warmup_is_a_duration_not_a_sample_count(self):
+        """A CT is polled once per battery, so samples arrive N times faster
+        with N batteries. Counting them would let a six-battery pool publish a
+        verdict off well under a second of observation, while a single battery
+        on a 3 s cadence waited half a minute for the same call."""
+        fast, fast_clock = self._make()
+        # Six batteries at 0.45 s: 30 samples, but only ~2 s of house.
+        _feed(fast, [0.0] * 30, dt=0.075, clock=fast_clock)
+        assert fast.snapshot().verdict == "warmup"
+        assert fast.snapshot().score is None
+        # A single slow poller reaches a verdict on the same amount of house.
+        slow, slow_clock = self._make()
+        _feed(slow, [0.0] * 4, dt=3.0, clock=slow_clock)
+        assert slow.snapshot().verdict == "stable"
+        assert CONTROL_QUALITY_WARMUP_SECONDS == 10.0
 
     def test_stable_when_the_grid_sits_inside_the_band(self):
         tracker, clock = self._make()
@@ -327,12 +343,43 @@ class TestControlQualityInBalancer:
         assert snap.verdict == "stable"
         assert snap.samples >= 100
 
+    def test_a_discharging_dc_battery_still_has_room_for_a_surplus(self):
+        """A B2500 cannot charge from AC, but it absorbs a surplus by
+        discharging *less* — it only runs out of room at its MIN_DC_OUTPUT
+        floor. Excusing every surplus on device type alone reported a
+        symmetric hunt (half the samples in surplus, battery mid-range,
+        saturation 0) as a full pack with nothing left to give: the exact
+        fault the verdict exists to surface, labelled as nothing to fix.
+        """
+        balancer, clock = self._make()
+        for i in range(400):
+            clock.advance(1.0)
+            grid = 400.0 if i % 2 == 0 else -400.0
+            reports = {"a": {"device_type": "HMA-1", "phase": "A", "power": 300.0}}
+            balancer.compute_target(
+                "a",
+                ConsumerMode("auto"),
+                reports,
+                grid,
+                frozenset(),
+                frozenset(),
+                (grid, 0, 0),
+            )
+        assert balancer.control_quality().verdict == "off_target"
+
+    def test_a_dc_battery_at_its_floor_really_is_out_of_room(self):
+        balancer, clock = self._make(min_dc_output=50.0)
+        for _ in range(120):
+            # Already down at the floor: it cannot reduce any further.
+            self._poll(balancer, clock, -400.0, reported=50.0, device_type="HMA-1")
+        assert balancer.control_quality().verdict == "limited"
+
     def test_surplus_with_no_ac_chargeable_battery_reads_as_limited(self):
         # A DC-only pack (B2500) under surplus physically cannot absorb; the
         # export that remains is not the controller mis-steering.
         balancer, clock = self._make()
         for _ in range(60):
-            self._poll(balancer, clock, -400.0, device_type="HMA-1")
+            self._poll(balancer, clock, -400.0, reported=0.0, device_type="HMA-1")
         assert balancer.control_quality().verdict == "limited"
 
     def test_a_saturated_pool_reads_as_limited(self):

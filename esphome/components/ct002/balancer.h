@@ -67,10 +67,17 @@ inline constexpr int IMPORT_TRIM_DWELL = 6;
 // EMAs are time-weighted against CONTROL_QUALITY_REFERENCE_DT exactly like the
 // saturation ones, so pollers at different cadences reach the same verdict
 // under the same physical conditions. Mirrors balancer.py.
+//
+// Everything here is per second, never per sample: a CT is polled once per
+// battery, so a per-sample figure would report the installation (battery count
+// times poll cadence) rather than the house.
 inline constexpr double CONTROL_QUALITY_REFERENCE_DT = 1.0;
 inline constexpr double CONTROL_QUALITY_ALPHA = 0.02;
 inline constexpr double CONTROL_QUALITY_LONG_GAP_SECONDS = 60.0;
-inline constexpr int CONTROL_QUALITY_WARMUP_SAMPLES = 10;
+// Observation before committing to a verdict — a duration, not a sample count:
+// a CT is polled once per battery, so a sample count would let a large pool
+// publish a verdict off a fraction of a second. See balancer.py.
+inline constexpr double CONTROL_QUALITY_WARMUP_SECONDS = 10.0;
 inline constexpr float CONTROL_QUALITY_MIN_BAND_W = 25.0f;
 // Mean error, in multiples of the band, up to which the loop still counts as
 // stable — deliberately well above the band, since a step lands on the meter
@@ -323,13 +330,15 @@ struct ControlQualitySnapshot {
   int samples{0};
 };
 
-// Judges the closed loop the way a user would: by what the meter shows. Two
-// independent numbers separate the failure modes — how far off the loop sits
-// (error_ema) says whether there is a problem, whether the error keeps
-// crossing zero (reversal_rate) says which one. A pool with no headroom left
-// is reported as "limited" rather than blamed. Mirrors balancer.py
-// ControlQualityTracker; unlike SaturationTracker it owns its state, which is
-// pool-level rather than per-consumer.
+// Judges the closed loop the way a user would: by what the meter shows. How
+// far off the loop sits (error_ema) says whether there is a problem; whether
+// it is the loop's fault is decided separately, and a pool with no headroom
+// left is reported as "limited" rather than blamed. The verdict deliberately
+// names no cause beyond that — see CONTROL_QUALITY_STATES. Everything is
+// measured per second, never per sample, because the sample rate is a property
+// of the installation (battery count times poll cadence), not of the house.
+// Mirrors balancer.py ControlQualityTracker; unlike SaturationTracker it owns
+// its state, which is pool-level rather than per-consumer.
 class ControlQualityTracker {
  public:
   ControlQualityTracker(float band, std::function<double()> clock);
@@ -352,6 +361,8 @@ class ControlQualityTracker {
   double limited_ema_{0.0};
   int last_sign_{0};
   int samples_{0};
+  // Seconds of steering actually observed in this window.
+  double observed_{0.0};
   double last_update_{0.0};
   bool steering_{false};
 };
@@ -440,6 +451,10 @@ class LoadBalancer {
   // Whether the pool physically cannot close the remaining error (every
   // battery saturated, or a surplus no reporting battery can absorb).
   bool pool_out_of_headroom_(const ReportMap &reports, float grid_total) const;
+  // Whether a surplus is genuinely beyond what the pool can take. A DC-only
+  // battery still absorbs one by discharging less, until it reaches its
+  // MIN_DC_OUTPUT floor. See balancer.py.
+  bool cannot_absorb_(const ReportMap &reports) const;
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);

@@ -159,6 +159,8 @@ Availability companion:
 - `control_quality_score` — the same judgement as a 0–100 % number, for trending
   and alerting. `null` (HA: `unknown`) while the loop is idle or warming up, so
   a "score below X" automation never fires on a reading that does not exist.
+  `control_quality` itself always carries a verdict — `idle` or `warmup` in
+  those states, never `unknown`.
 
 Home Assistant gets both as diagnostic entities on the CT device: **Control
 Quality** (an enum sensor) and **Control Quality Score**.
