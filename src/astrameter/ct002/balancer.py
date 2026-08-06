@@ -599,7 +599,9 @@ class ControlQualitySnapshot:
 
     verdict: ControlQualityVerdict
     #: 0..100, or ``None`` while ``verdict`` is ``idle``/``warmup`` and there
-    #: is nothing to score.  Accuracy against the band, discounted for hunting.
+    #: is nothing to score.  Accuracy of the mean error against the band, and
+    #: nothing else: the crossing rate deliberately does not discount it (see
+    #: :meth:`ControlQualityTracker._score`).
     score: float | None
     #: Mean absolute grid error over the recent window, watts.
     error_ema: float

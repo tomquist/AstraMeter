@@ -157,7 +157,13 @@ test("the control-quality verdict survives live updates", async ({ page }) => {
   // patching it loses the mark, which is exactly the failure a string-rendered
   // unit test cannot see.
   await card.evaluate((el) => ((el as any).__mark = "kept"));
-  await page.waitForTimeout(6000);
+  // Wait on observed progress rather than the clock: a fixed sleep is tied to
+  // whatever the poll interval happens to be, so it stops covering several
+  // polls the moment that interval grows. `seq` advances once per snapshot the
+  // backend produces, which is what the page is polling for.
+  const seq = async () => (await statusSnapshot()).seq;
+  const before = await seq();
+  await expect.poll(seq, { timeout: 30_000 }).toBeGreaterThan(before + 2);
   await expect(chip).toBeVisible();
   expect(await card.evaluate((el) => (el as any).__mark)).toBe("kept");
 });
