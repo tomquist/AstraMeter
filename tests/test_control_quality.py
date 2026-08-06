@@ -9,6 +9,8 @@ The cases that pin *what it refuses to claim* matter just as much — see
 
 import time
 
+import pytest
+
 from astrameter.ct002.balancer import (
     CONTROL_QUALITY_SATURATED,
     CONTROL_QUALITY_STATES,
@@ -18,6 +20,7 @@ from astrameter.ct002.balancer import (
     ControlQualityTracker,
     LoadBalancer,
 )
+from astrameter.ct002.ct002 import _control_quality_evidence
 
 
 class _FakeClock:
@@ -421,3 +424,46 @@ class TestControlQualityInBalancer:
         poll_pair()
         # One battery still has headroom, so the pool is not excused.
         assert balancer.control_quality().verdict == "off_target"
+
+
+class TestControlQualityOnTheMqttWire:
+    """The verdict names no cause, so the evidence has to travel with it.
+
+    Without these an MQTT-only user (no dashboard — it is opt-in outside the
+    add-on) gets "off target" and nothing to act on.
+    """
+
+    def _quality(self, **kwargs):
+        clock = _FakeClock()
+        tracker = ControlQualityTracker(band=25.0, clock=clock)
+        for value in kwargs.get("values", []):
+            clock.advance(1.0)
+            tracker.update(value, steering=True, limited=False)
+        return tracker.snapshot()
+
+    def test_evidence_is_published_in_the_units_the_docs_describe(self):
+        quality = self._quality(values=[250.0, -250.0] * 60)
+        evidence = _control_quality_evidence(quality)
+        # Percent, not a 0..1 fraction; per minute, not per second.
+        assert evidence["control_quality_in_band_pct"] == 0.0
+        assert evidence["control_quality_crossings_per_min"] == pytest.approx(
+            quality.crossings_per_second * 60, abs=0.01
+        )
+        assert evidence["control_quality_error_w"] == pytest.approx(250.0, abs=1.0)
+        assert evidence["control_quality_band_w"] == 25.0
+
+    def test_evidence_is_absent_before_anything_is_measured(self):
+        evidence = _control_quality_evidence(self._quality())
+        assert evidence["control_quality_error_w"] is None
+        assert evidence["control_quality_in_band_pct"] is None
+        assert evidence["control_quality_crossings_per_min"] is None
+        # The band is configuration, not a measurement: always meaningful.
+        assert evidence["control_quality_band_w"] == 25.0
+
+    def test_evidence_is_real_during_warmup(self):
+        """The EMAs are seeded from the first sample, so they are honest well
+        before the score is — only a window with nothing in it is absent."""
+        quality = self._quality(values=[900.0])
+        assert quality.verdict == "warmup"
+        assert quality.score is None
+        assert _control_quality_evidence(quality)["control_quality_error_w"] == 900.0

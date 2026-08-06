@@ -146,7 +146,21 @@ Availability companion:
 
 | Topic | Retain | Payload |
 |---|---|---|
-| `{base}/ct002/{did}/status` | yes | `{"smooth_target": <w>, "active_control": <bool>, "consumer_count": <int>, "control_quality": <string>, "control_quality_score": <pct>}` |
+| `{base}/ct002/{did}/status` | yes | see below |
+
+```json
+{
+  "smooth_target": 90.0,
+  "active_control": true,
+  "consumer_count": 2,
+  "control_quality": "off_target",
+  "control_quality_score": 41.5,
+  "control_quality_error_w": 214.0,
+  "control_quality_in_band_pct": 11.0,
+  "control_quality_crossings_per_min": 3.4,
+  "control_quality_band_w": 25.0
+}
+```
 
 - `smooth_target` — the device-wide smoothed grid target (watts).
 - `active_control` — `true` when the emulator is computing per-battery targets;
@@ -161,6 +175,24 @@ Availability companion:
   a "score below X" automation never fires on a reading that does not exist.
   `control_quality` itself always carries a verdict — `idle` or `warmup` in
   those states, never `unknown`.
+- `control_quality_error_w` — mean absolute grid error over the recent window
+  (watts). The number behind the verdict.
+- `control_quality_in_band_pct` — share of that window the grid spent inside
+  the settling band, 0–100 %.
+- `control_quality_crossings_per_min` — how often the error crossed zero while
+  it was large. Read together with the verdict: a high rate beside
+  `off_target` points at a loop overshooting past zero, a near-zero one at a
+  loop that never reaches it. A noisy meter also raises it — see
+  [Control quality](ct002.md#control-quality).
+- `control_quality_band_w` — the settling band the rest is judged against
+  (`BALANCE_DEADBAND`, floored at 25 W). Configuration, so never `null`.
+
+The three evidence fields are `null` (HA: `unknown`) until at least one reading
+has been folded in, for the same reason as the score.
+
+Home Assistant gets each of them as a diagnostic entity: **Control Quality Mean
+Error**, **Control Quality Time In Band** and **Control Quality Zero
+Crossings**.
 
 Home Assistant gets both as diagnostic entities on the CT device: **Control
 Quality** (an enum sensor) and **Control Quality Score**.

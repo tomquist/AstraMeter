@@ -280,6 +280,21 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     } else {
       root["control_quality_score"] = nullptr;
     }
+    // The evidence behind the verdict, which names no cause on purpose — an
+    // MQTT-only client needs these to act on "off_target". Null until at least
+    // one sample has been folded in (mirrors ct002.py).
+    if (quality.samples > 0) {
+      root["control_quality_error_w"] = std::round(quality.error_ema * 10.0) / 10.0;
+      root["control_quality_in_band_pct"] =
+          std::round(quality.in_band_fraction * 1000.0) / 10.0;
+      root["control_quality_crossings_per_min"] =
+          std::round(quality.crossings_per_second * 6000.0) / 100.0;
+    } else {
+      root["control_quality_error_w"] = nullptr;
+      root["control_quality_in_band_pct"] = nullptr;
+      root["control_quality_crossings_per_min"] = nullptr;
+    }
+    root["control_quality_band_w"] = std::round(quality.band * 10.0f) / 10.0f;
   });
   this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
                        true);

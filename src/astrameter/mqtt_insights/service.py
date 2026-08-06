@@ -705,8 +705,17 @@ class MqttInsightsService:
             "consumer_count": data.get("consumer_count", 0),
             "control_quality": data.get("control_quality", "idle"),
             # Null, not 0: the score is absent while the loop has nothing to
-            # be scored on, and a 0 would read as "as bad as it gets".
+            # be scored on, and a 0 would read as "as bad as it gets".  The
+            # same holds for the evidence behind the verdict, which travels
+            # with it so an MQTT-only client can act on "off target" without
+            # the dashboard.
             "control_quality_score": data.get("control_quality_score"),
+            "control_quality_error_w": data.get("control_quality_error_w"),
+            "control_quality_in_band_pct": data.get("control_quality_in_band_pct"),
+            "control_quality_crossings_per_min": data.get(
+                "control_quality_crossings_per_min"
+            ),
+            "control_quality_band_w": data.get("control_quality_band_w"),
         }
         await client.publish(
             f"{base}/ct002/{did}/status",

@@ -95,6 +95,30 @@ def _bucket_for_phase(phase: str) -> str:
     return "x"
 
 
+def _control_quality_evidence(quality) -> dict[str, Any]:
+    """The numbers behind a control-quality verdict, for the MQTT payload.
+
+    Percentages rather than 0..1 fractions, and crossings per minute rather
+    than per second, so the values a client graphs read the way the docs
+    describe them.  All ``None`` until the window holds at least one sample:
+    the EMAs start at zero, which is indistinguishable from a perfectly held
+    grid, and a graph would record that as fact.
+    """
+    measured = quality.samples > 0
+    return {
+        "control_quality_error_w": round(quality.error_ema, 1) if measured else None,
+        "control_quality_in_band_pct": (
+            round(quality.in_band_fraction * 100, 1) if measured else None
+        ),
+        "control_quality_crossings_per_min": (
+            round(quality.crossings_per_second * 60, 2) if measured else None
+        ),
+        # Always meaningful: it is the configured settling band, not a
+        # measurement, and it is what the other figures are judged against.
+        "control_quality_band_w": round(quality.band, 1),
+    }
+
+
 def _values_finite(values) -> bool:
     """True iff every meter value coerces to a finite number.
 
@@ -1453,6 +1477,14 @@ class CT002:
                             if quality.score is not None
                             else None
                         ),
+                        # The evidence behind the verdict.  It deliberately
+                        # names no cause, so whatever reads the verdict needs
+                        # these to act on it — MQTT clients included, not just
+                        # the dashboard.  Null until at least one sample has
+                        # been folded in: the EMAs read as a perfectly held
+                        # grid before that, and a 0 W mean error next to an
+                        # "idle" verdict is a lie a graph would record.
+                        **_control_quality_evidence(quality),
                     },
                 )
         finally:

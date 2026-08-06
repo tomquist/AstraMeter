@@ -292,6 +292,22 @@ def test_ct002_device_discovery_structure():
     assert score["unit_of_measurement"] == "%"
     assert score["state_class"] == "measurement"
     assert score["entity_category"] == "diagnostic"
+    # The evidence behind the verdict travels with it: the verdict names no
+    # cause, so an MQTT-only user has nothing to act on without these.
+    err = comps["control_quality_error"]
+    assert err["device_class"] == "power"
+    assert err["unit_of_measurement"] == "W"
+    band = comps["control_quality_in_band"]
+    assert band["unit_of_measurement"] == "%"
+    crossings = comps["control_quality_crossings"]
+    assert crossings["unit_of_measurement"] == "/min"
+    for evidence in (err, band, crossings):
+        assert evidence["platform"] == "sensor"
+        assert evidence["state_class"] == "measurement"
+        assert evidence["entity_category"] == "diagnostic"
+        # Same absence rule as the score — never the string "None".
+        assert "is not none" in evidence["value_template"]
+        assert "'unknown'" in evidence["value_template"]
     # The score is null until the loop has been observed; the template has to
     # turn that into HA's "unknown" rather than the string "None", or a
     # "score below X" automation fires on an absent reading.
@@ -1070,6 +1086,10 @@ SAMPLE_CT002_DATA = {
     "consumer_count": 2,
     "control_quality": "off_target",
     "control_quality_score": 41.5,
+    "control_quality_error_w": 214.0,
+    "control_quality_in_band_pct": 11.0,
+    "control_quality_crossings_per_min": 3.4,
+    "control_quality_band_w": 25.0,
 }
 
 SAMPLE_SHELLY_DATA = {
@@ -1137,6 +1157,10 @@ async def test_publishes_device_status(mqtt_broker):
         assert payload["consumer_count"] == 2
         assert payload["control_quality"] == "off_target"
         assert payload["control_quality_score"] == 41.5
+        assert payload["control_quality_error_w"] == 214.0
+        assert payload["control_quality_in_band_pct"] == 11.0
+        assert payload["control_quality_crossings_per_min"] == 3.4
+        assert payload["control_quality_band_w"] == 25.0
     finally:
         await service.stop()
 
@@ -1169,9 +1193,15 @@ async def test_device_status_defaults_control_quality_when_absent(mqtt_broker):
 
         payload = json.loads(received[0].payload)
         assert payload["control_quality"] == "idle"
-        # Null rather than 0: an absent score must not read as "as bad as it
-        # gets" on a graphed, alertable sensor.
-        assert payload["control_quality_score"] is None
+        # Null rather than 0: an absent reading must not read as "as bad as it
+        # gets" (or as a perfectly held grid) on a graphed, alertable sensor.
+        for key in (
+            "control_quality_score",
+            "control_quality_error_w",
+            "control_quality_in_band_pct",
+            "control_quality_crossings_per_min",
+        ):
+            assert payload[key] is None, key
     finally:
         await service.stop()
 
