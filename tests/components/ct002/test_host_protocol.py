@@ -81,3 +81,7 @@ def test_host_status_json(cmake_build: Path) -> None:
 
 def test_host_controls(cmake_build: Path) -> None:
     subprocess.run([str(cmake_build / "host_controls_test")], check=True)
+
+
+def test_host_write_slot(cmake_build: Path) -> None:
+    subprocess.run([str(cmake_build / "host_write_slot_test")], check=True)
