@@ -110,7 +110,8 @@ Two keys in `[GENERAL]` change that:
 [GENERAL]
 # Allow the dashboard to edit config.ini and control batteries (default False).
 DASHBOARD_ALLOW_WRITE = True
-# Serve nothing but the health check (default True).
+# Stop serving the dashboard — only the health check is left, plus the
+# standalone config editor if WEB_CONFIG_ENABLED is on (default True).
 DASHBOARD_ENABLED = False
 ```
 

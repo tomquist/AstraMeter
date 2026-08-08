@@ -633,6 +633,16 @@ const haDashDefault = generateHomeAssistant({
   ct: { fields: {} },
 });
 lacks(haDashDefault, "dashboard_allow_write", "ha-opts: nothing emitted when writes match the add-on default");
+lacks(haDashDefault, "dashboard_direct_access", "ha-opts: nothing emitted when the port stays behind ingress");
+
+// Reaching the page on the add-on's port instead of through ingress.
+const haDirect = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["ct002"], dashboardAllowWrite: true, dashboardDirectAccess: true },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(haDirect, "dashboard_direct_access: true", "ha-opts: direct access is emitted when asked for");
 
 // The add-on's sidebar panel *is* the dashboard, so it cannot be turned off
 // there — no `dashboard` option exists to emit, whatever the form says.

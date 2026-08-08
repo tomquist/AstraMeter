@@ -717,6 +717,10 @@ export function generateHomeAssistant(state: State): string {
   // there is no option to emit for that. Only a read-only dashboard deviates
   // from the add-on default.
   if (!g.dashboardAllowWrite) add("dashboard_allow_write", false);
+  // Reaching the page on the add-on's own port, bypassing the Home Assistant
+  // login that ingress provides. Off in the add-on, so only opting in is worth
+  // emitting.
+  if (g.dashboardDirectAccess) add("dashboard_direct_access", true);
 
   // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};

@@ -29,6 +29,7 @@ export interface State {
     /// service's opt-in.
     esphomeDashboard: boolean;
     dashboardAllowWrite: boolean;
+    dashboardDirectAccess: boolean;
     webServerPort: string;
     throttleInterval: string;
     waitForNextMessage: string;
@@ -64,6 +65,8 @@ export function defaultState(): State {
       dashboardEnabled: true,
       esphomeDashboard: true,
       dashboardAllowWrite: false,
+      // Unauthenticated access to the add-on's port. Off unless asked for.
+      dashboardDirectAccess: false,
       webServerPort: "",
       throttleInterval: "",
       waitForNextMessage: "",
@@ -154,6 +157,7 @@ export function migrate(s: any): State {
         dashboardEnabled: asBool(sg.dashboardEnabled, dg.dashboardEnabled),
         esphomeDashboard: asBool(sg.esphomeDashboard, dg.esphomeDashboard),
         dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
+        dashboardDirectAccess: asBool(sg.dashboardDirectAccess, dg.dashboardDirectAccess),
         webServerPort: asStr(sg.webServerPort, dg.webServerPort),
         throttleInterval: asStr(sg.throttleInterval, dg.throttleInterval),
         waitForNextMessage: asStr(sg.waitForNextMessage, dg.waitForNextMessage),

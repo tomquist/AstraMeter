@@ -11,9 +11,10 @@ SKIP_POWERMETER_TEST = False
 # The live status dashboard at http://<host>:<port>/ (default True).
 # Shows grid power, every battery's target and reported power, power-source
 # health and the balancer's internal state.  It is read-only unless
-# DASHBOARD_ALLOW_WRITE below says otherwise; set this to False to serve
-# nothing but the health check.  Ignored by the Home Assistant add-on, where
-# the dashboard always runs and opens from the sidebar.
+# DASHBOARD_ALLOW_WRITE below says otherwise; set this to False to serve only
+# the health check (and /config, if WEB_CONFIG_ENABLED above is on).  Ignored
+# by the Home Assistant add-on, where the dashboard always runs and opens from
+# the sidebar.
 # DASHBOARD_ENABLED = True
 # Let the dashboard change this file and control batteries (default False).
 # Leave it off to keep the dashboard read-only.  There is NO authentication on
