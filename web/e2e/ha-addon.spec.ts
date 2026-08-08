@@ -31,35 +31,44 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+type Page = import("@playwright/test").Page;
+
 /** The form card specifically, not the other cards the tab carries. */
-function form(page: import("@playwright/test").Page) {
+function form(page: Page) {
   return page.locator(".card", {
     has: page.locator('h2:text-is("Guided setup")'),
   });
 }
 
-type Page = import("@playwright/test").Page;
-
-/** One advanced group, opened if it is not already. */
-async function openFold(page: Page, title: string) {
-  const fold = page.locator("details.opt-fold", {
-    has: page.locator(`.fold-title:text-is("${title}")`),
-  });
+/**
+ * A disclosure, opened if it is not already.
+ *
+ * Never a bare click: <details> toggles, so clicking one that is already open
+ * shuts it and every later step then fails on a hidden control.
+ */
+async function open(fold: ReturnType<Page["locator"]>) {
   if ((await fold.getAttribute("open")) === null) {
     await fold.locator("summary").click();
   }
   return fold;
 }
 
+/** One advanced group of the guided form, by its heading. */
+function openFold(page: Page, title: string) {
+  return open(
+    page.locator("details.opt-fold", {
+      has: page.locator(`.fold-title:text-is("${title}")`),
+    }),
+  );
+}
+
 /** Every advanced group, for a test that is not about the disclosure. */
 async function openFolds(page: Page) {
   const folds = page.locator("details.opt-fold");
-  for (let i = 0; i < (await folds.count()); i++) {
-    const fold = folds.nth(i);
-    if ((await fold.getAttribute("open")) === null) {
-      await fold.locator("summary").click();
-    }
-  }
+  // Counted once: clicking a summary opens a group, it never adds or removes
+  // one, so the count cannot move under the loop.
+  const total = await folds.count();
+  for (let i = 0; i < total; i++) await open(folds.nth(i));
 }
 
 test("detects add-on options mode and refuses to edit the generated file", async () => {
@@ -423,7 +432,7 @@ test("migrating to a config file materializes what is running", async ({ page })
   await page.goto(`${BASE_URL}#/config`);
   await expect(page.locator(".confirm")).toHaveCount(0);
 
-  await fold.locator("summary").click();
+  await open(fold);
   await button.click();
   await page.locator('button:text("Yes, migrate and restart")').click();
   await expect(page.locator(".banner")).toContainText("Configuration mode changed");

@@ -195,15 +195,24 @@ export function configView(
   return cards;
 }
 
-/** Where the settings on this page actually come from, in one line. */
+/**
+ * Where the settings on this page actually come from, in one line.
+ *
+ * All three modes, not just the two that reach the editor: a read-only
+ * dashboard renders this instead of a form, and `ha_simple` there has no file
+ * behind it at all (`status/mode.py` — a null config path is what *makes* it
+ * ha_simple), so the file wording would have told that user the exact
+ * opposite of what is running.
+ */
 function sourceLine(mode: string, path: string | undefined): VNode {
-  return h(
-    "p",
-    { class: "hint" },
-    mode.startsWith("ha_")
-      ? `AstraMeter reads ${path || "a config file"} — the add-on options are ignored.`
-      : `AstraMeter reads ${path || "the config.ini mounted into this container"}.`,
-  );
+  const text =
+    mode === "ha_simple"
+      ? "AstraMeter is configured from the add-on options, and rewrites its " +
+        "config file from them at every start."
+      : mode.startsWith("ha_")
+        ? `AstraMeter reads ${path || "a config file"} — the add-on options are ignored.`
+        : `AstraMeter reads ${path || "the config.ini mounted into this container"}.`;
+  return h("p", { class: "hint" }, text);
 }
 
 // ── migration between add-on options and a config file ──────────────

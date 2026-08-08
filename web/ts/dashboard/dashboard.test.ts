@@ -714,6 +714,35 @@ has(emptyHtml, "This config file is empty", "an empty file explains itself");
 // Outside the add-on there is nothing to migrate to.
 lacks(iniHtml, "Migrate", "the standalone editor offers no migration");
 
+// A read-only dashboard renders no editor, so the source line is all it says
+// about where the settings come from — and in guided setup there is no file
+// behind them at all (a null config path is what makes the mode ha_simple),
+// so the file wording would state the exact opposite of what is running.
+{
+  const readOnly = (mode: string, path?: string): string => {
+    const state: AppState = {
+      ...live,
+      tab: "config",
+      snapshot: {
+        ...snapshot,
+        capabilities: { ...snapshot.capabilities, config_mode: mode as any, controls: false },
+        service: { ...snapshot.service, config_path: path },
+      },
+    };
+    return renderToString(h("div", null, ...view(state, actions, initialConfigState())));
+  };
+  const guided = readOnly("ha_simple");
+  has(guided, "configured from the add-on options", "guided setup names the options");
+  lacks(guided, "add-on options are ignored", "and never claims a file overrides them");
+  has(guided, "read-only", "the read-only banner is still there");
+  lacks(guided, "Migrate", "and a dashboard that cannot write is offered no migration");
+  has(
+    readOnly("ha_advanced", "/config/astrameter.ini"),
+    "/config/astrameter.ini — the add-on options are ignored",
+    "a config file names itself and says the options are inert",
+  );
+}
+
 // ── Home Assistant entity picker ──
 const HA_SCHEMA = normalizeAddonSchema([
   { name: "power_input_alias", required: true, type: "string" },
