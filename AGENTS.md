@@ -83,7 +83,10 @@ What differs is the document behind it:
   name and unit. The firmware serves a genuinely **reduced** document, which
   the schema is built for: every field is optional at every level, the frontend
   renders only what it receives, and it must never substitute 0 or "—" for
-  something absent.
+  something absent. What it leaves out is what the page does not render —
+  `balancer.config`, and the `integrations` entries with no card (cloud
+  reporting, Marstek registration) — since those would be bytes on every poll
+  that nothing reads. A field the page *does* render belongs on both sides.
 - The **configuration half is permanently waived.** An ESPHome device's config
   is compiled into its firmware, so there is nothing for a dashboard to write.
   The page hides its Configuration tab when the backend reports no

@@ -63,6 +63,30 @@ class MqttInsightsComponent : public Component {
   void set_ha_discovery_prefix(const std::string &v) { this->ha_discovery_prefix_ = v; }
   void set_marstek_mqtt_enabled(bool v) { this->marstek_mqtt_enabled_ = v; }
   void set_marstek_mqtt_interval_ms(uint32_t v) { this->marstek_mqtt_interval_ms_ = v; }
+  // The broker locator, passed down from the `mqtt:` block at codegen time
+  // (the client keeps its credentials struct private, and this must never
+  // reach for the username/password beside them). Reported by the dashboard.
+  void set_broker(const std::string &v) { this->broker_ = v; }
+  void set_broker_port(uint16_t v) { this->broker_port_ = v; }
+
+  /// This integration as the dashboard's Diagnostics card reads it.
+  ///
+  /// Mirrors MqttInsightsService.status_snapshot in the Python stack, minus
+  /// the fields this port has no counterpart for (see status_json.h). Defined
+  /// inline so a dashboard build without `mqtt:` still links — the rest of
+  /// this component compiles only under USE_MQTT.
+  status::MqttInsightsStatus status_snapshot() {
+    status::MqttInsightsStatus out;
+#ifdef USE_MQTT
+    out.connected = this->mqtt_ != nullptr && this->mqtt_->is_connected();
+#endif
+    out.broker = this->broker_;
+    out.port = this->broker_port_;
+    out.base_topic = this->base_topic_;
+    out.ha_discovery = this->ha_discovery_;
+    out.ha_discovery_prefix = this->ha_discovery_prefix_;
+    return out;
+  }
 
  protected:
   // Reaction to a fresh consumer event from ct002. Mirrors
@@ -101,6 +125,9 @@ class MqttInsightsComponent : public Component {
   std::string base_topic_{"astrameter"};
   bool ha_discovery_{true};
   std::string ha_discovery_prefix_{"homeassistant"};
+  // Reporting only — the client owns the connection.
+  std::string broker_;
+  uint16_t broker_port_{0};
   bool marstek_mqtt_enabled_{true};
   uint32_t marstek_mqtt_interval_ms_{300000};
 

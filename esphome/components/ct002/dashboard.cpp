@@ -313,6 +313,9 @@ void DashboardComponent::rebuild_() {
   doc.service.web_port = this->base_->get_port();
   doc.powermeters.push_back(this->ct002_->powermeter_status());
   doc.devices.push_back(this->ct002_->status_snapshot(wall));
+  if (this->mqtt_insights_ != nullptr) {
+    doc.mqtt_insights = this->mqtt_insights_->status_snapshot();
+  }
 
   // Serialize outside the lock: only the handover is contended, and the
   // httpd task should never wait on the encoder.

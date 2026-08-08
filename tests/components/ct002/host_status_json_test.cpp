@@ -107,6 +107,15 @@ StatusDocument sample() {
   device.consumers.push_back(consumer);
 
   doc.devices.push_back(device);
+
+  MqttInsightsStatus insights;
+  insights.connected = true;
+  insights.broker = "192.168.1.10";
+  insights.port = 1883;
+  insights.base_topic = "astrameter";
+  insights.ha_discovery = true;
+  insights.ha_discovery_prefix = "homeassistant";
+  doc.mqtt_insights = insights;
   return doc;
 }
 
@@ -234,6 +243,24 @@ TEST(StatusJson, CarriesTheBattery) {
   EXPECT_TRUE(contains(json, "\"saturation\":0.125"));
   // The page reads this as a percentage, like the MQTT entity of the same name.
   EXPECT_TRUE(contains(json, "\"efficiency_window_weight_pct\":100"));
+}
+
+TEST(StatusJson, CarriesTheMqttInsightsIntegration) {
+  const std::string json = build_status_json(sample());
+  EXPECT_TRUE(contains(json, "\"integrations\":{\"mqtt_insights\":{"));
+  EXPECT_TRUE(contains(json, "\"connected\":true"));
+  EXPECT_TRUE(contains(json, "\"broker\":\"192.168.1.10\""));
+  EXPECT_TRUE(contains(json, "\"port\":1883"));
+  EXPECT_TRUE(contains(json, "\"base_topic\":\"astrameter\""));
+  // No asyncio queue exists in this port, so the depth is absent rather than
+  // reported as a permanently empty one.
+  EXPECT_FALSE(contains(json, "queue_depth"));
+}
+
+TEST(StatusJson, OmitsTheIntegrationsBlockWhenThereAreNone) {
+  StatusDocument doc = sample();
+  doc.mqtt_insights.reset();
+  EXPECT_FALSE(contains(build_status_json(doc), "integrations"));
 }
 
 TEST(StatusJson, OmitsWhatItCannotProduce) {

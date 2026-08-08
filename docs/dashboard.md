@@ -129,7 +129,9 @@ the firmware with it.
 
 The board serves a **reduced version** of the page. Everything it can measure
 is there — grid power, every battery with its target and saturation, the
-balancer's internals, the health of the grid-power sensor — but:
+balancer's internals and its [control-quality verdict](ct002.md#control-quality),
+the health of the grid-power sensor, and MQTT Insights' connection state when
+that sub-block is configured — but:
 
 - **There is no Configuration tab.** An ESPHome device's settings are compiled
   into its firmware, so there would be nothing to save; change your YAML and

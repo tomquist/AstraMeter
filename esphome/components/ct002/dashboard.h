@@ -35,6 +35,7 @@
 #endif
 
 #include "ct002.h"
+#include "mqtt_insights.h"
 
 namespace esphome {
 namespace ct002 {
@@ -51,6 +52,11 @@ class DashboardComponent : public Component, public AsyncWebHandler {
 
   void set_ct002(CT002Component *ct002) { this->ct002_ = ct002; }
   void set_base(web_server_base::WebServerBase *base) { this->base_ = base; }
+  /// Optional: set only when the `mqtt_insights:` sub-block is configured
+  /// too, so the page can show that integration's state like the add-on does.
+  void set_mqtt_insights(mqtt_insights::MqttInsightsComponent *insights) {
+    this->mqtt_insights_ = insights;
+  }
   /// Mount prefix without a trailing slash; empty for the server root.
   void set_path(const std::string &path) { this->path_ = path; }
   void set_version(const std::string &version) { this->version_ = version; }
@@ -85,6 +91,7 @@ class DashboardComponent : public Component, public AsyncWebHandler {
 
   CT002Component *ct002_{nullptr};
   web_server_base::WebServerBase *base_{nullptr};
+  mqtt_insights::MqttInsightsComponent *mqtt_insights_{nullptr};
   std::string path_;
   std::string version_;
   std::string log_level_;

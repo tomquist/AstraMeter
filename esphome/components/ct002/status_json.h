@@ -152,6 +152,23 @@ struct DeviceStatus {
   std::vector<ConsumerStatus> consumers;
 };
 
+/// MQTT Insights, for the page's Diagnostics card.
+///
+/// A subset of the Python stack's MqttInsightsSnapshot: the fields the card
+/// renders, and only the ones this firmware can answer. The queue depth has
+/// no counterpart — the ESPHome port publishes synchronously and owns no
+/// queue (see mqtt_insights.h) — so it is left out rather than reported as a
+/// permanently empty one. Like Python's, this carries the broker locator only:
+/// the username and password never enter the document.
+struct MqttInsightsStatus {
+  bool connected{false};
+  std::string broker;
+  uint16_t port{0};
+  std::string base_topic;
+  bool ha_discovery{false};
+  std::string ha_discovery_prefix;
+};
+
 struct StatusDocument {
   Capabilities capabilities;
   std::optional<double> generated_at;  ///< wall-clock epoch, if the clock synced
@@ -160,6 +177,8 @@ struct StatusDocument {
   ServiceStatus service;
   std::vector<PowermeterStatus> powermeters;
   std::vector<DeviceStatus> devices;
+  /// Absent unless the `mqtt_insights:` sub-block is configured.
+  std::optional<MqttInsightsStatus> mqtt_insights;
 };
 
 /// Serialize *doc* to the wire JSON. Absent values are omitted, never zeroed.

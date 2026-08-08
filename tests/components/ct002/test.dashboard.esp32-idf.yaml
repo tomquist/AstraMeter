@@ -13,6 +13,13 @@ wifi:
   ssid: "test-ssid"
   password: "test-password"
 
+# Paired with mqtt_insights: below so the dashboard's Diagnostics card for
+# that integration is in the compile matrix too.
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
+  discovery: false
+
 external_components:
   - source:
       type: local
@@ -41,3 +48,5 @@ ct002:
   # the compile matrix too.
   dashboard:
     controls: true
+  mqtt_insights:
+    base_topic: astrameter

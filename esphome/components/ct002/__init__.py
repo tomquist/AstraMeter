@@ -786,6 +786,13 @@ async def _to_code_mqtt_insights(config, ct002_var):
             int(sub[CONF_MARSTEK_MQTT_INTERVAL].total_milliseconds)
         )
     )
+    # The broker locator, for the dashboard's Diagnostics card. Taken from the
+    # user's `mqtt:` block rather than the client at runtime: the client keeps
+    # its credentials struct private, and the address sits next to the
+    # username and password there.
+    mqtt_config = CORE.config.get("mqtt") or {}
+    cg.add(var.set_broker(str(mqtt_config.get("broker", ""))))
+    cg.add(var.set_broker_port(int(mqtt_config.get("port", 0))))
 
 
 async def _to_code_marstek_registration(config, ct002_var):
@@ -859,6 +866,12 @@ async def _to_code_dashboard(config, ct002_var):
     cg.add(var.set_base(base))
     cg.add(var.set_path(sub[CONF_PATH]))
     cg.add(var.set_controls(sub[CONF_CONTROLS]))
+
+    # When MQTT Insights is configured too, the page shows that integration's
+    # state — the same card the Python add-on's dashboard has.
+    if CONF_MQTT_INSIGHTS in config:
+        insights = await cg.get_variable(config[CONF_MQTT_INSIGHTS][CONF_ID])
+        cg.add(var.set_mqtt_insights(insights))
 
     # Shown on the page's Diagnostics tab, so a user can tell which build
     # they are looking at without reading the firmware log.

@@ -332,6 +332,22 @@ void write_powermeter(JsonWriter &json, const PowermeterStatus &meter) {
   json.end_object();
 }
 
+// Mirrors the `integrations` block registry.py builds. Only MQTT Insights is
+// carried: the page renders no card for the others, so cloud reporting and
+// Marstek registration would be bytes on every poll that nothing reads.
+void write_integrations(JsonWriter &json, const MqttInsightsStatus &insights) {
+  json.begin_object("integrations");
+  json.begin_object("mqtt_insights");
+  json.set("connected", insights.connected);
+  json.set_if("broker", insights.broker);
+  if (insights.port != 0) json.set("port", static_cast<long long>(insights.port));
+  json.set_if("base_topic", insights.base_topic);
+  json.set("ha_discovery", insights.ha_discovery);
+  json.set_if("ha_discovery_prefix", insights.ha_discovery_prefix);
+  json.end_object();
+  json.end_object();
+}
+
 }  // namespace
 
 std::string format_number(double value, int digits) {
@@ -406,6 +422,7 @@ std::string build_status_json(const StatusDocument &doc) {
     for (const auto &device : doc.devices) write_device(json, device);
     json.end_array();
   }
+  if (doc.mqtt_insights.has_value()) write_integrations(json, *doc.mqtt_insights);
   json.end_object();
   return json.take();
 }
