@@ -61,6 +61,7 @@ def get_ct_section(device_type: str, cfg: configparser.ConfigParser) -> str:
 async def read_ct_powermeter(
     addr: tuple[str, int],
     powermeters: list[tuple[Powermeter, ClientFilter, bool]],
+    bypass_cache: bool = False,
 ) -> list[float] | None:
     """Pick the powermeter matching *addr* and return up to three phase values.
 
@@ -68,6 +69,10 @@ async def read_ct_powermeter(
     powermeter has ``WAIT_FOR_NEXT_MESSAGE`` enabled. A timeout there is
     swallowed so the cached value is still served — `update_readings`
     callers should never see a stale-meter `TimeoutError`.
+
+    When *bypass_cache* is True the matching :class:`ThrottledPowermeter`
+    wrapper (if any) is told to propagate errors instead of returning
+    stale cached values, so the caller's fallback logic can activate.
     """
     powermeter = None
     wait_for_next = False
@@ -79,6 +84,14 @@ async def read_ct_powermeter(
     if powermeter is None:
         logger.debug(f"No powermeter found for client {addr[0]}")
         return None
+    # Lazily enable bypass on the wrapper chain for this specific
+    # powermeter so other powermeters in the shared list are unaffected.
+    if bypass_cache:
+        node = powermeter
+        while hasattr(node, "wrapped_powermeter"):
+            if hasattr(node, "bypass_cache_on_error"):
+                node.bypass_cache_on_error = True
+            node = node.wrapped_powermeter
     if wait_for_next:
         try:
             await powermeter.wait_for_next_message(timeout=2)
@@ -95,8 +108,18 @@ async def read_ct_powermeter(
     return [value1, value2, value3]
 
 
-async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
-    """Test powermeter configuration with minimal retry logic for edge cases."""
+async def test_powermeter(
+    powermeter: Powermeter,
+    client_filter: ClientFilter,
+    allow_failure: bool = False,
+):
+    """Test powermeter configuration with minimal retry logic for edge cases.
+
+    When *allow_failure* is True (e.g. because a TIMEOUT_FALLBACK_W is
+    configured), a persistent test failure logs an error but does **not**
+    crash the startup — the control loop's own fallback logic will handle
+    the dead meter at runtime.
+    """
     max_retries = 3
     retry_delay = 5  # seconds
 
@@ -123,6 +146,15 @@ async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
                 continue
             else:
                 # Last attempt failed
+                if allow_failure:
+                    logger.error(
+                        "Failed to test powermeter after %d attempts: %s. "
+                        "Continuing because TIMEOUT_FALLBACK_W is configured.",
+                        max_retries + 1,
+                        e,
+                        exc_info=False,
+                    )
+                    return
                 raise RuntimeError(
                     f"Failed to test powermeter after {max_retries + 1} attempts: {e}"
                 ) from e
@@ -241,6 +273,14 @@ async def run_device(
             ct_section, "SATURATION_DECAY_FACTOR", fallback=0.995
         )
         min_dc_output = cfg.getfloat(ct_section, "MIN_DC_OUTPUT", fallback=0.0)
+        timeout_fallback_raw = cfg.get(ct_section, "TIMEOUT_FALLBACK_W", fallback=None)
+        timeout_fallback_w = float(timeout_fallback_raw) if timeout_fallback_raw is not None else None
+        if timeout_fallback_w is not None and timeout_fallback_w < min_dc_output:
+            logger.warning(
+                "TIMEOUT_FALLBACK_W (%gW) is below MIN_DC_OUTPUT (%gW). Clamping fallback to %gW.",
+                timeout_fallback_w, min_dc_output, min_dc_output
+            )
+            timeout_fallback_w = min_dc_output
         if 0 < min_dc_output < min_target_for_saturation:
             logger.warning(
                 "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
@@ -317,11 +357,14 @@ async def run_device(
             min_dc_output=min_dc_output,
             saturation_decay_factor=saturation_decay_factor,
             device_id=device_id or "",
+            timeout_fallback_w=timeout_fallback_w,
             reset_fn=lambda: _reset_all_powermeters(powermeters),
         )
 
         async def update_readings(addr, _fields=None, _consumer_id=None):
-            return await read_ct_powermeter(addr, powermeters)
+            return await read_ct_powermeter(
+                addr, powermeters, bypass_cache=timeout_fallback_w is not None
+            )
 
         device.before_send = update_readings
 
@@ -516,7 +559,38 @@ async def run_device(
                         await asyncio.wait_for(
                             chosen.wait_for_next_message(), timeout=2.0
                         )
-                    vs = await chosen.get_powermeter_watts_raw()
+                    try:
+                        vs = await chosen.get_powermeter_watts_raw()
+                        chosen.in_fallback_mode = False
+                    except Exception as e:
+                        min_dc = cfg.getfloat("CT002", "MIN_DC_OUTPUT", fallback=0.0)
+                        timeout_fallback_raw = cfg.get("CT002", "TIMEOUT_FALLBACK_W", fallback=None)
+                        timeout_fallback_w = float(timeout_fallback_raw) if timeout_fallback_raw is not None else 0.0
+                        if timeout_fallback_raw is not None and timeout_fallback_w < min_dc:
+                            timeout_fallback_w = min_dc
+                        if not getattr(chosen, "in_fallback_mode", False):
+                            if timeout_fallback_raw is not None:
+                                logger.warning(
+                                    "Powermeter %s failed (%s: %s). Using fallback %gW",
+                                    getattr(chosen, 'name', 'unknown'),
+                                    type(e).__name__,
+                                    e,
+                                    timeout_fallback_w,
+                                    exc_info=False,
+                                )
+                            else:
+                                logger.warning(
+                                    "Powermeter %s failed (%s: %s). Holding output (no fallback configured).",
+                                    getattr(chosen, 'name', 'unknown'),
+                                    type(e).__name__,
+                                    e,
+                                    exc_info=False,
+                                )
+                        chosen.in_fallback_mode = True
+                        # Prevent spin-loop DoS on persistent network errors
+                        await asyncio.sleep(2.0)
+                        # Powermeter timed out. Inject safe fallback target to prevent drain.
+                        vs = [timeout_fallback_w / 3.0, timeout_fallback_w / 3.0, timeout_fallback_w / 3.0]
                     phases = [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
                 ap, bp, cp = (round(p) for p in phases)
                 buckets = _dev.reporting_phase_buckets()
@@ -622,8 +696,21 @@ async def async_main(
             await pm.start()
 
         if not skip_test:
+            # Intentionally broad: if *any* device section configures a
+            # fallback target, we allow all meters to fail startup.  The
+            # alternative (crashing on a dead meter while another device
+            # is ready to handle it gracefully) would be worse.  Per-meter
+            # scoping would require config_loader to associate powermeters
+            # with specific device sections, which it currently doesn't.
+            has_fallback = any(
+                cfg.get(s, "TIMEOUT_FALLBACK_W", fallback=None) is not None
+                for s in cfg.sections()
+                if s.upper().startswith("CT")
+            )
             for powermeter, client_filter, _ in powermeters:
-                await test_powermeter(powermeter, client_filter)
+                await test_powermeter(
+                    powermeter, client_filter, allow_failure=has_fallback
+                )
 
         # MQTT Insights (optional)
         insights_cfg = read_mqtt_insights_config(cfg)

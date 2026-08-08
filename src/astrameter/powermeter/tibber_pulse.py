@@ -68,11 +68,12 @@ class TibberPulse(Powermeter):
     async def start(self) -> None:
         if self.session:
             return
-        # Fail fast: the battery polls ~1/s, so a slow source should error
-        # quickly and let the next poll retry rather than pin a handler.
+        # Give the Pulse enough time to respond over WiFi — a transient
+        # slowdown shouldn't trigger fallback mode.  Genuine failures (HTTP
+        # errors, undecodable SML) surface quickly regardless of timeout.
         self.session = aiohttp.ClientSession(
             auth=BasicAuth(self.user, self.password),
-            timeout=ClientTimeout(total=2, connect=1),
+            timeout=ClientTimeout(total=5, connect=3),
         )
 
     async def stop(self) -> None:
