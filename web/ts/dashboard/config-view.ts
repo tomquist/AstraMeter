@@ -10,6 +10,10 @@
 // rather than from a mapping table of our own, so a new add-on option shows
 // up here the moment config.yaml has it — unlabelled but usable — instead of
 // silently going missing.
+//
+// Under the add-on the two surfaces are one migration apart, offered at the
+// foot of the page (`migrationFold`) rather than above the editor: it is a
+// once-if-ever move, not a setting.
 
 import { h, type VChild, type VNode } from "./vdom.js";
 import type { AppState } from "./model.js";
@@ -147,20 +151,18 @@ export function configView(
 ): VChild[] {
   const caps = state.snapshot?.capabilities;
   const mode = caps?.config_mode ?? "standalone";
-  // The mode switch writes, so a read-only dashboard must not offer it: the
-  // backend refuses the call and the user gets an error for a button we drew.
-  const cards: VChild[] = [
-    modeCard(mode, Boolean(caps?.ha_options && caps?.controls), config, actions),
-  ];
+  const path = state.snapshot?.service?.config_path;
+  const cards: VChild[] = [];
 
-  if (config.error) {
-    cards.unshift(h("div", { class: "banner err" }, config.error));
-  }
   if (config.message) {
-    cards.unshift(h("div", { class: "banner info" }, config.message));
+    cards.push(h("div", { class: "banner info" }, config.message));
+  }
+  if (config.error) {
+    cards.push(h("div", { class: "banner err" }, config.error));
   }
   if (!caps?.controls) {
     cards.push(
+      sourceLine(mode, path),
       h(
         "div",
         { class: "banner warn" },
@@ -174,39 +176,72 @@ export function configView(
   if (mode === "ha_simple") {
     cards.push(guidedForm(config, actions));
   } else {
-    cards.push(...iniEditor(config, actions), ...keyDatalists(config));
+    cards.push(sourceLine(mode, path), ...iniEditor(config, actions), ...keyDatalists(config));
+  }
+
+  // Last, and folded shut: moving between the two is a one-time migration
+  // most installations never make, and it writes — so a read-only dashboard
+  // (returned above) must not offer it at all, since the backend would refuse
+  // the call and the user would get an error for a button we drew.
+  if (mode.startsWith("ha_") && caps?.ha_options) {
+    cards.push(migrationFold(mode === "ha_simple", path, config, actions));
   }
   return cards;
 }
 
-function modeCard(
-  mode: string,
-  haOptions: boolean,
+/** Where the settings on this page actually come from, in one line. */
+function sourceLine(mode: string, path: string | undefined): VNode {
+  return h(
+    "p",
+    { class: "hint" },
+    mode.startsWith("ha_")
+      ? `AstraMeter reads ${path || "a config file"} — the add-on options are ignored.`
+      : `AstraMeter reads ${path || "the config.ini mounted into this container"}.`,
+  );
+}
+
+// ── migration between add-on options and a config file ──────────────
+
+/**
+ * Moving configuration from the add-on options to a `config.ini` or back.
+ *
+ * Folded shut and last on the page on purpose: it is a migration, not a
+ * setting — done once if ever, and the tab is otherwise about editing what
+ * is already configured. Opened, it has to answer "why would I", "what
+ * happens" and "what does it cost me" before the button, because the answer
+ * to the last one is a restart and a different source of truth.
+ */
+function migrationFold(
+  isSimple: boolean,
+  path: string | undefined,
   config: ConfigState,
   actions: ConfigActions,
 ): VNode {
-  const isSimple = mode === "ha_simple";
-  const isAddon = mode.startsWith("ha_");
   const target = isSimple ? "file" : "options";
-  return card(
-    "Configuration mode",
+  const file = isSimple ? "/config/astrameter.ini" : path || "your config file";
+  return h(
+    "details",
+    { class: "card migrate" },
     h(
-      "p",
-      { style: "margin:0 0 10px" },
-      isSimple
-        ? "Guided setup — AstraMeter is configured from the add-on options, " +
-            "and rewrites its config file on every start."
-        : isAddon
-          ? "Config file — AstraMeter reads a config.ini you control, and the " +
-              "add-on options are ignored."
-          : "Config file — AstraMeter reads the config.ini mounted into this container.",
+      "summary",
+      null,
+      h(
+        "span",
+        { class: "mig-title" },
+        isSimple ? "Migrate to a config file" : "Migrate back to guided setup",
+      ),
+      h("span", { class: "mig-now" }, isSimple ? "Now: add-on options" : "Now: config file"),
     ),
-    isAddon && haOptions
-      ? config.confirmMode === target
-        ? confirmSwitch(isSimple, config, actions)
+    h(
+      "div",
+      { class: "mig-body" },
+      ...comparison(isSimple),
+      ...(isSimple ? toFileBody(file) : toOptionsBody(file)),
+      config.confirmMode === target
+        ? confirmMigration(isSimple, file, config, actions)
         : h(
             "div",
-            { style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
+            null,
             h(
               "button",
               {
@@ -214,29 +249,135 @@ function modeCard(
                 disabled: config.saving,
                 onclick: () => actions.askSwitchMode(target),
               },
-              isSimple ? "Switch to a config file" : "Switch to guided setup",
+              isSimple ? "Migrate to a config file…" : "Migrate back to guided setup…",
             ),
-            h(
-              "span",
-              { class: "help", style: "color:var(--text-faint);font-size:.75rem" },
-              isSimple
-                ? "Copies what is running now into /config/astrameter.ini, then restarts."
-                : "Goes back to the add-on options. Your config file is kept, not deleted.",
-            ),
-          )
-      : null,
+          ),
+    ),
   );
 }
 
 /**
- * The switch, asked about before it happens.
+ * The two ways to configure the add-on, side by side.
+ *
+ * Shown the same in both directions, with the live one marked: the question
+ * a user actually has here is "which of these am I meant to be on", and that
+ * is answered by what each one can do, not by the button's label.
+ */
+function comparison(isSimple: boolean): VChild[] {
+  const option = (now: boolean, title: string, ...body: string[]): VNode =>
+    h(
+      "div",
+      { class: now ? "mig-opt is-now" : "mig-opt" },
+      h(
+        "h4",
+        null,
+        title,
+        now ? h("span", { class: "mig-chip" }, "in use") : null,
+      ),
+      ...body.map((text) => h("p", null, text)),
+    );
+  return [
+    h(
+      "div",
+      { class: "mig-compare" },
+      option(
+        isSimple,
+        "Guided setup",
+        "The easy path: labelled fields, entity pickers and values checked " +
+          "before they are saved. Grid power has to come from a Home Assistant " +
+          "sensor, and only the settings the add-on exposes can be changed.",
+      ),
+      option(
+        !isSimple,
+        "Config file",
+        "The advanced path: everything AstraMeter can do. Any power source — a " +
+          "Shelly, a Tasmota plug, an HTTP or MQTT meter, several at once — and " +
+          "every setting there is. You maintain the file yourself, and nothing " +
+          "checks it until AstraMeter starts.",
+      ),
+    ),
+  ];
+}
+
+function toFileBody(file: string): VChild[] {
+  return [
+    h("h3", null, "What migrating does"),
+    h(
+      "ol",
+      null,
+      h("li", null, `The configuration running right now is written to ${file}.`),
+      h("li", null, "The add-on's Custom Config option is pointed at that file."),
+      h("li", null, "The add-on restarts and this tab becomes the file editor."),
+    ),
+    h("h3", null, "What it costs you"),
+    h(
+      "ul",
+      null,
+      h(
+        "li",
+        null,
+        "The add-on options stop having any effect. They stay on the add-on's " +
+          "Configuration page, but nothing reads them until you migrate back.",
+      ),
+      h(
+        "li",
+        null,
+        `If ${file} already exists it is kept untouched, and AstraMeter runs ` +
+          "that file — not what is running now.",
+      ),
+      h("li", null, "The add-on restarts: the dashboard goes quiet for up to a minute."),
+      h("li", null, "Reversible — you can migrate back at any time."),
+    ),
+  ];
+}
+
+function toOptionsBody(file: string): VChild[] {
+  return [
+    h("h3", null, "What migrating does"),
+    h(
+      "ol",
+      null,
+      h("li", null, "The add-on's Custom Config option is cleared."),
+      h("li", null, "The add-on restarts and reads the add-on options again."),
+    ),
+    h("h3", null, "What it costs you"),
+    h(
+      "ul",
+      null,
+      h(
+        "li",
+        null,
+        "Your file is not copied into the add-on options. Whatever those " +
+          "options say today takes over, which may be an older setup — check " +
+          "them on the add-on's Configuration page first.",
+      ),
+      h(
+        "li",
+        null,
+        "Anything the guided form has no field for — another power source, a " +
+          "second meter, a setting it does not offer — stops applying until " +
+          "you migrate back.",
+      ),
+      h("li", null, "The add-on restarts: the dashboard goes quiet for up to a minute."),
+      h(
+        "li",
+        null,
+        `Reversible — ${file} is left on disk unchanged, and migrating back reads it again.`,
+      ),
+    ),
+  ];
+}
+
+/**
+ * The migration, asked about before it happens.
  *
  * It changes where every setting comes from and restarts the add-on, which
  * takes it off the air for a minute — too much to hang off one stray tap,
  * and on a phone the button sits under the thumb.
  */
-function confirmSwitch(
+function confirmMigration(
   isSimple: boolean,
+  file: string,
   config: ConfigState,
   actions: ConfigActions,
 ): VNode {
@@ -247,11 +388,10 @@ function confirmSwitch(
       "p",
       { class: "confirm-what" },
       isSimple
-        ? "Copy what is running now into /config/astrameter.ini and read your " +
-            "settings from that file from now on? The add-on options stop " +
-            "having any effect."
-        : "Go back to reading your settings from the add-on options? Your " +
-            "config file is kept, but AstraMeter stops reading it.",
+        ? `Write what is running now to ${file} and read every setting from ` +
+            "that file from now on?"
+        : "Read every setting from the add-on options again? Your config file " +
+            "is kept, but AstraMeter stops reading it.",
     ),
     h(
       "p",
@@ -268,7 +408,7 @@ function confirmSwitch(
           disabled: config.saving,
           onclick: () => actions.switchMode(isSimple ? "file" : "options"),
         },
-        config.saving ? "Switching…" : "Yes, switch and restart",
+        config.saving ? "Migrating…" : "Yes, migrate and restart",
       ),
       h(
         "button",

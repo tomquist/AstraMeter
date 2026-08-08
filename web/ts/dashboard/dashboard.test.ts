@@ -628,6 +628,28 @@ const emptyHtml = renderToString(
 );
 has(emptyHtml, "This config file is empty", "an empty file explains itself");
 
+// In the add-on, a config file means the add-on options are inert — the one
+// thing a user cannot deduce from the editor in front of them — and the way
+// back has its own cost: the options are whatever they were, not this file.
+{
+  const addonFile: AppState = {
+    ...live,
+    tab: "config",
+    snapshot: {
+      ...snapshot,
+      capabilities: { ...snapshot.capabilities, config_mode: "ha_advanced", ha_options: true },
+      service: { ...snapshot.service, config_path: "/config/astrameter.ini" },
+    },
+  };
+  const html = renderToString(h("div", null, ...view(addonFile, actions, iniConfig)));
+  has(html, "/config/astrameter.ini — the add-on options are ignored", "the live source is named");
+  has(html, "Migrate back to guided setup", "and the way back is offered");
+  has(html, "not copied into the add-on options", "with the stale-options risk stated");
+}
+
+// Outside the add-on there is nothing to migrate to.
+lacks(iniHtml, "Migrate", "the standalone editor offers no migration");
+
 // ── Home Assistant entity picker ──
 const HA_SCHEMA = normalizeAddonSchema([
   { name: "power_input_alias", required: true, type: "string" },
@@ -652,7 +674,16 @@ const haState: AppState = {
 const pickerHtml = renderToString(h("div", null, ...view(haState, actions, withEntities)));
 has(pickerHtml, 'role="combobox"', "the sensor field is a combobox");
 has(pickerHtml, "Grid power — currently 412.8 W", "the chosen sensor resolves to a readable line");
-has(pickerHtml, "Switch to a config file", "the mode switch is offered in the add-on");
+// The migration reads as a footnote, not a heading: folded shut, below the
+// editor, and answering what it costs before it offers the button.
+has(pickerHtml, "Migrate to a config file", "the migration is offered in the add-on");
+has(pickerHtml, "Now: add-on options", "and names the source in effect");
+has(pickerHtml, '<details class="card migrate">', "folded shut, not opened for everyone");
+has(pickerHtml, "stop having any effect", "the cost of migrating is spelled out");
+ok(
+  pickerHtml.indexOf("Guided setup") < pickerHtml.indexOf("Migrate to a config file"),
+  "and it sits below the editor rather than above it",
+);
 // Closed until the field is focused, so a form of them is not a wall of lists.
 lacks(pickerHtml, "combo-list", "the suggestions stay closed until asked for");
 has(pickerHtml, 'aria-expanded="false"', "and the field says so");

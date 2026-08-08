@@ -168,16 +168,31 @@ Passwords and tokens are shown as `••••••••`. Leave them untouch
 stored value; the real secret is never sent to your browser and never has to be
 retyped to edit an unrelated field.
 
-### Switching between them
+### Migrating between them
 
-In the add-on the Configuration Mode card can move you between the two:
+Which one you want comes down to what your setup needs:
 
-- **Switch to a config file** copies the configuration that is running right
-  now into `/config/astrameter.ini`, points the add-on's `custom_config` option
-  at it and restarts. You start from what is actually running, not a blank file.
-  An existing file with that name is never overwritten.
-- **Switch to guided setup** clears `custom_config` and goes back to the add-on
-  options. Your config file is left on disk, not deleted.
+- **Guided setup** is the easy path — labelled fields, entity pickers, values
+  checked before they save. Grid power has to come from a Home Assistant
+  sensor, and only the settings the add-on exposes can be changed.
+- **A config file** is the advanced path — everything AstraMeter can do: any
+  power source, several meters at once, every setting there is. You maintain
+  the file yourself, and nothing checks it until AstraMeter starts.
+
+In the add-on, **Migrate to a config file** / **Migrate back to guided setup**
+at the foot of the Configuration tab moves you between them. It is folded shut
+by default: this is a one-time move, not a setting.
+
+- **Migrating to a config file** writes the configuration that is running right
+  now to `/config/astrameter.ini`, points the add-on's `custom_config` option
+  at it and restarts. You start from what is actually running, not a blank
+  file. An existing file with that name is never overwritten — AstraMeter then
+  runs *that* file instead. The add-on options stay on the add-on's
+  Configuration page but stop having any effect.
+- **Migrating back to guided setup** clears `custom_config` and goes back to
+  the add-on options as they stand today — your file is *not* copied into them,
+  so check them first if they have not been touched in a while. The file itself
+  is left on disk unchanged, and migrating to it again reads it back.
 
 Either way you are asked to confirm first, and the add-on then restarts — the
 dashboard goes quiet for up to a minute and reconnects on its own.

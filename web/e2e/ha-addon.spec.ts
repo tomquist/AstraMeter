@@ -12,7 +12,7 @@ const SENTINEL = "\u2022".repeat(8);
 
 /**
  * The Home Assistant add-on path: the guided form, the entity picker and the
- * configuration-mode switch, against a stand-in Supervisor serving the
+ * migration to a config file, against a stand-in Supervisor serving the
  * repository's own `ha_addon/config.yaml`.
  */
 
@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-/** The form card specifically — the mode card also mentions "guided setup". */
+/** The form card specifically, not the other cards the tab carries. */
 function form(page: import("@playwright/test").Page) {
   return page.locator(".card", {
     has: page.locator('h2:text-is("Guided setup")'),
@@ -325,9 +325,17 @@ test("a three-phase meter can be entered one sensor per phase", async ({ page })
   expect(readAddonOptions(stack).power_input_alias).toBe("sensor.grid_power");
 });
 
-test("switching to a config file materializes what is running", async ({ page }) => {
+test("migrating to a config file materializes what is running", async ({ page }) => {
   await page.goto(`${BASE_URL}#/config`);
-  const button = page.locator('button:text("Switch to a config file")');
+  // Folded away below the editor: a once-if-ever move should not sit in front
+  // of someone who came to change a setting.
+  const fold = page.locator("details.migrate");
+  const button = page.locator('button:text("Migrate to a config file…")');
+  await expect(button).toBeHidden();
+  await fold.locator("summary").click();
+
+  // Opened, it says what the move costs before it offers the button.
+  await expect(fold).toContainText("stop having any effect");
   await expect(button).toBeVisible();
   await button.click();
 
@@ -335,7 +343,7 @@ test("switching to a config file materializes what is running", async ({ page })
   // the add-on off the air for a minute.
   const confirm = page.locator(".confirm");
   await expect(confirm).toContainText("/config/astrameter.ini");
-  await expect(page.locator('button:text("Yes, switch and restart")')).toBeVisible();
+  await expect(page.locator('button:text("Yes, migrate and restart")')).toBeVisible();
   // Backing out leaves everything alone.
   await page.locator('button:text("Cancel")').click();
   await expect(page.locator(".confirm")).toHaveCount(0);
@@ -349,8 +357,9 @@ test("switching to a config file materializes what is running", async ({ page })
   await page.goto(`${BASE_URL}#/config`);
   await expect(page.locator(".confirm")).toHaveCount(0);
 
+  await fold.locator("summary").click();
   await button.click();
-  await page.locator('button:text("Yes, switch and restart")').click();
+  await page.locator('button:text("Yes, migrate and restart")').click();
   await expect(page.locator(".banner")).toContainText("Configuration mode changed");
   // The restart is deferred until after this response, so the call the page
   // made must have succeeded rather than dying with the container.
