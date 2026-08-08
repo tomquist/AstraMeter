@@ -315,6 +315,16 @@ off, or set `dashboard: false`.
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.
 
+On ESPHome two things are worth knowing now that the page is on by default.
+ESPHome's HTTP server sends `Access-Control-Allow-Origin: *` on every response,
+so `/api/status` is readable by **any website you visit** while on the same
+network, not only by something already on your LAN — it reports your device
+name, battery addresses, MQTT broker and live household power. Writes are not
+exposed that way: they require `Content-Type: application/json`, which a
+browser cannot send cross-origin without a preflight the device refuses. Either
+`dashboard: false` or ESPHome's `web_server:` with an `auth:` block closes
+both.
+
 ## Troubleshooting
 
 **The sidebar panel is missing.** Restart the add-on; the panel is registered

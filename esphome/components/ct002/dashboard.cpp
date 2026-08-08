@@ -21,6 +21,10 @@ static const char *const TAG = "astrameter.dashboard";
 // milliseconds; the ceiling only matters when the loop is busy (a Wi-Fi
 // reconnect, a long UDP burst) and keeps the httpd task from parking there.
 static constexpr uint32_t STATUS_WAIT_MS = 500;
+// Assumes a 1 kHz FreeRTOS tick, which ESPHome pins (CONFIG_FREERTOS_HZ=1000).
+// At IDF's own 100 Hz default this would round down to vTaskDelay(0) — no
+// yield — and the httpd task would spin out the whole wait without ever
+// letting the lower-priority main loop produce what it is waiting for.
 static constexpr uint32_t STATUS_POLL_MS = 5;
 
 // A control write is four short fields. Anything larger is not one of ours,
@@ -64,6 +68,9 @@ void send_json(AsyncWebServerRequest *request, int code, const char *body) {
       break;
     case 404:
       status = "404 Not Found";
+      break;
+    case 415:
+      status = "415 Unsupported Media Type";
       break;
     case 503:
       status = "503 Service Unavailable";
@@ -236,11 +243,31 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
     return;
   }
 
+  // Insist on the page's own content type, and not only to be strict about
+  // the wire format.
+  //
+  // A browser may send text/plain, application/x-www-form-urlencoded or
+  // multipart/form-data cross-origin with no preflight, so without this check
+  // any web page the owner happens to visit could POST here — the body of a
+  // no-cors fetch() is text/plain by default, and the ESP-IDF shim's fallback
+  // takes every content type that is not a form. `application/json` is not on
+  // that safelist: asking for it forces a preflight, and the preflight has no
+  // handler and 404s. Same-origin callers (the page) are unaffected.
+  const auto content_type = request->get_header("Content-Type");
+  if (!content_type.has_value() ||
+      content_type.value().find("application/json") == std::string::npos) {
+    send_json(request, 415,
+              "{\"error\":\"Content-Type must be application/json\"}");
+    return;
+  }
+
   // Read the body ourselves. The ESP-IDF shim only parses form-encoded POSTs
   // into request params, and logs an "unsupported content type" warning for
   // anything else — but it leaves the body unread on the socket, so the JSON
   // the page sends is still here for us. Reading it keeps ONE wire format
   // across both backends instead of a second encoding just for the firmware.
+  // It also means the check above is what keeps this recv honest: for a form
+  // body the shim has already drained the socket, and we would find nothing.
   httpd_req_t *raw = *request;
   const size_t length = raw->content_len;
   if (length == 0 || length > MAX_CONTROL_BODY) {

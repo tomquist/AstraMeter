@@ -97,7 +97,17 @@ What differs is the document behind it:
   its `_CONSUMER_SETTERS` table. The bounds MUST match: a value one stack
   accepts and the other refuses would be settable from one dashboard and then
   silently reverted by the next retained MQTT replay. It is opt-in on the
-  firmware (`controls:`, default off) because that page has no login.
+  firmware (`controls:`, default off) because that page has no login, and it
+  requires `Content-Type: application/json` — a header a browser cannot set
+  cross-origin without a preflight, which is what stops any page the owner
+  happens to visit from POSTing to a device on their LAN.
+
+  Three divergences there are deliberate, so don't "restore" them: the
+  firmware **rejects a device write with no `value`** (except `force_rotation`,
+  which is a button) where Python defaults it to `True` — defaulting would
+  switch on `active_control` nobody asked for; it wants a **JSON number** where
+  Python accepts anything `float()` swallows; and it **ignores `device_id`**,
+  having exactly one device to write to.
 
 Three things the ESPHome half constrains, so keep them true:
 

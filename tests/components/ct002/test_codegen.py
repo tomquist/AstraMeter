@@ -215,6 +215,22 @@ def test_dashboard_shorthand_passes_a_block_through():
     assert ct002_component._dashboard_shorthand(block) is block
 
 
+def test_dashboard_off_by_substitution_string(esp32_core):
+    # `dashboard: ${enable_dashboard}` expands to a string, not a bool, so the
+    # two spellings have to mean the same thing.
+    for spelling in ("false", "False", "no", "off"):
+        config = {"power_sensor_l1": "grid_l1", "dashboard": spelling}
+        assert ct002_component._resolve_dashboard(config) == {
+            "power_sensor_l1": "grid_l1"
+        }, spelling
+
+
+def test_dashboard_on_by_substitution_string(esp32_core):
+    config = {"power_sensor_l1": "grid_l1", "dashboard": "true"}
+    ct002_component._resolve_dashboard(config)
+    assert ct002_component._dashboard_shorthand(config["dashboard"]) == {}
+
+
 def test_dashboard_false_drops_the_key_entirely(esp32_core):
     # `dashboard: false` must leave nothing behind, so a disabled dashboard
     # pulls in no HTTP server and no page in flash.
@@ -261,16 +277,36 @@ def test_dashboard_path_rejects_a_query_string():
         ct002_component._validate_dashboard_path("/astrameter?x=1")
 
 
-def test_auto_load_pulls_the_web_server_unless_refused(esp32_core):
-    # AUTO_LOAD runs on the raw YAML, before the schema fills the default in,
-    # so "absent" has to mean the same thing here as it does there.
-    assert "web_server_base" in ct002_component.AUTO_LOAD({})
+def test_auto_load_pulls_the_web_server_only_for_a_resolved_dashboard():
+    # A parameterized AUTO_LOAD runs *after* CONFIG_SCHEMA, so it is handed the
+    # validated config — one _resolve_dashboard has already been through. There
+    # the key is present exactly when a dashboard was asked for, which is the
+    # only shape worth asserting: reading the raw spelling instead would treat
+    # `dashboard: false` (deleted by then) as absent and load the server anyway.
     assert "web_server_base" in ct002_component.AUTO_LOAD({"dashboard": {}})
-    assert "web_server_base" not in ct002_component.AUTO_LOAD({"dashboard": False})
+    assert "web_server_base" not in ct002_component.AUTO_LOAD({})
+
+
+def test_auto_load_matches_resolve_dashboard_for_every_spelling(esp32_core):
+    # Belt and braces on the above: run each spelling through the resolver the
+    # way ESPHome does, and check AUTO_LOAD agrees with the outcome.
+    for spelling, wants_server in (
+        ({}, True),  # absent — the default
+        ({"dashboard": None}, True),  # bare `dashboard:`
+        ({"dashboard": True}, True),
+        ({"dashboard": {"controls": True}}, True),
+        ({"dashboard": False}, False),
+        ({"dashboard": "false"}, False),  # a substitution expands to a string
+    ):
+        resolved = ct002_component._resolve_dashboard(dict(spelling))
+        loaded = "web_server_base" in ct002_component.AUTO_LOAD(resolved)
+        assert loaded is wants_server, f"{spelling} -> {resolved}"
 
 
 def test_auto_load_leaves_the_web_server_out_off_esp32(host_core):
-    assert "web_server_base" not in ct002_component.AUTO_LOAD({})
+    assert "web_server_base" not in ct002_component.AUTO_LOAD(
+        ct002_component._resolve_dashboard({})
+    )
 
 
 def test_auto_load_always_carries_the_sub_block_infrastructure(esp32_core):

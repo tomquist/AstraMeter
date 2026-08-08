@@ -514,13 +514,31 @@ def _validate_dashboard_path(value):
     return path.rstrip("/")
 
 
+def _dashboard_toggle(value):
+    """The value as a bool if it is one, else None.
+
+    Substitutions expand to *strings*, so a packaged config saying
+    `dashboard: ${enable_dashboard}` hands this "false", not False. Reading it
+    with cv.boolean keeps the two spellings equivalent instead of failing with
+    "expected a dictionary".
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        try:
+            return cv.boolean(value)
+        except cv.Invalid:
+            return None
+    return None
+
+
 def _dashboard_shorthand(value):
     """`dashboard:` and `dashboard: true` mean "on, with the defaults".
 
     Turning it on should not require knowing a single option name, and the
     dict form stays available for the rare setup that needs one.
     """
-    if value is None or value is True:
+    if value is None or _dashboard_toggle(value) is True:
         return {}
     return value
 
@@ -554,34 +572,24 @@ DASHBOARD_SCHEMA = cv.All(
 )
 
 
-def _dashboard_wanted(config) -> bool:
-    """Whether this configuration gets a dashboard.
-
-    On unless the YAML says `dashboard: false` — a device that can serve the
-    page should, without anyone having to know the feature exists. ESP32 only,
-    because ESPHome's HTTP server is: there is no implementation for `host`,
-    and the smaller targets could not hold the page anyway.
-
-    Read from the *raw* config, so AUTO_LOAD (which runs before the schema
-    fills anything in) and the schema itself agree on what absent means.
-    """
-    if not isinstance(config, dict):
-        return False
-    return config.get(CONF_DASHBOARD, True) is not False and CORE.is_esp32
-
-
 def _resolve_dashboard(config):
-    """Turn the shorthands into a block the schema can validate, or nothing.
+    """Settle whether there is a dashboard at all, before the schema runs.
 
-    `dashboard: false` is removed outright, so a disabled dashboard pulls in
-    nothing at all — no HTTP server, no page in flash. An absent key is filled
-    in with the defaults, which is what makes the feature opt-out.
+    This is what makes the feature opt-out: an absent key becomes the default
+    block, and only `dashboard: false` removes it. Afterwards the key is
+    present if and only if the device gets a dashboard, which is the single
+    fact everything downstream — the schema, codegen and AUTO_LOAD — reads.
+
+    ESP32 only, because ESPHome's HTTP server is: there is no implementation
+    for `host`, and the smaller targets could not hold the page anyway.
     """
     if not isinstance(config, dict):
         return config
-    if config.get(CONF_DASHBOARD) is False:
+    if _dashboard_toggle(config.get(CONF_DASHBOARD)) is False:
+        # Removed outright, so a disabled dashboard pulls in nothing at all —
+        # no HTTP server, no page in flash.
         del config[CONF_DASHBOARD]
-    elif CONF_DASHBOARD not in config and _dashboard_wanted(config):
+    elif CONF_DASHBOARD not in config and CORE.is_esp32:
         config[CONF_DASHBOARD] = {}
     return config
 
@@ -591,14 +599,21 @@ def AUTO_LOAD(config):
 
     json / md5 are always loaded so nobody has to add empty `json:` or `md5:`
     blocks for the sub-block infrastructure (they're cheap and only the
-    sub-blocks reference them). web_server_base whenever there is a dashboard,
-    which is by default — `dashboard: false` is what leaves the HTTP server
-    out. mqtt / http_request have user-facing config of their own (broker,
-    timeout, ...) so those stay `cv.requires_component` on the sub-schema
-    instead.
+    sub-blocks reference them). web_server_base only when there is a dashboard
+    to serve, which is by default — `dashboard: false` is what leaves the HTTP
+    server out. mqtt / http_request have user-facing config of their own
+    (broker, timeout, ...) so those stay `cv.requires_component` on the
+    sub-schema instead.
+
+    A parameterized AUTO_LOAD runs *after* CONFIG_SCHEMA, not before it
+    (AddDynamicAutoLoadsValidationStep, priority -5.0), so what arrives here is
+    the validated config with _resolve_dashboard already applied: the key is
+    present exactly when a dashboard was asked for. Testing the raw spelling
+    instead would read `dashboard: false` as an absent key and load the server
+    for a build that opted out.
     """
     loads = ["socket", "json", "md5"]
-    if _dashboard_wanted(config):
+    if isinstance(config, dict) and CONF_DASHBOARD in config:
         loads.append("web_server_base")
     return loads
 
