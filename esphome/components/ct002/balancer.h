@@ -305,14 +305,8 @@ struct ProbeSnapshot {
   double deadline_in{0.0};
 };
 
-struct BalancerSnapshot {
-  BalancerConfig config;
-  bool efficiency_rotation_enabled{false};
-  PredictorSnapshot predictor;
-  ImportTrimSnapshot import_trim;
-  EfficiencySnapshot efficiency;
-  std::optional<ProbeSnapshot> probe;
-};
+// BalancerSnapshot, which gathers all of the above, is defined below
+// ControlQualitySnapshot — it carries one by value.
 
 struct ProbeState {
   std::string candidate_id;
@@ -388,6 +382,18 @@ struct ControlQualitySnapshot {
   bool has_score{false};
   float band{CONTROL_QUALITY_MIN_BAND_W};
   int samples{0};
+};
+
+// The whole-balancer view for the status API (see the snapshot structs above).
+// Mirrors balancer.py BalancerSnapshot.
+struct BalancerSnapshot {
+  BalancerConfig config;
+  bool efficiency_rotation_enabled{false};
+  PredictorSnapshot predictor;
+  ImportTrimSnapshot import_trim;
+  EfficiencySnapshot efficiency;
+  ControlQualitySnapshot control_quality;
+  std::optional<ProbeSnapshot> probe;
 };
 
 // Judges the closed loop the way a user would: by what the meter shows. How

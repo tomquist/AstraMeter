@@ -90,6 +90,20 @@ def test_document_carries_the_balancer_internals(esphome) -> None:
     assert "probe" not in balancer
 
 
+def test_document_carries_the_control_quality_verdict(esphome) -> None:
+    quality = _device(esphome)["balancer"]["control_quality"]
+    # One poll in: the loop is being judged but has nothing to say yet.
+    assert quality["verdict"] in {"idle", "warmup", "stable", "off_target", "limited"}
+    # The settling band is configuration, so it is always meaningful...
+    assert quality["band_w"] > 0
+    # ...while the measurements only appear once the window holds a sample,
+    # so an unmeasured window cannot read as a perfectly held grid.
+    if quality["samples"] == 0:
+        assert "error_w" not in quality
+        assert "in_band_fraction" not in quality
+        assert "crossings_per_min" not in quality
+
+
 def test_document_omits_what_the_firmware_cannot_produce(esphome) -> None:
     document = esphome.status()
     # No SNTP on this binary: ages are reported, dates are not invented.

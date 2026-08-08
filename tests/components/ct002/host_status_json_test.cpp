@@ -71,6 +71,14 @@ StatusDocument sample() {
   balancer.import_trim.dwell = 6;
   balancer.import_trim.engaged = true;
   balancer.efficiency.demand_ema = 420.0f;
+  balancer.control_quality.verdict = "stable";
+  balancer.control_quality.score = 92.5;
+  balancer.control_quality.has_score = true;
+  balancer.control_quality.error_ema = 18.25;
+  balancer.control_quality.in_band_fraction = 0.875;
+  balancer.control_quality.crossings_per_second = 0.05;
+  balancer.control_quality.band = 25.0f;
+  balancer.control_quality.samples = 640;
   balancer.efficiency.priority_order = {"aabbccddeeff"};
   balancer.efficiency.last_rotation_age = 61.5;
   device.balancer = balancer;
@@ -181,6 +189,37 @@ TEST(StatusJson, CarriesTheBalancerInternals) {
   EXPECT_TRUE(contains(json, "\"priority_order\":[\"aabbccddeeff\"]"));
   // No probe is running, so the object is absent rather than empty.
   EXPECT_FALSE(contains(json, "\"probe\""));
+}
+
+TEST(StatusJson, CarriesTheControlQualityVerdict) {
+  const std::string json = build_status_json(sample());
+  EXPECT_TRUE(contains(json, "\"verdict\":\"stable\""));
+  EXPECT_TRUE(contains(json, "\"score_pct\":92.5"));
+  // Half-to-even, like Python's round(): 18.25 → 18.2.
+  EXPECT_TRUE(contains(json, "\"error_w\":18.2"));
+  EXPECT_TRUE(contains(json, "\"in_band_fraction\":0.875"));
+  // Per minute on the wire, like the Python side: 0.05/s reads as 3/min.
+  EXPECT_TRUE(contains(json, "\"crossings_per_min\":3"));
+  EXPECT_TRUE(contains(json, "\"band_w\":25"));
+  EXPECT_TRUE(contains(json, "\"samples\":640"));
+}
+
+TEST(StatusJson, WithholdsControlQualityEvidenceUntilItHasSome) {
+  // An unmeasured window must not report "0 W mean error, 0% in band": that
+  // describes a perfectly held grid and a permanently failing one identically.
+  StatusDocument doc = sample();
+  ControlQualitySnapshot &quality = doc.devices[0].balancer->control_quality;
+  quality.verdict = "idle";
+  quality.has_score = false;
+  quality.samples = 0;
+  const std::string json = build_status_json(doc);
+  EXPECT_TRUE(contains(json, "\"verdict\":\"idle\""));
+  EXPECT_FALSE(contains(json, "score_pct"));
+  EXPECT_FALSE(contains(json, "error_w"));
+  EXPECT_FALSE(contains(json, "in_band_fraction"));
+  EXPECT_FALSE(contains(json, "crossings_per_min"));
+  // Configuration, not a measurement — still there.
+  EXPECT_TRUE(contains(json, "\"band_w\":25"));
 }
 
 TEST(StatusJson, CarriesTheBattery) {

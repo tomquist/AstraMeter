@@ -205,6 +205,28 @@ void write_consumer(JsonWriter &json, const ConsumerStatus &consumer) {
   json.end_object();
 }
 
+// Mirrors serialize.py::_control_quality_to_wire.
+void write_control_quality(JsonWriter &json, const ControlQualitySnapshot &quality) {
+  json.begin_object("control_quality");
+  json.set_if("verdict", quality.verdict);
+  if (quality.has_score) json.set("score_pct", quality.score, 1);
+  // The three measurements are omitted until the window holds a sample: the
+  // EMAs start at zero, and "mean grid error 0 W, time inside band 0%" beside
+  // an `idle` verdict describes a perfectly held grid and a permanently
+  // failing one identically — neither of which was measured.
+  if (quality.samples > 0) {
+    json.set("error_w", quality.error_ema, 1);
+    json.set("in_band_fraction", quality.in_band_fraction, 3);
+    // Per minute on the wire: per second reads as 0.002 in the UI, and this
+    // is a number a human is meant to interpret.
+    json.set("crossings_per_min", quality.crossings_per_second * 60.0, 2);
+  }
+  // Configuration, not a measurement: always meaningful.
+  json.set("band_w", static_cast<double>(quality.band), 1);
+  json.set("samples", static_cast<long long>(quality.samples));
+  json.end_object();
+}
+
 // Mirrors serialize.py::_balancer_to_wire, minus its `config` block: the page
 // never renders the balancer's configuration (it is compiled into this
 // firmware and visible in the YAML), so ~600 bytes of every poll would be
@@ -231,6 +253,7 @@ void write_balancer(JsonWriter &json, const BalancerSnapshot &balancer) {
   json.set("last_rotation_age_s", balancer.efficiency.last_rotation_age, 1);
   json.set("all_dc_under_surplus", balancer.efficiency.all_dc_under_surplus);
   json.end_object();
+  write_control_quality(json, balancer.control_quality);
   if (balancer.probe.has_value()) {
     const ProbeSnapshot &probe = *balancer.probe;
     json.begin_object("probe");

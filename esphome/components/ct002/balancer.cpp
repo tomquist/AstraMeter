@@ -921,6 +921,7 @@ BalancerSnapshot LoadBalancer::status_snapshot() const {
   std::sort(out.efficiency.deprioritized.begin(), out.efficiency.deprioritized.end());
   out.efficiency.last_rotation_age = std::max(0.0, now - this->last_rotation_);
   out.efficiency.all_dc_under_surplus = this->all_dc_surplus_warned_;
+  out.control_quality = this->control_quality_.snapshot();
   if (this->probe_state_.has_value()) {
     const ProbeState &probe = *this->probe_state_;
     ProbeSnapshot snap;
