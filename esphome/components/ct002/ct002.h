@@ -195,6 +195,19 @@ class CT002Component : public Component {
   // timestamp or has to stay an age.
   status::DeviceStatus status_snapshot(double wall_now) const;
   status::PowermeterStatus powermeter_status() const;
+
+  /// Whether this id names a battery the status document already shows —
+  /// either one that has polled, or a placeholder holding a saved setting.
+  ///
+  /// The dashboard's write path checks this first. Every setter creates the
+  /// consumer if it is missing, which is what lets a retained MQTT command
+  /// hold a setting for a battery that has not reported yet; on an
+  /// unauthenticated HTTP endpoint the same behaviour would let any caller
+  /// mint entries in `consumers_` until the heap ran out.
+  bool knows_consumer(const std::string &consumer_id) const {
+    return this->consumers_.count(consumer_id) > 0 ||
+           this->consumer_overrides_.count(consumer_id) > 0;
+  }
 #endif
 
   // ── MQTT-insights integration API ────────────────────────────────────

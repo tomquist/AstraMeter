@@ -193,3 +193,30 @@ def test_a_boolean_field_refuses_a_number(esphome) -> None:
 
 def test_an_unknown_field_is_refused(esphome) -> None:
     assert "Unknown" in esphome.control("nonsense", 1, CONSUMER_ID)
+
+
+def test_a_write_to_an_unknown_battery_is_refused(esphome) -> None:
+    """A stale page — or anyone poking the endpoint — must not mint batteries.
+
+    Every consumer setter creates the entry when it is missing, which is what
+    lets a retained MQTT command hold a setting for a battery that has not
+    reported yet. Reached from an unauthenticated HTTP endpoint, that would
+    grow the consumer map until the ESP32 ran out of heap, and each entry
+    would show up on the page as a battery that never existed.
+    """
+    before = len(_device(esphome)["consumers"])
+    assert esphome.control("manual_target", -100, "ffffffffffff").startswith("err")
+    assert len(_device(esphome)["consumers"]) == before
+
+
+def test_a_saved_setting_for_an_absent_battery_stays_writable(esphome) -> None:
+    """...but a battery the document DOES show must stay settable.
+
+    A consumer that has been evicted still has its saved override, and the
+    page draws a card for it (`never_reported`), so the guard above has to
+    admit it rather than turning that card read-only.
+    """
+    assert esphome.control("manual_target", -250, CONSUMER_ID).startswith("ok")
+    esphome.advance_clock(10_000)
+    esphome._cmd("evict")
+    assert esphome.control("manual_target", -300, CONSUMER_ID).startswith("ok")

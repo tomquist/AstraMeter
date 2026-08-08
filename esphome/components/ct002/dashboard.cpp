@@ -27,6 +27,11 @@ static constexpr uint32_t STATUS_POLL_MS = 5;
 // and reading it would only tie up the httpd task's buffer.
 static constexpr size_t MAX_CONTROL_BODY = 512;
 
+// How old the cached document may be before a request is answered 503
+// instead. Comfortably past the page's poll interval plus the wait above, so
+// only a genuinely stuck main loop reaches it.
+static constexpr uint32_t STATUS_STALE_MS = 10000;
+
 namespace {
 
 std::string request_url(AsyncWebServerRequest *request) {
@@ -68,6 +73,10 @@ void DashboardComponent::loop() {
     LockGuard guard(this->lock_);
     if (this->pending_valid_) {
       write = this->pending_;
+      // Taken, not just read: a handler that gives up waiting cancels by
+      // clearing this flag, and it must not be able to cancel a write that
+      // is already on its way in.
+      this->pending_valid_ = false;
       have_write = true;
     }
   }
@@ -76,10 +85,21 @@ void DashboardComponent::loop() {
         write.consumer_id.empty()
             ? apply_device_control(this->ct002_, write.field, write.value)
             : apply_consumer_control(this->ct002_, write.consumer_id, write.field, write.value);
+    // Mirror the setting onto its retained command topic, or the broker
+    // replays the old value on the next reconnect and undoes this.
+    // force_rotation is a button, not a setting: it has no retained state to
+    // protect, and a retained press would re-fire on every reconnect.
+    if (applied && this->mqtt_insights_ != nullptr && write.field != "force_rotation") {
+      if (write.consumer_id.empty()) {
+        this->mqtt_insights_->mirror_device_command(write.field, write.wire_value);
+      } else {
+        this->mqtt_insights_->mirror_consumer_command(write.consumer_id, write.field,
+                                                      write.wire_value);
+      }
+    }
     {
       LockGuard guard(this->lock_);
       this->pending_applied_ = applied;
-      this->pending_valid_ = false;
     }
     this->write_generation_++;
     // The next poll should show what the user just did, not the frame that
@@ -160,13 +180,18 @@ void DashboardComponent::handle_status_(AsyncWebServerRequest *request) {
   }
 
   std::string body;
+  uint32_t age = 0;
   {
     LockGuard guard(this->lock_);
     body = this->document_;
+    age = millis() - this->built_at_;
   }
-  if (body.empty()) {
-    // The loop never got round to us. Saying so beats serving a stale or
-    // half-built document that the page would render as current.
+  // Nothing built yet, or the main loop has been stuck long enough that what
+  // we hold is no longer a description of now. Saying so beats serving a
+  // frozen document the page would render as current: without a wall clock
+  // its ages are computed here, so a stale frame is indistinguishable from a
+  // live one at the browser.
+  if (body.empty() || age > STATUS_STALE_MS) {
     request->send(503, "application/json", "{\"error\":\"status not ready\"}");
     return;
   }
@@ -222,12 +247,17 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
     if (value.is<bool>()) {
       write.value.is_bool = true;
       write.value.flag = value.as<bool>();
+      write.wire_value = write.value.flag ? "true" : "false";
     } else if (value.is<float>()) {
       write.value.number = value.as<float>();
+      // Captured before coercion scales it — the retained mirror carries the
+      // unit the wire uses, which is the unit the reader scales from.
+      write.wire_value = status::format_number(static_cast<double>(write.value.number), 3);
     } else if (device_wide && value.isNull()) {
       // `force_rotation` carries no value; the page posts it bare.
       write.value.is_bool = true;
       write.value.flag = true;
+      write.wire_value = "true";
     } else {
       error = "Invalid request: value";
       return false;
@@ -290,7 +320,20 @@ bool DashboardComponent::submit_write_(const PendingWrite &write, bool *applied)
   while (this->write_generation_ == start && millis() - began_at < STATUS_WAIT_MS) {
     delay(STATUS_POLL_MS);
   }
-  if (this->write_generation_ == start) return false;
+  if (this->write_generation_ == start) {
+    // The loop never got to it. Withdraw the request so it cannot land
+    // minutes later, after this request was answered "not applied", and so
+    // the slot does not stay occupied and 503 every write after it.
+    LockGuard guard(this->lock_);
+    if (this->pending_valid_) {
+      this->pending_valid_ = false;
+      return false;
+    }
+    // Already taken: it is being applied right now and cannot be recalled.
+    // Answering 503 is the honest end of a request we waited out; the next
+    // poll shows what actually landed.
+    return false;
+  }
   LockGuard guard(this->lock_);
   *applied = this->pending_applied_;
   return true;
@@ -323,6 +366,7 @@ void DashboardComponent::rebuild_() {
   {
     LockGuard guard(this->lock_);
     this->document_ = std::move(body);
+    this->built_at_ = millis();
   }
   this->generation_++;
 }

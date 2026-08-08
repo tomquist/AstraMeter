@@ -162,8 +162,9 @@ ct002:
 
 Controls are off by default because the page has **no login of its own** — see
 [Security](#security). They accept exactly the values the MQTT entities and the
-Python dashboard accept, so a setting made here is not something a later MQTT
-reconnect will quietly revert.
+Python dashboard accept, and — when `mqtt_insights:` is configured — a change
+made here is written back to the broker's retained command topic, so it is not
+something the next reconnect quietly reverts.
 
 The dashboard shares ESPHome's HTTP server with `web_server:` and
 `captive_portal:`, so they all use one port. If you also run `web_server:`,

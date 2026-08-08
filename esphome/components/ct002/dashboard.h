@@ -78,6 +78,9 @@ class DashboardComponent : public Component, public AsyncWebHandler {
     std::string consumer_id;
     std::string field;
     controls::ControlValue value;
+    /// The value as the page sent it, before scaling — what gets mirrored
+    /// onto the retained command topic (see mirror_consumer_command).
+    std::string wire_value;
   };
 
   void handle_page_(AsyncWebServerRequest *request);
@@ -104,6 +107,9 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   // asked" from "still stale".
   Mutex lock_;
   std::string document_;
+  /// millis() at the last build, so a request can tell a live document from
+  /// one a stalled loop left behind.
+  uint32_t built_at_{0};
   volatile bool refresh_requested_{false};
   volatile uint32_t generation_{0};
   uint32_t seq_{0};

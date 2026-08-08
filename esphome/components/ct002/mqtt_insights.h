@@ -69,6 +69,50 @@ class MqttInsightsComponent : public Component {
   void set_broker(const std::string &v) { this->broker_ = v; }
   void set_broker_port(uint16_t v) { this->broker_port_ = v; }
 
+  /// Mirror a dashboard write onto the retained command topic it belongs to.
+  ///
+  /// Home Assistant publishes every command topic retained, and this
+  /// component re-subscribes on each reconnect — so without this, the broker
+  /// would replay the *old* value and silently undo what the user just set on
+  /// the page. Mirrors publish_consumer_command / publish_device_command in
+  /// src/astrameter/mqtt_insights/service.py, including their retain and QoS.
+  ///
+  /// *payload* must be the value as it crossed the wire, NOT the scaled
+  /// argument the setter took: the reader scales again, so mirroring a
+  /// percentage as a fraction would divide it by 100 on the next reconnect.
+  ///
+  /// Main loop only — the MQTT client belongs to it. Defined inline so a
+  /// dashboard build without `mqtt:` still links.
+  void mirror_consumer_command(const std::string &consumer_id, const std::string &field,
+                               const std::string &payload) {
+#ifdef USE_MQTT
+    if (this->mqtt_ == nullptr || !this->mqtt_->is_connected()) return;
+    this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/consumer/" +
+                             consumer_id + "/" + field + "/set",
+                         payload, 1, true);
+#else
+    (void) consumer_id;
+    (void) field;
+    (void) payload;
+#endif
+  }
+
+  /// The device-level counterpart, whose topic carries a JSON object.
+  ///
+  /// Only settings are mirrored. `force_rotation` is a button — an event with
+  /// no retained state to revert — and republishing it retained would re-fire
+  /// a rotation on every reconnect, so the caller does not pass it here.
+  void mirror_device_command(const std::string &field, const std::string &payload) {
+#ifdef USE_MQTT
+    if (this->mqtt_ == nullptr || !this->mqtt_->is_connected()) return;
+    this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/set",
+                         "{\"" + field + "\":" + payload + "}", 1, true);
+#else
+    (void) field;
+    (void) payload;
+#endif
+  }
+
   /// This integration as the dashboard's Diagnostics card reads it.
   ///
   /// Mirrors MqttInsightsService.status_snapshot in the Python stack, minus

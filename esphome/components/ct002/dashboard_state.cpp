@@ -200,6 +200,10 @@ status::PowermeterStatus CT002Component::powermeter_status() const {
 
 bool apply_consumer_control(CT002Component *ct002, const std::string &consumer_id,
                             const std::string &field, const controls::ControlValue &value) {
+  // The page only offers controls for batteries in the document it was drawn
+  // from, so an id from anywhere else is either a stale tab or someone
+  // poking the endpoint — and the setters below would silently create it.
+  if (!ct002->knows_consumer(consumer_id)) return false;
   if (field == "manual_target") {
     ct002->set_consumer_manual_target(consumer_id, value.number);
   } else if (field == "auto_target") {
