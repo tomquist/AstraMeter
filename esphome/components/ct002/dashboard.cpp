@@ -44,6 +44,40 @@ std::string request_url(AsyncWebServerRequest *request) {
 #endif
 }
 
+/// Answer with a JSON body under the status code the API actually promises.
+///
+/// ESPHome's IDF web server maps only 200, 404 and 409 to a status line and
+/// turns every other code into 500 (AsyncWebServerRequest::init_response_), so
+/// `request->send(503, ...)` would reach the page as a server error and the
+/// page's "is this retryable / is this my fault" split would be wrong. The
+/// status goes onto the request handle directly instead — the same handle the
+/// control body is read from a few lines below.
+void send_json(AsyncWebServerRequest *request, int code, const char *body) {
+  httpd_req_t *raw = *request;
+  const char *status;
+  switch (code) {
+    case 400:
+      status = "400 Bad Request";
+      break;
+    case 403:
+      status = "403 Forbidden";
+      break;
+    case 404:
+      status = "404 Not Found";
+      break;
+    case 503:
+      status = "503 Service Unavailable";
+      break;
+    default:
+      status = "200 OK";
+      break;
+  }
+  // httpd keeps the pointer rather than a copy, so these must be literals.
+  httpd_resp_set_status(raw, status);
+  httpd_resp_set_type(raw, "application/json");
+  httpd_resp_send(raw, body, HTTPD_RESP_USE_STRLEN);
+}
+
 /// The current wall-clock epoch, or 0 when the clock has not synced. Without
 /// SNTP an ESP32 counts from 1970, and a 1970 timestamp on the page is worse
 /// than no timestamp at all — everything downstream treats 0 as "unknown".
@@ -192,7 +226,7 @@ void DashboardComponent::handle_status_(AsyncWebServerRequest *request) {
   // its ages are computed here, so a stale frame is indistinguishable from a
   // live one at the browser.
   if (body.empty() || age > STATUS_STALE_MS) {
-    request->send(503, "application/json", "{\"error\":\"status not ready\"}");
+    send_json(request, 503, "{\"error\":\"status not ready\"}");
     return;
   }
   request->send(200, "application/json", body.c_str());
@@ -200,9 +234,9 @@ void DashboardComponent::handle_status_(AsyncWebServerRequest *request) {
 
 void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool device_wide) {
   if (!this->controls_) {
-    request->send(403, "application/json",
-                  "{\"error\":\"Controls are off. Set `controls: true` on this device's "
-                  "dashboard block to allow writes.\"}");
+    send_json(request, 403,
+              "{\"error\":\"Controls are off. Set `controls: true` on this device's "
+              "dashboard block to allow writes.\"}");
     return;
   }
 
@@ -214,7 +248,7 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
   httpd_req_t *raw = *request;
   const size_t length = raw->content_len;
   if (length == 0 || length > MAX_CONTROL_BODY) {
-    request->send(400, "application/json", "{\"error\":\"Invalid request: bad body length\"}");
+    send_json(request, 400, "{\"error\":\"Invalid request: bad body length\"}");
     return;
   }
   std::string body(length, '\0');
@@ -222,7 +256,7 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
   while (got < length) {
     const int chunk = httpd_req_recv(raw, &body[got], length - got);
     if (chunk <= 0) {
-      request->send(400, "application/json", "{\"error\":\"Invalid request: body not received\"}");
+      send_json(request, 400, "{\"error\":\"Invalid request: body not received\"}");
       return;
     }
     got += static_cast<size_t>(chunk);
@@ -268,16 +302,15 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
     return true;
   });
   if (!parsed) {
-    request->send(400, "application/json",
-                  ("{\"error\":\"" + (error.empty() ? std::string("Invalid request") : error) +
-                   "\"}")
-                      .c_str());
+    const std::string payload =
+        "{\"error\":\"" + (error.empty() ? std::string("Invalid request") : error) + "\"}";
+    send_json(request, 400, payload.c_str());
     return;
   }
 
   if (device_wide) {
     if (!controls::is_device_field(write.field)) {
-      request->send(404, "application/json", "{\"error\":\"Unknown field\"}");
+      send_json(request, 404, "{\"error\":\"Unknown field\"}");
       return;
     }
   } else {
@@ -287,19 +320,19 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
     const std::string message = controls::coerce_consumer_control(write.field, write.value);
     if (!message.empty()) {
       const bool unknown = !controls::is_consumer_field(write.field);
-      request->send(unknown ? 404 : 400, "application/json",
-                    ("{\"error\":\"" + message + "\"}").c_str());
+      const std::string payload = "{\"error\":\"" + message + "\"}";
+      send_json(request, unknown ? 404 : 400, payload.c_str());
       return;
     }
   }
 
   bool applied = false;
   if (!this->submit_write_(write, &applied)) {
-    request->send(503, "application/json", "{\"error\":\"Device busy, try again\"}");
+    send_json(request, 503, "{\"error\":\"Device busy, try again\"}");
     return;
   }
   if (!applied) {
-    request->send(404, "application/json", "{\"error\":\"Unknown device or field\"}");
+    send_json(request, 404, "{\"error\":\"Unknown device or field\"}");
     return;
   }
   ESP_LOGI(TAG, "control: %s%s%s = %s", write.consumer_id.c_str(),
