@@ -672,6 +672,92 @@ label.row input[type="checkbox"] {
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
+/* ── guided form: groups ─────────────────────────────────────────── */
+
+/* Two groups are open — the ones a working setup needs — and the rest fold
+ * away. Every option is documented, which is only readable if you are not
+ * handed all fifty of them at once. */
+.opt-group {
+  margin-bottom: 18px;
+}
+
+.opt-group > h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fold-blurb {
+  margin: 3px 0 10px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+details.opt-fold {
+  margin-bottom: 8px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+}
+
+details.opt-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.82rem;
+  border-radius: var(--radius);
+}
+
+details.opt-fold > summary:hover {
+  background: var(--bg-sunken);
+}
+
+details.opt-fold[open] > summary {
+  border-bottom: 1px solid var(--divider);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.fold-title {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+details.opt-fold[open] .fold-title,
+details.opt-fold > summary:hover .fold-title {
+  color: var(--text);
+}
+
+.fold-count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+details.opt-fold > .fold-blurb {
+  margin: 10px 12px 0;
+}
+
+details.opt-fold > .fields {
+  padding: 10px 12px 14px;
+}
+
+/* A checkbox option carries its help underneath, like every other field. */
+.field.toggle > .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.field.toggle input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 /* An action asked about before it happens: the question, then the two ways
  * out of it. Marked like a warning banner so it reads as a stop, not a step. */
 .confirm {

@@ -29,7 +29,12 @@ import {
   reportingConsumers,
   type AppState,
 } from "./model.js";
-import { normalizeAddonSchema, parseAddonSchema } from "./option-meta.js";
+import {
+  GROUPS,
+  OPTION_META,
+  normalizeAddonSchema,
+  parseAddonSchema,
+} from "./option-meta.js";
 import { view } from "./view.js";
 import {
   entityList,
@@ -549,6 +554,65 @@ ok(normalizeAddonSchema({ ct_mac: "str?" }).ct_mac.optional, "the mapping form p
   has(html, "disabled", "but not editable here");
   has(html, "Configuration page", "and it says where to edit it");
   lacks(html, "undefined", "no undefined leaks into the guided form");
+
+  // Everything but the two groups a working setup needs is folded away, and
+  // an option nobody has written copy for still renders — in the last group.
+  has(html, '<details class="opt-fold">', "the rest of the form is folded shut");
+  has(html, "Battery control", "an advanced group keeps its name on the fold");
+  has(html, "Options this dashboard has no description for yet", "unknown options say so");
+  ok(
+    html.indexOf("Grid measurement") < html.indexOf("Battery control"),
+    "the groups follow GROUPS order, not the order Supervisor sent",
+  );
+  // The checkbox rows carry help too: a bare switch is as undocumented as a
+  // bare number box.
+  has(html, "Work out each battery&#39;s own target", "a boolean option is documented");
+  // An empty box says what empty means rather than just "optional".
+  has(html, 'placeholder="0.5"', "a default is shown in the box it applies to");
+}
+
+// ── every add-on option is documented ──
+//
+// The add-on's own Configuration page describes all of these (translations/
+// en.yaml); a "guided" form of bare labels would be strictly worse than the
+// page it replaces. config.yaml is the list that matters — an option added
+// there and nowhere else would otherwise land in the form unexplained.
+{
+  const yaml = readFileSync(
+    new URL("../../../ha_addon/config.yaml", import.meta.url),
+    "utf8",
+  );
+  const options: string[] = [];
+  let inSchema = false;
+  for (const line of yaml.split("\n")) {
+    if (/^schema:/.test(line)) {
+      inSchema = true;
+      continue;
+    }
+    if (!inSchema) continue;
+    const match = /^ {2}([a-z0-9_]+):/.exec(line);
+    if (match) options.push(match[1]);
+    else if (/^\S/.test(line)) break;
+  }
+  ok(options.length > 40, "the add-on's schema block was found and parsed");
+
+  const titles = new Set(GROUPS.map((g) => g.title));
+  for (const key of options) {
+    const meta = OPTION_META[key];
+    ok(Boolean(meta), `${key} has an entry in OPTION_META`);
+    if (!meta) continue;
+    ok(Boolean(meta.help), `${key} says what it does`);
+    ok(titles.has(meta.group), `${key} is in a group the form renders`);
+    ok(
+      !meta.placeholder || !/\bdefault\b/i.test(meta.help ?? ""),
+      `${key} states its default once, not twice`,
+    );
+  }
+  // The other direction: copy for an option the add-on dropped is dead weight
+  // that reads as current.
+  for (const key of Object.keys(OPTION_META)) {
+    ok(options.includes(key), `OPTION_META.${key} is still an add-on option`);
+  }
 }
 
 // ── config.ini editor: typed controls from the backend's key metadata ──

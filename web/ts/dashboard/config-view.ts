@@ -17,7 +17,13 @@
 
 import { h, type VChild, type VNode } from "./vdom.js";
 import type { AppState } from "./model.js";
-import { OPTION_META, type OptionMeta, type OptionSpec } from "./option-meta.js";
+import {
+  GROUPS,
+  OPTION_META,
+  OTHER_GROUP,
+  type OptionMeta,
+  type OptionSpec,
+} from "./option-meta.js";
 import type { HaEntity } from "./transport.js";
 
 /** Type metadata for one INI key, from GET /api/key-types. */
@@ -444,30 +450,49 @@ function guidedForm(config: ConfigState, actions: ConfigActions): VNode {
 
   const groups = new Map<string, string[]>();
   for (const key of keys) {
-    const group = OPTION_META[key]?.group ?? "Other";
+    const group = OPTION_META[key]?.group ?? OTHER_GROUP;
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group)!.push(key);
   }
 
+  // In GROUPS order, not Supervisor's: what comes back is config.yaml order,
+  // which is the order the options were added in over the years.
   const sections: VChild[] = [];
-  for (const [group, groupKeys] of groups) {
-    sections.push(
-      h(
-        "div",
-        { style: "margin-bottom:18px" },
-        h(
-          "h3",
-          { style: "font-size:.85rem;margin:0 0 8px;color:var(--text-dim)" },
-          group,
-        ),
-        h(
-          "div",
-          { class: "fields" },
-          ...groupKeys.map((key) =>
-            optionField(key, config.schema[key], config.options[key], config, actions),
-          ),
-        ),
+  for (const group of GROUPS) {
+    const groupKeys = groups.get(group.title);
+    if (!groupKeys?.length) continue;
+    const fields = h(
+      "div",
+      { class: "fields" },
+      ...groupKeys.map((key) =>
+        optionField(key, config.schema[key], config.options[key], config, actions),
       ),
+    );
+    sections.push(
+      group.advanced
+        ? h(
+            "details",
+            { class: "opt-fold" },
+            h(
+              "summary",
+              null,
+              h("span", { class: "fold-title" }, group.title),
+              h(
+                "span",
+                { class: "fold-count" },
+                `${groupKeys.length} setting${groupKeys.length === 1 ? "" : "s"}`,
+              ),
+            ),
+            h("p", { class: "fold-blurb" }, group.blurb),
+            fields,
+          )
+        : h(
+            "div",
+            { class: "opt-group" },
+            h("h3", null, group.title),
+            h("p", { class: "fold-blurb" }, group.blurb),
+            fields,
+          ),
     );
   }
 
@@ -514,16 +539,24 @@ function optionField(
   if (meta?.entity) return entityField(key, label, value, meta, config, actions);
 
   if (spec.type === "bool") {
+    // The help goes under the box, like every other field: a switch labelled
+    // "Active control" and nothing else is exactly as undocumented as a
+    // number box labelled "Balance gain".
     return h(
       "label",
-      { class: "row" },
-      h("input", {
-        type: "checkbox",
-        checked: Boolean(value),
-        onchange: (e: Event) =>
-          actions.editOption(key, (e.target as HTMLInputElement).checked),
-      }),
-      h("span", null, label),
+      { class: "field toggle" },
+      h(
+        "span",
+        { class: "row" },
+        h("input", {
+          type: "checkbox",
+          checked: Boolean(value),
+          onchange: (e: Event) =>
+            actions.editOption(key, (e.target as HTMLInputElement).checked),
+        }),
+        h("span", null, label),
+      ),
+      meta?.help ? h("span", { class: "help" }, meta.help) : null,
     );
   }
 
@@ -548,7 +581,9 @@ function optionField(
           min: spec.min,
           max: spec.max,
           step: spec.type === "float" ? "any" : undefined,
-          placeholder: spec.optional ? "optional" : "",
+          // What happens if it is left empty, where that is known — "optional"
+          // says only that the box may be empty, never what empty means.
+          placeholder: meta?.placeholder ?? (spec.optional ? "optional" : ""),
           oninput: (e: Event) =>
             actions.editOption(key, coerce(spec, (e.target as HTMLInputElement).value)),
         }),

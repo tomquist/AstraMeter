@@ -122,8 +122,17 @@ built from the add-on's own options — the same settings as the add-on's
 Configuration page, with labels and help text. Saving writes them back through
 the Supervisor and restarts the add-on, which can take a minute.
 
+The form opens on the two groups a working setup needs — **Grid measurement**
+and **Emulated meter** — and folds the rest away behind named, counted
+headings: battery control, meter reading, signal filters, balancer tuning,
+Marstek's cloud, and the add-on's own settings. Open one to see its fields.
+Every setting says what it does underneath, and a box left empty shows the
+value that applies instead of it, so `0.2` in a greyed-out **Balance gain**
+means that is what you get by leaving it alone.
+
 The form is generated from the add-on's live option schema, so a new option
-appears here as soon as the add-on gains it.
+appears here as soon as the add-on gains it — in a trailing **Other** group
+until it is given a description.
 
 **Grid power sensor** and **Export power sensor** are entity pickers rather
 than text boxes: they list the Home Assistant entities that could plausibly
