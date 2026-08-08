@@ -24,6 +24,10 @@ export interface State {
     skipPowermeterTest: boolean;
     webConfigEnabled: boolean;
     dashboardEnabled: boolean;
+    /// ESPHome only. The firmware serves the dashboard unless told not to, so
+    /// this one starts true — unlike dashboardEnabled, which is the Python
+    /// service's opt-in.
+    esphomeDashboard: boolean;
     dashboardAllowWrite: boolean;
     webServerPort: string;
     throttleInterval: string;
@@ -56,6 +60,7 @@ export function defaultState(): State {
       skipPowermeterTest: false,
       webConfigEnabled: false,
       dashboardEnabled: false,
+      esphomeDashboard: true,
       dashboardAllowWrite: false,
       webServerPort: "",
       throttleInterval: "",
@@ -145,6 +150,7 @@ export function migrate(s: any): State {
         skipPowermeterTest: asBool(sg.skipPowermeterTest, dg.skipPowermeterTest),
         webConfigEnabled: asBool(sg.webConfigEnabled, dg.webConfigEnabled),
         dashboardEnabled: asBool(sg.dashboardEnabled, dg.dashboardEnabled),
+        esphomeDashboard: asBool(sg.esphomeDashboard, dg.esphomeDashboard),
         dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
         webServerPort: asStr(sg.webServerPort, dg.webServerPort),
         throttleInterval: asStr(sg.throttleInterval, dg.throttleInterval),

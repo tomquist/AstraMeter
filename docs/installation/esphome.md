@@ -52,9 +52,9 @@ Optional sub-blocks nest under the same `ct002:` key:
 
 - **`dashboard:`** — serves AstraMeter's [live status dashboard](../dashboard.md)
   from the ESP32 itself: the same page the add-on shows, at
-  `http://<device>/`. Needs nothing else — one line turns it on, and
-  `dashboard: false` turns it off again. Read-only unless you add
-  `controls: true`.
+  `http://<device>/`. **On by default** — the block is only needed to change
+  something, and `dashboard: false` leaves it out of the firmware. Read-only
+  unless you add `controls: true`.
 - **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device
   per battery + a parent CT002 device with manual-target / active / auto-target /
   distribution-weight controls and a force-rotation button) and answers

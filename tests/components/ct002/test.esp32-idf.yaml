@@ -74,3 +74,6 @@ ct002:
     enabled: true
     alpha: 0.15
     min_target: 20
+  # The dashboard is on by default; this build is the proof that it can be
+  # left out again — no HTTP server, no page in flash.
+  dashboard: false

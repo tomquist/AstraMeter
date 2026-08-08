@@ -1,0 +1,42 @@
+# The upgrade path for a device that already had `web_server:`.
+#
+# The dashboard is on by default, and ESPHome's own page owns '/', so the two
+# would contest the same URL. Nothing here says where the dashboard goes: the
+# component is expected to step aside to /astrameter on its own, so a config
+# that worked before the dashboard existed still builds and still serves
+# ESPHome's page at the root.
+esphome:
+  name: ct002-dash-ws
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+
+web_server:
+  port: 80
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  ct_type: HME-4
+  udp_port: 12345

@@ -13,8 +13,8 @@ schema accepts grid-power sensor IDs and the cross-phase filter pipeline
   apply it to this `ct002:` so UDP responses + MQTT topics use the
   cloud-side identity. Requires an upstream `http_request:` block.
 * `dashboard:` — serve AstraMeter's live status dashboard from the ESP32
-  itself. Off unless present; `dashboard: false` turns it off again
-  without deleting the block.
+  itself. On by default (ESP32 only); `dashboard: false` leaves it out of
+  the firmware entirely, and the block is only needed to change an option.
 """
 
 from __future__ import annotations
@@ -195,23 +195,31 @@ def _validate_power_unit(conf_key: str, sensor_id, unit: str | None) -> None:
 
 
 def _final_validate_dashboard_path(config, full):
-    """Reject a dashboard mounted where ESPHome's own web UI already lives.
+    """Settle where the dashboard is mounted, now that `web_server:` is known.
 
     Both mount on the shared HTTP server, and the first handler that claims a
     URL wins — so two pages at `/` would resolve to whichever component
-    happened to register first. Which one that is depends on codegen ordering,
-    i.e. it would look like a coin flip. Say so instead, with the fix.
+    happened to register first, which is codegen ordering, i.e. a coin flip.
+    Since the dashboard is on by default, an unasked-for one must never be the
+    reason somebody's `web_server:` build stops working: with no `path:` of its
+    own it steps aside to `/astrameter` instead of contesting the root. A
+    `path:` the user did write is theirs, so `path: /` alongside `web_server:`
+    is the one case still worth refusing.
     """
     dashboard = config.get(CONF_DASHBOARD)
-    if dashboard is None or dashboard[CONF_PATH] != "":
+    if dashboard is None:
         return
-    if "web_server" not in full:
+    collides = "web_server" in full
+    if CONF_PATH not in dashboard:
+        dashboard[CONF_PATH] = DASHBOARD_ASIDE_PATH if collides else ""
+        return
+    if dashboard[CONF_PATH] != "" or not collides:
         return
     raise cv.Invalid(
         "`web_server:` already serves ESPHome's own page at '/', so the "
         "AstraMeter dashboard cannot also be mounted there. Give it a path of "
-        "its own — set `path: /astrameter` (or any other) on this dashboard "
-        "block, and the page will be served from there",
+        f"its own — set `path: {DASHBOARD_ASIDE_PATH}` (or any other) on this "
+        "dashboard block, and the page will be served from there",
         path=[CONF_DASHBOARD, CONF_PATH],
     )
 
@@ -484,13 +492,16 @@ CLOUD_REPORTING_SCHEMA = cv.All(
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Sub-block: dashboard (opt-in live status web UI served from the ESP32)
+# Sub-block: dashboard (live status web UI served from the ESP32; opt-out)
 # ────────────────────────────────────────────────────────────────────────
 
 CONF_DASHBOARD = "dashboard"
 CONF_PATH = "path"
 CONF_CONTROLS = "controls"
 CONF_WEB_SERVER_BASE_ID = "web_server_base_id"
+
+# Where a default-on dashboard goes when `web_server:` already holds the root.
+DASHBOARD_ASIDE_PATH = "/astrameter"
 
 
 def _validate_dashboard_path(value):
@@ -522,7 +533,10 @@ DASHBOARD_OPTIONS_SCHEMA = cv.Schema(
         cv.GenerateID(CONF_WEB_SERVER_BASE_ID): cv.use_id(
             web_server_base.WebServerBase
         ),
-        cv.Optional(CONF_PATH, default="/"): _validate_dashboard_path,
+        # No default: whether the unset path means the root or a corner of
+        # its own depends on `web_server:`, which is only known once the whole
+        # configuration is validated (_final_validate_dashboard_path fills it).
+        cv.Optional(CONF_PATH): _validate_dashboard_path,
         # Off by default, like DASHBOARD_ALLOW_WRITE on the Python side:
         # the page has no login of its own, so steering someone's
         # batteries from the LAN stays an explicit choice.
@@ -540,15 +554,35 @@ DASHBOARD_SCHEMA = cv.All(
 )
 
 
-def _drop_disabled_dashboard(config):
-    """`dashboard: false` means exactly what leaving the block out means.
+def _dashboard_wanted(config) -> bool:
+    """Whether this configuration gets a dashboard.
 
-    Handled before the schema so a disabled dashboard pulls in nothing at
-    all — no HTTP server, no page in flash — and flipping the feature stays
-    a one-word edit.
+    On unless the YAML says `dashboard: false` — a device that can serve the
+    page should, without anyone having to know the feature exists. ESP32 only,
+    because ESPHome's HTTP server is: there is no implementation for `host`,
+    and the smaller targets could not hold the page anyway.
+
+    Read from the *raw* config, so AUTO_LOAD (which runs before the schema
+    fills anything in) and the schema itself agree on what absent means.
     """
-    if isinstance(config, dict) and config.get(CONF_DASHBOARD) is False:
+    if not isinstance(config, dict):
+        return False
+    return config.get(CONF_DASHBOARD, True) is not False and CORE.is_esp32
+
+
+def _resolve_dashboard(config):
+    """Turn the shorthands into a block the schema can validate, or nothing.
+
+    `dashboard: false` is removed outright, so a disabled dashboard pulls in
+    nothing at all — no HTTP server, no page in flash. An absent key is filled
+    in with the defaults, which is what makes the feature opt-out.
+    """
+    if not isinstance(config, dict):
+        return config
+    if config.get(CONF_DASHBOARD) is False:
         del config[CONF_DASHBOARD]
+    elif CONF_DASHBOARD not in config and _dashboard_wanted(config):
+        config[CONF_DASHBOARD] = {}
     return config
 
 
@@ -557,13 +591,14 @@ def AUTO_LOAD(config):
 
     json / md5 are always loaded so nobody has to add empty `json:` or `md5:`
     blocks for the sub-block infrastructure (they're cheap and only the
-    sub-blocks reference them). web_server_base only when `dashboard:` asks
-    for it, so a build without one carries no HTTP server. mqtt /
-    http_request have user-facing config of their own (broker, timeout, ...)
-    so those stay `cv.requires_component` on the sub-schema instead.
+    sub-blocks reference them). web_server_base whenever there is a dashboard,
+    which is by default — `dashboard: false` is what leaves the HTTP server
+    out. mqtt / http_request have user-facing config of their own (broker,
+    timeout, ...) so those stay `cv.requires_component` on the sub-schema
+    instead.
     """
     loads = ["socket", "json", "md5"]
-    if isinstance(config, dict) and CONF_DASHBOARD in config:
+    if _dashboard_wanted(config):
         loads.append("web_server_base")
     return loads
 
@@ -586,7 +621,7 @@ def _astrameter_version() -> str:
 
 
 CONFIG_SCHEMA = cv.All(
-    _drop_disabled_dashboard,
+    _resolve_dashboard,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(CT002Component),

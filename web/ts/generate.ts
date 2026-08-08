@@ -597,15 +597,13 @@ export function generateEsphome(state: State): string {
   if (fb) ctLines.push(fb);
   for (const b of ct002OptionalBlocks(state.ct)) ctLines.push(b);
 
-  // The live status dashboard, served by the board itself. Needs no options
-  // and no other block — the bare key is the whole opt-in, and writes are the
-  // one thing it has to be told to allow.
-  if (state.general && state.general.dashboardEnabled) {
-    ctLines.push(
-      state.general.dashboardAllowWrite
-        ? `${IND}dashboard:\n${IND}${IND}controls: true`
-        : `${IND}dashboard:`,
-    );
+  // The live status dashboard, served by the board itself. It is on by
+  // default, so the only things worth writing down are the two deviations:
+  // leaving it out of the firmware, and allowing writes.
+  if (state.general && state.general.esphomeDashboard === false) {
+    ctLines.push(`${IND}dashboard: false`);
+  } else if (state.general && state.general.dashboardAllowWrite) {
+    ctLines.push(`${IND}dashboard:\n${IND}${IND}controls: true`);
   }
 
   if (wantInsights) {

@@ -26,6 +26,36 @@ sys.path.insert(0, str(COMPONENTS_PATH))
 import ct002 as ct002_component  # noqa: E402
 
 
+@pytest.fixture
+def esp32_core():
+    """CORE pointed at an ESP32, which is where the dashboard exists."""
+    from esphome.core import CORE
+
+    previous = CORE.data.get(esphome.const.KEY_CORE, {}).get(
+        esphome.const.KEY_TARGET_PLATFORM
+    )
+    CORE.data.setdefault(esphome.const.KEY_CORE, {})[
+        esphome.const.KEY_TARGET_PLATFORM
+    ] = esphome.const.PLATFORM_ESP32
+    yield CORE
+    CORE.data[esphome.const.KEY_CORE][esphome.const.KEY_TARGET_PLATFORM] = previous
+
+
+@pytest.fixture
+def host_core():
+    """CORE pointed at the host platform, which has no ESPHome web server."""
+    from esphome.core import CORE
+
+    previous = CORE.data.get(esphome.const.KEY_CORE, {}).get(
+        esphome.const.KEY_TARGET_PLATFORM
+    )
+    CORE.data.setdefault(esphome.const.KEY_CORE, {})[
+        esphome.const.KEY_TARGET_PLATFORM
+    ] = esphome.const.PLATFORM_HOST
+    yield CORE
+    CORE.data[esphome.const.KEY_CORE][esphome.const.KEY_TARGET_PLATFORM] = previous
+
+
 def test_validate_ct_mac_accepts_empty():
     assert ct002_component._validate_ct_mac("") == ""
 
@@ -177,18 +207,28 @@ def test_dashboard_shorthand_passes_a_block_through():
     assert ct002_component._dashboard_shorthand(block) is block
 
 
-def test_dashboard_false_is_the_same_as_leaving_it_out():
-    # ...and it must drop the key entirely, so a disabled dashboard pulls in
-    # no HTTP server and no page in flash.
+def test_dashboard_false_drops_the_key_entirely(esp32_core):
+    # `dashboard: false` must leave nothing behind, so a disabled dashboard
+    # pulls in no HTTP server and no page in flash.
     config = {"power_sensor_l1": "grid_l1", "dashboard": False}
-    assert ct002_component._drop_disabled_dashboard(config) == {
-        "power_sensor_l1": "grid_l1"
+    assert ct002_component._resolve_dashboard(config) == {"power_sensor_l1": "grid_l1"}
+
+
+def test_dashboard_absent_means_on(esp32_core):
+    # The whole point of opt-out: a configuration that never mentions the
+    # dashboard still gets one.
+    config = {"power_sensor_l1": "grid_l1"}
+    assert ct002_component._resolve_dashboard(config) == {
+        "power_sensor_l1": "grid_l1",
+        "dashboard": {},
     }
 
 
-def test_dashboard_absent_config_is_untouched():
+def test_dashboard_absent_stays_absent_off_esp32(host_core):
+    # ESPHome has no HTTP server for the other targets, so the default must
+    # not conjure a block the schema would then reject.
     config = {"power_sensor_l1": "grid_l1"}
-    assert ct002_component._drop_disabled_dashboard(config) == config
+    assert ct002_component._resolve_dashboard(config) == {"power_sensor_l1": "grid_l1"}
 
 
 def test_dashboard_path_normalizes_to_a_prefix():
@@ -213,15 +253,39 @@ def test_dashboard_path_rejects_a_query_string():
         ct002_component._validate_dashboard_path("/astrameter?x=1")
 
 
-def test_auto_load_pulls_the_web_server_only_when_asked():
-    # A build without a dashboard must not gain an HTTP server.
-    assert "web_server_base" not in ct002_component.AUTO_LOAD({})
+def test_auto_load_pulls_the_web_server_unless_refused(esp32_core):
+    # AUTO_LOAD runs on the raw YAML, before the schema fills the default in,
+    # so "absent" has to mean the same thing here as it does there.
+    assert "web_server_base" in ct002_component.AUTO_LOAD({})
     assert "web_server_base" in ct002_component.AUTO_LOAD({"dashboard": {}})
+    assert "web_server_base" not in ct002_component.AUTO_LOAD({"dashboard": False})
+
+
+def test_auto_load_leaves_the_web_server_out_off_esp32(host_core):
+    assert "web_server_base" not in ct002_component.AUTO_LOAD({})
 
 
 def test_auto_load_always_carries_the_sub_block_infrastructure():
     for component in ("socket", "json", "md5"):
         assert component in ct002_component.AUTO_LOAD({})
+
+
+def test_dashboard_without_a_path_takes_the_root():
+    # No `web_server:` in the configuration, so the root is the dashboard's.
+    config = {ct002_component.CONF_DASHBOARD: {}}
+    ct002_component._final_validate_dashboard_path(config, {})
+    assert config[ct002_component.CONF_DASHBOARD][ct002_component.CONF_PATH] == ""
+
+
+def test_dashboard_steps_aside_for_the_esphome_web_server():
+    # A default-on dashboard must never be the reason an existing
+    # `web_server:` build stops working, so it moves rather than collides.
+    config = {ct002_component.CONF_DASHBOARD: {}}
+    ct002_component._final_validate_dashboard_path(config, {"web_server": {}})
+    assert (
+        config[ct002_component.CONF_DASHBOARD][ct002_component.CONF_PATH]
+        == ct002_component.DASHBOARD_ASIDE_PATH
+    )
 
 
 def test_dashboard_at_the_root_conflicts_with_esphome_web_server():
@@ -272,7 +336,3 @@ def test_dashboard_controls_are_off_by_default():
     # the LAN has to be asked for — matching DASHBOARD_ALLOW_WRITE on the
     # Python side, which also defaults to off outside the add-on.
     assert _dashboard_default(ct002_component.CONF_CONTROLS) is False
-
-
-def test_dashboard_mounts_at_the_root_by_default():
-    assert _dashboard_default(ct002_component.CONF_PATH) == "/"

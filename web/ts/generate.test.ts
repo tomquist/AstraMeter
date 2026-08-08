@@ -569,37 +569,49 @@ const dashOff = generateConfigIni({
 });
 lacks(dashOff, "DASHBOARD_ENABLED", "dashboard: absent when off");
 
-// On an ESP32 the same switch produces the bare `dashboard:` sub-block —
-// no options, and nothing else in the YAML has to change.
+// On an ESP32 the firmware serves the dashboard unless told not to, so the
+// on-and-read-only case is the default and writes nothing at all.
 const eyDash = generateEsphome({
   target: "esphome",
   esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
-  general: { deviceTypes: ["ct002"], dashboardEnabled: true },
+  general: { deviceTypes: ["ct002"], esphomeDashboard: true },
   meters: [
     { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
   ],
 });
-has(eyDash, "  dashboard:", "esp/dashboard: bare sub-block under ct002:");
-lacks(eyDash, "controls:", "esp/dashboard: read-only unless writes are asked for");
+lacks(eyDash, "dashboard", "esp/dashboard: on is the default, so nothing is emitted");
 
 const eyDashWritable = generateEsphome({
   target: "esphome",
   esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
-  general: { deviceTypes: ["ct002"], dashboardEnabled: true, dashboardAllowWrite: true },
+  general: { deviceTypes: ["ct002"], esphomeDashboard: true, dashboardAllowWrite: true },
   meters: [
     { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
   ],
 });
+has(eyDashWritable, "  dashboard:", "esp/dashboard: sub-block appears once it carries an option");
 has(eyDashWritable, "    controls: true", "esp/dashboard: writes are opt-in and emitted");
 
 const eyNoDash = generateEsphome({
   target: "esphome",
   esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], esphomeDashboard: false },
   meters: [
     { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
   ],
 });
-lacks(eyNoDash, "dashboard", "esp/dashboard: absent when off");
+has(eyNoDash, "  dashboard: false", "esp/dashboard: turning it off is what has to be written down");
+
+// A state with no general block at all is "nothing said", not "off" — the
+// firmware default stands.
+const eyDashUnsaid = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+lacks(eyDashUnsaid, "dashboard", "esp/dashboard: nothing said leaves the default alone");
 
 // The add-on ships the dashboard on and writable, so only a deviation from
 // those defaults is worth emitting into the options.

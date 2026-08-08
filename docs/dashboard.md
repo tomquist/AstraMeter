@@ -1,6 +1,6 @@
 # Live status dashboard
 
-An opt-in web page that shows what AstraMeter is doing right now — grid power,
+A web page that shows what AstraMeter is doing right now — grid power,
 every battery's target and reported power, the health of your power source, and
 the balancer's internal state — and lets you change your configuration without
 editing files by hand.
@@ -114,18 +114,17 @@ page, so this address is the dashboard, unauthenticated — see
 
 ### ESPHome on an ESP32
 
-Off by default. Add one line to your `ct002:` block:
+On by default — there is nothing to add. Flash a `ct002:` configuration and
+open `http://<device>/`: the same page, served straight from the ESP32's flash.
+
+To leave it out of the firmware entirely, taking the web server and the page
+with it:
 
 ```yaml
 ct002:
   power_sensor_l1: grid_l1
-  dashboard:
+  dashboard: false
 ```
-
-Then open `http://<device>/` — the same page, served straight from the ESP32's
-flash. `dashboard: true` means the same thing, and `dashboard: false` (or
-removing the line) turns it back off, taking the web server and the page out of
-the firmware with it.
 
 **Nothing else is required** — no MQTT broker, no Home Assistant, no second
 component. The board serves the page itself, and with `controls: true` below it
@@ -167,13 +166,24 @@ made here is written back to the broker's retained command topic, so it is not
 something the next reconnect quietly reverts.
 
 The dashboard shares ESPHome's HTTP server with `web_server:` and
-`captive_portal:`, so they all use one port. If you also run `web_server:`,
-both would claim `/` — give the dashboard a `path:` of its own and the
-configuration check will tell you so rather than letting the two race.
+`captive_portal:`, so they all use one port. `web_server:` already serves
+ESPHome's own page at `/`, and only one handler can have a URL — so on a device
+that has one, the dashboard moves itself to `http://<device>/astrameter/`
+rather than contesting the root. The address it settled on is in the boot log:
 
-Turning it on costs about 55 KiB of flash — the compressed page plus ESPHome's
-HTTP server — and no measurable RAM while nobody is watching. An ESP32 with
-4 MB is comfortable; ESP8266 is not supported.
+```
+[astrameter.dashboard]: AstraMeter dashboard:
+[astrameter.dashboard]:   URL: http://<device>:80/astrameter/
+```
+
+Set `path:` yourself to put it somewhere else. Asking for `path: /` while
+`web_server:` is configured is refused at validation time rather than letting
+the two race.
+
+It costs about 90 KiB of flash — the compressed page plus ESPHome's HTTP
+server — and no measurable RAM while nobody is watching. An ESP32 with 4 MB is
+comfortable; ESP8266 is not supported, and neither are boards too tight for the
+extra 90 KiB, which is what `dashboard: false` is for.
 
 ## Changing your configuration
 
@@ -281,7 +291,7 @@ from:
 | Add-on, sidebar (ingress) | yes | your Home Assistant login |
 | Add-on, `http://<host>:52500` | only with `dashboard_direct_access` | **nothing** |
 | Docker / standalone | with `DASHBOARD_ENABLED` | **nothing** |
-| ESPHome, `http://<device>/` | with `dashboard:` | **nothing** |
+| ESPHome, `http://<device>/` | yes, unless `dashboard: false` | **nothing** |
 
 Because the add-on runs with host networking, port 52500 is on your LAN
 whether or not you use it. There, everything except `/health` is refused
@@ -300,7 +310,7 @@ reach the device can re-target your batteries. If that matters, add ESPHome's
 [`web_server:`](https://esphome.io/components/web_server/) with its `auth:`
 block and give the dashboard a `path:` of its own: both mount on the same HTTP
 server, so that login covers the dashboard too. Otherwise leave `controls:`
-off, or leave `dashboard:` out entirely.
+off, or set `dashboard: false`.
 
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.

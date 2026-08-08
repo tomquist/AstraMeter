@@ -539,16 +539,16 @@ function extrasCard(): HTMLElement {
           el("h3", { text: "Live status dashboard" }),
           fieldControl(
             {
-              key: "dashboardEnabled",
+              key: "esphomeDashboard",
               label: "Serve the live status dashboard from the board",
-              help: "Optional. A status page at http://<device>/ showing grid power, every battery and the balancer's state. Configuration is not editable there — an ESP32's settings live in this file.",
+              help: "On by default. A status page at http://<device>/ showing grid power, every battery and the balancer's state. Configuration is not editable there — an ESP32's settings live in this file.",
               type: "checkbox",
             },
             state.general,
             { structural: true },
           ),
           // The page has no login of its own, so writes stay opt-in.
-          state.general.dashboardEnabled
+          state.general.esphomeDashboard
             ? fieldControl(
                 {
                   key: "dashboardAllowWrite",
