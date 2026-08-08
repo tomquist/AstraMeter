@@ -28,6 +28,7 @@
 
 #ifdef USE_CT002_TEST_HOOKS
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -194,15 +195,28 @@ void CT002Component::handle_control_command_(const std::string &cmd,
       const std::string field_str(field);
       const std::string raw_str(raw);
       controls::ControlValue value;
+      bool parsed = true;
       if (raw_str == "true" || raw_str == "false") {
         value.is_bool = true;
         value.flag = raw_str == "true";
       } else {
-        value.number = static_cast<float>(std::atof(raw));
+        // Strict: the whole token has to be the number. atof() would read
+        // "12abc" as 12 and "abc" as 0, so a typo in a test would quietly
+        // become a valid write instead of the error the test meant to see.
+        char *end = nullptr;
+        errno = 0;
+        const double parsed_value = std::strtod(raw, &end);
+        if (end == raw || *end != '\0' || errno == ERANGE) {
+          parsed = false;
+        } else {
+          value.number = static_cast<float>(parsed_value);
+        }
       }
       const bool device_wide = std::strcmp(cid, "-") == 0;
       std::string message;
-      if (device_wide) {
+      if (!parsed) {
+        message = "Value must be a number";
+      } else if (device_wide) {
         if (!controls::is_device_field(field_str)) message = "Unknown field";
       } else {
         message = controls::coerce_consumer_control(field_str, value);

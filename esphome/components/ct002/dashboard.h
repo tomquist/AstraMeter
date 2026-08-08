@@ -13,8 +13,8 @@
 // The page is the one shipped in src/astrameter/static/dashboard.html, so the
 // firmware and the add-on are never two different UIs. What differs is the
 // document behind it: an ESPHome build serves a reduced one — no configuration
-// surface (a device's config is compiled into its firmware) and no controls
-// today — and the page renders whatever it receives.
+// surface (a device's config is compiled into its firmware), and controls only
+// where `controls:` asks for them — and the page renders whatever it receives.
 //
 // Threading: on ESP32 the HTTP handler runs on the httpd task, NOT the main
 // loop, so it must never walk the live consumer map. The document is built in
@@ -23,6 +23,7 @@
 // handle_status_ / rebuild_.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -105,19 +106,24 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   // requests set by a handler and cleared by the loop, and the generation
   // counters let a waiting handler tell "the loop has been round since I
   // asked" from "still stale".
+  //
+  // The flags are atomics rather than plain `volatile`: the two run on
+  // different cores, and only an atomic actually orders a counter's increment
+  // against the state it stands for. They are read in a spin loop, so a
+  // relaxed integer load is all this costs on Xtensa.
   Mutex lock_;
   std::string document_;
   /// millis() at the last build, so a request can tell a live document from
   /// one a stalled loop left behind.
   uint32_t built_at_{0};
-  volatile bool refresh_requested_{false};
-  volatile uint32_t generation_{0};
+  std::atomic<bool> refresh_requested_{false};
+  std::atomic<uint32_t> generation_{0};
   uint32_t seq_{0};
 
   bool pending_valid_{false};
   PendingWrite pending_;
   bool pending_applied_{false};
-  volatile uint32_t write_generation_{0};
+  std::atomic<uint32_t> write_generation_{0};
 };
 
 #endif  // USE_CT002_DASHBOARD

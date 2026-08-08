@@ -253,8 +253,11 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
       // Captured before coercion scales it — the retained mirror carries the
       // unit the wire uses, which is the unit the reader scales from.
       write.wire_value = status::format_number(static_cast<double>(write.value.number), 3);
-    } else if (device_wide && value.isNull()) {
-      // `force_rotation` carries no value; the page posts it bare.
+    } else if (device_wide && write.field == "force_rotation" && value.isNull()) {
+      // `force_rotation` is a button and carries no value; the page posts it
+      // bare. Every other device field is a setting, and inventing `true` for
+      // one would switch on something nobody asked for — `active_control`
+      // most of all.
       write.value.is_bool = true;
       write.value.flag = true;
       write.wire_value = "true";
