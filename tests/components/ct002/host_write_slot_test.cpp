@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -168,7 +169,12 @@ TEST(WriteSlot, ConcurrentWritersEachGetTheirOwnAnswer) {
       uint32_t ticket = 0;
       {
         std::lock_guard<std::mutex> guard(lock);
-        if (!slot.take(&write, &ticket)) continue;
+        if (!slot.take(&write, &ticket)) {
+          // Nothing waiting. Yield rather than spin: on a single-core runner
+          // this thread would otherwise starve the writers it is serving.
+          std::this_thread::yield();
+          continue;
+        }
       }
       std::this_thread::sleep_for(std::chrono::microseconds(200));
       const bool applied = write != "unknown";

@@ -55,33 +55,60 @@ def cmake_build(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return build_dir
 
 
+# A host gtest is milliseconds of work; a minute means it deadlocked. Bound it
+# so the suite reports a failure instead of hanging the run.
+GTEST_TIMEOUT_S = 60
+
+
 def test_host_protocol_parity(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_protocol_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_protocol_test")], check=True, timeout=GTEST_TIMEOUT_S
+    )
 
 
 def test_host_wrappers(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_wrappers_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_wrappers_test")], check=True, timeout=GTEST_TIMEOUT_S
+    )
 
 
 def test_host_balancer(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_balancer_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_balancer_test")], check=True, timeout=GTEST_TIMEOUT_S
+    )
 
 
 def test_host_marstek_responder(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_marstek_responder_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_marstek_responder_test")],
+        check=True,
+        timeout=GTEST_TIMEOUT_S,
+    )
 
 
 def test_host_cloud_reporting(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_cloud_reporting_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_cloud_reporting_test")],
+        check=True,
+        timeout=GTEST_TIMEOUT_S,
+    )
 
 
 def test_host_status_json(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_status_json_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_status_json_test")],
+        check=True,
+        timeout=GTEST_TIMEOUT_S,
+    )
 
 
 def test_host_controls(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_controls_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_controls_test")], check=True, timeout=GTEST_TIMEOUT_S
+    )
 
 
 def test_host_write_slot(cmake_build: Path) -> None:
-    subprocess.run([str(cmake_build / "host_write_slot_test")], check=True)
+    subprocess.run(
+        [str(cmake_build / "host_write_slot_test")], check=True, timeout=GTEST_TIMEOUT_S
+    )

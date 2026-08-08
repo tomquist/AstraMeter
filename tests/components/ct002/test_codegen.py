@@ -9,6 +9,7 @@ guard.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -26,34 +27,41 @@ sys.path.insert(0, str(COMPONENTS_PATH))
 import ct002 as ct002_component  # noqa: E402
 
 
+@contextlib.contextmanager
+def _target_platform(platform):
+    """Point CORE at *platform* for the duration, then put it back as it was.
+
+    Restoring means *deleting* a key that was absent, not writing None over it:
+    the code under test asks CORE what the target is, and a leftover None is a
+    third answer neither branch expects.
+    """
+    from esphome.core import CORE
+
+    core_data = CORE.data.setdefault(esphome.const.KEY_CORE, {})
+    missing = object()
+    previous = core_data.get(esphome.const.KEY_TARGET_PLATFORM, missing)
+    core_data[esphome.const.KEY_TARGET_PLATFORM] = platform
+    try:
+        yield CORE
+    finally:
+        if previous is missing:
+            core_data.pop(esphome.const.KEY_TARGET_PLATFORM, None)
+        else:
+            core_data[esphome.const.KEY_TARGET_PLATFORM] = previous
+
+
 @pytest.fixture
 def esp32_core():
     """CORE pointed at an ESP32, which is where the dashboard exists."""
-    from esphome.core import CORE
-
-    previous = CORE.data.get(esphome.const.KEY_CORE, {}).get(
-        esphome.const.KEY_TARGET_PLATFORM
-    )
-    CORE.data.setdefault(esphome.const.KEY_CORE, {})[
-        esphome.const.KEY_TARGET_PLATFORM
-    ] = esphome.const.PLATFORM_ESP32
-    yield CORE
-    CORE.data[esphome.const.KEY_CORE][esphome.const.KEY_TARGET_PLATFORM] = previous
+    with _target_platform(esphome.const.PLATFORM_ESP32) as core:
+        yield core
 
 
 @pytest.fixture
 def host_core():
     """CORE pointed at the host platform, which has no ESPHome web server."""
-    from esphome.core import CORE
-
-    previous = CORE.data.get(esphome.const.KEY_CORE, {}).get(
-        esphome.const.KEY_TARGET_PLATFORM
-    )
-    CORE.data.setdefault(esphome.const.KEY_CORE, {})[
-        esphome.const.KEY_TARGET_PLATFORM
-    ] = esphome.const.PLATFORM_HOST
-    yield CORE
-    CORE.data[esphome.const.KEY_CORE][esphome.const.KEY_TARGET_PLATFORM] = previous
+    with _target_platform(esphome.const.PLATFORM_HOST) as core:
+        yield core
 
 
 def test_validate_ct_mac_accepts_empty():
@@ -265,7 +273,7 @@ def test_auto_load_leaves_the_web_server_out_off_esp32(host_core):
     assert "web_server_base" not in ct002_component.AUTO_LOAD({})
 
 
-def test_auto_load_always_carries_the_sub_block_infrastructure():
+def test_auto_load_always_carries_the_sub_block_infrastructure(esp32_core):
     for component in ("socket", "json", "md5"):
         assert component in ct002_component.AUTO_LOAD({})
 

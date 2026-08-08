@@ -120,6 +120,10 @@ target_include_directories(host_controls_test PRIVATE
 )
 target_link_libraries(host_controls_test PRIVATE GTest::gtest_main)
 
+# Without enable_testing() the gtest_discover_tests() calls below generate
+# nothing and `ctest` reports zero tests. CI runs the binaries through
+# test_host_protocol.py either way; this is what makes `ctest` work locally.
+enable_testing()
 include(GoogleTest)
 gtest_discover_tests(host_protocol_test)
 gtest_discover_tests(host_wrappers_test)
@@ -128,3 +132,4 @@ gtest_discover_tests(host_marstek_responder_test)
 gtest_discover_tests(host_cloud_reporting_test)
 gtest_discover_tests(host_status_json_test)
 gtest_discover_tests(host_controls_test)
+gtest_discover_tests(host_write_slot_test)

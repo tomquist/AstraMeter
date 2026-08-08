@@ -149,7 +149,7 @@ those who run that sub-block — but:
 | Option | Default | What it does |
 |---|---|---|
 | `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
-| `path` | `/` | Where the page is mounted, e.g. `/astrameter`. |
+| `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
 | `id` | generated | The usual ESPHome component id. |
 
 ```yaml
@@ -171,7 +171,7 @@ ESPHome's own page at `/`, and only one handler can have a URL — so on a devic
 that has one, the dashboard moves itself to `http://<device>/astrameter/`
 rather than contesting the root. The address it settled on is in the boot log:
 
-```
+```text
 [astrameter.dashboard]: AstraMeter dashboard:
 [astrameter.dashboard]:   URL: http://<device>:80/astrameter/
 ```
