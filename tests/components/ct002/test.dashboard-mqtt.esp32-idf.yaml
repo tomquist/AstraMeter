@@ -1,5 +1,5 @@
 esphome:
-  name: ct002-dashboard-esp32-idf
+  name: ct002-dashboard-mqtt-esp32-idf
 
 esp32:
   board: esp32dev
@@ -12,6 +12,11 @@ logger:
 wifi:
   ssid: "test-ssid"
   password: "test-password"
+
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
+  discovery: false
 
 external_components:
   - source:
@@ -35,9 +40,11 @@ ct002:
       window: 7
     smoothing:
       alpha: 0.3
-  # The whole opt-in: no options needed. `dashboard: true` is the same
-  # thing, `dashboard: false` (or removing the key) turns it back off.
-  # `controls:` is off by default; on here so the write endpoints are in
-  # the compile matrix too.
+  # The dashboard beside `mqtt_insights:`, so the coupling between them —
+  # the page's card for that integration — is built in CI. The plain
+  # dashboard build (no broker anywhere) is test.dashboard.esp32-idf.yaml;
+  # that one is the default shape and must keep compiling on its own.
   dashboard:
     controls: true
+  mqtt_insights:
+    base_topic: astrameter

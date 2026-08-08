@@ -127,11 +127,16 @@ flash. `dashboard: true` means the same thing, and `dashboard: false` (or
 removing the line) turns it back off, taking the web server and the page out of
 the firmware with it.
 
+**Nothing else is required** — no MQTT broker, no Home Assistant, no second
+component. The board serves the page itself, and with `controls: true` below it
+is also a complete way to steer your batteries, so MQTT Insights is an option
+rather than a prerequisite.
+
 The board serves a **reduced version** of the page. Everything it can measure
 is there — grid power, every battery with its target and saturation, the
 balancer's internals and its [control-quality verdict](ct002.md#control-quality),
-the health of the grid-power sensor, and MQTT Insights' connection state when
-that sub-block is configured — but:
+the health of the grid-power sensor, plus MQTT Insights' connection state for
+those who run that sub-block — but:
 
 - **There is no Configuration tab.** An ESPHome device's settings are compiled
   into its firmware, so there would be nothing to save; change your YAML and
