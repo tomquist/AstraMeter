@@ -37,6 +37,7 @@
 
 #include "ct002.h"
 #include "mqtt_insights.h"
+#include "write_slot.h"
 
 namespace esphome {
 namespace ct002 {
@@ -101,13 +102,13 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   std::string log_level_;
   bool controls_{false};
 
-  // Handover between the httpd task and the main loop. `document_` and
-  // `pending_` are only ever touched under `lock_`; the flags are one-way
-  // requests set by a handler and cleared by the loop, and the generation
-  // counters let a waiting handler tell "the loop has been round since I
+  // Handover between the httpd task and the main loop. `document_` and the
+  // write slot are only ever touched under `lock_`; `refresh_requested_` is a
+  // one-way request set by a handler and cleared by the loop, and
+  // `generation_` lets a waiting handler tell "the loop has been round since I
   // asked" from "still stale".
   //
-  // The flags are atomics rather than plain `volatile`: the two run on
+  // Those two are atomics rather than plain `volatile`: the two sides run on
   // different cores, and only an atomic actually orders a counter's increment
   // against the state it stands for. They are read in a spin loop, so a
   // relaxed integer load is all this costs on Xtensa.
@@ -120,10 +121,10 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   std::atomic<uint32_t> generation_{0};
   uint32_t seq_{0};
 
-  bool pending_valid_{false};
-  PendingWrite pending_;
-  bool pending_applied_{false};
-  std::atomic<uint32_t> write_generation_{0};
+  /// The write being handed to the main loop, if any. Ticketed, so a request
+  /// that gave up waiting can neither read the next write's answer nor cancel
+  /// it — see write_slot.h.
+  WriteSlot<PendingWrite> writes_;
 };
 
 #endif  // USE_CT002_DASHBOARD

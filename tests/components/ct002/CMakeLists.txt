@@ -56,6 +56,19 @@ target_include_directories(host_balancer_test PRIVATE
 )
 target_link_libraries(host_balancer_test PRIVATE GTest::gtest_main)
 
+# The dashboard's write handover. Header-only and free of ESPHome deps
+# precisely so it can be driven from both sides here, with real threads —
+# dashboard.cpp cannot be built for the host at all.
+add_executable(host_write_slot_test
+  host_write_slot_test.cpp
+)
+target_include_directories(host_write_slot_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+find_package(Threads REQUIRED)
+target_link_libraries(host_write_slot_test PRIVATE GTest::gtest_main Threads::Threads)
+
 # Marstek MQTT responder: pure CSV k=v helpers that mirror
 # src/astrameter/mqtt_insights/marstek_mqtt.py. No ESPHome deps — compiles
 # clean against host-gcc and validates wire-format parity with Python.

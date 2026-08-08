@@ -102,17 +102,14 @@ void DashboardComponent::loop() {
   // A write waiting on the httpd task. Applied here, on the loop that owns
   // the consumer map, and only then reported back as done.
   PendingWrite write;
+  uint32_t ticket = 0;
   bool have_write = false;
   {
     LockGuard guard(this->lock_);
-    if (this->pending_valid_) {
-      write = this->pending_;
-      // Taken, not just read: a handler that gives up waiting cancels by
-      // clearing this flag, and it must not be able to cancel a write that
-      // is already on its way in.
-      this->pending_valid_ = false;
-      have_write = true;
-    }
+    // Taken, not just read: it counts as in flight from here until it is
+    // applied, so a handler that gives up waiting can neither cancel it nor
+    // let the next request reserve the slot and read this write's answer.
+    have_write = this->writes_.take(&write, &ticket);
   }
   if (have_write) {
     const bool applied =
@@ -133,9 +130,8 @@ void DashboardComponent::loop() {
     }
     {
       LockGuard guard(this->lock_);
-      this->pending_applied_ = applied;
+      this->writes_.complete(ticket, applied);
     }
-    this->write_generation_++;
     // The next poll should show what the user just did, not the frame that
     // was built before it landed.
     this->refresh_requested_ = true;
@@ -343,36 +339,28 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
 }
 
 bool DashboardComponent::submit_write_(const PendingWrite &write, bool *applied) {
-  const uint32_t start = this->write_generation_;
+  uint32_t ticket;
   {
     LockGuard guard(this->lock_);
-    // One write in flight at a time: these come from a user's tap, so a
-    // queue would only ever hold a duplicate of what is already going.
-    if (this->pending_valid_) return false;
-    this->pending_ = write;
-    this->pending_valid_ = true;
+    // One write at a time: these come from a user's tap, so a queue would
+    // only ever hold a duplicate of what is already going.
+    ticket = this->writes_.reserve(write);
   }
+  if (ticket == 0) return false;
   const uint32_t began_at = millis();
-  while (this->write_generation_ == start && millis() - began_at < STATUS_WAIT_MS) {
+  while (this->writes_.completed() != ticket && millis() - began_at < STATUS_WAIT_MS) {
     delay(STATUS_POLL_MS);
   }
-  if (this->write_generation_ == start) {
-    // The loop never got to it. Withdraw the request so it cannot land
-    // minutes later, after this request was answered "not applied", and so
-    // the slot does not stay occupied and 503 every write after it.
-    LockGuard guard(this->lock_);
-    if (this->pending_valid_) {
-      this->pending_valid_ = false;
-      return false;
-    }
-    // Already taken: it is being applied right now and cannot be recalled.
-    // Answering 503 is the honest end of a request we waited out; the next
-    // poll shows what actually landed.
-    return false;
-  }
   LockGuard guard(this->lock_);
-  *applied = this->pending_applied_;
-  return true;
+  if (this->writes_.result(ticket, applied)) return true;
+  // The loop never got to *this* write. Withdraw it so it cannot land minutes
+  // later, after the request was answered, and so the slot does not stay
+  // occupied and 503 every write after it. Withdrawing is refused once the
+  // loop has taken it: it is being applied right now and cannot be recalled,
+  // and 503 is the honest end of a request we waited out — the next poll
+  // shows what actually landed.
+  this->writes_.withdraw(ticket);
+  return false;
 }
 
 void DashboardComponent::rebuild_() {

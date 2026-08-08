@@ -116,13 +116,17 @@ real stack. Anything touching the live DOM — the reconciler, a control's write
 path, a disclosure — needs a test there, because the unit tests render views
 to a string and cannot see those failures.
 
-The firmware side is covered in three places, because **ESPHome has no web
+The firmware side is covered in four places, because **ESPHome has no web
 server for the `host` platform** (`web_server` is declared ESP-only and
 `web_server_base.h` falls back to `<ESPAsyncWebServer.h>` elsewhere), so
 `dashboard.cpp` cannot be built or run there:
 
 - `host_status_json_test.cpp` / `host_controls_test.cpp` — the wire format and
   the write-path bounds, as pure host gtests.
+- `host_write_slot_test.cpp` — the httpd-task ↔ main-loop write handover, with
+  real threads. This is why it lives in `write_slot.h` and not in
+  `dashboard.cpp`: keep it free of ESPHome deps so both sides stay drivable
+  from a host test, since a race here is otherwise untestable anywhere.
 - `test_dashboard_e2e.py` — the document built from **live** state and the
   writes applied back into it, driven against the compiled host binary over
   the test-control channel (`status` / `control` commands in `test_hooks.cpp`,
