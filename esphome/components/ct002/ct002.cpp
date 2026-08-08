@@ -775,7 +775,9 @@ void CT002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  CT MAC: %s", this->ct_mac_.empty() ? "(mirror)" : this->ct_mac_.c_str());
   ESP_LOGCONFIG(TAG, "  UDP Port: %u", this->udp_port_);
   ESP_LOGCONFIG(TAG, "  Active Control: %s", YESNO(this->active_control_));
-  ESP_LOGCONFIG(TAG, "  Max Sensor Age: %u ms", this->max_sensor_age_ms_);
+  // uint32_t is `long unsigned` on xtensa, so %u needs the cast to match
+  // (lossless — both are 32 bits here and on the host build).
+  ESP_LOGCONFIG(TAG, "  Max Sensor Age: %u ms", static_cast<unsigned>(this->max_sensor_age_ms_));
   for (uint8_t i = 0; i < this->num_phases_; ++i) {
     if (this->unit_scale_[i] != 1.0f) {
       ESP_LOGCONFIG(TAG, "  L%u Unit Scale: x%g (declared unit -> W)",

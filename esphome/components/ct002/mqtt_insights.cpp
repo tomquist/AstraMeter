@@ -540,8 +540,10 @@ void MqttInsightsComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Base topic: %s", this->base_topic_.c_str());
   ESP_LOGCONFIG(TAG, "  HA Discovery: %s (prefix=%s)", YESNO(this->ha_discovery_),
                 this->ha_discovery_prefix_.c_str());
+  // uint32_t is `long unsigned` on xtensa, so %u needs the cast to match
+  // (lossless — both are 32 bits here and on the host build).
   ESP_LOGCONFIG(TAG, "  Marstek MQTT: %s (interval=%us)", YESNO(this->marstek_mqtt_enabled_),
-                this->marstek_mqtt_interval_ms_ / 1000U);
+                static_cast<unsigned>(this->marstek_mqtt_interval_ms_ / 1000U));
   // ct_mac is resolved lazily at connect time; at dump_config (boot) it
   // may legitimately still be empty if marstek_registration hasn't applied
   // it yet — the App-topic subscribe happens once it's known.

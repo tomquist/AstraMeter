@@ -202,7 +202,14 @@ void MarstekRegistrationComponent::tick_state_() {
         if (t == nullptr || t[0] == '\0') return false;
         token = t;
         if (root["data"].is<JsonArray>()) {
-          for (JsonObject d : root["data"].as<JsonArray>()) {
+          // Held in a named handle rather than iterated straight off the
+          // member proxy: the proxy is a temporary that dies at the end of
+          // the full expression, which GCC 13 flags as a possibly dangling
+          // reference (-Wdangling-reference). The array is a handle into the
+          // document's own pool, so it was never actually at risk — but this
+          // says so, and keeps a strict build quiet.
+          JsonArray data = root["data"].as<JsonArray>();
+          for (JsonObject d : data) {
             DeviceRecord r;
             if (d["devid"].is<const char *>()) r.devid = d["devid"].as<const char *>();
             if (d["mac"].is<const char *>()) r.mac = d["mac"].as<const char *>();
@@ -239,7 +246,9 @@ void MarstekRegistrationComponent::tick_state_() {
       }
       bool ok = json::parse_json(body, [&](JsonObject root) -> bool {
         if (!root["data"].is<JsonArray>()) return true;  // empty is OK
-        for (JsonObject d : root["data"].as<JsonArray>()) {
+        // Named handle, not the temporary member proxy — see above.
+        JsonArray data = root["data"].as<JsonArray>();
+        for (JsonObject d : data) {
           DeviceRecord r;
           if (d["devid"].is<const char *>()) r.devid = d["devid"].as<const char *>();
           if (d["mac"].is<const char *>()) r.mac = d["mac"].as<const char *>();

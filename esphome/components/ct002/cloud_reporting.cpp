@@ -42,7 +42,9 @@ void CloudReportingComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  host: %s", this->host_.c_str());
   ESP_LOGCONFIG(TAG, "  id: %s",
                 this->device_id_.empty() ? "(pending — from ct_mac)" : this->device_id_.c_str());
-  ESP_LOGCONFIG(TAG, "  interval: %u ms", this->interval_ms_);
+  // uint32_t is `long unsigned` on xtensa, so %u needs the cast to match
+  // (lossless — both are 32 bits here and on the host build).
+  ESP_LOGCONFIG(TAG, "  interval: %u ms", static_cast<unsigned>(this->interval_ms_));
 }
 
 bool CloudReportingComponent::network_ready_() const { return network::is_connected(); }
