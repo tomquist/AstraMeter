@@ -434,3 +434,214 @@ def test_dashboard_controls_are_off_by_default():
     # the LAN has to be asked for — matching DASHBOARD_ALLOW_WRITE on the
     # Python side, which also defaults to off outside the add-on.
     assert _dashboard_default(ct002_component.CONF_CONTROLS) is False
+
+
+@contextlib.contextmanager
+def _core_paths(tmp_path, name="device"):
+    """Point CORE's config directory and device name at *tmp_path*, then restore.
+
+    The web-server link is generated during validation, so it needs somewhere
+    to write and a device name to file it under; outside a real codegen run
+    neither is set.
+    """
+    from esphome.core import CORE
+
+    previous = (CORE.config_path, CORE.name)
+    CORE.config_path = tmp_path / f"{name}.yaml"
+    CORE.name = name
+    try:
+        yield CORE
+    finally:
+        CORE.config_path, CORE.name = previous
+
+
+def _link_config(path=None, **dashboard):
+    """A validated-shaped ct002 config with the dashboard's path settled."""
+    dashboard.setdefault(ct002_component.CONF_PATH, path)
+    if dashboard[ct002_component.CONF_PATH] is None:
+        dashboard[ct002_component.CONF_PATH] = ct002_component.DASHBOARD_ASIDE_PATH
+    return {ct002_component.CONF_DASHBOARD: dashboard}
+
+
+def _generated_js(core):
+    return ct002_component._web_server_link_path().read_text(encoding="utf-8")
+
+
+def test_web_server_link_is_injected_into_the_esphome_page(tmp_path):
+    # ESPHome's own frontend renders a fixed set of entity domains and
+    # text-binds every name and state, so no entity can be a link and the page
+    # would otherwise never mention the dashboard beside it. `js_include:` is
+    # the only opening, so the component fills it in on the user's behalf.
+    with _core_paths(tmp_path) as core:
+        config = _link_config()
+        web_server = {}
+        ct002_component._final_validate_web_server_link(
+            config, {ct002_component.CONF_WEB_SERVER: web_server}
+        )
+        generated = ct002_component._web_server_link_path()
+        assert web_server[esphome.const.CONF_JS_INCLUDE] == str(generated)
+        assert '"/astrameter/"' in _generated_js(core)
+
+
+def test_web_server_link_points_at_a_custom_path(tmp_path):
+    with _core_paths(tmp_path) as core:
+        config = _link_config("/power")
+        ct002_component._final_validate_web_server_link(
+            config, {ct002_component.CONF_WEB_SERVER: {}}
+        )
+        assert '"/power/"' in _generated_js(core)
+
+
+def test_web_server_link_keeps_the_trailing_slash(tmp_path):
+    # The dashboard answers the bare prefix with a redirect, so a link without
+    # the slash costs every visitor a round trip.
+    assert ct002_component._link_href(_link_config("/astrameter")) == "/astrameter/"
+    assert ct002_component._link_href(_link_config("")) == "/"
+
+
+def test_web_server_link_is_absent_without_the_esphome_page(tmp_path):
+    # Nothing to link *from*: the dashboard has the root to itself.
+    with _core_paths(tmp_path):
+        ct002_component._final_validate_web_server_link(_link_config(""), {})
+        assert not ct002_component._web_server_link_path().exists()
+
+
+def test_web_server_link_can_be_turned_off(tmp_path):
+    with _core_paths(tmp_path):
+        web_server = {}
+        ct002_component._final_validate_web_server_link(
+            _link_config(**{ct002_component.CONF_WEB_SERVER_LINK: False}),
+            {ct002_component.CONF_WEB_SERVER: web_server},
+        )
+        assert esphome.const.CONF_JS_INCLUDE not in web_server
+        assert not ct002_component._web_server_link_path().exists()
+
+
+def test_web_server_link_is_absent_for_a_dashboardless_build(tmp_path):
+    with _core_paths(tmp_path):
+        web_server = {}
+        ct002_component._final_validate_web_server_link(
+            {}, {ct002_component.CONF_WEB_SERVER: web_server}
+        )
+        assert esphome.const.CONF_JS_INCLUDE not in web_server
+
+
+@pytest.mark.parametrize(
+    "web_server",
+    [
+        # Builds its page in C++ and emits only /0.css, so js_include is never
+        # requested.
+        {esphome.const.CONF_VERSION: 1},
+        # Serves the prebuilt INDEX_GZ, which does not reference /0.js either.
+        {esphome.const.CONF_LOCAL: True},
+    ],
+    ids=["version-1", "local"],
+)
+def test_web_server_link_steps_aside_where_js_include_is_ignored(tmp_path, web_server):
+    # Both are deliberate user choices, and the dashboard is reachable either
+    # way — so this is a no-op with a log line, never a build failure.
+    with _core_paths(tmp_path):
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: dict(web_server)}
+        )
+        assert not ct002_component._web_server_link_path().exists()
+
+
+def test_web_server_link_keeps_a_user_js_include(tmp_path):
+    # We are claiming a slot the user may already be using, so theirs has to
+    # survive — it runs first, then ours.
+    with _core_paths(tmp_path) as core:
+        theirs = tmp_path / "my-ui.js"
+        theirs.write_text('console.log("mine");\n', encoding="utf-8")
+        web_server = {esphome.const.CONF_JS_INCLUDE: "my-ui.js"}
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: web_server}
+        )
+        generated = _generated_js(core)
+        assert generated.index('console.log("mine");') < generated.index("/astrameter/")
+        assert web_server[esphome.const.CONF_JS_INCLUDE] != str(theirs)
+
+
+def test_web_server_link_does_not_stack_on_revalidation(tmp_path):
+    # Guards the footgun in the line above: if the generated file were ever
+    # read back as "the user's", every run would append another copy.
+    with _core_paths(tmp_path) as core:
+        full = {ct002_component.CONF_WEB_SERVER: {}}
+        for _ in range(3):
+            ct002_component._final_validate_web_server_link(_link_config(), full)
+            full = {
+                ct002_component.CONF_WEB_SERVER: {
+                    esphome.const.CONF_JS_INCLUDE: full[
+                        ct002_component.CONF_WEB_SERVER
+                    ][esphome.const.CONF_JS_INCLUDE]
+                }
+            }
+        assert _generated_js(core).count("document.body.prepend") == 1
+
+
+def test_web_server_link_survives_an_unwritable_data_directory(tmp_path):
+    # A convenience must never be the reason a build fails.
+    with _core_paths(tmp_path) as core:
+        core.data_dir.parent.mkdir(parents=True, exist_ok=True)
+        core.data_dir.write_text("not a directory", encoding="utf-8")
+        web_server = {}
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: web_server}
+        )
+        assert esphome.const.CONF_JS_INCLUDE not in web_server
+
+
+def test_web_server_link_is_on_by_default():
+    assert _dashboard_default(ct002_component.CONF_WEB_SERVER_LINK) is True
+
+
+def test_web_server_link_is_not_written_into_the_build_directory(tmp_path):
+    # Regression: the build directory is the obvious home for a generated
+    # file and the wrong one. `write_cpp` calls `update_storage_json` first,
+    # which full-wipes that directory whenever the storage sidecar changed
+    # (every first build among others) — after our final-validation, before
+    # web_server reads the file. A snippet written there vanishes, and only
+    # on some builds.
+    from esphome.core import CORE
+
+    with _core_paths(tmp_path):
+        previous = CORE.build_path
+        CORE.build_path = tmp_path / "build"
+        try:
+            generated = ct002_component._web_server_link_path()
+            assert not generated.is_relative_to(CORE.build_path)
+        finally:
+            CORE.build_path = previous
+
+
+def test_web_server_link_is_namespaced_per_device(tmp_path):
+    # ESPHome's data directory is shared by every configuration beside it.
+    with _core_paths(tmp_path, name="kitchen"):
+        kitchen = ct002_component._web_server_link_path()
+    with _core_paths(tmp_path, name="garage"):
+        assert ct002_component._web_server_link_path() != kitchen
+
+
+def test_web_server_link_survives_a_user_file_without_a_semicolon(tmp_path):
+    # Both end up in one module, so a user file ending on an expression would
+    # otherwise read our IIFE as its argument list — `foo\n(() => {})()`.
+    with _core_paths(tmp_path) as core:
+        (tmp_path / "mine.js").write_text("const label = window.name", encoding="utf-8")
+        ct002_component._final_validate_web_server_link(
+            _link_config(),
+            {
+                ct002_component.CONF_WEB_SERVER: {
+                    esphome.const.CONF_JS_INCLUDE: "mine.js"
+                }
+            },
+        )
+        generated = _generated_js(core)
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed; cannot parse the generated module")
+    module = tmp_path / "concatenated.mjs"
+    module.write_text(generated, encoding="utf-8")
+    # `node --check` parses without running: enough to catch the merge, and it
+    # needs no DOM.
+    subprocess.run([node, "--check", str(module)], check=True)

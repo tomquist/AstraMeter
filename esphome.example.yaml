@@ -196,6 +196,9 @@ ct002:
   #   path: /                        # mount point. Left unset it takes the
   #                                  # root, or /astrameter when ESPHome's
   #                                  # own `web_server:` already holds it.
+  #   web_server_link: true          # when it has moved aside like that, add
+  #                                  # a link to it at the top of ESPHome's
+  #                                  # own page. false leaves that page alone.
 
   # ── Optional sub-block: mqtt_insights ────────────────────────────────
   # Publishes per-consumer + device-level state to MQTT with full Home

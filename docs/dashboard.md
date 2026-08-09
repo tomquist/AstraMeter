@@ -152,6 +152,7 @@ those who run that sub-block — but:
 |---|---|---|
 | `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
 | `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
+| `web_server_link` | `true` | Adds a link to the dashboard at the top of ESPHome's own page. Only does anything when `web_server:` is configured. |
 | `id` | generated | The usual ESPHome component id. |
 
 ```yaml
@@ -181,6 +182,15 @@ rather than contesting the root. The address it settled on is in the boot log:
 Set `path:` yourself to put it somewhere else. Asking for `path: /` while
 `web_server:` is configured is refused at validation time rather than letting
 the two race.
+
+So that the moved page is not hidden behind a URL you have to already know,
+**ESPHome's own page gets a link to it** at the top — no configuration, and
+nothing to keep in step if you change `path:`. Set `web_server_link: false`
+under `dashboard:` if you would rather it stayed as ESPHome ships it. Two
+`web_server:` settings leave the link out, because both replace the page it is
+added to: `version: 1`, whose page is built in firmware, and `local: true`,
+which serves a prebuilt one. Neither is an error — the compile log says so and
+the dashboard is reachable at its own URL regardless.
 
 It costs about 90 KiB of flash — the compressed page plus ESPHome's HTTP
 server — and no measurable RAM while nobody is watching. An ESP32 with 4 MB is

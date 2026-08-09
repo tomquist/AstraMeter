@@ -19,6 +19,8 @@ schema accepts grid-power sensor IDs and the cross-phase filter pipeline
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 import esphome.codegen as cg
@@ -29,13 +31,19 @@ from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import (
     CONF_ALPHA,
     CONF_ID,
+    CONF_JS_INCLUDE,
+    CONF_LOCAL,
     CONF_MODE,
     CONF_PASSWORD,
     CONF_TIMEZONE,
     CONF_UNIT_OF_MEASUREMENT,
+    CONF_VERSION,
+    CONF_WEB_SERVER,
     PLATFORM_ESP32,
 )
 from esphome.core import CORE
+
+_LOGGER = logging.getLogger(__name__)
 
 CODEOWNERS = ["@tomquist"]
 DEPENDENCIES = ["sensor"]
@@ -210,7 +218,7 @@ def _final_validate_dashboard_path(config, full):
     dashboard = config.get(CONF_DASHBOARD)
     if dashboard is None:
         return
-    collides = "web_server" in full
+    collides = CONF_WEB_SERVER in full
     if CONF_PATH not in dashboard:
         dashboard[CONF_PATH] = DASHBOARD_ASIDE_PATH if collides else ""
         return
@@ -225,6 +233,147 @@ def _final_validate_dashboard_path(config, full):
     )
 
 
+# The snippet handed to ESPHome's own web UI, which has no notion of a link:
+# its frontends render a fixed set of entity domains, and every name and state
+# is text-bound, so no entity can ever come out as an anchor. The one opening
+# is `js_include:` — a file gzipped into flash, served at /0.js and loaded as a
+# module ahead of <esp-app> — which leaves the link a few lines of DOM.
+#
+# Kept ASCII (→ rather than the arrow itself) so the bytes are the same
+# whatever encoding the file is read back with. The colours are the frontend's
+# own — its header background, and the text colour the `color-scheme` it sets
+# implies — so the bar follows the page into dark mode without knowing which
+# mode it is in. The font has to be restated rather than inherited: the
+# frontend declares it on `:host`, inside <esp-app>'s shadow DOM, which does
+# not reach an anchor sitting beside it in the light DOM.
+#
+# The leading `;` is the one that matters when a user's own `js_include:` runs
+# ahead of this in the same module: theirs ending on an expression with no
+# semicolon would otherwise take the IIFE below for its argument list.
+_WEB_SERVER_LINK_TEMPLATE = """\
+// Added by AstraMeter's ct002 component (dashboard: web_server_link: false
+// switches it off). Regenerated on every build; edits here are lost.
+;(() => {
+  const link = document.createElement("a");
+  link.href = %(href)s;
+  link.textContent = "AstraMeter dashboard \\u2192";
+  link.style.cssText =
+    "display:block;padding:.6em 1.5em;text-align:center;color:inherit;" +
+    "text-decoration:none;background:rgba(127,127,127,.3);" +
+    "border-radius:0 0 12px 12px;" +
+    "font-family:ui-monospace,system-ui,Helvetica,Roboto,Oxygen,Ubuntu,sans-serif";
+  document.body.prepend(link);
+})();
+"""
+
+# Where the generated snippet lands: ESPHome's data directory, under a
+# subdirectory of our own.
+#
+# NOT the build directory, however much it looks like the natural home for a
+# generated file. `write_cpp` calls `update_storage_json` first, which
+# `clean_build(full=True)`s — an outright rmtree of the build directory —
+# whenever the storage sidecar changed, which includes every first build. That
+# lands between our final-validation and web_server's codegen, so a file
+# written there is gone by the time it is read, and only on some builds.
+#
+# Not the user's config directory either: this is our artifact, not something
+# they should find sitting next to their YAML.
+WEB_SERVER_LINK_DIR = "astrameter"
+
+
+def _web_server_link_path():
+    """Where this device's generated snippet goes, or None if there is nowhere.
+
+    Namespaced by device name because ESPHome's data directory is shared by
+    every configuration beside it — two devices in one directory would
+    otherwise write each other's link.
+    """
+    if CORE.config_path is None or not CORE.name:
+        return None
+    return CORE.relative_internal_path(
+        WEB_SERVER_LINK_DIR, f"{CORE.name}.web-server-link.js"
+    )
+
+
+def _final_validate_web_server_link(config, full):
+    """Give ESPHome's own page a way through to the dashboard beside it.
+
+    With `web_server:` configured the dashboard steps aside to /astrameter
+    (above), which nothing on ESPHome's page points at — so a device serving
+    both hides one of them behind a URL the user has to already know. ESPHome
+    offers no config-level way to add a link, so this writes the anchor into
+    `web_server:`'s `js_include:` on the user's behalf.
+
+    Reaching into another component's config is only sound because
+    final-validation mutations *are* what codegen reads: `fv.full_config` is
+    the same object that becomes `CORE.config`, and web_server's `to_code`
+    runs afterwards (this is the same mechanism that defaults our own `path:`
+    just above). It has to happen here rather than in `to_code`, though —
+    web_server generates at CoroPriority.WEB and we generate at 0, so by the
+    time our codegen runs it has already read the file.
+
+    Anything that leaves the link out is a no-op and never an error: the page
+    is reachable either way, and a build must not fail over a convenience.
+    """
+    dashboard = config.get(CONF_DASHBOARD)
+    if dashboard is None or not dashboard.get(CONF_WEB_SERVER_LINK, True):
+        return
+    web_server = full.get(CONF_WEB_SERVER)
+    if web_server is None:
+        # Nothing to link *from* — with no ESPHome page, the dashboard has the
+        # root to itself.
+        return
+    if web_server.get(CONF_VERSION, 2) == 1:
+        _LOGGER.info(
+            "AstraMeter: `web_server: version: 1` builds its page in firmware "
+            "and cannot carry a link to the dashboard. It is served from "
+            "http://<device>%s/",
+            dashboard[CONF_PATH],
+        )
+        return
+    if web_server.get(CONF_LOCAL):
+        _LOGGER.info(
+            "AstraMeter: `web_server: local: true` serves a prebuilt page that "
+            "cannot carry a link to the dashboard. It is served from "
+            "http://<device>%s/",
+            dashboard[CONF_PATH],
+        )
+        return
+    generated = _web_server_link_path()
+    if generated is None:
+        return
+
+    existing = web_server.get(CONF_JS_INCLUDE)
+    prior = ""
+    try:
+        if existing:
+            existing_path = CORE.relative_config_path(existing)
+            # Never fold our own output back in: a re-validation that read the
+            # previous build's file would stack a second copy of the link on
+            # every run.
+            if existing_path != generated:
+                prior = existing_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n"
+        generated.parent.mkdir(parents=True, exist_ok=True)
+        generated.write_text(
+            prior
+            + _WEB_SERVER_LINK_TEMPLATE % {"href": json.dumps(_link_href(config))},
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+    web_server[CONF_JS_INCLUDE] = str(generated)
+
+
+def _link_href(config) -> str:
+    """The dashboard's URL as the injected anchor should spell it.
+
+    With a trailing slash: `/astrameter` answers with a redirect to
+    `/astrameter/`, so linking the bare prefix would cost every visitor a
+    round trip.
+    """
+    return (config[CONF_DASHBOARD][CONF_PATH] or "") + "/"
+
+
 def _final_validate(config):
     """Cross-component checks that need the whole validated configuration."""
     full = fv.full_config.get()
@@ -237,6 +386,9 @@ def _final_validate(config):
                 conf_key, config[conf_key], _declared_unit(full, config[conf_key])
             )
     _final_validate_dashboard_path(config, full)
+    # Strictly after the path is settled: the link points at wherever the
+    # dashboard ended up.
+    _final_validate_web_server_link(config, full)
 
 
 FINAL_VALIDATE_SCHEMA = _final_validate
@@ -499,6 +651,7 @@ CLOUD_REPORTING_SCHEMA = cv.All(
 CONF_DASHBOARD = "dashboard"
 CONF_PATH = "path"
 CONF_CONTROLS = "controls"
+CONF_WEB_SERVER_LINK = "web_server_link"
 
 # Where a default-on dashboard goes when `web_server:` already holds the root.
 DASHBOARD_ASIDE_PATH = "/astrameter"
@@ -555,6 +708,9 @@ DASHBOARD_OPTIONS_SCHEMA = cv.Schema(
         # the page has no login of its own, so steering someone's
         # batteries from the LAN stays an explicit choice.
         cv.Optional(CONF_CONTROLS, default=False): cv.boolean,
+        # Only bites when `web_server:` is configured, which is the only case
+        # where the dashboard is not at the root and so needs pointing at.
+        cv.Optional(CONF_WEB_SERVER_LINK, default=True): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
