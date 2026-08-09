@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import esphome.codegen as cg
@@ -251,8 +252,9 @@ def _final_validate_dashboard_path(config, full):
 # ahead of this in the same module: theirs ending on an expression with no
 # semicolon would otherwise take the IIFE below for its argument list.
 _WEB_SERVER_LINK_TEMPLATE = """\
-// Added by AstraMeter's ct002 component (dashboard: web_server_link: false
-// switches it off). Regenerated on every build; edits here are lost.
+// astrameter-web-server-link — added by AstraMeter's ct002 component
+// (dashboard: web_server_link: false switches it off).
+// Regenerated on every build; edits here are lost.
 ;(() => {
   const link = document.createElement("a");
   link.href = %(href)s;
@@ -324,10 +326,15 @@ def _final_validate_web_server_link(config, full):
         # root to itself.
         return
     if web_server.get(CONF_VERSION, 2) == 1:
+        # v1 builds its page in C++ and does have a `/0.js` tag — but behind
+        # `js_include_ != nullptr`, and web_server's codegen never calls
+        # `set_js_include()`, so the pointer is null for every v1 build and the
+        # tag is never emitted. The file would reach flash and nothing would
+        # load it.
         _LOGGER.info(
-            "AstraMeter: `web_server: version: 1` builds its page in firmware "
-            "and cannot carry a link to the dashboard. It is served from "
-            "http://<device>%s/",
+            "AstraMeter: `web_server: version: 1` serves a page that never "
+            "loads its `js_include:`, so it cannot carry a link to the "
+            "dashboard. The dashboard is served from http://<device>%s/",
             dashboard[CONF_PATH],
         )
         return
@@ -344,24 +351,63 @@ def _final_validate_web_server_link(config, full):
         return
 
     existing = web_server.get(CONF_JS_INCLUDE)
+    snippet = _WEB_SERVER_LINK_TEMPLATE % {"href": json.dumps(_link_href(config))}
     prior = ""
+    # UnicodeError as much as OSError: `cv.file_` checks only that the path
+    # exists, so a user's `js_include:` can be any bytes at all, and decoding
+    # it is the one step here that can fail on a file that is otherwise fine.
+    # Both have to leave the build alone rather than take it down.
     try:
         if existing:
-            existing_path = CORE.relative_config_path(existing)
-            # Never fold our own output back in: a re-validation that read the
-            # previous build's file would stack a second copy of the link on
-            # every run.
-            if existing_path != generated:
-                prior = existing_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n"
-        generated.parent.mkdir(parents=True, exist_ok=True)
-        generated.write_text(
-            prior
-            + _WEB_SERVER_LINK_TEMPLATE % {"href": json.dumps(_link_href(config))},
-            encoding="utf-8",
-        )
-    except OSError:
+            prior = _prior_js(CORE.relative_config_path(existing), generated)
+        _write_atomically(generated, prior + snippet)
+    except (OSError, UnicodeError):
         return
-    web_server[CONF_JS_INCLUDE] = str(generated)
+    web_server[CONF_JS_INCLUDE] = generated
+
+
+# Marks our own output, for the benefit of the "is this the user's file?" test
+# below. Kept in the snippet itself rather than inferred from the path, so a
+# copy of it is recognised too.
+_WEB_SERVER_LINK_MARKER = "astrameter-web-server-link"
+
+
+def _prior_js(existing_path, generated):
+    """The user's own `js_include:`, to run ahead of ours in the same module.
+
+    Empty when what we are pointed at is our own previous output. That is not
+    hypothetical: the config still names the user's file, but a path can reach
+    ours by another spelling — a symlink, a `..` hop, a bind-mounted config
+    directory — and each build would then prepend the last build's copy, so
+    the number of links on the page (and the bytes in flash) would grow on
+    every compile. Both the resolved path and the content are checked, since
+    a *copy* of our output has neither the same path nor any business being
+    prepended.
+    """
+    if existing_path.resolve() == generated.resolve():
+        return ""
+    content = existing_path.read_text(encoding="utf-8")
+    if _WEB_SERVER_LINK_MARKER in content:
+        return ""
+    return content.rstrip("\n") + "\n\n"
+
+
+def _write_atomically(path, content):
+    """Write *content* to *path* as one replacement, never a truncated file.
+
+    Generating during validation means this runs far more often than a build
+    does — every `esphome config`, and the ESPHome dashboard's editor
+    validates as you type. A plain truncating write can therefore land in the
+    middle of a concurrent compile reading the same file, which would embed a
+    half-written module and take the user's own script down with it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        temp.write_text(content, encoding="utf-8")
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _link_href(config) -> str:

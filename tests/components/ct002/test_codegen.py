@@ -10,6 +10,8 @@ guard.
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -436,6 +438,12 @@ def test_dashboard_controls_are_off_by_default():
     assert _dashboard_default(ct002_component.CONF_CONTROLS) is False
 
 
+# What CORE.data_dir consults *before* the config path — either one would
+# send every test in this file at one shared directory, where the
+# "nothing was written" assertions would start reading each other's output.
+_DATA_DIR_ENV = ("ESPHOME_DATA_DIR", "ESPHOME_IS_HA_ADDON")
+
+
 @contextlib.contextmanager
 def _core_paths(tmp_path, name="device"):
     """Point CORE's config directory and device name at *tmp_path*, then restore.
@@ -447,12 +455,16 @@ def _core_paths(tmp_path, name="device"):
     from esphome.core import CORE
 
     previous = (CORE.config_path, CORE.name)
+    previous_env = {key: os.environ.pop(key, None) for key in _DATA_DIR_ENV}
     CORE.config_path = tmp_path / f"{name}.yaml"
     CORE.name = name
     try:
         yield CORE
     finally:
         CORE.config_path, CORE.name = previous
+        for key, value in previous_env.items():
+            if value is not None:
+                os.environ[key] = value
 
 
 def _link_config(path=None, **dashboard):
@@ -463,7 +475,7 @@ def _link_config(path=None, **dashboard):
     return {ct002_component.CONF_DASHBOARD: dashboard}
 
 
-def _generated_js(core):
+def _generated_js():
     return ct002_component._web_server_link_path().read_text(encoding="utf-8")
 
 
@@ -472,27 +484,27 @@ def test_web_server_link_is_injected_into_the_esphome_page(tmp_path):
     # text-binds every name and state, so no entity can be a link and the page
     # would otherwise never mention the dashboard beside it. `js_include:` is
     # the only opening, so the component fills it in on the user's behalf.
-    with _core_paths(tmp_path) as core:
+    with _core_paths(tmp_path):
         config = _link_config()
         web_server = {}
         ct002_component._final_validate_web_server_link(
             config, {ct002_component.CONF_WEB_SERVER: web_server}
         )
         generated = ct002_component._web_server_link_path()
-        assert web_server[esphome.const.CONF_JS_INCLUDE] == str(generated)
-        assert '"/astrameter/"' in _generated_js(core)
+        assert web_server[esphome.const.CONF_JS_INCLUDE] == generated
+        assert '"/astrameter/"' in _generated_js()
 
 
 def test_web_server_link_points_at_a_custom_path(tmp_path):
-    with _core_paths(tmp_path) as core:
+    with _core_paths(tmp_path):
         config = _link_config("/power")
         ct002_component._final_validate_web_server_link(
             config, {ct002_component.CONF_WEB_SERVER: {}}
         )
-        assert '"/power/"' in _generated_js(core)
+        assert '"/power/"' in _generated_js()
 
 
-def test_web_server_link_keeps_the_trailing_slash(tmp_path):
+def test_web_server_link_keeps_the_trailing_slash():
     # The dashboard answers the bare prefix with a redirect, so a link without
     # the slash costs every visitor a round trip.
     assert ct002_component._link_href(_link_config("/astrameter")) == "/astrameter/"
@@ -550,14 +562,14 @@ def test_web_server_link_steps_aside_where_js_include_is_ignored(tmp_path, web_s
 def test_web_server_link_keeps_a_user_js_include(tmp_path):
     # We are claiming a slot the user may already be using, so theirs has to
     # survive — it runs first, then ours.
-    with _core_paths(tmp_path) as core:
+    with _core_paths(tmp_path):
         theirs = tmp_path / "my-ui.js"
         theirs.write_text('console.log("mine");\n', encoding="utf-8")
         web_server = {esphome.const.CONF_JS_INCLUDE: "my-ui.js"}
         ct002_component._final_validate_web_server_link(
             _link_config(), {ct002_component.CONF_WEB_SERVER: web_server}
         )
-        generated = _generated_js(core)
+        generated = _generated_js()
         assert generated.index('console.log("mine");') < generated.index("/astrameter/")
         assert web_server[esphome.const.CONF_JS_INCLUDE] != str(theirs)
 
@@ -565,7 +577,7 @@ def test_web_server_link_keeps_a_user_js_include(tmp_path):
 def test_web_server_link_does_not_stack_on_revalidation(tmp_path):
     # Guards the footgun in the line above: if the generated file were ever
     # read back as "the user's", every run would append another copy.
-    with _core_paths(tmp_path) as core:
+    with _core_paths(tmp_path):
         full = {ct002_component.CONF_WEB_SERVER: {}}
         for _ in range(3):
             ct002_component._final_validate_web_server_link(_link_config(), full)
@@ -576,7 +588,7 @@ def test_web_server_link_does_not_stack_on_revalidation(tmp_path):
                     ][esphome.const.CONF_JS_INCLUDE]
                 }
             }
-        assert _generated_js(core).count("document.body.prepend") == 1
+        assert _generated_js().count("document.body.prepend") == 1
 
 
 def test_web_server_link_survives_an_unwritable_data_directory(tmp_path):
@@ -604,9 +616,12 @@ def test_web_server_link_is_not_written_into_the_build_directory(tmp_path):
     # on some builds.
     from esphome.core import CORE
 
-    with _core_paths(tmp_path):
+    with _core_paths(tmp_path) as core:
         previous = CORE.build_path
-        CORE.build_path = tmp_path / "build"
+        # The shape a real run produces — `esphome compile` puts it at
+        # <data_dir>/build/<name>. A path invented here would let the
+        # assertion pass against a directory nothing actually wipes.
+        CORE.build_path = core.data_dir / "build" / core.name
         try:
             generated = ct002_component._web_server_link_path()
             assert not generated.is_relative_to(CORE.build_path)
@@ -622,10 +637,54 @@ def test_web_server_link_is_namespaced_per_device(tmp_path):
         assert ct002_component._web_server_link_path() != kitchen
 
 
-def test_web_server_link_survives_a_user_file_without_a_semicolon(tmp_path):
+def _run_module(source: str, tmp_path):
+    """Execute *source* as an ES module against a stub DOM, return the anchor.
+
+    Parsing it is not enough. The failure this guards against — a user's
+    `js_include:` ending on an expression, so ASI reads our IIFE as its
+    argument list — produces a *syntactically valid* call expression that
+    only blows up when it runs.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed; cannot execute the generated module")
+    harness = tmp_path / "harness.mjs"
+    harness.write_text(
+        """
+globalThis.window = { name: "a-string-not-a-function" };
+globalThis.document = {
+  createElement: () => ({ style: {}, setAttribute() {} }),
+  body: { prepend: (el) => { globalThis.__anchor = el; } },
+};
+"""
+        + source
+        + """
+console.log(JSON.stringify(globalThis.__anchor ?? null));
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [node, str(harness)], capture_output=True, text=True, check=True
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_the_generated_module_actually_builds_the_anchor(tmp_path):
+    with _core_paths(tmp_path):
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: {}}
+        )
+        anchor = _run_module(_generated_js(), tmp_path)
+    assert anchor["href"] == "/astrameter/"
+    assert "AstraMeter" in anchor["textContent"]
+
+
+def test_the_generated_module_runs_after_a_user_file_without_a_semicolon(tmp_path):
     # Both end up in one module, so a user file ending on an expression would
-    # otherwise read our IIFE as its argument list — `foo\n(() => {})()`.
-    with _core_paths(tmp_path) as core:
+    # otherwise take our IIFE for its argument list — `window.name\n(() => {})()`
+    # parses fine and throws "window.name is not a function" at runtime, so
+    # only executing it catches this.
+    with _core_paths(tmp_path):
         (tmp_path / "mine.js").write_text("const label = window.name", encoding="utf-8")
         ct002_component._final_validate_web_server_link(
             _link_config(),
@@ -635,13 +694,84 @@ def test_web_server_link_survives_a_user_file_without_a_semicolon(tmp_path):
                 }
             },
         )
-        generated = _generated_js(core)
+        anchor = _run_module(_generated_js(), tmp_path)
+    assert anchor["href"] == "/astrameter/"
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node not installed; cannot parse the generated module")
-    module = tmp_path / "concatenated.mjs"
-    module.write_text(generated, encoding="utf-8")
-    # `node --check` parses without running: enough to catch the merge, and it
-    # needs no DOM.
-    subprocess.run([node, "--check", str(module)], check=True)
+
+def test_web_server_link_leaves_a_non_utf8_user_file_alone(tmp_path):
+    # `cv.file_` only checks that the path exists, so a user's js_include can
+    # be any bytes at all. Decoding it is the one step here that fails on a
+    # file that is otherwise perfectly fine, and a convenience must not take
+    # the build down with it — before this, `esphome config` on such a config
+    # succeeded.
+    with _core_paths(tmp_path):
+        (tmp_path / "latin1.js").write_bytes(b'console.log("caf\xe9");\n')
+        web_server = {esphome.const.CONF_JS_INCLUDE: "latin1.js"}
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: web_server}
+        )
+        # Their file stays exactly as they configured it.
+        assert web_server[esphome.const.CONF_JS_INCLUDE] == "latin1.js"
+
+
+def test_web_server_link_does_not_stack_through_an_aliased_path(tmp_path):
+    # The self-reference check has to survive a path that reaches our output
+    # by another spelling — a symlink, a `..` hop, a bind-mounted config dir.
+    # Comparing the configured spelling alone would read the last build's
+    # output as "the user's file" and prepend it, growing the page's links
+    # and the firmware's flash on every compile.
+    with _core_paths(tmp_path):
+        generated = ct002_component._web_server_link_path()
+        full = {ct002_component.CONF_WEB_SERVER: {}}
+        ct002_component._final_validate_web_server_link(_link_config(), full)
+        alias = tmp_path / "alias.js"
+        alias.symlink_to(generated)
+        for _ in range(3):
+            ct002_component._final_validate_web_server_link(
+                _link_config(),
+                {
+                    ct002_component.CONF_WEB_SERVER: {
+                        esphome.const.CONF_JS_INCLUDE: "alias.js"
+                    }
+                },
+            )
+        assert _generated_js().count("document.body.prepend") == 1
+
+
+def test_web_server_link_does_not_stack_through_a_copy(tmp_path):
+    # And a *copy* of our output has neither the same path nor any business
+    # being prepended, so the content is checked too.
+    with _core_paths(tmp_path):
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: {}}
+        )
+        (tmp_path / "copy.js").write_text(_generated_js(), encoding="utf-8")
+        ct002_component._final_validate_web_server_link(
+            _link_config(),
+            {
+                ct002_component.CONF_WEB_SERVER: {
+                    esphome.const.CONF_JS_INCLUDE: "copy.js"
+                }
+            },
+        )
+        assert _generated_js().count("document.body.prepend") == 1
+
+
+def test_web_server_link_is_handed_back_as_a_path(tmp_path):
+    # `cv.file_` produces a Path, so writing a str back would leave the
+    # validated document inconsistent with web_server's own schema.
+    with _core_paths(tmp_path):
+        web_server = {}
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: web_server}
+        )
+        assert isinstance(web_server[esphome.const.CONF_JS_INCLUDE], Path)
+
+
+def test_web_server_link_leaves_no_temporary_file_behind(tmp_path):
+    with _core_paths(tmp_path):
+        ct002_component._final_validate_web_server_link(
+            _link_config(), {ct002_component.CONF_WEB_SERVER: {}}
+        )
+        generated = ct002_component._web_server_link_path()
+        assert [p.name for p in generated.parent.iterdir()] == [generated.name]
