@@ -441,6 +441,7 @@ std::string build_status_json(const StatusDocument &doc) {
   json.set("uptime_s", doc.uptime_s, 1);
   json.begin_object("service");
   json.set_if("version", doc.service.version);
+  json.set_if("git_commit", doc.service.git_commit);
   json.set_if("log_level", doc.service.log_level);
   json.set("runtime", std::string("esphome"));
   json.set_time("started_at", doc.service.started_at);

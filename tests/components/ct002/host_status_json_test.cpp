@@ -30,6 +30,7 @@ StatusDocument sample() {
   doc.seq = 7;
   doc.uptime_s = 3661.25f;
   doc.service.version = "2.2.4";
+  doc.service.git_commit = "0123456789abcdef0123456789abcdef01234567";
   doc.service.log_level = "DEBUG";
   doc.service.web_port = 80;
   doc.service.started_at = 1717232339.0;
@@ -156,6 +157,15 @@ TEST(StatusJson, IdentifiesItselfAsTheEsphomeBackend) {
   EXPECT_TRUE(contains(json, "\"generated_at\":\"2024-06-01T10:00:00+00:00\""));
 }
 
+TEST(StatusJson, NamesTheBuildItWasCompiledFrom) {
+  // Same field and same full-SHA form as the Python backend's, so the page's
+  // Diagnostics tab reads identically whichever stack is answering.
+  const std::string json = build_status_json(sample());
+  EXPECT_TRUE(contains(json, "\"version\":\"2.2.4\""));
+  EXPECT_TRUE(
+      contains(json, "\"git_commit\":\"0123456789abcdef0123456789abcdef01234567\""));
+}
+
 TEST(StatusJson, OffersNoConfigurationSurface) {
   // An ESPHome device's settings are compiled into its firmware, so the page
   // must not offer to change them: no config_mode at all, and writes off.
@@ -273,6 +283,9 @@ TEST(StatusJson, OmitsWhatItCannotProduce) {
   doc.devices[0].consumers[0].last_seen_at.reset();
   doc.devices[0].consumers[0].min_dc_output_w.reset();
   doc.service.version.clear();
+  // Not built from a git checkout — the page must show no commit at all
+  // rather than an empty one.
+  doc.service.git_commit.clear();
   const std::string json = build_status_json(doc);
   EXPECT_FALSE(contains(json, "generated_at"));
   EXPECT_FALSE(contains(json, "started_at"));
@@ -280,6 +293,7 @@ TEST(StatusJson, OmitsWhatItCannotProduce) {
   EXPECT_FALSE(contains(json, "last_seen_at"));
   EXPECT_FALSE(contains(json, "min_dc_output_w"));
   EXPECT_FALSE(contains(json, "\"version\""));
+  EXPECT_FALSE(contains(json, "git_commit"));
   // ...but the ages the page falls back to are still there.
   EXPECT_TRUE(contains(json, "\"uptime_s\":3661.2"));
   EXPECT_TRUE(contains(json, "\"last_seen_age_s\":2"));

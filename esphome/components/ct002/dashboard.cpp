@@ -412,6 +412,7 @@ void DashboardComponent::rebuild_() {
   doc.seq = this->generation_.load(std::memory_order_relaxed) + 1;
   doc.uptime_s = static_cast<float>(uptime);
   doc.service.version = this->version_;
+  doc.service.git_commit = this->git_commit_;
   doc.service.log_level = this->log_level_;
   doc.service.web_port = this->base_->get_port();
   doc.powermeters.push_back(this->ct002_->powermeter_status());

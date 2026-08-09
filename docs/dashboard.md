@@ -51,8 +51,9 @@ applied to it (smoothing, spike rejection, PID) and when it was last read.
   <img alt="The Power source tab: one meter card showing what reads it, its total, and the filter chain applied" src="images/dashboard-sources-light.png">
 </picture>
 
-**Diagnostics** — service version, uptime, config file and mode, plus the
-balancer's internals. Each balancer card leads with its **control quality**:
+**Diagnostics** — service version, the commit the build came from (for a
+released image or a firmware compiled from a checkout), uptime, config file and
+mode, plus the balancer's internals. Each balancer card leads with its **control quality**:
 whether the grid is being held at zero, with the mean error, time inside the
 band and zero-crossing rate behind it (see
 [Control quality](ct002.md#control-quality)), followed by the predicted grid

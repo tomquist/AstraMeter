@@ -67,8 +67,9 @@ struct Capabilities {
 };
 
 struct ServiceStatus {
-  std::string version;    ///< AstraMeter version, empty when unknown
-  std::string log_level;  ///< compiled-in log level, empty when unknown
+  std::string version;     ///< AstraMeter version, empty when unknown
+  std::string git_commit;  ///< full SHA of the checkout built from, empty when unknown
+  std::string log_level;   ///< compiled-in log level, empty when unknown
   uint16_t web_port{80};
   std::optional<double> started_at;  ///< wall-clock epoch, if the clock synced
 };

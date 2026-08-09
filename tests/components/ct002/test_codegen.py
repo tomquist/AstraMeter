@@ -362,6 +362,26 @@ def test_astrameter_version_is_read_from_the_repo():
     assert version and version[0].isdigit()
 
 
+def test_astrameter_git_commit_is_read_from_the_checkout():
+    # The firmware has no CI step to bake a SHA in, so the page's commit comes
+    # from the repo the sources were compiled out of.
+    root = Path(ct002_component.__file__).resolve().parents[3]
+    if not (root / ".git").exists():
+        pytest.skip("not running from a git checkout")
+    sha = ct002_component._astrameter_git_commit()
+    assert ct002_component._is_sha(sha), sha
+
+
+def test_astrameter_git_commit_is_empty_without_a_repo(monkeypatch, tmp_path):
+    # Vendored into a config directory rather than fetched as a checkout: the
+    # page must then show no commit rather than one from an unrelated repo.
+    fake = tmp_path / "esphome" / "components" / "ct002" / "__init__.py"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("")
+    monkeypatch.setattr(ct002_component, "__file__", str(fake))
+    assert ct002_component._astrameter_git_commit() == ""
+
+
 def _dashboard_default(key: str):
     """The schema default for one dashboard option.
 

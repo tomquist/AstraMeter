@@ -62,6 +62,9 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   /// Mount prefix without a trailing slash; empty for the server root.
   void set_path(const std::string &path) { this->path_ = path; }
   void set_version(const std::string &version) { this->version_ = version; }
+  /// Full SHA of the checkout this firmware was built from; empty when the
+  /// component did not ship as a git checkout.
+  void set_git_commit(const std::string &sha) { this->git_commit_ = sha; }
   void set_log_level(const std::string &level) { this->log_level_ = level; }
   /// Whether the write endpoints exist at all. Off unless the YAML asks:
   /// the page has no login of its own, so an unauthenticated LAN visitor
@@ -99,6 +102,7 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   mqtt_insights::MqttInsightsComponent *mqtt_insights_{nullptr};
   std::string path_;
   std::string version_;
+  std::string git_commit_;
   std::string log_level_;
   bool controls_{false};
 

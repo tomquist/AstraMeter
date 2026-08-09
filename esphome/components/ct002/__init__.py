@@ -631,6 +631,53 @@ def _astrameter_version() -> str:
     return ""
 
 
+def _is_sha(value: str) -> bool:
+    """40 hex chars, or 64 for a repo using SHA-256 object names."""
+    return len(value) in (40, 64) and all(c in "0123456789abcdef" for c in value)
+
+
+def _astrameter_git_commit() -> str:
+    """SHA of the checkout this component ships in, or "" when there is none.
+
+    The Python stack gets its SHA from ``GIT_COMMIT_SHA``, baked in when CI
+    builds the image; a firmware has no such build step, so the SHA is read
+    out of the repo `esphome compile` is reading the sources from. `.git` is
+    read directly rather than shelling out to `git`, which need not be
+    installed wherever ESPHome runs — and a shallow clone (what ESPHome makes
+    of a `github://` source) has HEAD like any other.
+
+    Best-effort, like the version above: no repo, an odd layout, or a ref
+    this cannot resolve means the page shows no commit rather than a wrong
+    one.
+    """
+    root = Path(__file__).resolve().parents[3]
+    git_dir = root / ".git"
+    try:
+        if git_dir.is_file():
+            # A linked worktree: `.git` is a pointer to the real directory.
+            pointer = git_dir.read_text(encoding="utf-8").split("gitdir:", 1)[1]
+            git_dir = Path(pointer.strip())
+            if not git_dir.is_absolute():
+                git_dir = (root / git_dir).resolve()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref:"):
+            # Detached — checking out a tag or a SHA, as a release build does.
+            return head if _is_sha(head) else ""
+        ref = head.split(":", 1)[1].strip()
+        loose = git_dir / ref
+        if loose.is_file():
+            sha = loose.read_text(encoding="utf-8").strip()
+            return sha if _is_sha(sha) else ""
+        # Packed by `git gc`, so the loose file is gone.
+        for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref and _is_sha(sha):
+                return sha
+    except (OSError, IndexError):
+        pass
+    return ""
+
+
 CONFIG_SCHEMA = cv.All(
     _resolve_dashboard,
     cv.Schema(
@@ -923,5 +970,6 @@ async def _to_code_dashboard(config, ct002_var):
     # Shown on the page's Diagnostics tab, so a user can tell which build
     # they are looking at without reading the firmware log.
     cg.add(var.set_version(_astrameter_version()))
+    cg.add(var.set_git_commit(_astrameter_git_commit()))
     logger_config = CORE.config.get("logger") or {}
     cg.add(var.set_log_level(str(logger_config.get("level", ""))))

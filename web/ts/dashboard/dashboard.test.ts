@@ -268,7 +268,11 @@ const esphomeSnapshot: StatusSnapshot = {
     config_writable: false,
     balancer_internals: true,
   },
-  service: { runtime: "esphome", version: "2.2.4" },
+  service: {
+    runtime: "esphome",
+    version: "2.2.4",
+    git_commit: "0123456789abcdef0123456789abcdef01234567",
+  },
 };
 const esphomeState: AppState = {
   ...initialState(),
@@ -281,6 +285,15 @@ const esphomeHtml = renderToString(
 lacks(esphomeHtml, ">Configuration<", "no config tab without a config surface");
 has(esphomeHtml, ">Diagnostics<", "the other tabs are untouched");
 has(esphomeHtml, "v2.2.4", "the firmware's version still names itself");
+
+// A firmware reports the build it was compiled from the same way the Python
+// backend reports the image's, so Diagnostics names the exact commit either
+// way — abbreviated for reading, like `git log --oneline`.
+const esphomeDiagnostics = renderToString(
+  h("div", null, ...view({ ...esphomeState, tab: "diagnostics" }, actions, initialConfigState())),
+);
+has(esphomeDiagnostics, ">Commit<", "diagnostics names the commit it is built from");
+has(esphomeDiagnostics, "0123456789ab", "the commit is abbreviated, not printed in full");
 
 // ...and a deep link into that tab lands somewhere real rather than on an
 // empty shell nothing can fill.
