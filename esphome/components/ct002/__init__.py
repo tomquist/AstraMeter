@@ -636,6 +636,39 @@ def _is_sha(value: str) -> bool:
     return len(value) in (40, 64) and all(c in "0123456789abcdef" for c in value)
 
 
+def _ref_dirs(git_dir: Path) -> list[Path]:
+    """Directories a ref may live in, nearest first.
+
+    A linked worktree keeps its own HEAD but shares the branch refs, so the
+    directory `.git` pointed at has to fall back to the one its ``commondir``
+    names — otherwise a worktree checked out to a branch resolves to nothing.
+    """
+    dirs = [git_dir]
+    commondir = git_dir / "commondir"
+    if commondir.is_file():
+        common = Path(commondir.read_text(encoding="utf-8").strip())
+        if not common.is_absolute():
+            common = (git_dir / common).resolve()
+        dirs.append(common)
+    return dirs
+
+
+def _read_ref(git_dir: Path, ref: str) -> str:
+    """Resolve one ref out of *git_dir*, loose file first, then `packed-refs`."""
+    loose = git_dir / ref
+    if loose.is_file():
+        sha = loose.read_text(encoding="utf-8").strip()
+        return sha if _is_sha(sha) else ""
+    # Packed by `git gc`, so the loose file is gone.
+    packed = git_dir / "packed-refs"
+    if packed.is_file():
+        for line in packed.read_text(encoding="utf-8").splitlines():
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref and _is_sha(sha):
+                return sha
+    return ""
+
+
 def _astrameter_git_commit() -> str:
     """SHA of the checkout this component ships in, or "" when there is none.
 
@@ -654,7 +687,8 @@ def _astrameter_git_commit() -> str:
     git_dir = root / ".git"
     try:
         if git_dir.is_file():
-            # A linked worktree: `.git` is a pointer to the real directory.
+            # A linked worktree: `.git` is a pointer to a private directory
+            # holding this worktree's own HEAD.
             pointer = git_dir.read_text(encoding="utf-8").split("gitdir:", 1)[1]
             git_dir = Path(pointer.strip())
             if not git_dir.is_absolute():
@@ -664,16 +698,14 @@ def _astrameter_git_commit() -> str:
             # Detached — checking out a tag or a SHA, as a release build does.
             return head if _is_sha(head) else ""
         ref = head.split(":", 1)[1].strip()
-        loose = git_dir / ref
-        if loose.is_file():
-            sha = loose.read_text(encoding="utf-8").strip()
-            return sha if _is_sha(sha) else ""
-        # Packed by `git gc`, so the loose file is gone.
-        for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
-            sha, _, name = line.partition(" ")
-            if name.strip() == ref and _is_sha(sha):
+        for ref_dir in _ref_dirs(git_dir):
+            sha = _read_ref(ref_dir, ref)
+            if sha:
                 return sha
-    except (OSError, IndexError):
+    # Anything unreadable or not a repository at all, including a `.git` file
+    # whose bytes are not text (UnicodeDecodeError is a ValueError, not an
+    # OSError): codegen must not fail over a cosmetic field.
+    except (OSError, IndexError, UnicodeDecodeError):
         pass
     return ""
 

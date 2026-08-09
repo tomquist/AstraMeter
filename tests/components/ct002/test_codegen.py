@@ -10,6 +10,8 @@ guard.
 from __future__ import annotations
 
 import contextlib
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -380,6 +382,38 @@ def test_astrameter_git_commit_is_empty_without_a_repo(monkeypatch, tmp_path):
     fake.write_text("")
     monkeypatch.setattr(ct002_component, "__file__", str(fake))
     assert ct002_component._astrameter_git_commit() == ""
+
+
+def test_astrameter_git_commit_reads_a_linked_worktree(monkeypatch, tmp_path):
+    # `git worktree add` leaves `.git` as a pointer to a private directory that
+    # holds this worktree's HEAD — but the branch HEAD names lives in the
+    # shared directory, so resolving it means following `commondir` too.
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "repo"
+
+    def git(cwd, *args):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "initial")
+
+    linked = tmp_path / "linked"
+    git(repo, "worktree", "add", "-q", "-b", "side", str(linked))
+    expected = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=linked,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    fake = linked / "esphome" / "components" / "ct002" / "__init__.py"
+    monkeypatch.setattr(ct002_component, "__file__", str(fake))
+    assert ct002_component._astrameter_git_commit() == expected
 
 
 def _dashboard_default(key: str):
