@@ -338,7 +338,8 @@ at start-up.
 `http://<host>:52500` directly rather than through the sidebar. Either use the
 sidebar or turn on `dashboard_direct_access`, understanding that it is
 unauthenticated. Running AstraMeter yourself this does not apply — if that
-address is refused, `DASHBOARD_ENABLED = False` is set somewhere.
+address is refused, check that AstraMeter is running, that you are on the port
+`WEB_SERVER_PORT` gives it, and that nothing sets `DASHBOARD_ENABLED = False`.
 
 **"Lost contact with AstraMeter."** The page could not reach the service for
 two polls. It keeps retrying, dims the values and switches every relative time
