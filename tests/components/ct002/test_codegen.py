@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -607,7 +608,7 @@ def test_web_server_link_is_on_by_default():
     assert _dashboard_default(ct002_component.CONF_WEB_SERVER_LINK) is True
 
 
-def test_web_server_link_is_not_written_into_the_build_directory(tmp_path):
+def test_web_server_link_is_not_written_into_the_build_directory(tmp_path, monkeypatch):
     # Regression: the build directory is the obvious home for a generated
     # file and the wrong one. `write_cpp` calls `update_storage_json` first,
     # which full-wipes that directory whenever the storage sidecar changed
@@ -617,16 +618,18 @@ def test_web_server_link_is_not_written_into_the_build_directory(tmp_path):
     from esphome.core import CORE
 
     with _core_paths(tmp_path) as core:
-        previous = CORE.build_path
         # The shape a real run produces — `esphome compile` puts it at
         # <data_dir>/build/<name>. A path invented here would let the
         # assertion pass against a directory nothing actually wipes.
-        CORE.build_path = core.data_dir / "build" / core.name
-        try:
-            generated = ct002_component._web_server_link_path()
-            assert not generated.is_relative_to(CORE.build_path)
-        finally:
-            CORE.build_path = previous
+        #
+        # monkeypatch rather than a bare assignment: it restores for us, and
+        # it raises if `build_path` ever stops being an attribute of CORE,
+        # so an ESPHome that moved it fails loudly here instead of leaving
+        # this test quietly asserting against something that no longer means
+        # anything.
+        monkeypatch.setattr(CORE, "build_path", core.data_dir / "build" / core.name)
+        generated = ct002_component._web_server_link_path()
+        assert not generated.is_relative_to(CORE.build_path)
 
 
 def test_web_server_link_is_namespaced_per_device(tmp_path):
@@ -775,3 +778,32 @@ def test_web_server_link_leaves_no_temporary_file_behind(tmp_path):
         )
         generated = ct002_component._web_server_link_path()
         assert [p.name for p in generated.parent.iterdir()] == [generated.name]
+
+
+def test_concurrent_writes_do_not_delete_each_others_temporary_file(tmp_path):
+    # Two validations of the same device inside one process are exactly what
+    # the atomic write exists for — the ESPHome dashboard validates in-process
+    # as you type. A temporary name keyed only on the pid would hand both
+    # writers the same path, and each one's cleanup would then be free to
+    # delete the other's file: the loser's os.replace raises FileNotFoundError,
+    # the caller swallows it as an OSError, and the link silently goes missing.
+    target = tmp_path / "out" / "link.js"
+    content = "// snippet\n"
+    errors: list[BaseException] = []
+
+    def write():
+        try:
+            for _ in range(20):
+                ct002_component._write_atomically(target, content)
+        except BaseException as exc:  # reported to the test, not swallowed
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, errors
+    assert target.read_text(encoding="utf-8") == content
+    assert [p.name for p in target.parent.iterdir()] == [target.name]

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 
 import esphome.codegen as cg
@@ -402,7 +403,11 @@ def _write_atomically(path, content):
     half-written module and take the user's own script down with it.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    # Unique per call, not merely per process. The overlap this guards against
+    # is two validations of the same device inside one process, so a pid alone
+    # would give both writers the same temporary path — and each one's `finally`
+    # would then be free to delete the other's file out from under it.
+    temp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         temp.write_text(content, encoding="utf-8")
         os.replace(temp, path)
