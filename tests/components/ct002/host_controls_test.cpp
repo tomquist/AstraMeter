@@ -98,6 +98,17 @@ TEST(Controls, RefusesABooleanForANumericField) {
   EXPECT_EQ(coerce_consumer_control("manual_target", value), "manual_target must be a number");
 }
 
+TEST(Controls, TellsButtonsApartFromSettings) {
+  // Two consumers rely on this: a button may be written with no value, and a
+  // button is never mirrored onto a retained MQTT topic.
+  EXPECT_TRUE(is_device_button("force_rotation"));
+  EXPECT_FALSE(is_device_button("active_control"));
+  EXPECT_FALSE(is_device_button("manual_target"));
+  EXPECT_FALSE(is_device_button("nonsense"));
+  // Every button is still a device field.
+  EXPECT_TRUE(is_device_field("force_rotation"));
+}
+
 TEST(Controls, ReportsAnUnknownFieldAsUnknown) {
   ControlValue value = number(1.0f);
   EXPECT_EQ(coerce_consumer_control("nonsense", value), "Unknown device or field");

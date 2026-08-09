@@ -192,6 +192,14 @@ std::string format_number(double value, int digits);
 
 /// An epoch as ISO-8601 UTC ("2024-05-06T07:08:09+00:00", matching Python's
 /// datetime.isoformat()), or empty when the clock has not synced.
+/// Room for "YYYY-MM-DDTHH:MM:SS+00:00" and its terminator.
+inline constexpr size_t ISO_UTC_BUF_SIZE = 32;
+
+/// Format *epoch* into *out*, or return false (and empty *out*) when the clock
+/// has not synced. The buffer form is what the serializer uses: the string one
+/// would heap-allocate for every timestamp, of which there is one per battery.
+bool iso_utc_to(double epoch, char (&out)[ISO_UTC_BUF_SIZE]);
+
 std::string iso_utc(double epoch);
 
 }  // namespace status

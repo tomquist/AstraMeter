@@ -60,55 +60,32 @@ def cmake_build(tmp_path_factory: pytest.TempPathFactory) -> Path:
 GTEST_TIMEOUT_S = 60
 
 
-def test_host_protocol_parity(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_protocol_test")], check=True, timeout=GTEST_TIMEOUT_S
-    )
+HOST_GTESTS = [
+    "host_protocol_test",
+    "host_wrappers_test",
+    "host_balancer_test",
+    "host_marstek_responder_test",
+    "host_cloud_reporting_test",
+    "host_status_json_test",
+    "host_controls_test",
+    "host_write_slot_test",
+]
 
 
-def test_host_wrappers(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_wrappers_test")], check=True, timeout=GTEST_TIMEOUT_S
-    )
+@pytest.mark.parametrize("binary", HOST_GTESTS)
+def test_host_gtest(cmake_build: Path, binary: str) -> None:
+    """Run one gtest binary. Every target CMake builds needs a row here."""
+    subprocess.run([str(cmake_build / binary)], check=True, timeout=GTEST_TIMEOUT_S)
 
 
-def test_host_balancer(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_balancer_test")], check=True, timeout=GTEST_TIMEOUT_S
-    )
+def test_every_built_gtest_is_listed(cmake_build: Path) -> None:
+    """A target added to CMakeLists but not above would be built and never run.
 
-
-def test_host_marstek_responder(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_marstek_responder_test")],
-        check=True,
-        timeout=GTEST_TIMEOUT_S,
-    )
-
-
-def test_host_cloud_reporting(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_cloud_reporting_test")],
-        check=True,
-        timeout=GTEST_TIMEOUT_S,
-    )
-
-
-def test_host_status_json(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_status_json_test")],
-        check=True,
-        timeout=GTEST_TIMEOUT_S,
-    )
-
-
-def test_host_controls(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_controls_test")], check=True, timeout=GTEST_TIMEOUT_S
-    )
-
-
-def test_host_write_slot(cmake_build: Path) -> None:
-    subprocess.run(
-        [str(cmake_build / "host_write_slot_test")], check=True, timeout=GTEST_TIMEOUT_S
-    )
+    That is not hypothetical: host_write_slot_test shipped in exactly that
+    state. Compare the list against what the build actually produced rather
+    than trusting the two to be edited together.
+    """
+    built = {path.name for path in cmake_build.glob("host_*_test") if path.is_file()}
+    listed = set(HOST_GTESTS)
+    assert built - listed == set(), "built but never run"
+    assert listed - built == set(), "listed but not built"

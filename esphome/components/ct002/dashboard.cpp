@@ -3,6 +3,7 @@
 #ifdef USE_CT002_DASHBOARD
 
 #include <ctime>
+#include <string_view>
 
 #include "esphome/components/json/json_util.h"
 #include "esphome/core/hal.h"
@@ -38,14 +39,21 @@ static constexpr uint32_t STATUS_STALE_MS = 10000;
 
 namespace {
 
-std::string request_url(AsyncWebServerRequest *request) {
-#ifdef USE_ESP32
-  char buffer[AsyncWebServerRequest::URL_BUF_SIZE];
+/// The request path, copied into *buffer* (which must outlive the result).
+///
+/// No non-ESP32 branch: `dashboard:` is ESP32-only, and everything below reads
+/// the raw `httpd_req_t` anyway. Returning a view rather than a string keeps
+/// this allocation-free — it runs twice per request, on the httpd task.
+std::string_view request_url(AsyncWebServerRequest *request,
+                             char (&buffer)[AsyncWebServerRequest::URL_BUF_SIZE]) {
   const auto url = request->url_to(buffer);
-  return std::string(url.begin(), url.end());
-#else
-  return std::string(request->url().c_str());
-#endif
+  return std::string_view(url.begin(), url.size());
+}
+
+/// The part of *url* after the mount prefix, or nothing when it is elsewhere.
+optional<std::string_view> strip_prefix(std::string_view url, const std::string &prefix) {
+  if (url.compare(0, prefix.size(), prefix) != 0) return {};
+  return url.substr(prefix.size());
 }
 
 /// Answer with a JSON body under the status code the API actually promises.
@@ -127,7 +135,7 @@ void DashboardComponent::loop() {
     // replays the old value on the next reconnect and undoes this.
     // force_rotation is a button, not a setting: it has no retained state to
     // protect, and a retained press would re-fire on every reconnect.
-    if (applied && this->mqtt_insights_ != nullptr && write.field != "force_rotation") {
+    if (applied && this->mqtt_insights_ != nullptr && !controls::is_device_button(write.field)) {
       if (write.consumer_id.empty()) {
         this->mqtt_insights_->mirror_device_command(write.field, write.wire_value);
       } else {
@@ -139,9 +147,9 @@ void DashboardComponent::loop() {
       LockGuard guard(this->lock_);
       this->writes_.complete(ticket, applied);
     }
-    // The next poll should show what the user just did, not the frame that
-    // was built before it landed.
-    this->refresh_requested_ = true;
+    // No refresh needed here: a poll always asks for one itself and waits for
+    // a generation newer than its request, so it can never be served the frame
+    // built before this write landed.
   }
 
   // Built only when a request is waiting for one: with nobody watching, an
@@ -163,9 +171,10 @@ void DashboardComponent::dump_config() {
 }
 
 bool DashboardComponent::canHandle(AsyncWebServerRequest *request) const {
-  const std::string url = request_url(request);
-  if (url.compare(0, this->path_.size(), this->path_) != 0) return false;
-  const std::string rest = url.substr(this->path_.size());
+  char buffer[AsyncWebServerRequest::URL_BUF_SIZE];
+  const auto stripped = strip_prefix(request_url(request, buffer), this->path_);
+  if (!stripped.has_value()) return false;
+  const std::string_view rest = *stripped;
   if (request->method() == HTTP_POST) {
     // Claimed even with controls off, so the page gets a 403 that says why
     // rather than a 404 that reads like a broken build.
@@ -176,8 +185,8 @@ bool DashboardComponent::canHandle(AsyncWebServerRequest *request) const {
 }
 
 void DashboardComponent::handleRequest(AsyncWebServerRequest *request) {
-  const std::string url = request_url(request);
-  const std::string rest = url.substr(this->path_.size());
+  char buffer[AsyncWebServerRequest::URL_BUF_SIZE];
+  const std::string_view rest = request_url(request, buffer).substr(this->path_.size());
   if (rest == "/api/control/consumer" || rest == "/api/control/device") {
     this->handle_control_(request, rest == "/api/control/device");
     return;
@@ -310,7 +319,7 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
       // Captured before coercion scales it — the retained mirror carries the
       // unit the wire uses, which is the unit the reader scales from.
       write.wire_value = status::format_number(static_cast<double>(write.value.number), 3);
-    } else if (device_wide && write.field == "force_rotation" && value.isNull()) {
+    } else if (device_wide && controls::is_device_button(write.field) && value.isNull()) {
       // `force_rotation` is a button and carries no value; the page posts it
       // bare. Every other device field is a setting, and inventing `true` for
       // one would switch on something nobody asked for — `active_control`
@@ -400,7 +409,7 @@ void DashboardComponent::rebuild_() {
     doc.service.started_at = wall - uptime;
   }
   doc.capabilities.controls = this->controls_;
-  doc.seq = ++this->seq_;
+  doc.seq = this->generation_.load(std::memory_order_relaxed) + 1;
   doc.uptime_s = static_cast<float>(uptime);
   doc.service.version = this->version_;
   doc.service.log_level = this->log_level_;

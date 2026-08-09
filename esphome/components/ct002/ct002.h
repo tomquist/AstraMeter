@@ -130,6 +130,21 @@ class CT002Component : public Component {
   void setup() override;
   void loop() override;
   void dump_config() override;
+
+  /// Age in ms of the most recent raw sensor reading across the live phases,
+  /// or nothing when no phase has ever reported. Freshness comes from the
+  /// sensor feed rather than the control loop: with no battery polling, the
+  /// last reply can be minutes old while the sensor is live.
+  optional<uint32_t> freshest_sensor_age_ms() const {
+    const uint32_t now_ms = ::esphome::millis();
+    optional<uint32_t> freshest;
+    for (uint8_t i = 0; i < this->num_phases_ && i < 3; i++) {
+      if (this->raw_stamp_ms_[i] == 0) continue;
+      const uint32_t age = now_ms - this->raw_stamp_ms_[i];
+      if (!freshest.has_value() || age < *freshest) freshest = age;
+    }
+    return freshest;
+  }
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   // Configuration setters (called from to_code()).

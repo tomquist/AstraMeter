@@ -22,8 +22,8 @@
 // Floor we treat as "real wall-clock time available" — anything before
 // 2020-01-01 means SNTP hasn't synced yet and time(nullptr) is just
 // returning seconds-since-boot. HA renders sub-1970 timestamps as the
-// epoch start, which is worse than publishing null.
-static constexpr time_t WALL_CLOCK_SANE_THRESHOLD = 1577836800;  // 2020-01-01 UTC
+// epoch start, which is worse than publishing null. The floor itself lives in
+// status_json.h, so the dashboard and MQTT cannot disagree about it.
 
 namespace esphome {
 namespace ct002 {
@@ -233,7 +233,7 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     // (or any other time source has set it), otherwise publish null so
     // HA shows "unavailable" instead of a wildly-wrong date.
     const time_t now_wall = std::time(nullptr);
-    if (now_wall >= WALL_CLOCK_SANE_THRESHOLD) {
+    if (now_wall >= status::WALL_CLOCK_SANE_THRESHOLD) {
       root["last_seen"] = static_cast<long>(now_wall);
     } else {
       root["last_seen"] = nullptr;

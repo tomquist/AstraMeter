@@ -119,7 +119,6 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   uint32_t built_at_{0};
   std::atomic<bool> refresh_requested_{false};
   std::atomic<uint32_t> generation_{0};
-  uint32_t seq_{0};
 
   /// The write being handed to the main loop, if any. Ticketed, so a request
   /// that gave up waiting can neither read the next write's answer nor cancel

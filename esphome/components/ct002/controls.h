@@ -30,6 +30,10 @@ bool is_consumer_field(const std::string &field);
 /// True when *field* is a device-wide control this firmware knows.
 bool is_device_field(const std::string &field);
 
+/// Whether *field* is a button rather than a setting. A button write carries
+/// no value, and nothing about it is worth mirroring onto a retained topic.
+bool is_device_button(const std::string &field);
+
 /// Validate and scale *value* for *field*, mirroring _coerce_control_value.
 ///
 /// Returns an empty string on success (with *value* scaled to the unit the

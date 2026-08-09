@@ -907,7 +907,6 @@ std::optional<BalancerConsumerSnapshot> LoadBalancer::snapshot_consumer(
 BalancerSnapshot LoadBalancer::status_snapshot() const {
   const double now = this->clock_();
   BalancerSnapshot out;
-  out.config = this->cfg_;
   out.efficiency_rotation_enabled = this->efficiency_rotation_enabled();
   out.predictor.grid_estimate = this->pred_grid_;
   out.predictor.trust = this->pred_trust_;

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 namespace esphome {
@@ -38,6 +39,12 @@ class JsonWriter {
     this->key_(key);
     this->quote_(value);
   }
+  /// Explicit, so a `char[]` argument cannot decay to `char *` and pick the
+  /// bool overload instead — which is exactly what a raw buffer would do.
+  void set(const char *key, const char *value) {
+    this->key_(key);
+    this->quote_(value);
+  }
   /// Mirrors Python's `value or None`: an empty string is absence, not "".
   void set_if(const char *key, const std::string &value) {
     if (!value.empty()) this->set(key, value);
@@ -69,7 +76,9 @@ class JsonWriter {
   /// A wall-clock epoch as an ISO timestamp, omitted while the clock is unsynced.
   void set_time(const char *key, const std::optional<double> &epoch) {
     if (!epoch.has_value()) return;
-    this->set_if(key, iso_utc(*epoch));
+    char stamp[ISO_UTC_BUF_SIZE];
+    if (!iso_utc_to(*epoch, stamp)) return;
+    this->set(key, stamp);
   }
   void value(const std::string &item) {
     this->prefix_();
@@ -96,17 +105,31 @@ class JsonWriter {
     this->out_ += open;
     // The parent level has just had a member written (prefix_ cleared its
     // flag), so what is stacked is always "not first" — restored on pop.
-    this->stack_.push_back(this->first_);
+    if (this->depth_ < 32) {
+      if (this->first_) {
+        this->stack_ |= (1u << this->depth_);
+      } else {
+        this->stack_ &= ~(1u << this->depth_);
+      }
+      this->depth_++;
+    }
     this->first_ = true;
   }
   void pop_(char close) {
     this->out_ += close;
-    this->first_ = this->stack_.empty() ? false : this->stack_.back();
-    if (!this->stack_.empty()) this->stack_.pop_back();
+    if (this->depth_ == 0) {
+      this->first_ = false;
+      return;
+    }
+    this->depth_--;
+    this->first_ = (this->stack_ & (1u << this->depth_)) != 0;
   }
-  void quote_(const std::string &text) {
+  void quote_(const std::string &text) { this->quote_(text.c_str(), text.size()); }
+  void quote_(const char *text) { this->quote_(text, std::strlen(text)); }
+  void quote_(const char *text, size_t length) {
     this->out_ += '"';
-    for (const char c : text) {
+    for (size_t i = 0; i < length; i++) {
+      const char c = text[i];
       switch (c) {
         case '"':
           this->out_ += "\\\"";
@@ -137,7 +160,11 @@ class JsonWriter {
   }
 
   std::string out_;
-  std::vector<bool> stack_;
+  // One bit per open container, array or not. A mask rather than a
+  // vector<bool>: nesting here is five deep at most, and the vector both
+  // allocates and pulls in the bit-iterator machinery to say so.
+  uint32_t stack_{0};
+  uint8_t depth_{0};
   bool first_{true};
 };
 
@@ -288,9 +315,9 @@ void write_device(JsonWriter &json, const DeviceStatus &device) {
   json.end_object();
   if (device.grid.has_value()) {
     json.begin_object("grid");
+    static constexpr const char *PHASE_KEYS[3] = {"l1_w", "l2_w", "l3_w"};
     for (size_t i = 0; i < 3; i++) {
-      const std::string name = "l" + std::to_string(i + 1) + "_w";
-      json.set(name.c_str(), static_cast<double>((*device.grid)[i]), 1);
+      json.set(PHASE_KEYS[i], static_cast<double>((*device.grid)[i]), 1);
     }
     json.set("grid_total_w", static_cast<double>(device.grid_total_w), 1);
     json.set_time("sample_at", device.grid_sample_at);
@@ -369,22 +396,31 @@ std::string format_number(double value, int digits) {
   return text;
 }
 
-std::string iso_utc(double epoch) {
-  if (epoch < WALL_CLOCK_SANE_THRESHOLD) return {};
+bool iso_utc_to(double epoch, char (&out)[ISO_UTC_BUF_SIZE]) {
+  out[0] = '\0';
+  if (epoch < WALL_CLOCK_SANE_THRESHOLD) return false;
   const std::time_t seconds = static_cast<std::time_t>(epoch);
   std::tm parts{};
 #ifdef _WIN32
-  if (gmtime_s(&parts, &seconds) != 0) return {};
+  if (gmtime_s(&parts, &seconds) != 0) return false;
 #else
-  if (gmtime_r(&seconds, &parts) == nullptr) return {};
+  if (gmtime_r(&seconds, &parts) == nullptr) return false;
 #endif
-  char buffer[80];
   // "+00:00" rather than "Z", matching datetime.isoformat() on the Python side.
   const int written =
-      std::snprintf(buffer, sizeof(buffer), "%04d-%02d-%02dT%02d:%02d:%02d+00:00",
+      std::snprintf(out, ISO_UTC_BUF_SIZE, "%04d-%02d-%02dT%02d:%02d:%02d+00:00",
                     parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday, parts.tm_hour,
                     parts.tm_min, parts.tm_sec);
-  if (written < 0 || static_cast<size_t>(written) >= sizeof(buffer)) return {};
+  if (written < 0 || static_cast<size_t>(written) >= ISO_UTC_BUF_SIZE) {
+    out[0] = '\0';
+    return false;
+  }
+  return true;
+}
+
+std::string iso_utc(double epoch) {
+  char buffer[ISO_UTC_BUF_SIZE];
+  if (!iso_utc_to(epoch, buffer)) return {};
   return std::string(buffer);
 }
 

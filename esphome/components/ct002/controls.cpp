@@ -31,6 +31,10 @@ constexpr const char *BOOL_FIELDS[] = {"active", "auto_target"};
 
 // Mirrors the device-wide branch of _handle_control_device.
 constexpr const char *DEVICE_FIELDS[] = {"active_control", "force_rotation"};
+// Buttons, not settings: they carry no value, so a write may arrive bare, and
+// there is no retained state for a dashboard write to mirror onto MQTT — a
+// retained press would re-fire on every reconnect.
+constexpr const char *DEVICE_BUTTONS[] = {"force_rotation"};
 
 const Range *find_numeric(const std::string &field) {
   for (const Range &range : NUMERIC_FIELDS) {
@@ -57,6 +61,13 @@ std::string compact(float value) {
 
 bool is_consumer_field(const std::string &field) {
   return is_bool_field(field) || find_numeric(field) != nullptr;
+}
+
+bool is_device_button(const std::string &field) {
+  for (const char *name : DEVICE_BUTTONS) {
+    if (field == name) return true;
+  }
+  return false;
 }
 
 bool is_device_field(const std::string &field) {

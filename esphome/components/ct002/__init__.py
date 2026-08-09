@@ -25,6 +25,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
 from esphome.components import http_request, sensor, web_server_base
+from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import (
     CONF_ALPHA,
     CONF_ID,
@@ -498,7 +499,6 @@ CLOUD_REPORTING_SCHEMA = cv.All(
 CONF_DASHBOARD = "dashboard"
 CONF_PATH = "path"
 CONF_CONTROLS = "controls"
-CONF_WEB_SERVER_BASE_ID = "web_server_base_id"
 
 # Where a default-on dashboard goes when `web_server:` already holds the root.
 DASHBOARD_ASIDE_PATH = "/astrameter"
@@ -518,18 +518,14 @@ def _dashboard_toggle(value):
     """The value as a bool if it is one, else None.
 
     Substitutions expand to *strings*, so a packaged config saying
-    `dashboard: ${enable_dashboard}` hands this "false", not False. Reading it
-    with cv.boolean keeps the two spellings equivalent instead of failing with
-    "expected a dictionary".
+    `dashboard: ${enable_dashboard}` hands this "false", not False. Deferring
+    to cv.boolean keeps every spelling it accepts equivalent, instead of the
+    dict form failing with "expected a dictionary".
     """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        try:
-            return cv.boolean(value)
-        except cv.Invalid:
-            return None
-    return None
+    try:
+        return cv.boolean(value)
+    except cv.Invalid:
+        return None
 
 
 def _dashboard_shorthand(value):
@@ -903,8 +899,9 @@ async def _to_code_dashboard(config, ct002_var):
     """Codegen for the optional `dashboard:` sub-block.
 
     Mounts the status page + `api/status` on ESPHome's shared HTTP server.
-    The define gates dashboard.cpp, status_snapshot.cpp and the embedded page
-    (~21 KiB of flash), so a build without this block carries none of it.
+    The define gates dashboard.cpp, dashboard_state.cpp and the embedded page;
+    with AUTO_LOAD leaving the HTTP server out too, `dashboard: false` saves
+    about 90 KB of flash and the server's ~6 KB of heap.
     """
     sub = config[CONF_DASHBOARD]
     cg.add_define("USE_CT002_DASHBOARD")

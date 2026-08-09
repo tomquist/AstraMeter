@@ -61,15 +61,7 @@ status::DeviceStatus CT002Component::status_snapshot(double wall_now) const {
     for (uint8_t i = 0; i < this->num_phases_ && i < 3; i++) total += this->last_grid_power_[i];
     out.grid_total_w = total;
   }
-  // Freshness comes from the sensor feed rather than the control loop: with no
-  // battery polling, the last reply can be minutes old while the sensor is live.
-  const uint32_t now_ms = ::esphome::millis();
-  std::optional<uint32_t> freshest;
-  for (uint8_t i = 0; i < this->num_phases_ && i < 3; i++) {
-    if (this->raw_stamp_ms_[i] == 0) continue;
-    const uint32_t age = now_ms - this->raw_stamp_ms_[i];
-    if (!freshest.has_value() || age < *freshest) freshest = age;
-  }
+  const optional<uint32_t> freshest = this->freshest_sensor_age_ms();
   if (freshest.has_value())
     out.grid_sample_at = wall_time_for(wall_now, static_cast<double>(*freshest) / 1000.0);
   // "Failed" here is the same condition SensorBackedPowermeter zeroes on: no
@@ -161,17 +153,14 @@ status::PowermeterStatus CT002Component::powermeter_status() const {
   if (this->deadband_threshold_.has_value()) out.pipeline.emplace_back("DeadbandPowermeter");
   if (this->pid_cfg_.has_value()) out.pipeline.emplace_back("PidPowermeter");
 
-  const uint32_t now_ms = ::esphome::millis();
-  std::optional<uint32_t> freshest;
+  const optional<uint32_t> freshest = this->freshest_sensor_age_ms();
   std::vector<float> values;
+  values.reserve(std::min<uint8_t>(this->num_phases_, 3));
   for (uint8_t i = 0; i < this->num_phases_ && i < 3; i++) {
     // Already in watts: the sensor callback applies the unit scale before
     // caching (see ct002.cpp), so scaling again here would multiply a kW
     // source by 1000 a second time.
     values.push_back(this->raw_values_[i]);
-    if (this->raw_stamp_ms_[i] == 0) continue;
-    const uint32_t age = now_ms - this->raw_stamp_ms_[i];
-    if (!freshest.has_value() || age < *freshest) freshest = age;
   }
   if (!freshest.has_value()) {
     // Nothing has ever arrived: no age, no values, and explicitly down —

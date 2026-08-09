@@ -387,7 +387,6 @@ struct ControlQualitySnapshot {
 // The whole-balancer view for the status API (see the snapshot structs above).
 // Mirrors balancer.py BalancerSnapshot.
 struct BalancerSnapshot {
-  BalancerConfig config;
   bool efficiency_rotation_enabled{false};
   PredictorSnapshot predictor;
   ImportTrimSnapshot import_trim;
@@ -462,8 +461,6 @@ class LoadBalancer {
   // Absolute net-output target intended pre-pacing (see BalancerConsumerState).
   std::optional<float> get_last_intent(const std::string &consumer_id) const;
 
-  // Effective, post-clamp configuration (mirrors balancer.py's `config`).
-  const BalancerConfig &config() const { return this->cfg_; }
   bool efficiency_rotation_enabled() const { return this->cfg_.min_efficient_power > 0.0f; }
   // Per-consumer control state, or absent if the consumer was never steered.
   std::optional<BalancerConsumerSnapshot> snapshot_consumer(const std::string &consumer_id) const;
