@@ -780,25 +780,45 @@ def test_web_server_link_leaves_no_temporary_file_behind(tmp_path):
         assert [p.name for p in generated.parent.iterdir()] == [generated.name]
 
 
-def test_concurrent_writes_do_not_delete_each_others_temporary_file(tmp_path):
+def test_concurrent_writes_do_not_delete_each_others_temporary_file(
+    tmp_path, monkeypatch
+):
     # Two validations of the same device inside one process are exactly what
     # the atomic write exists for — the ESPHome dashboard validates in-process
     # as you type. A temporary name keyed only on the pid would hand both
     # writers the same path, and each one's cleanup would then be free to
     # delete the other's file: the loser's os.replace raises FileNotFoundError,
     # the caller swallows it as an OSError, and the link silently goes missing.
+    #
+    # The barrier is what makes that deterministic rather than a matter of
+    # timing: every writer has written its temporary file and none has replaced
+    # yet, so a shared temporary name is guaranteed to have exactly one winner
+    # and the rest failing. Left to chance, a loaded or single-core runner can
+    # serialise the threads and never reproduce it.
+    threads_count = 8
     target = tmp_path / "out" / "link.js"
     content = "// snippet\n"
     errors: list[BaseException] = []
+    barrier = threading.Barrier(threads_count)
+    real_replace = os.replace
+
+    def synchronized_replace(source, destination):
+        # Only our own writers wait. Patching os.replace is process-wide, and
+        # an unrelated caller landing on the barrier would break it for
+        # everyone and fail this test for the wrong reason.
+        if Path(destination) == target:
+            barrier.wait(timeout=30)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", synchronized_replace)
 
     def write():
         try:
-            for _ in range(20):
-                ct002_component._write_atomically(target, content)
+            ct002_component._write_atomically(target, content)
         except BaseException as exc:  # reported to the test, not swallowed
             errors.append(exc)
 
-    threads = [threading.Thread(target=write) for _ in range(8)]
+    threads = [threading.Thread(target=write) for _ in range(threads_count)]
     for thread in threads:
         thread.start()
     for thread in threads:
