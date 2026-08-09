@@ -582,10 +582,9 @@ class AddonIniAppConfig(IniAppConfig):
     """A user's own ``config.ini``, read with the add-on's web settings.
 
     The file decides everything except whether the web server and dashboard
-    run — see :func:`_serve_the_panel`. Without this the file's defaults
-    applied, and since ``DASHBOARD_ENABLED`` defaults off for a bare Docker
-    run, every add-on user with a custom config file got a sidebar panel
-    serving ``{"error": "Not Found"}``.
+    run — see :func:`_serve_the_panel`. Without this a file that turns either
+    off would leave the add-on user with a sidebar panel serving
+    ``{"error": "Not Found"}``.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

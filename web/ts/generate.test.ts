@@ -562,12 +562,23 @@ const dashReadOnly = generateConfigIni({
 has(dashReadOnly, "DASHBOARD_ENABLED = True", "dashboard: on");
 lacks(dashReadOnly, "DASHBOARD_ALLOW_WRITE", "dashboard: read-only unless asked");
 
-const dashOff = generateConfigIni({
+// Unset means the default, and the default is on.
+const dashDefault = generateConfigIni({
   target: "python",
-  general: { deviceTypes: ["ct002"] },
+  general: { deviceTypes: ["ct002"], webServerPort: "8123" },
   meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
 });
-lacks(dashOff, "DASHBOARD_ENABLED", "dashboard: absent when off");
+has(dashDefault, "DASHBOARD_ENABLED = True", "dashboard: on by default");
+has(dashDefault, "WEB_SERVER_PORT = 8123", "dashboard: default-on dashboard still carries the port");
+
+const dashOff = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"], dashboardEnabled: false, dashboardAllowWrite: true, webServerPort: "8123" },
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
+});
+has(dashOff, "DASHBOARD_ENABLED = False", "dashboard: turning it off is written out");
+lacks(dashOff, "DASHBOARD_ALLOW_WRITE", "dashboard: no write flag for a dashboard that never runs");
+has(dashOff, "WEB_SERVER_PORT = 8123", "dashboard: a chosen port survives turning the dashboard off");
 
 // On an ESP32 the firmware serves the dashboard unless told not to, so the
 // on-and-read-only case is the default and writes nothing at all.

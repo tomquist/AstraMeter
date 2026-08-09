@@ -59,7 +59,9 @@ export function defaultState(): State {
       deviceIds: "",
       skipPowermeterTest: false,
       webConfigEnabled: false,
-      dashboardEnabled: false,
+      // On by default, matching the service itself. It is read-only until
+      // `dashboardAllowWrite` says otherwise.
+      dashboardEnabled: true,
       esphomeDashboard: true,
       dashboardAllowWrite: false,
       webServerPort: "",

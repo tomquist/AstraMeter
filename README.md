@@ -98,8 +98,8 @@ then consult the reference docs as needed:
   registration.
 - **[Live status dashboard](docs/dashboard.md)** — the built-in web UI showing
   live grid and per-battery state, and editing your configuration from the
-  browser. On by default in the Home Assistant add-on; an ESP32 can serve it
-  too.
+  browser. On by default in the Home Assistant add-on and in Docker or
+  standalone runs; an ESP32 can serve it too.
 - **[MQTT Insights & Home Assistant entities](docs/mqtt-insights.md)** —
   publishing internal state to MQTT, HA Device Discovery, and per-battery
   controls.

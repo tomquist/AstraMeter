@@ -329,12 +329,15 @@ function deviceCard(): HTMLElement {
         // Device IDs, skip-test and the built-in web editor aren't add-on options.
         state.target === "homeassistant" ? null : fieldControl({ key: "deviceIds", label: "Device IDs", help: "Optional fixed IDs (comma-separated, same order as the meters above). Leave blank to auto-generate.", type: "text", placeholder: "shellypro3em-c59b15461a21" }, g, {}),
         state.target === "homeassistant" ? null : fieldControl({ key: "skipPowermeterTest", label: "Skip power meter test on startup", help: "Skip the connection check when AstraMeter starts.", type: "checkbox" }, g, {}),
-        state.target === "homeassistant" ? null : fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }),
-        // The add-on always serves the dashboard — it is the sidebar panel —
-        // so there is nothing to enable there, only the write flag to relax.
-        state.target === "homeassistant" ? null : fieldControl({ key: "dashboardEnabled", label: "Enable live status dashboard", help: "Live status page at http://<host>:<port>/.", type: "checkbox" }, g, { structural: true }),
-        state.target === "homeassistant" || g.dashboardEnabled ? fieldControl({ key: "dashboardAllowWrite", label: "Allow changes from the dashboard", help: "Lets the dashboard edit your configuration and control batteries. Leave off for a read-only dashboard.", type: "checkbox" }, g, {}) : null,
-        state.target !== "homeassistant" && (g.webConfigEnabled || g.dashboardEnabled) ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
+        // These three are config.ini settings. The add-on always serves the
+        // dashboard — it is the sidebar panel — so there is nothing to enable
+        // there, only the write flag to relax; an ESP32 serves its dashboard
+        // from a `ct002:` sub-block, so that target has its own toggle down in
+        // the ESPHome card.
+        state.target === "python" ? fieldControl({ key: "webConfigEnabled", label: "Enable built-in web config editor", help: "Opt-in editor at http://<host>:<port>/config.", type: "checkbox" }, g, { structural: true }) : null,
+        state.target === "python" ? fieldControl({ key: "dashboardEnabled", label: "Serve the live status dashboard", help: "Live status page at http://<host>:<port>/. On by default; uncheck to serve nothing but the health check.", type: "checkbox" }, g, { structural: true }) : null,
+        state.target === "homeassistant" || (state.target === "python" && g.dashboardEnabled) ? fieldControl({ key: "dashboardAllowWrite", label: "Allow changes from the dashboard", help: "Lets the dashboard edit your configuration and control batteries. Leave off for a read-only dashboard.", type: "checkbox" }, g, {}) : null,
+        state.target === "python" ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Serves the health check, and the dashboard and editor when they are on. Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
         fieldControl({ key: "waitForNextMessage", label: "Wait for fresh push (global)", help: "Wait up to 2s for the newest reading from push-based meters.", type: "select", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] }, g, {}),
         fieldControl({ key: "dedupeTimeWindow", label: "Dedupe window (s)", help: "Ignore repeated requests from the same client within this window. 0 = off.", type: "number", placeholder: "0" }, g, {}),

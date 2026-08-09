@@ -386,11 +386,11 @@ def _custom(tmp_path, caplog, body, level="WARNING"):
 
 
 def test_custom_config_still_serves_the_dashboard(tmp_path, caplog):
-    """A file predating the dashboard must not leave the panel on a 404.
+    """A file that says nothing about the dashboard still gets the panel.
 
-    ``DASHBOARD_ENABLED`` is off by default for a bare Docker run, where the
-    web port is unauthenticated. Under the add-on the panel and the watchdog
-    both depend on it, so the file's default cannot be allowed to decide.
+    Under the add-on the sidebar panel and the Supervisor watchdog both depend
+    on the dashboard running, so the file does not get to decide — see
+    :func:`test_custom_config_cannot_turn_the_dashboard_or_web_server_off`.
     """
     general = _custom(tmp_path, caplog, "[GENERAL]\nDEVICE_TYPE = ct003\n")
 

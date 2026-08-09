@@ -63,11 +63,15 @@ function generalSection(state: State): string {
   if (g.webConfigEnabled) {
     lines.push("WEB_CONFIG_ENABLED = True");
   }
-  if (g.dashboardEnabled) {
-    lines.push("DASHBOARD_ENABLED = True");
-    if (g.dashboardAllowWrite) lines.push("DASHBOARD_ALLOW_WRITE = True");
-  }
-  if ((g.webConfigEnabled || g.dashboardEnabled) && !isBlank(g.webServerPort)) {
+  // The dashboard is on unless the form says otherwise (`undefined` from an
+  // ad-hoc caller means "default", and the default is on). Written out either
+  // way — it is the one line a user goes looking for to turn the page off.
+  const dashboardEnabled = g.dashboardEnabled !== false;
+  lines.push(`DASHBOARD_ENABLED = ${boolToIni(dashboardEnabled)}`);
+  if (dashboardEnabled && g.dashboardAllowWrite) lines.push("DASHBOARD_ALLOW_WRITE = True");
+  // The port carries the health check too, so a chosen one is kept even when
+  // neither the dashboard nor the editor is served on it.
+  if (!isBlank(g.webServerPort)) {
     lines.push(`WEB_SERVER_PORT = ${g.webServerPort}`);
   }
   if (!isBlank(g.throttleInterval)) lines.push(`THROTTLE_INTERVAL = ${g.throttleInterval}`);
