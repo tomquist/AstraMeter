@@ -556,19 +556,20 @@ has(dashOn, "WEB_SERVER_PORT = 8123", "dashboard: port emitted without the INI e
 
 const dashReadOnly = generateConfigIni({
   target: "python",
-  general: { deviceTypes: ["ct002"], dashboardEnabled: true },
+  general: { deviceTypes: ["ct002"], dashboardEnabled: true, dashboardAllowWrite: false },
   meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
 });
 has(dashReadOnly, "DASHBOARD_ENABLED = True", "dashboard: on");
-lacks(dashReadOnly, "DASHBOARD_ALLOW_WRITE", "dashboard: read-only unless asked");
+has(dashReadOnly, "DASHBOARD_ALLOW_WRITE = False", "dashboard: asking for read-only is written out");
 
-// Unset means the default, and the default is on.
+// Unset means the defaults, and both of them are on.
 const dashDefault = generateConfigIni({
   target: "python",
   general: { deviceTypes: ["ct002"], webServerPort: "8123" },
   meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
 });
 has(dashDefault, "DASHBOARD_ENABLED = True", "dashboard: on by default");
+has(dashDefault, "DASHBOARD_ALLOW_WRITE = True", "dashboard: writable by default");
 has(dashDefault, "WEB_SERVER_PORT = 8123", "dashboard: default-on dashboard still carries the port");
 
 const dashOff = generateConfigIni({
@@ -595,13 +596,25 @@ lacks(eyDash, "dashboard", "esp/dashboard: on is the default, so nothing is emit
 const eyDashWritable = generateEsphome({
   target: "esphome",
   esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
-  general: { deviceTypes: ["ct002"], esphomeDashboard: true, dashboardAllowWrite: true },
+  general: { deviceTypes: ["ct002"], esphomeDashboard: true, esphomeControls: true },
   meters: [
     { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
   ],
 });
 has(eyDashWritable, "  dashboard:", "esp/dashboard: sub-block appears once it carries an option");
-has(eyDashWritable, "    controls: true", "esp/dashboard: writes are opt-in and emitted");
+has(eyDashWritable, "    controls: true", "esp/dashboard: controls are opt-in and emitted");
+
+// The service ships writes on; a board has no login to sit behind, so its
+// controls must not follow that flag.
+const eyDashServiceWrites = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], esphomeDashboard: true, dashboardAllowWrite: true },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+lacks(eyDashServiceWrites, "controls: true", "esp/dashboard: DASHBOARD_ALLOW_WRITE does not turn on board controls");
 
 const eyNoDash = generateEsphome({
   target: "esphome",

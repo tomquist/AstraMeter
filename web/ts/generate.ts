@@ -68,7 +68,10 @@ function generalSection(state: State): string {
   // way — it is the one line a user goes looking for to turn the page off.
   const dashboardEnabled = g.dashboardEnabled !== false;
   lines.push(`DASHBOARD_ENABLED = ${boolToIni(dashboardEnabled)}`);
-  if (dashboardEnabled && g.dashboardAllowWrite) lines.push("DASHBOARD_ALLOW_WRITE = True");
+  // Writes are on by default too, and this is the line someone turns off after
+  // reading the security section — so it is written out whenever the page is
+  // served, not only when it deviates.
+  if (dashboardEnabled) lines.push(`DASHBOARD_ALLOW_WRITE = ${boolToIni(g.dashboardAllowWrite !== false)}`);
   // The port carries the health check too, so a chosen one is kept even when
   // neither the dashboard nor the editor is served on it.
   if (!isBlank(g.webServerPort)) {
@@ -603,10 +606,12 @@ export function generateEsphome(state: State): string {
 
   // The live status dashboard, served by the board itself. It is on by
   // default, so the only things worth writing down are the two deviations:
-  // leaving it out of the firmware, and allowing writes.
+  // leaving it out of the firmware, and allowing writes. Controls have their
+  // own flag here: the board has no ingress to sit behind, so unlike the
+  // service's DASHBOARD_ALLOW_WRITE they stay off until asked for.
   if (state.general && state.general.esphomeDashboard === false) {
     ctLines.push(`${IND}dashboard: false`);
-  } else if (state.general && state.general.dashboardAllowWrite) {
+  } else if (state.general && state.general.esphomeControls) {
     ctLines.push(`${IND}dashboard:\n${IND}${IND}controls: true`);
   }
 

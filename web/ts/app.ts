@@ -232,14 +232,9 @@ function targetCard(): HTMLElement {
         class: "choice" + (active ? " active" : ""),
         type: "button",
         onclick: () => {
-          if (state.target !== value) {
-            // The two targets ship opposite defaults for dashboard writes: the
-            // add-on has them on, because Home Assistant authenticates every
-            // ingress request, while a config.ini has them off, because that
-            // port does not. Move the box to the new target's default so the
-            // form shows what that target actually ships.
-            state.general.dashboardAllowWrite = value === "homeassistant";
-          }
+          // Both targets ship dashboard writes on, so the box carries over as
+          // the user left it. (The ESP32's own controls are a separate flag —
+          // it has no login to sit behind.)
           state.target = value;
           if (value === "homeassistant") coerceHaMeter();
           rerenderAll();
@@ -558,7 +553,7 @@ function extrasCard(): HTMLElement {
           state.general.esphomeDashboard
             ? fieldControl(
                 {
-                  key: "dashboardAllowWrite",
+                  key: "esphomeControls",
                   label: "Allow battery changes from the dashboard",
                   help: "Lets anyone who can reach the device steer your batteries from the page. Leave off for a read-only dashboard.",
                   type: "checkbox",

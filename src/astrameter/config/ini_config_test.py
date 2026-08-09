@@ -19,11 +19,17 @@ def test_empty_config_yields_the_defaults():
     assert cfg.marstek().enable is False
 
 
-def test_the_dashboard_is_served_unless_the_file_turns_it_off():
-    """On by default, and read-only until the file says otherwise."""
+def test_the_dashboard_is_served_and_writable_unless_the_file_says_otherwise():
+    """Both on by default; each takes its own key to switch off."""
     assert config("").general().dashboard is True
-    assert config("").general().dashboard_allow_write is False
+    assert config("").general().dashboard_allow_write is True
     assert config("[GENERAL]\nDASHBOARD_ENABLED = False\n").general().dashboard is False
+    assert (
+        config("[GENERAL]\nDASHBOARD_ALLOW_WRITE = False\n")
+        .general()
+        .dashboard_allow_write
+        is False
+    )
 
 
 def test_general_section_is_read_into_settings():
