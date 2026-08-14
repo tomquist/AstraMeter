@@ -96,6 +96,20 @@ def _efficiency_window_weight(report: dict) -> float:
 # whole step response — while still rejecting a genuinely stalled battery.
 PACE_TRACKING_DELTA_W = 5.0
 PACE_GROWTH_FACTOR = 2.0
+# Consecutive clamped polls with no movement after which the cap grows anyway.
+#
+# "Grow only while tracking" deadlocks against any actuator whose *minimum
+# actionable command* exceeds pace_base_step: the clamp holds the command below
+# what the device can execute, the device therefore never moves, and never
+# moving is exactly what withholds the bigger command. A B2500 is the concrete
+# case — its DC channels cannot energize below roughly 40 W each, so a 30 W base
+# step leaves it parked at 0 W forever while the whole load is imported.
+#
+# Escaping on a stall costs nothing in overshoot: a device that is not moving
+# cannot overshoot, and the escalation is still bounded by pace_max_step — the
+# same ceiling a tracking device reaches. A genuinely full/empty battery is
+# handled by saturation detection, not by starving its command.
+PACE_STALL_ESCAPE_POLLS = 3
 # Reference poll interval the pace caps are defined against: pace_base_step /
 # pace_max_step are watts per reference second, scaled by the consumer's observed
 # inter-poll time so a fast poller can't integrate the same per-poll reading into
@@ -469,6 +483,15 @@ class BalancerConsumerState:
     pace_sign: int = 0
     pace_prev_reported: float | None = None
     pace_last_at: float = 0.0
+    # Consecutive clamped polls this consumer has not moved for (see
+    # PACE_STALL_ESCAPE_POLLS).
+    pace_stall_polls: int = 0
+    # Smallest command this consumer has actually been observed to respond to,
+    # in the current direction (see ``_pace_reading``). 0 = nothing learned yet.
+    pace_responded_at: float = 0.0
+    # The reading put on the wire last poll, used to attribute the movement
+    # observed this poll to the command that caused it.
+    pace_last_sent: float = 0.0
     # Oscillation-gated damping (see BalancerConfig.osc_damp_max): accumulated
     # reversal score (1.0 = sustained hunting, 0.0 = steady) and the sign of the
     # last non-zero residual that fed it.
@@ -1478,6 +1501,9 @@ class LoadBalancer:
         state.pace_sign = 0
         state.pace_prev_reported = None
         state.pace_last_at = 0.0
+        state.pace_stall_polls = 0
+        state.pace_responded_at = 0.0
+        state.pace_last_sent = 0.0
         state.osc_score = 0.0
         state.osc_last_sign = 0
         state.saturation_score = 0.0
@@ -2284,8 +2310,13 @@ class LoadBalancer:
         # cadence scale still bounds the *grown* cap, which is where the
         # fast-poller overshoot lived.
         limit = max(base, cap * dt_ratio)
+        stalled = False
         if sign == 0 or sign != state.pace_sign:
             cap = base
+            state.pace_stall_polls = 0
+            # A reversal re-opens the question of what this device responds to
+            # in the new direction; nothing learned going one way carries over.
+            state.pace_responded_at = 0.0
         elif abs(reading) > limit:
             moved = (
                 (reported - state.pace_prev_reported) * sign
@@ -2298,8 +2329,26 @@ class LoadBalancer:
             # per poll.
             if moved >= PACE_TRACKING_DELTA_W * dt_ratio:
                 cap = min(cap * PACE_GROWTH_FACTOR**dt_ratio, self._cfg.pace_max_step)
+                state.pace_stall_polls = 0
+                # It moved, so last poll's command was one this device can
+                # execute. Remember it: clamping back under that level would
+                # switch a hysteresis regulator straight off again.
+                if state.pace_last_sent > 0:
+                    state.pace_responded_at = state.pace_last_sent
+            else:
+                # Held below what the device can act on: grow anyway once the
+                # stall has persisted, or the clamp is self-sustaining (see
+                # PACE_STALL_ESCAPE_POLLS).
+                stalled = True
+                state.pace_stall_polls += 1
+                if state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS:
+                    cap = min(
+                        cap * PACE_GROWTH_FACTOR**dt_ratio, self._cfg.pace_max_step
+                    )
+                    state.pace_stall_polls = 0
         else:
             cap = max(base, abs(reading) / dt_ratio)
+            state.pace_stall_polls = 0
         # Enforce the pace_max_step contract: the grow branch already clamps,
         # but the else branch back-computes cap as abs(reading) / dt_ratio,
         # which a fast poll (small dt_ratio) can inflate past the max — and a
@@ -2308,8 +2357,26 @@ class LoadBalancer:
         state.pace_cap = cap
         state.pace_sign = sign
         state.pace_prev_reported = reported
-        limit = max(base, cap * dt_ratio)
-        return max(-limit, min(limit, reading))
+        # The cadence scale exists so a fast poller cannot integrate the same
+        # per-poll reading into a higher W/s slew. A stalled device integrates
+        # nothing, so there is no slew to bound — and scaling a fast poller's
+        # clamp back down to ``base`` is precisely what keeps it stalled
+        # (``max(base, cap * dt_ratio)`` stays at ``base`` until ``cap`` reaches
+        # ``base / dt_ratio``, so growing the cap alone never frees a 0.3 s
+        # poller). While stalled, clamp on the unscaled cap so the command can
+        # actually reach what the device needs to start moving; the cadence
+        # scale resumes on the first poll it does.
+        limit = max(base, cap if stalled else cap * dt_ratio)
+        # Never clamp under a level this device has demonstrably responded to.
+        # The cadence scale otherwise pulls a fast poller's clamp back to
+        # ``base`` the moment the device starts moving, and for a hysteresis
+        # regulator that is not a gentler command but an *off* command — the
+        # unit switches off, stops moving, and the stall escape has to lift it
+        # again, indefinitely. Still bounded by ``pace_max_step``.
+        limit = min(max(limit, state.pace_responded_at), self._cfg.pace_max_step)
+        out = max(-limit, min(limit, reading))
+        state.pace_last_sent = abs(out)
+        return out
 
     def _concentration_pool_balanced(self, reports: dict, conc_ids: list[str]) -> bool:
         """True iff every battery in *conc_ids* already sits at its fair share.

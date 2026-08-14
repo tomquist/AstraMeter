@@ -29,6 +29,12 @@ namespace ct002 {
 // into a higher W/s slew. Mirrors balancer.py.
 inline constexpr float PACE_TRACKING_DELTA_W = 5.0f;
 inline constexpr float PACE_GROWTH_FACTOR = 2.0f;
+// Consecutive clamped polls with no movement after which the cap grows anyway.
+// "Grow only while tracking" deadlocks against any actuator whose minimum
+// actionable command exceeds pace_base_step: the clamp holds the command below
+// what the device can execute, so it never moves, and never moving is exactly
+// what withholds the bigger command (mirrors balancer.py).
+inline constexpr int PACE_STALL_ESCAPE_POLLS = 3;
 inline constexpr double PACE_REFERENCE_DT = 1.0;
 
 // Adaptive grid-state predictor (see BalancerConfig::grid_predict_trust and
@@ -242,6 +248,12 @@ struct BalancerConsumerState {
   int pace_sign{0};
   std::optional<float> pace_prev_reported{};
   double pace_last_at{0.0};
+  int pace_stall_polls{0};
+  // Smallest command this consumer has been observed to respond to in the
+  // current direction; 0 = nothing learned yet.
+  float pace_responded_at{0.0f};
+  // The reading put on the wire last poll, to attribute observed movement.
+  float pace_last_sent{0.0f};
   // Oscillation-gated damping (see BalancerConfig::osc_damp_max): accumulated
   // reversal score and the sign of the last non-zero residual that fed it.
   float osc_score{0.0f};

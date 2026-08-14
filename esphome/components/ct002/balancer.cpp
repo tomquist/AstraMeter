@@ -821,6 +821,9 @@ void LoadBalancer::reset_consumer(const std::string &consumer_id) {
   state.pace_sign = 0;
   state.pace_prev_reported.reset();
   state.pace_last_at = 0.0;
+  state.pace_stall_polls = 0;
+  state.pace_responded_at = 0.0f;
+  state.pace_last_sent = 0.0f;
   state.osc_score = 0.0f;
   state.osc_last_sign = 0;
   state.saturation_score = 0.0;
@@ -1343,8 +1346,13 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // minimum reading to clear their input hold window at all; the cadence
   // scale still bounds the grown cap (mirrors balancer.py).
   float limit = std::max(base, cap * dt_ratio);
+  bool stalled = false;
   if (sign == 0 || sign != state.pace_sign) {
     cap = base;
+    state.pace_stall_polls = 0;
+    // A reversal re-opens the question of what this device responds to in the
+    // new direction; nothing learned going one way carries over.
+    state.pace_responded_at = 0.0f;
   } else if (std::fabs(reading) > limit) {
     float moved = 0.0f;
     if (state.pace_prev_reported.has_value())
@@ -1352,10 +1360,26 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
     // The tracking threshold and growth rate scale with the same cadence
     // ratio: a fast poller is expected to have moved less between polls,
     // and its cap doubles per reference second, not per poll.
-    if (moved >= PACE_TRACKING_DELTA_W * dt_ratio)
+    if (moved >= PACE_TRACKING_DELTA_W * dt_ratio) {
       cap = std::min(cap * std::pow(PACE_GROWTH_FACTOR, dt_ratio), this->cfg_.pace_max_step);
+      state.pace_stall_polls = 0;
+      // It moved, so last poll's command was one this device can execute.
+      // Remember it: clamping back under that level would switch a hysteresis
+      // regulator straight off again.
+      if (state.pace_last_sent > 0.0f) state.pace_responded_at = state.pace_last_sent;
+    } else {
+      // Held below what the device can act on: grow anyway once the stall has
+      // persisted, or the clamp is self-sustaining (see PACE_STALL_ESCAPE_POLLS).
+      stalled = true;
+      state.pace_stall_polls++;
+      if (state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS) {
+        cap = std::min(cap * std::pow(PACE_GROWTH_FACTOR, dt_ratio), this->cfg_.pace_max_step);
+        state.pace_stall_polls = 0;
+      }
+    }
   } else {
     cap = std::max(base, std::fabs(reading) / dt_ratio);
+    state.pace_stall_polls = 0;
   }
   // Enforce the pace_max_step contract: the grow branch already clamps, but the
   // else branch back-computes cap as fabs(reading) / dt_ratio, which a fast poll
@@ -1365,8 +1389,21 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   state.pace_cap = cap;
   state.pace_sign = sign;
   state.pace_prev_reported = reported;
-  limit = std::max(base, cap * dt_ratio);
-  return std::max(-limit, std::min(limit, reading));
+  // The cadence scale exists so a fast poller cannot integrate the same
+  // per-poll reading into a higher W/s slew. A stalled device integrates
+  // nothing, so there is no slew to bound — and scaling a fast poller's clamp
+  // back down to base is precisely what keeps it stalled (max(base, cap *
+  // dt_ratio) stays at base until cap reaches base / dt_ratio, so growing the
+  // cap alone never frees a 0.3 s poller).
+  limit = std::max(base, stalled ? cap : cap * dt_ratio);
+  // Never clamp under a level this device has demonstrably responded to: for a
+  // hysteresis regulator a smaller command is not a gentler one but an *off*
+  // one, so the unit would switch off, stop moving, and need lifting again
+  // indefinitely. Still bounded by pace_max_step.
+  limit = std::min(std::max(limit, state.pace_responded_at), this->cfg_.pace_max_step);
+  const float out = std::max(-limit, std::min(limit, reading));
+  state.pace_last_sent = std::fabs(out);
+  return out;
 }
 
 // True iff every battery in conc_ids already sits within balance_deadband of

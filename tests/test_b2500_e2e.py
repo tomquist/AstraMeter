@@ -222,13 +222,17 @@ async def test_mixed_surplus_only_venus_absorbs() -> None:
     await h.start()
     try:
         # Moderate surplus, within the Venus's charge capacity: grid nulls. The
-        # Venus absorbs it (charges); the B2500 never charges, though it may hold
-        # a small discharge in the circulating equilibrium (always >= 0).
+        # Venus absorbs it (charges); the B2500 never charges, and under a
+        # surplus it sits at a clean 0 — its channels cannot energize below their
+        # minimum output, so there is no small discharge left for it to hold.
+        # What remains is the Venus's own ~30 W of over-absorption; the B2500's
+        # sub-minimum trickle used to cancel that out, so this bound is against
+        # the Venus's equilibrium, not against a B2500 contribution.
         h.load_model.base_load = [-400.0, 0.0, 0.0]
         await h.settle(200)
         assert h.b2500.current_power >= -1  # never charges from AC
         assert h.venus.current_power < -250  # Venus absorbs the surplus
-        assert abs(h.grid()) < 30  # grid nulled
+        assert abs(h.grid()) <= 35  # grid nulled
 
         # Surplus beyond the absorb capacity: the Venus caps near its charge
         # limit, the B2500 still never charges, and the excess remains on the

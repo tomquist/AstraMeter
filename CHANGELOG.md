@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** B2500 batteries sitting at 0 W under active control while the whole house load was imported: the command they were sent could never exceed what the battery needs to start, and a battery that never starts was never sent more ([#600](https://github.com/tomquist/astrameter/issues/600), [#614](https://github.com/tomquist/astrameter/pull/614)).
+
 - **Added** Refoss / Meross energy monitors (EM01P, EM06P, EM16P) as a power source (`[REFOSS]` or `[MEROSS]`) ([#598](https://github.com/tomquist/astrameter/pull/598)).
 
 - **Breaking:** **removed** the per-battery **Last Seen** sensor — it changed on every poll and buried the Home Assistant logbook under one entry per second. Automations that used it should switch to the battery's entities going *unavailable*, or to `last_reported`; see [docs/mqtt-insights.md](docs/mqtt-insights.md#is-a-battery-still-reporting-home-assistant) ([#576](https://github.com/tomquist/astrameter/issues/576), [#597](https://github.com/tomquist/astrameter/pull/597)).
