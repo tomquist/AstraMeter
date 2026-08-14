@@ -230,7 +230,7 @@ async def test_mixed_surplus_only_venus_absorbs() -> None:
         # the Venus's equilibrium, not against a B2500 contribution.
         h.load_model.base_load = [-400.0, 0.0, 0.0]
         await h.settle(200)
-        assert h.b2500.current_power >= -1  # never charges from AC
+        assert abs(h.b2500.current_power) <= 1  # off under surplus, never charges
         assert h.venus.current_power < -250  # Venus absorbs the surplus
         assert abs(h.grid()) <= 35  # grid nulled
 

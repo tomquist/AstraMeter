@@ -1791,7 +1791,7 @@ class LoadBalancer:
         )
         reading = to_grid_reading(NetOutputW(0), reported)
         if paced and consumer_id:
-            reading = self._pace_reading(consumer_id, reading, reported)
+            reading = self._pace_reading(consumer_id, reading, reported, reports)
         if consumer_id:
             state = self._get_consumer(consumer_id)
             state.last_target = reading if paced else 0
@@ -1984,7 +1984,7 @@ class LoadBalancer:
             desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
             reading = to_grid_reading(NetOutputW(desired), reported)
             unpaced_reading = reading
-            reading = self._pace_reading(consumer_id, reading, reported)
+            reading = self._pace_reading(consumer_id, reading, reported, reports)
 
             state.last_target = reading
             state.last_intent = desired
@@ -2113,7 +2113,7 @@ class LoadBalancer:
         unpaced_reading = reading
 
         if consumer_id:
-            reading = self._pace_reading(consumer_id, reading, reported)
+            reading = self._pace_reading(consumer_id, reading, reported, reports)
             state = self._get_consumer(consumer_id)
             state.last_target = reading
             state.last_intent = reported + residual
@@ -2245,7 +2245,9 @@ class LoadBalancer:
             state.osc_last_sign = sign
         return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
 
-    def _pace_reading(self, consumer_id: str, reading: float, reported: float) -> float:
+    def _pace_reading(
+        self, consumer_id: str, reading: float, reported: float, reports: dict
+    ) -> float:
         """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
 
         The battery integrates the reading with its own accelerating ramp,
@@ -2310,6 +2312,16 @@ class LoadBalancer:
         # cadence scale still bounds the *grown* cap, which is where the
         # fast-poller overshoot lived.
         limit = max(base, cap * dt_ratio)
+        # The stall escape and the response floor below only apply to devices
+        # that actually have a minimum actionable command — the DC-output
+        # family, whose channels are a hard on/off below their minimum. Every
+        # other battery can execute an arbitrarily small command, so it can
+        # never be deadlocked by the clamp and gains nothing here; leaving it on
+        # the unmodified path keeps its behaviour bit-for-bit and confines the
+        # overshoot cost (see the response floor) to the devices that need it.
+        can_stall = _needs_dc_output_floor(
+            (reports.get(consumer_id) or {}).get("device_type", "")
+        )
         stalled = False
         if sign == 0 or sign != state.pace_sign:
             cap = base
@@ -2333,15 +2345,28 @@ class LoadBalancer:
                 # It moved, so last poll's command was one this device can
                 # execute. Remember it: clamping back under that level would
                 # switch a hysteresis regulator straight off again.
-                if state.pace_last_sent > 0:
+                #
+                # Keep the *lowest* command seen to work, not the latest: the
+                # floor's job is "the least this device needs", so during a
+                # successful ramp — where the commands grow — overwriting would
+                # ratchet it up to the largest and hold every later
+                # same-direction correction there. It does not move the measured
+                # overshoot on the mixed Venus/B2500 scenarios, because the first
+                # command a stalled device responds to is already the escalated
+                # one and nothing smaller is ever seen to work; it matters when a
+                # smaller command does later succeed.
+                if state.pace_last_sent > 0 and (
+                    state.pace_responded_at <= 0
+                    or state.pace_last_sent < state.pace_responded_at
+                ):
                     state.pace_responded_at = state.pace_last_sent
             else:
                 # Held below what the device can act on: grow anyway once the
                 # stall has persisted, or the clamp is self-sustaining (see
                 # PACE_STALL_ESCAPE_POLLS).
-                stalled = True
+                stalled = can_stall
                 state.pace_stall_polls += 1
-                if state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS:
+                if can_stall and state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS:
                     cap = min(
                         cap * PACE_GROWTH_FACTOR**dt_ratio, self._cfg.pace_max_step
                     )
@@ -2378,8 +2403,10 @@ class LoadBalancer:
         # by definition one it responds to hard, and gating the floor on the
         # reported output does not recover it (the overshoot happens during the
         # ramp, while the output is still under the floor — measured, not
-        # assumed). The trade is against the device not starting at all.
-        limit = min(max(limit, state.pace_responded_at), self._cfg.pace_max_step)
+        # assumed). The trade is against the device not starting at all, so it
+        # is confined to the devices that can fail to start.
+        if can_stall:
+            limit = min(max(limit, state.pace_responded_at), self._cfg.pace_max_step)
         out = max(-limit, min(limit, reading))
         state.pace_last_sent = abs(out)
         return out

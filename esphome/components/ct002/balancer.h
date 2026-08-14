@@ -527,7 +527,8 @@ class LoadBalancer {
                             float fair_share);
   bool concentration_pool_balanced_(const ReportMap &reports,
                                     const std::vector<const std::string *> &conc_ids);
-  float pace_reading_(const std::string &consumer_id, float reading, float reported);
+  float pace_reading_(const std::string &consumer_id, float reading, float reported,
+                      const ReportMap &reports);
   float damp_oscillation_(const std::string &consumer_id, float residual);
   float predict_control_grid_(const ReportMap &reports, float grid_total,
                               const std::vector<float> &sample_id);

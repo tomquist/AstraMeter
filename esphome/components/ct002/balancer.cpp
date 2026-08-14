@@ -687,7 +687,7 @@ std::array<float, 3> LoadBalancer::steer_to_zero_(
     }
   }
   float reading = to_grid_reading(NetOutputW(0.0f), reported);
-  if (paced && consumer_id) reading = this->pace_reading_(*consumer_id, reading, reported);
+  if (paced && consumer_id) reading = this->pace_reading_(*consumer_id, reading, reported, reports);
   if (consumer_id) {
     auto &stz_state = this->get_consumer_(*consumer_id);
     stz_state.last_target = paced ? reading : 0.0f;
@@ -1036,7 +1036,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     const double desired = (total_fade > 0.0) ? demand * fade_w / total_fade : 0.0;
     float reading = to_grid_reading(NetOutputW(desired), reported);
     const float unpaced_reading = reading;
-    reading = this->pace_reading_(*consumer_id, reading, reported);
+    reading = this->pace_reading_(*consumer_id, reading, reported, reports);
     state.last_target = reading;
     state.last_intent = desired;
     state.last_intent_reading = unpaced_reading;
@@ -1168,7 +1168,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   float reading = to_grid_reading(NetOutputW(reported + residual), reported);
   const float unpaced_reading = reading;
   if (consumer_id) {
-    reading = this->pace_reading_(*consumer_id, reading, reported);
+    reading = this->pace_reading_(*consumer_id, reading, reported, reports);
     auto &auto_state = this->get_consumer_(*consumer_id);
     auto_state.last_target = reading;
     auto_state.last_intent = reported + residual;
@@ -1323,8 +1323,8 @@ bool LoadBalancer::cannot_absorb_(const ReportMap &reports) const {
 // manual / inactive steer-to-zero bypass it (see balancer.py for the
 // rationale). Caps are W per PACE_REFERENCE_DT; the per-poll clamp scales
 // with the consumer's observed inter-poll time, clamped at 1.0.
-float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
-                                  float reported) {
+float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading, float reported,
+                                  const ReportMap &reports) {
   const float base = this->cfg_.pace_base_step;
   if (base <= 0.0f) return reading;
   auto &state = this->get_consumer_(consumer_id);
@@ -1346,6 +1346,15 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // minimum reading to clear their input hold window at all; the cadence
   // scale still bounds the grown cap (mirrors balancer.py).
   float limit = std::max(base, cap * dt_ratio);
+  // The stall escape and the response floor below only apply to devices that
+  // actually have a minimum actionable command — the DC-output family, whose
+  // channels are a hard on/off below their minimum. Every other battery can
+  // execute an arbitrarily small command, so it can never be deadlocked by the
+  // clamp; leaving it on the unmodified path keeps its behaviour bit-for-bit
+  // and confines the overshoot cost to the devices that need it.
+  const auto report_it = reports.find(consumer_id);
+  const bool can_stall =
+      report_it != reports.end() && needs_dc_output_floor(report_it->second.device_type);
   bool stalled = false;
   if (sign == 0 || sign != state.pace_sign) {
     cap = base;
@@ -1366,13 +1375,22 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
       // It moved, so last poll's command was one this device can execute.
       // Remember it: clamping back under that level would switch a hysteresis
       // regulator straight off again.
-      if (state.pace_last_sent > 0.0f) state.pace_responded_at = state.pace_last_sent;
+      // Keep the *lowest* command seen to work, not the latest: the floor's job
+      // is "the least this device needs", so during a successful ramp — where
+      // the commands grow — overwriting would ratchet it up to the largest and
+      // hold every later same-direction correction there. It does not move the
+      // measured overshoot (the first command a stalled device responds to is
+      // already the escalated one); it matters when a smaller command later
+      // succeeds (mirrors balancer.py).
+      if (state.pace_last_sent > 0.0f &&
+          (state.pace_responded_at <= 0.0f || state.pace_last_sent < state.pace_responded_at))
+        state.pace_responded_at = state.pace_last_sent;
     } else {
       // Held below what the device can act on: grow anyway once the stall has
       // persisted, or the clamp is self-sustaining (see PACE_STALL_ESCAPE_POLLS).
-      stalled = true;
+      stalled = can_stall;
       state.pace_stall_polls++;
-      if (state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS) {
+      if (can_stall && state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS) {
         cap = std::min(cap * std::pow(PACE_GROWTH_FACTOR, dt_ratio), this->cfg_.pace_max_step);
         state.pace_stall_polls = 0;
       }
@@ -1401,8 +1419,10 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // one, so the unit would switch off, stop moving, and need lifting again
   // indefinitely. Still bounded by pace_max_step. This costs worst-case
   // overshoot — the command that starts the device is one it responds to hard —
-  // and the trade is against it not starting at all (mirrors balancer.py).
-  limit = std::min(std::max(limit, state.pace_responded_at), this->cfg_.pace_max_step);
+  // and the trade is against it not starting at all, so it is confined to the
+  // devices that can fail to start (mirrors balancer.py).
+  if (can_stall)
+    limit = std::min(std::max(limit, state.pace_responded_at), this->cfg_.pace_max_step);
   const float out = std::max(-limit, std::min(limit, reading));
   state.pace_last_sent = std::fabs(out);
   return out;
