@@ -2373,6 +2373,12 @@ class LoadBalancer:
         # regulator that is not a gentler command but an *off* command — the
         # unit switches off, stops moving, and the stall escape has to lift it
         # again, indefinitely. Still bounded by ``pace_max_step``.
+        #
+        # This costs worst-case overshoot: the command that starts the device is
+        # by definition one it responds to hard, and gating the floor on the
+        # reported output does not recover it (the overshoot happens during the
+        # ramp, while the output is still under the floor — measured, not
+        # assumed). The trade is against the device not starting at all.
         limit = min(max(limit, state.pace_responded_at), self._cfg.pace_max_step)
         out = max(-limit, min(limit, reading))
         state.pace_last_sent = abs(out)

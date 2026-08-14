@@ -1399,7 +1399,9 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // Never clamp under a level this device has demonstrably responded to: for a
   // hysteresis regulator a smaller command is not a gentler one but an *off*
   // one, so the unit would switch off, stop moving, and need lifting again
-  // indefinitely. Still bounded by pace_max_step.
+  // indefinitely. Still bounded by pace_max_step. This costs worst-case
+  // overshoot — the command that starts the device is one it responds to hard —
+  // and the trade is against it not starting at all (mirrors balancer.py).
   limit = std::min(std::max(limit, state.pace_responded_at), this->cfg_.pace_max_step);
   const float out = std::max(-limit, std::min(limit, reading));
   state.pace_last_sent = std::fabs(out);
