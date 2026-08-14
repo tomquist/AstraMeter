@@ -18,7 +18,11 @@ from __future__ import annotations
 
 import pytest
 
-from astrameter.simulator.b2500_steering import B2500SteeringController
+from astrameter.simulator.b2500_steering import (
+    DEADBAND_W,
+    MIN_CHANNEL_OUTPUT_W,
+    B2500SteeringController,
+)
 
 # Closed-loop regulator trajectories: (cmd, output) per cycle, output fed back.
 GOLDEN = [
@@ -203,3 +207,64 @@ def test_step_setpoint_is_incremental() -> None:
     assert c.output() == 100
     out = c.step(grid=200, power=100, max_power=800)
     assert out > 100  # rising toward 280, not parking at an absolute fraction
+
+
+# -- minimum channel output -------------------------------------------------
+
+
+def test_setpoint_below_minimum_leaves_channel_off() -> None:
+    """A channel commanded under its minimum delivers nothing at all — not a
+    reduced trickle."""
+    c = B2500SteeringController()
+    assert c.regulate(MIN_CHANNEL_OUTPUT_W - 1, 0) == 0
+
+
+def test_sub_minimum_command_never_starts_the_channel() -> None:
+    """Repeating an under-minimum command does not eventually start the output.
+
+    The regulator is an integrator, so without resetting ``cmd`` a held
+    sub-minimum setpoint would wind up over successive cycles and cross the
+    threshold on its own — turning "never responds" into "responds after a
+    delay", which is the more forgiving of the two and not what the device
+    does.
+    """
+    c = B2500SteeringController()
+    power = 0
+    for _ in range(500):
+        power = c.regulate(MIN_CHANNEL_OUTPUT_W - 1, power)
+        assert power == 0
+
+
+def test_command_at_the_minimum_starts_the_channel() -> None:
+    """At (not just above) the minimum the channel energizes and ramps."""
+    c = B2500SteeringController()
+    power = 0
+    for _ in range(20):
+        power = c.regulate(MIN_CHANNEL_OUTPUT_W, power)
+    assert power >= MIN_CHANNEL_OUTPUT_W - DEADBAND_W
+
+
+def test_running_channel_shuts_off_when_command_drops_below_minimum() -> None:
+    """A channel already delivering power stops outright once commanded under
+    the minimum, rather than winding down through it."""
+    c = B2500SteeringController()
+    power = 0
+    for _ in range(30):
+        power = c.regulate(300, power)
+    assert power > 200
+    assert c.regulate(MIN_CHANNEL_OUTPUT_W - 1, power) == 0
+
+
+def test_minimum_can_be_disabled() -> None:
+    """``min_output=0`` restores an unfloored channel (a differently-paired
+    inverter, or isolating the regulator in a test)."""
+    c = B2500SteeringController(min_output=0)
+    power = 0
+    for _ in range(20):
+        power = c.regulate(20, power)
+    assert 10 <= power <= 30
+
+
+def test_closed_loop_ignores_a_sub_minimum_load() -> None:
+    """A load one channel could never serve is left entirely unserved."""
+    assert _closed_loop(MIN_CHANNEL_OUTPUT_W - 5) == 0

@@ -15,7 +15,7 @@ import time
 from astrameter.ct002.balancer import device_capabilities
 
 from . import protocol
-from .b2500_steering import B2500SteeringController
+from .b2500_steering import MIN_CHANNEL_OUTPUT_W, B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
 from .venus_d_steering import VenusDSteeringController
 
@@ -47,6 +47,7 @@ class BatterySimulator:
         dc_input_power: float = 0.0,
         participates: bool = True,
         initial_power: float = 0.0,
+        min_channel_output: int = MIN_CHANNEL_OUTPUT_W,
     ) -> None:
         if phase not in protocol.PHASE_FIELD_INDEX:
             raise ValueError(
@@ -107,12 +108,19 @@ class BatterySimulator:
             and not caps.has_builtin_inverter
             and not caps.has_ac_input
         )
-        # Two channels, each capped at half the unit's discharge envelope.
+        # Two channels, each capped at half the unit's discharge envelope and
+        # unable to energize below ``min_channel_output`` — so the unit as a
+        # whole has a ~2x minimum output and simply does not respond to a
+        # command below it (``0`` removes the floor).
         _ch_max = max(1, self.max_discharge_power // 2)
         self._b2500_channels = (
             [
-                B2500SteeringController(max_output=_ch_max),
-                B2500SteeringController(max_output=_ch_max),
+                B2500SteeringController(
+                    max_output=_ch_max, min_output=min_channel_output
+                ),
+                B2500SteeringController(
+                    max_output=_ch_max, min_output=min_channel_output
+                ),
             ]
             if self._is_dc_output
             else []
