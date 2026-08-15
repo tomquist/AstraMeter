@@ -617,8 +617,20 @@ export function generateEsphome(state: State): string {
   // service's DASHBOARD_ALLOW_WRITE they stay off until asked for.
   if (state.general && state.general.esphomeDashboard === false) {
     ctLines.push(`${IND}dashboard: false`);
-  } else if (state.general && state.general.esphomeControls) {
-    ctLines.push(`${IND}dashboard:\n${IND}${IND}controls: true`);
+  } else if (state.general && (state.general.esphomeControls || !isBlank(state.general.dashboardAllowedHosts))) {
+    const dash = [`${IND}dashboard:`];
+    if (state.general.esphomeControls) dash.push(`${IND}${IND}controls: true`);
+    // The board's IP and its `.local` mDNS name are allowed without asking, so
+    // this only appears when the user named something else — a reverse proxy.
+    const hosts = String(state.general.dashboardAllowedHosts || "")
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean);
+    if (hosts.length) {
+      dash.push(`${IND}${IND}allowed_hosts:`);
+      for (const name of hosts) dash.push(`${IND}${IND}${IND}- ${name}`);
+    }
+    ctLines.push(dash.join("\n"));
   }
 
   if (wantInsights) {

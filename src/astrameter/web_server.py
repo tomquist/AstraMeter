@@ -37,6 +37,11 @@ RESTART_GRACE_S = 0.5
 #: operator's monitoring uses, and it neither reads state nor writes anything.
 HEALTH_PATHS = ("/health", "/health/", "/api", "/api/")
 
+#: How many distinct refused host names to remember for log deduplication.
+#: The name comes from the request, so this is a bound on what a caller can
+#: make the process hold.
+_REFUSED_HOST_LOG_CAP = 64
+
 # Only reachable in the add-on, where ingress is the intended way in. Kept to
 # plain inline markup: the bundle is exactly what this response is refusing to
 # hand out.
@@ -219,12 +224,16 @@ def is_allowed_host(host: str, allowed: Collection[str] = ()) -> bool:
         return False
     if name in allowed:
         return True
-    try:
-        ipaddress.ip_address(name)
-    except ValueError:
-        pass
-    else:
-        return True
+    # A scoped address (`fd00::1%eth0`) names a local interface. `ip_address`
+    # accepts one, but a browser cannot put it in a URL's host, and the C++
+    # mirror would have to grow a parser for it — so neither side takes it.
+    if "%" not in name:
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            pass
+        else:
+            return True
     return name in ALWAYS_ALLOWED_HOSTS or name.endswith(ALWAYS_ALLOWED_HOST_SUFFIXES)
 
 
@@ -337,8 +346,10 @@ class WebServer:
         self.allowed_hosts = parse_allowed_hosts(allowed_hosts)
         self._runner = None
         #: Host names already reported as refused, so a page reloading behind
-        #: a misconfigured name logs once rather than on every poll.
+        #: a misconfigured name logs once rather than on every poll. Bounded by
+        #: :data:`_REFUSED_HOST_LOG_CAP` — the names are the caller's to choose.
         self._logged_hosts: set[str] = set()
+        self._logged_host_cap_hit = False
         #: Whether an unrenderable add-on schema has already been reported.
         self._logged_schema_shape = False
         #: Deferred restarts, held so the loop cannot collect them mid-flight.
@@ -376,16 +387,30 @@ class WebServer:
         if is_allowed_host(host, self.allowed_hosts):
             return None
         shown = host or "(no Host header)"
+        # Log each name once — but the name is attacker-chosen, and a page
+        # sweeping unlimited subdomains would otherwise grow this set (and the
+        # log) without bound. Past the cap, say so once and go quiet: the
+        # operator's own misconfigured hostname is one of the first few, not
+        # the thousandth.
         if shown not in self._logged_hosts:
-            self._logged_hosts.add(shown)
-            logger.warning(
-                "Refused a request for %s: %s is not an address this server "
-                "answers under. Reach it by IP, or add the name to "
-                "DASHBOARD_ALLOWED_HOSTS (dashboard_allowed_hosts in the "
-                "add-on) if it is yours.",
-                request.path,
-                shown,
-            )
+            if len(self._logged_hosts) < _REFUSED_HOST_LOG_CAP:
+                self._logged_hosts.add(shown)
+                logger.warning(
+                    "Refused a request for %s: %s is not an address this server "
+                    "answers under. Reach it by IP, or add the name to "
+                    "DASHBOARD_ALLOWED_HOSTS (dashboard_allowed_hosts in the "
+                    "add-on) if it is yours.",
+                    request.path,
+                    shown,
+                )
+            elif not self._logged_host_cap_hit:
+                self._logged_host_cap_hit = True
+                logger.warning(
+                    "Refused requests for %d different host names; not logging "
+                    "further ones. A page sweeping many names is what this "
+                    "guard exists to stop.",
+                    _REFUSED_HOST_LOG_CAP,
+                )
         message = (
             f"{shown} is not an address AstraMeter answers under. Reach it by "
             "IP address, or add the name to DASHBOARD_ALLOWED_HOSTS."

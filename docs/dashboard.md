@@ -159,7 +159,7 @@ those who run that sub-block — but:
 |---|---|---|
 | `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
 | `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
-| `allowed_hosts` | empty | Extra host names the device answers under. Its IP address and its `.local` mDNS name always work — needed only behind a reverse proxy. See [Security](#only-addresses-that-cannot-be-pointed-here). |
+| `allowed_hosts` | empty | Extra host names the device answers under. Its IP address, `localhost` and its `.local` mDNS name always work — needed only behind a reverse proxy. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 | `web_server_link` | `true` | Adds a link to the dashboard at the top of ESPHome's own page. Only does anything when `web_server:` is configured. |
 | `id` | generated | The usual ESPHome component id. |
 
@@ -376,9 +376,11 @@ under addresses that could not have got there that way:
   `dashboard_allowed_hosts` in the add-on, `allowed_hosts:` under the ESPHome
   `dashboard:` block.
 
-Anything else gets a `403` naming the address it refused. Requests through the
-Home Assistant sidebar are unaffected — ingress arrives under whatever name you
-reach Home Assistant by, and it is already authenticated.
+Anything else gets a `403` naming the address it refused. Two things are exempt:
+the **`/health` endpoint**, which your monitoring reaches under whatever name it
+likes and which exposes nothing, and the **Home Assistant sidebar** — ingress
+arrives under whatever name you reach Home Assistant by, and it is already
+authenticated.
 
 Reads are a different matter, and only on ESPHome: that HTTP server sends
 `Access-Control-Allow-Origin: *` on every response, so `/api/status` is

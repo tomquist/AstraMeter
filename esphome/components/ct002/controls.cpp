@@ -67,11 +67,58 @@ std::string host_name(const std::string &host) {
   return trimmed;
 }
 
+/// True for a syntactically valid IPv6 literal, with an optional trailing
+/// IPv4 part (`::ffff:192.168.1.5`) and at most one `::` run.
+///
+/// Presence of a colon is NOT enough: `evil::example` and `1:2:3:4:5:6:7:8:9`
+/// both carry one and neither is an address. Python reaches the same verdict
+/// through `ipaddress.ip_address`, and the two sides have to agree.
+bool is_ipv4_literal(const std::string &name);
+
+bool is_ipv6_literal(const std::string &name) {
+  if (name.find(':') == std::string::npos) return false;
+  // A zone id (`fe80::1%eth0`) names a local interface. Python's `ip_address`
+  // would take one, but a browser cannot put it in a URL's host, so
+  // `is_allowed_host` there refuses it explicitly to stay level with this.
+  if (name.find('%') != std::string::npos) return false;
+  const size_t size = name.size();
+  if (size < 2) return false;  // ":" alone
+  // At most one "::" run may stand in for a stretch of zero groups.
+  const size_t run = name.find("::");
+  if (run != std::string::npos && name.find("::", run + 1) != std::string::npos) return false;
+  // A lone ':' at either end is malformed — only "::" may sit there.
+  if (name[0] == ':' && name[1] != ':') return false;
+  if (name[size - 1] == ':' && name[size - 2] != ':') return false;
+
+  int groups = 0;
+  size_t start = 0;
+  while (start < size) {
+    size_t colon = name.find(':', start);
+    if (colon == std::string::npos) colon = size;
+    const std::string part = name.substr(start, colon - start);
+    if (part.empty()) {
+      // The empty halves of the "::" run, already accounted for above.
+    } else if (part.find('.') != std::string::npos) {
+      // Only the last group may be a dotted-quad tail (`::ffff:192.168.1.5`).
+      if (colon != size) return false;
+      if (!is_ipv4_literal(part)) return false;
+      groups += 2;  // an embedded IPv4 fills two 16-bit groups
+    } else {
+      if (part.size() > 4) return false;
+      for (const char c : part) {
+        if (std::isxdigit(static_cast<unsigned char>(c)) == 0) return false;
+      }
+      groups++;
+    }
+    start = colon + 1;
+  }
+  // Exactly 8 groups, or fewer with a "::" run standing in for the rest.
+  return run != std::string::npos ? groups < 8 : groups == 8;
+}
+
 /// True for an address that needed no name lookup, so nothing could rebind it.
-bool is_ip_literal(const std::string &name) {
+bool is_ipv4_literal(const std::string &name) {
   if (name.empty()) return false;
-  // A host name cannot contain a colon, so one here is an IPv6 literal.
-  if (name.find(':') != std::string::npos) return true;
   int groups = 0;
   size_t start = 0;
   while (true) {
@@ -160,7 +207,7 @@ bool is_allowed_host(const std::string &host, const std::vector<std::string> &al
   for (const auto &entry : allowed) {
     if (normalise_host(entry) == name) return true;
   }
-  if (is_ip_literal(name)) return true;
+  if (is_ipv4_literal(name) || is_ipv6_literal(name)) return true;
   // `localhost` resolves to the loopback address and nowhere else, and
   // `.local` is mDNS (RFC 6762) — resolved by multicast on the link, not
   // through a nameserver an outsider can answer for.

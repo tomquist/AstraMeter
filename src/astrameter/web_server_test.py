@@ -618,6 +618,50 @@ def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it():
     assert parse_allowed_hosts(None) == ()
 
 
+#: Colon-bearing values that are NOT addresses, and the IPv6 forms that are.
+#: The C++ mirror has to agree on every one of them — it hand-rolls what
+#: `ipaddress` does here, so this is the list `host_controls_test.cpp` pins
+#: too (`RefusesAColonBearingNameThatIsNotAnAddress` /
+#: `AcceptsTheIPv6FormsPythonAccepts`).
+_NOT_ADDRESSES = (
+    "evil::example",
+    "1:2:3:4:5:6:7:8:9",
+    "1:2:3:4:5:6:7",
+    "fd00::1::2",
+    "fd00:::1",
+    "fd00::12345",
+    "fd00::zz",
+    ":1",
+    "192.168.1.5::1",
+    # A scoped address: `ipaddress` takes it, we do not — see is_allowed_host.
+    "fd00::1%eth0",
+)
+
+_ADDRESSES = (
+    "1:2:3:4:5:6:7:8",
+    "fd00::",
+    "::",
+    "::1",
+    "fd00::1",
+    "::ffff:192.168.1.5",
+)
+
+
+@pytest.mark.parametrize("host", _NOT_ADDRESSES)
+def test_a_colon_does_not_make_something_an_address(host):
+    from astrameter.web_server import is_allowed_host
+
+    assert not is_allowed_host(host)
+
+
+@pytest.mark.parametrize("host", _ADDRESSES)
+def test_the_real_ipv6_forms_are_addresses(host):
+    from astrameter.web_server import is_allowed_host
+
+    assert is_allowed_host(host)
+    assert is_allowed_host(f"[{host}]:52500")
+
+
 async def test_dashboard_off_serves_no_routes(tmp_path):
     client = await _client(_registry(tmp_path, dashboard_enabled=False))
     assert (await client.get("/api/status")).status == 404

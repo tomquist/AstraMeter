@@ -195,6 +195,35 @@ TEST(Controls, RefusesANameAnotherSiteCouldPointHere) {
   EXPECT_FALSE(is_allowed_host("   ", none));
 }
 
+TEST(Controls, RefusesAColonBearingNameThatIsNotAnAddress) {
+  // A colon alone must not stand in for "this is IPv6": Python reaches its
+  // verdict through `ipaddress.ip_address`, and a name this side waved
+  // through would be settable here and refused there.
+  const std::vector<std::string> none;
+  EXPECT_FALSE(is_allowed_host("evil::example", none));
+  EXPECT_FALSE(is_allowed_host("1:2:3:4:5:6:7:8:9", none));  // too many groups
+  EXPECT_FALSE(is_allowed_host("1:2:3:4:5:6:7", none));      // too few, no "::"
+  EXPECT_FALSE(is_allowed_host("fd00::1::2", none));         // two "::" runs
+  EXPECT_FALSE(is_allowed_host("fd00:::1", none));
+  EXPECT_FALSE(is_allowed_host("fd00::12345", none));        // group too long
+  EXPECT_FALSE(is_allowed_host("fd00::zz", none));           // not hex
+  EXPECT_FALSE(is_allowed_host(":1", none));                 // lone leading ':'
+  EXPECT_FALSE(is_allowed_host("fd00::1%eth0", none));       // zone id
+  EXPECT_FALSE(is_allowed_host("192.168.1.5::1", none));     // quad not at end
+}
+
+TEST(Controls, AcceptsTheIPv6FormsPythonAccepts) {
+  const std::vector<std::string> none;
+  EXPECT_TRUE(is_allowed_host("1:2:3:4:5:6:7:8", none));
+  EXPECT_TRUE(is_allowed_host("fd00::", none));
+  EXPECT_TRUE(is_allowed_host("::", none));
+  EXPECT_TRUE(is_allowed_host("::1", none));
+  EXPECT_TRUE(is_allowed_host("fd00::1", none));
+  // An IPv4-mapped tail fills the last two groups.
+  EXPECT_TRUE(is_allowed_host("::ffff:192.168.1.5", none));
+  EXPECT_TRUE(is_allowed_host("[::ffff:192.168.1.5]:80", none));
+}
+
 TEST(Controls, AcceptsANameTheOperatorListed) {
   const std::vector<std::string> allowed{"astra.example.lan", " PROXY.example.lan. "};
   EXPECT_TRUE(is_allowed_host("astra.example.lan", allowed));

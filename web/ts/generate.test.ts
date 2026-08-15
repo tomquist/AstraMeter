@@ -684,6 +684,41 @@ const iniNoHosts = generateConfigIni({
 });
 lacks(iniNoHosts, "DASHBOARD_ALLOWED_HOSTS", "config.ini: nothing written when no host is named");
 
+// The board's page answers on a host name too, and its component takes the
+// same allowlist — so a name the user configures has to reach the YAML.
+const espHosts = generateEsphome({
+  target: "esphome",
+  general: { deviceTypes: ["ct002"], dashboardAllowedHosts: "astra.example.lan, proxy.example.lan" },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(espHosts, "allowed_hosts:", "esphome: the allowlist block is emitted");
+has(espHosts, "- astra.example.lan", "esphome: each named host is a list entry");
+has(espHosts, "- proxy.example.lan", "esphome: a second named host is emitted too");
+
+// Controls and hosts are independent: naming a host must not silently switch
+// writes on, and the dashboard block must still appear without controls.
+lacks(espHosts, "controls: true", "esphome: naming a host does not enable controls");
+
+const espBoth = generateEsphome({
+  target: "esphome",
+  general: { deviceTypes: ["ct002"], esphomeControls: true, dashboardAllowedHosts: "astra.example.lan" },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(espBoth, "controls: true", "esphome: controls and hosts coexist");
+has(espBoth, "- astra.example.lan", "esphome: hosts survive alongside controls");
+
+// A board with the dashboard turned off has nothing to allow hosts for.
+const espOff = generateEsphome({
+  target: "esphome",
+  general: { deviceTypes: ["ct002"], esphomeDashboard: false, dashboardAllowedHosts: "astra.example.lan" },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(espOff, "dashboard: false", "esphome: dashboard off wins over a named host");
+lacks(espOff, "allowed_hosts", "esphome: no allowlist when there is no dashboard");
+
 // The add-on's sidebar panel *is* the dashboard, so it cannot be turned off
 // there — no `dashboard` option exists to emit, whatever the form says.
 const haDashOff = generateHomeAssistant({

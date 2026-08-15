@@ -336,10 +336,11 @@ function deviceCard(): HTMLElement {
         // is an add-on option — a config.ini reads it only when the add-on
         // runs from one, which the editor cannot tell from here.
         state.target === "homeassistant" ? fieldControl({ key: "dashboardDirectAccess", label: "Allow dashboard access outside Home Assistant", help: "Also serves the page on http://<host>:52500 with NO login. Leave off unless you need it.", type: "checkbox" }, g, {}) : null,
-        // Both targets serve the port, so both can be reached under a name.
-        // On the add-on that only matters once direct access is on — but the
-        // field is cheap and hiding it behind another toggle buries the fix
-        // for the refusal someone is looking at.
+        // Both targets here serve the port, so both can be reached under a
+        // name. On the add-on that only matters once direct access is on — but
+        // the field is cheap, and hiding it behind another toggle buries the
+        // fix for the refusal someone is looking at. ESPHome takes the same
+        // setting as a ct002: sub-block, so it appears in that card instead.
         state.target === "homeassistant" || (state.target === "python" && g.dashboardEnabled) ? fieldControl({ key: "dashboardAllowedHosts", label: "Extra dashboard host names", help: "Comma-separated. IP addresses, localhost and .local names always work — add a name only if you reach the dashboard through a reverse proxy or a private DNS entry.", type: "text", placeholder: "astrameter.example.lan" }, g, {}) : null,
         state.target === "python" ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Serves the health check, and the dashboard and editor when they are on. Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
@@ -562,6 +563,22 @@ function extrasCard(): HTMLElement {
                   label: "Allow battery changes from the dashboard",
                   help: "Lets anyone who can reach the device steer your batteries from the page. Leave off for a read-only dashboard.",
                   type: "checkbox",
+                },
+                state.general,
+                {},
+              )
+            : null,
+          // The board is reached by IP or by its .local mDNS name, both of
+          // which the firmware allows outright — so this stays empty unless a
+          // reverse proxy sits in front of it.
+          state.general.esphomeDashboard
+            ? fieldControl(
+                {
+                  key: "dashboardAllowedHosts",
+                  label: "Extra dashboard host names",
+                  help: "Comma-separated. The board's IP address, localhost and its .local name always work — add a name only if you reach the page through a reverse proxy. Other names are refused, because a name is the one part of the address another website can aim at this device.",
+                  type: "text",
+                  placeholder: "astrameter.example.lan",
                 },
                 state.general,
                 {},

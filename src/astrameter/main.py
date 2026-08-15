@@ -39,7 +39,7 @@ from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.shelly import Shelly
 from astrameter.status import StatusRegistry, detect_config_mode
 from astrameter.version_info import get_git_commit_sha, get_version
-from astrameter.web_server import WebServer
+from astrameter.web_server import WebServer, parse_allowed_hosts
 
 # CT002/CT003 phase assignment is auto-managed by emulator runtime.
 
@@ -971,6 +971,19 @@ async def _supervise(
             # the next cycle runs from may not be the one this one used.
             registry.app_config = config
             registry.config_path = config.path
+            # The web server outlives every cycle, so the settings it reads per
+            # request have to be re-pointed at the configuration just loaded —
+            # otherwise editing them in the dashboard and restarting from it
+            # appears to do nothing until the process itself is restarted.
+            # Only the per-request gates: `dashboard_enabled` decides which
+            # routes `build_app` registers, and those were built once at
+            # start-up, so changing it here would disagree with the route table.
+            registry.allow_write = general.dashboard_allow_write
+            registry.direct_access = general.dashboard_direct_access
+            if web_server is not None:
+                web_server.allowed_hosts = parse_allowed_hosts(
+                    general.dashboard_allowed_hosts
+                )
             registry.config_mode = detect_config_mode(
                 addon=args.addon, config_path=config.path
             )
