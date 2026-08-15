@@ -350,11 +350,69 @@ jobs:
   # PR comment. Purely informational — thresholds that must hold live in
   # pytest regressions, not here.
   #
-  # The suite is split across three jobs so every scenario runs in its own
+  # The suite is split across four jobs so every scenario runs in its own
   # matrix worker in parallel, cutting wall time from ~(N_scenarios * seeds)
   # sequential minutes down to roughly one scenario's worth.
+  #
+  # That parallelism costs one runner per scenario, twice over (base + head),
+  # and the whole point of the run is the PR comment — so the gate below keeps
+  # it off every push and off any PR whose diff cannot move the numbers.
+  steering-eval-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # The base commit has to be present to diff against it.
+          fetch-depth: 0
+
+      - name: Decide whether the evaluation is needed
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # Escape hatch for a change that moves steering from somewhere the
+          # paths below don't cover (a new dependency, a refactor elsewhere in
+          # the loop): label the PR `steering-eval` to force a run.
+          FORCED: ${{ contains(github.event.pull_request.labels.*.name, 'steering-eval') }}
+          # What the simulation actually reads: the controller under test, the
+          # simulated plant and the harness itself — plus this workflow, so a
+          # change to the eval jobs is exercised by the PR that makes it.
+          RELEVANT: '^(src/astrameter/(ct002|simulator)/|\.github/workflows/ci\.yml$)'
+        run: |
+          decide() {
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "$2"
+            if [ "$1" = "false" ]; then
+              echo "Steering evaluation skipped — $2" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+          if [ "$FORCED" = "true" ]; then
+            decide true "forced by the 'steering-eval' label."
+            exit 0
+          fi
+          # Fail open: if the base commit is somehow unreachable, run the suite
+          # rather than silently dropping the comparison.
+          if ! changed=$(git diff --name-only "$BASE_SHA...HEAD"); then
+            decide true "could not diff against $BASE_SHA; running anyway."
+            exit 0
+          fi
+          echo "Changed files:"
+          echo "$changed"
+          # Tests next to the code can't move the metrics — the harness never
+          # imports them — so a test-only edit under those paths still skips.
+          changed=$(printf '%s\n' "$changed" | grep -vE '_test\.py$' || true)
+          if printf '%s\n' "$changed" | grep -qE "$RELEVANT"; then
+            decide true "the diff touches the active-control loop."
+          else
+            decide false "the diff touches nothing the simulation reads."
+          fi
+
   steering-eval-discover:
-    needs: [ lint ]
+    needs: [ lint, steering-eval-gate ]
+    if: needs.steering-eval-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}

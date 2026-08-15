@@ -198,7 +198,12 @@ single-seed run, and `--seed N` to set the starting seed — seeds run are
 else in the active-control loop), capture a baseline first (`--json base.json`
 on the unchanged code), re-run after the change, and compare with `--input
 head.json --compare base.json`. CI runs the same suite on PR base + head (job
-`steering-eval`) and posts the comparison as a sticky PR comment. The
+`steering-eval`) and posts the comparison as a sticky PR comment. It costs a
+runner per scenario twice over, so `steering-eval-gate` keeps it off pushes
+entirely and off any PR whose diff touches neither `src/astrameter/ct002/`
+nor `src/astrameter/simulator/` (`*_test.py` under those paths doesn't count)
+nor `.github/workflows/ci.yml` — label a PR `steering-eval` to force a run
+when a change steers from somewhere else. The
 comparison leads with an **aggregate roll-up** (per-metric mean across all
 scenarios plus a one-line overall verdict — how many metrics
 improved/regressed and the mean relative change), so an across-the-board
