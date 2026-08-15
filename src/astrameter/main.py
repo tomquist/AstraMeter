@@ -889,6 +889,7 @@ async def _supervise(
                 config_path=config.path,
                 enable_web_config=general.web_config_enabled,
                 status=registry,
+                allowed_hosts=general.dashboard_allowed_hosts,
             )
             if not await web_server.start():
                 logger.error("Failed to start web server")

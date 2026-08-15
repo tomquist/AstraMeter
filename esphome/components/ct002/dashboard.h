@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "esphome/core/component.h"
 #include "esphome/core/defines.h"
@@ -70,6 +71,11 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   /// the page has no login of its own, so an unauthenticated LAN visitor
   /// should not be able to re-target someone's batteries.
   void set_controls(bool controls) { this->controls_ = controls; }
+  /// Extra host names this device answers under, beyond IP literals and
+  /// `.local` (which mDNS already gives every ESPHome device). Needed only
+  /// behind a reverse proxy — see `controls::is_allowed_host` for why a name
+  /// is refused by default.
+  void add_allowed_host(const std::string &host) { this->allowed_hosts_.push_back(host); }
 
   // NOLINTNEXTLINE(readability-identifier-naming)
   bool canHandle(AsyncWebServerRequest *request) const override;
@@ -105,6 +111,7 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   std::string git_commit_;
   std::string log_level_;
   bool controls_{false};
+  std::vector<std::string> allowed_hosts_;
 
   // Handover between the httpd task and the main loop. `document_` and the
   // write slot are only ever touched under `lock_`; `refresh_requested_` is a

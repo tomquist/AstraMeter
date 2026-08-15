@@ -24,6 +24,14 @@ SKIP_POWERMETER_TEST = False
 # here.  Running AstraMeter yourself (Docker or Python), the port is the only
 # way in and the dashboard is already served there.
 # DASHBOARD_DIRECT_ACCESS = False
+# Extra host names the web port answers under, comma-separated.  IP addresses,
+# localhost and .local names always work, so most setups need nothing here.
+# Add a name only if you reach the dashboard through one that resolves via a
+# nameserver — a reverse proxy or a private DNS entry.  Names are refused by
+# default because a name is the one part of the address another website can
+# aim at this port from your browser (DNS rebinding), and this port has no
+# login to fall back on.
+# DASHBOARD_ALLOWED_HOSTS = astrameter.example.lan, proxy.example.lan
 # Port for the embedded web server (health check + dashboard + config editor). Default: 52500
 # WEB_SERVER_PORT = 52500
 # Global throttling configuration (in seconds) - applies to all powermeters unless overridden

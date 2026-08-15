@@ -44,6 +44,7 @@
   "general": {
     "dashboard": true,
     "dashboard_allow_write": false,
+    "dashboard_allowed_hosts": "astra.example.lan, proxy.example.lan",
     "dashboard_direct_access": true,
     "dedupe_time_window": 1.25,
     "device_ids": [],
@@ -110,6 +111,7 @@
     "concentrate_deadband": 44,
     "ct_mac": "AA:BB:CC:DD:EE:FF",
     "dashboard_allow_write": false,
+    "dashboard_allowed_hosts": "astra.example.lan, proxy.example.lan",
     "dashboard_direct_access": true,
     "deadband": 6,
     "dedupe_time_window": 1.25,

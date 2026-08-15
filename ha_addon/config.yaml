@@ -49,6 +49,7 @@ options:
   grid_predict_trust: 0.5
   dashboard_allow_write: true
   dashboard_direct_access: false
+  dashboard_allowed_hosts: ""
   log_level: "info"
 schema:
   power_input_alias: str
@@ -70,6 +71,7 @@ schema:
   grid_predict_trust: float(0,1)?
   dashboard_allow_write: bool?
   dashboard_direct_access: bool?
+  dashboard_allowed_hosts: str?
   fair_distribution: bool?
   balance_gain: float(0,1)?
   balance_deadband: int(0,)?

@@ -17,6 +17,8 @@ editing files by hand.
   - [Config file](#config-file)
   - [Switching between them](#switching-between-them)
 - [Security](#security)
+  - [Writes are refused to other websites](#writes-are-refused-to-other-websites)
+  - [Only addresses that cannot be pointed here](#only-addresses-that-cannot-be-pointed-here)
 - [Troubleshooting](#troubleshooting)
 
 ## What it shows
@@ -89,6 +91,7 @@ Two add-on options control it:
 |---|---|---|
 | `dashboard_allow_write` | `true` | Lets the dashboard change configuration and control batteries. Turn it off for a read-only dashboard. |
 | `dashboard_direct_access` | `false` | Also serves the page on `http://<host>:52500` **with no authentication**. See [Security](#security). |
+| `dashboard_allowed_hosts` | empty | Extra host names that port answers under, comma-separated. IP addresses, `localhost` and `.local` names always work — needed only behind a reverse proxy or a private DNS entry. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 
 This holds for a `custom_config` file too: `DASHBOARD_ENABLED` and
 `ENABLE_WEB_SERVER` in that file are ignored, because the sidebar panel and the
@@ -112,6 +115,10 @@ DASHBOARD_ALLOW_WRITE = False
 # Stop serving the dashboard — only the health check is left, plus the
 # standalone config editor if WEB_CONFIG_ENABLED is on (default True).
 DASHBOARD_ENABLED = False
+# Extra host names this port answers under, comma-separated. IP addresses,
+# localhost and .local names always work, so this is only needed if you
+# reach the dashboard through a reverse proxy or a private DNS entry.
+DASHBOARD_ALLOWED_HOSTS = astrameter.example.lan
 ```
 
 ### ESPHome on an ESP32
@@ -152,6 +159,7 @@ those who run that sub-block — but:
 |---|---|---|
 | `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
 | `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
+| `allowed_hosts` | empty | Extra host names the device answers under. Its IP address and its `.local` mDNS name always work — needed only behind a reverse proxy. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 | `web_server_link` | `true` | Adds a link to the dashboard at the top of ESPHome's own page. Only does anything when `web_server:` is configured. |
 | `id` | generated | The usual ESPHome component id. |
 
@@ -344,6 +352,34 @@ without asking permission first, and no AstraMeter route grants it, so such a
 request never leaves the browser. Nothing you configure turns this off, and it
 applies whatever `dashboard_allow_write` is set to.
 
+### Only addresses that cannot be pointed here
+
+The content-type rule above stops a website driving the API *across origins*.
+One attack gets around it: the site serves its page from a name it owns, then
+answers the next lookup for that name with your AstraMeter's address. Your
+browser now treats its page as the **same origin** as AstraMeter, so it can
+send any content type it likes — and read the reply. That is your
+configuration and the state of your house on the way out, and on the way in a
+`[SCRIPT]` power source is a shell command AstraMeter runs.
+
+The one part of the address the site cannot choose is the name in the `Host`
+header, because the browser copies it from the URL and the URL has to carry a
+name the site's own nameserver is asked about. So AstraMeter answers only
+under addresses that could not have got there that way:
+
+- **IP addresses** — no lookup happens, so there is no answer to poison.
+- **`localhost`** and any **`.local`** name — `.local` is mDNS, resolved on
+  your link rather than by a nameserver someone outside can answer for. This
+  covers every ESPHome device, which mDNS names automatically.
+- **Names you list yourself**, for a reverse proxy or a private DNS entry:
+  `DASHBOARD_ALLOWED_HOSTS` (comma-separated) in `config.ini`,
+  `dashboard_allowed_hosts` in the add-on, `allowed_hosts:` under the ESPHome
+  `dashboard:` block.
+
+Anything else gets a `403` naming the address it refused. Requests through the
+Home Assistant sidebar are unaffected — ingress arrives under whatever name you
+reach Home Assistant by, and it is already authenticated.
+
 Reads are a different matter, and only on ESPHome: that HTTP server sends
 `Access-Control-Allow-Origin: *` on every response, so `/api/status` is
 readable by any website you visit while on the same network — it reports your
@@ -363,6 +399,12 @@ sidebar or turn on `dashboard_direct_access`, understanding that it is
 unauthenticated. Running AstraMeter yourself this does not apply — if that
 address is refused, check that AstraMeter is running, that you are on the port
 `WEB_SERVER_PORT` gives it, and that nothing sets `DASHBOARD_ENABLED = False`.
+
+**"Unrecognised address."** You opened the dashboard under a host name rather
+than an IP address, and that name is not one AstraMeter answers under — see
+[Security](#only-addresses-that-cannot-be-pointed-here). Use the IP address, or
+add the name to `DASHBOARD_ALLOWED_HOSTS` (`dashboard_allowed_hosts` in the
+add-on, `allowed_hosts:` on ESPHome).
 
 **"Lost contact with AstraMeter."** The page could not reach the service for
 two polls. It keeps retrying, dims the values and switches every relative time

@@ -702,6 +702,7 @@ CLOUD_REPORTING_SCHEMA = cv.All(
 CONF_DASHBOARD = "dashboard"
 CONF_PATH = "path"
 CONF_CONTROLS = "controls"
+CONF_ALLOWED_HOSTS = "allowed_hosts"
 CONF_WEB_SERVER_LINK = "web_server_link"
 
 # Where a default-on dashboard goes when `web_server:` already holds the root.
@@ -759,6 +760,12 @@ DASHBOARD_OPTIONS_SCHEMA = cv.Schema(
         # the page has no login of its own, so steering someone's
         # batteries from the LAN stays an explicit choice.
         cv.Optional(CONF_CONTROLS, default=False): cv.boolean,
+        # Extra names the page answers under. An ESP32 is reached by IP or by
+        # the `.local` name mDNS already gives it, and both are allowed
+        # unconditionally, so this is empty for everyone but a reverse proxy —
+        # a name is refused by default because it is the one part of the
+        # address another website can aim at this device (DNS rebinding).
+        cv.Optional(CONF_ALLOWED_HOSTS, default=[]): cv.ensure_list(cv.string_strict),
         # Only bites when `web_server:` is configured, which is the only case
         # where the dashboard is not at the root and so needs pointing at.
         cv.Optional(CONF_WEB_SERVER_LINK, default=True): cv.boolean,
@@ -1199,6 +1206,8 @@ async def _to_code_dashboard(config, ct002_var):
     cg.add(var.set_base(base))
     cg.add(var.set_path(sub[CONF_PATH]))
     cg.add(var.set_controls(sub[CONF_CONTROLS]))
+    for host in sub[CONF_ALLOWED_HOSTS]:
+        cg.add(var.add_allowed_host(host))
 
     # When MQTT Insights is configured too, the page shows that integration's
     # state — the same card the Python add-on's dashboard has.

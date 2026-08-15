@@ -41,3 +41,7 @@ ct002:
   # the compile matrix too.
   dashboard:
     controls: true
+    # Empty for everyone but a reverse proxy — listed here so the option is
+    # in the compile matrix alongside the write endpoints it protects.
+    allowed_hosts:
+      - astrameter.example.lan

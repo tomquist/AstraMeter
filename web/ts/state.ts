@@ -34,6 +34,11 @@ export interface State {
     esphomeControls: boolean;
     dashboardAllowWrite: boolean;
     dashboardDirectAccess: boolean;
+    /// Comma-separated extra host names the web port answers under. Empty for
+    /// almost everyone: IP addresses, localhost and .local always work, and a
+    /// name that resolves through a nameserver is refused unless listed here
+    /// so no other site can aim a browser at this port.
+    dashboardAllowedHosts: string;
     webServerPort: string;
     throttleInterval: string;
     waitForNextMessage: string;
@@ -73,6 +78,7 @@ export function defaultState(): State {
       dashboardAllowWrite: true,
       // Unauthenticated access to the add-on's port. Off unless asked for.
       dashboardDirectAccess: false,
+      dashboardAllowedHosts: "",
       webServerPort: "",
       throttleInterval: "",
       waitForNextMessage: "",
@@ -165,6 +171,7 @@ export function migrate(s: any): State {
         esphomeControls: asBool(sg.esphomeControls, dg.esphomeControls),
         dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
         dashboardDirectAccess: asBool(sg.dashboardDirectAccess, dg.dashboardDirectAccess),
+        dashboardAllowedHosts: asStr(sg.dashboardAllowedHosts, dg.dashboardAllowedHosts),
         webServerPort: asStr(sg.webServerPort, dg.webServerPort),
         throttleInterval: asStr(sg.throttleInterval, dg.throttleInterval),
         waitForNextMessage: asStr(sg.waitForNextMessage, dg.waitForNextMessage),

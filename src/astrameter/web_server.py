@@ -8,9 +8,12 @@ dashboard plus a browser-based configuration editor.
 
 import asyncio
 import errno
+import html
+import ipaddress
 import json
 import os
 import threading
+from collections.abc import Collection, Iterable
 
 from aiohttp import web
 
@@ -28,6 +31,11 @@ INGRESS_PEER = "172.30.32.2"
 #: How long a deferred Supervisor restart waits before firing, so the response
 #: that asked for it is on the wire before the container goes down.
 RESTART_GRACE_S = 0.5
+
+#: The health check, which is exempt from the host guard below: Docker's
+#: HEALTHCHECK and the add-on watchdog reach it under whatever name the
+#: operator's monitoring uses, and it neither reads state nor writes anything.
+HEALTH_PATHS = ("/health", "/health/", "/api", "/api/")
 
 # Only reachable in the add-on, where ingress is the intended way in. Kept to
 # plain inline markup: the bundle is exactly what this response is refusing to
@@ -47,6 +55,27 @@ refused by default.</p>
 <p>To use this address instead, turn on <code>dashboard_direct_access</code> in the
 add-on's configuration &mdash; understanding that anyone on your network can then
 open it.</p>
+"""
+
+# Shown when the Host header names something the guard does not recognise.
+# Most of the time that is the operator reaching the page under a name of
+# their own rather than an attack, so it says how to allow it.
+_FOREIGN_HOST_HTML = """<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AstraMeter — unrecognised address</title>
+<style>
+body{{font:16px/1.6 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem}}
+code{{background:#8883;padding:.1em .35em;border-radius:.25em}}
+</style>
+<h1>Unrecognised address</h1>
+<p>This page was requested as <code>{host}</code>, which is not an address
+AstraMeter answers under. The page has no login, so it only answers under
+addresses that cannot be pointed here by someone else &mdash; an IP address,
+or a name you have listed yourself.</p>
+<p>Open it by IP address instead, or add this name to
+<code>DASHBOARD_ALLOWED_HOSTS</code> (<code>dashboard_allowed_hosts</code> in the
+Home Assistant add-on) if it is yours.</p>
 """
 
 
@@ -112,6 +141,91 @@ def _requires_json_content_type(handler):
         return await handler(request)
 
     return guarded
+
+
+#: Host names always accepted, beyond IP literals and the operator's own list.
+#:
+#: ``localhost`` resolves to the loopback address and nowhere else, and
+#: ``.local`` is mDNS (RFC 6762): a browser resolves it by multicast on the
+#: link, not through the attacker's nameserver, so neither can be pointed at a
+#: LAN address from the outside. Everything else has to be named explicitly.
+ALWAYS_ALLOWED_HOST_SUFFIXES = (".localhost", ".local")
+ALWAYS_ALLOWED_HOSTS = ("localhost",)
+
+
+def _host_name(host: str) -> str:
+    """The name part of a ``Host`` header value, without its port.
+
+    An IPv6 literal is bracketed there (RFC 3986), which is also what keeps
+    its colons apart from the port separator.
+    """
+    host = host.strip()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[1:end] if end != -1 else host[1:]
+    # One colon separates a port; several mean an unbracketed IPv6 literal,
+    # which is malformed but still parses as an address below.
+    if host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def parse_allowed_hosts(value: str | Iterable[str] | None) -> tuple[str, ...]:
+    """Normalise the configured host allowlist to compare against."""
+    if not value:
+        return ()
+    items = value.split(",") if isinstance(value, str) else value
+    return tuple(name for name in (_normalise_host(item) for item in items) if name)
+
+
+def _normalise_host(name: str) -> str:
+    """Casefold a host name and drop the root label a resolver ignores."""
+    return name.strip().rstrip(".").casefold()
+
+
+def is_allowed_host(host: str, allowed: Collection[str] = ()) -> bool:
+    """True when *host* is one this server may answer under.
+
+    This is the defence against **DNS rebinding**, which the content-type
+    guard above cannot cover. There, the attacker's page is refused because a
+    browser will not send ``application/json`` across origins without a
+    preflight. Rebinding removes the cross-origin part entirely: the attacker
+    serves a page from a name they control, answers the second lookup for that
+    name with the victim's LAN address, and the browser then treats
+    ``http://evil.example:52500/`` as *same-origin* with the page. Any content
+    type is fair game, and — unlike a blind cross-origin write — the reply is
+    readable, so ``/api/config`` hands back the configuration and
+    ``/api/status`` the state of the house. The write side is worse: a
+    ``[SCRIPT]`` section is a shell command the loader runs, and ``/api/restart``
+    asks for exactly that.
+
+    What the attack cannot do is control the ``Host`` header, because the
+    browser fills it in from the name in the URL — and the name has to be one
+    they own for their nameserver to be asked in the first place. So an
+    address that is not a name at all (the IP literal a LAN user types, which
+    needs no lookup and cannot be rebound), the names that resolve without a
+    nameserver, and whatever the operator adds for their own setup, are the
+    complete allowlist. Requests under any other name are refused.
+
+    Mirrored by ``controls::is_allowed_host`` in
+    ``esphome/components/ct002/controls.cpp`` — the firmware's dashboard has no
+    login either (see AGENTS.md: the write path has parity, and the bounds must
+    match).
+    """
+    name = _normalise_host(_host_name(host))
+    if not name:
+        # HTTP/1.1 requires a Host header and every browser sends one, so its
+        # absence is not a request this surface needs to answer.
+        return False
+    if name in allowed:
+        return True
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        pass
+    else:
+        return True
+    return name in ALWAYS_ALLOWED_HOSTS or name.endswith(ALWAYS_ALLOWED_HOST_SUFFIXES)
 
 
 _CONSUMER_SETTERS = {
@@ -212,6 +326,7 @@ class WebServer:
         config_path: str | None = None,
         enable_web_config: bool = False,
         status=None,
+        allowed_hosts: str | Iterable[str] | None = None,
     ):
         """Initialise the service; call ``start()`` to bind the port."""
         self.port = port
@@ -219,7 +334,11 @@ class WebServer:
         self.config_path = config_path
         self.enable_web_config = enable_web_config
         self.status = status
+        self.allowed_hosts = parse_allowed_hosts(allowed_hosts)
         self._runner = None
+        #: Host names already reported as refused, so a page reloading behind
+        #: a misconfigured name logs once rather than on every poll.
+        self._logged_hosts: set[str] = set()
         #: Whether an unrenderable add-on schema has already been reported.
         self._logged_schema_shape = False
         #: Deferred restarts, held so the loop cannot collect them mid-flight.
@@ -239,6 +358,45 @@ class WebServer:
         our own.
         """
         return request.remote == INGRESS_PEER
+
+    def _refuse_foreign_host(self, request):
+        """Refuse a request whose ``Host`` is a name that could be rebound.
+
+        Returns the refusal, or ``None`` to let the request through. See
+        :func:`is_allowed_host` for what the guard is defending against.
+
+        Ingress is exempt: the Supervisor sets ``Host`` to whatever name the
+        user reaches Home Assistant under, which is a name we cannot know and
+        do not need to — the peer address already proves the hop, and Home
+        Assistant has authenticated the user before this point.
+        """
+        if request.path in HEALTH_PATHS or self._is_ingress(request):
+            return None
+        host = request.headers.get("Host", "")
+        if is_allowed_host(host, self.allowed_hosts):
+            return None
+        shown = host or "(no Host header)"
+        if shown not in self._logged_hosts:
+            self._logged_hosts.add(shown)
+            logger.warning(
+                "Refused a request for %s: %s is not an address this server "
+                "answers under. Reach it by IP, or add the name to "
+                "DASHBOARD_ALLOWED_HOSTS (dashboard_allowed_hosts in the "
+                "add-on) if it is yours.",
+                request.path,
+                shown,
+            )
+        message = (
+            f"{shown} is not an address AstraMeter answers under. Reach it by "
+            "IP address, or add the name to DASHBOARD_ALLOWED_HOSTS."
+        )
+        if request.path.startswith("/api/"):
+            return _json({"error": message}, status=403)
+        return web.Response(
+            status=403,
+            text=_FOREIGN_HOST_HTML.format(host=html.escape(shown)),
+            content_type="text/html",
+        )
 
     def _trusted(self, request) -> bool:
         """True when this request may see or change anything sensitive.
@@ -279,9 +437,21 @@ class WebServer:
         Split out from ``start()`` so tests exercise the real route table
         rather than a copy of it that can drift.
         """
-        app = web.Application()
+
+        # The host guard runs as middleware rather than per route: unlike the
+        # content-type check it also has to cover the two pages registered
+        # directly below (``/`` and ``/config``), and a document served under a
+        # rebound name is the request that goes on to drive the API.
+        @web.middleware
+        async def host_guard(request, handler):
+            refusal = self._refuse_foreign_host(request)
+            if refusal is not None:
+                return refusal
+            return await handler(request)
+
+        app = web.Application(middlewares=[host_guard])
         # aiohttp auto-handles HEAD for GET routes.
-        for path in ("/health", "/health/", "/api", "/api/"):
+        for path in HEALTH_PATHS:
             app.router.add_get(path, self._handle_health)
 
         if self.enable_dashboard:

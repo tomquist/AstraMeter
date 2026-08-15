@@ -12,6 +12,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace esphome {
 namespace ct002 {
@@ -30,6 +31,23 @@ namespace controls {
 /// Mirrors `_requires_json_content_type` in `src/astrameter/web_server.py`,
 /// which compares `request.content_type` for the same reason.
 bool is_json_content_type(const std::string &header);
+
+/// Whether *host* — a raw `Host` header value — is an address this device may
+/// answer under, given the operator's extra *allowed* names.
+///
+/// The defence against DNS rebinding, which the content-type check above
+/// cannot cover: an attacker who answers a lookup for their own name with this
+/// device's address makes their page *same-origin* with it, at which point any
+/// content type is theirs to send and the reply is theirs to read. The one
+/// thing they cannot forge is the name in the header, because the browser
+/// copies it from the URL and the URL has to carry a name their nameserver is
+/// asked about. So an IP literal (no lookup to answer), the names that resolve
+/// without a nameserver, and whatever the operator listed are the whole
+/// allowlist.
+///
+/// Mirrors `is_allowed_host` in `src/astrameter/web_server.py`; the two must
+/// accept the same addresses (see AGENTS.md — the write path has parity).
+bool is_allowed_host(const std::string &host, const std::vector<std::string> &allowed);
 
 /// One control value as it arrived on the wire, after JSON typing.
 struct ControlValue {

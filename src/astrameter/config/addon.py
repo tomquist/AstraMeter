@@ -80,6 +80,7 @@ _GENERAL_FIELDS: dict[str, str] = {
     "dedupe_time_window": "dedupe_time_window",
     "dashboard_allow_write": "dashboard_allow_write",
     "dashboard_direct_access": "dashboard_direct_access",
+    "dashboard_allowed_hosts": "dashboard_allowed_hosts",
 }
 
 _GLOBAL_SIGNAL_FIELDS: dict[str, str] = {

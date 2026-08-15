@@ -148,6 +148,64 @@ TEST(Controls, RefusesTheOrdinaryNonJsonContentTypes) {
   EXPECT_FALSE(is_json_content_type("application/json-patch+json"));
 }
 
+// -- the host guard (DNS rebinding) ------------------------------------
+//
+// Mirrors `test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it`
+// and the route-level host tests in `src/astrameter/web_server_test.py`. Both
+// stacks must accept the same addresses: this page has no login either, and a
+// name one of them answers under is a name that can be rebound onto it.
+
+TEST(Controls, AcceptsAnAddressThatCannotBeRebound) {
+  const std::vector<std::string> none;
+  // An IP literal needs no lookup, so there is no answer to poison.
+  EXPECT_TRUE(is_allowed_host("192.168.1.50", none));
+  EXPECT_TRUE(is_allowed_host("192.168.1.50:80", none));
+  EXPECT_TRUE(is_allowed_host("10.0.0.5:6052", none));
+  // IPv6, bracketed as a Host header carries it — and unbracketed, which is
+  // malformed but still an address.
+  EXPECT_TRUE(is_allowed_host("[fd00::1]:80", none));
+  EXPECT_TRUE(is_allowed_host("[::1]", none));
+  EXPECT_TRUE(is_allowed_host("fd00::1", none));
+  // Resolved without a nameserver an outsider can answer for.
+  EXPECT_TRUE(is_allowed_host("localhost", none));
+  EXPECT_TRUE(is_allowed_host("localhost:6052", none));
+  EXPECT_TRUE(is_allowed_host("astrameter.local", none));
+  // The root label is the resolver's to ignore, and case is not ours to keep.
+  EXPECT_TRUE(is_allowed_host("AstraMeter.LOCAL.:80", none));
+}
+
+TEST(Controls, RefusesANameAnotherSiteCouldPointHere) {
+  const std::vector<std::string> none;
+  EXPECT_FALSE(is_allowed_host("evil.example", none));
+  EXPECT_FALSE(is_allowed_host("evil.example:6052", none));
+  EXPECT_FALSE(is_allowed_host("astrameter.evil.example", none));
+  // Ending in an allowed label is not the same as being one.
+  EXPECT_FALSE(is_allowed_host("notlocalhost", none));
+  EXPECT_FALSE(is_allowed_host("localhost.evil.example", none));
+  EXPECT_FALSE(is_allowed_host("local", none));
+  // A dotted name that is not a valid address is still a name.
+  EXPECT_FALSE(is_allowed_host("1.2.3.4.evil.example", none));
+  EXPECT_FALSE(is_allowed_host("999.1.1.1", none));
+  EXPECT_FALSE(is_allowed_host("1.2.3", none));
+  // Rejected for the same reason Python's ipaddress rejects it, rather than
+  // guessing at an octal-looking group.
+  EXPECT_FALSE(is_allowed_host("010.1.1.1", none));
+  // No Host header is not something a browser produces.
+  EXPECT_FALSE(is_allowed_host("", none));
+  EXPECT_FALSE(is_allowed_host("   ", none));
+}
+
+TEST(Controls, AcceptsANameTheOperatorListed) {
+  const std::vector<std::string> allowed{"astra.example.lan", " PROXY.example.lan. "};
+  EXPECT_TRUE(is_allowed_host("astra.example.lan", allowed));
+  EXPECT_TRUE(is_allowed_host("astra.example.lan:80", allowed));
+  EXPECT_TRUE(is_allowed_host("ASTRA.Example.LAN.", allowed));
+  EXPECT_TRUE(is_allowed_host("proxy.example.lan", allowed));
+  // Listing one name does not open the port to every other.
+  EXPECT_FALSE(is_allowed_host("other.example.lan", allowed));
+  EXPECT_FALSE(is_allowed_host("evil.example", allowed));
+}
+
 }  // namespace
 }  // namespace controls
 }  // namespace ct002

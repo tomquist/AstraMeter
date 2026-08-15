@@ -47,6 +47,9 @@ configuration:
   dashboard_direct_access:
     name: Allow Dashboard Access Outside Home Assistant
     description: "Also serves the dashboard on http://<your-host>:52500 without any authentication. Home Assistant's login does not protect this, so anyone on your network can see and (if changes are allowed) alter your configuration. Leave this off unless you specifically need it. Off by default."
+  dashboard_allowed_hosts:
+    name: Extra Dashboard Host Names
+    description: "Extra host names the dashboard answers under on http://<your-host>:52500, separated by commas. IP addresses, localhost and .local names always work, so leave this empty unless you reach the dashboard through a name that resolves via a nameserver — a reverse proxy or a private DNS entry. Other names are refused because a name is the one part of the address another website can aim at this port from your browser, and this port has no login. Does not affect opening the dashboard from the Home Assistant sidebar."
   pace_base_step:
     name: Ramp Pacing Base Step (W)
     description: "Starting cap on how many watts each battery's command may change per poll. It grows toward the max step only while the battery is observed following the command, which keeps the firmware's accelerating ramp from overshooting when the meter reports with a delay. Lower = gentler, slower reaction to load steps; higher = faster, more like a plain CT002. Default 30; set 0 to turn pacing off entirely. Raise this (and the max step) if the batteries ramp too slowly in small steps and your meter is fast/low-latency. Only applies to CT002/CT003 device types."

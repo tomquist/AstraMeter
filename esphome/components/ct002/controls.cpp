@@ -1,5 +1,6 @@
 #include "controls.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -29,6 +30,75 @@ bool is_json_content_type(const std::string &header) {
 }
 
 namespace {
+
+/// Lowercase, and drop the root label a resolver ignores.
+std::string normalise_host(const std::string &name) {
+  size_t begin = 0;
+  size_t end = name.size();
+  const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+  while (begin < end && is_space(name[begin])) begin++;
+  while (end > begin && is_space(name[end - 1])) end--;
+  while (end > begin && name[end - 1] == '.') end--;
+  std::string out = name.substr(begin, end - begin);
+  for (char &c : out) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return out;
+}
+
+/// The name part of a `Host` header value, without its port.
+///
+/// An IPv6 literal is bracketed there (RFC 3986), which is also what keeps its
+/// colons apart from the port separator.
+std::string host_name(const std::string &host) {
+  std::string trimmed = host;
+  const size_t first = trimmed.find_first_not_of(" \t");
+  if (first == std::string::npos) return "";
+  trimmed = trimmed.substr(first);
+  if (trimmed[0] == '[') {
+    const size_t close = trimmed.find(']');
+    return close == std::string::npos ? trimmed.substr(1) : trimmed.substr(1, close - 1);
+  }
+  // One colon separates a port; several mean an unbracketed IPv6 literal,
+  // which is malformed but still an address.
+  if (std::count(trimmed.begin(), trimmed.end(), ':') == 1) {
+    trimmed = trimmed.substr(0, trimmed.find(':'));
+  }
+  return trimmed;
+}
+
+/// True for an address that needed no name lookup, so nothing could rebind it.
+bool is_ip_literal(const std::string &name) {
+  if (name.empty()) return false;
+  // A host name cannot contain a colon, so one here is an IPv6 literal.
+  if (name.find(':') != std::string::npos) return true;
+  int groups = 0;
+  size_t start = 0;
+  while (true) {
+    const size_t dot = name.find('.', start);
+    const std::string part =
+        name.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+    // Reject a leading zero, matching Python's ipaddress, which refuses the
+    // ambiguous octal-looking form rather than guessing at it.
+    if (part.empty() || part.size() > 3 || (part.size() > 1 && part[0] == '0')) return false;
+    int value = 0;
+    for (const char c : part) {
+      if (std::isdigit(static_cast<unsigned char>(c)) == 0) return false;
+      value = value * 10 + (c - '0');
+    }
+    if (value > 255) return false;
+    groups++;
+    if (dot == std::string::npos) break;
+    start = dot + 1;
+  }
+  return groups == 4;
+}
+
+/// True when *name* ends in *suffix*.
+bool ends_with(const std::string &name, const std::string &suffix) {
+  return name.size() >= suffix.size() &&
+         name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 struct Range {
   const char *field;
@@ -79,6 +149,23 @@ std::string compact(float value) {
 }
 
 }  // namespace
+
+bool is_allowed_host(const std::string &host, const std::vector<std::string> &allowed) {
+  const std::string name = normalise_host(host_name(host));
+  if (name.empty()) {
+    // HTTP/1.1 requires a Host header and every browser sends one, so its
+    // absence is not a request this surface needs to answer.
+    return false;
+  }
+  for (const auto &entry : allowed) {
+    if (normalise_host(entry) == name) return true;
+  }
+  if (is_ip_literal(name)) return true;
+  // `localhost` resolves to the loopback address and nowhere else, and
+  // `.local` is mDNS (RFC 6762) — resolved by multicast on the link, not
+  // through a nameserver an outsider can answer for.
+  return name == "localhost" || ends_with(name, ".localhost") || ends_with(name, ".local");
+}
 
 bool is_consumer_field(const std::string &field) {
   return is_bool_field(field) || find_numeric(field) != nullptr;

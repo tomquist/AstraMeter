@@ -185,6 +185,22 @@ bool DashboardComponent::canHandle(AsyncWebServerRequest *request) const {
 }
 
 void DashboardComponent::handleRequest(AsyncWebServerRequest *request) {
+  // Refuse a name that another site could have pointed at this device.
+  //
+  // Checked before anything is served, not only on the write path: rebinding
+  // makes the attacker's page same-origin with us, so it reads the reply as
+  // well as sending the request — the status document included. It is the
+  // Content-Type check's blind spot, since a same-origin request needs no
+  // preflight to declare JSON. See `controls::is_allowed_host`.
+  const auto host = request->get_header("Host");
+  if (!controls::is_allowed_host(host.has_value() ? host.value() : "", this->allowed_hosts_)) {
+    send_json(request, 403,
+              "{\"error\":\"Not an address this device answers under. Reach it by IP "
+              "or .local name, or list this name under `allowed_hosts` in the "
+              "dashboard block.\"}");
+    return;
+  }
+
   char buffer[AsyncWebServerRequest::URL_BUF_SIZE];
   const std::string_view rest = request_url(request, buffer).substr(this->path_.size());
   if (rest == "/api/control/consumer" || rest == "/api/control/device") {

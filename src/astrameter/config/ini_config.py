@@ -101,6 +101,11 @@ class IniAppConfig(AppConfig):
                 "DASHBOARD_DIRECT_ACCESS",
                 fallback=defaults.dashboard_direct_access,
             ),
+            dashboard_allowed_hosts=config.get(
+                GENERAL_SECTION,
+                "DASHBOARD_ALLOWED_HOSTS",
+                fallback=defaults.dashboard_allowed_hosts,
+            ),
             signal=read_signal_settings(
                 GENERAL_SECTION, config, SignalSettings(), with_transform=False
             ),

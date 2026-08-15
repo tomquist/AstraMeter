@@ -470,6 +470,154 @@ async def test_the_guard_covers_every_post_route(tmp_path):
     await client.close()
 
 
+# -- the host guard (DNS rebinding) -----------------------------------
+
+
+#: Names an outside site could point at this port. The browser resolves them
+#: through the attacker's nameserver, so the second answer can be a LAN
+#: address — at which point the page is *same-origin* with us and the
+#: content-type guard above has nothing left to refuse.
+_REBOUND_HOSTS = (
+    "evil.example",
+    "evil.example:52500",
+    "astrameter.evil.example:52500",
+    # A name that merely ends in an allowed label is still a name the
+    # attacker's nameserver answers for.
+    "local:52500",
+    "notlocalhost",
+    "localhost.evil.example",
+    ".local.evil.example",
+)
+
+
+@pytest.mark.parametrize("host", _REBOUND_HOSTS)
+async def test_a_rebound_name_cannot_read(tmp_path, host):
+    """The page has no login, so a name the attacker controls must not reach
+    it — the reply to a same-origin read is theirs to keep."""
+    client = await _client(_registry(tmp_path, direct_access=True))
+    response = await client.get("/api/status", headers={"Host": host})
+    assert response.status == 403, host
+    await client.close()
+
+
+@pytest.mark.parametrize("path,body", _WRITE_ROUTES)
+async def test_a_rebound_name_cannot_write(tmp_path, path, body):
+    """Rebinding defeats the content-type guard — the request is same-origin,
+    so `application/json` needs no preflight. This is what stops the write."""
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    response = await client.post(
+        path,
+        data=json.dumps(body),
+        headers={"Content-Type": "application/json", "Host": "evil.example"},
+    )
+    assert response.status == 403, path
+    await client.close()
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "192.168.1.50:52500",
+        "10.0.0.5",
+        "[fd00::1]:52500",
+        "[::1]",
+        "localhost:52500",
+        "astrameter.local:52500",
+        # A resolver ignores the root label, and the header may carry it.
+        "LOCALHOST.:52500",
+        "Homeassistant.LOCAL",
+    ],
+)
+async def test_an_unrebindable_address_is_served(tmp_path, host):
+    """An IP literal needs no lookup, and localhost/.local do not reach a
+    nameserver an outsider can answer for. None of them can be aimed here."""
+    client = await _client(_registry(tmp_path, direct_access=True))
+    response = await client.get("/api/status", headers={"Host": host})
+    assert response.status == 200, host
+    await client.close()
+
+
+async def test_a_named_host_is_served_once_configured(tmp_path):
+    """A reverse proxy or a private DNS entry is a real setup; the operator
+    says so and it works, without opening the port to every other name."""
+    client = await _client(
+        _registry(tmp_path, direct_access=True),
+        allowed_hosts="astra.example.lan, PROXY.example.lan.",
+    )
+    for host in ("astra.example.lan", "astra.example.lan:52500", "proxy.example.lan"):
+        assert (await client.get("/api/status", headers={"Host": host})).status == 200
+    assert (
+        await client.get("/api/status", headers={"Host": "other.example.lan"})
+    ).status == 403
+    await client.close()
+
+
+async def test_the_health_check_answers_under_any_name(tmp_path):
+    """Docker's HEALTHCHECK and the watchdog reach it under whatever name the
+    operator's monitoring uses, and it exposes nothing worth rebinding for."""
+    client = await _client(_registry(tmp_path, direct_access=True))
+    for path in ("/health", "/api"):
+        response = await client.get(path, headers={"Host": "anything.example"})
+        assert response.status == 200, path
+    await client.close()
+
+
+async def test_ingress_is_not_subject_to_the_host_guard(tmp_path, monkeypatch):
+    """Home Assistant is reached under a name we cannot know and has already
+    authenticated the user; the peer address is what proves the hop."""
+    import astrameter.web_server as web_server_module
+
+    client = await _client(
+        _registry(tmp_path, direct_access=False, config_mode="ha_advanced")
+    )
+    monkeypatch.setattr(web_server_module, "INGRESS_PEER", "127.0.0.1")
+    response = await client.get(
+        "/api/status", headers={"Host": "homeassistant.example.com:8123"}
+    )
+    assert response.status == 200
+    await client.close()
+
+
+async def test_a_refused_host_explains_itself_in_prose(tmp_path):
+    """Most refusals are the operator's own hostname, not an attack, so the
+    page has to say which option fixes it."""
+    client = await _client(_registry(tmp_path, direct_access=True))
+    response = await client.get("/", headers={"Host": "astra.example.lan"})
+    assert response.status == 403
+    assert response.content_type == "text/html"
+    body = await response.text()
+    assert "astra.example.lan" in body
+    assert "DASHBOARD_ALLOWED_HOSTS" in body
+    await client.close()
+
+
+def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it():
+    """Unit-level edges the route tests would need a server to reach."""
+    from astrameter.web_server import is_allowed_host, parse_allowed_hosts
+
+    # An unbracketed IPv6 literal is malformed in a Host header, but it is
+    # still an address and still cannot be rebound.
+    assert is_allowed_host("fd00::1")
+    # No Host header at all: not something a browser sends, and not a request
+    # this surface needs to answer.
+    assert not is_allowed_host("")
+    assert not is_allowed_host("   ")
+    # The port is not part of the name.
+    assert is_allowed_host("192.168.1.5:52500")
+    assert not is_allowed_host("evil.example:80")
+    # Configured names are compared case- and root-label-insensitively.
+    allowed = parse_allowed_hosts(" Astra.Example.LAN. , ,proxy.lan ")
+    assert allowed == ("astra.example.lan", "proxy.lan")
+    assert is_allowed_host("ASTRA.example.lan:52500", allowed)
+    assert is_allowed_host("proxy.lan.", allowed)
+    assert not is_allowed_host("evil.example", allowed)
+    # A list may also arrive already split.
+    assert parse_allowed_hosts(["a.lan", " b.lan "]) == ("a.lan", "b.lan")
+    assert parse_allowed_hosts(None) == ()
+
+
 async def test_dashboard_off_serves_no_routes(tmp_path):
     client = await _client(_registry(tmp_path, dashboard_enabled=False))
     assert (await client.get("/api/status")).status == 404

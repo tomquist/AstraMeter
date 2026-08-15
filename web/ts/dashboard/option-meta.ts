@@ -612,6 +612,15 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "Also serves the dashboard on port 52500 with no login at all — Home " +
       "Assistant's own does not cover it. Trusted networks only.",
   },
+  dashboard_allowed_hosts: {
+    label: "Extra host names",
+    group: ADDON,
+    placeholder: "astrameter.example.lan",
+    help:
+      "Extra names port 52500 answers under, comma-separated. IP addresses, " +
+      "localhost and .local names always work — add a name here only if you " +
+      "reach the dashboard through a reverse proxy or a private DNS entry.",
+  },
   custom_config: {
     label: "Custom config file",
     group: ADDON,

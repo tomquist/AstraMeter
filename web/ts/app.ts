@@ -336,6 +336,11 @@ function deviceCard(): HTMLElement {
         // is an add-on option — a config.ini reads it only when the add-on
         // runs from one, which the editor cannot tell from here.
         state.target === "homeassistant" ? fieldControl({ key: "dashboardDirectAccess", label: "Allow dashboard access outside Home Assistant", help: "Also serves the page on http://<host>:52500 with NO login. Leave off unless you need it.", type: "checkbox" }, g, {}) : null,
+        // Both targets serve the port, so both can be reached under a name.
+        // On the add-on that only matters once direct access is on — but the
+        // field is cheap and hiding it behind another toggle buries the fix
+        // for the refusal someone is looking at.
+        state.target === "homeassistant" || (state.target === "python" && g.dashboardEnabled) ? fieldControl({ key: "dashboardAllowedHosts", label: "Extra dashboard host names", help: "Comma-separated. IP addresses, localhost and .local names always work — add a name only if you reach the dashboard through a reverse proxy or a private DNS entry.", type: "text", placeholder: "astrameter.example.lan" }, g, {}) : null,
         state.target === "python" ? fieldControl({ key: "webServerPort", label: "Web server port", help: "Serves the health check, and the dashboard and editor when they are on. Default 52500.", type: "number", placeholder: "52500" }, g, {}) : null,
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
         fieldControl({ key: "waitForNextMessage", label: "Wait for fresh push (global)", help: "Wait up to 2s for the newest reading from push-based meters.", type: "select", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] }, g, {}),

@@ -84,6 +84,13 @@ class GeneralSettings:
     #: Assistant ingress. Ingress carries the user's identity; the port does
     #: not, so reaching it directly is a separate opt-in.
     dashboard_direct_access: bool = False
+    #: Extra host names the web port answers under, comma-separated. IP
+    #: addresses, ``localhost`` and ``.local`` names always work; a name that
+    #: resolves through a nameserver has to be listed here, because a name is
+    #: the one part of the address an outside site can point at this port
+    #: (see ``is_allowed_host`` in ``web_server.py``). Needed for a reverse
+    #: proxy or a private DNS entry, and for nothing else.
+    dashboard_allowed_hosts: str = ""
     #: Conditioning every power source starts from; a source may override it.
     signal: SignalSettings = SignalSettings()
 
