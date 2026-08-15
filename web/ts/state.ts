@@ -122,6 +122,17 @@ function asStr(v: unknown, fallback: string): string {
 function asBool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
+// The config editor was a checkbox before it was tri-state, so a saved state
+// can carry a boolean. `true` said "serve the editor" and still does; `false`
+// only ever meant "I did not tick this", never "keep the dashboard's
+// Configuration tab out" — the checkbox could not say that — so it restores as
+// unset rather than as the "off" that would newly take that tab away. Anything
+// outside the three known values is treated the same way, since the generator
+// reads every non-"true" string as False.
+function asWebConfig(v: unknown): string {
+  if (typeof v === "boolean") return v ? "true" : "";
+  return v === "true" || v === "false" ? v : "";
+}
 function asObject(v: unknown): Fields {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : {};
 }
@@ -169,7 +180,7 @@ export function migrate(s: any): State {
         deviceTypes: Array.isArray(sg.deviceTypes) ? sg.deviceTypes.map((t: unknown) => String(t)) : dg.deviceTypes,
         deviceIds: asStr(sg.deviceIds, dg.deviceIds),
         skipPowermeterTest: asBool(sg.skipPowermeterTest, dg.skipPowermeterTest),
-        webConfigEnabled: asStr(sg.webConfigEnabled, dg.webConfigEnabled),
+        webConfigEnabled: asWebConfig(sg.webConfigEnabled),
         dashboardEnabled: asBool(sg.dashboardEnabled, dg.dashboardEnabled),
         esphomeDashboard: asBool(sg.esphomeDashboard, dg.esphomeDashboard),
         esphomeControls: asBool(sg.esphomeControls, dg.esphomeControls),

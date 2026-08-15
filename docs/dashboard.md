@@ -116,7 +116,8 @@ DASHBOARD_ALLOW_WRITE = False
 # standalone config editor if WEB_CONFIG_ENABLED is on (default True).
 DASHBOARD_ENABLED = False
 # Drop the Configuration tab and the /config editor behind it, keeping the
-# rest of the page. Left unset it follows DASHBOARD_ENABLED above.
+# rest of the page. Left unset it follows DASHBOARD_ENABLED above; set it to
+# True to keep /config served even with the dashboard off.
 WEB_CONFIG_ENABLED = False
 # Extra host names this port answers under, comma-separated. IP addresses,
 # localhost, .local and .home.arpa names always work, so this is only needed
@@ -125,11 +126,16 @@ WEB_CONFIG_ENABLED = False
 DASHBOARD_ALLOWED_HOSTS = astrameter.example.lan
 ```
 
-`WEB_CONFIG_ENABLED = False` is the narrower of the two write switches:
-`DASHBOARD_ALLOW_WRITE = False` makes the whole page read-only, batteries
-included, while this leaves the controls working and takes only the
-configuration surface away. If you set it in an earlier release, it still
-means what it said — the dashboard does not override it.
+`WEB_CONFIG_ENABLED` decides whether there is a configuration surface at all,
+not whether the page may write. It has three states: left out it follows the
+dashboard, `True` serves the editor even with `DASHBOARD_ENABLED = False`, and
+`False` refuses it even with the dashboard on. If you set it in an earlier
+release, it still means what it said — the dashboard does not override it.
+
+That makes it the narrower of the two switches: `DASHBOARD_ALLOW_WRITE = False`
+makes the whole page read-only, batteries included, while `WEB_CONFIG_ENABLED =
+False` leaves the battery controls working and takes only the configuration
+away.
 
 ### ESPHome on an ESP32
 

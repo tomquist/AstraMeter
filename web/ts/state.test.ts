@@ -91,6 +91,17 @@ ok(typeof hg.general.webServerPort === "string", "migrate: numeric webServerPort
 const okg = migrate({ general: { deviceTypes: ["ct002", "ct003"], deviceIds: "x-1" } });
 ok(okg.general.deviceTypes.length === 2 && okg.general.deviceIds === "x-1", "migrate: valid general preserved");
 
+// The config editor was a checkbox before it was tri-state. A saved "on" has
+// to survive; a saved "off" was only ever "not ticked", so restoring it as the
+// new "off" would take the dashboard's Configuration tab from everyone who
+// comes back to the generator.
+const editorWas = (v: unknown) => migrate({ general: { webConfigEnabled: v } }).general.webConfigEnabled;
+ok(editorWas(true) === "true", "migrate: a ticked editor checkbox still asks for the editor");
+ok(editorWas(false) === "", "migrate: an unticked one restores as unset, not as off");
+ok(editorWas("false") === "false", "migrate: an explicit off is kept");
+ok(editorWas("yes") === "", "migrate: a value from nowhere does not become off");
+ok(editorWas(undefined) === "", "migrate: a state written before the key existed is unset");
+
 // migrate fills in newly-added keys for an old saved state
 const old = migrate({ target: "python", meters: [{ type: "shelly", fields: { IP: "1.1.1.1" } }] });
 ok(old.esphome && old.esphome.board, "migrate: backfills missing esphome defaults");
