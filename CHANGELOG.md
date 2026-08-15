@@ -2,8 +2,6 @@
 
 ## Next
 
-- **Fixed** any website you visit being able to edit your `config.ini`, steer your batteries and restart AstraMeter through your own browser, whenever the dashboard or the config editor is served on a port without a login.
-
 - **Fixed** B2500 batteries sitting at 0 W under active control while the whole house load was imported: the command they were sent could never exceed what the battery needs to start, and a battery that never starts was never sent more ([#600](https://github.com/tomquist/astrameter/issues/600), [#614](https://github.com/tomquist/astrameter/pull/614)).
 
 - **Added** Refoss / Meross energy monitors (EM01P, EM06P, EM16P) as a power source (`[REFOSS]` or `[MEROSS]`) ([#598](https://github.com/tomquist/astrameter/pull/598)).
