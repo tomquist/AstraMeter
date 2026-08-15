@@ -269,7 +269,7 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
   // take no body would then go through without the JSON parse ever failing.
   const auto content_type = request->get_header("Content-Type");
   if (!content_type.has_value() ||
-      !is_json_content_type(content_type.value())) {
+      !controls::is_json_content_type(content_type.value())) {
     send_json(request, 415,
               "{\"error\":\"Content-Type must be application/json\"}");
     return;
