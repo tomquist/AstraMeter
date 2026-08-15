@@ -391,9 +391,12 @@ class AddonAppConfig(AppConfig):
             replace(
                 defaults,
                 device_types=device_types or defaults.device_types,
-                # The config editor is for config files only, and in this mode
-                # there is none.
-                web_config_enabled=False,
+                # Left unstated, like the default: the Configuration tab here
+                # is the guided form, not the file editor, and saying "off"
+                # would take the whole tab away with it. There is no config
+                # file to edit in this mode, and the ha_simple guard in the
+                # web server is what says so.
+                web_config_enabled=None,
                 # Writing is on by default and can be turned off.
                 dashboard_allow_write=True,
                 signal=_apply_options(

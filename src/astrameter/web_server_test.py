@@ -487,6 +487,12 @@ _REBOUND_HOSTS = (
     "notlocalhost",
     "localhost.evil.example",
     ".local.evil.example",
+    "home.arpa.evil.example",
+    # Common router-assigned suffixes that are *not* reserved: `.box` is a
+    # real gTLD and `.lan` an ordinary label, so a nameserver can answer for
+    # either. They are DASHBOARD_ALLOWED_HOSTS material, not built in.
+    "astrameter.fritz.box",
+    "nas.lan:52500",
 )
 
 
@@ -525,14 +531,18 @@ async def test_a_rebound_name_cannot_write(tmp_path, path, body):
         "[::1]",
         "localhost:52500",
         "astrameter.local:52500",
+        # RFC 8375 reserves this one for home networks: the root will not
+        # delegate it, so there is no outside nameserver to poison.
+        "astrameter.home.arpa",
+        "NAS.Home.Arpa:52500",
         # A resolver ignores the root label, and the header may carry it.
         "LOCALHOST.:52500",
         "Homeassistant.LOCAL",
     ],
 )
 async def test_an_unrebindable_address_is_served(tmp_path, host):
-    """An IP literal needs no lookup, and localhost/.local do not reach a
-    nameserver an outsider can answer for. None of them can be aimed here."""
+    """An IP literal needs no lookup, and localhost/.local/.home.arpa do not
+    reach a nameserver an outsider can answer for. None can be aimed here."""
     client = await _client(_registry(tmp_path, direct_access=True))
     response = await client.get("/api/status", headers={"Host": host})
     assert response.status == 200, host
@@ -816,6 +826,74 @@ async def test_simple_mode_refuses_config_writes(tmp_path):
     )
     assert response.status == 403
     assert "add-on options" in (await response.json())["error"]
+    await client.close()
+
+
+#: What the config editor answers to a GET. These plus the two writes below
+#: (POST /api/config and the restart that would run a `[SCRIPT]` section it
+#: just saved) are the whole surface, and all of it goes when it is off.
+_EDITOR_ROUTES = ("/config", "/api/config", "/api/key-types")
+
+
+async def test_web_config_off_closes_the_editor_the_dashboard_would_open(tmp_path):
+    """`WEB_CONFIG_ENABLED = False` is someone's explicit answer, given when
+    the editor was the only thing on this port. The dashboard now defaults on
+    and writable, so ignoring it would reopen, on upgrade, exactly what they
+    went looking for the switch to close."""
+    (tmp_path / "config.ini").write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    client = await _client(registry, enable_web_config=False)
+
+    for path in _EDITOR_ROUTES:
+        assert (await client.get(path)).status == 404, path
+    assert (
+        await client.post(
+            "/api/config",
+            json={"sections": {"GENERAL": {"DEVICE_TYPE": "ct003"}}, "order": []},
+        )
+    ).status == 404
+    assert (await client.post("/api/restart", json={})).status == 404
+
+    # The rest of the dashboard is untouched — this is not a way to turn the
+    # page off, only its Configuration tab.
+    assert (await client.get("/api/status")).status == 200
+    await client.close()
+
+
+async def test_no_config_surface_is_announced_when_the_editor_is_off(tmp_path):
+    """The page hides its Configuration tab when the backend names no
+    config_mode — the same signal an ESPHome device sends. Without it the tab
+    would stay, linking to routes that are no longer there."""
+    (tmp_path / "config.ini").write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    client = await _client(registry, enable_web_config=False)
+
+    caps = (await (await client.get("/api/status")).json())["capabilities"]
+    assert "config_mode" not in caps
+    assert caps["config_writable"] is False
+    assert caps["ha_options"] is False
+    # Steering batteries is a separate permission and stays granted.
+    assert caps["controls"] is True
+    await client.close()
+
+
+@pytest.mark.parametrize("path", _EDITOR_ROUTES)
+async def test_the_editor_follows_the_dashboard_when_unset(tmp_path, path):
+    """Unset is the default, and a new user should not have to find a flag to
+    get the Configuration tab the page advertises."""
+    (tmp_path / "config.ini").write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
+    client = await _client(_registry(tmp_path, direct_access=True, allow_write=True))
+    assert (await client.get(path)).status == 200, path
+    await client.close()
+
+
+async def test_web_config_on_still_serves_the_editor_without_a_dashboard(tmp_path):
+    """What the flag meant before there was a dashboard, unchanged."""
+    (tmp_path / "config.ini").write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
+    registry = _registry(tmp_path, dashboard_enabled=False)
+    client = await _client(registry, enable_web_config=True)
+    assert (await client.get("/config")).status == 200
+    assert (await client.get("/api/status")).status == 404
     await client.close()
 
 

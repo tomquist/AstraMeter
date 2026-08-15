@@ -16,6 +16,9 @@ behaviour to record. They are carried here anyway, each set to something other
 than its default, so the same assertion still fails if one stops reaching its
 field. ``GeneralSettings.dashboard`` is pinned too even though no option feeds
 it: in the add-on the dashboard is always on, and that is the assertion.
+``web_config_enabled`` is pinned as unset for the same kind of reason —
+``run.sh`` never wrote that key either, and the config editor here is the
+dashboard's Configuration tab rather than something the options switch on.
 """
 
 from __future__ import annotations

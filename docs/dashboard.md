@@ -91,7 +91,7 @@ Two add-on options control it:
 |---|---|---|
 | `dashboard_allow_write` | `true` | Lets the dashboard change configuration and control batteries. Turn it off for a read-only dashboard. |
 | `dashboard_direct_access` | `false` | Also serves the page on `http://<host>:52500` **with no authentication**. See [Security](#security). |
-| `dashboard_allowed_hosts` | empty | Extra host names that port answers under, comma-separated. IP addresses, `localhost` and `.local` names always work — needed only behind a reverse proxy or a private DNS entry. See [Security](#only-addresses-that-cannot-be-pointed-here). |
+| `dashboard_allowed_hosts` | empty | Extra host names that port answers under, comma-separated. IP addresses, `localhost`, `.local` and `.home.arpa` names always work — needed for a reverse proxy, a private DNS entry, or a router-assigned name such as `astrameter.fritz.box`. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 
 This holds for a `custom_config` file too: `DASHBOARD_ENABLED` and
 `ENABLE_WEB_SERVER` in that file are ignored, because the sidebar panel and the
@@ -106,7 +106,7 @@ The port follows `WEB_SERVER_PORT`. Nothing else is needed: outside the add-on
 there is no Home Assistant in front of the page, so this address is the
 dashboard, unauthenticated — see [Security](#security).
 
-Two keys in `[GENERAL]` narrow it:
+Keys in `[GENERAL]` narrow it:
 
 ```ini
 [GENERAL]
@@ -115,11 +115,21 @@ DASHBOARD_ALLOW_WRITE = False
 # Stop serving the dashboard — only the health check is left, plus the
 # standalone config editor if WEB_CONFIG_ENABLED is on (default True).
 DASHBOARD_ENABLED = False
+# Drop the Configuration tab and the /config editor behind it, keeping the
+# rest of the page. Left unset it follows DASHBOARD_ENABLED above.
+WEB_CONFIG_ENABLED = False
 # Extra host names this port answers under, comma-separated. IP addresses,
-# localhost and .local names always work, so this is only needed if you
-# reach the dashboard through a reverse proxy or a private DNS entry.
+# localhost, .local and .home.arpa names always work, so this is only needed
+# if you reach the dashboard through a reverse proxy, a private DNS entry, or
+# a router-assigned name such as astrameter.fritz.box.
 DASHBOARD_ALLOWED_HOSTS = astrameter.example.lan
 ```
+
+`WEB_CONFIG_ENABLED = False` is the narrower of the two write switches:
+`DASHBOARD_ALLOW_WRITE = False` makes the whole page read-only, batteries
+included, while this leaves the controls working and takes only the
+configuration surface away. If you set it in an earlier release, it still
+means what it said — the dashboard does not override it.
 
 ### ESPHome on an ESP32
 
@@ -159,7 +169,7 @@ those who run that sub-block — but:
 |---|---|---|
 | `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
 | `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
-| `allowed_hosts` | empty | Extra host names the device answers under. Its IP address, `localhost` and its `.local` mDNS name always work — needed only behind a reverse proxy. See [Security](#only-addresses-that-cannot-be-pointed-here). |
+| `allowed_hosts` | empty | Extra host names the device answers under. Its IP address, `localhost`, its `.local` mDNS name and any `.home.arpa` name always work — needed behind a reverse proxy or for a router-assigned name. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 | `web_server_link` | `true` | Adds a link to the dashboard at the top of ESPHome's own page. Only does anything when `web_server:` is configured. |
 | `id` | generated | The usual ESPHome component id. |
 
@@ -371,7 +381,14 @@ under addresses that could not have got there that way:
 - **`localhost`** and any **`.local`** name — `.local` is mDNS, resolved on
   your link rather than by a nameserver someone outside can answer for. This
   covers every ESPHome device, which mDNS names automatically.
-- **Names you list yourself**, for a reverse proxy or a private DNS entry:
+- Any **`.home.arpa`** name — the suffix reserved for home networks
+  ([RFC 8375](https://www.rfc-editor.org/rfc/rfc8375)). The DNS root delegates
+  it to nobody, so there is no outside nameserver to poison.
+- **Names you list yourself**, for a reverse proxy, a private DNS entry, or a
+  name your router hands out — `astrameter.fritz.box` and `nas.lan` are
+  refused until you list them, because `.box` is a real top-level domain and
+  `.lan` an ordinary label, so unlike the three above a nameserver *can* be
+  asked about them:
   `DASHBOARD_ALLOWED_HOSTS` (comma-separated) in `config.ini`,
   `dashboard_allowed_hosts` in the add-on, `allowed_hosts:` under the ESPHome
   `dashboard:` block.
@@ -406,7 +423,12 @@ address is refused, check that AstraMeter is running, that you are on the port
 than an IP address, and that name is not one AstraMeter answers under — see
 [Security](#only-addresses-that-cannot-be-pointed-here). Use the IP address, or
 add the name to `DASHBOARD_ALLOWED_HOSTS` (`dashboard_allowed_hosts` in the
-add-on, `allowed_hosts:` on ESPHome).
+add-on, `allowed_hosts:` on ESPHome). A name your router hands out, such as
+`astrameter.fritz.box`, needs listing like any other.
+
+**The Configuration tab is gone.** `WEB_CONFIG_ENABLED = False` is set — it
+takes the tab and the `/config` editor with it, leaving the rest of the page.
+Remove the line to have it follow the dashboard again.
 
 **"Lost contact with AstraMeter."** The page could not reach the service for
 two polls. It keeps retrying, dims the values and switches every relative time

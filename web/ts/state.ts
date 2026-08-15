@@ -22,7 +22,10 @@ export interface State {
     deviceTypes: string[];
     deviceIds: string;
     skipPowermeterTest: boolean;
-    webConfigEnabled: boolean;
+    /// Tri-state, like the setting: "" leaves the config editor to the
+    /// dashboard (whose Configuration tab it is), "true" serves it without
+    /// one, "false" refuses it even with one.
+    webConfigEnabled: string;
     dashboardEnabled: boolean;
     /// ESPHome only. The firmware serves the dashboard unless told not to, so
     /// this one starts true — unlike dashboardEnabled, which is the Python
@@ -35,7 +38,8 @@ export interface State {
     dashboardAllowWrite: boolean;
     dashboardDirectAccess: boolean;
     /// Comma-separated extra host names the web port answers under. Empty for
-    /// almost everyone: IP addresses, localhost and .local always work, and a
+    /// almost everyone: IP addresses, localhost, .local and .home.arpa always
+    /// work, and a
     /// name that resolves through a nameserver is refused unless listed here
     /// so no other site can aim a browser at this port.
     dashboardAllowedHosts: string;
@@ -68,7 +72,7 @@ export function defaultState(): State {
       deviceTypes: ["ct002"],
       deviceIds: "",
       skipPowermeterTest: false,
-      webConfigEnabled: false,
+      webConfigEnabled: "",
       // On by default, matching the service itself. It is read-only until
       // `dashboardAllowWrite` says otherwise.
       dashboardEnabled: true,
@@ -165,7 +169,7 @@ export function migrate(s: any): State {
         deviceTypes: Array.isArray(sg.deviceTypes) ? sg.deviceTypes.map((t: unknown) => String(t)) : dg.deviceTypes,
         deviceIds: asStr(sg.deviceIds, dg.deviceIds),
         skipPowermeterTest: asBool(sg.skipPowermeterTest, dg.skipPowermeterTest),
-        webConfigEnabled: asBool(sg.webConfigEnabled, dg.webConfigEnabled),
+        webConfigEnabled: asStr(sg.webConfigEnabled, dg.webConfigEnabled),
         dashboardEnabled: asBool(sg.dashboardEnabled, dg.dashboardEnabled),
         esphomeDashboard: asBool(sg.esphomeDashboard, dg.esphomeDashboard),
         esphomeControls: asBool(sg.esphomeControls, dg.esphomeControls),

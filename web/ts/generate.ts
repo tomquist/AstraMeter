@@ -60,8 +60,10 @@ function generalSection(state: State): string {
   lines.push(`DEVICE_TYPE = ${types}`);
   if (!isBlank(g.deviceIds)) lines.push(`DEVICE_IDS = ${g.deviceIds.trim()}`);
   lines.push(`SKIP_POWERMETER_TEST = ${boolToIni(!!g.skipPowermeterTest)}`);
-  if (g.webConfigEnabled) {
-    lines.push("WEB_CONFIG_ENABLED = True");
+  // Tri-state: written only when the user answered, since leaving it out is
+  // itself an answer — the config editor then follows the dashboard below.
+  if (!isBlank(g.webConfigEnabled)) {
+    lines.push(`WEB_CONFIG_ENABLED = ${g.webConfigEnabled === "true" ? "True" : "False"}`);
   }
   // The dashboard is on unless the form says otherwise (`undefined` from an
   // ad-hoc caller means "default", and the default is on). Written out either

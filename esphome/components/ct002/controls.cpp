@@ -208,10 +208,15 @@ bool is_allowed_host(const std::string &host, const std::vector<std::string> &al
     if (normalise_host(entry) == name) return true;
   }
   if (is_ipv4_literal(name) || is_ipv6_literal(name)) return true;
-  // `localhost` resolves to the loopback address and nowhere else, and
-  // `.local` is mDNS (RFC 6762) — resolved by multicast on the link, not
-  // through a nameserver an outsider can answer for.
-  return name == "localhost" || ends_with(name, ".localhost") || ends_with(name, ".local");
+  // `localhost` resolves to the loopback address and nowhere else, `.local`
+  // is mDNS (RFC 6762) — resolved by multicast on the link, not through a
+  // nameserver an outsider can answer for — and `.home.arpa` is reserved for
+  // home networks (RFC 8375), which the DNS root will not delegate, so there
+  // is no outside nameserver to ask about a name under it either. A merely
+  // common router suffix (`.box`, `.lan`) is not reserved and stays an
+  // `allowed_hosts` decision. Mirrors ALWAYS_ALLOWED_HOST* in web_server.py.
+  return name == "localhost" || ends_with(name, ".localhost") || ends_with(name, ".local") ||
+         ends_with(name, ".home.arpa");
 }
 
 bool is_consumer_field(const std::string &field) {

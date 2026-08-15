@@ -170,6 +170,10 @@ TEST(Controls, AcceptsAnAddressThatCannotBeRebound) {
   EXPECT_TRUE(is_allowed_host("localhost", none));
   EXPECT_TRUE(is_allowed_host("localhost:6052", none));
   EXPECT_TRUE(is_allowed_host("astrameter.local", none));
+  // RFC 8375 reserves `home.arpa` for home networks, so the root delegates it
+  // to nobody and no outside nameserver can be asked about a name under it.
+  EXPECT_TRUE(is_allowed_host("astrameter.home.arpa", none));
+  EXPECT_TRUE(is_allowed_host("NAS.Home.Arpa:80", none));
   // The root label is the resolver's to ignore, and case is not ours to keep.
   EXPECT_TRUE(is_allowed_host("AstraMeter.LOCAL.:80", none));
 }
@@ -183,6 +187,11 @@ TEST(Controls, RefusesANameAnotherSiteCouldPointHere) {
   EXPECT_FALSE(is_allowed_host("notlocalhost", none));
   EXPECT_FALSE(is_allowed_host("localhost.evil.example", none));
   EXPECT_FALSE(is_allowed_host("local", none));
+  EXPECT_FALSE(is_allowed_host("home.arpa.evil.example", none));
+  // Common, but not reserved: `.box` is a real gTLD and `.lan` an ordinary
+  // label, so a nameserver can answer for either. Both stay `allowed_hosts`.
+  EXPECT_FALSE(is_allowed_host("astrameter.fritz.box", none));
+  EXPECT_FALSE(is_allowed_host("nas.lan:80", none));
   // A dotted name that is not a valid address is still a name.
   EXPECT_FALSE(is_allowed_host("1.2.3.4.evil.example", none));
   EXPECT_FALSE(is_allowed_host("999.1.1.1", none));

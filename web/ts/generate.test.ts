@@ -581,6 +581,25 @@ has(dashOff, "DASHBOARD_ENABLED = False", "dashboard: turning it off is written 
 lacks(dashOff, "DASHBOARD_ALLOW_WRITE", "dashboard: no write flag for a dashboard that never runs");
 has(dashOff, "WEB_SERVER_PORT = 8123", "dashboard: a chosen port survives turning the dashboard off");
 
+// The config editor is tri-state: it follows the dashboard unless the user
+// says otherwise, so an unanswered question writes no line at all.
+lacks(dashDefault, "WEB_CONFIG_ENABLED", "editor: left to the dashboard by default");
+
+const editorOn = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"], dashboardEnabled: false, webConfigEnabled: "true" },
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
+});
+has(editorOn, "WEB_CONFIG_ENABLED = True", "editor: served on its own with no dashboard");
+
+const editorOff = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"], dashboardEnabled: true, webConfigEnabled: "false" },
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }],
+});
+has(editorOff, "WEB_CONFIG_ENABLED = False", "editor: refused even though the dashboard is on");
+has(editorOff, "DASHBOARD_ENABLED = True", "editor: turning it off leaves the rest of the page");
+
 // On an ESP32 the firmware serves the dashboard unless told not to, so the
 // on-and-read-only case is the default and writes nothing at all.
 const eyDash = generateEsphome({

@@ -67,6 +67,10 @@ class StatusRegistry:
     dashboard_enabled: bool = False
     allow_write: bool = False
     direct_access: bool = False
+    #: Whether a configuration surface is served at all. Set from the web
+    #: server's route table, since ``WEB_CONFIG_ENABLED = False`` turns the
+    #: editor off while the rest of the dashboard stays.
+    config_editor: bool = True
     started_monotonic: float = dataclasses.field(default_factory=time.monotonic)
     started_at: datetime = dataclasses.field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -144,21 +148,31 @@ class StatusRegistry:
         """What this deployment can do, so the UI never branches on identity."""
         supervisor = self.under_supervisor()
         writable = self.allow_write and (ingress or self.serves_direct())
-        return {
-            "backend": "python",
-            # Reserved: there is no push transport today, and the field
-            # exists so a future one is a capability flip, not a redesign.
-            "stream": False,
-            "poll_interval_ms": 2000,
-            "config_mode": self.config_mode,
-            "config_writable": writable and self.config_mode != "ha_simple",
-            "ha_options": supervisor and writable,
-            "controls": writable,
-            "restart_process": writable,
-            "restart_supervisor": supervisor and writable,
-            "balancer_internals": True,
-            "ingress": ingress,
-        }
+        # No config_mode means "this backend has nothing to configure", which
+        # is what hides the Configuration tab. An ESPHome device says it by
+        # having its settings compiled in; here it is WEB_CONFIG_ENABLED
+        # turned off, and the tab has to go the same way — the routes behind
+        # it are not registered.
+        editable = self.config_editor
+        return compact(
+            {
+                "backend": "python",
+                # Reserved: there is no push transport today, and the field
+                # exists so a future one is a capability flip, not a redesign.
+                "stream": False,
+                "poll_interval_ms": 2000,
+                "config_mode": self.config_mode if editable else None,
+                "config_writable": editable
+                and writable
+                and self.config_mode != "ha_simple",
+                "ha_options": editable and supervisor and writable,
+                "controls": writable,
+                "restart_process": writable,
+                "restart_supervisor": supervisor and writable,
+                "balancer_internals": True,
+                "ingress": ingress,
+            }
+        )
 
     def snapshot(self, *, ingress: bool) -> dict[str, Any]:
         """Build the whole status document.  Pure, synchronous, no awaits."""

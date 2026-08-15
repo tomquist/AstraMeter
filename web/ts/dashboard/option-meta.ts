@@ -618,8 +618,9 @@ export const OPTION_META: Record<string, OptionMeta> = {
     placeholder: "astrameter.example.lan",
     help:
       "Extra names port 52500 answers under, comma-separated. IP addresses, " +
-      "localhost and .local names always work — add a name here only if you " +
-      "reach the dashboard through a reverse proxy or a private DNS entry.",
+      "localhost, .local and .home.arpa names always work — add a name here " +
+      "if you reach the dashboard through a reverse proxy, a private DNS " +
+      "entry, or a router-assigned name such as astrameter.fritz.box.",
   },
   custom_config: {
     label: "Custom config file",

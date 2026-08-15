@@ -6,7 +6,12 @@ DEVICE_TYPE = shellypro3em
 # DEVICE_IDS = shellypro3em-c59b15461a21
 # Skip initial powermeter test on startup
 SKIP_POWERMETER_TEST = False
-# Enable the web-based configuration editor at http://<host>:<port>/config (opt-in, default False)
+# The web-based configuration editor at http://<host>:<port>/config.  Left
+# unset it follows DASHBOARD_ENABLED below, whose Configuration tab is that
+# editor.  Set it to True to serve the editor with no dashboard, or to False
+# to refuse it even with one — False also takes the dashboard's Configuration
+# tab away, and is the way to keep an unauthenticated port from editing this
+# file at all.
 # WEB_CONFIG_ENABLED = False
 # The live status dashboard at http://<host>:<port>/ (default True).
 # Shows grid power, every battery's target and reported power, power-source
@@ -25,9 +30,10 @@ SKIP_POWERMETER_TEST = False
 # way in and the dashboard is already served there.
 # DASHBOARD_DIRECT_ACCESS = False
 # Extra host names the web port answers under, comma-separated.  IP addresses,
-# localhost and .local names always work, so most setups need nothing here.
-# Add a name only if you reach the dashboard through one that resolves via a
-# nameserver — a reverse proxy or a private DNS entry.  Names are refused by
+# localhost, .local and .home.arpa names always work, so most setups need
+# nothing here.  Add a name if you reach the dashboard through one that
+# resolves via a nameserver — a reverse proxy, a private DNS entry, or a
+# router-assigned name such as astrameter.fritz.box.  Names are refused by
 # default because a name is the one part of the address another website can
 # aim at this port from your browser (DNS rebinding), and this port has no
 # login to fall back on.

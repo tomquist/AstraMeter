@@ -80,10 +80,13 @@ class IniAppConfig(AppConfig):
                 "ENABLE_WEB_SERVER",
                 fallback=defaults.enable_web_server,
             ),
-            web_config_enabled=config.getboolean(
-                GENERAL_SECTION,
-                "WEB_CONFIG_ENABLED",
-                fallback=defaults.web_config_enabled,
+            # Tri-state: absent stays absent rather than collapsing to False,
+            # so "never mentioned it" and "turned it off" reach the web server
+            # as different answers.
+            web_config_enabled=(
+                config.getboolean(GENERAL_SECTION, "WEB_CONFIG_ENABLED")
+                if config.has_option(GENERAL_SECTION, "WEB_CONFIG_ENABLED")
+                else defaults.web_config_enabled
             ),
             web_server_port=config.getint(
                 GENERAL_SECTION, "WEB_SERVER_PORT", fallback=defaults.web_server_port

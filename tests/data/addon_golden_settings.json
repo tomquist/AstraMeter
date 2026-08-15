@@ -70,7 +70,7 @@
       "wait_for_next_message": true
     },
     "skip_powermeter_test": false,
-    "web_config_enabled": false,
+    "web_config_enabled": null,
     "web_server_port": 52500
   },
   "marstek": {

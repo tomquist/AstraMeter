@@ -68,7 +68,12 @@ class GeneralSettings:
     skip_powermeter_test: bool = False
     dedupe_time_window: float = 0.0
     enable_web_server: bool = True
-    web_config_enabled: bool = False
+    #: The ``config.ini`` editor. ``None`` — the default — leaves it to the
+    #: dashboard, whose Configuration tab is that editor. ``True`` serves it
+    #: without a dashboard, and ``False`` refuses it even with one: a setting
+    #: someone chose in an earlier release must keep meaning what it said
+    #: (see ``WebServer.serve_config_editor``).
+    web_config_enabled: bool | None = None
     web_server_port: int = 52500
     #: The live status dashboard. On by default — it is how most users see
     #: what AstraMeter is doing. Set it to ``False`` to serve nothing.

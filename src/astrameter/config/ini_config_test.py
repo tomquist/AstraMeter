@@ -57,6 +57,21 @@ THROTTLE_INTERVAL = 2
     assert general.signal.throttle_interval == 2.0
 
 
+def test_the_config_editor_flag_keeps_unset_apart_from_off():
+    """Absent has to stay absent rather than collapsing to False: the web
+    server reads "off" as an opt-out that overrides the dashboard, and a file
+    that never mentioned the key never asked for that."""
+    assert (
+        config("[GENERAL]\nDEVICE_TYPE = ct002\n").general().web_config_enabled is None
+    )
+    off = config("[GENERAL]\nWEB_CONFIG_ENABLED = false\n")
+    assert off.general().web_config_enabled is False
+    # And it survives being written back out, or switching to a config file
+    # would quietly re-open the editor it turns off.
+    assert "WEB_CONFIG_ENABLED = False" in render_ini(off)
+    assert _round_trip(off).general().web_config_enabled is False
+
+
 def test_ct_section_is_read_into_settings():
     ct = config(
         """

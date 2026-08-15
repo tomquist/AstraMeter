@@ -150,11 +150,20 @@ def _requires_json_content_type(handler):
 
 #: Host names always accepted, beyond IP literals and the operator's own list.
 #:
-#: ``localhost`` resolves to the loopback address and nowhere else, and
-#: ``.local`` is mDNS (RFC 6762): a browser resolves it by multicast on the
-#: link, not through the attacker's nameserver, so neither can be pointed at a
-#: LAN address from the outside. Everything else has to be named explicitly.
-ALWAYS_ALLOWED_HOST_SUFFIXES = (".localhost", ".local")
+#: ``localhost`` resolves to the loopback address and nowhere else, ``.local``
+#: is mDNS (RFC 6762): a browser resolves it by multicast on the link, not
+#: through the attacker's nameserver, and ``.home.arpa`` is the name reserved
+#: for home networks (RFC 8375) — the DNS root will not delegate it, so no
+#: outside nameserver can be asked about a name under it either. None of the
+#: three can be pointed at a LAN address from outside. Everything else has to
+#: be named explicitly.
+#:
+#: A router-assigned suffix that is *not* reserved does not belong here however
+#: common it is: ``.box`` (AVM's ``fritz.box``) and ``.lan`` are ordinary
+#: labels a nameserver can answer for, so they stay a
+#: ``DASHBOARD_ALLOWED_HOSTS`` decision the operator makes for their own
+#: network rather than one shipped for everyone's.
+ALWAYS_ALLOWED_HOST_SUFFIXES = (".localhost", ".local", ".home.arpa")
 ALWAYS_ALLOWED_HOSTS = ("localhost",)
 
 
@@ -333,7 +342,7 @@ class WebServer:
         port=52500,
         bind_address="0.0.0.0",
         config_path: str | None = None,
-        enable_web_config: bool = False,
+        enable_web_config: bool | None = None,
         status=None,
         allowed_hosts: str | Iterable[str] | None = None,
     ):
@@ -344,6 +353,12 @@ class WebServer:
         self.enable_web_config = enable_web_config
         self.status = status
         self.allowed_hosts = parse_allowed_hosts(allowed_hosts)
+        # The dashboard hides its Configuration tab when the backend names no
+        # config_mode, which is how an ESPHome device says it has nothing to
+        # edit. Say the same here when the editor is off, so the tab is never
+        # a link to routes this server does not serve.
+        if status is not None and not self.serve_config_editor:
+            status.config_editor = False
         self._runner = None
         #: Host names already reported as refused, so a page reloading behind
         #: a misconfigured name logs once rather than on every poll. Bounded by
@@ -360,6 +375,26 @@ class WebServer:
     @property
     def enable_dashboard(self) -> bool:
         return bool(self.status is not None and self.status.dashboard_enabled)
+
+    @property
+    def serve_config_editor(self) -> bool:
+        """Whether the ``config.ini`` editor is part of this server.
+
+        ``WEB_CONFIG_ENABLED`` is tri-state deliberately. Left unset it
+        follows the dashboard, whose Configuration tab *is* the editor — the
+        flag is not something a new user should have to find to get the
+        feature the page advertises. Set, it is an explicit answer either way:
+        ``True`` serves the editor with no dashboard, which is what the flag
+        meant before there was one, and ``False`` keeps it off even when the
+        dashboard is on. That last case is the point. The dashboard defaults
+        on and writable, so without it, upgrading would hand back an
+        unauthenticated config surface to the one user who went looking for
+        the switch that turns it off — and a config write is a ``[SCRIPT]``
+        section away from being a shell command.
+        """
+        if self.enable_web_config is None:
+            return self.enable_dashboard
+        return self.enable_web_config
 
     def _is_ingress(self, request) -> bool:
         """True when the request arrived through Home Assistant ingress.
@@ -497,8 +532,9 @@ class WebServer:
             self._add("POST", app, "/api/config-mode", self._handle_config_mode_post)
 
         # The INI editor is reachable either from the dashboard or from the
-        # standalone WEB_CONFIG_ENABLED flag.
-        if self.enable_web_config or self.enable_dashboard:
+        # standalone WEB_CONFIG_ENABLED flag — see `serve_config_editor` for
+        # how the two combine, and why a flag set to False wins over both.
+        if self.serve_config_editor:
             app.router.add_get("/config", self._handle_config_ui)
             app.router.add_get("/config/", self._handle_config_ui)
             self._add("GET", app, "/api/config", self._handle_api_config_get)
@@ -550,7 +586,7 @@ class WebServer:
 
     def _log_access_posture(self):
         if not self.enable_dashboard:
-            if self.enable_web_config and self.config_path:
+            if self.serve_config_editor and self.config_path:
                 logger.warning(
                     "Config editor is ENABLED — unauthenticated read/write access "
                     "is active. Disable WEB_CONFIG_ENABLED when not in use."
@@ -981,7 +1017,7 @@ class WebServer:
     def _config_write_blocked(self, request):
         """Why a config.ini write is refused, or None when it is allowed."""
         if self.status is None:
-            return None if self.enable_web_config else "Forbidden"
+            return None if self.serve_config_editor else "Forbidden"
         if not self._may_write(request):
             return "Forbidden"
         if self.status.config_mode == HA_SIMPLE:

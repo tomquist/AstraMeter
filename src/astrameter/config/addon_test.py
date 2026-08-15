@@ -71,9 +71,12 @@ def test_general_settings_come_from_the_options():
     assert general.device_types == ["ct002", "ct003"]
     assert general.signal.throttle_interval == 2.0
     assert general.signal.wait_for_next_message is True
-    # The add-on panel links to the web UI; its editor is for config files.
+    # The add-on panel links to the web UI. Guided setup has no config file to
+    # edit, but it leaves the flag unstated rather than saying "off": off is an
+    # opt-out that would take the whole Configuration tab — guided form and all
+    # — away with it.
     assert general.enable_web_server is True
-    assert general.web_config_enabled is False
+    assert general.web_config_enabled is None
 
 
 def test_untouched_options_keep_the_settings_defaults():
