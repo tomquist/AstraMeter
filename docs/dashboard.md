@@ -331,15 +331,26 @@ off, or set `dashboard: false`.
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.
 
-On ESPHome two things are worth knowing now that the page is on by default.
-ESPHome's HTTP server sends `Access-Control-Allow-Origin: *` on every response,
-so `/api/status` is readable by **any website you visit** while on the same
-network, not only by something already on your LAN — it reports your device
-name, battery addresses, MQTT broker and live household power. Writes are not
-exposed that way: they require `Content-Type: application/json`, which a
-browser cannot send cross-origin without a preflight the device refuses. Either
+### Writes are refused to other websites
+
+"Anyone who can reach it" above means a person or program on your network. It
+does **not** include a website you happen to visit while on that network,
+which would otherwise be able to reach a LAN address through your own browser
+and drive the write API without ever seeing the reply.
+
+Every write — on all three backends — requires `Content-Type:
+application/json`. That is a header a browser will not send cross-origin
+without asking permission first, and no AstraMeter route grants it, so such a
+request never leaves the browser. Nothing you configure turns this off, and it
+applies whatever `dashboard_allow_write` is set to.
+
+Reads are a different matter, and only on ESPHome: that HTTP server sends
+`Access-Control-Allow-Origin: *` on every response, so `/api/status` is
+readable by any website you visit while on the same network — it reports your
+device name, battery addresses, MQTT broker and live household power. Either
 `dashboard: false` or ESPHome's `web_server:` with an `auth:` block closes
-both.
+that. The Python service sends no such header, so its status is readable only
+from your network.
 
 ## Troubleshooting
 

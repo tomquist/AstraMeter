@@ -97,10 +97,18 @@ What differs is the document behind it:
   its `_CONSUMER_SETTERS` table. The bounds MUST match: a value one stack
   accepts and the other refuses would be settable from one dashboard and then
   silently reverted by the next retained MQTT replay. It is opt-in on the
-  firmware (`controls:`, default off) because that page has no login, and it
-  requires `Content-Type: application/json` — a header a browser cannot set
-  cross-origin without a preflight, which is what stops any page the owner
-  happens to visit from POSTing to a device on their LAN.
+  firmware (`controls:`, default off) because that page has no login.
+
+  **Both** stacks require `Content-Type: application/json` on every write — a
+  header a browser cannot set cross-origin without a preflight neither answers,
+  which is what stops any page the owner happens to visit from POSTing to a
+  device on their LAN. Neither the source-address gate in `web_server.py` nor
+  the firmware's `controls:` flag helps there: such a request arrives from the
+  owner's own browser, and the write lands whether or not the reply can be
+  read. Python enforces it in `WebServer._add`, so every `POST` route is
+  covered by construction; the firmware does it in `handle_control_`. Keep both
+  — and note `request.json()` parses a body whatever its declared type, so
+  dropping the check on the Python side silently reopens this.
 
   Three divergences there are deliberate, so don't "restore" them: the
   firmware **rejects a device write with no `value`** (except `force_rotation`,

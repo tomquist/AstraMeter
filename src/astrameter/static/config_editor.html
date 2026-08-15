@@ -673,7 +673,12 @@ async function saveAndRestart() {
     // Step 2: trigger restart
     saveRestartBtn.textContent = 'Restarting\u2026';
     try {
-      await fetch('/api/restart', { method: 'POST' });
+      // Content-Type is required on every write, body or not — it is what a
+      // browser cannot set cross-origin without a preflight.
+      await fetch('/api/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
     } catch (_) {
       // Connection drop is expected as the service restarts
     }

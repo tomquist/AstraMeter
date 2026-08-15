@@ -3,6 +3,7 @@ the control-write validation."""
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -347,6 +348,117 @@ async def test_writes_need_both_trust_and_the_write_flag(tmp_path):
         },
     )
     assert response.status == 403
+    await client.close()
+
+
+# -- the cross-origin guard -------------------------------------------
+
+#: What a browser sends cross-origin *without* asking permission first. Anything
+#: else triggers a preflight, which no route here answers.
+_SIMPLE_CONTENT_TYPES = (
+    "text/plain;charset=UTF-8",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data; boundary=x",
+)
+
+#: Every mutating route, with a body each one would otherwise act on.
+_WRITE_ROUTES: tuple[tuple[str, dict[str, Any]], ...] = (
+    (
+        "/api/control/consumer",
+        {
+            "device_id": "ct-1",
+            "consumer_id": "02b250000001",
+            "field": "manual_target",
+            "value": 800,
+        },
+    ),
+    ("/api/control/device", {"device_id": "ct-1", "field": "active_control"}),
+    ("/api/config", {"sections": {"GENERAL": {"DEVICE_TYPE": "ct002"}}}),
+    ("/api/addon/options", {"options": {}}),
+    ("/api/addon/restart", {}),
+    ("/api/config-mode", {"mode": "file"}),
+    ("/api/restart", {}),
+)
+
+
+@pytest.mark.parametrize("path,body", _WRITE_ROUTES)
+@pytest.mark.parametrize("content_type", _SIMPLE_CONTENT_TYPES)
+async def test_writes_refuse_a_browser_simple_content_type(
+    tmp_path, path, body, content_type
+):
+    """A page the operator happens to visit must not be able to drive this.
+
+    The trust gate cannot help: a request that website makes through their
+    browser reaches us from the very address that gate trusts, and the write
+    lands whether or not the reply can be read. Refusing every content type a
+    browser will send cross-origin unasked is what stops it — the rest need a
+    preflight, and nothing here answers one.
+    """
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    client = await _client(registry)
+    response = await client.post(
+        path, data=json.dumps(body), headers={"Content-Type": content_type}
+    )
+    assert response.status == 415, path
+    assert "Content-Type" in (await response.json())["error"]
+    await client.close()
+
+
+async def test_a_declared_json_write_still_goes_through(tmp_path):
+    """The guard must refuse the browser's unasked-for encodings and nothing
+    else, or it would take the dashboard's own controls down with them."""
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+    client = await _client(registry)
+    response = await client.post(
+        "/api/control/consumer",
+        data=json.dumps(
+            {
+                "device_id": "ct-1",
+                "consumer_id": "02b250000001",
+                "field": "manual_target",
+                "value": 800,
+            }
+        ),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    assert response.status == 200
+    assert (await response.json())["applied"] is True
+    await client.close()
+
+
+async def test_the_guard_covers_every_post_route(tmp_path):
+    """A route added later must not be able to forget the guard.
+
+    Driven off the shipped route table rather than the list above, so a new
+    write endpoint is caught here instead of shipping unguarded — and both the
+    slashed and unslashed registration of each is probed.
+    """
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    registry.register_device("ct-1", "ct002", _device())
+    server = WebServer(config_path=registry.config_path, status=registry)
+    app = server.build_app()
+    posts = sorted(
+        resource.canonical
+        for resource in app.router.resources()
+        for route in resource
+        # The catch-all 404 handler registers as "*", not POST, and changes
+        # nothing — only real endpoints are in scope here.
+        if route.method == "POST"
+    )
+    assert {path.rstrip("/") or "/" for path in posts} == {
+        path for path, _ in _WRITE_ROUTES
+    }
+
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    for path in posts:
+        response = await client.post(
+            path, data="{}", headers={"Content-Type": "text/plain"}
+        )
+        assert response.status == 415, path
     await client.close()
 
 

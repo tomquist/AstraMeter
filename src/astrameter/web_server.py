@@ -70,6 +70,41 @@ def _json(payload, status=200, **headers):
     )
 
 
+#: Content type every mutating request must declare.
+#:
+#: This is the dashboard's only defence against a *cross-origin* write. The
+#: page has no login, so the gate in :meth:`WebServer._trusted` can only ask
+#: where a request came from — and a request a website makes through the
+#: operator's own browser comes from exactly the right place. Nothing about
+#: the reply reaching that page matters: the write has already landed.
+#:
+#: A browser will not send this header cross-origin without a preflight first,
+#: and no route answers one, so the write never leaves the browser. The form
+#: encodings it *will* send without asking (``text/plain``,
+#: ``application/x-www-form-urlencoded``, ``multipart/form-data``) are exactly
+#: what this refuses — note that ``aiohttp``'s ``request.json()`` parses a body
+#: whatever its declared type, so the check has to be explicit.
+#:
+#: ``esphome/components/ct002/dashboard.cpp`` enforces the same header, for the
+#: same reason (see AGENTS.md — the write path has parity). The two must not
+#: diverge: a request one stack accepts and the other refuses means the risk is
+#: real on whichever half forgot.
+JSON_CONTENT_TYPE = "application/json"
+
+
+def _requires_json_content_type(handler):
+    """Wrap *handler* so a request not declared as JSON is refused."""
+
+    async def guarded(request):
+        if JSON_CONTENT_TYPE not in (request.headers.get("Content-Type") or ""):
+            return _json(
+                {"error": f"Content-Type must be {JSON_CONTENT_TYPE}"}, status=415
+            )
+        return await handler(request)
+
+    return guarded
+
+
 _CONSUMER_SETTERS = {
     "manual_target": "set_consumer_manual_target",
     "auto_target": "set_consumer_auto_target",
@@ -299,7 +334,13 @@ class WebServer:
 
         A redirect would send a `Location` header, which both ingress hops
         copy verbatim — navigating the user out of the ingress prefix.
+
+        Every ``POST`` is wrapped in the JSON content-type guard here rather
+        than at each handler, so a route added later cannot forget it — see
+        :data:`JSON_CONTENT_TYPE` for what it defends against.
         """
+        if method == "POST":
+            handler = _requires_json_content_type(handler)
         app.router.add_route(method, path, handler)
         app.router.add_route(method, path + "/", handler)
 

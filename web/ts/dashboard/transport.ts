@@ -85,7 +85,11 @@ async function request<T>(
 ): Promise<{ data: T | null; etag: string | null; status: number }> {
   const headers: Record<string, string> = {};
   if (init?.etag) headers["If-None-Match"] = init.etag;
-  if (init?.body) headers["Content-Type"] = "application/json";
+  // Declared on every write, not only the ones carrying a body: the backend
+  // requires it on all of them, because a browser cannot set it cross-origin
+  // without a preflight — which is what keeps another website off this API.
+  if (init?.body || init?.method === "POST")
+    headers["Content-Type"] = "application/json";
   // Without a deadline a hung connection never settles, and the poll loop
   // only re-arms once the previous request finishes — so the page would sit
   // on stale values forever instead of reporting itself offline.
