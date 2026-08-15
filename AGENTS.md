@@ -177,6 +177,14 @@ ESP32's flash) are **committed generated artifacts** — neither the Docker buil
 nor `esphome compile` has Node. After touching anything under `web/`, run
 `cd web && npm run build:dashboard` and commit **both**; CI fails on a stale one.
 
+`.gitattributes` marks both `-diff -merge linguist-generated`, so they show as
+`Bin` in `git diff --stat` and collapse on GitHub rather than burying the
+change that caused them — gzip rewrites the whole byte array for a one-line
+source edit. Two consequences: `git diff` will not show you their contents (ask
+`npm run check:dashboard` whether they are stale), and a branch that conflicts
+on one should be resolved by **regenerating**, not by editing the conflict
+markers.
+
 ### Screenshots (docs + website)
 
 `docs/images/dashboard-<tab>-<light|dark>.png` are **committed generated
