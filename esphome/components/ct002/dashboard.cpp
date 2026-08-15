@@ -262,9 +262,14 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
   // takes every content type that is not a form. `application/json` is not on
   // that safelist: asking for it forces a preflight, and the preflight has no
   // handler and 404s. Same-origin callers (the page) are unaffected.
+  // Compare the parsed media type, never search the raw header: what decides
+  // whether a browser preflights is the *essence*, the part before the first
+  // ';'. `text/plain; x=application/json` is text/plain to the browser and is
+  // sent with no preflight, yet a find() would match it — and the writes that
+  // take no body would then go through without the JSON parse ever failing.
   const auto content_type = request->get_header("Content-Type");
   if (!content_type.has_value() ||
-      content_type.value().find("application/json") == std::string::npos) {
+      !is_json_content_type(content_type.value())) {
     send_json(request, 415,
               "{\"error\":\"Content-Type must be application/json\"}");
     return;

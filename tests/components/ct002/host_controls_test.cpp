@@ -114,6 +114,40 @@ TEST(Controls, ReportsAnUnknownFieldAsUnknown) {
   EXPECT_EQ(coerce_consumer_control("nonsense", value), "Unknown device or field");
 }
 
+TEST(Controls, AcceptsJsonContentTypeWithParameters) {
+  EXPECT_TRUE(is_json_content_type("application/json"));
+  // The page's own fetch() sends a charset; casing and padding are the
+  // header's business, not ours.
+  EXPECT_TRUE(is_json_content_type("application/json; charset=utf-8"));
+  EXPECT_TRUE(is_json_content_type("Application/JSON"));
+  EXPECT_TRUE(is_json_content_type("  application/json  "));
+}
+
+TEST(Controls, RefusesAContentTypeThatOnlyMentionsJson) {
+  // What decides whether a browser preflights is the essence — the part
+  // before the first ';'. Each of these is one of the three encodings a
+  // browser sends cross-origin with no preflight, dressed up to contain
+  // "application/json" so that a find() on the raw header would match. A
+  // write taking no body (the restart routes) would then go straight
+  // through, since nothing later re-checks the format.
+  EXPECT_FALSE(is_json_content_type("text/plain; x=application/json"));
+  EXPECT_FALSE(is_json_content_type("text/plain; application/json"));
+  EXPECT_FALSE(is_json_content_type("text/plain;charset=application/json"));
+  EXPECT_FALSE(
+      is_json_content_type("multipart/form-data; boundary=application/json"));
+  EXPECT_FALSE(
+      is_json_content_type("application/x-www-form-urlencoded; a=application/json"));
+}
+
+TEST(Controls, RefusesTheOrdinaryNonJsonContentTypes) {
+  EXPECT_FALSE(is_json_content_type(""));
+  EXPECT_FALSE(is_json_content_type("text/plain"));
+  EXPECT_FALSE(is_json_content_type("application/x-www-form-urlencoded"));
+  EXPECT_FALSE(is_json_content_type("multipart/form-data; boundary=x"));
+  // A prefix match must not count either.
+  EXPECT_FALSE(is_json_content_type("application/json-patch+json"));
+}
+
 }  // namespace
 }  // namespace controls
 }  // namespace ct002

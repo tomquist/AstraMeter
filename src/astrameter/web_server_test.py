@@ -355,10 +355,18 @@ async def test_writes_need_both_trust_and_the_write_flag(tmp_path):
 
 #: What a browser sends cross-origin *without* asking permission first. Anything
 #: else triggers a preflight, which no route here answers.
+#:
+#: The last three carry ``application/json`` as a *parameter*. Only the essence
+#: — the part before the first ``;`` — decides whether a browser preflights, so
+#: these travel cross-origin freely while still containing the string a naive
+#: substring check looks for. They are the regression guard for exactly that.
 _SIMPLE_CONTENT_TYPES = (
     "text/plain;charset=UTF-8",
     "application/x-www-form-urlencoded",
     "multipart/form-data; boundary=x",
+    "text/plain; x=application/json",
+    "text/plain; application/json",
+    "multipart/form-data; boundary=application/json",
 )
 
 #: Every mutating route, with a body each one would otherwise act on.

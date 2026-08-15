@@ -1,11 +1,32 @@
 #include "controls.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
 namespace esphome {
 namespace ct002 {
 namespace controls {
+
+bool is_json_content_type(const std::string &header) {
+  // Essence only: everything from the first ';' is a parameter, and a browser
+  // ignores it when deciding whether the request needs a preflight.
+  std::string essence = header.substr(0, header.find(';'));
+  const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+  size_t begin = 0;
+  while (begin < essence.size() && is_space(essence[begin])) {
+    begin++;
+  }
+  size_t end = essence.size();
+  while (end > begin && is_space(essence[end - 1])) {
+    end--;
+  }
+  essence = essence.substr(begin, end - begin);
+  for (char &c : essence) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return essence == "application/json";
+}
 
 namespace {
 

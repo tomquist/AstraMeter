@@ -102,7 +102,14 @@ What differs is the document behind it:
   **Both** stacks require `Content-Type: application/json` on every write — a
   header a browser cannot set cross-origin without a preflight neither answers,
   which is what stops any page the owner happens to visit from POSTing to a
-  device on their LAN. Neither the source-address gate in `web_server.py` nor
+  device on their LAN. Both compare the parsed **media type**, and must keep
+  doing so: what makes a request preflight-free is the *essence*, the part
+  before the first `;`, so `text/plain; x=application/json` crosses origins
+  freely and a substring test on the raw header would admit it — with the
+  bodiless restart routes never re-checking the format afterwards. Python reads
+  `request.content_type`; the firmware calls `controls::is_json_content_type`,
+  which lives in `controls.{h,cpp}` rather than `dashboard.cpp` so a host gtest
+  can drive it. Neither the source-address gate in `web_server.py` nor
   the firmware's `controls:` flag helps there: such a request arrives from the
   owner's own browser, and the write lands whether or not the reply can be
   read. Python enforces it in `WebServer._add`, so every `POST` route is

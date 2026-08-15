@@ -85,10 +85,19 @@ def _json(payload, status=200, **headers):
 #: what this refuses — note that ``aiohttp``'s ``request.json()`` parses a body
 #: whatever its declared type, so the check has to be explicit.
 #:
+#: It must compare the parsed **media type**, never search the raw header. What
+#: makes a request preflight-free is the *essence* of its content type — the
+#: part before the first ``;`` — so ``text/plain; x=application/json`` is sent
+#: cross-origin with no preflight while still containing this string. A
+#: substring test lets that through, and the bodiless restart routes do not even
+#: need the body to parse afterwards. ``request.content_type`` is already the
+#: essence, lowercased, and is what the comparison below uses.
+#:
 #: ``esphome/components/ct002/dashboard.cpp`` enforces the same header, for the
 #: same reason (see AGENTS.md — the write path has parity). The two must not
 #: diverge: a request one stack accepts and the other refuses means the risk is
-#: real on whichever half forgot.
+#: real on whichever half forgot — which is why that side parses the essence too
+#: rather than calling ``find()`` on the header.
 JSON_CONTENT_TYPE = "application/json"
 
 
@@ -96,7 +105,7 @@ def _requires_json_content_type(handler):
     """Wrap *handler* so a request not declared as JSON is refused."""
 
     async def guarded(request):
-        if JSON_CONTENT_TYPE not in (request.headers.get("Content-Type") or ""):
+        if request.content_type.casefold() != JSON_CONTENT_TYPE:
             return _json(
                 {"error": f"Content-Type must be {JSON_CONTENT_TYPE}"}, status=415
             )

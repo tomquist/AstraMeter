@@ -17,6 +17,20 @@ namespace esphome {
 namespace ct002 {
 namespace controls {
 
+/// Whether a Content-Type header declares JSON, comparing the parsed media
+/// type rather than searching the raw value.
+///
+/// This is what keeps a cross-origin write off the dashboard, so it has to
+/// match how a *browser* reads the header: only the essence — the part before
+/// the first ';', trimmed and case-insensitive — decides whether the request
+/// is sent without a preflight. `text/plain; x=application/json` is plain text
+/// to the browser and travels with no preflight, so a `find()` on the raw
+/// header would wave through exactly the request this exists to stop.
+///
+/// Mirrors `_requires_json_content_type` in `src/astrameter/web_server.py`,
+/// which compares `request.content_type` for the same reason.
+bool is_json_content_type(const std::string &header);
+
 /// One control value as it arrived on the wire, after JSON typing.
 struct ControlValue {
   bool is_bool{false};
