@@ -158,6 +158,19 @@ server for the `host` platform** (`web_server` is declared ESP-only and
   which is why `dashboard_state.cpp` compiles for test-hook builds too).
 - The ESP32 compile matrix — everything HTTP.
 
+That last one is the **only** thing that compiles `dashboard.cpp`, and it runs
+here, so don't leave it to CI after touching that file:
+
+```bash
+cd tests/components/ct002 && esphome compile test.dashboard.esp32-idf.yaml
+```
+
+The first run fetches the toolchain and dies on the TLS-intercepting proxy:
+PlatformIO builds its own venv and overrides `REQUESTS_CA_BUNDLE` with
+`certifi.where()`, so the CA has to go into *that* bundle —
+`cat /root/.ccr/ca-bundle.crt >> /root/.platformio/penv/lib/python3.11/site-packages/certifi/cacert.pem`.
+After that a config compiles in ~2.5 min.
+
 `src/astrameter/static/dashboard.html` and
 `esphome/components/ct002/dashboard_asset.h` (the same page gzipped, for the
 ESP32's flash) are **committed generated artifacts** — neither the Docker build
