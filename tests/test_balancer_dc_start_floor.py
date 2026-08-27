@@ -50,6 +50,28 @@ def _tracker(clock: _FakeClock) -> SaturationTracker:
     )
 
 
+def _balancer(clock: _FakeClock) -> LoadBalancer:
+    return LoadBalancer(
+        config=BalancerConfig(
+            min_efficient_power=100.0,
+            fair_distribution=True,
+            balance_gain=0.2,
+            balance_deadband=25,
+            concentrate_deadband=60.0,
+            grid_predict_trust=0.5,
+            osc_damp_max=0.95,
+            pace_base_step=100,
+            pace_max_step=400,
+        ),
+        saturation_alpha=0.15,
+        saturation_min_target=20,
+        saturation_decay_factor=0.995,
+        saturation_grace_seconds=90,
+        saturation_stall_timeout_seconds=60,
+        clock=clock,
+    )
+
+
 def test_min_actionable_output_only_applies_to_dc_only_batteries() -> None:
     assert min_actionable_output("HMJ-2") == DC_MIN_ACTIONABLE_OUTPUT_W
     assert min_actionable_output("HMA-1") == DC_MIN_ACTIONABLE_OUTPUT_W
@@ -98,6 +120,29 @@ def test_venus_is_unaffected_by_the_dc_floor() -> None:
     assert tracker.get(state) > 0.8
 
 
+def test_a_unit_seen_answering_a_smaller_command_is_judged_from_there() -> None:
+    """The 80 W figure is an assumption; a demonstrated response beats it.
+
+    A B2500 pairs with whatever inverter its owner selected, and some energize
+    below the nominal two-channel floor.  Once such a unit has answered a 30 W
+    command, a missed 50 W one is real evidence again -- otherwise a genuinely
+    empty battery of that kind would keep its share.
+    """
+    clock = _FakeClock()
+    lb = _balancer(clock)
+    state = lb._get_consumer("cccccccccccc")
+    report = {"device_type": "HMJ-2", "phase": "A", "power": 0}
+
+    assert lb._saturation_floor(state, report) == DC_MIN_ACTIONABLE_OUTPUT_W
+    state.pace_responded_at = 30.0
+    assert lb._saturation_floor(state, report) == 30.0
+    # A big command answered says nothing about small ones: stay conservative.
+    state.pace_responded_at = 250.0
+    assert lb._saturation_floor(state, report) == DC_MIN_ACTIONABLE_OUTPUT_W
+    # Batteries with a built-in inverter keep no floor either way.
+    assert lb._saturation_floor(state, {"device_type": "VNSE3-0"}) == 0.0
+
+
 def test_idle_b2500_keeps_its_share_while_under_commanded() -> None:
     """The reporter's case, driven through the balancer.
 
@@ -107,25 +152,7 @@ def test_idle_b2500_keeps_its_share_while_under_commanded() -> None:
     reporter's log its largest command over two minutes was 77 W.
     """
     clock = _FakeClock()
-    lb = LoadBalancer(
-        config=BalancerConfig(
-            min_efficient_power=100.0,
-            fair_distribution=True,
-            balance_gain=0.2,
-            balance_deadband=25,
-            concentrate_deadband=60.0,
-            grid_predict_trust=0.5,
-            osc_damp_max=0.95,
-            pace_base_step=100,
-            pace_max_step=400,
-        ),
-        saturation_alpha=0.15,
-        saturation_min_target=20,
-        saturation_decay_factor=0.995,
-        saturation_grace_seconds=90,
-        saturation_stall_timeout_seconds=60,
-        clock=clock,
-    )
+    lb = _balancer(clock)
     mode = ConsumerMode("auto", None)
     at_limit, stuck = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
     reports = {

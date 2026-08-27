@@ -1487,7 +1487,7 @@ class LoadBalancer:
                 state,
                 last_intent_reading,
                 actual,
-                min_actionable_output(report.get("device_type", "")),
+                self._saturation_floor(state, report),
             )
 
         # --- Manual override ---
@@ -1742,6 +1742,29 @@ class LoadBalancer:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _saturation_floor(self, state: BalancerConsumerState, report: dict) -> float:
+        """Smallest command worth judging *state*'s consumer by (W).
+
+        The nominal :func:`min_actionable_output` is a datasheet-ish assumption:
+        a B2500 pairs with whatever inverter the owner picked in the Marstek
+        app, and some of those energize below the ~80 W two-channel figure.  So
+        prefer *evidence* where there is any -- ``pace_responded_at`` is the
+        smallest command this very unit has been seen to act on (issue #614) --
+        and fall back to the assumption only for a unit that has never yet
+        demonstrated it can do less.
+
+        Getting the floor too high costs a real full/empty battery some
+        detection delay, bounded by the floor itself: it keeps its share only
+        while that share stays under a command it could not have answered
+        anyway.  Getting it too low costs the battery entirely (issue #624), so
+        the asymmetry is deliberate.
+        """
+        nominal = min_actionable_output(report.get("device_type", ""))
+        if nominal <= 0.0:
+            return 0.0
+        observed = state.pace_responded_at
+        return min(nominal, observed) if observed > 0.0 else nominal
 
     def _effective_min_dc_output(self, consumer_id: str | None, reports: dict) -> float:
         """Per-consumer MIN_DC_OUTPUT floor (W); 0 means no floor.

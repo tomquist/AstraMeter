@@ -137,6 +137,7 @@ constexpr float DC_MIN_ACTIONABLE_OUTPUT_W = 80.0f;
 // Mirrors balancer.py min_actionable_output.
 float min_actionable_output(const std::string &device_type);
 
+
 // Absolute net-output target in watts: the single currency of all control
 // logic (mirrors balancer.py NetOutputW). Sign convention, defined once:
 //   +  =  net discharge (export to grid / serve load)
@@ -360,6 +361,11 @@ struct ConsumerReport {
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
+// Smallest command worth judging a consumer by: the demonstrated response
+// floor where this unit has shown one, else the nominal figure for its family.
+// Mirrors balancer.py LoadBalancer._saturation_floor.
+float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report);
+
 
 class SaturationTracker {
  public:

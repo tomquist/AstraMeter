@@ -99,6 +99,17 @@ float min_actionable_output(const std::string &device_type) {
   return needs_dc_output_floor(device_type) ? DC_MIN_ACTIONABLE_OUTPUT_W : 0.0f;
 }
 
+float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report) {
+  // The nominal figure is an assumption -- a B2500 pairs with whatever inverter
+  // its owner selected, and some energize below it -- so prefer the smallest
+  // command this very unit has been seen to act on (issue #614) where there is
+  // one. Mirrors balancer.py LoadBalancer::_saturation_floor.
+  const float nominal = min_actionable_output(report.device_type);
+  if (nominal <= 0.0f) return 0.0f;
+  const float observed = state.pace_responded_at;
+  return observed > 0.0f ? std::min(nominal, observed) : nominal;
+}
+
 void BalancerConfig::clamp() {
   auto clamp_v = [](float &v, float lo, float hi) {
     v = std::max(lo, std::min(hi, v));
@@ -766,7 +777,7 @@ std::array<float, 3> LoadBalancer::compute_target(
         this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
       const float actual = active_reports[*consumer_id].power;
       this->saturation_.update(*state, last_intent_reading, actual,
-                               min_actionable_output(active_reports[*consumer_id].device_type));
+                               saturation_floor(*state, active_reports[*consumer_id]));
     }
   }
 

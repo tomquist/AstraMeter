@@ -29,6 +29,7 @@ using esphome::ct002::BalancerConsumerState;
 using esphome::ct002::DC_MIN_ACTIONABLE_OUTPUT_W;
 using esphome::ct002::min_actionable_output;
 using esphome::ct002::needs_dc_output_floor;
+using esphome::ct002::saturation_floor;
 using esphome::ct002::SaturationTracker;
 using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
@@ -149,6 +150,22 @@ TEST(SaturationTrackerDcFloor, VenusIsUnaffected) {
     now += 1.5;
   }
   EXPECT_GT(tracker.get(state), 0.8);
+}
+
+// The nominal floor is an assumption (the paired inverter decides); a command
+// this unit has been seen to answer beats it. Mirrors the Python test.
+TEST(SaturationTrackerDcFloor, DemonstratedResponseBeatsTheNominalFloor) {
+  BalancerConsumerState state;
+  ConsumerReport report;
+  report.device_type = "HMJ-2";
+  EXPECT_FLOAT_EQ(saturation_floor(state, report), DC_MIN_ACTIONABLE_OUTPUT_W);
+  state.pace_responded_at = 30.0f;
+  EXPECT_FLOAT_EQ(saturation_floor(state, report), 30.0f);
+  // A large command answered says nothing about small ones.
+  state.pace_responded_at = 250.0f;
+  EXPECT_FLOAT_EQ(saturation_floor(state, report), DC_MIN_ACTIONABLE_OUTPUT_W);
+  report.device_type = "VNSE3-0";
+  EXPECT_FLOAT_EQ(saturation_floor(state, report), 0.0f);
 }
 
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {
