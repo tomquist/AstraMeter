@@ -107,8 +107,13 @@ def test_the_floor_prefers_evidence_over_the_nominal_figure() -> None:
     # A large command answered says nothing about small ones: stay conservative.
     state.pace_responded_at = 250.0
     assert saturation_floor(state, B2500, 0.0) == DC_MIN_ACTIONABLE_OUTPUT_W
-    # Batteries with a built-in inverter keep no floor either way.
-    assert saturation_floor(state, {"device_type": "VNSE3-0"}, 150.0) == 0.0
+    # A per-device MIN_DC_OUTPUT override applies to any battery, including a
+    # family with no nominal floor: that unit is being held above its deadband,
+    # and the gate has to follow, or it is judged against a command it is never
+    # sent (flagged by CodeRabbit on #629).
+    assert saturation_floor(state, {"device_type": "VNSE3-0"}, 150.0) == 150.0
+    # With no override, a battery with a built-in inverter keeps no floor.
+    assert saturation_floor(state, {"device_type": "VNSE3-0"}, 0.0) == 0.0
 
 
 def test_compute_target_supplies_each_consumer_its_floor() -> None:

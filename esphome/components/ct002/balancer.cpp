@@ -108,9 +108,13 @@ float saturation_floor(const BalancerConsumerState &state, const ConsumerReport 
   // since pacing records it just while its clamp is active and clears it on
   // reversal — then the model's nominal figure. Mirrors balancer.py
   // saturation_floor; see it for why the asymmetry favours the battery.
+  // The configured floor is checked first because a per-device override
+  // applies to any battery, including one whose family has no nominal floor:
+  // for such a unit the override is the only thing that knows it is held above
+  // its deadband.
+  if (configured_floor > 0.0f) return configured_floor;
   const float nominal = min_actionable_output(report.device_type);
   if (nominal <= 0.0f) return 0.0f;
-  if (configured_floor > 0.0f) return configured_floor;
   const float observed = state.pace_responded_at;
   return observed > 0.0f ? std::min(nominal, observed) : nominal;
 }

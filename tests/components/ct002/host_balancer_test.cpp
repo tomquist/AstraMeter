@@ -145,8 +145,12 @@ TEST(SaturationTrackerDcFloor, FloorPrefersEvidenceOverTheNominalFigure) {
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 30.0f);
   state.pace_responded_at = 250.0f;
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
+  // A per-device MIN_DC_OUTPUT override applies to any battery, including a
+  // family with no nominal floor — that unit is held above its deadband, so
+  // the gate has to follow it.
   report.device_type = "VNSE3-0";
-  EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 0.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 150.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 0.0f);
 }
 
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {

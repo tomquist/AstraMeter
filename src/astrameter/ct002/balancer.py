@@ -336,6 +336,11 @@ def saturation_floor(
       their inverter needs, which beats any figure of ours; it also keeps this
       gate consistent with the floor ``_apply_min_dc_output`` parks them at, and
       with the MIN_DC_OUTPUT/MIN_TARGET_FOR_SATURATION advice in ``main.py``.
+      It is checked *before* the model's own floor because a per-device
+      override applies to any battery, including one whose family has no
+      nominal floor at all — for such a unit the override is the only thing
+      that knows it is being held above its deadband, and discarding it left
+      the gate at ``min_target`` while the command sat at the override.
     * ``pace_responded_at`` — a command this unit was actually seen to answer.
       Opportunistic only: ramp pacing records it just while its clamp is active
       and clears it on every direction reversal, so treat its absence as "no
@@ -347,11 +352,11 @@ def saturation_floor(
     share stays under a command it could not have answered anyway.  Too low
     costs the battery entirely (issue #624), so the asymmetry is deliberate.
     """
+    if configured_floor > 0.0:
+        return configured_floor
     nominal = min_actionable_output(report.get("device_type", ""))
     if nominal <= 0.0:
         return 0.0
-    if configured_floor > 0.0:
-        return configured_floor
     observed = state.pace_responded_at
     return min(nominal, observed) if observed > 0.0 else nominal
 
