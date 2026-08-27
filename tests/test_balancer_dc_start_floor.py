@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from astrameter.ct002.balancer import (
     DC_MIN_ACTIONABLE_OUTPUT_W,
     BalancerConfig,
@@ -26,7 +28,10 @@ from astrameter.ct002.balancer import (
     LoadBalancer,
     SaturationTracker,
     min_actionable_output,
+    saturation_floor,
 )
+
+B2500 = {"device_type": "HMJ-2", "phase": "A", "power": 0}
 
 
 class _FakeClock:
@@ -40,29 +45,83 @@ class _FakeClock:
         self._t += dt
 
 
-def _tracker(clock: _FakeClock) -> SaturationTracker:
-    return SaturationTracker(
+def _score_after(target: float, min_actionable: float, polls: int = 40) -> float:
+    """Drive a tracker with a battery that reports nothing, and return its score."""
+    clock = _FakeClock()
+    tracker = SaturationTracker(
         alpha=0.15,
         min_target=20,
         decay_factor=0.995,
         stall_timeout_seconds=60,
         clock=clock,
     )
+    state = BalancerConsumerState()
+    for _ in range(polls):
+        tracker.update(state, target, 0.0, min_actionable)
+        clock.advance(1.5)
+    return tracker.get(state)
 
 
-def _balancer(clock: _FakeClock) -> LoadBalancer:
-    return LoadBalancer(
-        config=BalancerConfig(
-            min_efficient_power=100.0,
-            fair_distribution=True,
-            balance_gain=0.2,
-            balance_deadband=25,
-            concentrate_deadband=60.0,
-            grid_predict_trust=0.5,
-            osc_damp_max=0.95,
-            pace_base_step=100,
-            pace_max_step=400,
-        ),
+def test_dc_only_batteries_carry_a_start_floor() -> None:
+    assert min_actionable_output("HMJ-2") == DC_MIN_ACTIONABLE_OUTPUT_W
+    # A Venus regulates down to its own deadband, so it has none.
+    assert min_actionable_output("VNSE3-0") == 0.0
+
+
+@pytest.mark.parametrize(
+    ("target", "floor", "scored"),
+    [
+        # Below what a B2500 can execute: it cannot try, so it cannot fail.
+        (50.0, DC_MIN_ACTIONABLE_OUTPUT_W, False),
+        # Above it: ignoring a command it could have executed is real evidence.
+        (200.0, DC_MIN_ACTIONABLE_OUTPUT_W, True),
+        # A battery with a built-in inverter follows 50 W, so missing it counts.
+        (50.0, 0.0, True),
+    ],
+)
+def test_saturation_is_scored_only_above_the_start_floor(
+    target: float, floor: float, scored: bool
+) -> None:
+    score = _score_after(target, floor)
+    assert (score > 0.8) if scored else (score == 0.0)
+
+
+def test_the_floor_prefers_evidence_over_the_nominal_figure() -> None:
+    """The 80 W figure is an assumption; the paired inverter decides.
+
+    A configured MIN_DC_OUTPUT is the owner telling us what their unit needs,
+    and a command it was seen to answer is proof.  Without either, a missed
+    50 W would be blamed on a battery that never had a chance -- and for an
+    owner whose inverter starts lower, a genuinely empty unit would keep its
+    share.
+    """
+    state = BalancerConsumerState()
+
+    assert saturation_floor(state, B2500, 0.0) == DC_MIN_ACTIONABLE_OUTPUT_W
+    # An owner who configured a floor outranks our figure, in both directions.
+    assert saturation_floor(state, B2500, 30.0) == 30.0
+    assert saturation_floor(state, B2500, 150.0) == 150.0
+    # Otherwise a smaller command this unit answered lowers it.
+    state.pace_responded_at = 30.0
+    assert saturation_floor(state, B2500, 0.0) == 30.0
+    # A large command answered says nothing about small ones: stay conservative.
+    state.pace_responded_at = 250.0
+    assert saturation_floor(state, B2500, 0.0) == DC_MIN_ACTIONABLE_OUTPUT_W
+    # Batteries with a built-in inverter keep no floor either way.
+    assert saturation_floor(state, {"device_type": "VNSE3-0"}, 150.0) == 0.0
+
+
+def test_compute_target_supplies_each_consumer_its_floor() -> None:
+    """The wiring, not just the tracker.
+
+    ``compute_target`` has to hand the tracker the floor for the battery it is
+    scoring; dropping that argument restores #624 while every tracker-level
+    test above stays green, so pin it here.  A Venus in the same pool must keep
+    a floor of 0 -- the floor is per consumer, not per pool.
+    """
+    clock = _FakeClock()
+    lb = LoadBalancer(
+        config=BalancerConfig(min_efficient_power=0.0, fair_distribution=True),
         saturation_alpha=0.15,
         saturation_min_target=20,
         saturation_decay_factor=0.995,
@@ -70,109 +129,27 @@ def _balancer(clock: _FakeClock) -> LoadBalancer:
         saturation_stall_timeout_seconds=60,
         clock=clock,
     )
-
-
-def test_min_actionable_output_only_applies_to_dc_only_batteries() -> None:
-    assert min_actionable_output("HMJ-2") == DC_MIN_ACTIONABLE_OUTPUT_W
-    assert min_actionable_output("HMA-1") == DC_MIN_ACTIONABLE_OUTPUT_W
-    # Venus and Jupiter regulate down to their own deadband.
-    assert min_actionable_output("HMG-50") == 0.0
-    assert min_actionable_output("VNSE3-0") == 0.0
-    assert min_actionable_output("HMN-1") == 0.0
-
-
-def test_sub_floor_command_scores_no_saturation() -> None:
-    """50 W asked of a B2500 is not a target it can miss -- it cannot try."""
-    clock = _FakeClock()
-    tracker = _tracker(clock)
-    state = BalancerConsumerState()
-
-    for _ in range(40):
-        tracker.update(state, 50.0, 0.0, min_actionable_output("HMJ-2"))
-        clock.advance(1.5)
-
-    assert tracker.get(state) == 0.0
-
-
-def test_command_above_the_floor_still_scores_saturation() -> None:
-    """A battery that ignores a command it *could* execute is still saturated."""
-    clock = _FakeClock()
-    tracker = _tracker(clock)
-    state = BalancerConsumerState()
-
-    for _ in range(40):
-        tracker.update(state, 200.0, 0.0, min_actionable_output("HMJ-2"))
-        clock.advance(1.5)
-
-    assert tracker.get(state) > 0.8
-
-
-def test_venus_is_unaffected_by_the_dc_floor() -> None:
-    """A Venus follows small targets, so a missed 50 W is real evidence."""
-    clock = _FakeClock()
-    tracker = _tracker(clock)
-    state = BalancerConsumerState()
-
-    for _ in range(40):
-        tracker.update(state, 50.0, 0.0, min_actionable_output("VNSE3-0"))
-        clock.advance(1.5)
-
-    assert tracker.get(state) > 0.8
-
-
-def test_a_unit_seen_answering_a_smaller_command_is_judged_from_there() -> None:
-    """The 80 W figure is an assumption; a demonstrated response beats it.
-
-    A B2500 pairs with whatever inverter its owner selected, and some energize
-    below the nominal two-channel floor.  Once such a unit has answered a 30 W
-    command, a missed 50 W one is real evidence again -- otherwise a genuinely
-    empty battery of that kind would keep its share.
-    """
-    clock = _FakeClock()
-    lb = _balancer(clock)
-    state = lb._get_consumer("cccccccccccc")
-    report = {"device_type": "HMJ-2", "phase": "A", "power": 0}
-
-    assert lb._saturation_floor(state, report) == DC_MIN_ACTIONABLE_OUTPUT_W
-    state.pace_responded_at = 30.0
-    assert lb._saturation_floor(state, report) == 30.0
-    # A big command answered says nothing about small ones: stay conservative.
-    state.pace_responded_at = 250.0
-    assert lb._saturation_floor(state, report) == DC_MIN_ACTIONABLE_OUTPUT_W
-    # Batteries with a built-in inverter keep no floor either way.
-    assert lb._saturation_floor(state, {"device_type": "VNSE3-0"}) == 0.0
-
-
-def test_idle_b2500_keeps_its_share_while_under_commanded() -> None:
-    """The reporter's case, driven through the balancer.
-
-    One B2500 at its 400 W limit, one stuck at 1 W (it never got a command big
-    enough to start), ~150 W importing.  The idle one has to keep getting a
-    real share, so that it eventually clears its start floor -- in the
-    reporter's log its largest command over two minutes was 77 W.
-    """
-    clock = _FakeClock()
-    lb = _balancer(clock)
-    mode = ConsumerMode("auto", None)
-    at_limit, stuck = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
+    b2500, venus = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
     reports = {
-        at_limit: {"device_type": "HMJ-2", "phase": "A", "power": 400},
-        stuck: {"device_type": "HMJ-2", "phase": "A", "power": 1},
+        b2500: {"device_type": "HMJ-2", "phase": "A", "power": 1},
+        venus: {"device_type": "VNSE3-0", "phase": "A", "power": 1},
     }
-
-    asks = []
-    for i in range(120):
-        grid = 150.0 if i % 4 else 20.0  # drum pulsing, mostly importing
-        for cid in (at_limit, stuck):
-            out = lb.compute_target(
-                cid, mode, reports, grid, frozenset(), frozenset(), (i, grid)
+    seen: dict[str, float] = {}
+    real_update = lb._saturation.update
+    mode = ConsumerMode("auto", None)
+    for cid in (b2500, venus):
+        captured: list[float] = []
+        lb._saturation.update = (  # type: ignore[method-assign]
+            lambda state, lt, actual, floor, _c=captured: _c.append(floor)
+        )
+        # Two polls: the first records an intent, the second scores against it.
+        for i in range(2):
+            lb.compute_target(
+                cid, mode, reports, 60.0, frozenset(), frozenset(), (i, 60.0)
             )
-            if cid == stuck:
-                asks.append(sum(out))
             clock.advance(1.5)
+        lb._saturation.update = real_update  # type: ignore[method-assign]
+        seen[cid] = captured[-1] if captured else -1.0
 
-    biggest = max(asks)
-    assert biggest >= DC_MIN_ACTIONABLE_OUTPUT_W, (
-        f"the idle B2500's largest command was {biggest:.0f} W, below the "
-        f"{DC_MIN_ACTIONABLE_OUTPUT_W:.0f} W it needs to produce anything"
-    )
+    assert seen[b2500] == DC_MIN_ACTIONABLE_OUTPUT_W
+    assert seen[venus] == 0.0

@@ -118,6 +118,9 @@ struct DeviceCapabilities {
   bool has_builtin_inverter{false};
   bool has_ac_input{false};
   bool has_dc_input{false};
+  // Smallest net output the model can be commanded to produce, 0 when it
+  // follows a target down to its own deadband. Mirrors the Python field.
+  float min_actionable_output_w{0.0f};
 };
 
 DeviceCapabilities device_capabilities(const std::string &device_type);
@@ -361,10 +364,11 @@ struct ConsumerReport {
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
-// Smallest command worth judging a consumer by: the demonstrated response
-// floor where this unit has shown one, else the nominal figure for its family.
-// Mirrors balancer.py LoadBalancer._saturation_floor.
-float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report);
+// Smallest command worth judging a consumer by: the configured MIN_DC_OUTPUT
+// for this battery if its owner set one, else a command it was seen to answer,
+// else the model's nominal floor. Mirrors balancer.py saturation_floor.
+float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report,
+                       float configured_floor);
 
 
 class SaturationTracker {
@@ -378,7 +382,7 @@ class SaturationTracker {
   // by, exactly like a below-min_target one, because a device that ignores such
   // a command by construction is not evidence of saturation (issue #624).
   void update(BalancerConsumerState &state, std::optional<float> last_target,
-              float actual, float min_actionable = 0.0f);
+              float actual, float min_actionable);
   double get(const BalancerConsumerState &state) const { return state.saturation_score; }
   void set_grace(BalancerConsumerState &state, double deadline);
   void clear(BalancerConsumerState &state);

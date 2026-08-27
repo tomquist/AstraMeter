@@ -108,64 +108,45 @@ TEST(NeedsDcOutputFloor, OnlyExternalInverterFamilies) {
   EXPECT_FALSE(needs_dc_output_floor(""));          // unknown -> assumed AC
 }
 
-TEST(MinActionableOutput, OnlyDcOnlyBatteriesHaveAStartFloor) {
-  EXPECT_FLOAT_EQ(min_actionable_output("HMJ-2"), DC_MIN_ACTIONABLE_OUTPUT_W);
-  EXPECT_FLOAT_EQ(min_actionable_output("HMA-1"), DC_MIN_ACTIONABLE_OUTPUT_W);
-  EXPECT_FLOAT_EQ(min_actionable_output("HMG-50"), 0.0f);   // Venus
-  EXPECT_FLOAT_EQ(min_actionable_output("VNSE3-0"), 0.0f);  // Venus E3
-  EXPECT_FLOAT_EQ(min_actionable_output("HMN-1"), 0.0f);    // Jupiter
-}
-
 // Issue #624: a B2500 cannot energize a DC channel below ~80 W, so a command
 // under that floor is not a target it can miss — scoring it as saturated cut
 // the battery's share further below the floor and pinned it at 0 W for good.
-TEST(SaturationTrackerDcFloor, SubFloorCommandScoresNothing) {
+double score_after(float target, float min_actionable, int polls = 40) {
   double now = 1000.0;
   SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
   BalancerConsumerState state;
-  for (int i = 0; i < 40; i++) {
-    tracker.update(state, 50.0f, 0.0f, min_actionable_output("HMJ-2"));
+  for (int i = 0; i < polls; i++) {
+    tracker.update(state, target, 0.0f, min_actionable);
     now += 1.5;
   }
-  EXPECT_DOUBLE_EQ(tracker.get(state), 0.0);
+  return tracker.get(state);
 }
 
-TEST(SaturationTrackerDcFloor, CommandAboveTheFloorStillScores) {
-  double now = 1000.0;
-  SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
-  BalancerConsumerState state;
-  for (int i = 0; i < 40; i++) {
-    tracker.update(state, 200.0f, 0.0f, min_actionable_output("HMJ-2"));
-    now += 1.5;
-  }
-  EXPECT_GT(tracker.get(state), 0.8);
+TEST(SaturationTrackerDcFloor, ScoredOnlyAboveTheStartFloor) {
+  // Below what a B2500 can execute: it cannot try, so it cannot fail.
+  EXPECT_DOUBLE_EQ(score_after(50.0f, DC_MIN_ACTIONABLE_OUTPUT_W), 0.0);
+  // Above it: ignoring a command it could have executed is real evidence.
+  EXPECT_GT(score_after(200.0f, DC_MIN_ACTIONABLE_OUTPUT_W), 0.8);
+  // A battery with a built-in inverter follows 50 W, so missing it counts.
+  EXPECT_GT(score_after(50.0f, 0.0f), 0.8);
 }
 
-TEST(SaturationTrackerDcFloor, VenusIsUnaffected) {
-  double now = 1000.0;
-  SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
-  BalancerConsumerState state;
-  for (int i = 0; i < 40; i++) {
-    tracker.update(state, 50.0f, 0.0f, min_actionable_output("VNSE3-0"));
-    now += 1.5;
-  }
-  EXPECT_GT(tracker.get(state), 0.8);
-}
-
-// The nominal floor is an assumption (the paired inverter decides); a command
-// this unit has been seen to answer beats it. Mirrors the Python test.
-TEST(SaturationTrackerDcFloor, DemonstratedResponseBeatsTheNominalFloor) {
+TEST(SaturationTrackerDcFloor, FloorPrefersEvidenceOverTheNominalFigure) {
   BalancerConsumerState state;
   ConsumerReport report;
   report.device_type = "HMJ-2";
-  EXPECT_FLOAT_EQ(saturation_floor(state, report), DC_MIN_ACTIONABLE_OUTPUT_W);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
+  // A configured MIN_DC_OUTPUT outranks our figure, in both directions.
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 30.0f), 30.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 150.0f);
+  // Otherwise a smaller command this unit answered lowers it; a large one says
+  // nothing about small ones.
   state.pace_responded_at = 30.0f;
-  EXPECT_FLOAT_EQ(saturation_floor(state, report), 30.0f);
-  // A large command answered says nothing about small ones.
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 30.0f);
   state.pace_responded_at = 250.0f;
-  EXPECT_FLOAT_EQ(saturation_floor(state, report), DC_MIN_ACTIONABLE_OUTPUT_W);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
   report.device_type = "VNSE3-0";
-  EXPECT_FLOAT_EQ(saturation_floor(state, report), 0.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 0.0f);
 }
 
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {

@@ -79,9 +79,10 @@ DeviceCapabilities device_capabilities(const std::string &device_type) {
   // Jupiter: DC battery with a built-in inverter.
   if (starts_with(dt, "HMN") || starts_with(dt, "HMM") || starts_with(dt, "JPLS"))
     return {true, false, true};
-  // B2500 family: DC input feeding a SEPARATE inverter (no built-in inverter).
+  // B2500 family: DC input feeding a SEPARATE inverter (no built-in inverter),
+  // and the only family that cannot answer an arbitrarily small command.
   if (starts_with(dt, "HMA") || starts_with(dt, "HMJ") || starts_with(dt, "HMK"))
-    return {false, false, true};
+    return {false, false, true, DC_MIN_ACTIONABLE_OUTPUT_W};
   // Unknown / future / empty: assume a modern AC-coupled battery.
   return {true, true, false};
 }
@@ -96,16 +97,20 @@ bool needs_dc_output_floor(const std::string &device_type) {
 }
 
 float min_actionable_output(const std::string &device_type) {
-  return needs_dc_output_floor(device_type) ? DC_MIN_ACTIONABLE_OUTPUT_W : 0.0f;
+  return device_capabilities(device_type).min_actionable_output_w;
 }
 
-float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report) {
-  // The nominal figure is an assumption -- a B2500 pairs with whatever inverter
-  // its owner selected, and some energize below it -- so prefer the smallest
-  // command this very unit has been seen to act on (issue #614) where there is
-  // one. Mirrors balancer.py LoadBalancer::_saturation_floor.
+float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report,
+                       float configured_floor) {
+  // Three sources, most authoritative first: what the owner configured (they
+  // are stating what their inverter needs, and it is the floor we park them
+  // at), then a command this unit was seen to answer — opportunistic only,
+  // since pacing records it just while its clamp is active and clears it on
+  // reversal — then the model's nominal figure. Mirrors balancer.py
+  // saturation_floor; see it for why the asymmetry favours the battery.
   const float nominal = min_actionable_output(report.device_type);
   if (nominal <= 0.0f) return 0.0f;
+  if (configured_floor > 0.0f) return configured_floor;
   const float observed = state.pace_responded_at;
   return observed > 0.0f ? std::min(nominal, observed) : nominal;
 }
@@ -775,9 +780,14 @@ std::array<float, 3> LoadBalancer::compute_target(
     const auto probe_set = this->probe_participants_();
     if (probe_set.find(*consumer_id) == probe_set.end() &&
         this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
-      const float actual = active_reports[*consumer_id].power;
-      this->saturation_.update(*state, last_intent_reading, actual,
-                               saturation_floor(*state, active_reports[*consumer_id]));
+      const ConsumerReport &report = active_reports[*consumer_id];
+      // The floor is compared against the *unpaced* intent, like the rest of
+      // this call (issue #522): a battery the pacing clamp is holding below its
+      // floor must still register as pushed, or a full/empty one would never be
+      // detected while clamped. #614's stall escape bounds that window.
+      this->saturation_.update(
+          *state, last_intent_reading, report.power,
+          saturation_floor(*state, report, this->effective_min_dc_output_(*consumer_id, active_reports)));
     }
   }
 

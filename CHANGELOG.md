@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** a B2500 that stayed at 0 W for good while the house imported and the other batteries were already at their limit: once it had been handed a share too small for it to switch on, it was written off as unable to deliver, which made every later share smaller still ([#624](https://github.com/tomquist/astrameter/issues/624)).
+- **Fixed** a B2500 written off as unable to deliver after being handed a share too small to switch it on, which made every later share smaller still — leaving it at 0 W indefinitely while the house imported ([#624](https://github.com/tomquist/astrameter/issues/624)).
 
 - **Fixed** B2500 batteries sitting at 0 W under active control while the whole house load was imported: the command they were sent could never exceed what the battery needs to start, and a battery that never starts was never sent more ([#600](https://github.com/tomquist/astrameter/issues/600), [#614](https://github.com/tomquist/astrameter/pull/614)).
 

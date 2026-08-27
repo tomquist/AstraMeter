@@ -939,7 +939,9 @@ class TestEfficiencySaturationSwap:
         )
         device._balancer._get_consumer("a").saturation_score = 0.5
         # target (10) < min_target_for_saturation (20) → decay branch
-        device._balancer._saturation.update(device._balancer._get_consumer("a"), 10, 10)
+        device._balancer._saturation.update(
+            device._balancer._get_consumer("a"), 10, 10, 0.0
+        )
         expected = 0.5 * 0.9
         assert abs(device._balancer._consumers["a"].saturation_score - expected) < 1e-6
 
@@ -952,7 +954,9 @@ class TestEfficiencySaturationSwap:
             min_target_for_saturation=20,
         )
         device._balancer._get_consumer("a").saturation_score = 0.001
-        device._balancer._saturation.update(device._balancer._get_consumer("a"), 10, 10)
+        device._balancer._saturation.update(
+            device._balancer._get_consumer("a"), 10, 10, 0.0
+        )
         # 0.001 * 0.5 = 0.0005 < 0.001 → entry should be removed
         assert device._balancer._get_consumer("a").saturation_score == 0.0
 
@@ -1156,7 +1160,7 @@ class TestEfficiencySaturationSwap:
         device._balancer._get_consumer(first_depr).last_target = 200
         for _ in range(10):
             device._balancer._saturation.update(
-                device._balancer._get_consumer(first_depr), 200, 0
+                device._balancer._get_consumer(first_depr), 200, 0, 0.0
             )
             device._balancer._cache_sample = None
             device._compute_smooth_target([200, 0, 0], "a")
