@@ -25,7 +25,12 @@ using esphome::ct002::CONTROL_QUALITY_WARMUP_SECONDS;
 using esphome::ct002::ControlQualityTracker;
 using esphome::ct002::is_ac_chargeable;
 using esphome::ct002::LoadBalancer;
+using esphome::ct002::BalancerConsumerState;
+using esphome::ct002::DC_MIN_ACTIONABLE_OUTPUT_W;
+using esphome::ct002::min_actionable_output;
 using esphome::ct002::needs_dc_output_floor;
+using esphome::ct002::saturation_floor;
+using esphome::ct002::SaturationTracker;
 using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
 using esphome::ct002::to_grid_reading;
@@ -101,6 +106,51 @@ TEST(NeedsDcOutputFloor, OnlyExternalInverterFamilies) {
   EXPECT_FALSE(needs_dc_output_floor("VNSD"));      // Venus D (built-in + DC)
   EXPECT_FALSE(needs_dc_output_floor("HMN-1"));     // Jupiter
   EXPECT_FALSE(needs_dc_output_floor(""));          // unknown -> assumed AC
+}
+
+// Issue #624: a B2500 cannot energize a DC channel below ~80 W, so a command
+// under that floor is not a target it can miss — scoring it as saturated cut
+// the battery's share further below the floor and pinned it at 0 W for good.
+double score_after(float target, float min_actionable, int polls = 40) {
+  double now = 1000.0;
+  SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
+  BalancerConsumerState state;
+  for (int i = 0; i < polls; i++) {
+    tracker.update(state, target, 0.0f, min_actionable);
+    now += 1.5;
+  }
+  return tracker.get(state);
+}
+
+TEST(SaturationTrackerDcFloor, ScoredOnlyAboveTheStartFloor) {
+  // Below what a B2500 can execute: it cannot try, so it cannot fail.
+  EXPECT_DOUBLE_EQ(score_after(50.0f, DC_MIN_ACTIONABLE_OUTPUT_W), 0.0);
+  // Above it: ignoring a command it could have executed is real evidence.
+  EXPECT_GT(score_after(200.0f, DC_MIN_ACTIONABLE_OUTPUT_W), 0.8);
+  // A battery with a built-in inverter follows 50 W, so missing it counts.
+  EXPECT_GT(score_after(50.0f, 0.0f), 0.8);
+}
+
+TEST(SaturationTrackerDcFloor, FloorPrefersEvidenceOverTheNominalFigure) {
+  BalancerConsumerState state;
+  ConsumerReport report;
+  report.device_type = "HMJ-2";
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
+  // A configured MIN_DC_OUTPUT outranks our figure, in both directions.
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 30.0f), 30.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 150.0f);
+  // Otherwise a smaller command this unit answered lowers it; a large one says
+  // nothing about small ones.
+  state.pace_responded_at = 30.0f;
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 30.0f);
+  state.pace_responded_at = 250.0f;
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
+  // A per-device MIN_DC_OUTPUT override applies to any battery, including a
+  // family with no nominal floor — that unit is held above its deadband, so
+  // the gate has to follow it.
+  report.device_type = "VNSE3-0";
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 150.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 0.0f);
 }
 
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {

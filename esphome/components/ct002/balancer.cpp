@@ -79,9 +79,10 @@ DeviceCapabilities device_capabilities(const std::string &device_type) {
   // Jupiter: DC battery with a built-in inverter.
   if (starts_with(dt, "HMN") || starts_with(dt, "HMM") || starts_with(dt, "JPLS"))
     return {true, false, true};
-  // B2500 family: DC input feeding a SEPARATE inverter (no built-in inverter).
+  // B2500 family: DC input feeding a SEPARATE inverter (no built-in inverter),
+  // and the only family that cannot answer an arbitrarily small command.
   if (starts_with(dt, "HMA") || starts_with(dt, "HMJ") || starts_with(dt, "HMK"))
-    return {false, false, true};
+    return {false, false, true, DC_MIN_ACTIONABLE_OUTPUT_W};
   // Unknown / future / empty: assume a modern AC-coupled battery.
   return {true, true, false};
 }
@@ -93,6 +94,29 @@ bool is_ac_chargeable(const std::string &device_type) {
 bool needs_dc_output_floor(const std::string &device_type) {
   const DeviceCapabilities caps = device_capabilities(device_type);
   return !caps.has_ac_input && !caps.has_builtin_inverter;
+}
+
+float min_actionable_output(const std::string &device_type) {
+  return device_capabilities(device_type).min_actionable_output_w;
+}
+
+float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report,
+                       float configured_floor) {
+  // Three sources, most authoritative first: what the owner configured (they
+  // are stating what their inverter needs, and it is the floor we park them
+  // at), then a command this unit was seen to answer — opportunistic only,
+  // since pacing records it just while its clamp is active and clears it on
+  // reversal — then the model's nominal figure. Mirrors balancer.py
+  // saturation_floor; see it for why the asymmetry favours the battery.
+  // The configured floor is checked first because a per-device override
+  // applies to any battery, including one whose family has no nominal floor:
+  // for such a unit the override is the only thing that knows it is held above
+  // its deadband.
+  if (configured_floor > 0.0f) return configured_floor;
+  const float nominal = min_actionable_output(report.device_type);
+  if (nominal <= 0.0f) return 0.0f;
+  const float observed = state.pace_responded_at;
+  return observed > 0.0f ? std::min(nominal, observed) : nominal;
 }
 
 void BalancerConfig::clamp() {
@@ -140,10 +164,12 @@ SaturationTracker::SaturationTracker(double alpha, float min_target, double deca
       stall_timeout_seconds_(std::max(0.0f, stall_timeout_seconds)) {}
 
 void SaturationTracker::update(BalancerConsumerState &state,
-                               std::optional<float> last_target, float actual) {
+                               std::optional<float> last_target, float actual,
+                               float min_actionable) {
   if (!this->enabled_ || !last_target.has_value()) return;
   const double now = this->clock_();
   const double target_abs = std::fabs(*last_target);
+  const float min_target = std::max(this->min_target_, min_actionable);
 
   if (state.saturation_grace_until > 0.0) {
     if (now < state.saturation_grace_until) {
@@ -151,7 +177,7 @@ void SaturationTracker::update(BalancerConsumerState &state,
         state.saturation_grace_until = 0.0;
         state.saturation_grace_started_at = 0.0;
         state.last_saturation_update = 0.0;
-      } else if (target_abs >= this->min_target_ &&
+      } else if (target_abs >= min_target &&
                  state.saturation_grace_started_at > 0.0 &&
                  (now - state.saturation_grace_started_at) >= this->stall_timeout_seconds_) {
         state.saturation_score = 1.0;
@@ -182,7 +208,7 @@ void SaturationTracker::update(BalancerConsumerState &state,
   if (dt > SATURATION_LONG_GAP_SECONDS) return;
 
   const double ratio = dt / SATURATION_REFERENCE_DT;
-  if (target_abs < this->min_target_ || sign_reversing) {
+  if (target_abs < min_target || sign_reversing) {
     const double prev = state.saturation_score;
     if (prev > 0.0) {
       const double decayed = prev * std::pow(this->decay_factor_, ratio);
@@ -758,8 +784,14 @@ std::array<float, 3> LoadBalancer::compute_target(
     const auto probe_set = this->probe_participants_();
     if (probe_set.find(*consumer_id) == probe_set.end() &&
         this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
-      const float actual = active_reports[*consumer_id].power;
-      this->saturation_.update(*state, last_intent_reading, actual);
+      const ConsumerReport &report = active_reports[*consumer_id];
+      // The floor is compared against the *unpaced* intent, like the rest of
+      // this call (issue #522): a battery the pacing clamp is holding below its
+      // floor must still register as pushed, or a full/empty one would never be
+      // detected while clamped. #614's stall escape bounds that window.
+      this->saturation_.update(
+          *state, last_intent_reading, report.power,
+          saturation_floor(*state, report, this->effective_min_dc_output_(*consumer_id, active_reports)));
     }
   }
 

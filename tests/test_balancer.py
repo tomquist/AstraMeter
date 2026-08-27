@@ -110,25 +110,25 @@ class TestSaturationTracker:
     def test_update_noop_when_disabled(self):
         tracker = self._make_tracker(enabled=False)
         state = BalancerConsumerState()
-        tracker.update(state, 200, 0)
+        tracker.update(state, 200, 0, 0.0)
         assert state.saturation_score == 0.0
 
     def test_update_noop_when_last_target_none(self):
         tracker = self._make_tracker()
         state = BalancerConsumerState()
-        tracker.update(state, None, 0)
+        tracker.update(state, None, 0, 0.0)
         assert state.saturation_score == 0.0
 
     def test_update_saturated_when_actual_below_min_target(self):
         tracker = self._make_tracker(alpha=1.0, min_target=20)
         state = BalancerConsumerState()
-        tracker.update(state, 200, 5)  # actual=5 < min_target=20
+        tracker.update(state, 200, 5, 0.0)  # actual=5 < min_target=20
         assert state.saturation_score == 1.0
 
     def test_update_not_saturated_when_actual_at_min_target(self):
         tracker = self._make_tracker(alpha=1.0, min_target=20)
         state = BalancerConsumerState()
-        tracker.update(state, 200, 20)  # actual=20 >= min_target=20
+        tracker.update(state, 200, 20, 0.0)  # actual=20 >= min_target=20
         assert state.saturation_score == 0.0
 
     def test_update_ema_smoothing(self):
@@ -137,30 +137,30 @@ class TestSaturationTracker:
         # First update: saturated.  The first sample is treated as one
         # reference period (``prev_t = now - SATURATION_REFERENCE_DT``),
         # so the per-sample EMA formula applies directly.
-        tracker.update(state, 200, 0)
+        tracker.update(state, 200, 0, 0.0)
         assert state.saturation_score == 0.5  # 0.5*1.0 + 0.5*0.0
         # Second update one reference period later: still saturated.
         clock.advance(1.0)
-        tracker.update(state, 200, 0)
+        tracker.update(state, 200, 0, 0.0)
         assert state.saturation_score == 0.75  # 0.5*1.0 + 0.5*0.5
 
     def test_update_decays_when_target_below_min(self):
         tracker = self._make_tracker(decay_factor=0.9, min_target=20)
         state = BalancerConsumerState(saturation_score=0.5)
-        tracker.update(state, 10, 10)  # target_abs=10 < min_target=20
+        tracker.update(state, 10, 10, 0.0)  # target_abs=10 < min_target=20
         assert abs(state.saturation_score - 0.45) < 1e-6  # 0.5 * 0.9
 
     def test_update_decay_floor(self):
         tracker = self._make_tracker(decay_factor=0.5, min_target=20)
         state = BalancerConsumerState(saturation_score=0.001)
-        tracker.update(state, 10, 10)
+        tracker.update(state, 10, 10, 0.0)
         # 0.001 * 0.5 = 0.0005 < 0.001 → floored to 0.0
         assert state.saturation_score == 0.0
 
     def test_grace_period_skips_update(self):
         tracker = self._make_tracker(alpha=1.0, min_target=20)
         state = BalancerConsumerState(saturation_grace_until=time.time() + 100)
-        tracker.update(state, 200, 0)  # actual=0, would saturate
+        tracker.update(state, 200, 0, 0.0)  # actual=0, would saturate
         assert state.saturation_score == 0.0  # skipped due to grace
 
     def test_grace_clears_early_on_meaningful_output(self):
@@ -170,7 +170,7 @@ class TestSaturationTracker:
             saturation_grace_until=now + 100,
             saturation_grace_started_at=now,
         )
-        tracker.update(state, 200, 50)  # actual=50 >= min_target=20
+        tracker.update(state, 200, 50, 0.0)  # actual=50 >= min_target=20
         assert state.saturation_grace_until == 0.0  # grace cleared early
         assert state.saturation_grace_started_at == 0.0
         assert state.saturation_score == 0.0  # not saturated
@@ -181,7 +181,7 @@ class TestSaturationTracker:
             saturation_grace_until=time.time() - 1,
             saturation_grace_started_at=time.time() - 5,
         )
-        tracker.update(state, 200, 0)
+        tracker.update(state, 200, 0, 0.0)
         assert state.saturation_grace_until == 0.0
         assert state.saturation_grace_started_at == 0.0
         assert state.saturation_score == 1.0  # grace expired, saturated
@@ -195,7 +195,7 @@ class TestSaturationTracker:
             saturation_grace_until=now + 100,
             saturation_grace_started_at=now - 5,
         )
-        tracker.update(state, 200, 0)
+        tracker.update(state, 200, 0, 0.0)
         assert state.saturation_score == 1.0
         assert state.saturation_grace_until == 0.0
         assert state.saturation_grace_started_at == 0.0
@@ -232,12 +232,12 @@ class TestSaturationTracker:
 
         # Battery discharging at 100W, tracking well
         for _ in range(5):
-            tracker.update(state, last_target=100.0, actual=95.0)
+            tracker.update(state, last_target=100.0, actual=95.0, min_actionable=0.0)
         assert state.saturation_score < 0.01
 
         # Target flips to charge (-100W), but actual is still +80W (ramping)
         for _ in range(20):
-            tracker.update(state, last_target=-100.0, actual=80.0)
+            tracker.update(state, last_target=-100.0, actual=80.0, min_actionable=0.0)
         # Score must NOT have accumulated — should have stayed near zero
         assert state.saturation_score < 0.01, (
             f"Saturation score {state.saturation_score:.3f} should not "
@@ -251,7 +251,7 @@ class TestSaturationTracker:
 
         # Target positive, actual negative (battery reversing)
         for _ in range(10):
-            tracker.update(state, last_target=100.0, actual=-50.0)
+            tracker.update(state, last_target=100.0, actual=-50.0, min_actionable=0.0)
         assert state.saturation_score < 0.5, (
             f"Score should decay during sign reversal, got {state.saturation_score:.3f}"
         )
@@ -267,7 +267,7 @@ class TestSaturationTracker:
         # update so the time-weighted EMA applies one full per-sample
         # step each iteration.
         for _ in range(20):
-            tracker.update(state, last_target=100.0, actual=5.0)
+            tracker.update(state, last_target=100.0, actual=5.0, min_actionable=0.0)
             clock.advance(1.0)
         assert state.saturation_score > 0.4, (
             f"Saturation score {state.saturation_score:.3f} should accumulate "
@@ -282,7 +282,7 @@ class TestSaturationTracker:
 
         # Target is -100W (charge) but actual is exactly 0
         for _ in range(20):
-            tracker.update(state, last_target=-100.0, actual=0.0)
+            tracker.update(state, last_target=-100.0, actual=0.0, min_actionable=0.0)
             clock.advance(1.0)
         assert state.saturation_score > 0.4, (
             f"Saturation score {state.saturation_score:.3f} should accumulate "
@@ -297,7 +297,7 @@ class TestSaturationTracker:
         # Target is 0, actual is positive — target_abs < min_target so
         # the low-target decay path handles this, not the sign guard.
         for _ in range(10):
-            tracker.update(state, last_target=0.0, actual=50.0)
+            tracker.update(state, last_target=0.0, actual=50.0, min_actionable=0.0)
         # Score should have decayed via the low-target path
         assert state.saturation_score < 0.5
 
@@ -309,14 +309,14 @@ class TestSaturationTracker:
 
         # Phase 1: sign reversal — target negative, actual positive
         for _ in range(10):
-            tracker.update(state, last_target=-100.0, actual=50.0)
+            tracker.update(state, last_target=-100.0, actual=50.0, min_actionable=0.0)
             clock.advance(1.0)
         score_after_reversal = state.saturation_score
         assert score_after_reversal < 0.01
 
         # Phase 2: actual crosses zero but is small (same sign, low output)
         for _ in range(20):
-            tracker.update(state, last_target=-100.0, actual=-5.0)
+            tracker.update(state, last_target=-100.0, actual=-5.0, min_actionable=0.0)
             clock.advance(1.0)
         assert state.saturation_score > 0.4, (
             f"Saturation score {state.saturation_score:.3f} should accumulate "
@@ -352,7 +352,7 @@ class TestSaturationTracker:
             elapsed = 0.0
             while elapsed < window_seconds - 1e-9:
                 clock.advance(dt)
-                tracker.update(state, last_target=100.0, actual=5.0)
+                tracker.update(state, last_target=100.0, actual=5.0, min_actionable=0.0)
                 elapsed += dt
             return state.saturation_score
 
@@ -385,7 +385,7 @@ class TestSaturationTracker:
             elapsed = 0.0
             while elapsed < window_seconds - 1e-9:
                 clock.advance(dt)
-                tracker.update(state, last_target=5.0, actual=5.0)
+                tracker.update(state, last_target=5.0, actual=5.0, min_actionable=0.0)
                 elapsed += dt
             return state.saturation_score
 
@@ -410,7 +410,7 @@ class TestSaturationTracker:
         # the long-gap threshold, then reporting again.
         state.last_saturation_update = clock()
         clock.advance(SATURATION_LONG_GAP_SECONDS + 10.0)
-        tracker.update(state, last_target=100.0, actual=5.0)
+        tracker.update(state, last_target=100.0, actual=5.0, min_actionable=0.0)
         # The score must not have moved by a huge amount — the gap
         # should have been dropped and the update re-seeded.
         assert state.saturation_score == 0.5

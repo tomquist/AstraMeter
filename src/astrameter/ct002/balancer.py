@@ -209,6 +209,20 @@ SATURATION_GRACE_SECONDS = 90
 # ramping up. In that case we bypass the remaining grace window and mark it
 # saturated immediately so the balancer can rotate to a healthy unit.
 SATURATION_STALL_TIMEOUT_SECONDS = 60.0
+# Smallest net output a DC-only battery (B2500 family) can produce: each of its
+# two DC channels is a hard on/off below roughly 40 W, so the unit as a whole
+# cannot answer a command under ~80 W at all.  Scoring saturation against such a
+# command is self-reinforcing — "asked for 50 W, delivered 0 W" says nothing
+# about whether the battery *could* deliver, and a saturated battery's share is
+# then cut further below the floor (issue #624).
+#
+# A nominal figure, not a guarantee: the paired inverter decides, and it is only
+# the fallback where neither the user's MIN_DC_OUTPUT nor observed evidence says
+# otherwise (see saturation_floor).  The simulator models the same physics from
+# the per-channel side (b2500_steering.MIN_CHANNEL_OUTPUT_W); keep them in step,
+# but deliberately not shared — the plant must be able to disagree with the
+# controller for the steering evaluation to mean anything.
+DC_MIN_ACTIONABLE_OUTPUT_W = 80.0
 # Reference poll interval (seconds) at which the configured ``SATURATION_ALPHA``
 # and ``SATURATION_DECAY_FACTOR`` apply one full step.  The EMA is time-
 # weighted against this reference so that batteries polling at different
@@ -239,11 +253,17 @@ class DeviceCapabilities:
       never depends on a separate inverter that could sleep at low DC output.
     - ``has_ac_input``: the battery can be charged from AC (Venus lineup).
     - ``has_dc_input``: the battery has a DC (solar) input.
+    - ``min_actionable_output_w``: the smallest net output the model can be
+      commanded to produce, 0 when it follows a target down to its own
+      deadband.  A B2500's two DC channels are a hard on/off below ~40 W each,
+      so it cannot answer a command under ~80 W at all — see
+      :func:`min_actionable_output`.
     """
 
     has_builtin_inverter: bool
     has_ac_input: bool
     has_dc_input: bool
+    min_actionable_output_w: float = 0.0
 
 
 def device_capabilities(device_type: str) -> DeviceCapabilities:
@@ -272,7 +292,7 @@ def device_capabilities(device_type: str) -> DeviceCapabilities:
     if dt.startswith(("HMN", "HMM", "JPLS")):
         return DeviceCapabilities(True, False, True)
     if dt.startswith(("HMA", "HMJ", "HMK")):
-        return DeviceCapabilities(False, False, True)
+        return DeviceCapabilities(False, False, True, DC_MIN_ACTIONABLE_OUTPUT_W)
     return DeviceCapabilities(True, True, False)
 
 
@@ -297,6 +317,48 @@ def _needs_dc_output_floor(device_type: str) -> bool:
     """
     caps = device_capabilities(device_type)
     return not caps.has_ac_input and not caps.has_builtin_inverter
+
+
+def min_actionable_output(device_type: str) -> float:
+    """The nominal start floor for *device_type* (see its capabilities)."""
+    return device_capabilities(device_type).min_actionable_output_w
+
+
+def saturation_floor(
+    state: BalancerConsumerState, report: dict, configured_floor: float
+) -> float:
+    """Smallest command worth judging this consumer by (W).
+
+    Three sources, most authoritative first:
+
+    * *configured_floor* — the effective MIN_DC_OUTPUT for this battery
+      (global or per-device override).  An owner who set it is stating what
+      their inverter needs, which beats any figure of ours; it also keeps this
+      gate consistent with the floor ``_apply_min_dc_output`` parks them at, and
+      with the MIN_DC_OUTPUT/MIN_TARGET_FOR_SATURATION advice in ``main.py``.
+      It is checked *before* the model's own floor because a per-device
+      override applies to any battery, including one whose family has no
+      nominal floor at all — for such a unit the override is the only thing
+      that knows it is being held above its deadband, and discarding it left
+      the gate at ``min_target`` while the command sat at the override.
+    * ``pace_responded_at`` — a command this unit was actually seen to answer.
+      Opportunistic only: ramp pacing records it just while its clamp is active
+      and clears it on every direction reversal, so treat its absence as "no
+      evidence", never as "cannot go lower".
+    * the model's nominal floor, as the fallback prior.
+
+    Too high a floor costs a genuinely full or empty battery some detection
+    delay, bounded by the floor itself — it keeps its share only while that
+    share stays under a command it could not have answered anyway.  Too low
+    costs the battery entirely (issue #624), so the asymmetry is deliberate.
+    """
+    if configured_floor > 0.0:
+        return configured_floor
+    nominal = min_actionable_output(report.get("device_type", ""))
+    if nominal <= 0.0:
+        return 0.0
+    observed = state.pace_responded_at
+    return min(nominal, observed) if observed > 0.0 else nominal
 
 
 # ---------------------------------------------------------------------------
@@ -708,13 +770,27 @@ class SaturationTracker:
         self._stall_timeout_seconds = max(0.0, stall_timeout_seconds)
 
     def update(
-        self, state: BalancerConsumerState, last_target: float | None, actual: float
+        self,
+        state: BalancerConsumerState,
+        last_target: float | None,
+        actual: float,
+        min_actionable: float,
     ) -> None:
-        """Update the saturation score for a consumer."""
+        """Update the saturation score for a consumer.
+
+        *min_actionable* is the smallest command the device can physically
+        execute (see :func:`min_actionable_output`).  A target below it is
+        treated exactly like a below-``min_target`` one -- too small to judge
+        the battery by -- because a device that ignores such a command by
+        construction is not evidence of saturation.  Without this a DC-only
+        battery handed a sub-floor share is scored as unable to follow, which
+        cuts its share further and keeps it there for good (issue #624).
+        """
         if not self._enabled or last_target is None:
             return
         now = self._clock()
         target_abs = abs(last_target)
+        min_target = max(self._min_target, min_actionable)
         # Grace period handling
         if state.saturation_grace_until > 0:
             if now < state.saturation_grace_until:
@@ -725,7 +801,7 @@ class SaturationTracker:
                     # reference-period step rather than a stale dt dose.
                     state.last_saturation_update = 0.0
                 elif (
-                    target_abs >= self._min_target
+                    target_abs >= min_target
                     and state.saturation_grace_started_at > 0
                     and now - state.saturation_grace_started_at
                     >= self._stall_timeout_seconds
@@ -766,7 +842,7 @@ class SaturationTracker:
         if dt > SATURATION_LONG_GAP_SECONDS:
             return
         ratio = dt / SATURATION_REFERENCE_DT
-        if target_abs < self._min_target or sign_reversing:
+        if target_abs < min_target or sign_reversing:
             prev = state.saturation_score
             if prev > 0:
                 decayed = prev * (self._decay_factor**ratio)
@@ -1446,8 +1522,23 @@ class LoadBalancer:
             and consumer_id not in self._probe_participants()
             and consumer_id not in self._deprioritized
         ):
-            actual = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
-            self._saturation.update(state, last_intent_reading, actual)
+            report = active_reports.get(consumer_id, {})
+            actual = parse_int(report.get("power", 0))
+            # The floor is compared against the *unpaced* intent, like the
+            # rest of this call (issue #522): a battery the pacing clamp is
+            # holding below its floor must still register as pushed, or a
+            # full/empty one would never be detected while clamped.  #614's
+            # stall escape bounds how long the wire stays under the floor.
+            self._saturation.update(
+                state,
+                last_intent_reading,
+                actual,
+                saturation_floor(
+                    state,
+                    report,
+                    self._effective_min_dc_output(consumer_id, active_reports),
+                ),
+            )
 
         # --- Manual override ---
         if consumer_mode.mode == "manual" and consumer_id and state:
