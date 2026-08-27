@@ -128,6 +128,15 @@ bool is_ac_chargeable(const std::string &device_type);
 // inverter and no AC input — the B2500 family). Mirrors _needs_dc_output_floor.
 bool needs_dc_output_floor(const std::string &device_type);
 
+// Smallest net output a DC-only battery (B2500 family) can actually produce:
+// each of its two DC channels is a hard on/off below ~40 W, so the unit cannot
+// answer a command under ~80 W at all. Mirrors DC_MIN_ACTIONABLE_OUTPUT_W.
+constexpr float DC_MIN_ACTIONABLE_OUTPUT_W = 80.0f;
+
+// The floor for *device_type*, 0 for batteries with a built-in inverter.
+// Mirrors balancer.py min_actionable_output.
+float min_actionable_output(const std::string &device_type);
+
 // Absolute net-output target in watts: the single currency of all control
 // logic (mirrors balancer.py NetOutputW). Sign convention, defined once:
 //   +  =  net discharge (export to grid / serve load)
@@ -358,8 +367,12 @@ class SaturationTracker {
                     float stall_timeout_seconds, bool enabled,
                     std::function<double()> clock);
 
+  // *min_actionable* is the smallest command the device can execute (see
+  // min_actionable_output): a target below it is too small to judge the battery
+  // by, exactly like a below-min_target one, because a device that ignores such
+  // a command by construction is not evidence of saturation (issue #624).
   void update(BalancerConsumerState &state, std::optional<float> last_target,
-              float actual);
+              float actual, float min_actionable = 0.0f);
   double get(const BalancerConsumerState &state) const { return state.saturation_score; }
   void set_grace(BalancerConsumerState &state, double deadline);
   void clear(BalancerConsumerState &state);

@@ -209,6 +209,15 @@ SATURATION_GRACE_SECONDS = 90
 # ramping up. In that case we bypass the remaining grace window and mark it
 # saturated immediately so the balancer can rotate to a healthy unit.
 SATURATION_STALL_TIMEOUT_SECONDS = 60.0
+# Smallest net output a DC-only battery (B2500 family) can actually produce.
+# Each of its two DC output channels is a hard on/off below roughly 40 W --
+# commanded under that the channel stays de-energized rather than delivering a
+# trickle -- so the unit as a whole cannot answer a command below ~80 W at all.
+# Saturation must not be scored against such a command: "asked for 50 W,
+# delivered 0 W" says nothing about whether the battery *could* deliver, and
+# scoring it as a failure is self-reinforcing, because a saturated battery's
+# share is then cut further below the floor (issue #624).
+DC_MIN_ACTIONABLE_OUTPUT_W = 80.0
 # Reference poll interval (seconds) at which the configured ``SATURATION_ALPHA``
 # and ``SATURATION_DECAY_FACTOR`` apply one full step.  The EMA is time-
 # weighted against this reference so that batteries polling at different
@@ -297,6 +306,18 @@ def _needs_dc_output_floor(device_type: str) -> bool:
     """
     caps = device_capabilities(device_type)
     return not caps.has_ac_input and not caps.has_builtin_inverter
+
+
+def min_actionable_output(device_type: str) -> float:
+    """Smallest net output *device_type* can actually be commanded to produce.
+
+    ``0`` for batteries with a built-in inverter, whose regulator follows any
+    target down to its own input deadband.  A DC-only battery driving a
+    separate inverter cannot energize a channel below its minimum, so a command
+    under :data:`DC_MIN_ACTIONABLE_OUTPUT_W` is one it will ignore outright --
+    see :meth:`SaturationTracker.update`.
+    """
+    return DC_MIN_ACTIONABLE_OUTPUT_W if _needs_dc_output_floor(device_type) else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -708,13 +729,27 @@ class SaturationTracker:
         self._stall_timeout_seconds = max(0.0, stall_timeout_seconds)
 
     def update(
-        self, state: BalancerConsumerState, last_target: float | None, actual: float
+        self,
+        state: BalancerConsumerState,
+        last_target: float | None,
+        actual: float,
+        min_actionable: float = 0.0,
     ) -> None:
-        """Update the saturation score for a consumer."""
+        """Update the saturation score for a consumer.
+
+        *min_actionable* is the smallest command the device can physically
+        execute (see :func:`min_actionable_output`).  A target below it is
+        treated exactly like a below-``min_target`` one -- too small to judge
+        the battery by -- because a device that ignores such a command by
+        construction is not evidence of saturation.  Without this a DC-only
+        battery handed a sub-floor share is scored as unable to follow, which
+        cuts its share further and keeps it there for good (issue #624).
+        """
         if not self._enabled or last_target is None:
             return
         now = self._clock()
         target_abs = abs(last_target)
+        min_target = max(self._min_target, min_actionable)
         # Grace period handling
         if state.saturation_grace_until > 0:
             if now < state.saturation_grace_until:
@@ -725,7 +760,7 @@ class SaturationTracker:
                     # reference-period step rather than a stale dt dose.
                     state.last_saturation_update = 0.0
                 elif (
-                    target_abs >= self._min_target
+                    target_abs >= min_target
                     and state.saturation_grace_started_at > 0
                     and now - state.saturation_grace_started_at
                     >= self._stall_timeout_seconds
@@ -766,7 +801,7 @@ class SaturationTracker:
         if dt > SATURATION_LONG_GAP_SECONDS:
             return
         ratio = dt / SATURATION_REFERENCE_DT
-        if target_abs < self._min_target or sign_reversing:
+        if target_abs < min_target or sign_reversing:
             prev = state.saturation_score
             if prev > 0:
                 decayed = prev * (self._decay_factor**ratio)
@@ -1446,8 +1481,14 @@ class LoadBalancer:
             and consumer_id not in self._probe_participants()
             and consumer_id not in self._deprioritized
         ):
-            actual = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
-            self._saturation.update(state, last_intent_reading, actual)
+            report = active_reports.get(consumer_id, {})
+            actual = parse_int(report.get("power", 0))
+            self._saturation.update(
+                state,
+                last_intent_reading,
+                actual,
+                min_actionable_output(report.get("device_type", "")),
+            )
 
         # --- Manual override ---
         if consumer_mode.mode == "manual" and consumer_id and state:

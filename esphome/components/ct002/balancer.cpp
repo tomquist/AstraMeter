@@ -95,6 +95,10 @@ bool needs_dc_output_floor(const std::string &device_type) {
   return !caps.has_ac_input && !caps.has_builtin_inverter;
 }
 
+float min_actionable_output(const std::string &device_type) {
+  return needs_dc_output_floor(device_type) ? DC_MIN_ACTIONABLE_OUTPUT_W : 0.0f;
+}
+
 void BalancerConfig::clamp() {
   auto clamp_v = [](float &v, float lo, float hi) {
     v = std::max(lo, std::min(hi, v));
@@ -140,10 +144,12 @@ SaturationTracker::SaturationTracker(double alpha, float min_target, double deca
       stall_timeout_seconds_(std::max(0.0f, stall_timeout_seconds)) {}
 
 void SaturationTracker::update(BalancerConsumerState &state,
-                               std::optional<float> last_target, float actual) {
+                               std::optional<float> last_target, float actual,
+                               float min_actionable) {
   if (!this->enabled_ || !last_target.has_value()) return;
   const double now = this->clock_();
   const double target_abs = std::fabs(*last_target);
+  const float min_target = std::max(this->min_target_, min_actionable);
 
   if (state.saturation_grace_until > 0.0) {
     if (now < state.saturation_grace_until) {
@@ -151,7 +157,7 @@ void SaturationTracker::update(BalancerConsumerState &state,
         state.saturation_grace_until = 0.0;
         state.saturation_grace_started_at = 0.0;
         state.last_saturation_update = 0.0;
-      } else if (target_abs >= this->min_target_ &&
+      } else if (target_abs >= min_target &&
                  state.saturation_grace_started_at > 0.0 &&
                  (now - state.saturation_grace_started_at) >= this->stall_timeout_seconds_) {
         state.saturation_score = 1.0;
@@ -182,7 +188,7 @@ void SaturationTracker::update(BalancerConsumerState &state,
   if (dt > SATURATION_LONG_GAP_SECONDS) return;
 
   const double ratio = dt / SATURATION_REFERENCE_DT;
-  if (target_abs < this->min_target_ || sign_reversing) {
+  if (target_abs < min_target || sign_reversing) {
     const double prev = state.saturation_score;
     if (prev > 0.0) {
       const double decayed = prev * std::pow(this->decay_factor_, ratio);
@@ -759,7 +765,8 @@ std::array<float, 3> LoadBalancer::compute_target(
     if (probe_set.find(*consumer_id) == probe_set.end() &&
         this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
       const float actual = active_reports[*consumer_id].power;
-      this->saturation_.update(*state, last_intent_reading, actual);
+      this->saturation_.update(*state, last_intent_reading, actual,
+                               min_actionable_output(active_reports[*consumer_id].device_type));
     }
   }
 

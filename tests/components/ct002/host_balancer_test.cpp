@@ -25,7 +25,11 @@ using esphome::ct002::CONTROL_QUALITY_WARMUP_SECONDS;
 using esphome::ct002::ControlQualityTracker;
 using esphome::ct002::is_ac_chargeable;
 using esphome::ct002::LoadBalancer;
+using esphome::ct002::BalancerConsumerState;
+using esphome::ct002::DC_MIN_ACTIONABLE_OUTPUT_W;
+using esphome::ct002::min_actionable_output;
 using esphome::ct002::needs_dc_output_floor;
+using esphome::ct002::SaturationTracker;
 using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
 using esphome::ct002::to_grid_reading;
@@ -101,6 +105,50 @@ TEST(NeedsDcOutputFloor, OnlyExternalInverterFamilies) {
   EXPECT_FALSE(needs_dc_output_floor("VNSD"));      // Venus D (built-in + DC)
   EXPECT_FALSE(needs_dc_output_floor("HMN-1"));     // Jupiter
   EXPECT_FALSE(needs_dc_output_floor(""));          // unknown -> assumed AC
+}
+
+TEST(MinActionableOutput, OnlyDcOnlyBatteriesHaveAStartFloor) {
+  EXPECT_FLOAT_EQ(min_actionable_output("HMJ-2"), DC_MIN_ACTIONABLE_OUTPUT_W);
+  EXPECT_FLOAT_EQ(min_actionable_output("HMA-1"), DC_MIN_ACTIONABLE_OUTPUT_W);
+  EXPECT_FLOAT_EQ(min_actionable_output("HMG-50"), 0.0f);   // Venus
+  EXPECT_FLOAT_EQ(min_actionable_output("VNSE3-0"), 0.0f);  // Venus E3
+  EXPECT_FLOAT_EQ(min_actionable_output("HMN-1"), 0.0f);    // Jupiter
+}
+
+// Issue #624: a B2500 cannot energize a DC channel below ~80 W, so a command
+// under that floor is not a target it can miss — scoring it as saturated cut
+// the battery's share further below the floor and pinned it at 0 W for good.
+TEST(SaturationTrackerDcFloor, SubFloorCommandScoresNothing) {
+  double now = 1000.0;
+  SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
+  BalancerConsumerState state;
+  for (int i = 0; i < 40; i++) {
+    tracker.update(state, 50.0f, 0.0f, min_actionable_output("HMJ-2"));
+    now += 1.5;
+  }
+  EXPECT_DOUBLE_EQ(tracker.get(state), 0.0);
+}
+
+TEST(SaturationTrackerDcFloor, CommandAboveTheFloorStillScores) {
+  double now = 1000.0;
+  SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
+  BalancerConsumerState state;
+  for (int i = 0; i < 40; i++) {
+    tracker.update(state, 200.0f, 0.0f, min_actionable_output("HMJ-2"));
+    now += 1.5;
+  }
+  EXPECT_GT(tracker.get(state), 0.8);
+}
+
+TEST(SaturationTrackerDcFloor, VenusIsUnaffected) {
+  double now = 1000.0;
+  SaturationTracker tracker(0.15, 20.0f, 0.995, 60.0f, true, [&now]() { return now; });
+  BalancerConsumerState state;
+  for (int i = 0; i < 40; i++) {
+    tracker.update(state, 50.0f, 0.0f, min_actionable_output("VNSE3-0"));
+    now += 1.5;
+  }
+  EXPECT_GT(tracker.get(state), 0.8);
 }
 
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {
