@@ -370,6 +370,32 @@ using ReportMap = std::unordered_map<std::string, ConsumerReport>;
 float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report,
                        float configured_floor);
 
+// One consumer's steering decision, as a support log needs to read it back.
+// Mirrors the fields of balancer.py ``LoadBalancer._log_steer``; absent
+// optionals render as "-" for the stages a consumer never reached.
+struct SteerLog {
+  std::string consumer_id;
+  std::string mode;      // "auto", "inactive", or "manual=<target>"
+  std::string rotation;  // "active", "deprioritized", or "probing"
+  float weight{1.0f};
+  float grid{0.0f};
+  std::optional<float> control_grid{};
+  std::optional<float> fair_share{};
+  float reported{0.0f};
+  std::optional<float> intent{};
+  float send{0.0f};
+  std::optional<float> unpaced{};
+  std::optional<float> pace_cap{};
+  double saturation{0.0};
+};
+
+// Render a SteerLog as the single line both stacks emit. Byte-identical to the
+// Python format string in ``LoadBalancer._log_steer`` -- one reader parses logs
+// from either stack, so the field names, order and precision are the contract
+// (host_balancer_test.cpp pins it). Free and ESPHome-free so a host test can
+// drive it; the firmware hands the result to the sink below.
+std::string format_steer_log(const SteerLog &entry);
+
 
 class SaturationTracker {
  public:
@@ -481,6 +507,15 @@ class LoadBalancer {
                                       const std::unordered_set<std::string> &inactive,
                                       const std::unordered_set<std::string> &manual,
                                       const std::vector<float> &sample_id);
+
+  // Where the per-poll steering line goes. Unset by default, so a balancer
+  // built without one (host tests, the parity harness) formats nothing and
+  // costs nothing. ct002.cpp points it at ESP_LOGD; keeping the emit out here
+  // is what lets balancer.{h,cpp} stay free of ESPHome includes, which both
+  // host build paths depend on.
+  void set_steer_log_sink(std::function<void(const std::string &)> sink) {
+    this->steer_log_sink_ = std::move(sink);
+  }
 
   void remove_consumer(const std::string &consumer_id);
   void detach_from_auto_pool(const std::string &consumer_id);
@@ -594,6 +629,17 @@ class LoadBalancer {
   double post_probe_fade_until_{0.0};
   std::unordered_set<std::string> post_probe_fade_ids_;
   bool all_dc_surplus_warned_{false};
+
+  // Diagnostics only (see log_steer_): the two allocation intermediates that
+  // live nowhere else once compute_target returns. Reset per call so a manual
+  // or inactive consumer never reports the previous consumer's figures. Never
+  // read by the control path.
+  std::optional<float> diag_control_grid_{};
+  std::optional<float> diag_fair_share_{};
+  std::function<void(const std::string &)> steer_log_sink_{};
+  void log_steer_(const std::optional<std::string> &consumer_id, ConsumerMode mode,
+                  const ReportMap &reports, float grid_total,
+                  const std::array<float, 3> &result);
 
   // Adaptive grid-state predictor state (see predict_control_grid_).
   // pred_grid_ is the estimate the control path acts on; pred_pool_output_ is
