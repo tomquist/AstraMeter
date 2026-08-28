@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import time
 from collections.abc import Callable
 from typing import Literal, NamedTuple, NewType, get_args
@@ -1496,10 +1497,13 @@ class LoadBalancer:
         on versus what the meter reported, the share it was allocated, and the
         unpaced intent behind a paced command.
 
-        DEBUG-only and one line per consumer per poll, so it costs a normal
-        install nothing; every value is already computed by the control path.
+        One line per consumer per poll, and *nothing at all* when DEBUG is off:
+        the level is checked before any of it runs.  That check is not
+        decoration — ``logger.debug`` would discard the line, but its arguments
+        are evaluated first, and rendering a dozen of them per consumer per
+        poll is real work on a busy pool for output nobody reads.
         """
-        if not consumer_id:
+        if not consumer_id or not logger.isEnabledFor(logging.DEBUG):
             return
         state = self._consumers.get(consumer_id)
         if consumer_id in self._probe_participants():

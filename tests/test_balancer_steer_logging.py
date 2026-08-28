@@ -15,6 +15,7 @@ import logging
 
 import pytest
 
+from astrameter.config.logger import logger
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
@@ -118,6 +119,52 @@ def test_allocation_figures_are_blank_where_they_do_not_apply(
     for cid in (MANUAL, IDLE):
         assert "ctrl=-" in lines[cid], lines[cid]
         assert "share=-" in lines[cid], lines[cid]
+
+
+def test_nothing_is_computed_when_debug_logging_is_off() -> None:
+    """The guard, not just the output.
+
+    ``logger.debug`` discards the line at INFO, but Python evaluates its
+    arguments first -- a dozen renderings per consumer per poll, plus the
+    probe-participant set, for output nobody reads.  Dropping the level check
+    would leave every assertion above green while a normal install paid for
+    diagnostics it never sees, so pin it: with DEBUG off, the line must not be
+    built at all.
+    """
+    clock = [1000.0]
+    lb = LoadBalancer(
+        config=BalancerConfig(fair_distribution=True),
+        saturation_alpha=0.15,
+        saturation_min_target=20,
+        saturation_decay_factor=0.995,
+        saturation_grace_seconds=90,
+        saturation_stall_timeout_seconds=60,
+        clock=lambda: clock[0],
+    )
+    reports = _reports()
+
+    def explode(_value: float | None) -> str:  # pragma: no cover - never runs
+        raise AssertionError("steer log rendered a field with DEBUG disabled")
+
+    # ``_diag_num`` is reachable only from the logging path -- the control path
+    # never renders. (``_probe_participants`` would be the wrong canary: the
+    # saturation gate calls it too, so it fires on a healthy poll.)
+    lb._diag_num = explode  # type: ignore[method-assign]
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        for cid in reports:
+            lb.compute_target(
+                cid,
+                ConsumerMode("auto"),
+                reports,
+                1000.0,
+                frozenset(),
+                frozenset(),
+                (0, 1000.0),
+            )
+    finally:
+        logger.setLevel(previous)
 
 
 def test_a_consumer_the_efficiency_layer_idled_says_so(

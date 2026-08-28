@@ -111,8 +111,16 @@ void CT002Component::build_balancer_() {
   // The emit lives here rather than in the balancer so balancer.{h,cpp} stays
   // free of ESPHome includes — both host build paths compile it with nothing
   // but the repo root on the include path.
+  //
+  // Installed only on a build whose log level actually reaches DEBUG, exactly
+  // as ESP_LOGD is itself compiled out below that level. Without the gate the
+  // balancer would build the line — three std::string allocations, a set, and
+  // an snprintf, per consumer per poll — and hand it to a macro that throws it
+  // away. With no sink installed, log_steer_ returns on its first branch.
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
   this->balancer_->set_steer_log_sink(
       [](const std::string &line) { ESP_LOGD(TAG, "%s", line.c_str()); });
+#endif
 }
 
 void CT002Component::enable_hampel(size_t window, float n_sigma, float min_threshold) {
