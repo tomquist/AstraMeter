@@ -1118,6 +1118,13 @@ class LoadBalancer:
         # Latch so the "surplus with no AC-chargeable battery" notice is
         # logged once per transition into that state, not every tick.
         self._all_dc_surplus_warned: bool = False
+        # Diagnostics only (see ``_log_steer``): the two allocation
+        # intermediates that live nowhere else once ``compute_target``
+        # returns.  Reset per call so a manual/inactive consumer never
+        # reports the previous consumer's figures.  Never read by the
+        # control path.
+        self._diag_control_grid: float | None = None
+        self._diag_fair_share: float | None = None
         # Adaptive grid-state observer (see BalancerConfig.grid_predict_trust).
         # ``_pred_grid`` is the estimate of the *instantaneous* grid the control
         # path acts on; ``_pred_meter`` models what the *latent* meter currently
@@ -1464,6 +1471,64 @@ class LoadBalancer:
     # Primary interface
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _diag_num(value: float | None) -> str:
+        """Compact fixed-point rendering; ``-`` when the figure doesn't apply."""
+        return "-" if value is None else f"{value:.0f}"
+
+    def _log_steer(
+        self,
+        consumer_id: str | None,
+        mode: ConsumerMode,
+        reports: dict,
+        grid_total: float,
+        result: list[float],
+    ) -> None:
+        """Emit one DEBUG line explaining the command this consumer just got.
+
+        A support log otherwise cannot say *why* a battery was told what it was
+        told.  The response carries only the final reading, and on the wire a
+        manual target, an efficiency-deprioritized fade and a genuinely small
+        auto share are indistinguishable — reconstructing an allocation from a
+        user's log meant guessing between them (discussion #625).  This records
+        the state that actually decides the command: the consumer's mode and
+        its standing in the efficiency rotation, the grid figure the loop acted
+        on versus what the meter reported, the share it was allocated, and the
+        unpaced intent behind a paced command.
+
+        DEBUG-only and one line per consumer per poll, so it costs a normal
+        install nothing; every value is already computed by the control path.
+        """
+        if not consumer_id:
+            return
+        state = self._consumers.get(consumer_id)
+        if consumer_id in self._probe_participants():
+            rotation = "probing"
+        elif consumer_id in self._deprioritized:
+            rotation = "deprioritized"
+        else:
+            rotation = "active"
+        logger.debug(
+            "CT002 steer %s: mode=%s rotation=%s weight=%.2f grid=%s ctrl=%s "
+            "share=%s reported=%s intent=%s send=%s unpaced=%s pace_cap=%s "
+            "sat=%.2f",
+            consumer_id,
+            f"manual={mode.manual_value:g}"
+            if mode.mode == "manual" and mode.manual_value is not None
+            else mode.mode,
+            rotation,
+            _report_weight(reports.get(consumer_id, {})),
+            self._diag_num(grid_total),
+            self._diag_num(self._diag_control_grid),
+            self._diag_num(self._diag_fair_share),
+            self._diag_num(parse_int(reports.get(consumer_id, {}).get("power", 0))),
+            self._diag_num(state.last_intent if state else None),
+            self._diag_num(sum(result)),
+            self._diag_num(state.last_intent_reading if state else None),
+            self._diag_num(state.pace_cap if state else None),
+            state.saturation_score if state else 0.0,
+        )
+
     def compute_target(
         self,
         consumer_id: str | None,
@@ -1481,9 +1546,16 @@ class LoadBalancer:
         consumer IDs; this method filters internally.
         *sample_id* identifies the current meter reading for cache keying.
         """
+        # Diagnostics only: cleared per call so a manual/inactive consumer
+        # never reports the figures of whichever consumer ran before it.
+        self._diag_control_grid = None
+        self._diag_fair_share = None
+
         # --- Inactive consumer: steer to zero ---
         if consumer_mode.mode == "inactive":
-            return self._steer_to_zero(consumer_id, all_reports)
+            result = self._steer_to_zero(consumer_id, all_reports)
+            self._log_steer(consumer_id, consumer_mode, all_reports, grid_total, result)
+            return result
 
         # Reports excluding inactive consumers
         active_reports = {
@@ -1547,13 +1619,19 @@ class LoadBalancer:
             state.last_target = reading
             state.last_intent = consumer_mode.manual_value
             state.last_intent_reading = reading
-            return self._split_by_phase(reading, active_reports)
+            result = self._split_by_phase(reading, active_reports)
+            self._log_steer(
+                consumer_id, consumer_mode, active_reports, grid_total, result
+            )
+            return result
 
         # Auto-pool reports (exclude manual consumers)
         reports = {cid: r for cid, r in active_reports.items() if cid not in manual}
 
         result = self._compute_auto_target(consumer_id, reports, grid_total, sample_id)
-        return self._apply_min_dc_output(consumer_id, reports, result)
+        result = self._apply_min_dc_output(consumer_id, reports, result)
+        self._log_steer(consumer_id, consumer_mode, reports, grid_total, result)
+        return result
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1963,6 +2041,7 @@ class LoadBalancer:
         )
         control_grid = self._predict_control_grid(reports, grid_total, sample_id)
         control_grid = self._apply_import_trim(control_grid, trim_fresh)
+        self._diag_control_grid = control_grid
 
         saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
         num_consumers = max(1, len(reports))
@@ -2151,6 +2230,7 @@ class LoadBalancer:
             )
             fair_share = control_grid if consumer_id == designated else 0.0
             concentrate = True
+        self._diag_fair_share = fair_share
 
         # ``fair_share`` / ``_balance_correction`` produce the residual: this
         # consumer's slice of the grid imbalance to fold into its current
