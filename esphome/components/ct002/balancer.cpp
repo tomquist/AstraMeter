@@ -119,6 +119,30 @@ float saturation_floor(const BalancerConsumerState &state, const ConsumerReport 
   return observed > 0.0f ? std::min(nominal, observed) : nominal;
 }
 
+std::string format_steer_log(const SteerLog &entry) {
+  // Absent stages render as "-" rather than 0: a manual or inactive consumer
+  // never reaches the allocator, and printing a zero there reads as a real
+  // figure and sends the next reader down a false trail.
+  auto num = [](const std::optional<float> &v) -> std::string {
+    if (!v.has_value()) return "-";
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%.0f", static_cast<double>(*v));
+    return std::string(buf);
+  };
+  char buf[320];
+  std::snprintf(buf, sizeof(buf),
+                "CT002 steer %s: mode=%s rotation=%s weight=%.2f grid=%s ctrl=%s "
+                "share=%s reported=%s intent=%s send=%s unpaced=%s pace_cap=%s "
+                "sat=%.2f",
+                entry.consumer_id.c_str(), entry.mode.c_str(), entry.rotation.c_str(),
+                static_cast<double>(entry.weight), num(entry.grid).c_str(),
+                num(entry.control_grid).c_str(), num(entry.fair_share).c_str(),
+                num(entry.reported).c_str(), num(entry.intent).c_str(),
+                num(entry.send).c_str(), num(entry.unpaced).c_str(),
+                num(entry.pace_cap).c_str(), entry.saturation);
+  return std::string(buf);
+}
+
 void BalancerConfig::clamp() {
   auto clamp_v = [](float &v, float lo, float hi) {
     v = std::max(lo, std::min(hi, v));
@@ -758,14 +782,59 @@ std::array<float, 3> LoadBalancer::split_by_phase_(
           target * (phase_effective[2] / total)};
 }
 
+void LoadBalancer::log_steer_(const std::optional<std::string> &consumer_id,
+                              ConsumerMode mode, const ReportMap &reports,
+                              float grid_total, const std::array<float, 3> &result) {
+  if (!this->steer_log_sink_ || !consumer_id) return;
+  SteerLog entry;
+  entry.consumer_id = *consumer_id;
+  if (mode.kind == ConsumerModeKind::MANUAL) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "manual=%g", static_cast<double>(mode.manual_value));
+    entry.mode = buf;
+  } else {
+    entry.mode = mode.kind == ConsumerModeKind::INACTIVE ? "inactive" : "auto";
+  }
+  const auto probe_set = this->probe_participants_();
+  if (probe_set.find(*consumer_id) != probe_set.end()) {
+    entry.rotation = "probing";
+  } else if (this->deprioritized_.find(*consumer_id) != this->deprioritized_.end()) {
+    entry.rotation = "deprioritized";
+  } else {
+    entry.rotation = "active";
+  }
+  auto it = reports.find(*consumer_id);
+  entry.weight = it != reports.end() ? it->second.weight : 1.0f;
+  entry.reported = it != reports.end() ? it->second.power : 0.0f;
+  entry.grid = grid_total;
+  entry.control_grid = this->diag_control_grid_;
+  entry.fair_share = this->diag_fair_share_;
+  entry.send = result[0] + result[1] + result[2];
+  auto state_it = this->consumers_.find(*consumer_id);
+  if (state_it != this->consumers_.end()) {
+    entry.intent = state_it->second.last_intent;
+    entry.unpaced = state_it->second.last_intent_reading;
+    entry.pace_cap = state_it->second.pace_cap;
+    entry.saturation = state_it->second.saturation_score;
+  }
+  this->steer_log_sink_(format_steer_log(entry));
+}
+
 std::array<float, 3> LoadBalancer::compute_target(
     const std::optional<std::string> &consumer_id, ConsumerMode mode,
     const ReportMap &all_reports, float grid_total,
     const std::unordered_set<std::string> &inactive,
     const std::unordered_set<std::string> &manual,
     const std::vector<float> &sample_id) {
+  // Diagnostics only: cleared per call so a manual or inactive consumer never
+  // reports the figures of whichever consumer ran before it.
+  this->diag_control_grid_.reset();
+  this->diag_fair_share_.reset();
+
   if (mode.kind == ConsumerModeKind::INACTIVE) {
-    return this->steer_to_zero_(consumer_id, all_reports);
+    const auto result = this->steer_to_zero_(consumer_id, all_reports);
+    this->log_steer_(consumer_id, mode, all_reports, grid_total, result);
+    return result;
   }
   ReportMap active_reports;
   for (const auto &r : all_reports) {
@@ -803,7 +872,9 @@ std::array<float, 3> LoadBalancer::compute_target(
     state->last_target = reading;
     state->last_intent = mode.manual_value;
     state->last_intent_reading = reading;
-    return split_by_phase_(reading, active_reports);
+    const auto result = split_by_phase_(reading, active_reports);
+    this->log_steer_(consumer_id, mode, active_reports, grid_total, result);
+    return result;
   }
 
   ReportMap auto_reports;
@@ -812,7 +883,9 @@ std::array<float, 3> LoadBalancer::compute_target(
   }
   auto result =
       this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id);
-  return this->apply_min_dc_output_(consumer_id, auto_reports, result);
+  const auto paced = this->apply_min_dc_output_(consumer_id, auto_reports, result);
+  this->log_steer_(consumer_id, mode, auto_reports, grid_total, paced);
+  return paced;
 }
 
 // -------------------------------------------------------------------------
@@ -999,6 +1072,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
                                 this->pool_out_of_headroom_(reports, grid_total));
   const float control_grid = this->apply_import_trim_(
       this->predict_control_grid_(reports, grid_total, sample_id), trim_fresh);
+  this->diag_control_grid_ = control_grid;
 
   std::unordered_map<std::string, float> saturation;
   for (const auto &c : this->consumers_)
@@ -1160,6 +1234,7 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     fair_share = (designated && *consumer_id == *designated) ? control_grid : 0.0f;
     concentrate = true;
   }
+  this->diag_fair_share_ = fair_share;
 
   // fair_share / balance_correction_ produce the residual: this consumer's
   // slice of the grid imbalance to fold into its current output. The absolute

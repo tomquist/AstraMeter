@@ -59,6 +59,24 @@ def _steer(caplog: pytest.LogCaptureFixture, **cfg) -> dict[str, str]:
     return {line.split()[2].rstrip(":"): line for line in lines}
 
 
+def test_the_line_matches_the_firmware_format_byte_for_byte(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One reader parses support logs from both stacks, so the format is shared.
+
+    ``format_steer_log`` in ``esphome/components/ct002/balancer.cpp`` renders
+    the same fields, in this order, at this precision;
+    ``host_balancer_test.cpp`` asserts the C++ side against the literal below.
+    Python is canonical -- change it here first, then mirror.
+    """
+    lines = _steer(caplog)
+    assert lines[MANUAL] == (
+        "CT002 steer aaaaaaaaaaaa: mode=manual=800 rotation=active weight=1.00 "
+        "grid=1000 ctrl=- share=- reported=400 intent=800 send=400 "
+        "unpaced=400 pace_cap=0 sat=0.00"
+    )
+
+
 def test_every_consumer_gets_a_line_naming_its_mode(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

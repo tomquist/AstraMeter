@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "esphome/components/ct002/balancer.h"
 
@@ -30,6 +31,9 @@ using esphome::ct002::DC_MIN_ACTIONABLE_OUTPUT_W;
 using esphome::ct002::min_actionable_output;
 using esphome::ct002::needs_dc_output_floor;
 using esphome::ct002::saturation_floor;
+using esphome::ct002::format_steer_log;
+using esphome::ct002::ReportMap;
+using esphome::ct002::SteerLog;
 using esphome::ct002::SaturationTracker;
 using esphome::ct002::NetOutputW;
 using esphome::ct002::ReportMap;
@@ -357,8 +361,6 @@ void feed(ControlQualityTracker &t, double *clock, int count, float grid,
   }
 }
 
-}  // namespace
-
 TEST(ControlQuality, IdleUntilSomethingIsSteered) {
   double clock = 1000.0;
   auto t = make_tracker(&clock);
@@ -629,6 +631,124 @@ TEST(LoadBalancer, ResetConsumerClearsLastTarget) {
   ASSERT_TRUE(b.get_last_target("a").has_value());
   b.reset_consumer("a");
   EXPECT_FALSE(b.get_last_target("a").has_value());
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Steering diagnostics (discussion #625)
+// ---------------------------------------------------------------------------
+//
+// The line is the contract, not just the fields: one reader parses support
+// logs from the Python service and from the firmware, so the format string is
+// mirrored byte for byte. tests/test_balancer_steer_logging.py asserts the
+// same shape on the Python side; balancer.py's format string is canonical.
+
+TEST(SteerLog, RendersTheSameLineThePythonStackDoes) {
+  SteerLog entry;
+  entry.consumer_id = "b42f0398a5ce";
+  entry.mode = "auto";
+  entry.rotation = "active";
+  entry.weight = 1.0f;
+  entry.grid = 1118.0f;
+  entry.control_grid = 1091.3f;
+  entry.fair_share = 342.4f;
+  entry.reported = 338.0f;
+  entry.intent = 1350.0f;
+  entry.send = 30.0f;
+  entry.unpaced = 1000.0f;
+  entry.pace_cap = 30.0f;
+  entry.saturation = 0.0;
+  EXPECT_EQ(format_steer_log(entry),
+            "CT002 steer b42f0398a5ce: mode=auto rotation=active weight=1.00 "
+            "grid=1118 ctrl=1091 share=342 reported=338 intent=1350 send=30 "
+            "unpaced=1000 pace_cap=30 sat=0.00");
+}
+
+TEST(SteerLog, TiesRoundHalfToEvenOnBothStacks) {
+  // Both stacks render through a "%.0f" that rounds half to even, so a figure
+  // landing exactly on .5 reads the same in either log. This pins the shared
+  // rule; it is not a licence to compare *computed* values across the stacks
+  // byte for byte, since C++ floats and Python doubles can land either side of
+  // a tie (see WATT_TOL in tests/components/ct002/test_balancer_parity.py).
+  SteerLog entry;
+  entry.consumer_id = "a";
+  entry.mode = "auto";
+  entry.rotation = "active";
+  entry.fair_share = 342.5f;   // -> 342, not 343
+  entry.control_grid = 341.5f;  // -> 342
+  EXPECT_NE(format_steer_log(entry).find("ctrl=342 share=342"), std::string::npos)
+      << format_steer_log(entry);
+}
+
+TEST(SteerLog, AbsentAllocationStagesRenderAsADashNotAZero) {
+  // A manual consumer never reaches the allocator. Printing 0 there would read
+  // as a real figure and send the next reader down a false trail -- exactly the
+  // ambiguity this line exists to remove.
+  SteerLog entry;
+  entry.consumer_id = "7ce71219ae84";
+  entry.mode = "manual=800";
+  entry.rotation = "active";
+  entry.grid = 1118.0f;
+  entry.reported = 400.0f;
+  entry.intent = 800.0f;
+  entry.send = 400.0f;
+  entry.unpaced = 400.0f;
+  entry.pace_cap = 0.0f;
+  EXPECT_EQ(format_steer_log(entry),
+            "CT002 steer 7ce71219ae84: mode=manual=800 rotation=active weight=1.00 "
+            "grid=1118 ctrl=- share=- reported=400 intent=800 send=400 "
+            "unpaced=400 pace_cap=0 sat=0.00");
+}
+
+TEST(SteerLog, TheBalancerFeedsTheSinkOneLinePerModeItSteers) {
+  // The wiring, not the formatter: every exit of compute_target must report,
+  // and each must carry its own mode -- a manual target and a steered-to-zero
+  // consumer are byte-identical on the wire, which is the whole point.
+  std::vector<std::string> lines;
+  BalancerConfig cfg;
+  cfg.fair_distribution = true;
+  double now = 1000.0;
+  LoadBalancer lb(cfg, 0.15, 20.0f, 0.995, 90.0f, 60.0f, true, [&now]() { return now; },
+                  []() {});
+  lb.set_steer_log_sink([&lines](const std::string &line) { lines.push_back(line); });
+
+  ReportMap reports;
+  reports["aaaaaaaaaaaa"] = ConsumerReport{"HMJ-2", "A", 400.0f, 1.0f, 1.0f, {}};
+  reports["bbbbbbbbbbbb"] = ConsumerReport{"HMJ-2", "A", 350.0f, 1.0f, 1.0f, {}};
+  reports["cccccccccccc"] = ConsumerReport{"HMJ-2", "A", 0.0f, 1.0f, 1.0f, {}};
+  const std::unordered_set<std::string> manual{"aaaaaaaaaaaa"};
+  const std::unordered_set<std::string> inactive{"cccccccccccc"};
+
+  lb.compute_target("aaaaaaaaaaaa", ConsumerMode{ConsumerModeKind::MANUAL, 800.0f},
+                    reports, 1000.0f, inactive, manual, {0.0f, 1000.0f});
+  lb.compute_target("bbbbbbbbbbbb", ConsumerMode{ConsumerModeKind::AUTO, 0.0f}, reports,
+                    1000.0f, inactive, manual, {0.0f, 1000.0f});
+  lb.compute_target("cccccccccccc", ConsumerMode{ConsumerModeKind::INACTIVE, 0.0f},
+                    reports, 1000.0f, inactive, manual, {0.0f, 1000.0f});
+
+  ASSERT_EQ(lines.size(), 3u);
+  EXPECT_NE(lines[0].find("mode=manual=800"), std::string::npos) << lines[0];
+  EXPECT_NE(lines[1].find("mode=auto"), std::string::npos) << lines[1];
+  EXPECT_NE(lines[2].find("mode=inactive"), std::string::npos) << lines[2];
+  // Only the auto consumer reached the allocator.
+  EXPECT_NE(lines[0].find("ctrl=- share=-"), std::string::npos) << lines[0];
+  EXPECT_EQ(lines[1].find("ctrl=- share=-"), std::string::npos) << lines[1];
+  EXPECT_NE(lines[2].find("ctrl=- share=-"), std::string::npos) << lines[2];
+}
+
+TEST(SteerLog, WithNoSinkTheBalancerFormatsNothing) {
+  // Default-constructed sink: the parity harness and every other host build
+  // must pay nothing for this.
+  BalancerConfig cfg;
+  double now = 1000.0;
+  LoadBalancer lb(cfg, 0.15, 20.0f, 0.995, 90.0f, 60.0f, true, [&now]() { return now; },
+                  []() {});
+  ReportMap reports;
+  reports["aaaaaaaaaaaa"] = ConsumerReport{"HMJ-2", "A", 100.0f, 1.0f, 1.0f, {}};
+  EXPECT_NO_THROW(lb.compute_target("aaaaaaaaaaaa",
+                                    ConsumerMode{ConsumerModeKind::AUTO, 0.0f}, reports,
+                                    500.0f, {}, {}, {0.0f, 500.0f}));
 }
 
 }  // namespace

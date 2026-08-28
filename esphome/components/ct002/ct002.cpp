@@ -107,6 +107,12 @@ void CT002Component::build_balancer_() {
       [this]() {
         for (auto &p : this->pipeline_) p->reset();
       });
+  // Per-poll steering diagnostics (mirrors balancer.py LoadBalancer._log_steer).
+  // The emit lives here rather than in the balancer so balancer.{h,cpp} stays
+  // free of ESPHome includes — both host build paths compile it with nothing
+  // but the repo root on the include path.
+  this->balancer_->set_steer_log_sink(
+      [](const std::string &line) { ESP_LOGD(TAG, "%s", line.c_str()); });
 }
 
 void CT002Component::enable_hampel(size_t window, float n_sigma, float min_threshold) {
