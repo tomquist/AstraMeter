@@ -30,9 +30,10 @@ a one-shot spike filter), modelled in
 :mod:`astrameter.simulator.venus_integer_steering`.
 
 That shared law is ``setpoint += (ctrl_ratio/100)*g - 5 W``, clamped to the
-configured charge/discharge limits and parked inside +/-11 W (alone on the
-bucket) or +/-15 W (sharing it). Neither this controller nor its GOLDEN vectors
-model it. See ``docs/ct002-ct003-protocol.md`` ("Model scope").
+configured charge/discharge limits and then parked near zero — inside +/-11 W
+for a Venus alone on its bucket, or the HMG-50's own wider bound. Neither this
+controller nor its GOLDEN vectors model it. See
+``docs/ct002-ct003-protocol.md`` ("Model scope").
 
 Open questions from the 2026-08 firmware audit
 ----------------------------------------------

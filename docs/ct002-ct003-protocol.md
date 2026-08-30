@@ -311,7 +311,13 @@ enough to reproduce the device's behavior bit‑for‑bit. Powers are in **watts
 the constants below are the literal values used.
 
 > **Model scope.** The float controller documented here is the **HMG‑50** one
-> (Venus C), and it is HMG‑50‑**only**. It is **not** universal:
+> (Venus C), and it is HMG‑50‑**only**. It is **not** universal — and an
+> HMG‑50 talking to AstraMeter does **not** run it either. That firmware
+> carries two laws and selects between them on a model code it parses from the
+> CT meter's greeting, taking the float ramp only for code `1` (the "no model
+> suffix" fallback). AstraMeter announces `HME-4`, so a real HMG‑50 driven by
+> it runs the **same integer integrator as the Venus A/D/E**, differing only in
+> its rest deadband (±20 W) and its single‑unit park.
 > - The **VNSA‑0**, **VNSD‑0** and **VNSE3‑0** (Venus A / D / E) all run **one
 >   shared law** instead — an integer proportional **integrator** behind an
 >   input‑conditioning gate — and **none** of them contains any of the eleven
