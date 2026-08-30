@@ -7,8 +7,12 @@ from unittest.mock import patch
 import pytest
 
 from astrameter.simulator.battery import BatterySimulator
-from astrameter.simulator.firmware_steering import FirmwareSteeringController
 from astrameter.simulator.runner import parse_config, validate_config
+from astrameter.simulator.venus_integer_steering import (
+    DEADBAND_HMG50_W,
+    PARK_ALONE_HMG50,
+    VenusIntegerSteeringController,
+)
 
 
 def _battery(delay: int = 0, **kwargs) -> BatterySimulator:
@@ -196,8 +200,10 @@ def test_steering_deadband_uses_own_output() -> None:
     b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
     assert b.target_power == 0.0
 
+    # 30 W sits outside the HMG-50's park (|setpoint| <= 20 and grid <= 15), so
+    # the response survives instead of being snapped back to zero.
     b._current_power = 100.0
-    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    b._handle_ct_response(_response_fields(phase_targets=(30, 0, 0)))
     assert b.target_power != 0.0
 
 
@@ -211,8 +217,10 @@ def test_steering_spike_debounced_for_one_response() -> None:
     assert b.target_power == 0.0  # first sample debounced
 
     b._handle_ct_response(fields)
-    # Discharge begins, exactly the bare ramp law's first response to g=200.
-    expected = -FirmwareSteeringController().step_raw(200, 800.0, -800.0)
+    # Discharge begins, exactly the bare integer law's first response to g=200.
+    expected = VenusIntegerSteeringController(
+        park_alone=PARK_ALONE_HMG50, deadband=DEADBAND_HMG50_W
+    ).step_raw(200, 800.0, -800.0, out=0)
     assert b.target_power == expected
 
 
@@ -327,12 +335,21 @@ def test_parse_config_venus_d_fields() -> None:
 
 @pytest.mark.parametrize("dev", ["VNSD-0", "VNSE3-0", "VNSA-0"])
 def test_venus_device_types_select_integer_steering(dev: str) -> None:
-    """Every AC-coupled Venus uses the integer integrator, not the float ramp
-    or the B2500 DC-output controller — all three firmwares run the same law."""
+    """Every AC-coupled Venus uses the integer integrator, not the B2500
+    DC-output controller — all three firmwares run the same law."""
     b = _battery(meter_dev_type=dev)
     assert b._venus_steering is not None
     assert b._b2500 is None
-    assert _battery(meter_dev_type="HMG-50")._venus_steering is None
+
+
+def test_hmg50_also_runs_the_integer_law_but_with_its_own_constants() -> None:
+    """The HMG-50 only takes its float gain-table ramp for CT model code 1, and
+    AstraMeter's ``HME-4`` greeting is not that. It runs the integer law, with a
+    wider rest deadband and a wider single-unit park."""
+    b = _battery(meter_dev_type="HMG-50")
+    assert b._venus_steering is not None
+    assert b._venus_steering.deadband == DEADBAND_HMG50_W
+    assert b._venus_steering.park_alone == PARK_ALONE_HMG50
 
 
 def test_venus_d_battery_discharges_on_import_charges_on_export() -> None:

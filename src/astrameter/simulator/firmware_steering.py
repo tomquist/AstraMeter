@@ -9,6 +9,19 @@ and a small-import hold). It is the steering law documented in
 per-step arithmetic, and the gate thresholds and ordering, are the exact values
 the HMG-50 firmware uses.
 
+**This law is almost certainly not the one your HMG-50 runs.** The firmware
+carries two, and picks between them on a model code it parses out of the CT
+meter's greeting: it takes the ramp below only when that code is ``1``, the
+"no model suffix" fallback, and takes the integer integrator
+(:mod:`astrameter.simulator.venus_integer_steering`) for every meter it
+recognises. AstraMeter announces itself as ``HME-4`` (``ct002.py``), which is
+not code 1, so a real HMG-50 driven by AstraMeter runs the integer law and
+never reaches the gain table. The selector is a single ``cmp #1`` at
+file+0x20b8e; the model code is written by the CT002 parser's string-compare
+chain at file+0x24344. :class:`BatterySimulator` routes HMG-50 devices
+accordingly; this module is kept because the code-1 path is real, and because
+its gain table is the thing that distinguishes an HMG-50 image from a Venus one.
+
 Scope: the gain table and ramp arithmetic here are the **HMG-50** (Venus C)
 ones, and they are HMG-50-*only*. No other Venus runs this law: the VNSA-0,
 VNSD-0 and VNSE3-0 firmwares contain none of the gain-table constants and share

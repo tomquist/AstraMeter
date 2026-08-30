@@ -1,9 +1,18 @@
-"""Marstek Venus (VNSA-0 / VNSD-0 / VNSE3-0) self-consumption steering.
+"""Marstek integer self-consumption steering (Venus A/D/E, and the HMG-50).
 
-The AC-coupled Venus units that are *not* an HMG-50 all run one control law: an
+The AC-coupled Venus units that are not an HMG-50 all run one control law: an
 integer proportional integrator behind an input-conditioning gate, one
 regulation step per CT response. None of them contains the HMG-50's float
 gain-scheduled ramp (:mod:`astrameter.simulator.firmware_steering`).
+
+**The HMG-50 runs this law too**, for every meter it recognises. Its firmware
+carries both: it parses a model code out of the meter's greeting and only takes
+the float ramp when that code is ``1``, which is the "no model suffix" fallback.
+AstraMeter announces itself as ``HME-4``, which the HMG-50's parser maps to a
+code of its own, so an HMG-50 steered by AstraMeter runs the integer law below
+and never the gain table. Its branch structure is identical to the Venus one;
+only the single-unit park (``park_alone``) and the gate's rest deadband
+(``deadband``: ±20 W rather than ±10 W) differ.
 
 Per-step law (``g`` = the bucket value to null, positive = importing; ``out`` =
 the unit's own measured output, positive = discharging)::
@@ -19,7 +28,7 @@ the unit's own measured output, positive = discharging)::
         # else: hold
     else:                         setpoint += gain * g - 5
     setpoint = clamp(setpoint, lo, hi)         # discharge / charge envelope
-    if abs(setpoint) < park and g < park:      # park = 11 alone, 15 shared
+    if abs(setpoint) < park_sp and g < park_g: # 11/11 alone, 15/15 shared
         setpoint = 0
 
 ``setpoint`` is the commanded inverter power in the device's own convention:
@@ -99,9 +108,12 @@ import struct
 from dataclasses import dataclass
 
 __all__ = [
+    "DEADBAND_HMG50_W",
     "DEADBAND_W",
     "DEFAULT_CTRL_RATIO",
     "IMPORT_THRESHOLD_W",
+    "PARK_ALONE_HMG50",
+    "PARK_ALONE_VENUS",
     "PARK_SHARED_W",
     "PARK_SINGLE_W",
     "SMALL_IMPORT_HOLD_W",
@@ -115,14 +127,23 @@ __all__ = [
 # sharing the bucket within ±15 W.
 PARK_SINGLE_W = 11
 PARK_SHARED_W = 15
+# The HMG-50 runs the same law with a wider park when it is alone on the bucket
+# (``|setpoint| <= 20 and g <= 15``, i.e. strict bounds of 21/16); its shared
+# park is 15/15, the same as the Venus. It also snaps to ``0.01`` rather than a
+# literal ``0.0`` — its settle interlock refuses to re-arm on exactly zero — but
+# this model carries integers, where the two are the same value.
+PARK_ALONE_VENUS = (PARK_SINGLE_W, PARK_SINGLE_W)
+PARK_ALONE_HMG50 = (21, 16)
 # An import below this is treated as the export/hold side of the branch split.
 IMPORT_THRESHOLD_W = 11
 # Per-step bias subtracted on the integrating branches (nudges toward a hair of
 # import rather than exact zero).
 STEP_BIAS_W = 5
-# Input-conditioning thresholds. The gate's deadband is ±10 W, where the HMG-50
-# uses ±20 W; the spike thresholds are the same on both.
+# Input-conditioning thresholds. The gate's rest deadband is ±10 W on a Venus
+# and ±20 W on an HMG-50 (see ``deadband``); the spike thresholds and the
+# small-import hold are the same on both.
 DEADBAND_W = 10
+DEADBAND_HMG50_W = 20
 SPIKE_JUMP_W = 50
 SPIKE_OWN_DELTA_W = 20
 SMALL_IMPORT_HOLD_W = 10
@@ -159,6 +180,11 @@ class VenusIntegerSteeringController:
 
     setpoint: int = 0
     ctrl_ratio: int = DEFAULT_CTRL_RATIO
+    # ``(setpoint, grid)`` bounds inside which a unit alone on its bucket parks
+    # at zero. The Venus and the HMG-50 differ here and nowhere else.
+    park_alone: tuple[int, int] = PARK_ALONE_VENUS
+    # The gate's rest deadband. ±10 W on a Venus, ±20 W on an HMG-50.
+    deadband: int = DEADBAND_W
     # Gate baselines and the spike filter's one-shot flag.
     prev_g: int = 0
     prev_out: int = 0
@@ -215,7 +241,9 @@ class VenusIntegerSteeringController:
             self.prev_g = g
             self.prev_out = out
             spike = (
-                abs(g) > DEADBAND_W and d_g > SPIKE_JUMP_W and d_out < SPIKE_OWN_DELTA_W
+                abs(g) > self.deadband
+                and d_g > SPIKE_JUMP_W
+                and d_out < SPIKE_OWN_DELTA_W
             )
             if spike and not self.spike_pending:
                 self.spike_pending = True
@@ -224,7 +252,7 @@ class VenusIntegerSteeringController:
                 self.spike_pending = False
                 return True
         self.spike_pending = False
-        if abs(g) < DEADBAND_W and out < 1:
+        if abs(g) < self.deadband and out < 1:
             return False
         return not 0 <= g < SMALL_IMPORT_HOLD_W
 
@@ -266,8 +294,11 @@ class VenusIntegerSteeringController:
         if sp < lo_i:
             sp = lo_i
 
-        park = PARK_SINGLE_W if device_count < 2 else PARK_SHARED_W
-        if abs(sp) < park and err < park:
+        if device_count < 2:
+            park_sp, park_g = self.park_alone
+        else:
+            park_sp = park_g = PARK_SHARED_W
+        if abs(sp) < park_sp and err < park_g:
             sp = 0
 
         self.setpoint = sp

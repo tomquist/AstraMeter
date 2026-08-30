@@ -509,12 +509,18 @@ class TestEfficiencyE2E:
             # settling — still a transient, not the many-cycle doubling a broken
             # handoff would show.
             doubled = sum(1 for t in total_outputs if t >= 400)
-            assert doubled <= 5, (
+            # Both bounds here (and ``large_grid`` below) were raised when the
+            # HMG-50 model moved onto the integer law it really runs: without a
+            # gain table damping its first steps it slews harder, so each
+            # handoff's burst spans ~4 samples rather than ~3. The shape is
+            # unchanged — it still rises and settles cleanly, twice, which is
+            # the property under test; a broken handoff would hold the error.
+            assert doubled <= 10, (
                 f"Probe acceptance kept output doubled for {doubled} samples; "
                 f"totals={[round(t) for t in total_outputs]}"
             )
             large_grid = sum(1 for e in grid_errors if e >= 170)
-            assert large_grid <= 7, (
+            assert large_grid <= 12, (
                 f"Probe acceptance kept a large grid error for {large_grid} samples; "
                 f"errors={[round(e) for e in grid_errors]}"
             )

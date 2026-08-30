@@ -17,7 +17,13 @@ from astrameter.ct002.balancer import device_capabilities
 from . import protocol
 from .b2500_steering import MIN_CHANNEL_OUTPUT_W, B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
-from .venus_integer_steering import VenusIntegerSteeringController
+from .venus_integer_steering import (
+    DEADBAND_HMG50_W,
+    DEADBAND_W,
+    PARK_ALONE_HMG50,
+    PARK_ALONE_VENUS,
+    VenusIntegerSteeringController,
+)
 
 logger = logging.getLogger("astra_sim.battery")
 
@@ -131,11 +137,24 @@ class BatterySimulator:
         # negative = charge — so ``hi`` is the discharge limit and ``lo`` the
         # (negative) charge limit, and the simulator target is the setpoint
         # *unnegated*.
+        # The HMG-50 carries *both* laws and picks between them on a model code
+        # it parses out of the meter's greeting; only code 1 — the "no model
+        # suffix" fallback — takes the float gain-table ramp. AstraMeter
+        # announces ``HME-4``, so a real HMG-50 driven by it runs the same
+        # integer integrator as the other Venus units, with a wider rest
+        # deadband and a wider single-unit park.
+        _dt = self.meter_dev_type.upper()
+        self._is_hmg50 = _dt.startswith("HMG")
         self._is_venus_integer = (
-            self.meter_dev_type.upper().startswith("VNS") and not self._is_dc_output
-        )
+            _dt.startswith("VNS") or self._is_hmg50
+        ) and not self._is_dc_output
         self._venus_steering = (
-            VenusIntegerSteeringController() if self._is_venus_integer else None
+            VenusIntegerSteeringController(
+                park_alone=PARK_ALONE_HMG50 if self._is_hmg50 else PARK_ALONE_VENUS,
+                deadband=DEADBAND_HMG50_W if self._is_hmg50 else DEADBAND_W,
+            )
+            if self._is_venus_integer
+            else None
         )
 
         # Optionally start already in motion (net output W; positive = discharge,
