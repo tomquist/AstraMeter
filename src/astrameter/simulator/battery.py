@@ -108,22 +108,18 @@ class BatterySimulator:
             and not caps.has_builtin_inverter
             and not caps.has_ac_input
         )
-        # Two channels, each capped at half the unit's discharge envelope and
-        # unable to energize below ``min_channel_output`` — so the unit as a
-        # whole has a ~2x minimum output and simply does not respond to a
-        # command below it (``0`` removes the floor).
-        _ch_max = max(1, self.max_discharge_power // 2)
-        self._b2500_channels = (
-            [
-                B2500SteeringController(
-                    max_output=_ch_max, min_output=min_channel_output
-                ),
-                B2500SteeringController(
-                    max_output=_ch_max, min_output=min_channel_output
-                ),
-            ]
+        # One device-level controller: the firmware's integrator is device-wide
+        # and the split across the two outputs happens below it. The unit's
+        # minimum (``pmin``) is twice the per-channel floor callers pass in, and
+        # it is a *clamp on the command*, not a gate on the response — a B2500
+        # cannot form a command below it at all (``0`` removes the floor).
+        self._b2500 = (
+            B2500SteeringController(
+                p=max(1, self.max_discharge_power),
+                pmin=2 * min_channel_output,
+            )
             if self._is_dc_output
-            else []
+            else None
         )
 
         # The AC-coupled Venus units that aren't an HMG-50 (VNSA-0, VNSD-0,
@@ -155,10 +151,14 @@ class BatterySimulator:
             self._requested_target = float(initial_power)
             if self._venus_steering is not None:
                 self._venus_steering.setpoint = round(initial_power)
-            elif not self._b2500_channels:
-                # Ramp controller: target = -setpoint, so seed the inverse. (The
-                # B2500's command-domain regulator converges from the seeded
-                # measured output, so it needs no explicit setpoint seed.)
+            elif self._b2500 is not None:
+                # The B2500's integrator accumulates onto its own command, so it
+                # has to start from the seeded output — and it only integrates
+                # while it is actually producing.
+                self._b2500.setpoint = max(self._b2500.p_min, round(initial_power))
+                self._b2500.producing = initial_power > 0
+            else:
+                # Ramp controller: target = -setpoint, so seed the inverse.
                 self._steering.setpoint = -float(initial_power)
 
     # -- public read-only properties ---------------------------------------
@@ -369,7 +369,7 @@ class BatterySimulator:
 
         grid_reading = field(4) + field(5) + field(6)
 
-        if self._b2500_channels:
+        if self._b2500 is not None:
             self._steer_b2500_output(grid_reading)
             return
 
@@ -403,27 +403,32 @@ class BatterySimulator:
         self._apply_ct_derived_target(-setpoint)
 
     def _steer_b2500_output(self, grid_reading: int) -> None:
-        """Steer a DC-coupled B2500's two output channels toward nulling the grid.
+        """Steer a DC-coupled B2500's DC output toward nulling the grid.
 
         The B2500 only discharges its DC output (no AC input, never charges from
-        AC). The setpoint is incremental (``output + 0.9 * grid``; see
-        :mod:`b2500_steering`), floored at 0, capped at the discharge envelope, and
-        split evenly across the two channels.
+        AC). The firmware integrates the grid reading into a device-wide command
+        clamped to ``[pmin, p]``, then splits it across the two outputs; see
+        :mod:`b2500_steering`.
         """
-        cur = max(0, round(self._current_power))
-        target = cur + grid_reading * 9 // 10  # incremental: 90% of the residual
-        target = max(0, min(target, self.max_discharge_power))
+        assert self._b2500 is not None
+        envelope = self.max_discharge_power
         # At full SoC the PV passes straight through to the output and cannot be
         # curtailed below the DC input (the pack is full, the PV has nowhere else
         # to go). The steering can't drive the output under that floor, so don't
         # let it try — otherwise it fights the passthrough override and the
         # output oscillates instead of settling at the PV level.
-        if self._soc >= 1.0 and self._dc_input_power > 0:
-            target = max(target, round(self._dc_input_power))
-        per_channel = target // 2
-        own = cur // 2  # each channel's ~half of the measured output
-        out = sum(ch.regulate(per_channel, own) for ch in self._b2500_channels)
-        self._apply_ct_derived_target(float(out))
+        floor = (
+            round(self._dc_input_power)
+            if self._soc >= 1.0 and self._dc_input_power > 0
+            else 0
+        )
+        out = self._b2500.step(
+            grid_reading,
+            max(0, round(self._current_power)),
+            self.poll_interval,
+            max_power=envelope,
+        )
+        self._apply_ct_derived_target(float(max(out, floor)))
 
     # -- main loop ---------------------------------------------------------
 

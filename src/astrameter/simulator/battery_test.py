@@ -219,8 +219,8 @@ def test_steering_spike_debounced_for_one_response() -> None:
 def test_b2500_device_type_selects_dc_output_steering() -> None:
     """A B2500-family device type (HMA/HMJ/HMK) steers its DC output via two
     channels; a Venus device type uses the ramp controller."""
-    assert len(_battery(meter_dev_type="HMJ-2")._b2500_channels) == 2
-    assert _battery(meter_dev_type="HMG-50")._b2500_channels == []
+    assert _battery(meter_dev_type="HMJ-2")._b2500 is not None
+    assert _battery(meter_dev_type="HMG-50")._b2500 is None
 
 
 def _drive_b2500(b: BatterySimulator, load: float, cycles: int) -> None:
@@ -331,7 +331,7 @@ def test_venus_device_types_select_integer_steering(dev: str) -> None:
     or the B2500 DC-output controller — all three firmwares run the same law."""
     b = _battery(meter_dev_type=dev)
     assert b._venus_steering is not None
-    assert b._b2500_channels == []
+    assert b._b2500 is None
     assert _battery(meter_dev_type="HMG-50")._venus_steering is None
 
 
