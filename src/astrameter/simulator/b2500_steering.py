@@ -329,14 +329,21 @@ class B2500SteeringController:
     def _drive(self, dt: float, max_power: int) -> int:
         """Split the total across the channels and advance them."""
         ceiling = self.p // 2
+        # The envelope caps the *total* before the split, as the firmware does
+        # (0x0800d23a computes a battery-derived limit and splits
+        # ``min(Pcmd, Plimit)``), rather than trimming the summed output
+        # afterwards. Clamping after the sum would leave each channel claiming
+        # to deliver power the pack cannot supply: the outputs would read live,
+        # `producing` would stay true, and the integrator would keep winding
+        # against an output that is not there.
+        total = min(self.setpoint, max(0, int(max_power)))
         if self.single_mode:
-            targets = [min(self.setpoint, ceiling), 0]
+            targets = [min(total, ceiling), 0]
         else:
-            half = self.setpoint // 2
-            targets = [min(half, ceiling), min(half, ceiling)]
+            half = min(total // 2, ceiling)
+            targets = [half, half]
         for ch, t in zip(self._channels, targets, strict=True):
             ch.set_target(t)
         out = sum(ch.advance(dt) for ch in self._channels)
-        out = min(out, max(0, max_power))
         self._refresh_producing()
         return out

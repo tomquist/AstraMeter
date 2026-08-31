@@ -226,7 +226,7 @@ def test_steering_spike_debounced_for_one_response() -> None:
 
 def test_b2500_device_type_selects_dc_output_steering() -> None:
     """A B2500-family device type (HMA/HMJ/HMK) steers its DC output via two
-    channels; a Venus device type uses the ramp controller."""
+    channels; an AC-coupled device does not."""
     assert _battery(meter_dev_type="HMJ-2")._b2500 is not None
     assert _battery(meter_dev_type="HMG-50")._b2500 is None
 

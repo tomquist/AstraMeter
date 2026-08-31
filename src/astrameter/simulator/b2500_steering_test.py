@@ -108,6 +108,31 @@ def test_output_is_capped_by_the_envelope() -> None:
     assert max(trace) <= ENV
 
 
+def test_a_binding_envelope_reaches_the_channels() -> None:
+    """The envelope caps the total *before* the split, as the firmware does.
+
+    Trimming the summed output instead would leave each channel reporting power
+    the pack cannot supply, keep `producing` true, and let the integrator wind
+    up against an output that is not there.
+    """
+    ctl = B2500SteeringController(setpoint=200, producing=True)
+    ctl._both_producing = True
+    for _ in range(8):
+        assert ctl.step(300, 0, 1.0, max_power=0) == 0
+    assert all(ch.output == 0 for ch in ctl._channels)
+    assert ctl.producing is False
+    assert ctl.setpoint <= ctl.p_min  # parked at the floor, not wound up
+
+
+def test_a_partial_envelope_splits_across_both_outputs() -> None:
+    ctl = B2500SteeringController(setpoint=600, producing=True)
+    ctl._both_producing = True
+    ctl.step(0, 600, 1.0, max_power=300)
+    out = ctl.step(0, 600, 1.0, max_power=300)
+    assert out <= 300
+    assert [ch.target for ch in ctl._channels] == [150, 150]
+
+
 def test_command_is_capped_at_p() -> None:
     ctl = _started()
     for _ in range(60):

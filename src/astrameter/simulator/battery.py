@@ -367,15 +367,16 @@ class BatterySimulator:
         """Derive the new AC target from the grid value read back from the CT.
 
         The grid value (sum of the per-phase power fields, positive = importing)
-        is fed to this battery's steering controller. An HMG-50 (Venus C) runs
-        :class:`FirmwareSteeringController` (a ramp law with input-conditioning
-        gates), whose sign is the inverse of the simulator's (setpoint positive =
-        charge), so the simulator target is the negated setpoint. A DC-coupled
-        B2500 instead runs :class:`B2500SteeringController` on its DC output (see
-        :meth:`_steer_b2500_output`). Every other AC-coupled Venus (VNSA-0,
-        VNSD-0, VNSE3-0) runs :class:`VenusIntegerSteeringController`, whose
-        setpoint is already in the simulator's sign (positive = discharge) and
-        is applied directly.
+        is fed to this battery's steering controller. Every AC-coupled unit —
+        the HMG-50 (Venus C) included, since it takes its float ramp only for a
+        meter model code AstraMeter does not present — runs
+        :class:`VenusIntegerSteeringController`, whose setpoint is already in
+        the simulator's sign (positive = discharge) and is applied directly;
+        the HMG-50 differs only in its rest deadband and single-unit park. A
+        DC-coupled B2500 instead runs :class:`B2500SteeringController` on its
+        DC output (see :meth:`_steer_b2500_output`).
+        :class:`FirmwareSteeringController` is the ramp law for the code-1
+        path and is not reached from here.
 
         Cross-battery share-split: a real battery divides the grid value by the
         number of batteries reported on its phase (the ``*_chrg_nb`` count), so
