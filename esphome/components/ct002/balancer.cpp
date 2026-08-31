@@ -102,21 +102,21 @@ float min_actionable_output(const std::string &device_type) {
 
 float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report,
                        float configured_floor) {
-  // Three sources, most authoritative first: what the owner configured (they
-  // are stating what their inverter needs, and it is the floor we park them
-  // at), then a command this unit was seen to answer — opportunistic only,
-  // since pacing records it just while its clamp is active and clears it on
-  // reversal — then the model's nominal figure. Mirrors balancer.py
-  // saturation_floor; see it for why the asymmetry favours the battery.
-  // The configured floor is checked first because a per-device override
-  // applies to any battery, including one whose family has no nominal floor:
-  // for such a unit the override is the only thing that knows it is held above
-  // its deadband.
-  if (configured_floor > 0.0f) return configured_floor;
-  const float nominal = min_actionable_output(report.device_type);
-  if (nominal <= 0.0f) return 0.0f;
-  const float observed = state.pace_responded_at;
-  return observed > 0.0f ? std::min(nominal, observed) : nominal;
+  // The higher of two lower bounds, each ruling out a different command as
+  // evidence: the configured MIN_DC_OUTPUT (the floor we park the unit at, so
+  // a command at or below it may be our own doing rather than a share the
+  // battery was asked for), and what the family can physically execute —
+  // lowered to a command this unit was seen to answer, which is opportunistic
+  // only, since pacing records it just while its clamp is active and clears it
+  // on reversal. Taking the configured floor *instead of* the model's is what
+  // left issue #600 open after #624. Mirrors balancer.py saturation_floor; see
+  // it for why the asymmetry favours the battery.
+  float nominal = min_actionable_output(report.device_type);
+  if (nominal > 0.0f) {
+    const float observed = state.pace_responded_at;
+    if (observed > 0.0f) nominal = std::min(nominal, observed);
+  }
+  return std::max(configured_floor, nominal);
 }
 
 std::string format_steer_log(const SteerLog &entry) {
