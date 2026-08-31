@@ -310,30 +310,54 @@ This is the exact control law the storage runs on the selected grid value. It is
 enough to reproduce the device's behavior bit‑for‑bit. Powers are in **watts**;
 the constants below are the literal values used.
 
-> **Model scope.** The float controller documented here is the **HMG‑50**
-> one (Venus C; **not** Venus D — see the VNSD‑0 note below). It is **not**
-> universal:
-> - The **VNSE3‑0** (Venus E) shares the **same step‑3 conditioning gate** — the
->   same >50 W spike filter, <20 W own‑output exemption, signed deadband and
->   small‑import hold — but with a tighter **±10 W** deadband instead of ±20 W,
->   and it uses a **different ramp/step law** (no float gain table, integer
->   setpoint). So the gate logic carries over, but the gain table and ramp
->   arithmetic below are HMG‑50‑specific.
-> - The **VNSD‑0** (Venus D) does **not** run this float law at all — **none**
->   of the float gain‑table / `sqrt`‑step constants apply. Its CT‑following
->   controller is **integer** and built as a configurable proportional
->   **integrator**, run per CT response:
->   `setpoint += (ctrl_ratio/100)·error − 5 W`, where `error = g − grid_standard`
->   (the configured grid setpoint offset). The per‑step branches are
->   sign‑conditioned on `error` and the device's own measured grid; the result
->   is clamped to the configured charge / discharge limits (defaults +2200 W /
->   −800 W) and zeroed inside a **±11 W** (single‑phase) / **±15 W** (combined)
->   deadband. `ctrl_ratio` is the loop gain (30–100 %, default **100** ⇒ unity,
->   i.e. one step ≈ `error − 5`). There is **no** −5…+5 gain‑scheduled ramp, no
->   `sqrt` step and no float ±2500 W clamp — so a sustained 500 W import ramps
->   ~495 W per cycle straight to the charge clamp, not the HMG‑50's ~50 W
->   near‑zero step. (The fine power slewing is delegated to a separate inverter
->   sub‑processor reached over the internal bus.)
+> **Model scope.** The float controller documented here is the **HMG‑50** one
+> (Venus C), and it is HMG‑50‑**only**. It is **not** universal — and an
+> HMG‑50 talking to AstraMeter does **not** run it either. That firmware
+> carries two laws and selects between them on a model code it parses from the
+> CT meter's greeting, taking the float ramp only for code `1` (the "no model
+> suffix" fallback). AstraMeter announces `HME-4`, so a real HMG‑50 driven by
+> it runs the **same integer integrator as the Venus A/D/E**, differing only in
+> its rest deadband (±20 W) and its single‑unit park.
+> - The **VNSA‑0**, **VNSD‑0** and **VNSE3‑0** (Venus A / D / E) all run **one
+>   shared law** instead — an integer proportional **integrator** behind an
+>   input‑conditioning gate — and **none** of them contains any of the eleven
+>   float gain‑table constants (all eleven are present in all ten archived
+>   HMG‑50 images). Verified against the archived Control images in
+>   [rweijnen/marstek-firmware-archive][fw-archive] and
+>   [sphings79/marstek-firmware-archiv][fw-archive2]: the VNSD‑0 and VNSE3‑0
+>   integrator, gate and share split are the same code instruction for
+>   instruction, the VNSA‑0 integrator and gate match them, and the law is
+>   unchanged across VNSE3‑0 v144/v148/v1476/v150 and VNSD‑0
+>   v147/v149/v1492/v150. (These are app images flashed above a bootloader, so
+>   they load at `0x08004800`, not `0x08000000` — code offsets are listed in
+>   `venus_integer_steering.py` as file offsets to keep that ambiguity out.)
+>
+>   Per CT response: `setpoint += (ctrl_ratio/100)·g − 5 W`, where
+>   `g = bucket − grid_standard` divided by the bucket's `*_chrg_nb` count. The
+>   per‑step branches are sign‑conditioned on `g` and on the unit's **own
+>   measured output**; the result is clamped to the configured charge /
+>   discharge limits (defaults +2200 W / −800 W) and parked inside **±11 W**
+>   (alone on the bucket) / **±15 W** (sharing it). `ctrl_ratio` is the loop
+>   gain (30–100 %, default **100** ⇒ unity, i.e. one step ≈ `g − 5`). There is
+>   **no** −5…+5 gain‑scheduled ramp, no `sqrt` step and no float ±2500 W clamp
+>   — so a sustained 500 W import ramps ~495 W per cycle straight to the clamp,
+>   not the HMG‑50's ~50 W near‑zero step. (The fine power slewing is delegated
+>   to a separate inverter sub‑processor reached over the internal bus.)
+>
+>   The gate is this step‑3 gate with a tighter **±10 W** deadband, and its
+>   spike filter is a **one‑shot**: the sample after a skipped one is forced
+>   through, bypassing the deadband and small‑import hold. A shared bucket
+>   (`*_chrg_nb > 1`) skips the spike filter entirely.
+>
+>   The integrator adds to its **own stored setpoint**, never to its measured
+>   output, so a command too small for the inverter to execute still accumulates
+>   until it is large enough — every other write to that RAM word is a reset to
+>   zero. (A B2500 is the opposite; see the HMJ section.) Modelled in
+>   `src/astrameter/simulator/venus_integer_steering.py`, which cites the
+>   firmware addresses for each part.
+>
+>   [fw-archive]: https://github.com/rweijnen/marstek-firmware-archive
+>   [fw-archive2]: https://github.com/sphings79/marstek-firmware-archiv
 > - The **B2500 class** (HMJ) is a **DC‑coupled** unit (PV/DC in, DC out to one
 >   or two external microinverters), so it steers its **DC output power** rather
 >   than an AC inverter setpoint. Its controller is **integer‑only** and

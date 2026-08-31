@@ -1,17 +1,11 @@
-"""Tests for :class:`B2500SteeringController` — the B2500 (HMJ) DC-output steering.
+"""Tests for :class:`B2500SteeringController` — the B2500 (HMJ) DC output.
 
-Unlike the Venus controllers (an AC inverter nulling grid power with a float
-ramp law), the B2500 is **DC-coupled**: it steers its DC output power per channel
-with an integer hysteresis loop. ``GOLDEN`` are regulator trajectories
-``(cmd, output)`` for the real B2500 — fixed setpoint, ``cmd = 60`` start, output
-fed back each cycle (``power := previous output``); the controller reproduces
-them exactly. The full :meth:`step` uses an **incremental** setpoint
-(``output + 0.9 * grid``), so in a closed loop (``grid = load - output``) the
-output integrates the grid to zero — verified separately.
-
-``cmd`` is an internal command unit, not watts: ``output = (cmd - 5) * 10 / 59``,
-so a ±100 ``cmd`` step moves the output by only ~17 W/cycle. SOC and temperature
-are a separate BMS subsystem and never enter this loop.
+These follow the ``HMJ-2`` V118 firmware: a device-wide integrator running every
+500 ms, clamped to ``[pmin, p]``, gated by a ±9 W settle band with an
+``adjust_time`` re-seed, feeding two outputs that each carry a ``pmin/2`` floor
+and a 500 ms dwell after a target change. The hysteresis loop the previous
+model was built on is dead code in the firmware and is deliberately not tested
+here — see the module docstring.
 """
 
 from __future__ import annotations
@@ -19,252 +13,213 @@ from __future__ import annotations
 import pytest
 
 from astrameter.simulator.b2500_steering import (
-    DEADBAND_W,
+    MAX_OUTPUT_W,
     MIN_CHANNEL_OUTPUT_W,
+    MIN_OUTPUT_W,
+    SETTLE_BAND_W,
+    STANDBY_CMD_DUAL_W,
     B2500SteeringController,
 )
 
-# Closed-loop regulator trajectories: (cmd, output) per cycle, output fed back.
-GOLDEN = [
-    {
-        "name": "converge_300",
-        "setpoint": 300,
-        "steps": [
-            (160, 26),
-            (260, 43),
-            (360, 60),
-            (460, 77),
-            (560, 94),
-            (660, 111),
-            (760, 127),
-            (860, 144),
-            (960, 161),
-            (1060, 178),
-            (1160, 195),
-            (1260, 212),
-            (1360, 229),
-            (1460, 246),
-            (1560, 263),
-            (1660, 280),
-            (1760, 297),
-            (1760, 297),
-            (1760, 297),
-        ],
-    },
-    {
-        "name": "converge_324",
-        "setpoint": 324,
-        "steps": [
-            (160, 26),
-            (260, 43),
-            (360, 60),
-            (460, 77),
-            (560, 94),
-            (660, 111),
-            (760, 127),
-            (860, 144),
-            (960, 161),
-            (1060, 178),
-            (1160, 195),
-            (1260, 212),
-            (1360, 229),
-            (1460, 246),
-            (1560, 263),
-            (1660, 280),
-            (1760, 297),
-            (1860, 314),
-            (1860, 314),
-            (1860, 314),
-        ],
-    },
-    {
-        "name": "converge_400",
-        "setpoint": 400,
-        "steps": [
-            (160, 26),
-            (260, 43),
-            (360, 60),
-            (460, 77),
-            (560, 94),
-            (660, 111),
-            (760, 127),
-            (860, 144),
-            (960, 161),
-            (1060, 178),
-            (1160, 195),
-            (1260, 212),
-            (1360, 229),
-            (1460, 246),
-            (1560, 263),
-            (1660, 280),
-            (1760, 297),
-            (1860, 314),
-            (1960, 331),
-            (2060, 348),
-            (2160, 365),
-            (2260, 382),
-            (2360, 399),
-            (2360, 399),
-            (2360, 399),
-        ],
-    },
-]
+ENV = 2500
 
 
-@pytest.mark.parametrize("scenario", GOLDEN, ids=lambda s: s["name"])
-def test_matches_golden_trajectory(scenario: dict) -> None:
-    c = B2500SteeringController()
-    power = 0
-    for i, (exp_cmd, exp_out) in enumerate(scenario["steps"]):
-        out = c.regulate(scenario["setpoint"], power)
-        assert (c.cmd, out) == (exp_cmd, exp_out), (
-            f"{scenario['name']} step {i}: got cmd={c.cmd} out={out}, "
-            f"want cmd={exp_cmd} out={exp_out}"
-        )
-        power = out
-
-
-def _closed_loop(load: int, max_power: int = 800, cycles: int = 120) -> int:
-    """Drive one channel against *load* with ``grid = load - output``; return the
-    settled output."""
-    c = B2500SteeringController()
-    power = 0
+def _run(ctl: B2500SteeringController, grid_of, cycles: int, dt: float = 1.0):
+    """Drive *ctl* closed-loop; return the output after each cycle."""
+    out = 0
+    trace = []
     for _ in range(cycles):
-        power = c.step(load - power, power, max_power)
-    return power
+        out = ctl.step(grid_of(out), out, dt, max_power=ENV)
+        trace.append(out)
+    return trace
 
 
-@pytest.mark.parametrize("load", [300, 600])
-def test_step_nulls_the_grid(load: int) -> None:
-    """The incremental setpoint integrates the residual grid to ~zero: in a
-    closed loop the output converges to the load (within the ±10 W deadband)."""
-    output = _closed_loop(load)
-    assert abs(output - load) <= 15  # grid nulled
+def _started() -> B2500SteeringController:
+    """A controller already producing, as one is after it has started."""
+    return B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
 
 
-def test_step_clamps_to_envelope() -> None:
-    """A load above the envelope parks the output at the max (not beyond)."""
-    output = _closed_loop(2000, max_power=800)
-    assert 780 <= output <= 815
+def test_command_can_never_be_formed_below_pmin() -> None:
+    """The lower clamp is on the command itself, not on the response."""
+    ctl = _started()
+    for _ in range(50):
+        ctl.step(1, ctl.setpoint, 1.0, max_power=ENV)
+    assert ctl.setpoint >= MIN_OUTPUT_W
 
 
-def test_step_surplus_winds_down_to_idle() -> None:
-    """A grid surplus winds the output down to idle — the B2500 has no AC input
-    and never charges."""
-    c = B2500SteeringController()
-    power = 0
-    for _ in range(60):
-        power = c.step(300 - power, power, 800)  # wind up against a load
-    assert power > 200
-    for _ in range(60):
-        power = c.step(-400, power, 800)  # sustained surplus
-    assert 0 <= power <= 20  # idle, never negative
+def test_integrator_nulls_a_steady_load() -> None:
+    """A sustained import winds the output up until the grid is nulled."""
+    load = 600
+    ctl = _started()
+    trace = _run(ctl, lambda out: load - out, 40)
+    assert abs(load - trace[-1]) <= SETTLE_BAND_W + MIN_OUTPUT_W
 
 
-def test_setpoint_drop_winds_output_back_down() -> None:
-    """After settling at 300 W, dropping the setpoint to 120 W winds the output
-    back to within the deadband (≈127 W)."""
-    c = B2500SteeringController()
-    power = 0
-    for _ in range(8):
-        power = c.regulate(300, power)
-    for _ in range(8):
-        power = c.regulate(120, power)
-    assert power == 127  # cmd 760, within +/-10 W of 120
+def test_integrator_adds_the_whole_grid_error_not_a_fraction() -> None:
+    """One 500 ms pass adds the grid error itself, not 90% of it. With both
+    outputs running the gain is 1 (see the gain-2 case below)."""
+    ctl = _started()
+    ctl._both_producing = True
+    before = ctl.setpoint
+    ctl.step(100, before, 0.5, max_power=ENV)
+    assert ctl.setpoint == before + 100
 
 
-def test_deadband_holds_within_10w() -> None:
-    """The ±10 W deadband is inclusive: power == setpoint ± 10 holds."""
-    for power, expect in [(289, "up"), (290, "hold"), (310, "hold"), (311, "down")]:
-        c = B2500SteeringController(cmd=500)
-        c.regulate(300, power)
-        if expect == "up":
-            assert c.cmd == 600
-        elif expect == "down":
-            assert c.cmd == 400
-        else:
-            assert c.cmd == 500
+def test_unsettled_output_holds_the_integrator_then_reseeds() -> None:
+    """Outside the settle band nothing happens until ``adjust_time`` elapses."""
+    ctl = B2500SteeringController(setpoint=600, producing=True)
+    # Measured output nowhere near the command, and adjust_time not yet up, so
+    # the command is held exactly where it was.
+    for _ in range(4):
+        ctl.step(200, 100, 1.0, max_power=ENV)
+    assert ctl.setpoint == 600
+    # After adjust_time the command is pulled back to reality and then stepped.
+    ctl = B2500SteeringController(setpoint=600, producing=True)
+    for _ in range(int(ctl.adjust_time) + 2):
+        ctl.step(200, 100, 1.0, max_power=ENV)
+    assert ctl.setpoint < 600  # re-seeded from the measurement, not wound up
 
 
-def test_output_calibration() -> None:
-    """output = (cmd - 5) * 10 // 59."""
-    for cmd, out in [
-        (50, 7),
-        (100, 16),
-        (200, 33),
-        (500, 83),
-        (1000, 168),
-        (2000, 338),
-    ]:
-        assert B2500SteeringController(cmd=cmd).output() == out
+def test_a_stopped_unit_does_not_integrate() -> None:
+    """With nothing producing, the 500 ms task returns before the integrator."""
+    ctl = B2500SteeringController(producing=False)
+    for _ in range(20):
+        ctl.step(MIN_OUTPUT_W - 1, 0, 1.0, max_power=ENV)
+    assert ctl.setpoint == 0
 
 
-def test_step_setpoint_is_incremental() -> None:
-    """``step`` targets ``output + 0.9 * grid`` (not an absolute fraction of
-    grid): from a 100 W output with 200 W residual import it heads toward
-    100 + 180 = 280 W, so the first cycle steps the output up."""
-    c = B2500SteeringController(cmd=600)  # output 100 W
-    assert c.output() == 100
-    out = c.step(grid=200, power=100, max_power=800)
-    assert out > 100  # rising toward 280, not parking at an absolute fraction
+def test_a_stopped_unit_restarts_once_the_import_reaches_pmin() -> None:
+    """That is the whole restart condition — and why a small import cannot."""
+    ctl = B2500SteeringController(producing=False)
+    ctl.step(MIN_OUTPUT_W, 0, 1.0, max_power=ENV)
+    assert ctl.setpoint == MIN_OUTPUT_W
 
 
-# -- minimum channel output -------------------------------------------------
+def test_small_steady_import_leaves_a_stopped_unit_at_zero() -> None:
+    """The observable behind issue #600, on the firmware-accurate model."""
+    ctl = B2500SteeringController(producing=False)
+    trace = _run(ctl, lambda out: 30 - out, 60)
+    assert set(trace) == {0}
 
 
-def test_setpoint_below_minimum_leaves_channel_off() -> None:
-    """A channel commanded under its minimum delivers nothing at all — not a
-    reduced trickle."""
-    c = B2500SteeringController()
-    assert c.regulate(MIN_CHANNEL_OUTPUT_W - 1, 0) == 0
+def test_output_is_capped_by_the_envelope() -> None:
+    ctl = _started()
+    trace = _run(ctl, lambda out: 5000 - out, 40)
+    assert max(trace) <= ENV
 
 
-def test_sub_minimum_command_never_starts_the_channel() -> None:
-    """Repeating an under-minimum command does not eventually start the output.
+def test_a_binding_envelope_reaches_the_channels() -> None:
+    """The envelope caps the total *before* the split, as the firmware does.
 
-    The regulator is an integrator, so without resetting ``cmd`` a held
-    sub-minimum setpoint would wind up over successive cycles and cross the
-    threshold on its own — turning "never responds" into "responds after a
-    delay", which is the more forgiving of the two and not what the device
-    does.
+    Trimming the summed output instead would leave each channel reporting power
+    the pack cannot supply, keep `producing` true, and let the integrator wind
+    up against an output that is not there.
     """
-    c = B2500SteeringController()
-    power = 0
-    for _ in range(500):
-        power = c.regulate(MIN_CHANNEL_OUTPUT_W - 1, power)
-        assert power == 0
+    ctl = B2500SteeringController(setpoint=200, producing=True)
+    ctl._both_producing = True
+    for _ in range(8):
+        assert ctl.step(300, 0, 1.0, max_power=0) == 0
+    assert all(ch.output == 0 for ch in ctl._channels)
+    assert ctl.producing is False
+    assert ctl.setpoint <= ctl.p_min  # parked at the floor, not wound up
 
 
-def test_command_at_the_minimum_starts_the_channel() -> None:
-    """At (not just above) the minimum the channel energizes and ramps."""
-    c = B2500SteeringController()
-    power = 0
-    for _ in range(20):
-        power = c.regulate(MIN_CHANNEL_OUTPUT_W, power)
-    assert power >= MIN_CHANNEL_OUTPUT_W - DEADBAND_W
+def test_a_partial_envelope_splits_across_both_outputs() -> None:
+    ctl = B2500SteeringController(setpoint=600, producing=True)
+    ctl._both_producing = True
+    ctl.step(0, 600, 1.0, max_power=300)
+    out = ctl.step(0, 600, 1.0, max_power=300)
+    assert out <= 300
+    assert [ch.target for ch in ctl._channels] == [150, 150]
 
 
-def test_running_channel_shuts_off_when_command_drops_below_minimum() -> None:
-    """A channel already delivering power stops outright once commanded under
-    the minimum, rather than winding down through it."""
-    c = B2500SteeringController()
-    power = 0
-    for _ in range(30):
-        power = c.regulate(300, power)
-    assert power > 200
-    assert c.regulate(MIN_CHANNEL_OUTPUT_W - 1, power) == 0
+def test_command_is_capped_at_p() -> None:
+    ctl = _started()
+    for _ in range(60):
+        ctl.step(500, ctl.setpoint, 1.0, max_power=ENV)
+    assert ctl.setpoint <= ctl.p
 
 
-def test_minimum_can_be_disabled() -> None:
-    """``min_output=0`` restores an unfloored channel (a differently-paired
-    inverter, or isolating the regulator in a test)."""
-    c = B2500SteeringController(min_output=0)
-    power = 0
-    for _ in range(20):
-        power = c.regulate(20, power)
-    assert 10 <= power <= 30
+def test_p_is_capped_at_the_firmware_maximum() -> None:
+    """A real unit cannot be configured above 800 W however big the pack."""
+    assert B2500SteeringController(p=2500).p == MAX_OUTPUT_W
 
 
-def test_closed_loop_ignores_a_sub_minimum_load() -> None:
-    """A load one channel could never serve is left entirely unserved."""
-    assert _closed_loop(MIN_CHANNEL_OUTPUT_W - 5) == 0
+def test_at_pmin_each_output_carries_half_of_it() -> None:
+    ctl = B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
+    ctl.step(0, MIN_OUTPUT_W, 1.0, max_power=ENV)  # first pass sets the target
+    out = ctl.step(0, MIN_OUTPUT_W, 1.0, max_power=ENV)  # dwell over
+    assert out == 2 * MIN_CHANNEL_OUTPUT_W
+
+
+def test_sustained_export_parks_the_unit_in_standby() -> None:
+    """The integrator cannot wind below ``pmin``; the standby detector can."""
+    ctl = B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
+    for _ in range(40):
+        ctl.step(-300, MIN_OUTPUT_W, 1.0, max_power=ENV)
+    assert ctl.standby
+    assert ctl.setpoint <= STANDBY_CMD_DUAL_W
+
+
+def test_standby_needs_the_command_already_at_pmin() -> None:
+    """A big export while running winds down first, it does not jump to standby."""
+    ctl = B2500SteeringController(setpoint=600, producing=True)
+    ctl.step(-300, 600, 0.5, max_power=ENV)
+    assert not ctl.standby
+
+
+def test_standby_exits_when_the_import_reaches_pmin() -> None:
+    ctl = B2500SteeringController(standby=True, setpoint=STANDBY_CMD_DUAL_W)
+    for _ in range(6):
+        ctl.step(MIN_OUTPUT_W, 0, 1.0, max_power=ENV)
+    assert not ctl.standby
+    assert ctl.setpoint >= MIN_OUTPUT_W
+
+
+def test_channel_dwell_delays_the_first_response() -> None:
+    """After a target change a channel waits before commanding anything."""
+    ctl = B2500SteeringController(setpoint=0, producing=True)
+    first = ctl.step(400, 0, 0.1, max_power=ENV)
+    assert first == 0  # still inside the 500 ms dwell
+
+
+def test_single_mode_halves_both_limits() -> None:
+    ctl = B2500SteeringController(single_mode=True)
+    assert ctl.p_max == ctl.p // 2
+    assert ctl.p_min == ctl.pmin // 2
+
+
+def test_pmin_of_forty_models_the_other_inverter_class() -> None:
+    """``pmin`` follows the paired inverter: 40 W for ids in [5000, 5500)."""
+    ctl = B2500SteeringController(pmin=40, producing=False)
+    ctl.step(40, 0, 1.0, max_power=ENV)
+    assert ctl.setpoint == 40
+
+
+def test_floor_can_be_disabled() -> None:
+    ctl = B2500SteeringController(pmin=0, producing=True)
+    trace = _run(ctl, lambda out: 30 - out, 40)
+    assert trace[-1] > 0
+
+
+@pytest.mark.parametrize("load", [200, 400, 600])
+def test_converges_across_loads(load: int) -> None:
+    ctl = _started()
+    trace = _run(ctl, lambda out: load - out, 60)
+    assert abs(load - trace[-1]) <= SETTLE_BAND_W + MIN_OUTPUT_W
+
+
+def test_gain_doubles_while_only_one_output_runs() -> None:
+    """Gain 2 needs *either* output idle, which the producing gate still lets
+    through — it only returns when neither is."""
+    ctl = B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
+    ctl._both_producing = False
+    before = ctl.setpoint
+    ctl.step(100, before, 0.5, max_power=ENV)
+    assert ctl.setpoint == before + 200
+
+    ctl = B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
+    ctl._both_producing = True
+    before = ctl.setpoint
+    ctl.step(100, before, 0.5, max_power=ENV)
+    assert ctl.setpoint == before + 100

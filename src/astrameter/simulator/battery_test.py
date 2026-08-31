@@ -7,9 +7,12 @@ from unittest.mock import patch
 import pytest
 
 from astrameter.simulator.battery import BatterySimulator
-from astrameter.simulator.firmware_steering import FirmwareSteeringController
 from astrameter.simulator.runner import parse_config, validate_config
-from astrameter.simulator.venus_d_steering import VenusDSteeringController
+from astrameter.simulator.venus_integer_steering import (
+    DEADBAND_HMG50_W,
+    PARK_ALONE_HMG50,
+    VenusIntegerSteeringController,
+)
 
 
 def _battery(delay: int = 0, **kwargs) -> BatterySimulator:
@@ -197,8 +200,10 @@ def test_steering_deadband_uses_own_output() -> None:
     b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
     assert b.target_power == 0.0
 
+    # 30 W sits outside the HMG-50's park (|setpoint| <= 20 and grid <= 15), so
+    # the response survives instead of being snapped back to zero.
     b._current_power = 100.0
-    b._handle_ct_response(_response_fields(phase_targets=(15, 0, 0)))
+    b._handle_ct_response(_response_fields(phase_targets=(30, 0, 0)))
     assert b.target_power != 0.0
 
 
@@ -212,16 +217,18 @@ def test_steering_spike_debounced_for_one_response() -> None:
     assert b.target_power == 0.0  # first sample debounced
 
     b._handle_ct_response(fields)
-    # Discharge begins, exactly the bare ramp law's first response to g=200.
-    expected = -FirmwareSteeringController().step_raw(200, 800.0, -800.0)
+    # Discharge begins, exactly the bare integer law's first response to g=200.
+    expected = VenusIntegerSteeringController(
+        park_alone=PARK_ALONE_HMG50, deadband=DEADBAND_HMG50_W
+    ).step_raw(200, 800.0, -800.0, out=0)
     assert b.target_power == expected
 
 
 def test_b2500_device_type_selects_dc_output_steering() -> None:
     """A B2500-family device type (HMA/HMJ/HMK) steers its DC output via two
-    channels; a Venus device type uses the ramp controller."""
-    assert len(_battery(meter_dev_type="HMJ-2")._b2500_channels) == 2
-    assert _battery(meter_dev_type="HMG-50")._b2500_channels == []
+    channels; an AC-coupled device does not."""
+    assert _battery(meter_dev_type="HMJ-2")._b2500 is not None
+    assert _battery(meter_dev_type="HMG-50")._b2500 is None
 
 
 def _drive_b2500(b: BatterySimulator, load: float, cycles: int) -> None:
@@ -326,162 +333,39 @@ def test_parse_config_venus_d_fields() -> None:
     assert bc.dc_input_power == 500.0
 
 
-# ---------------------------------------------------------------------------
-# Venus D (VNSD-0) integer steering law
-# ---------------------------------------------------------------------------
-
-# ``VENUS_D_GOLDEN`` pins :class:`VenusDSteeringController` to the Venus D's
-# observed CT-following behaviour. Each trajectory fixes the loop gain
-# (``ctrl_ratio`` %) and the discharge/charge limits (``hi``/``lo``) and lists
-# ``(error, measured_grid, phase_count, setpoint)`` steps the controller must
-# reproduce exactly (single precision, +setpoint = discharge).
-VENUS_D_GOLDEN = [
-    # Sustained 500 W import integrates ~495 W/cycle to the discharge clamp —
-    # no near-zero step-size shaping, unlike the HMG-50 ramp.
-    {
-        "name": "import_ramp",
-        "ratio": 100,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (500, 500, 1, 495),
-            (500, 500, 1, 990),
-            (500, 500, 1, 1485),
-            (500, 500, 1, 1980),
-            (500, 500, 1, 2475),
-            (500, 500, 1, 2500),
-        ],
-    },
-    # Sustained export integrates the other way (charge), no -5 W bias branch.
-    {
-        "name": "export_ramp",
-        "ratio": 100,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (-500, -500, 1, -500),
-            (-500, -500, 1, -1000),
-            (-500, -500, 1, -1500),
-            (-500, -500, 1, -2000),
-            (-500, -500, 1, -2500),
-            (-500, -500, 1, -2500),
-        ],
-    },
-    # ctrl_ratio scales the step: 50 % ⇒ ~245 W/cycle on a 500 W import.
-    {
-        "name": "gain_50_import",
-        "ratio": 50,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (500, 500, 1, 245),
-            (500, 500, 1, 490),
-            (500, 500, 1, 735),
-            (500, 500, 1, 980),
-        ],
-    },
-    # 30 % gain on export, truncated toward zero (-149, not -150).
-    {
-        "name": "gain_30_export",
-        "ratio": 30,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (-500, -500, 1, -149),
-            (-500, -500, 1, -299),
-            (-500, -500, 1, -449),
-            (-500, -500, 1, -599),
-        ],
-    },
-    # Single-phase ±11 W deadband: a 12 W import acts (→7), 10/8 W hold at 0.
-    {
-        "name": "deadband_single",
-        "ratio": 100,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (10, 10, 1, 0),
-            (8, 8, 1, 0),
-            (12, 12, 1, 7),
-            (-8, -8, 1, 0),
-        ],
-    },
-    # Combined (phase D) widens the deadband to ±15 W: 16 W acts (→11).
-    {
-        "name": "deadband_combined",
-        "ratio": 100,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (12, 12, 2, 0),
-            (14, 14, 2, 0),
-            (16, 16, 2, 11),
-            (-14, -14, 2, 0),
-        ],
-    },
-    # Discharge clamp at hi=800; charge clamp at lo=-2200.
-    {
-        "name": "clamp_discharge",
-        "ratio": 100,
-        "hi": 800,
-        "lo": -2200,
-        "steps": [(3000, 3000, 1, 800)] * 4,
-    },
-    {
-        "name": "clamp_charge",
-        "ratio": 100,
-        "hi": 800,
-        "lo": -2200,
-        "steps": [(-3000, -3000, 1, -2200)] * 4,
-    },
-    # When the device's own grid reading disagrees in sign with the error, the
-    # step is the full error (gain-1 branch), no -5 W bias.
-    {
-        "name": "signflip",
-        "ratio": 100,
-        "hi": 2500,
-        "lo": -2500,
-        "steps": [
-            (50, -50, 1, 50),
-            (-50, 50, 1, 0),
-            (300, 300, 1, 295),
-        ],
-    },
-]
+@pytest.mark.parametrize("dev", ["VNSD-0", "VNSE3-0", "VNSA-0"])
+def test_venus_device_types_select_integer_steering(dev: str) -> None:
+    """Every AC-coupled Venus uses the integer integrator, not the B2500
+    DC-output controller — all three firmwares run the same law."""
+    b = _battery(meter_dev_type=dev)
+    assert b._venus_steering is not None
+    assert b._b2500 is None
 
 
-@pytest.mark.parametrize("case", VENUS_D_GOLDEN, ids=lambda c: c["name"])
-def test_venus_d_steering_golden(case: dict) -> None:
-    """The Venus D controller reproduces its reference trajectories exactly."""
-    ctl = VenusDSteeringController(ctrl_ratio=case["ratio"])
-    for error, measured_grid, phase_count, expected in case["steps"]:
-        got = ctl.step(
-            error,
-            case["hi"],
-            case["lo"],
-            measured_grid=measured_grid,
-            phase_count=phase_count,
-        )
-        assert got == expected, (
-            f"{case['name']}: error={error} -> {got}, expected {expected}"
-        )
-        assert ctl.setpoint == got
+def test_b2500_seeded_start_leaves_the_gain_state_consistent() -> None:
+    """A mid-flight start must not leave the channels reading idle while the
+    controller reads producing — that combination selects the gain-2 path on
+    the first pass against outputs that are already live."""
+    b = _battery(meter_dev_type="HMJ-2", initial_power=400.0)
+    ctl = b._b2500
+    assert ctl is not None
+    assert ctl.producing is True
+    assert ctl._both_producing is True  # not left at its default
+    assert [ch.target for ch in ctl._channels] == [200, 200]
+    # A seed under the device minimum still starts at pmin, never below it.
+    low = _battery(meter_dev_type="HMJ-2", initial_power=30.0)
+    assert low._b2500 is not None
+    assert low._b2500.setpoint == low._b2500.p_min
 
 
-def test_venus_d_invalid_ctrl_ratio_falls_back_to_unity() -> None:
-    """ctrl_ratio outside 30-100 % falls back to 100 % (unity), like the device."""
-    unity = VenusDSteeringController(ctrl_ratio=100).step(500, 2500, -2500)
-    for bad in (0, 29, 101, 255):
-        assert VenusDSteeringController(ctrl_ratio=bad).step(500, 2500, -2500) == unity
-
-
-def test_venus_d_device_type_selects_integer_steering() -> None:
-    """A VNSD-0 device type uses the integer integrator, not the float ramp or
-    the B2500 DC-output controller."""
-    b = _battery(meter_dev_type="VNSD-0")
-    assert b._venus_d_steering is not None
-    assert b._b2500_channels == []
-    assert _battery(meter_dev_type="HMG-50")._venus_d_steering is None
+def test_hmg50_also_runs_the_integer_law_but_with_its_own_constants() -> None:
+    """The HMG-50 only takes its float gain-table ramp for CT model code 1, and
+    AstraMeter's ``HME-4`` greeting is not that. It runs the integer law, with a
+    wider rest deadband and a wider single-unit park."""
+    b = _battery(meter_dev_type="HMG-50")
+    assert b._venus_steering is not None
+    assert b._venus_steering.deadband == DEADBAND_HMG50_W
+    assert b._venus_steering.park_alone == PARK_ALONE_HMG50
 
 
 def test_venus_d_battery_discharges_on_import_charges_on_export() -> None:
