@@ -63,7 +63,7 @@ import socket
 import sys
 from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from astrameter.ct002.balancer import device_capabilities
@@ -828,6 +828,18 @@ _B2500 = BatterySpec(
     capacity_wh=2240.0,
     max_dc_input=1000,
     initial_soc=0.5,
+)
+
+# A B2500 in a same-phase pair, sized to serve a household on its own charge
+# for the run: no DC input, so the only thing deciding its output is what the
+# balancer commands.  Matches the pair in issue #600 (two HMJ-2 on phase A).
+_B2500_PAIR = BatterySpec(
+    device_type="HMJ-2",
+    phase="A",
+    max_charge_power=0,
+    max_discharge_power=800,
+    capacity_wh=5120.0,
+    initial_soc=0.8,
 )
 
 # Efficiency-optimization mode knobs (mirrors a typical multi-battery setup).
@@ -1647,6 +1659,37 @@ def build_scenarios() -> dict[str, Scenario]:
                 "saturation_alpha": 0.9,
             },
             meter_latency_s=0.5,
+        )
+    )
+
+    # Two B2500 on one phase with MIN_DC_OUTPUT set *below* the ~80 W a
+    # channel pair needs to start -- the configuration issue #600 reports.
+    # The floor is where the balancer parks a starved unit, so a value under
+    # the start floor parks it at a command it cannot execute; whether that
+    # counts as evidence of saturation decides if the second unit ever gets a
+    # real share or sits at 0 W while the first carries the house.  Nothing
+    # else in the suite sets MIN_DC_OUTPUT, so this is the only scenario that
+    # exercises the floor at all.
+    dur_floor = 3600.0
+    add(
+        Scenario(
+            name="b2500_pair_dc_floor",
+            description="Two DC-only B2500 on one phase, MIN_DC_OUTPUT below "
+            "their start floor",
+            batteries=[
+                # One unit already carrying the house, the other at rest --
+                # the state a restart leaves behind, and the one the reporter
+                # captured (230 W against 4 W).  Starting both from zero would
+                # split the first correction evenly and neither would ever be
+                # starved.
+                replace(_B2500_PAIR, initial_power=250.0),
+                _B2500_PAIR,
+            ],
+            duration_s=dur_floor,
+            base_load=[250.0, 0.0, 0.0],
+            loads=list(_HOUSEHOLD_LOADS),
+            build_events=lambda rng: _household_steps(rng, dur_floor),
+            ct_kwargs={"min_dc_output": 20.0},
         )
     )
 
