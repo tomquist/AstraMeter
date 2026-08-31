@@ -4,22 +4,13 @@ import json
 import ssl
 
 import aiomqtt
-from jsonpath_ng.ext import parse
 
 from astrameter.config.logger import logger
 
 from .base import Powermeter
+from .json_utils import extract_json_value
 
 RECONNECT_DELAY = 5
-
-
-def extract_json_value(data, path):
-    jsonpath_expr = parse(path)
-    match = jsonpath_expr.find(data)
-    if match:
-        return float(match[0].value)
-    else:
-        raise ValueError("No match found for the JSON path")
 
 
 class MqttPowermeter(Powermeter):

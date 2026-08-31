@@ -1,9 +1,7 @@
-import aiohttp
-
-from .base import Powermeter
+from .base import HttpPollingPowermeter
 
 
-class IoBroker(Powermeter):
+class IoBroker(HttpPollingPowermeter):
     def __init__(
         self,
         ip: str,
@@ -13,38 +11,17 @@ class IoBroker(Powermeter):
         power_input_alias: str,
         power_output_alias: str,
     ):
+        super().__init__(f"http://{ip}:{port}")
         self.ip = ip
         self.port = port
         self.current_power_alias = current_power_alias
         self.power_calculate = power_calculate
         self.power_input_alias = power_input_alias
         self.power_output_alias = power_output_alias
-        self.session: aiohttp.ClientSession | None = None
-
-    async def start(self) -> None:
-        if self.session:
-            return
-        # Fail fast: the battery polls ~1/s, so a slow source should error
-        # quickly and let the next poll retry rather than pin a handler.
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=2, connect=1)
-        )
-
-    async def stop(self) -> None:
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-    async def get_json(self, path):
-        if not self.session:
-            raise RuntimeError("Session not started; call start() first")
-        url = f"http://{self.ip}:{self.port}{path}"
-        async with self.session.get(url) as resp:
-            return await resp.json(content_type=None)
 
     async def get_powermeter_watts(self) -> list[float]:
         if not self.power_calculate:
-            response = await self.get_json(f"/getBulk/{self.current_power_alias}")
+            response = await self._get_json(f"/getBulk/{self.current_power_alias}")
             for item in response:
                 if item["id"] == self.current_power_alias:
                     return [int(item["val"])]
@@ -52,7 +29,7 @@ class IoBroker(Powermeter):
                 f"Alias {self.current_power_alias!r} not found in response"
             )
         else:
-            response = await self.get_json(
+            response = await self._get_json(
                 f"/getBulk/{self.power_input_alias},{self.power_output_alias}"
             )
             power_in = 0

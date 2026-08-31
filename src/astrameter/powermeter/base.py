@@ -1,5 +1,11 @@
 # Powermeter classes
+from __future__ import annotations
+
 from collections.abc import Callable
+from typing import Any
+
+import aiohttp
+from aiohttp import ClientTimeout
 
 
 def stream_fresh(
@@ -71,3 +77,40 @@ class Powermeter:
 
     def reset(self):
         pass
+
+
+#: Default timeout shared by all HTTP-polling powermeters.  The battery polls
+#: roughly once per second and gives up on the CT long before a 10 s read
+#: would return, so fail fast: a slow/unresponsive source should error
+#: quickly and let the next poll retry rather than pin a request handler.
+_DEFAULT_HTTP_TIMEOUT = ClientTimeout(total=2, connect=1)
+
+
+class HttpPollingPowermeter(Powermeter):
+    """Base for polling-based HTTP powermeters with shared session lifecycle.
+
+    Subclasses pass ``base_url`` (e.g. ``http://192.168.1.1`` or
+    ``http://192.168.1.1:8080``) and use :meth:`_get_json` to fetch JSON
+    from relative paths.
+    """
+
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url
+        self.session: aiohttp.ClientSession | None = None
+
+    async def start(self) -> None:
+        if self.session:
+            return
+        self.session = aiohttp.ClientSession(timeout=_DEFAULT_HTTP_TIMEOUT)
+
+    async def stop(self) -> None:
+        if self.session:
+            await self.session.close()
+            self.session = None
+
+    async def _get_json(self, path: str) -> Any:
+        if not self.session:
+            raise RuntimeError("Session not started; call start() first")
+        url = f"{self._base_url}{path}"
+        async with self.session.get(url) as resp:
+            return await resp.json(content_type=None)

@@ -1,12 +1,10 @@
+from typing import Any
 from urllib.parse import urlencode
 
-import aiohttp
-from aiohttp import ClientTimeout
-
-from .base import Powermeter
+from .base import HttpPollingPowermeter
 
 
-class Tasmota(Powermeter):
+class Tasmota(HttpPollingPowermeter):
     def __init__(
         self,
         ip: str,
@@ -19,6 +17,7 @@ class Tasmota(Powermeter):
         json_power_output_mqtt_label: str | list[str],
         json_power_calculate: bool,
     ):
+        super().__init__(f"http://{ip}")
         self.ip = ip
         self.user = user
         self.password = password
@@ -57,36 +56,23 @@ class Tasmota(Powermeter):
                     "JSON_POWER_INPUT_MQTT_LABEL and JSON_POWER_OUTPUT_MQTT_LABEL "
                     "entries cannot be empty when JSON_POWER_CALCULATE is enabled"
                 )
-        self.session: aiohttp.ClientSession | None = None
 
-    async def start(self) -> None:
-        if self.session:
-            return
-        # Fail fast: the battery polls ~1/s, so a slow source should error
-        # quickly and let the next poll retry rather than pin a handler.
-        self.session = aiohttp.ClientSession(timeout=ClientTimeout(total=2, connect=1))
-
-    async def stop(self) -> None:
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-    async def get_json(self, path):
+    async def _get_json(self, path: str) -> Any:
         if not self.session:
             raise RuntimeError("Session not started; call start() first")
-        url = f"http://{self.ip}{path}"
+        url = f"{self._base_url}{path}"
         async with self.session.get(url) as resp:
             resp.raise_for_status()
             return await resp.json(content_type=None)
 
     async def get_powermeter_watts(self) -> list[float]:
         if not self.user:
-            response = await self.get_json("/cm?cmnd=status%2010")
+            response = await self._get_json("/cm?cmnd=status%2010")
         else:
             qs = urlencode(
                 {"user": self.user, "password": self.password, "cmnd": "status 10"}
             )
-            response = await self.get_json(f"/cm?{qs}")
+            response = await self._get_json(f"/cm?{qs}")
         value = response[self.json_status][self.json_payload_mqtt_prefix]
         if not self.json_power_calculate:
             return [int(value[label]) for label in self.json_power_mqtt_labels]
