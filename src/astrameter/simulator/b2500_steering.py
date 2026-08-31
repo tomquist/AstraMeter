@@ -251,8 +251,16 @@ class B2500SteeringController:
         # branch falls through to the doubling path when ch0 is below it, and
         # again when ch0 is above but ch1 is below). That is a weaker condition
         # than the gate above, which returns only when *neither* output is
-        # producing — so exactly one output running is the reachable gain-2
-        # state.
+        # producing — so on the device, exactly one output running is the
+        # gain-2 state.
+        #
+        # In *this model* that state does not arise: the split below gives both
+        # outputs the same target, so they are always both live or both idle,
+        # and single-output mode forces gain 1 regardless. The condition is
+        # written to match the firmware rather than to be exercised, and only
+        # the unit test drives it. Real asymmetry between the two channels
+        # comes from hardware and measurement differences this model does not
+        # carry, so inventing it here would be speculation, not fidelity.
         gain = 1 if (self.single_mode or self._both_producing) else 2
         sp = self.setpoint + gain * grid
         self.setpoint = max(self.p_min, min(sp, self.p_max))
