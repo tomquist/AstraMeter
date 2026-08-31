@@ -190,6 +190,7 @@ class B2500SteeringController:
     producing: bool = False  # is either channel drawing >= 500 mA?
     _channels: list[_Channel] = field(default_factory=lambda: [_Channel(), _Channel()])
     standby: bool = False  # output detector has parked the command
+    _both_producing: bool = False  # both outputs above the producing threshold
     _outer: float = 0.0  # time owed to the 500 ms task
     _since_adjust: float = 0.0
     _export_passes: int = 0
@@ -245,7 +246,14 @@ class B2500SteeringController:
             self._since_adjust = 0.0
         else:
             return
-        gain = 1 if self.single_mode else 2 if not self.producing else 1
+        # Gain 2 whenever *either* output is below the producing threshold and
+        # the unit is not in single-output mode (0x0801a3f4-0x0801a422: the
+        # branch falls through to the doubling path when ch0 is below it, and
+        # again when ch0 is above but ch1 is below). That is a weaker condition
+        # than the gate above, which returns only when *neither* output is
+        # producing — so exactly one output running is the reachable gain-2
+        # state.
+        gain = 1 if (self.single_mode or self._both_producing) else 2
         sp = self.setpoint + gain * grid
         self.setpoint = max(self.p_min, min(sp, self.p_max))
 
@@ -294,5 +302,7 @@ class B2500SteeringController:
         # producing even though this model's 500 ms dwell has not released its
         # output yet — otherwise every target change would read as a stop and
         # send the unit through the standby-exit path.
-        self.producing = out > 0 or any(ch.target > 0 for ch in self._channels)
+        live = [ch.output > 0 or ch.target > 0 for ch in self._channels]
+        self.producing = any(live)
+        self._both_producing = all(live)
         return out

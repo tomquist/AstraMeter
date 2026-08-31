@@ -164,6 +164,12 @@ class BatterySimulator:
         # running when a disturbance arrives. The relevant steering controller's
         # setpoint is seeded so its ramp law holds the seeded output instead of
         # winding back to zero on the first cycle.
+        # A DC-coupled B2500 has no AC input and cannot charge, so a negative
+        # seed would start it in a state it can never physically be in and
+        # would simulate charging until the first CT reply displaced it. Clamp
+        # the seed itself, not just the controller's command.
+        if initial_power and self._b2500 is not None:
+            initial_power = max(0, initial_power)
         if initial_power:
             self._current_power = float(initial_power)
             self._target_power = float(initial_power)
@@ -175,7 +181,7 @@ class BatterySimulator:
                 # has to start from the seeded output — and it only integrates
                 # while it is actually producing.
                 self._b2500.setpoint = max(self._b2500.p_min, round(initial_power))
-                self._b2500.producing = initial_power > 0
+                self._b2500.producing = True
             else:
                 # Ramp controller: target = -setpoint, so seed the inverse.
                 self._steering.setpoint = -float(initial_power)

@@ -26,8 +26,10 @@ just around 20-30 W for any shortfall the rest of the pool cannot cover, however
 large that shortfall is — see PART A.
 
 For a battery whose minimum actionable command is higher than that the state is
-permanent: a B2500 channel cannot energize below ~40 W (so ~80 W for the unit),
-so it is asked for 22 W forever and answers 0 W forever.  Nothing rescues it:
+permanent: a B2500's firmware clamps its own command to at least ``pmin``
+(80 W with the common inverter, 40 W with the other class), and a stopped unit
+only restarts once the grid import reaches that figure, so it is asked for 22 W
+forever and answers 0 W forever.  Nothing rescues it:
 ``MIN_EFFICIENT_POWER = 0`` (the default) disables rotation and probing entirely,
 and a restart only re-runs the same trap.
 
@@ -40,10 +42,12 @@ import time
 
 from astrameter.ct002.balancer import BalancerConfig, ConsumerMode, LoadBalancer
 from astrameter.simulator.b2500_steering import (
-    MIN_CHANNEL_OUTPUT_W,
+    MIN_OUTPUT_W,
     B2500SteeringController,
 )
-from astrameter.simulator.venus_d_steering import VenusDSteeringController
+from astrameter.simulator.venus_integer_steering import (
+    VenusIntegerSteeringController,
+)
 
 # The reporter's add-on settings (issue #600 and the follow-up on the Venus):
 # active control, fair distribution, no efficiency limiting, no DC floor.
@@ -81,7 +85,12 @@ class _Clock:
 
 
 class _Battery:
-    """A battery plant running the device's real steering law.
+    """A battery plant running each device's firmware-derived steering law.
+
+    Both laws were read out of the shipped firmware images: the B2500's
+    integrator and its ``pmin`` clamp from HMJ-2 V118, the Venus integrator
+    from the VNSA-0 / VNSD-0 / VNSE3-0 images (and validated by executing the
+    routine under emulation).
 
     ``healthy`` is the "mode"/SoC switch from the report: while it is ``False``
     the unit answers every command with 0 W (empty, or in an app mode that does
@@ -96,14 +105,10 @@ class _Battery:
         self.power = 0.0
         self.ramp = 400.0
         self._dc = device_type.upper().startswith(("HMA", "HMJ", "HMK"))
-        # B2500: two DC channels, neither able to energize below ~40 W.
-        self._channels = [
-            B2500SteeringController(
-                max_output=MAX_POWER // 2, min_output=MIN_CHANNEL_OUTPUT_W
-            )
-            for _ in range(2)
-        ]
-        self._venus_d = VenusDSteeringController()
+        # B2500: the firmware's device-wide integrator, whose command is
+        # clamped to [pmin, p] and so can never be formed below pmin.
+        self._b2500 = B2500SteeringController(pmin=MIN_OUTPUT_W)
+        self._venus = VenusIntegerSteeringController()
 
     def step(self, reading: float, dt: float) -> None:
         if not self.healthy:
@@ -112,14 +117,18 @@ class _Battery:
         grid = round(reading)
         if self._dc:
             # Mirrors BatterySimulator._steer_b2500_output.
-            cur = max(0, round(self.power))
-            target = max(0, min(cur + grid * 9 // 10, MAX_POWER))
-            out = sum(ch.regulate(target // 2, cur // 2) for ch in self._channels)
-            desired = float(out)
+            desired = float(
+                self._b2500.step(
+                    grid, max(0, round(self.power)), dt, max_power=MAX_POWER
+                )
+            )
         else:
             desired = float(
-                self._venus_d.step(
-                    grid, float(MAX_POWER), -float(MAX_POWER), measured_grid=grid
+                self._venus.step(
+                    grid,
+                    float(MAX_POWER),
+                    -float(MAX_POWER),
+                    out=self.power,
                 )
             )
         diff = max(-self.ramp * dt, min(self.ramp * dt, desired - self.power))
@@ -257,10 +266,12 @@ def part_c() -> None:
         )
     print(
         "  A Venus gets the same ~1% trickle while saturated, but its steering law\n"
-        "  integrates its *own* setpoint (Venus D: setpoint += gain*g - 5 per poll),\n"
-        "  so a repeated 22 W command accumulates until the unit starts and the\n"
-        "  score decays. A device that regulates on measured output instead — the\n"
-        "  B2500 — can never accumulate, so it stays locked."
+        "  integrates its *own* setpoint (setpoint += gain*g - 5 per poll), so a\n"
+        "  repeated 22 W command accumulates until the unit starts and the score\n"
+        "  decays. A B2500 cannot: its firmware clamps its own command to at least\n"
+        "  pmin, and once stopped it restarts only when the grid import itself\n"
+        "  reaches pmin — so a 22 W request is never executed, however often it\n"
+        "  is repeated, and the unit stays locked."
     )
 
 

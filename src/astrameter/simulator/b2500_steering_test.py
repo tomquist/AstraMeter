@@ -55,9 +55,11 @@ def test_integrator_nulls_a_steady_load() -> None:
     assert abs(load - trace[-1]) <= SETTLE_BAND_W + MIN_OUTPUT_W
 
 
-def test_integrator_gain_is_one_not_a_fraction() -> None:
-    """One 500 ms pass adds the whole grid error, not a fraction of it."""
+def test_integrator_adds_the_whole_grid_error_not_a_fraction() -> None:
+    """One 500 ms pass adds the grid error itself, not 90% of it. With both
+    outputs running the gain is 1 (see the gain-2 case below)."""
     ctl = _started()
+    ctl._both_producing = True
     before = ctl.setpoint
     ctl.step(100, before, 0.5, max_power=ENV)
     assert ctl.setpoint == before + 100
@@ -66,10 +68,11 @@ def test_integrator_gain_is_one_not_a_fraction() -> None:
 def test_unsettled_output_holds_the_integrator_then_reseeds() -> None:
     """Outside the settle band nothing happens until ``adjust_time`` elapses."""
     ctl = B2500SteeringController(setpoint=600, producing=True)
-    # Measured output nowhere near the command: no integration for a while.
+    # Measured output nowhere near the command, and adjust_time not yet up, so
+    # the command is held exactly where it was.
     for _ in range(4):
         ctl.step(200, 100, 1.0, max_power=ENV)
-    assert ctl.setpoint == 600 or ctl.setpoint != 600
+    assert ctl.setpoint == 600
     # After adjust_time the command is pulled back to reality and then stepped.
     ctl = B2500SteeringController(setpoint=600, producing=True)
     for _ in range(int(ctl.adjust_time) + 2):
@@ -179,3 +182,19 @@ def test_converges_across_loads(load: int) -> None:
     ctl = _started()
     trace = _run(ctl, lambda out: load - out, 60)
     assert abs(load - trace[-1]) <= SETTLE_BAND_W + MIN_OUTPUT_W
+
+
+def test_gain_doubles_while_only_one_output_runs() -> None:
+    """Gain 2 needs *either* output idle, which the producing gate still lets
+    through — it only returns when neither is."""
+    ctl = B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
+    ctl._both_producing = False
+    before = ctl.setpoint
+    ctl.step(100, before, 0.5, max_power=ENV)
+    assert ctl.setpoint == before + 200
+
+    ctl = B2500SteeringController(setpoint=MIN_OUTPUT_W, producing=True)
+    ctl._both_producing = True
+    before = ctl.setpoint
+    ctl.step(100, before, 0.5, max_power=ENV)
+    assert ctl.setpoint == before + 100
