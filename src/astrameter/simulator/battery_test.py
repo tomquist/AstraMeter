@@ -342,6 +342,22 @@ def test_venus_device_types_select_integer_steering(dev: str) -> None:
     assert b._b2500 is None
 
 
+def test_b2500_seeded_start_leaves_the_gain_state_consistent() -> None:
+    """A mid-flight start must not leave the channels reading idle while the
+    controller reads producing — that combination selects the gain-2 path on
+    the first pass against outputs that are already live."""
+    b = _battery(meter_dev_type="HMJ-2", initial_power=400.0)
+    ctl = b._b2500
+    assert ctl is not None
+    assert ctl.producing is True
+    assert ctl._both_producing is True  # not left at its default
+    assert [ch.target for ch in ctl._channels] == [200, 200]
+    # A seed under the device minimum still starts at pmin, never below it.
+    low = _battery(meter_dev_type="HMJ-2", initial_power=30.0)
+    assert low._b2500 is not None
+    assert low._b2500.setpoint == low._b2500.p_min
+
+
 def test_hmg50_also_runs_the_integer_law_but_with_its_own_constants() -> None:
     """The HMG-50 only takes its float gain-table ramp for CT model code 1, and
     AstraMeter's ``HME-4`` greeting is not that. It runs the integer law, with a

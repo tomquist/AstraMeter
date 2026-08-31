@@ -229,6 +229,40 @@ class B2500SteeringController:
             self._integrate(int(grid), int(measured))
         return self._drive(dt, int(max_power))
 
+    def seed(self, power: int) -> None:
+        """Start already delivering *power* watts, as a mid-flight scenario does.
+
+        Sets the command, the channel state and the producing flags together.
+        Setting them piecemeal leaves the first pass reading a stale gain: the
+        channels look idle while ``producing`` says otherwise, which selects
+        the gain-2 path against outputs that are conceptually already live.
+        """
+        power = max(0, int(power))
+        self.standby = False
+        self.setpoint = max(self.p_min, power) if power else 0
+        if self.single_mode:
+            targets = [min(self.setpoint, self.p // 2), 0]
+        else:
+            half = min(self.setpoint // 2, self.p // 2)
+            targets = [half, half]
+        for ch, t in zip(self._channels, targets, strict=True):
+            ch.target = t
+            ch.output = t
+            ch.dwell = 0.0
+        self._refresh_producing()
+
+    def _refresh_producing(self) -> None:
+        """Recompute the producing flags from the channels' present state."""
+        # "Producing" is the firmware's 500 mA-per-channel test on *measured*
+        # current. Current follows a new command within milliseconds, so a
+        # channel that has just been given a non-zero target counts as
+        # producing even though this model's 500 ms dwell has not released its
+        # output yet — otherwise every target change would read as a stop and
+        # send the unit through the standby-exit path.
+        live = [ch.output > 0 or ch.target > 0 for ch in self._channels]
+        self.producing = any(live)
+        self._both_producing = all(live)
+
     def _integrate(self, grid: int, measured: int) -> None:
         """One pass of the 500 ms task (0x0800b96c -> 0x0801a3c4)."""
         if self.standby or not self.producing:
@@ -304,13 +338,5 @@ class B2500SteeringController:
             ch.set_target(t)
         out = sum(ch.advance(dt) for ch in self._channels)
         out = min(out, max(0, max_power))
-        # "Producing" is the firmware's 500 mA-per-channel test on *measured*
-        # current. Current follows a new command within milliseconds, so a
-        # channel that has just been given a non-zero target counts as
-        # producing even though this model's 500 ms dwell has not released its
-        # output yet — otherwise every target change would read as a stop and
-        # send the unit through the standby-exit path.
-        live = [ch.output > 0 or ch.target > 0 for ch in self._channels]
-        self.producing = any(live)
-        self._both_producing = all(live)
+        self._refresh_producing()
         return out

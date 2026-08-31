@@ -180,8 +180,7 @@ class BatterySimulator:
                 # The B2500's integrator accumulates onto its own command, so it
                 # has to start from the seeded output — and it only integrates
                 # while it is actually producing.
-                self._b2500.setpoint = max(self._b2500.p_min, round(initial_power))
-                self._b2500.producing = True
+                self._b2500.seed(round(initial_power))
             else:
                 # Ramp controller: target = -setpoint, so seed the inverse.
                 self._steering.setpoint = -float(initial_power)
