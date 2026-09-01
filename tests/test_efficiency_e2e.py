@@ -463,8 +463,9 @@ class TestEfficiencyE2E:
             # physically produce. The candidate can reach its own
             # ``max_discharge_power`` while the incumbent has not finished
             # ramping down, so with a 200 W house the export floor is
-            # 200 - (800 + 200) = -800 W. Past that, something is being
-            # commanded that the plant cannot explain.
+            # 200 - (800 + 200) = -800 W, which is attainable, so the
+            # ceiling itself passes. Past it, something is being commanded
+            # that the plant cannot explain.
             #
             # The old bound was 500 W, calibrated when ``_SimHarness.step()``
             # polled every battery once per step and advanced the clock by the
@@ -476,7 +477,7 @@ class TestEfficiencyE2E:
             # not a new one -- the same handoff overshoots to 680 W of battery
             # output on the old harness too.
             single_unit_limit = float(h.batteries[0].max_discharge_power)
-            assert max(grid_errors) < single_unit_limit, (
+            assert max(grid_errors) <= single_unit_limit, (
                 f"Mixed poll intervals should not blow up grid error "
                 f"(max={max(grid_errors):.0f}W, limit={single_unit_limit:.0f}W). "
                 f"Powers: {h.battery_powers()}"

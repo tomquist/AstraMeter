@@ -104,6 +104,15 @@ class PollScheduler:
     one, so its ramp and SoC integrate several times too slowly. With every
     battery on the same interval the two are identical -- one poll each, then
     one advance -- which is why this went unnoticed.
+
+    ``_to_next`` holds each battery's time *remaining* until its next poll,
+    never an absolute timestamp. Two things follow. Accumulation error stays at
+    the float epsilon of the intervals rather than of a ~1.7e9 wall-clock value.
+    And a test that jumps the clock by hand (``h.clock.advance(8)``, to reach a
+    rotation deadline without polling through it) cannot desynchronise the
+    schedule: the skipped polls are skipped, which is the point of such a jump,
+    and each battery keeps its place in its own cycle across it. See
+    ``test_sim_harness_cadence.py``.
     """
 
     def __init__(self, batteries, clock, step_one) -> None:
