@@ -19,7 +19,13 @@ from __future__ import annotations
 
 import _ct002_e2e_backend as be
 import pytest
-from _ct002_e2e_backend import E2E_UDP_PORT, EsphomeSim, HarnessClock, find_free_ports
+from _ct002_e2e_backend import (
+    E2E_UDP_PORT,
+    EsphomeSim,
+    HarnessClock,
+    PollScheduler,
+    find_free_ports,
+)
 
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
@@ -121,6 +127,8 @@ class _Issue376Harness:
         else:
             self.ct002 = None
 
+        self._scheduler = PollScheduler(self.batteries, self.clock, self._step_battery)
+
     async def start(self) -> None:
         await self.powermeter.start()
         if self.backend == "python":
@@ -152,11 +160,7 @@ class _Issue376Harness:
         await b._send_request()
 
     async def step(self, n: int = 1) -> None:
-        for _ in range(n):
-            max_dt = max(b.poll_interval for b in self.batteries)
-            for b in self.batteries:
-                await self._step_battery(b)
-            self.clock.advance(max_dt)
+        await self._scheduler.step(n)
 
     # -- backend-agnostic emulator-state accessors -------------------------
 

@@ -21,7 +21,12 @@ import socket
 
 import _ct002_e2e_backend as be
 import pytest
-from _ct002_e2e_backend import E2E_UDP_PORT, EsphomeSim, HarnessClock
+from _ct002_e2e_backend import (
+    E2E_UDP_PORT,
+    EsphomeSim,
+    HarnessClock,
+    PollScheduler,
+)
 
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
@@ -196,6 +201,8 @@ class _Harness:
         else:
             self.ct002 = None
 
+        self._scheduler = PollScheduler(self.batteries, self.clock, self._step_battery)
+
     def freeze_meter_at_current_reading(self) -> None:
         """Simulate a push-based powermeter going stale.  From this
         call onward the CT002 emulator sees a frozen snapshot of the
@@ -288,10 +295,7 @@ class _Harness:
         await b._send_request()
 
     async def step(self, n: int = 1) -> None:
-        for _ in range(n):
-            for b in self.batteries:
-                await self._step_battery(b)
-            self.clock.advance(max(b.poll_interval for b in self.batteries))
+        await self._scheduler.step(n)
 
     def battery_powers(self) -> list[float]:
         return [b.current_power for b in self.batteries]
