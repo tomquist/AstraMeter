@@ -1132,6 +1132,9 @@ async def _to_code_mqtt_insights(config, ct002_var):
     mqtt_config = CORE.config.get("mqtt") or {}
     cg.add(var.set_broker(str(mqtt_config.get("broker", ""))))
     cg.add(var.set_broker_port(int(mqtt_config.get("port", 0))))
+    # Reported as the HA discovery `origin` block's sw_version, the way the
+    # Python stack reports its own SHA there.
+    cg.add(var.set_git_commit(_astrameter_git_commit()))
 
 
 async def _to_code_marstek_registration(config, ct002_var):
