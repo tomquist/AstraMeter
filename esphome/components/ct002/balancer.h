@@ -364,9 +364,9 @@ struct ConsumerReport {
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
-// Smallest command worth judging a consumer by: the configured MIN_DC_OUTPUT
-// for this battery if its owner set one, else a command it was seen to answer,
-// else the model's nominal floor. Mirrors balancer.py saturation_floor.
+// Smallest command worth judging a consumer by: the higher of the configured
+// MIN_DC_OUTPUT for this battery and the model's floor (itself lowered to a
+// command the unit was seen to answer). Mirrors balancer.py saturation_floor.
 float saturation_floor(const BalancerConsumerState &state, const ConsumerReport &report,
                        float configured_floor);
 

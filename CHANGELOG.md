@@ -4,7 +4,7 @@
 
 - **Fixed** a B2500 written off as unable to deliver after being handed a share too small to switch it on, which made every later share smaller still — leaving it at 0 W indefinitely while the house imported ([#624](https://github.com/tomquist/astrameter/issues/624), [#629](https://github.com/tomquist/astrameter/pull/629)).
 
-- **Fixed** B2500 batteries sitting at 0 W under active control while the whole house load was imported: the command they were sent could never exceed what the battery needs to start, and a battery that never starts was never sent more ([#600](https://github.com/tomquist/astrameter/issues/600), [#614](https://github.com/tomquist/astrameter/pull/614)).
+- **Fixed** B2500 batteries sitting at 0 W under active control while the whole house load was imported: the command they were sent could never exceed what the battery needs to start, and a battery that never starts was never sent more ([#600](https://github.com/tomquist/astrameter/issues/600), [#614](https://github.com/tomquist/astrameter/pull/614), [#631](https://github.com/tomquist/astrameter/pull/631)).
 
 - **Added** Refoss / Meross energy monitors (EM01P, EM06P, EM16P) as a power source (`[REFOSS]` or `[MEROSS]`) ([#598](https://github.com/tomquist/astrameter/pull/598)).
 

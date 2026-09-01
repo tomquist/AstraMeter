@@ -330,36 +330,43 @@ def saturation_floor(
 ) -> float:
     """Smallest command worth judging this consumer by (W).
 
-    Three sources, most authoritative first:
+    The gate is the *higher* of two lower bounds, because each rules out a
+    different command as evidence:
 
     * *configured_floor* — the effective MIN_DC_OUTPUT for this battery
-      (global or per-device override).  An owner who set it is stating what
-      their inverter needs, which beats any figure of ours; it also keeps this
-      gate consistent with the floor ``_apply_min_dc_output`` parks them at, and
-      with the MIN_DC_OUTPUT/MIN_TARGET_FOR_SATURATION advice in ``main.py``.
-      It is checked *before* the model's own floor because a per-device
-      override applies to any battery, including one whose family has no
-      nominal floor at all — for such a unit the override is the only thing
-      that knows it is being held above its deadband, and discarding it left
-      the gate at ``min_target`` while the command sat at the override.
-    * ``pace_responded_at`` — a command this unit was actually seen to answer.
-      Opportunistic only: ramp pacing records it just while its clamp is active
-      and clears it on every direction reversal, so treat its absence as "no
-      evidence", never as "cannot go lower".
-    * the model's nominal floor, as the fallback prior.
+      (global or per-device override).  It is the floor
+      ``_apply_min_dc_output`` parks the unit at, so any command at or below it
+      may be one this balancer imposed rather than a share the battery was
+      genuinely asked for; judging the battery by our own parking command is
+      circular.  It also applies to a battery whose family has no nominal floor
+      at all, where it is the only thing that knows the unit is being held
+      above its deadband.
+    * the model's floor — what the family can physically execute, lowered to
+      ``pace_responded_at`` when this unit has been seen to answer something
+      smaller.  That evidence is opportunistic: ramp pacing records it just
+      while its clamp is active and clears it on every direction reversal, so
+      treat its absence as "no evidence", never as "cannot go lower".
+
+    Taking the configured floor *instead of* the model's is what left issue
+    #600 open after #624: an owner whose MIN_DC_OUTPUT sits below their
+    battery's start floor (20 W on a B2500 that needs ~80 W) parks it at a
+    command it cannot execute, and scoring that command re-opened exactly the
+    lock-out #624 closed — the unit is starved because it looks saturated, and
+    looks saturated because the starvation command is unanswerable.  A
+    configured floor still raises the gate above the model's; it just cannot
+    lower it below what the hardware can do.
 
     Too high a floor costs a genuinely full or empty battery some detection
     delay, bounded by the floor itself — it keeps its share only while that
     share stays under a command it could not have answered anyway.  Too low
     costs the battery entirely (issue #624), so the asymmetry is deliberate.
     """
-    if configured_floor > 0.0:
-        return configured_floor
     nominal = min_actionable_output(report.get("device_type", ""))
-    if nominal <= 0.0:
-        return 0.0
-    observed = state.pace_responded_at
-    return min(nominal, observed) if observed > 0.0 else nominal
+    if nominal > 0.0:
+        observed = state.pace_responded_at
+        if observed > 0.0:
+            nominal = min(nominal, observed)
+    return max(configured_floor, nominal)
 
 
 # ---------------------------------------------------------------------------

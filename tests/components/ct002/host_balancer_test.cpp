@@ -140,13 +140,16 @@ TEST(SaturationTrackerDcFloor, FloorPrefersEvidenceOverTheNominalFigure) {
   ConsumerReport report;
   report.device_type = "HMJ-2";
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
-  // A configured MIN_DC_OUTPUT outranks our figure, in both directions.
-  EXPECT_FLOAT_EQ(saturation_floor(state, report, 30.0f), 30.0f);
+  // A configured MIN_DC_OUTPUT raises the gate above our figure ...
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 150.0f), 150.0f);
-  // Otherwise a smaller command this unit answered lowers it; a large one says
-  // nothing about small ones.
+  // ... but cannot lower it below what the hardware can do: MIN_DC_OUTPUT is
+  // where we park the unit, not a claim about what it can start on (#600).
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 30.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
+  // A smaller command this unit answered lowers the model's half of it; a
+  // large one says nothing about small ones.
   state.pace_responded_at = 30.0f;
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 30.0f);
+  EXPECT_FLOAT_EQ(saturation_floor(state, report, 50.0f), 50.0f);
   state.pace_responded_at = 250.0f;
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), DC_MIN_ACTIONABLE_OUTPUT_W);
   // A per-device MIN_DC_OUTPUT override applies to any battery, including a

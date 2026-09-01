@@ -98,12 +98,16 @@ def test_the_floor_prefers_evidence_over_the_nominal_figure() -> None:
     state = BalancerConsumerState()
 
     assert saturation_floor(state, B2500, 0.0) == DC_MIN_ACTIONABLE_OUTPUT_W
-    # An owner who configured a floor outranks our figure, in both directions.
-    assert saturation_floor(state, B2500, 30.0) == 30.0
+    # A configured floor raises the gate above our figure ...
     assert saturation_floor(state, B2500, 150.0) == 150.0
-    # Otherwise a smaller command this unit answered lowers it.
+    # ... but cannot lower it below what the hardware can do: MIN_DC_OUTPUT is
+    # where we park the unit, not a claim about what it can start on (#600).
+    assert saturation_floor(state, B2500, 30.0) == DC_MIN_ACTIONABLE_OUTPUT_W
+    # A smaller command this unit answered lowers the model's half of it.
     state.pace_responded_at = 30.0
     assert saturation_floor(state, B2500, 0.0) == 30.0
+    # ... and the configured floor still wins where it is the higher of the two.
+    assert saturation_floor(state, B2500, 50.0) == 50.0
     # A large command answered says nothing about small ones: stay conservative.
     state.pace_responded_at = 250.0
     assert saturation_floor(state, B2500, 0.0) == DC_MIN_ACTIONABLE_OUTPUT_W
@@ -158,3 +162,66 @@ def test_compute_target_supplies_each_consumer_its_floor() -> None:
 
     assert seen[b2500] == DC_MIN_ACTIONABLE_OUTPUT_W
     assert seen[venus] == 0.0
+
+
+def test_a_configured_floor_below_the_start_floor_does_not_lock_a_unit_out() -> None:
+    """Regression for issue #600.
+
+    Two B2500 on one phase, ``MIN_DC_OUTPUT = 20`` -- below the ~80 W the
+    family needs to energize a channel pair.  The second unit is parked at that
+    20 W floor, cannot execute it, and used to be scored for the miss: its
+    saturation pinned at 1.0, its share of every correction cut to a hundredth,
+    and the first unit left carrying the whole house.  The reporter's recorder
+    trace shows exactly that -- 230 W against 4 W, saturation 0% against 89%,
+    and ``reported + last_target == 20`` on two thirds of the replies.
+
+    The floor MIN_DC_OUTPUT parks a unit at is not a statement that the unit
+    can start there, so it must not lower the gate below what the hardware can
+    do.  Here that is the difference between the second unit taking half the
+    load and sitting at 0 W for good.
+    """
+    house, start_floor = 460.0, DC_MIN_ACTIONABLE_OUTPUT_W
+    clock = _FakeClock()
+    lb = LoadBalancer(
+        config=BalancerConfig(
+            fair_distribution=True,
+            min_efficient_power=0.0,
+            min_dc_output=20.0,
+            balance_deadband=25,
+            max_correction_per_step=80,
+        ),
+        saturation_alpha=0.15,
+        saturation_min_target=20,
+        saturation_decay_factor=0.995,
+        saturation_grace_seconds=90,
+        saturation_stall_timeout_seconds=180,
+        clock=clock,
+    )
+    mode = ConsumerMode("auto", None)
+    # A carries the house; B idles, as in the reporter's trace.
+    power = {"aaaaaaaaaaaa": 230.0, "bbbbbbbbbbbb": 4.0}
+    for step in range(400):
+        reports = {
+            cid: {"device_type": "HMJ-2", "phase": "A", "power": round(w)}
+            for cid, w in power.items()
+        }
+        grid = house - sum(power.values())
+        commands = {
+            cid: sum(
+                lb.compute_target(
+                    cid, mode, reports, grid, frozenset(), frozenset(), (step, grid)
+                )
+            )
+            for cid in power
+        }
+        for cid, delta in commands.items():
+            # A B2500 channel pair is a hard on/off: below its start floor the
+            # unit stays in standby, above it the setpoint is executed.
+            want = power[cid] + delta
+            power[cid] = 0.0 if want < start_floor else min(want, 800.0)
+        clock.advance(1.0)
+
+    assert power["bbbbbbbbbbbb"] > start_floor
+    assert lb.get_saturation("bbbbbbbbbbbb") < 0.5
+    # And the pair actually shares the house rather than one unit carrying it.
+    assert abs(power["aaaaaaaaaaaa"] - power["bbbbbbbbbbbb"]) < house / 2
