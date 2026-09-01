@@ -898,6 +898,15 @@ def _astrameter_git_commit() -> str:
     one.
     """
     root = Path(__file__).resolve().parents[3]
+    # Only a real AstraMeter checkout has a SHA worth reporting. ESPHome also
+    # accepts a top-level ``components/ct002`` layout, where that ``parents[3]``
+    # lands *above* the vendor root — and an ESPHome config directory kept in
+    # git (most of them are) would then stamp its own commit on the firmware as
+    # the build it is running. ``src/astrameter`` marks this repository and
+    # nothing else, so an unrecognisable root reports nothing rather than
+    # somebody else's SHA.
+    if not (root / "src" / "astrameter").is_dir():
+        return ""
     git_dir = root / ".git"
     try:
         if git_dir.is_file():
@@ -1132,6 +1141,9 @@ async def _to_code_mqtt_insights(config, ct002_var):
     mqtt_config = CORE.config.get("mqtt") or {}
     cg.add(var.set_broker(str(mqtt_config.get("broker", ""))))
     cg.add(var.set_broker_port(int(mqtt_config.get("port", 0))))
+    # Reported as the HA discovery `origin` block's sw_version, the way the
+    # Python stack reports its own SHA there.
+    cg.add(var.set_git_commit(_astrameter_git_commit()))
 
 
 async def _to_code_marstek_registration(config, ct002_var):

@@ -46,13 +46,17 @@ std::string sanitize_id(const std::string &value) {
 
 namespace {
 
-// Build the standard `origin` block — we lose Python's git-sha resolution
-// since the firmware build doesn't have access to it at runtime; emit a
-// stable string so HA's "added by" metadata still groups our entities.
-void add_origin(JsonObject obj) {
+// Build the standard `origin` block. Mirrors discovery.py::_origin, down to
+// the git SHA: codegen resolves it from the checked-out component repo and
+// bakes it into the firmware, so the same build identifier reaches HA from
+// either stack. Empty (an unusual layout, or a checkout with no git metadata)
+// falls back to "unknown", which is what Python emits in the same case.
+void add_origin(JsonObject obj, const std::string &sw_version) {
   JsonObject origin = obj["origin"].to<JsonObject>();
   origin["name"] = "astrameter";
-  origin["sw_version"] = "esphome";
+  // Assigned as a std::string: ArduinoJson copies one, but only borrows a
+  // const char*, and the caller's buffer need not outlive the document.
+  origin["sw_version"] = sw_version.empty() ? std::string("unknown") : sw_version;
   origin["support_url"] = "https://github.com/tomquist/astrameter";
 }
 
@@ -89,7 +93,8 @@ void add_power_sensor(JsonObject components, const std::string &key, const std::
 std::pair<std::string, std::string> build_ct002_consumer_discovery(
     const std::string &base_topic, const std::string &device_id,
     const std::string &consumer_id, const std::string &ha_prefix,
-    const std::string &device_type, bool efficiency_rotation, bool retire_removed) {
+    const std::string &device_type, bool efficiency_rotation, bool retire_removed,
+    const std::string &sw_version) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string safe_cid = sanitize_id(consumer_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev + "_" + safe_cid;
@@ -354,7 +359,7 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     // namespaced `identifiers` and linked to the meter via `via_device`.
     if (!device_type.empty()) device["model_id"] = device_type;
 
-    add_origin(root);
+    add_origin(root, sw_version);
 
     root["availability_mode"] = "all";
     JsonArray avail = root["availability"].to<JsonArray>();
@@ -379,7 +384,8 @@ static std::string absent_as_unknown(const std::string &key) {
 
 std::pair<std::string, std::string> build_ct002_device_discovery(
     const std::string &base_topic, const std::string &device_id,
-    const std::string &ha_prefix, bool efficiency_rotation) {
+    const std::string &ha_prefix, bool efficiency_rotation,
+    const std::string &sw_version) {
   const std::string safe_dev = sanitize_id(device_id);
   const std::string node_id = "astrameter_ct002_" + safe_dev;
   const std::string state_topic = base_topic + "/ct002/" + device_id + "/status";
@@ -504,7 +510,7 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     device["name"] = "AstraMeter CT002 " + device_id;
     device["manufacturer"] = "astrameter";
 
-    add_origin(root);
+    add_origin(root, sw_version);
     JsonArray avail = root["availability"].to<JsonArray>();
     add_system_availability(avail.add<JsonObject>(), base_topic);
     root["state_topic"] = state_topic;

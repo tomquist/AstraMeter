@@ -112,7 +112,8 @@ void MqttInsightsComponent::on_mqtt_connected_() {
   if (this->ha_discovery_) {
     auto [topic, payload] = build_ct002_device_discovery(
         this->base_topic_, this->device_id_, this->ha_discovery_prefix_,
-        this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled());
+        this->ct002_ != nullptr && this->ct002_->efficiency_rotation_enabled(),
+        this->git_commit_);
     this->mqtt_->publish(topic, payload, 0, true);
     this->device_discovered_ = true;
   }
@@ -317,12 +318,12 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
       {
         auto [retire_topic, retire_payload] = build_ct002_consumer_discovery(
             this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-            snap.device_type, rotation, /*retire_removed=*/true);
+            snap.device_type, rotation, /*retire_removed=*/true, this->git_commit_);
         this->mqtt_->publish(retire_topic, retire_payload, 0, true);
       }
       auto [topic, payload] = build_ct002_consumer_discovery(
           this->base_topic_, this->device_id_, consumer_id, this->ha_discovery_prefix_,
-          snap.device_type, rotation);
+          snap.device_type, rotation, /*retire_removed=*/false, this->git_commit_);
       this->mqtt_->publish(topic, payload, 0, true);
     }
   }

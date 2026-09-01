@@ -68,6 +68,11 @@ class MqttInsightsComponent : public Component {
   // reach for the username/password beside them). Reported by the dashboard.
   void set_broker(const std::string &v) { this->broker_ = v; }
   void set_broker_port(uint16_t v) { this->broker_port_ = v; }
+  // The build's git SHA, resolved at codegen time from the component's own
+  // checkout. Published as the discovery `origin` block's sw_version, so a
+  // user reading HA's "added by" metadata sees the same build identifier the
+  // Python stack reports there (discovery.py _origin).
+  void set_git_commit(const std::string &v) { this->git_commit_ = v; }
 
   /// Mirror a dashboard write onto the retained command topic it belongs to.
   ///
@@ -172,6 +177,7 @@ class MqttInsightsComponent : public Component {
   // Reporting only — the client owns the connection.
   std::string broker_;
   uint16_t broker_port_{0};
+  std::string git_commit_;
   bool marstek_mqtt_enabled_{true};
   uint32_t marstek_mqtt_interval_ms_{300000};
 
