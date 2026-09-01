@@ -387,6 +387,25 @@ def test_astrameter_git_commit_is_empty_without_a_repo(monkeypatch, tmp_path):
     assert ct002_component._astrameter_git_commit() == ""
 
 
+def test_astrameter_git_commit_ignores_a_surrounding_repo(monkeypatch, tmp_path):
+    # ESPHome also accepts a top-level `components/ct002` layout. There the
+    # root this walks up to sits *above* the vendor directory, so an ESPHome
+    # config kept in git — most are — would otherwise hand us its own HEAD and
+    # the firmware would report the user's config commit as its build.
+    outer = tmp_path / "my-esphome-config"
+    git_dir = outer / ".git"
+    git_dir.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+    (git_dir / "refs" / "heads").mkdir(parents=True)
+    (git_dir / "refs" / "heads" / "main").write_text("b" * 40 + "\n")
+
+    fake = outer / "vendor" / "components" / "ct002" / "__init__.py"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("")
+    monkeypatch.setattr(ct002_component, "__file__", str(fake))
+    assert ct002_component._astrameter_git_commit() == ""
+
+
 def test_astrameter_git_commit_reads_a_linked_worktree(monkeypatch, tmp_path):
     # `git worktree add` leaves `.git` as a pointer to a private directory that
     # holds this worktree's HEAD — but the branch HEAD names lives in the
@@ -414,6 +433,9 @@ def test_astrameter_git_commit_reads_a_linked_worktree(monkeypatch, tmp_path):
         text=True,
     ).stdout.strip()
 
+    # The marker the resolver checks the root by; a worktree of this repo has
+    # it, and without it this stand-in is not a checkout it will report on.
+    (linked / "src" / "astrameter").mkdir(parents=True)
     fake = linked / "esphome" / "components" / "ct002" / "__init__.py"
     monkeypatch.setattr(ct002_component, "__file__", str(fake))
     assert ct002_component._astrameter_git_commit() == expected
