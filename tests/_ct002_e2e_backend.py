@@ -81,6 +81,64 @@ class HarnessClock:
             self._on_change(self._now)
 
 
+# Below this, a difference between two poll times is treated as zero. The
+# schedule is walked in relative offsets (never absolute timestamps) so the
+# error stays near the float epsilon of the intervals themselves, not of a
+# ~1.7e9 wall-clock value, where an ulp is already ~2.4e-7 s.
+_POLL_EPS = 1e-9
+
+
+class PollScheduler:
+    """Deliver each battery's polls at its own cadence.
+
+    ``step()`` advances simulated time by the *slowest* battery's poll
+    interval and delivers every poll that falls due inside that window, in
+    time order -- so a battery polling three times as fast sends three
+    requests per step, as it would on a real network.
+
+    Polling every battery exactly once per step and then advancing the clock
+    by the slowest interval, which is what the harnesses did before, gets two
+    things wrong whenever the intervals differ: the fast battery is silently
+    throttled to the slow one's rate, and it is stepped with its own (small)
+    ``poll_interval`` as the physics ``dt`` while the clock moves by the large
+    one, so its ramp and SoC integrate several times too slowly. With every
+    battery on the same interval the two are identical -- one poll each, then
+    one advance -- which is why this went unnoticed.
+    """
+
+    def __init__(self, batteries, clock, step_one) -> None:
+        self._batteries = batteries
+        self._clock = clock
+        self._step_one = step_one
+        # Everything is due immediately, so a step polls at its starting
+        # timestamp and advances afterwards -- the ordering the suites' timing
+        # assertions were written against.
+        self._to_next = [0.0] * len(batteries)
+
+    def _advance(self, dt: float) -> None:
+        if dt > 0:
+            self._clock.advance(dt)
+        for i in range(len(self._to_next)):
+            self._to_next[i] -= dt
+
+    async def step(self, n: int = 1) -> None:
+        for _ in range(n):
+            remaining = max(b.poll_interval for b in self._batteries)
+            while True:
+                wait = min(self._to_next)
+                # A poll falling exactly on the window's end belongs to the
+                # next step, not this one, or the slowest battery polls twice.
+                if wait >= remaining - _POLL_EPS:
+                    break
+                self._advance(wait)
+                remaining -= wait
+                for i, b in enumerate(self._batteries):
+                    if self._to_next[i] <= _POLL_EPS:
+                        await self._step_one(b)
+                        self._to_next[i] = b.poll_interval
+            self._advance(remaining)
+
+
 class EsphomeSim:
     """Spawns the test-hooks host binary and drives it via the control channel."""
 
