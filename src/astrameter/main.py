@@ -3,8 +3,9 @@ import asyncio
 import contextlib
 import os
 import signal
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from typing import Any
 
 from astrameter.cloud_reporting import (
     CloudReporter,
@@ -41,12 +42,22 @@ from astrameter.status import StatusRegistry, detect_config_mode
 from astrameter.version_info import get_git_commit_sha, get_version
 from astrameter.web_server import WebServer, parse_allowed_hosts
 
-# CT002/CT003 phase assignment is auto-managed by emulator runtime.
+ConfiguredPowermeter = tuple[Powermeter, ClientFilter, bool]
+
+#: UDP port each Shelly emulation listens on; the battery firmware expects it.
+_SHELLY_UDP_PORTS = {
+    "shellypro3em_old": 1010,
+    "shellypro3em_new": 2220,
+    "shellyemg3": 2222,
+    "shellyproem50": 2223,
+}
+
+#: How long a read waits for a fresh push before serving the cached value.
+FRESH_READING_TIMEOUT_S = 2.0
 
 
 def _powermeter_log_name(powermeter: Powermeter) -> str:
-    """Label for logs: the underlying meter class, seen through the outermost
-    HealthTrackingPowermeter wrapper that now wraps every configured meter."""
+    """The meter class behind the health wrapper every configured meter gets."""
     inner = (
         powermeter.wrapped_powermeter
         if isinstance(powermeter, HealthTrackingPowermeter)
@@ -55,9 +66,15 @@ def _powermeter_log_name(powermeter: Powermeter) -> str:
     return type(inner).__name__
 
 
+def _three_phases(values) -> list:
+    """Pad or trim a reading to the three phase values the CT protocol carries."""
+    phases = list(values)[:3]
+    return phases + [0.0] * (3 - len(phases))
+
+
 async def read_ct_powermeter(
     addr: tuple[str, int],
-    powermeters: list[tuple[Powermeter, ClientFilter, bool]],
+    powermeters: list[ConfiguredPowermeter],
 ) -> list[float] | None:
     """Pick the powermeter matching *addr* and return up to three phase values.
 
@@ -85,49 +102,53 @@ async def read_ct_powermeter(
                 "serving last known value",
                 _powermeter_log_name(powermeter),
             )
-    values = await powermeter.get_powermeter_watts()
-    value1 = values[0] if len(values) > 0 else 0
-    value2 = values[1] if len(values) > 1 else 0
-    value3 = values[2] if len(values) > 2 else 0
-    return [value1, value2, value3]
+    return _three_phases(await powermeter.get_powermeter_watts())
 
 
-async def test_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
-    """Test powermeter configuration with minimal retry logic for edge cases."""
-    max_retries = 3
-    retry_delay = 5  # seconds
+async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
+    """Raw three-phase reading from the meter that serves every client (or the
+    first one), waiting briefly for a fresh push so an idle meter cannot pin
+    the caller."""
+    chosen = next((pm for pm, cf, _ in powermeters if cf.matches("0.0.0.0")), None)
+    if chosen is None and powermeters:
+        chosen = powermeters[0][0]
+    if chosen is None:
+        return [0.0, 0.0, 0.0]
+    with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+        await asyncio.wait_for(
+            chosen.wait_for_next_message(), timeout=FRESH_READING_TIMEOUT_S
+        )
+    return [float(v) for v in _three_phases(await chosen.get_powermeter_watts_raw())]
 
-    for attempt in range(max_retries + 1):
+
+async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
+    """Prove the meter delivers a reading before any battery is served."""
+    attempts = 4
+    retry_delay_s = 5
+    for attempt in range(1, attempts + 1):
         try:
-            logger.debug(
-                f"Testing powermeter configuration... (attempt {attempt + 1}/{max_retries + 1})"
-            )
+            logger.debug("Testing powermeter (attempt %d/%d)", attempt, attempts)
             await powermeter.wait_for_message(timeout=30)
-            value = await powermeter.get_powermeter_watts()
-            value_with_units = " | ".join([f"{v}W" for v in value])
-            powermeter_name = _powermeter_log_name(powermeter)
-            filter_description = ", ".join([str(n) for n in client_filter.netmasks])
-            logger.info(
-                f"Successfully fetched {powermeter_name} powermeter value (filter {filter_description}): {value_with_units}"
-            )
-            return  # Success, exit the function
-        except Exception as e:
-            logger.debug(f"Error on attempt {attempt + 1}: {e}")
-
-            if attempt < max_retries:
-                logger.info(f"Retrying powermeter test in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-                continue
-            else:
-                # Last attempt failed
+            values = await powermeter.get_powermeter_watts()
+        except Exception as exc:
+            logger.debug("Powermeter test attempt %d failed: %s", attempt, exc)
+            if attempt == attempts:
                 raise RuntimeError(
-                    f"Failed to test powermeter after {max_retries + 1} attempts: {e}"
-                ) from e
+                    f"Failed to test powermeter after {attempts} attempts: {exc}"
+                ) from exc
+            logger.info("Retrying powermeter test in %d seconds...", retry_delay_s)
+            await asyncio.sleep(retry_delay_s)
+            continue
+        logger.info(
+            "Successfully fetched %s powermeter value (filter %s): %s",
+            _powermeter_log_name(powermeter),
+            ", ".join(str(n) for n in client_filter.netmasks),
+            " | ".join(f"{v}W" for v in values),
+        )
+        return
 
 
-def _reset_all_powermeters(
-    powermeters: Sequence[tuple[Powermeter, object, object]],
-) -> None:
+def _reset_all_powermeters(powermeters: Sequence[ConfiguredPowermeter]) -> None:
     for pm, *_ in powermeters:
         pm.reset()
 
@@ -184,66 +205,68 @@ def _build_ct002(
     )
 
 
-async def run_device(
+def _log_ct_settings(ct: CtSettings, device_type: str, device_id: str) -> None:
+    if 0 < ct.min_dc_output < ct.min_target_for_saturation:
+        logger.warning(
+            "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
+            "floored battery's target never clears the saturation gate, so an "
+            "empty/full unit can't be detected. Consider MIN_DC_OUTPUT >= %d.",
+            ct.min_dc_output,
+            ct.min_target_for_saturation,
+            ct.min_target_for_saturation,
+        )
+    logger.debug("%s settings for %s: %s", device_type.upper(), device_id, ct)
+    if not ct.active_control:
+        logger.debug("CT control model: relay (forward consumer aggregates)")
+        return
+    extras = []
+    if ct.fair_distribution:
+        extras.append("fair distribution")
+    if ct.saturation_detection:
+        extras.append("saturation detection")
+    if ct.min_efficient_power > 0:
+        extras.append(f"efficiency optimization ({ct.min_efficient_power}W)")
+    logger.info("Active control enabled: %s", " + ".join(["load split", *extras]))
+
+
+def _forward_events(insights: MqttInsightsService, device: CT002 | Shelly):
+    """Route a device's per-battery events to MQTT Insights.  A battery that
+    the device evicted arrives as ``{"_removed": True}``."""
+    on_update: Callable[[str, str, dict[str, Any]], None]
+    on_removed: Callable[[str, str], None]
+    if isinstance(device, CT002):
+        on_update = insights.on_ct002_response
+        on_removed = insights.on_ct002_consumer_removed
+    else:
+        on_update = insights.on_shelly_response
+        on_removed = insights.on_shelly_battery_removed
+
+    def listener(device_id: str, battery_id: str, data: dict) -> None:
+        if data.get("_removed"):
+            on_removed(device_id, battery_id)
+        else:
+            on_update(device_id, battery_id, data)
+
+    return listener
+
+
+def _build_device(
     device_type: str,
-    config: AppConfig,
+    ct: CtSettings | None,
     general: GeneralSettings,
-    powermeters: list[tuple[Powermeter, ClientFilter, bool]],
-    device_id: str | None = None,
-    insights: MqttInsightsService | None = None,
-    marstek_mac: str = "",
-    marstek_ver_v: int | None = None,
-    registry: StatusRegistry | None = None,
-):
-    logger.debug(f"Starting device: {device_type}")
-
-    device: CT002 | Shelly
-    cloud_reporting = False
-
-    if device_type in ["ct002", "ct003"]:
-        ct = config.ct(device_type)
+    powermeters: list[ConfiguredPowermeter],
+    device_id: str,
+) -> CT002 | Shelly:
+    if ct is not None:
         ct_type = "HME-4" if device_type == "ct002" else "HME-3"
-        cloud_reporting = ct.cloud_reporting
         debug_status = ct.debug_status or os.environ.get(
             "DEBUG_STATUS", ""
         ).lower() in ("1", "true", "yes")
-        if 0 < ct.min_dc_output < ct.min_target_for_saturation:
-            logger.warning(
-                "MIN_DC_OUTPUT (%gW) is below MIN_TARGET_FOR_SATURATION (%dW): a "
-                "floored battery's target never clears the saturation gate, so an "
-                "empty/full unit can't be detected. Consider MIN_DC_OUTPUT >= %d.",
-                ct.min_dc_output,
-                ct.min_target_for_saturation,
-                ct.min_target_for_saturation,
-            )
-
-        logger.debug(f"{device_type.upper()} Settings for {device_id}: {ct}")
-        logger.debug(f"CT Type: {ct_type}")
-        logger.debug(
-            "CT control model: %s",
-            (
-                "active control (emulator computes targets)"
-                if ct.active_control
-                else "relay (forward consumer aggregates)"
-            ),
-        )
-        if ct.active_control:
-            extras = []
-            if ct.fair_distribution:
-                extras.append("fair distribution")
-            if ct.saturation_detection:
-                extras.append("saturation detection")
-            if ct.min_efficient_power > 0:
-                extras.append(f"efficiency optimization ({ct.min_efficient_power}W)")
-            logger.info(
-                "Active control enabled: load split%s",
-                " + " + " + ".join(extras) if extras else "",
-            )
-
+        _log_ct_settings(ct, device_type, device_id)
         device = _build_ct002(
             ct,
             ct_type,
-            device_id or "",
+            device_id,
             debug_status,
             lambda: _reset_all_powermeters(powermeters),
         )
@@ -252,81 +275,159 @@ async def run_device(
             return await read_ct_powermeter(addr, powermeters)
 
         device.before_send = update_readings
-
-        if insights:
-
-            def _ct002_event_listener(dev_id, consumer_id, data):
-                # {"_removed": True} is a sentinel from _cleanup_consumers
-                if data.get("_removed"):
-                    insights.on_ct002_consumer_removed(dev_id, consumer_id)
-                else:
-                    insights.on_ct002_response(dev_id, consumer_id, data)
-
-            device.event_listener = _ct002_event_listener
-
-    elif device_type == "shellypro3em_old":
-        logger.debug("Shelly Pro 3EM Settings:")
-        logger.debug(f"Device ID: {device_id}")
-        device = Shelly(
+        return device
+    if device_type in _SHELLY_UDP_PORTS:
+        logger.debug("Shelly settings: device id %s, type %s", device_id, device_type)
+        return Shelly(
             powermeters=powermeters,
             device_id=device_id,
             device_type=device_type,
-            udp_port=1010,
+            udp_port=_SHELLY_UDP_PORTS[device_type],
             dedupe_time_window=general.dedupe_time_window,
         )
+    raise ValueError(f"Unsupported device type: {device_type}")
 
-    elif device_type == "shellypro3em_new":
-        logger.debug("Shelly Pro 3EM Settings:")
-        logger.debug(f"Device ID: {device_id}")
-        device = Shelly(
-            powermeters=powermeters,
+
+async def _bind_marstek_responder(
+    insights: MqttInsightsService,
+    device: CT002,
+    device_id: str,
+    powermeters: list[ConfiguredPowermeter],
+    marstek_mac: str,
+    marstek_ver_v: int | None,
+) -> None:
+    """Answer Marstek app polls over MQTT, if a managed MAC gives hame-relay
+    something to route the replies back to."""
+    if not marstek_mac:
+        logger.info(
+            "Marstek MQTT responder not wired for %s: no managed MAC "
+            "available. Enable [MARSTEK] with MAILBOX/PASSWORD to use "
+            "this feature, or set MARSTEK_MQTT_ENABLED=false to silence "
+            "this notice.",
+            device_id,
+        )
+        return
+    await insights.register_marstek(
+        MarstekMqttBinding(
             device_id=device_id,
-            device_type=device_type,
-            udp_port=2220,
-            dedupe_time_window=general.dedupe_time_window,
+            ct_type=device.ct_type,
+            mac=marstek_mac,
+            get_values=lambda: _read_grid_phases(powermeters),
+            get_connected_slave_count=device.reporting_consumer_count,
+            get_cd4_slave_csv=lambda: format_cd4_slave_csv(
+                device.reporting_consumer_rows()
+            ),
+            wifi_rssi=device.wifi_rssi,
+            ver_v=(
+                marstek_ver_v
+                if marstek_ver_v is not None
+                else ver_v_from_marstek_api_version(None)
+            ),
+        )
+    )
+
+
+def _ct_measurement(
+    device: CT002, phases: list[float], mqtt_connected: bool
+) -> CtMeasurement:
+    """What a real CT reports to the cloud: the grid phases plus the charge and
+    discharge power aggregated per phase bucket."""
+    ap, bp, cp = (round(p) for p in phases)
+    buckets = device.reporting_phase_buckets()
+
+    def charge(bucket: str) -> int:
+        return int(buckets.get(bucket, {}).get("chrg_power", 0))
+
+    def discharge(bucket: str) -> int:
+        return int(buckets.get(bucket, {}).get("dchrg_power", 0))
+
+    return CtMeasurement(
+        ap=ap,
+        bp=bp,
+        cp=cp,
+        dp=ap + bp + cp,
+        rssi=device.wifi_rssi,
+        slv=device.reporting_consumer_count(),
+        udp=1,
+        mqtt=1 if mqtt_connected else 0,
+        cz=charge("x"),
+        ca=charge("A"),
+        cb=charge("B"),
+        cc=charge("C"),
+        cd=charge("ABC"),
+        dz=discharge("x"),
+        da=discharge("A"),
+        db=discharge("B"),
+        dc=discharge("C"),
+        dd=discharge("ABC"),
+    )
+
+
+def _start_cloud_reporting(
+    device: CT002,
+    ct: CtSettings,
+    device_id: str,
+    powermeters: list[ConfiguredPowermeter],
+    report_id: str,
+    mqtt_connected: bool,
+    registry: StatusRegistry | None,
+) -> asyncio.Task[None] | None:
+    """Opt-in reporting to hamedata.com the way a real CT does: a handshake,
+    then a periodic report with live grid and bucket data."""
+    if not report_id:
+        logger.warning(
+            "CLOUD_REPORTING enabled for %s but no device id is available; "
+            "set CT_MAC, or enable the Marstek account so the registered "
+            "device id is used. Cloud reporting disabled.",
+            device_id,
+        )
+        return None
+
+    async def gather() -> CtMeasurement:
+        return _ct_measurement(
+            device, await _read_grid_phases(powermeters), mqtt_connected
         )
 
-    elif device_type == "shellyemg3":
-        logger.debug("Shelly EM Gen3 Settings:")
-        logger.debug(f"Device ID: {device_id}")
-        device = Shelly(
-            powermeters=powermeters,
-            device_id=device_id,
-            device_type=device_type,
-            udp_port=2222,
-            dedupe_time_window=general.dedupe_time_window,
-        )
+    reporter = CloudReporter(
+        CloudReporterConfig(
+            ct_type=device.ct_type,
+            device_id=report_id,
+            host=ct.cloud_reporting_host,
+            interval_seconds=ct.cloud_reporting_interval,
+        ),
+        gather,
+    )
+    if registry is not None:
+        registry.cloud_reporters[device_id] = reporter
+    return asyncio.create_task(reporter.run())
 
-    elif device_type == "shellyproem50":
-        logger.debug("Shelly Pro EM 50 Settings:")
-        logger.debug(f"Device ID: {device_id}")
-        device = Shelly(
-            powermeters=powermeters,
-            device_id=device_id,
-            device_type=device_type,
-            udp_port=2223,
-            dedupe_time_window=general.dedupe_time_window,
-        )
 
-    else:
-        raise ValueError(f"Unsupported device type: {device_type}")
-
-    # Wire Shelly event listener
-    if insights and isinstance(device, Shelly):
-
-        def _shelly_event_listener(dev_id, battery_ip, data):
-            if data.get("_removed"):
-                insights.on_shelly_battery_removed(dev_id, battery_ip)
-            else:
-                insights.on_shelly_response(dev_id, battery_ip, data)
-
-        device.event_listener = _shelly_event_listener
+async def run_device(
+    device_type: str,
+    config: AppConfig,
+    general: GeneralSettings,
+    powermeters: list[ConfiguredPowermeter],
+    device_id: str | None = None,
+    insights: MqttInsightsService | None = None,
+    marstek_mac: str = "",
+    marstek_ver_v: int | None = None,
+    registry: StatusRegistry | None = None,
+):
+    """Run one emulated device until it stops, wiring it to the optional
+    integrations (MQTT Insights, the Marstek responder, cloud reporting)."""
+    logger.debug("Starting device: %s", device_type)
+    device_id = device_id or ""
+    ct = config.ct(device_type) if device_type in ("ct002", "ct003") else None
+    device = _build_device(device_type, ct, general, powermeters, device_id)
+    if insights:
+        device.event_listener = _forward_events(insights, device)
 
     try:
         await device.start()
     except Exception:
-        # Log but don't re-raise: a single device failing to start (e.g. port
-        # conflict) should not take down other healthy devices in the gather.
+        # One device failing to start (a port conflict, say) must not take
+        # down the others.  It stays absent from the dashboard rather than
+        # reporting zeros.
         logger.exception("Device %s (%s) failed to start", device_type, device_id)
         try:
             await device.stop()
@@ -336,182 +437,45 @@ async def run_device(
             )
         return
 
-    # Same rule as the MQTT handlers below: only a device that actually came
-    # up is visible to the dashboard, so a port conflict shows as an absent
-    # device rather than a device reporting zeros.
     if registry is not None:
-        registry.register_device(device_id or "", device_type, device)
+        registry.register_device(device_id, device_type, device)
 
-    # Register active handler only after successful start so MQTT commands
-    # are never routed to a device that failed to come up.
-    if insights and isinstance(device, CT002):
-        insights.register_active_handler(device_id or "", device.set_consumer_active)
-        insights.register_manual_target_handler(
-            device_id or "", device.set_consumer_manual_target
-        )
-        insights.register_auto_target_handler(
-            device_id or "", device.set_consumer_auto_target
-        )
-        insights.register_distribution_weight_handler(
-            device_id or "", device.set_consumer_distribution_weight
-        )
-        insights.register_efficiency_window_weight_handler(
-            device_id or "", device.set_consumer_efficiency_window_weight
-        )
-        insights.register_min_dc_output_handler(
-            device_id or "", device.set_consumer_min_dc_output
-        )
-        insights.register_rotation_handler(
-            device_id or "", device.force_efficiency_rotation
-        )
-        insights.register_active_control_handler(
-            device_id or "", device.set_active_control
-        )
-
-    # Marstek MQTT responder — only wired up when Marstek credentials
-    # yielded a managed MAC (so hame-relay can route the replies back to
-    # the Marstek app) and the feature is enabled.
-    if isinstance(device, CT002) and insights and insights.marstek_mqtt_enabled:
-        if marstek_mac:
-
-            async def _marstek_get_values(
-                _pms: list[tuple[Powermeter, ClientFilter, bool]] = powermeters,
-            ) -> list[float]:
-                chosen: Powermeter | None = next(
-                    (pm for pm, cf, _ in _pms if cf.matches("0.0.0.0")), None
+    cloud_task = None
+    if isinstance(device, CT002) and ct is not None:
+        if insights:
+            # Only now, so MQTT commands never reach a device that failed to
+            # come up.
+            insights.register_device(device_id, device)
+            if insights.marstek_mqtt_enabled:
+                await _bind_marstek_responder(
+                    insights, device, device_id, powermeters, marstek_mac, marstek_ver_v
                 )
-                if chosen is None and _pms:
-                    chosen = _pms[0][0]
-                if chosen is None:
-                    return [0.0, 0.0, 0.0]
-                # Bound the wait so a quiet/offline powermeter can't pin a
-                # Marstek poll responder task; fall back to last-known values.
-                with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
-                    await asyncio.wait_for(chosen.wait_for_next_message(), timeout=2.0)
-                vs = await chosen.get_powermeter_watts_raw()
-                return [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
-
-            def _marstek_connected_slave_count() -> int:
-                return device.reporting_consumer_count()
-
-            def _marstek_cd4_slave_csv() -> str:
-                return format_cd4_slave_csv(device.reporting_consumer_rows())
-
-            await insights.register_marstek(
-                MarstekMqttBinding(
-                    device_id=device_id or "",
-                    ct_type=device.ct_type,
-                    mac=marstek_mac,
-                    get_values=_marstek_get_values,
-                    get_connected_slave_count=_marstek_connected_slave_count,
-                    get_cd4_slave_csv=_marstek_cd4_slave_csv,
-                    wifi_rssi=device.wifi_rssi,
-                    ver_v=marstek_ver_v
-                    if marstek_ver_v is not None
-                    else ver_v_from_marstek_api_version(None),
-                )
-            )
-        else:
-            logger.info(
-                "Marstek MQTT responder not wired for %s: no managed MAC "
-                "available. Enable [MARSTEK] with MAILBOX/PASSWORD to use "
-                "this feature, or set MARSTEK_MQTT_ENABLED=false to silence "
-                "this notice.",
+        if ct.cloud_reporting:
+            # The cloud knows the CT by the MAC registered in the Marstek
+            # account when there is one, else by the locally set CT_MAC.
+            cloud_task = _start_cloud_reporting(
+                device,
+                ct,
                 device_id,
+                powermeters,
+                marstek_mac or ct.ct_mac,
+                insights is not None,
+                registry,
             )
-
-    # Opt-in HTTP cloud reporting (hamedata.com), mimicking what a real CT does:
-    # a handshake then a periodic setCtReporting GET with live grid/bucket data.
-    cloud_task: asyncio.Task[None] | None = None
-    if isinstance(device, CT002) and cloud_reporting:
-        # The reported id is the CT's MAC: the one AstraMeter registered in the
-        # Marstek account (the id the cloud actually knows) when configured, else
-        # the locally set CT_MAC.
-        report_id = marstek_mac or ct.ct_mac
-        if not report_id:
-            logger.warning(
-                "CLOUD_REPORTING enabled for %s but no device id is available; "
-                "set CT_MAC, or enable the Marstek account so the registered "
-                "device id is used. Cloud reporting disabled.",
-                device_id,
-            )
-        else:
-            ct_device: CT002 = device
-
-            async def _cloud_gather(
-                _pms: list[tuple[Powermeter, ClientFilter, bool]] = powermeters,
-                _dev: CT002 = ct_device,
-                _insights: MqttInsightsService | None = insights,
-            ) -> CtMeasurement:
-                chosen: Powermeter | None = next(
-                    (pm for pm, cf, _ in _pms if cf.matches("0.0.0.0")), None
-                )
-                if chosen is None and _pms:
-                    chosen = _pms[0][0]
-                phases = [0.0, 0.0, 0.0]
-                if chosen is not None:
-                    with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
-                        await asyncio.wait_for(
-                            chosen.wait_for_next_message(), timeout=2.0
-                        )
-                    vs = await chosen.get_powermeter_watts_raw()
-                    phases = [float(vs[i]) if i < len(vs) else 0.0 for i in range(3)]
-                ap, bp, cp = (round(p) for p in phases)
-                buckets = _dev.reporting_phase_buckets()
-
-                def _chrg(b: str) -> int:
-                    return int(buckets.get(b, {}).get("chrg_power", 0))
-
-                def _dchrg(b: str) -> int:
-                    return int(buckets.get(b, {}).get("dchrg_power", 0))
-
-                return CtMeasurement(
-                    ap=ap,
-                    bp=bp,
-                    cp=cp,
-                    dp=ap + bp + cp,
-                    rssi=_dev.wifi_rssi,
-                    slv=_dev.reporting_consumer_count(),
-                    udp=1,
-                    mqtt=1 if _insights is not None else 0,
-                    cz=_chrg("x"),
-                    ca=_chrg("A"),
-                    cb=_chrg("B"),
-                    cc=_chrg("C"),
-                    cd=_chrg("ABC"),
-                    dz=_dchrg("x"),
-                    da=_dchrg("A"),
-                    db=_dchrg("B"),
-                    dc=_dchrg("C"),
-                    dd=_dchrg("ABC"),
-                )
-
-            reporter = CloudReporter(
-                CloudReporterConfig(
-                    ct_type=device.ct_type,
-                    device_id=report_id,
-                    host=ct.cloud_reporting_host,
-                    interval_seconds=ct.cloud_reporting_interval,
-                ),
-                _cloud_gather,
-            )
-            if registry is not None:
-                registry.cloud_reporters[device_id or ""] = reporter
-            cloud_task = asyncio.create_task(reporter.run())
 
     try:
         await device.wait()
     finally:
         if registry is not None:
-            registry.unregister_device(device_id or "")
+            registry.unregister_device(device_id)
         if cloud_task is not None:
             cloud_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cloud_task
         if insights and isinstance(device, CT002):
-            insights.unregister_handlers(device_id or "")
+            insights.unregister_device(device_id)
             with contextlib.suppress(Exception):
-                await insights.unregister_marstek(device_id or "")
+                await insights.unregister_marstek(device_id)
         try:
             await device.stop()
         except Exception:
@@ -529,7 +493,7 @@ async def async_main(
 ):
     managed_marstek = managed_marstek or {}
 
-    powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
+    powermeters: list[ConfiguredPowermeter] = []
     insights: MqttInsightsService | None = None
 
     try:
@@ -545,7 +509,7 @@ async def async_main(
 
         if not skip_test:
             for powermeter, client_filter, _ in powermeters:
-                await test_powermeter(powermeter, client_filter)
+                await check_powermeter(powermeter, client_filter)
 
         # MQTT Insights (optional)
         insights_cfg = config.mqtt_insights()
@@ -999,8 +963,6 @@ async def _supervise(
             except Exception:
                 logger.exception("Error stopping web server")
 
-
-# end main
 
 if __name__ == "__main__":
     main()
