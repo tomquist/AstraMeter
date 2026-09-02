@@ -92,9 +92,12 @@ What differs is the document behind it:
   The page hides its Configuration tab when the backend reports no
   `config_mode`.
 - The **write path has parity too**: `esphome/components/ct002/controls.{h,cpp}`
-  mirrors `_CONTROL_RANGES` / `_CONTROL_SCALE` / `_coerce_control_value` in
-  `web_server.py`, and `apply_consumer_control` / `apply_device_control` mirror
-  its `_CONSUMER_SETTERS` table. The bounds MUST match: a value one stack
+  mirrors `CONSUMER_CONTROLS` / `coerce_consumer_control` in
+  `src/astrameter/ct002/controls.py`, and `apply_consumer_control` /
+  `apply_device_control` mirror its setter column and `apply_device_control`.
+  That one table is also what the MQTT command handlers and the Home Assistant
+  discovery payloads read, so a bound exists once per stack rather than once
+  per surface. The bounds MUST match: a value one stack
   accepts and the other refuses would be settable from one dashboard and then
   silently reverted by the next retained MQTT replay. It is opt-in on the
   firmware (`controls:`, default off) because that page has no login.
@@ -225,7 +228,12 @@ Two things to hold onto when refreshing them:
 
 `uv run python -m astrameter.simulator.evaluation` simulates hours of
 realistic household activity against the firmware-accurate battery plant and
-reports reaction/oscillation/energy metrics per scenario. Each scenario is run
+reports reaction/oscillation/energy metrics per scenario. `evaluation.py` is the
+CLI; the work is split across `eval_spec.py` (scenario/battery types),
+`eval_harness.py` (running one scenario), `eval_metrics.py` (every metric),
+`eval_scenarios.py` (the scenario definitions) and `eval_compare.py` /
+`eval_report.py` (the base-vs-head comparison and the HTML report). Names the
+CI job and the tests import stay re-exported from `evaluation`. Each scenario is run
 over several seeds (`--seeds`, default 5) **in parallel across CPU cores**, and
 every metric is the mean over those seeds — so the figures are the
 seed-averaged signal, not one noisy draw (use `--seeds 1` for a quick
@@ -244,7 +252,7 @@ comparison leads with an **aggregate roll-up** (per-metric mean across all
 scenarios plus a one-line overall verdict — how many metrics
 improved/regressed and the mean relative change), so an across-the-board
 improvement or regression is visible without reading every scenario table. A
-second **priority verdict** sits below it: a value-weighted score (`_METRIC_WEIGHTS`
+second **priority verdict** sits below it: a value-weighted score (`_METRIC_WEIGHTS` in `eval_compare.py`
 — `cost_regret_ct` money north-star, import-heavy self-consumption energy,
 do-no-harm overshoot/hunting guardrails, cycle-life battery travel and
 `share_imbalance_w` inter-battery fairness) plus a hard
@@ -257,7 +265,7 @@ it break a guardrail?".
 The headline metric is **`cost_regret_ct`**: the controller's electricity bill
 (eurocents, asymmetric tariff — import @ `RETAIL_CT_PER_KWH`, export @
 `FEEDIN_CT_PER_KWH`) minus what a **perfect-foresight optimal battery** would
-have paid on the same load (`_oracle_cost_ct`, a lossless greedy aggregate
+have paid on the same load (`_oracle_cost_ct` in `eval_metrics.py`, a lossless greedy aggregate
 battery — provably optimal under a flat tariff). It is the single ungameable
 "money the controller left on the table" number — 0 means it matched the
 optimum; the irreducible cost when the pack saturates is subtracted out, so
@@ -295,11 +303,11 @@ Write each bullet for the **user**, not the implementer: the user-visible proble
 
 Any **user-facing config option** must be wired into **every** config surface, not just the loader — a setting that only one entry point understands is a bug. When you add or rename a `[SECTION]` key, update **all** of:
 
-1. **Settings + loader** — add the field (with its default) to the matching dataclass in `src/astrameter/config/settings.py`, read the `[SECTION] KEY` for it in `src/astrameter/config/ini_config.py` (powermeter keys: `src/astrameter/config/config_loader.py`), and use it where it belongs (e.g. `run_device` in `main.py`). Config **backends** answer the `AppConfig` interface — nothing outside `ini_config.py` / `config_loader.py` should know section or key names.
+1. **Settings + loader** — add the field (with its default) to the matching dataclass in `src/astrameter/config/settings.py`, `src/astrameter/config/ini_config.py` then reads it by itself — the INI key is the field name upper-cased, unless an entry in `_GENERAL_KEY_OVERRIDES` says otherwise, and the getter follows the field's declared type (powermeter keys are read explicitly in `src/astrameter/config/config_loader.py`), and use it where it belongs (e.g. `run_device` in `main.py`). Config **backends** answer the `AppConfig` interface — nothing outside `ini_config.py` / `config_loader.py` should know section or key names.
 2. **`config.ini.example`** — a commented example with a short rationale.
 3. **Web config editor** — register typed keys in `SECTION_KEY_TYPES` in `src/astrameter/web_config.py`.
 4. **Web config generator (ALWAYS)** — add the field to the matching group in `web/ts/schema.ts` (e.g. a `CT_*` group or a `POWERMETERS` entry), emit it from `web/ts/generate.ts` for **every** target it applies to (`config.ini`, the Home Assistant add-on options, and ESPHome **only if** it has an ESPHome counterpart — Python-only options carry no `ey` key and must be excluded from the `ct002:` block), surface it in `web/ts/app.ts`, and add `web/ts/generate.test.ts` assertions. Run `cd web && npm run check`.
-5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it onto the settings field in `src/astrameter/config/addon.py` (the `--addon` backend reads the add-on options directly — usually one entry in `_CT_FIELDS` / `_SOURCE_SIGNAL_FIELDS` / `_GENERAL_FIELDS`) with a test in `addon_test.py`, and describe it in `ha_addon/translations/en.yaml`. `ha_addon/run.sh` only launches the app — nothing to change there. `addon_schema_test.py` fails until the option is wired up (and `tests/test_addon_golden_settings.py` until it appears in the golden fixture), so an option that does nothing cannot ship.
+5. **Home Assistant add-on** — add the option + schema to `ha_addon/config.yaml`, map it onto the settings field in `src/astrameter/config/addon.py` (the `--addon` backend reads the add-on options directly — usually just the field name appended to `_CT_FIELDS` / `_SOURCE_SIGNAL_FIELDS` / `_GENERAL_FIELDS`; add an `_OPTION_NAMES` entry only when the add-on option is not named after the field) with a test in `addon_test.py`, and describe it in `ha_addon/translations/en.yaml`. `ha_addon/run.sh` only launches the app — nothing to change there. `addon_schema_test.py` fails until the option is wired up (and `tests/test_addon_golden_settings.py` until it appears in the golden fixture), so an option that does nothing cannot ship.
 6. **Dashboard guided form** — an add-on option also needs a label, a `help` sentence and a group in `OPTION_META` (`web/ts/dashboard/option-meta.ts`), plus a `placeholder` when leaving it empty means something worth stating. Groups are declared in `GROUPS` in the same file; anything but the two open ones is folded shut. `dashboard.test.ts` reads `ha_addon/config.yaml` and fails on an option with no entry or no help — and on an entry for an option that no longer exists.
 7. **Docs** — the relevant `docs/*.md` (and `README.md` if it belongs in the quick reference).
 
@@ -314,9 +322,9 @@ places beyond the implementation — work through **every** step below so the
 config loader, web editor, config generator, and both doc sets stay in sync
 (grep an existing meter, e.g. `HomeWizard`/`HOMEWIZARD`, to find all the spots):
 
-1. **Implementation** — Add `src/astrameter/powermeter/<module>.py` with a class subclassing `Powermeter`; implement `get_powermeter_watts()` (and `wait_for_message()` only if the base default is wrong for your source).
+1. **Implementation** — Add `src/astrameter/powermeter/<module>.py` with a class subclassing `Powermeter`; implement `get_powermeter_watts()` (and `wait_for_message()` only if the base default is wrong for your source). A meter polled over HTTP should subclass `HttpPowermeter` (`powermeter/http_client.py`) instead — it owns the session lifecycle and a `get_json(url)` that fails fast and raises on an HTTP error, so a backend only builds URLs and decodes bodies.
 2. **Exports** — Import and re-export the class from `src/astrameter/powermeter/__init__.py` (both the import and `__all__`).
-3. **Config loader** — In `src/astrameter/config/config_loader.py`: import the class, define a `*_SECTION` string, add a `section.startswith(...)` branch in `create_powermeter()`, and a `create_*_powermeter()` factory that reads options from the section. `POWER_OFFSET` / `POWER_MULTIPLIER`, `THROTTLE_INTERVAL`, and `NETMASK` are handled globally for any section that returns a powermeter — no extra wiring unless you need something custom.
+3. **Config loader** — In `src/astrameter/config/config_loader.py`: import the class, define a `*_SECTION` string, add a `create_*_powermeter()` factory that reads options from the section, and register the pair in the `_FACTORIES` table (matched longest-prefix-first, so ordering is not a hazard). Pass an optional key through `_declared(...)` so the meter class's own default applies when the key is unset, rather than restating it here. `POWER_OFFSET` / `POWER_MULTIPLIER`, `THROTTLE_INTERVAL`, and `NETMASK` are handled globally for any section that returns a powermeter — no extra wiring unless you need something custom.
 4. **Web config editor** — Register the section's typed keys in `SECTION_KEY_TYPES` in `src/astrameter/web_config.py` (use the `_pm(...)` helper, adding only the non-default field types, e.g. `password`/`boolean`/`integer`).
 5. **Web config generator** — Add a `POWERMETERS` entry in `web/ts/schema.ts` (fields, `docPython`, and an `esphome` spec describing how the same source is read on an ESP32 — `kind`/`tier` plus any `haEntity`/`url1`/`lambda1`/`warn`). Run `cd web && npm run check`.
 6. **ESPHome docs** — Even though there's no C++ port, document how to read the *same source* on an ESP32 in `docs/esphome-powermeters.md`: a tier section (🟢 native / 🔵 generic HTTP / 🟠 alternate via HA/Modbus/MQTT / 🔴 not yet) **and** its entry in the Contents legend. Keep it consistent with the generator's `esphome` spec from step 5.
