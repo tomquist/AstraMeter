@@ -167,7 +167,7 @@ class _Issue376Harness:
     def phase_dchrg(self, phase: str) -> float:
         """Aggregated *_dchrg_power for a phase (positive instructed power)."""
         if self.backend == "python":
-            return self.ct002._collect_reports_by_phase()[phase]["dchrg_power"]
+            return self.ct002._collect_reports_by_phase()[phase].dchrg_power
         total = 0.0
         for c in self._esphome.dump()["consumers"].values():
             if c["phase"] != phase:

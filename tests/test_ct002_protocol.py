@@ -441,8 +441,8 @@ async def test_handle_request_pv_passthrough_net_target_and_relay_buckets():
     consumer = device._consumers["aabbccddeeff"]
     assert consumer.last_instructed_power == 0.0
     by_phase = device._collect_reports_by_phase()
-    assert by_phase["A"]["dchrg_power"] == 500
-    assert by_phase["A"]["chrg_power"] == 0
+    assert by_phase["A"].dchrg_power == 500
+    assert by_phase["A"].chrg_power == 0
 
 
 async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid():
@@ -461,8 +461,8 @@ async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid():
     assert device._consumers["aabbccddeeff"].last_instructed_power == -150.0
     # ...but the forwarded bucket carries the reported -100.
     by_phase = device._collect_reports_by_phase()
-    assert by_phase["A"]["chrg_power"] == -100
-    assert by_phase["A"]["dchrg_power"] == 0
+    assert by_phase["A"].chrg_power == -100
+    assert by_phase["A"].dchrg_power == 0
     response = device._build_response_fields(
         CT002Request.from_fields(
             ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "B", "0"]
@@ -643,10 +643,10 @@ async def test_inspection_reporter_counts_in_x_bucket_not_a():
         delta_values=[0, 0, 0],
     )
     by_phase = device._collect_reports_by_phase()
-    assert by_phase["x"]["count"] == 1
-    assert by_phase["x"]["chrg_power"] == -200
-    assert by_phase["A"]["count"] == 0
-    assert by_phase["A"]["chrg_power"] == 0
+    assert by_phase["x"].count == 1
+    assert by_phase["x"].chrg_power == -200
+    assert by_phase["A"].count == 0
+    assert by_phase["A"].chrg_power == 0
 
     response = device._build_response_fields(
         CT002Request.from_fields(
@@ -672,9 +672,9 @@ async def test_combined_phase_d_reporter_lands_in_abc_bucket():
         delta_values=[0, 0, 0],
     )
     by_phase = device._collect_reports_by_phase()
-    assert by_phase["ABC"]["count"] == 1
-    assert by_phase["ABC"]["dchrg_power"] == 300
-    assert by_phase["A"]["count"] == 0
+    assert by_phase["ABC"].count == 1
+    assert by_phase["ABC"].dchrg_power == 300
+    assert by_phase["A"].count == 0
 
     response = device._build_response_fields(
         CT002Request.from_fields(
@@ -704,11 +704,11 @@ def test_active_control_abc_bucket_uses_instructed_power():
     device._update_consumer_report("ins-x", phase="0", power=-200)
 
     by_phase = device._collect_reports_by_phase()
-    assert by_phase["A"]["chrg_power"] == -500  # instructed net
-    assert by_phase["A"]["dchrg_power"] == 0
-    assert by_phase["ABC"]["chrg_power"] == -300  # instructed net, not reported
-    assert by_phase["ABC"]["count"] == 1
-    assert by_phase["x"]["chrg_power"] == -200  # reported (never instructed)
+    assert by_phase["A"].chrg_power == -500  # instructed net
+    assert by_phase["A"].dchrg_power == 0
+    assert by_phase["ABC"].chrg_power == -300  # instructed net, not reported
+    assert by_phase["ABC"].count == 1
+    assert by_phase["x"].chrg_power == -200  # reported (never instructed)
 
 
 def test_active_control_combined_mode_response_reports_count_one():
@@ -857,5 +857,5 @@ def test_stale_consumer_drops_out_of_aggregation_before_cleanup_runs():
 
     by_phase = device._collect_reports_by_phase()
     assert "b" in device._consumers  # cleanup hasn't run yet
-    assert by_phase["A"]["count"] == 1
-    assert by_phase["A"]["dchrg_power"] == 100  # b's 50 W is gone
+    assert by_phase["A"].count == 1
+    assert by_phase["A"].dchrg_power == 100  # b's 50 W is gone

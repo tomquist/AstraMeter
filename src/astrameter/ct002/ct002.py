@@ -49,6 +49,7 @@ __all__ = [
     "SOH",
     "STX",
     "UDP_PORT",
+    "PhaseBucket",
     "ReportingConsumerRow",
     "ReportingPhase",
     "build_payload",
@@ -301,6 +302,34 @@ class ConsumerOverride:
 ReportingPhase = Literal["a", "b", "c", "d", "0"]
 
 
+@dataclasses.dataclass
+class PhaseBucket:
+    """What one cross-talk bucket aggregates over the batteries reporting into it.
+
+    ``chrg_power`` is never positive and ``dchrg_power`` never negative — the
+    same sign split the UDP response carries.  ``count`` includes every battery
+    in the bucket, idle ones too, because relay mode forwards it as the divisor
+    each battery takes its 1/N share by; ``active`` says whether any of them is
+    actually moving power.
+    """
+
+    chrg_power: int = 0
+    dchrg_power: int = 0
+    count: int = 0
+    active: bool = False
+
+    def add(self, power: int) -> None:
+        """Fold one battery's net power into the bucket."""
+        self.count += 1
+        if power == 0:
+            return
+        self.active = True
+        if power < 0:
+            self.chrg_power += power
+        else:
+            self.dchrg_power += power
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class ReportingConsumerRow:
     """One UDP-reporting consumer, for integrations that need a stable device list."""
@@ -372,7 +401,7 @@ class CT002Snapshot:
     grid_sample_at: float | None
     meter_failed: bool
     consecutive_meter_failures: int
-    buckets: dict[str, dict[str, int | bool]]
+    buckets: dict[str, PhaseBucket]
     consumers: tuple[ConsumerSnapshot, ...]
     orphan_overrides: tuple[tuple[str, ConsumerOverride], ...]
     balancer: BalancerSnapshot
@@ -797,11 +826,8 @@ class CT002:
             sample_id,
         )
 
-    def _collect_reports_by_phase(self):
-        by_phase = {
-            bucket: {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0}
-            for bucket in PHASE_BUCKETS
-        }
+    def _collect_reports_by_phase(self) -> dict[str, PhaseBucket]:
+        by_phase = {bucket: PhaseBucket() for bucket in PHASE_BUCKETS}
 
         now = self._clock()
         for consumer in self._consumers.values():
@@ -819,11 +845,6 @@ class CT002:
             if self._consumer_expired(consumer, now):
                 continue
             bucket = _bucket_for_phase(consumer.phase)
-            # Count every battery reporting into the bucket (regardless of its
-            # current power) so relay mode can forward the real per-phase
-            # battery count — each battery divides the forwarded aggregate by it
-            # to take its 1/N share.
-            by_phase[bucket]["count"] += 1
             if self.active_control and bucket in ("A", "B", "C", "ABC"):
                 # Active control: use the net AC power we *instructed* this
                 # consumer to be at (its reported output plus the delta in the
@@ -850,13 +871,7 @@ class CT002:
                 # never actively instructed, so their reported power is the only
                 # truthful signal in either mode.
                 power = consumer.power
-            if power == 0:
-                continue
-            by_phase[bucket]["active"] = True
-            if power < 0:
-                by_phase[bucket]["chrg_power"] += power
-            else:
-                by_phase[bucket]["dchrg_power"] += power
+            by_phase[bucket].add(power)
         return by_phase
 
     # ------------------------------------------------------------------
@@ -962,13 +977,11 @@ class CT002:
         """Number of consumers that have reported at least once over UDP."""
         return sum(1 for c in self._consumers.values() if c.timestamp > 0)
 
-    def reporting_phase_buckets(self) -> dict[str, dict[str, int | bool]]:
+    def reporting_phase_buckets(self) -> dict[str, PhaseBucket]:
         """Per-bucket charge/discharge power (W) and counts for integrations.
 
-        Keys are :data:`PHASE_BUCKETS` (``x``/``A``/``B``/``C``/``ABC``); each
-        value has ``chrg_power`` (≤0), ``dchrg_power`` (≥0), ``count`` and
-        ``active`` — the same sign-split the UDP response carries. Used by the
-        opt-in HTTP cloud reporter for its ``cz…cd`` / ``dz…dd`` fields.
+        Keyed by :data:`PHASE_BUCKETS` (``x``/``A``/``B``/``C``/``ABC``).  Used
+        by the opt-in HTTP cloud reporter for its ``cz…cd`` / ``dz…dd`` fields.
         """
         return self._collect_reports_by_phase()
 
@@ -1011,8 +1024,8 @@ class CT002:
         if meter_value is not None:
             parts.append(f"meter {meter_value}W")
         phases = " ".join(f"{p}:{int(v)}W" for p, v in zip("ABC", values, strict=False))
-        chrg = " ".join(f"{p}:{phase_values[p]['chrg_power']}" for p in PHASE_BUCKETS)
-        dchrg = " ".join(f"{p}:{phase_values[p]['dchrg_power']}" for p in PHASE_BUCKETS)
+        chrg = " ".join(f"{p}:{phase_values[p].chrg_power}" for p in PHASE_BUCKETS)
+        dchrg = " ".join(f"{p}:{phase_values[p].dchrg_power}" for p in PHASE_BUCKETS)
         consumers_with_reports = sorted(
             ((c.consumer_id, c) for c in self._consumers.values() if c.timestamp > 0),
             key=lambda x: x[0],
@@ -1082,19 +1095,19 @@ class CT002:
                 # a real count N would make every battery under-respond by a
                 # factor of N.  The issue #455 relay-count fix applies to the
                 # relay branch below only; don't generalize it here.
-                if pv["active"] or phase_power[idx] != 0:
+                if pv.active or phase_power[idx] != 0:
                     response_fields[8 + idx] = "1"
             else:
                 # Relay mode forwards the per-phase aggregate; report the real
                 # battery count so each battery takes its 1/N share.
-                response_fields[8 + idx] = str(pv["count"])
-            response_fields[15 + idx] = str(pv["chrg_power"])
-            response_fields[20 + idx] = str(pv["dchrg_power"])
+                response_fields[8 + idx] = str(pv.count)
+            response_fields[15 + idx] = str(pv.chrg_power)
+            response_fields[20 + idx] = str(pv.dchrg_power)
 
         # x (unassigned/inspection) bucket — chrg/dchrg only; the response
         # carries no x count field.
-        response_fields[14] = str(phase_values["x"]["chrg_power"])
-        response_fields[19] = str(phase_values["x"]["dchrg_power"])
+        response_fields[14] = str(phase_values["x"].chrg_power)
+        response_fields[19] = str(phase_values["x"].dchrg_power)
         # ABC (combined, phase "D") bucket.  A combined-mode battery reads the
         # summed grid field (field 7, ``measured_total_power``) and divides it
         # by this count.  Under active control we deliver a per-consumer target
@@ -1108,12 +1121,12 @@ class CT002:
         # phase-A/B/C responses (where the battery ignores it anyway).
         abc = phase_values["ABC"]
         if self.active_control:
-            if abc["active"] or (request.phase == "D" and measured_total_power != 0):
+            if abc.active or (request.phase == "D" and measured_total_power != 0):
                 response_fields[11] = "1"
         else:
-            response_fields[11] = str(abc["count"])
-        response_fields[18] = str(abc["chrg_power"])
-        response_fields[23] = str(abc["dchrg_power"])
+            response_fields[11] = str(abc.count)
+        response_fields[18] = str(abc.chrg_power)
+        response_fields[23] = str(abc.dchrg_power)
 
         response_fields += ["0"] * (len(RESPONSE_LABELS) - len(response_fields))
         self._info_idx_counter = (self._info_idx_counter + 1) % 256

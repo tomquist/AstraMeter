@@ -321,10 +321,10 @@ def _ct_measurement(
     buckets = device.reporting_phase_buckets()
 
     def charge(bucket: str) -> int:
-        return int(buckets.get(bucket, {}).get("chrg_power", 0))
+        return buckets[bucket].chrg_power
 
     def discharge(bucket: str) -> int:
-        return int(buckets.get(bucket, {}).get("dchrg_power", 0))
+        return buckets[bucket].dchrg_power
 
     return CtMeasurement(
         ap=ap,
