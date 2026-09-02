@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from astrameter.ct002.ct002 import CT002Snapshot
+from astrameter.status.mode import HA_SIMPLE, STANDALONE
 from astrameter.status.serialize import (
     compact,
     ct002_to_wire,
@@ -61,7 +63,7 @@ class StatusRegistry:
     #: The configuration backend currently running, so the mode switch can
     #: write out what it holds. Replaced (not mutated) on a config restart.
     app_config: Any = None
-    config_mode: str = "standalone"
+    config_mode: str = STANDALONE
     addon_slug: str | None = None
     web_port: int = 52500
     dashboard_enabled: bool = False
@@ -144,10 +146,27 @@ class StatusRegistry:
         """
         return self.direct_access or not self.under_supervisor()
 
+    def may_write(self, *, ingress: bool) -> bool:
+        """Whether a request may change anything through the dashboard.
+
+        The one rule; ``WebServer._may_write`` enforces it and
+        :meth:`capabilities` advertises it, so the page cannot offer a control
+        the server would refuse.
+        """
+        return self.allow_write and (ingress or self.serves_direct())
+
+    def config_writable(self, *, ingress: bool) -> bool:
+        """Whether ``config.ini`` may be written from such a request.
+
+        Simple mode regenerates the file on every start, so an edit there
+        would be lost — ``WebServer._config_write_blocked`` says so in prose.
+        """
+        return self.may_write(ingress=ingress) and self.config_mode != HA_SIMPLE
+
     def capabilities(self, *, ingress: bool) -> dict[str, Any]:
         """What this deployment can do, so the UI never branches on identity."""
         supervisor = self.under_supervisor()
-        writable = self.allow_write and (ingress or self.serves_direct())
+        writable = self.may_write(ingress=ingress)
         # No config_mode means "this backend has nothing to configure", which
         # is what hides the Configuration tab. An ESPHome device says it by
         # having its settings compiled in; here it is WEB_CONFIG_ENABLED
@@ -162,9 +181,7 @@ class StatusRegistry:
                 "stream": False,
                 "poll_interval_ms": 2000,
                 "config_mode": self.config_mode if editable else None,
-                "config_writable": editable
-                and writable
-                and self.config_mode != "ha_simple",
+                "config_writable": editable and self.config_writable(ingress=ingress),
                 "ha_options": editable and supervisor and writable,
                 "controls": writable,
                 "restart_process": writable,
@@ -180,16 +197,12 @@ class StatusRegistry:
         now = time.monotonic()
         devices: list[dict[str, Any]] = []
         for entry in self.devices.values():
-            snapshot_fn = getattr(entry.device, "status_snapshot", None)
-            if snapshot_fn is None:
-                continue
-            snap = snapshot_fn()
-            wire = (
+            snap = entry.device.status_snapshot()
+            devices.append(
                 ct002_to_wire(snap)
-                if getattr(snap, "consumers", None) is not None
+                if isinstance(snap, CT002Snapshot)
                 else shelly_to_wire(snap)
             )
-            devices.append(wire)
 
         return compact(
             {
@@ -206,9 +219,7 @@ class StatusRegistry:
                         "log_level": self.log_level,
                         "config_path": self.config_path,
                         "config_mtime_at": iso(_mtime(self.config_path)),
-                        "runtime": "ha_addon"
-                        if self.config_mode.startswith("ha_")
-                        else "docker",
+                        "runtime": "ha_addon" if self.under_supervisor() else "docker",
                         "addon_slug": self.addon_slug,
                         "restart_pending": self.restart_pending,
                         "started_at": self.started_at.isoformat(),
@@ -216,9 +227,7 @@ class StatusRegistry:
                     }
                 ),
                 "powermeters": [
-                    powermeter_to_wire(pm.status_snapshot())
-                    for pm in self.powermeters
-                    if hasattr(pm, "status_snapshot")
+                    powermeter_to_wire(pm.status_snapshot()) for pm in self.powermeters
                 ]
                 or None,
                 "devices": devices or None,
@@ -228,12 +237,10 @@ class StatusRegistry:
 
     def _integrations(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
-        if self.insights is not None and hasattr(self.insights, "status_snapshot"):
+        if self.insights is not None:
             out["mqtt_insights"] = _as_wire_dict(self.insights.status_snapshot())
         reporters = [
-            _as_wire_dict(r.status_snapshot())
-            for r in self.cloud_reporters.values()
-            if hasattr(r, "status_snapshot")
+            _as_wire_dict(r.status_snapshot()) for r in self.cloud_reporters.values()
         ]
         if reporters:
             out["cloud_reporting"] = reporters

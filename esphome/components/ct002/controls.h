@@ -28,7 +28,7 @@ namespace controls {
 /// to the browser and travels with no preflight, so a `find()` on the raw
 /// header would wave through exactly the request this exists to stop.
 ///
-/// Mirrors `_requires_json_content_type` in `src/astrameter/web_server.py`,
+/// Mirrors `requires_json_content_type` in `src/astrameter/web_guard.py`,
 /// which compares `request.content_type` for the same reason.
 bool is_json_content_type(const std::string &header);
 
@@ -45,7 +45,7 @@ bool is_json_content_type(const std::string &header);
 /// without a nameserver, and whatever the operator listed are the whole
 /// allowlist.
 ///
-/// Mirrors `is_allowed_host` in `src/astrameter/web_server.py`; the two must
+/// Mirrors `is_allowed_host` in `src/astrameter/web_guard.py`; the two must
 /// accept the same addresses (see AGENTS.md — the write path has parity).
 bool is_allowed_host(const std::string &host, const std::vector<std::string> &allowed);
 

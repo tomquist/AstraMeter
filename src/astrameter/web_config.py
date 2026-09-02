@@ -8,7 +8,6 @@ import configparser
 import contextlib
 import errno
 import importlib.resources
-import json
 import os
 import shutil
 import tempfile
@@ -41,12 +40,8 @@ def read_config_as_dict(config_path: str) -> tuple[dict, list]:
     cfg.optionxform = str  # type: ignore[assignment]  # preserve key case
     if os.path.exists(config_path):
         cfg.read(config_path)
-    sections: dict[str, dict[str, str]] = {}
-    order = []
-    for section in cfg.sections():
-        sections[section] = dict(cfg.items(section))
-        order.append(section)
-    return sections, order
+    sections = {section: dict(cfg.items(section)) for section in cfg.sections()}
+    return sections, list(sections)
 
 
 _CONFIG_WRITE_LOCK = threading.Lock()
@@ -220,12 +215,6 @@ def validate_config(config_path: str) -> None:
     read_all_powermeter_configs(cfg)
 
 
-def config_to_json(config_path: str) -> str:
-    """Return the config as a JSON string suitable for the web UI."""
-    sections, order = read_config_as_dict(config_path)
-    return json.dumps({"sections": sections, "order": order})
-
-
 # -- Key-type metadata served to the config editor --------------------------
 
 _PM_COMMON: dict[str, dict[str, object]] = {
@@ -267,8 +256,6 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "DASHBOARD_ALLOWED_HOSTS": {"type": "string"},
         "ENABLE_WEB_SERVER": {"type": "boolean"},
         "WEB_SERVER_PORT": {"type": "integer"},
-        "DISABLE_SUM_PHASES": {"type": "boolean"},
-        "DISABLE_ABSOLUTE_VALUES": {"type": "boolean"},
         "THROTTLE_INTERVAL": {"type": "float"},
         "WAIT_FOR_NEXT_MESSAGE": {"type": "boolean"},
         "DEDUPE_TIME_WINDOW": {"type": "float", "min": 0},
@@ -410,8 +397,3 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
 }
 # Resolve aliases
 SECTION_KEY_TYPES["CT003"] = SECTION_KEY_TYPES["CT002"]
-
-
-def section_key_types_json() -> str:
-    """Return SECTION_KEY_TYPES as a JSON string for the config editor."""
-    return json.dumps(SECTION_KEY_TYPES)

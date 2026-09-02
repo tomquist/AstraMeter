@@ -214,7 +214,7 @@ bool is_allowed_host(const std::string &host, const std::vector<std::string> &al
   // home networks (RFC 8375), which the DNS root will not delegate, so there
   // is no outside nameserver to ask about a name under it either. A merely
   // common router suffix (`.box`, `.lan`) is not reserved and stays an
-  // `allowed_hosts` decision. Mirrors ALWAYS_ALLOWED_HOST* in web_server.py.
+  // `allowed_hosts` decision. Mirrors ALWAYS_ALLOWED_HOST* in web_guard.py.
   return name == "localhost" || ends_with(name, ".localhost") || ends_with(name, ".local") ||
          ends_with(name, ".home.arpa");
 }
