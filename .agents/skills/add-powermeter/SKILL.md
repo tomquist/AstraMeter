@@ -11,13 +11,19 @@ beyond the implementation; grep an existing one (`HomeWizard` / `HOMEWIZARD`) to
 find every spot, and work through all eight so the config loader, web editor,
 generator and both doc sets stay in sync.
 
-1. **Implementation** — `powermeter/<module>.py` with a class subclassing
-   `Powermeter`, implementing `get_powermeter_watts()`; override
-   `wait_for_message()` only if the base default is wrong for your source. A
-   meter polled over HTTP should subclass `HttpPowermeter`
-   (`powermeter/http_client.py`) instead — it owns the session lifecycle and a
-   `get_json(url)` that fails fast and raises on an HTTP error, so a backend
-   only builds URLs and decodes bodies.
+1. **Implementation** — `powermeter/<module>.py` with a class implementing
+   `get_powermeter_watts()`. Pick the base by how readings arrive:
+
+   - **Polled over HTTP** — `HttpPowermeter` (`powermeter/http_client.py`). It
+     owns the session lifecycle and a `get_json(url)` that fails fast and
+     raises on an HTTP error, so a backend only builds URLs and decodes bodies.
+   - **Pushed to you** — `PushPowermeter` (`powermeter/base.py`). Set
+     `_message_event` on every measurement received and it implements both wait
+     methods for you. Don't subclass plain `Powermeter` for a push source: the
+     control loop asks for a *fresh* reading through `wait_for_next_message()`,
+     whose base default is a no-op, so it would be handed a stale one.
+   - **Anything else** — `Powermeter`, overriding the waits only if its no-op
+     defaults are wrong for the source.
 2. **Exports** — the import and `__all__` entry in `powermeter/__init__.py`.
 3. **Config loader** — in `config/config_loader.py`: import the class, define a
    `*_SECTION` string, add a `create_*_powermeter()` factory reading the

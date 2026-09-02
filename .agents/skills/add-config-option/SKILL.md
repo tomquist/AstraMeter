@@ -12,9 +12,12 @@ An option only one entry point understands is a bug. Adding or renaming a
    the field name upper-cased unless `_GENERAL_KEY_OVERRIDES` says otherwise,
    and the getter follows the field's declared type. Powermeter keys are read
    explicitly in `config_loader.py`. Use the field where it belongs (e.g.
-   `run_device` in `main.py`). Only `ini_config.py` and `config_loader.py` may
-   know section or key names — every other backend answers the `AppConfig`
-   interface.
+   `run_device` in `main.py`). `ini_config.py` and `config_loader.py` are the
+   only readers of section and key names; every other backend answers the
+   `AppConfig` interface. One writer names them too: the add-on's
+   `render_powermeters_ini()` emits a `[HOMEASSISTANT]` section for the loader
+   to parse back, and `addon_test.py` pins it key for key against
+   `AddonAppConfig.powermeters()`.
 2. **`config.ini.example`** — a commented example with a short rationale.
 3. **Web config editor** — the typed key in `SECTION_KEY_TYPES`
    (`src/astrameter/web_config.py`).
