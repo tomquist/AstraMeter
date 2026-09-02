@@ -1,5 +1,4 @@
 ---
-name: web-ui
 description: Builds and verifies the dashboard page: the two committed artifacts CI rejects when stale, the browser tests, and the documentation screenshots. Use when changing the dashboard UI, adding a tab or a control, or refreshing the screenshots in docs/images/.
 ---
 
@@ -7,7 +6,7 @@ description: Builds and verifies the dashboard page: the two committed artifacts
 
 `web/ts/dashboard/` is **one page served by both stacks**, so a UI change lands
 on the Python service and the ESPHome component at once. The document behind it
-differs; the `ct002-parity` skill covers that split and the firmware's
+differs; the `check-ct002-parity` skill covers that split and the firmware's
 constraints on the page.
 
 Verify with `cd web && npm run check`.

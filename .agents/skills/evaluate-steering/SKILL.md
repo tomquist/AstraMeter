@@ -1,5 +1,4 @@
 ---
-name: steering-eval
 description: Runs the steering-quality evaluation and reads its base-vs-head comparison, including the cost_regret_ct headline and the do-no-harm guardrails. Use when changing how the balancer steers — reaction speed, oscillation, overshoot, battery sharing — or anything else in the active-control loop or the simulator.
 ---
 

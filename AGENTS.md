@@ -6,11 +6,11 @@ doesn't load skills (`.claude/skills` symlinks there for the ones that do):
 
 | Working on | Read |
 | --- | --- |
-| `src/astrameter/ct002/`, `src/astrameter/status/`, `esphome/components/ct002/` | `.agents/skills/ct002-parity/SKILL.md` |
-| anything under `web/`, or the docs screenshots | `.agents/skills/web-ui/SKILL.md` |
-| balancer or simulator behavior | `.agents/skills/steering-eval/SKILL.md` |
-| a `[SECTION]` config key, or `ha_addon/` | `.agents/skills/config-option/SKILL.md` |
-| a powermeter backend | `.agents/skills/powermeter/SKILL.md` |
+| `src/astrameter/ct002/`, `src/astrameter/status/`, `esphome/components/ct002/` | `.agents/skills/check-ct002-parity/SKILL.md` |
+| anything under `web/`, or the docs screenshots | `.agents/skills/build-dashboard/SKILL.md` |
+| balancer or simulator behavior | `.agents/skills/evaluate-steering/SKILL.md` |
+| a `[SECTION]` config key, or `ha_addon/` | `.agents/skills/add-config-option/SKILL.md` |
+| a powermeter backend | `.agents/skills/add-powermeter/SKILL.md` |
 
 Keep all of it true: when a change makes something here or in a skill wrong,
 fix it in the same change.
@@ -34,7 +34,7 @@ in a sandbox. Don't report a suite as skipped without trying.
 stack: filenames, symbol names and filter ordering all match. Any change to
 shared behavior lands on **both** sides in the same change, verified by `uv run
 pytest tests/components/ct002/`. `CONTRIBUTING.md` maps file to file; the
-`ct002-parity` skill has what is mirrored, what is deliberately waived, and what
+`check-ct002-parity` skill has what is mirrored, what is deliberately waived, and what
 the firmware constrains.
 
 ## Branches and pull requests

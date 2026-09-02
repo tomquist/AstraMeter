@@ -1,5 +1,4 @@
 ---
-name: ct002-parity
 description: Keeps the Python CT002 stack and its ESPHome C++ mirror in step: what must change on both sides, which divergences are deliberate, what the ESP32 constrains, and which tests prove parity. Use when changing CT002 or balancer behavior, adding a status field or a dashboard control, or editing the ESPHome component.
 ---
 
@@ -41,7 +40,7 @@ stack. Shared behavior lands on **both** sides in the same change;
 
 ## What the firmware constrains
 
-The dashboard is one page served by both stacks (see the `web-ui` skill), and
+The dashboard is one page served by both stacks (see the `build-dashboard` skill), and
 the ESP32 half sets its limits:
 
 - It lives in flash, inside the gzipped budget `npm run check:dashboard`

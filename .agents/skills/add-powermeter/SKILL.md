@@ -1,5 +1,4 @@
 ---
-name: powermeter
 description: Adds a grid powermeter backend end to end: the module, the config-loader factory, the web editor and generator entries, the ESPHome equivalent, both doc sets and the tests. Use when adding support for a new energy meter or smart-meter source, or renaming an existing one.
 ---
 

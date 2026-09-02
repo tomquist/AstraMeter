@@ -1,5 +1,4 @@
 ---
-name: config-option
 description: Adds or renames a user-facing config option across all seven surfaces it has to reach, from the settings dataclass through the web config generator to the Home Assistant add-on and the docs. Use when adding a new setting, renaming a config key, or changing the add-on's options or container image.
 ---
 
