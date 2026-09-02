@@ -25,13 +25,14 @@ from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     SaturationTracker,
     min_actionable_output,
     saturation_floor,
 )
 
-B2500 = {"device_type": "HMJ-2", "phase": "A", "power": 0}
+B2500 = ConsumerReport(device_type="HMJ-2", phase="A", power=0)
 
 
 class _FakeClock:
@@ -115,9 +116,11 @@ def test_the_floor_prefers_evidence_over_the_nominal_figure() -> None:
     # family with no nominal floor: that unit is being held above its deadband,
     # and the gate has to follow, or it is judged against a command it is never
     # sent (flagged by CodeRabbit on #629).
-    assert saturation_floor(state, {"device_type": "VNSE3-0"}, 150.0) == 150.0
+    assert (
+        saturation_floor(state, ConsumerReport(device_type="VNSE3-0"), 150.0) == 150.0
+    )
     # With no override, a battery with a built-in inverter keeps no floor.
-    assert saturation_floor(state, {"device_type": "VNSE3-0"}, 0.0) == 0.0
+    assert saturation_floor(state, ConsumerReport(device_type="VNSE3-0"), 0.0) == 0.0
 
 
 def test_compute_target_supplies_each_consumer_its_floor() -> None:
@@ -140,8 +143,8 @@ def test_compute_target_supplies_each_consumer_its_floor() -> None:
     )
     b2500, venus = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
     reports = {
-        b2500: {"device_type": "HMJ-2", "phase": "A", "power": 1},
-        venus: {"device_type": "VNSE3-0", "phase": "A", "power": 1},
+        b2500: ConsumerReport(device_type="HMJ-2", phase="A", power=1),
+        venus: ConsumerReport(device_type="VNSE3-0", phase="A", power=1),
     }
     seen: dict[str, float] = {}
     real_update = lb._saturation.update
@@ -202,7 +205,7 @@ def test_a_configured_floor_below_the_start_floor_does_not_lock_a_unit_out() -> 
     power = {"aaaaaaaaaaaa": 230.0, "bbbbbbbbbbbb": 4.0}
     for step in range(400):
         reports = {
-            cid: {"device_type": "HMJ-2", "phase": "A", "power": round(w)}
+            cid: ConsumerReport(device_type="HMJ-2", phase="A", power=round(w))
             for cid, w in power.items()
         }
         grid = house - sum(power.values())

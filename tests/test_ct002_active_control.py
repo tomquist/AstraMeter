@@ -3,7 +3,7 @@
 import dataclasses
 import time
 
-from astrameter.ct002.balancer import ProbeState, split_balancer_knobs
+from astrameter.ct002.balancer import ConsumerReport, ProbeState, split_balancer_knobs
 from astrameter.ct002.ct002 import CT002
 
 
@@ -1276,8 +1276,8 @@ class TestEfficiencySaturationSwap:
             proof_samples=1,
         )
         reports = {
-            "a": {"phase": "A", "power": 200},
-            "b": {"phase": "A", "power": 80},
+            "a": ConsumerReport(phase="A", power=200),
+            "b": ConsumerReport(phase="A", power=80),
         }
         out_a = device._balancer._compute_probe_target("a", reports, -80, {})
 

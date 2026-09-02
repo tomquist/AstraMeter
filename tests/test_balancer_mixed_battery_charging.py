@@ -47,6 +47,7 @@ import pytest
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     _is_ac_chargeable,
     _needs_dc_output_floor,
@@ -223,11 +224,9 @@ def _run_scenario(batteries, surplus_watts: float, ticks: int):
 
     for tick in range(ticks):
         reports = {
-            b.mac: {
-                "phase": "A",
-                "power": round(b.power),
-                "device_type": b.device_type,
-            }
+            b.mac: ConsumerReport(
+                phase="A", power=round(b.power), device_type=b.device_type
+            )
             for b in batteries
         }
         # Grid = (load - solar) - battery_sum.  Here we model a clean
@@ -250,7 +249,7 @@ def _run_scenario(batteries, surplus_watts: float, ticks: int):
             deltas[b.mac] = phase_targets[0]
 
         for b in batteries:
-            b.step(deltas[b.mac], reports[b.mac]["power"])
+            b.step(deltas[b.mac], reports[b.mac].power)
             power_trace[b.mac].append(b.power)
 
         clock.advance(1.0)
@@ -552,11 +551,9 @@ def test_transient_surplus_does_not_collapse_dc_only_pool() -> None:
     power_trace: dict[str, list[float]] = {"dc_a": [], "dc_b": []}
     for tick in range(45):
         reports = {
-            bat.mac: {
-                "phase": "A",
-                "power": round(bat.power),
-                "device_type": bat.device_type,
-            }
+            bat.mac: ConsumerReport(
+                phase="A", power=round(bat.power), device_type=bat.device_type
+            )
             for bat in (a, b)
         }
         grid_total = house_load(tick) - sum(bat.power for bat in (a, b))
@@ -570,7 +567,7 @@ def test_transient_surplus_does_not_collapse_dc_only_pool() -> None:
                 manual=frozenset(),
                 sample_id=(tick,),
             )[0]
-            bat.step(delta, reports[bat.mac]["power"])
+            bat.step(delta, reports[bat.mac].power)
             power_trace[bat.mac].append(bat.power)
         clock.advance(1.0)
 
@@ -607,7 +604,9 @@ def test_sustained_surplus_dc_only_balancer_never_asks_to_discharge() -> None:
     max_target_seen: dict[str, float] = {m: float("-inf") for m in macs}
     for tick in range(200):
         # Batteries pinned at 0 W (real B2500 cannot accept AC charge).
-        reports = {m: {"phase": "A", "power": 0, "device_type": "HMJ-1"} for m in macs}
+        reports = {
+            m: ConsumerReport(phase="A", power=0, device_type="HMJ-1") for m in macs
+        }
         grid_total = -surplus  # nothing absorbs, so grid stays at -600 W
         for m in macs:
             delta = lb.compute_target(
@@ -674,13 +673,13 @@ def _run_floor_scenario(
 
     for tick in range(ticks):
         reports = {
-            b.mac: {
-                "phase": "A",
-                "power": round(b.power),
-                "device_type": b.device_type,
-                "weight": weights.get(b.mac, 1.0),
-                "min_dc_output": overrides.get(b.mac),
-            }
+            b.mac: ConsumerReport(
+                phase="A",
+                power=round(b.power),
+                device_type=b.device_type,
+                weight=weights.get(b.mac, 1.0),
+                min_dc_output=overrides.get(b.mac),
+            )
             for b in batteries
         }
         grid_total = -surplus_watts - sum(b.power for b in batteries)
@@ -705,7 +704,7 @@ def _run_floor_scenario(
             deltas[b.mac] = phase_targets[0]
 
         for b in batteries:
-            b.step(deltas[b.mac], reports[b.mac]["power"])
+            b.step(deltas[b.mac], reports[b.mac].power)
             power_trace[b.mac].append(b.power)
         clock.advance(1.0)
 

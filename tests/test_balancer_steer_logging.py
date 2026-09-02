@@ -19,6 +19,7 @@ from astrameter.config.logger import logger
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
 )
 
@@ -27,9 +28,9 @@ MANUAL, AUTO, IDLE = "aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"
 
 def _reports() -> dict:
     return {
-        MANUAL: {"device_type": "HMJ-2", "phase": "A", "power": 400},
-        AUTO: {"device_type": "HMJ-2", "phase": "A", "power": 350},
-        IDLE: {"device_type": "HMJ-2", "phase": "A", "power": 0},
+        MANUAL: ConsumerReport(device_type="HMJ-2", phase="A", power=400),
+        AUTO: ConsumerReport(device_type="HMJ-2", phase="A", power=350),
+        IDLE: ConsumerReport(device_type="HMJ-2", phase="A", power=0),
     }
 
 
@@ -189,7 +190,7 @@ def test_a_consumer_the_efficiency_layer_idled_says_so(
         clock=lambda: clock[0],
     )
     reports = {
-        cid: {"device_type": "HMJ-2", "phase": "A", "power": 50}
+        cid: ConsumerReport(device_type="HMJ-2", phase="A", power=50)
         for cid in ("dddddddddddd", "eeeeeeeeeeee", "ffffffffffff")
     }
     # Demand well under one battery's efficient slice, so the layer idles two.

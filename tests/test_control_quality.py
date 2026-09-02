@@ -17,6 +17,7 @@ from astrameter.ct002.balancer import (
     CONTROL_QUALITY_WARMUP_SECONDS,
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     ControlQualityTracker,
     LoadBalancer,
 )
@@ -310,7 +311,9 @@ class TestControlQualityInBalancer:
 
     def _poll(self, balancer, clock, grid, *, reported=0.0, device_type="HMG-50"):
         clock.advance(1.0)
-        reports = {"a": {"device_type": device_type, "phase": "A", "power": reported}}
+        reports = {
+            "a": ConsumerReport(device_type=device_type, phase="A", power=reported)
+        }
         balancer.compute_target(
             "a",
             ConsumerMode("auto"),
@@ -338,7 +341,9 @@ class TestControlQualityInBalancer:
         balancer, clock = self._make()
         for _ in range(120):
             clock.advance(1.0)
-            reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 300.0}}
+            reports = {
+                "a": ConsumerReport(device_type="HMG-50", phase="A", power=300.0)
+            }
             balancer.compute_target(
                 "a", ConsumerMode("auto"), reports, 0.0, frozenset(), frozenset(), ()
             )
@@ -358,7 +363,7 @@ class TestControlQualityInBalancer:
         for i in range(400):
             clock.advance(1.0)
             grid = 400.0 if i % 2 == 0 else -400.0
-            reports = {"a": {"device_type": "HMA-1", "phase": "A", "power": 300.0}}
+            reports = {"a": ConsumerReport(device_type="HMA-1", phase="A", power=300.0)}
             balancer.compute_target(
                 "a",
                 ConsumerMode("auto"),
@@ -404,8 +409,8 @@ class TestControlQualityInBalancer:
         def poll_pair():
             clock.advance(1.0)
             reports = {
-                "a": {"device_type": "HMG-50", "phase": "A", "power": 0.0},
-                "b": {"device_type": "HMG-50", "phase": "A", "power": 0.0},
+                "a": ConsumerReport(device_type="HMG-50", phase="A", power=0.0),
+                "b": ConsumerReport(device_type="HMG-50", phase="A", power=0.0),
             }
             balancer.compute_target(
                 "a",

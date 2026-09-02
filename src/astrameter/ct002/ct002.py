@@ -19,6 +19,7 @@ from .balancer import (
     BalancerConsumerSnapshot,
     BalancerSnapshot,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     _needs_dc_output_floor,
     device_capabilities,
@@ -722,14 +723,14 @@ class CT002:
         mode = self._consumer_mode(consumer_id)
 
         reports = {
-            cid: {
-                "phase": c.phase,
-                "power": c.power,
-                "device_type": c.device_type,
-                "weight": c.distribution_weight,
-                "efficiency_window_weight": c.efficiency_window_weight,
-                "min_dc_output": c.min_dc_output,
-            }
+            cid: ConsumerReport(
+                phase=c.phase,
+                power=c.power,
+                device_type=c.device_type,
+                weight=c.distribution_weight,
+                efficiency_window_weight=c.efficiency_window_weight,
+                min_dc_output=c.min_dc_output,
+            )
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }
