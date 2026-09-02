@@ -4,7 +4,7 @@ import contextlib
 import os
 import signal
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import fields, replace
 from typing import Any
 
 from astrameter.cloud_reporting import (
@@ -23,6 +23,7 @@ from astrameter.config.settings import (
     MarstekSettings,
 )
 from astrameter.ct002 import CT002
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.marstek_api import (
     MarstekApiError,
     MarstekConfig,
@@ -170,38 +171,23 @@ def _build_ct002(
         consumer_ttl=ct.consumer_ttl,
         debug_status=debug_status,
         active_control=ct.active_control,
-        fair_distribution=ct.fair_distribution,
-        balance_gain=ct.balance_gain,
-        error_boost_threshold=ct.error_boost_threshold,
-        error_boost_max=ct.error_boost_max,
-        error_reduce_threshold=ct.error_reduce_threshold,
-        balance_deadband=ct.balance_deadband,
-        max_correction_per_step=ct.max_correction_per_step,
-        max_target_step=ct.max_target_step,
-        pace_base_step=ct.pace_base_step,
-        pace_max_step=ct.pace_max_step,
-        osc_damp_max=ct.osc_damp_max,
-        osc_damp_alpha=ct.osc_damp_alpha,
-        osc_damp_decay=ct.osc_damp_decay,
-        osc_damp_threshold=ct.osc_damp_threshold,
-        grid_predict_trust=ct.grid_predict_trust,
-        concentrate_deadband=ct.concentrate_deadband,
-        import_trim_w=ct.import_trim_w,
+        balancer=_balancer_config(ct),
         saturation_detection=ct.saturation_detection,
         saturation_alpha=ct.saturation_alpha,
         min_target_for_saturation=ct.min_target_for_saturation,
+        saturation_decay_factor=ct.saturation_decay_factor,
         saturation_grace_seconds=ct.saturation_grace_seconds,
         saturation_stall_timeout_seconds=ct.saturation_stall_timeout_seconds,
-        min_efficient_power=ct.min_efficient_power,
-        probe_min_power=ct.probe_min_power,
-        efficiency_rotation_interval=ct.efficiency_rotation_interval,
-        efficiency_fade_alpha=ct.efficiency_fade_alpha,
-        efficiency_saturation_threshold=ct.efficiency_saturation_threshold,
-        efficiency_demand_alpha=ct.efficiency_demand_alpha,
-        min_dc_output=ct.min_dc_output,
-        saturation_decay_factor=ct.saturation_decay_factor,
         device_id=device_id,
         reset_fn=reset_fn,
+    )
+
+
+def _balancer_config(ct: CtSettings) -> BalancerConfig:
+    """Every balancer knob is a ``CtSettings`` field of the same name, so a
+    new one reaches the balancer as soon as both sides declare it."""
+    return BalancerConfig(
+        **{f.name: getattr(ct, f.name) for f in fields(BalancerConfig)}
     )
 
 

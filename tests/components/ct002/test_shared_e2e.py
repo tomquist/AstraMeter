@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.ct002 import CT002
 from astrameter.ct002.protocol import build_payload, parse_request
 
@@ -104,7 +105,7 @@ class PythonBackend:
             udp_port=UDP_PORT,  # unused: we never start() a real socket
             ct_mac="",  # mirror mode, like the e2e YAML
             active_control=True,
-            fair_distribution=True,
+            balancer=BalancerConfig(fair_distribution=True),
             clock=self._clock,
             reset_fn=None,
             dedupe_time_window=0.0,  # off by default; set_dedupe() toggles it

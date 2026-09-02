@@ -12,6 +12,7 @@ import random
 import socket
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from astrameter.ct002.balancer import split_balancer_knobs
 from astrameter.ct002.ct002 import CT002
 
 from .battery import BatterySimulator
@@ -129,14 +130,16 @@ async def run_scenario(
 
     ct_kwargs: dict[str, float] = dict(scenario.ct_kwargs)
     ct_kwargs.update(overrides or {})
+    balancer, other_kwargs = split_balancer_knobs(ct_kwargs)
     ct002 = CT002(
         udp_port=0,  # assigned by _start_ct002 below
         ct_mac=_CT_MAC,
         active_control=True,
+        balancer=balancer,
         clock=clock,
         consumer_ttl=_CONSUMER_TTL_S,
         dedupe_time_window=0.0,
-        **ct_kwargs,
+        **other_kwargs,
     )
 
     samples: list[_Sample] = []

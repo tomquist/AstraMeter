@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 from _ct002_e2e_backend import HarnessClock, find_free_ports
 
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import LoadModel
@@ -55,8 +56,7 @@ class _B2500Harness:
             udp_port=free_udp,
             ct_mac=ct_mac,
             active_control=active_control,
-            fair_distribution=True,
-            min_efficient_power=0,
+            balancer=BalancerConfig(fair_distribution=True, min_efficient_power=0),
             clock=self.clock,
             reset_fn=None,
             consumer_ttl=100000,
@@ -164,8 +164,7 @@ class _MixedHarness:
             udp_port=free_udp,
             ct_mac=ct_mac,
             active_control=active_control,
-            fair_distribution=True,
-            min_efficient_power=0,
+            balancer=BalancerConfig(fair_distribution=True, min_efficient_power=0),
             clock=self.clock,
             reset_fn=None,
             consumer_ttl=100000,

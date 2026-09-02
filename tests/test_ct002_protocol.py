@@ -2,6 +2,7 @@ import logging
 from unittest.mock import MagicMock
 
 from astrameter.ct002 import CT002, ReportingConsumerRow
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.protocol import (
     ETX,
     RESPONSE_LABELS,
@@ -519,7 +520,11 @@ async def test_handle_request_holds_with_zero_delta_when_before_send_fails():
     """Issue #403: when the powermeter is unavailable (before_send raises),
     the response must be a zero adjustment so the battery holds — not a delta
     re-derived from the stale cached reading (which would wind it up)."""
-    device = CT002(ct_mac="112233445566", active_control=True, fair_distribution=True)
+    device = CT002(
+        ct_mac="112233445566",
+        active_control=True,
+        balancer=BalancerConfig(fair_distribution=True),
+    )
     await _seed_good_reading(device, "AABBCCDDEEFF")
     assert device._consumers["aabbccddeeff"].values == [500, 0, 0]
 

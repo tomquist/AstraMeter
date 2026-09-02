@@ -5,8 +5,8 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
-from collections.abc import Callable
-from typing import Literal, NamedTuple, NewType, get_args
+from collections.abc import Callable, Mapping
+from typing import Any, Literal, NamedTuple, NewType, get_args
 
 from astrameter.config.logger import logger
 
@@ -356,6 +356,20 @@ class BalancerConfig:
         _clamp("grid_predict_trust", 0.0, 1.0)
         _clamp("concentrate_deadband", 0.0, float("inf"))
         _clamp("import_trim_w", 0.0, float("inf"))
+
+
+def split_balancer_knobs(knobs: Mapping[str, Any]) -> tuple[BalancerConfig, dict]:
+    """Split flat tuning knobs into a config and whatever else was named.
+
+    Scenario files and CLI overrides carry knobs flat, by field name; this is
+    the one place that sorts them into the balancer's config. Python-only —
+    the firmware takes its configuration from codegen.
+    """
+    mine = {f.name for f in dataclasses.fields(BalancerConfig)}
+    return (
+        BalancerConfig(**{k: v for k, v in knobs.items() if k in mine}),
+        {k: v for k, v in knobs.items() if k not in mine},
+    )
 
 
 # ---------------------------------------------------------------------------

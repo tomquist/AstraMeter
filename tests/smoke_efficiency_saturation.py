@@ -16,6 +16,7 @@ import socket
 import sys
 import time
 
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import Load, LoadModel
@@ -108,10 +109,12 @@ class SmokeHarness:
             udp_port=ct_port,
             ct_mac=ct_mac,
             active_control=True,
-            fair_distribution=True,
-            min_efficient_power=min_efficient_power,
-            efficiency_rotation_interval=scaled_rotation,
-            efficiency_saturation_threshold=efficiency_saturation_threshold,
+            balancer=BalancerConfig(
+                fair_distribution=True,
+                min_efficient_power=min_efficient_power,
+                efficiency_rotation_interval=scaled_rotation,
+                efficiency_saturation_threshold=efficiency_saturation_threshold,
+            ),
             saturation_decay_factor=saturation_decay_factor,
             consumer_ttl=120 / time_scale,
             reset_fn=None,

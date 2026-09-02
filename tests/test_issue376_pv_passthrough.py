@@ -27,6 +27,7 @@ from _ct002_e2e_backend import (
     find_free_ports,
 )
 
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import LoadModel
@@ -112,8 +113,7 @@ class _Issue376Harness:
                 udp_port=ct_port,
                 ct_mac=ct_mac,
                 active_control=True,
-                fair_distribution=True,
-                min_efficient_power=0,
+                balancer=BalancerConfig(fair_distribution=True, min_efficient_power=0),
                 clock=self.clock,
                 reset_fn=None,
                 consumer_ttl=100000,
