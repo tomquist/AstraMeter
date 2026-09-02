@@ -5,14 +5,14 @@ import contextlib
 import dataclasses
 import math
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal, NamedTuple, cast
 
 from astrameter.config.logger import debug_traceback, logger
 from astrameter.power_units import three_phases
 from astrameter.request_dedupe import RequestDeduplicator
-from astrameter.udp_server import UdpServer
+from astrameter.udp_server import DatagramSink, UdpServer
 
 from .balancer import (
     SATURATION_GRACE_SECONDS,
@@ -22,6 +22,7 @@ from .balancer import (
     BalancerSnapshot,
     ConsumerMode,
     ConsumerReport,
+    ControlQualitySnapshot,
     LoadBalancer,
     _needs_dc_output_floor,
     device_capabilities,
@@ -117,7 +118,7 @@ def _bucket_for_phase(phase: str) -> str:
     return p
 
 
-def _control_quality_evidence(quality) -> dict[str, Any]:
+def _control_quality_evidence(quality: ControlQualitySnapshot) -> dict[str, Any]:
     """The numbers behind a control-quality verdict, for the MQTT payload.
 
     Percentages rather than 0..1 fractions, and crossings per minute rather
@@ -141,7 +142,7 @@ def _control_quality_evidence(quality) -> dict[str, Any]:
     }
 
 
-def _values_finite(values) -> bool:
+def _values_finite(values: Iterable[Any]) -> bool:
     """True iff every meter value coerces to a finite number.
 
     Numeric strings are tolerated (some sources deliver them); NaN/Inf or
@@ -228,7 +229,7 @@ class Consumer:
 
     consumer_id: str
     # Meter readings (set externally, e.g. by powermeter integration)
-    values: list | None = None
+    values: list[float] | None = None
     # Report data (updated each UDP request)
     phase: str = "A"
     power: int = 0
@@ -423,27 +424,27 @@ class CT002Snapshot:
 class CT002:
     def __init__(
         self,
-        udp_port=UDP_PORT,
-        ct_mac="",
-        ct_type="HME-4",
-        wifi_rssi=-50,
-        dedupe_time_window=0.0,
+        udp_port: int = UDP_PORT,
+        ct_mac: str = "",
+        ct_type: str = "HME-4",
+        wifi_rssi: int = -50,
+        dedupe_time_window: float = 0.0,
         # None (default) = adaptive eviction: a consumer expires after missing
         # ~2 of its own poll cycles, like the real CT.  A number = fixed TTL
         # in seconds (set CONSUMER_TTL to get this).
-        consumer_ttl=None,
-        debug_status=False,
-        active_control=True,
+        consumer_ttl: int | None = None,
+        debug_status: bool = False,
+        active_control: bool = True,
         balancer: BalancerConfig | None = None,
-        saturation_detection=True,
-        saturation_alpha=0.15,
-        min_target_for_saturation=20,
-        saturation_decay_factor=0.995,
-        saturation_grace_seconds=SATURATION_GRACE_SECONDS,
-        saturation_stall_timeout_seconds=SATURATION_STALL_TIMEOUT_SECONDS,
-        device_id="",
-        clock=None,
-        reset_fn=None,
+        saturation_detection: bool = True,
+        saturation_alpha: float = 0.15,
+        min_target_for_saturation: float = 20,
+        saturation_decay_factor: float = 0.995,
+        saturation_grace_seconds: float = SATURATION_GRACE_SECONDS,
+        saturation_stall_timeout_seconds: float = SATURATION_STALL_TIMEOUT_SECONDS,
+        device_id: str = "",
+        clock: Callable[[], float] | None = None,
+        reset_fn: Callable[[], None] | None = None,
     ) -> None:
         self.udp_port = udp_port
         self.ct_mac = ct_mac
@@ -481,7 +482,7 @@ class CT002:
             dedupe_time_window, clock=clock or time.time
         )
         self._server: UdpServer | None = None
-        self._cleanup_task = None
+        self._cleanup_task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         # Clock used for rate-limiting ``before_send`` warning logs.
         # Defaults to wall time but tests may inject a fake clock so
@@ -571,10 +572,10 @@ class CT002:
             min_dc_output=consumer.min_dc_output,
         )
 
-    def set_consumer_value(self, consumer_id, values):
+    def set_consumer_value(self, consumer_id: str, values: list[float]) -> None:
         self._get_consumer(consumer_id).values = values
 
-    def _get_consumer_value(self, consumer_id):
+    def _get_consumer_value(self, consumer_id: str) -> list[float] | None:
         consumer = self._consumers.get(consumer_id)
         return consumer.values if consumer else None
 
@@ -695,14 +696,14 @@ class CT002:
 
     def _update_consumer_report(
         self,
-        consumer_id,
-        phase,
-        power,
-        device_type="",
+        consumer_id: str,
+        phase: str,
+        power: object,
+        device_type: str = "",
         *,
         source_ip: str | None = None,
         participates: bool = True,
-    ):
+    ) -> None:
         normalized_phase = normalize_phase(phase)
         consumer = self._get_consumer(consumer_id)
         previous_phase = consumer.phase if consumer.timestamp > 0 else None
@@ -756,7 +757,7 @@ class CT002:
             and now - consumer.timestamp > self._consumer_ttl_seconds(consumer)
         )
 
-    def _cleanup_consumers(self):
+    def _cleanup_consumers(self) -> None:
         now = self._clock()
         stale = [
             key
@@ -794,7 +795,9 @@ class CT002:
             return ConsumerMode("manual", consumer.manual_target)
         return ConsumerMode("auto")
 
-    def _compute_smooth_target(self, values, consumer_id=None):
+    def _compute_smooth_target(
+        self, values: list[float], consumer_id: str | None = None
+    ) -> list[float]:
         """Active control: smooth the raw grid reading and delegate
         target allocation to the load balancer."""
         if not self.active_control or not values:
@@ -1025,7 +1028,13 @@ class CT002:
             )
         return tuple(out)
 
-    def _format_status(self, values, phase_values, consumer_id=None, meter_value=None):
+    def _format_status(
+        self,
+        values: list[float],
+        phase_values: dict[str, PhaseBucket],
+        consumer_id: str | None = None,
+        meter_value: float | None = None,
+    ) -> str:
         """Concise one-line status: phase consumption and consumer charge/discharge reports."""
         if not values or len(values) != 3:
             values = [0, 0, 0]
@@ -1059,7 +1068,9 @@ class CT002:
         )
         return " | ".join(parts)
 
-    def _build_response_fields(self, request: CT002Request, values):
+    def _build_response_fields(
+        self, request: CT002Request, values: list[float]
+    ) -> list[str]:
         if not values or len(values) != 3:
             values = [0, 0, 0]
         phase_a, phase_b, phase_c = values
@@ -1145,7 +1156,9 @@ class CT002:
         self._info_idx_counter = (self._info_idx_counter + 1) % 256
         return response_fields
 
-    async def _call_before_send(self, request: CT002Request):
+    async def _call_before_send(
+        self, request: CT002Request
+    ) -> tuple[list[float] | None, bool]:
         """Invoke the ``before_send`` powermeter hook.
 
         Returns ``(result, failed)``.  ``failed`` is ``True`` only when the
@@ -1201,13 +1214,17 @@ class CT002:
             return True
         return bool(request.ct_mac) and request.ct_mac.lower() == self.ct_mac.lower()
 
-    async def _safe_handle_request(self, data, addr, transport):
+    async def _safe_handle_request(
+        self, data: bytes, addr: tuple[str, int], transport: DatagramSink
+    ) -> None:
         try:
             await self._handle_request(data, addr, transport)
         except Exception:
             logger.exception("Error handling CT002 request from %s", addr)
 
-    async def _handle_request(self, data, addr, transport):
+    async def _handle_request(
+        self, data: bytes, addr: tuple[str, int], transport: DatagramSink
+    ) -> None:
         request = self._decode_request(data, addr)
         if request is None:
             return
@@ -1242,7 +1259,9 @@ class CT002:
         finally:
             self._inflight_consumers.discard(consumer_id)
 
-    def _decode_request(self, data, addr) -> CT002Request | None:
+    def _decode_request(
+        self, data: bytes, addr: tuple[str, int]
+    ) -> CT002Request | None:
         """Decode one datagram, or ``None`` when it is not ours to answer."""
         logger.debug("CT002 request from %s: %s", addr, data.hex())
         fields, error = parse_request(data)
@@ -1323,7 +1342,7 @@ class CT002:
             return False
         return True
 
-    async def _serve(self, request: CT002Request, transport) -> None:
+    async def _serve(self, request: CT002Request, transport: DatagramSink) -> None:
         """Read the meter, answer the poll, and publish what we served."""
         consumer_id = request.consumer_id
         updated, meter_failed = await self._call_before_send(request)
@@ -1393,13 +1412,12 @@ class CT002:
         (issue #403).  The ESPHome component does the same when its sensor ages
         out (see esphome/components/ct002/ct002.cpp).
         """
-        if meter_failed:
-            values: list = [0, 0, 0]
-        else:
-            values = self._get_consumer_value(request.consumer_id)
-            if values is None:
-                values = [0, 0, 0]
-            elif not _values_finite(values):
+        values: list[float] = [0.0, 0.0, 0.0]
+        stored = None if meter_failed else self._get_consumer_value(request.consumer_id)
+        if stored is not None:
+            if _values_finite(stored):
+                values = stored
+            else:
                 # A non-finite reading (NaN/Inf from a flaky source or a filter
                 # chain fed one) is a meter failure, not a sample.  One NaN fed
                 # into the stateful controller poisons the grid-state predictor
@@ -1408,7 +1426,6 @@ class CT002:
                 # pinned at the ramp-pacing base step until restart (issue #548).
                 # Take the same hold path as an unavailable meter.
                 meter_failed = True
-                values = [0, 0, 0]
 
         raw_values = three_phases(values)
         # The hold above is a *sentinel*, not a real reading, so active control
@@ -1422,7 +1439,9 @@ class CT002:
             values = self._compute_smooth_target(values, request.consumer_id)
         return _ServedTarget(raw_values, three_phases(values), meter_failed)
 
-    def _record_instructed_power(self, request: CT002Request, values: list) -> None:
+    def _record_instructed_power(
+        self, request: CT002Request, values: list[float]
+    ) -> None:
         """Book the net power we expect this battery to reach.
 
         Its reported output plus the delta we deliver — the firmware computes
@@ -1508,7 +1527,7 @@ class CT002:
             **_control_quality_evidence(quality),
         }
 
-    async def _cleanup_loop(self):
+    async def _cleanup_loop(self) -> None:
         try:
             while True:
                 await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -1516,7 +1535,7 @@ class CT002:
         except asyncio.CancelledError:
             pass
 
-    async def start(self):
+    async def start(self) -> None:
         self._server = await UdpServer.serve(self.udp_port, self._safe_handle_request)
         # Read the bound port back: a configured 0 asks the OS to pick one, and
         # the log line and status document below would otherwise both say "0".
@@ -1528,10 +1547,10 @@ class CT002:
         self._rev += 1
         logger.info("CT002 UDP server listening on port %s", self.udp_port)
 
-    async def wait(self):
+    async def wait(self) -> None:
         await self._stopped.wait()
 
-    async def stop(self):
+    async def stop(self) -> None:
         if self._cleanup_task:
             self._cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

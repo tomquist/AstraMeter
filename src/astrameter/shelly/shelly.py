@@ -13,7 +13,7 @@ from astrameter.config.logger import debug_traceback, logger
 from astrameter.config.settings import ConfiguredPowermeter
 from astrameter.meter_pool import powermeter_for, powermeter_name, read_fresh
 from astrameter.request_dedupe import RequestDeduplicator
-from astrameter.udp_server import UdpServer
+from astrameter.udp_server import DatagramSink, UdpServer
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_EMA_ALPHA = 0.3
@@ -252,7 +252,7 @@ class Shelly:
             )
 
     async def _safe_handle_request(
-        self, data: bytes, addr: tuple[str, int], transport: asyncio.DatagramTransport
+        self, data: bytes, addr: tuple[str, int], transport: DatagramSink
     ) -> None:
         try:
             await self._handle_request(data, addr, transport)
@@ -260,7 +260,7 @@ class Shelly:
             logger.exception("Error handling Shelly request from %s", addr)
 
     async def _handle_request(
-        self, data: bytes, addr: tuple[str, int], transport: asyncio.DatagramTransport
+        self, data: bytes, addr: tuple[str, int], transport: DatagramSink
     ) -> None:
         battery_ip = addr[0]
         poll_interval = self._track_battery_seen(addr)

@@ -11,7 +11,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, Protocol
+
+
+class DatagramSink(Protocol):
+    """The one thing a handler does with the transport it is handed."""
+
+    def sendto(self, data: bytes, addr: tuple) -> None: ...
+
 
 Handler = Callable[[bytes, tuple, asyncio.DatagramTransport], Coroutine[Any, Any, None]]
 
