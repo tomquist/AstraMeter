@@ -1,0 +1,2057 @@
+{
+  "discovery": {
+    "addon": {
+      "topic": "ha/device/astrameter_addon_abc123_astrameter/config",
+      "payload": {
+        "device": {
+          "identifiers": "abc123_astrameter",
+          "name": "AstraMeter",
+          "manufacturer": "astrameter"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "status": {
+            "platform": "binary_sensor",
+            "unique_id": "astrameter_addon_abc123_astrameter_status",
+            "name": "Status",
+            "device_class": "connectivity",
+            "state_topic": "am/status",
+            "payload_on": "online",
+            "payload_off": "offline",
+            "entity_category": "diagnostic"
+          },
+          "version": {
+            "platform": "sensor",
+            "unique_id": "astrameter_addon_abc123_astrameter_version",
+            "name": "Version",
+            "state_topic": "am/bridge",
+            "value_template": "{{ value_json.version }}",
+            "entity_category": "diagnostic",
+            "availability": [
+              {
+                "topic": "am/status",
+                "payload_available": "online",
+                "payload_not_available": "offline"
+              }
+            ]
+          },
+          "consumer_count": {
+            "platform": "sensor",
+            "unique_id": "astrameter_addon_abc123_astrameter_consumer_count",
+            "name": "Consumer Count",
+            "state_topic": "am/bridge",
+            "value_template": "{{ value_json.consumer_count }}",
+            "entity_category": "diagnostic",
+            "availability": [
+              {
+                "topic": "am/status",
+                "payload_available": "online",
+                "payload_not_available": "offline"
+              }
+            ]
+          }
+        },
+        "state_topic": "am/bridge"
+      }
+    },
+    "ct002_device": {
+      "topic": "ha/device/astrameter_ct002_dev1/config",
+      "payload": {
+        "device": {
+          "identifiers": "astrameter_ct002_dev1",
+          "name": "AstraMeter CT002 dev1",
+          "manufacturer": "astrameter",
+          "via_device": "abc123_astrameter"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "smooth_target": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_smooth_target",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.smooth_target }}"
+          },
+          "active_control": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_active_control",
+            "name": "Active Control",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.active_control }}",
+            "command_topic": "am/ct002/dev1/set",
+            "command_template": "{\"active_control\": {{ \"true\" if value == \"ON\" else \"false\" }}}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "consumer_count": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_consumer_count",
+            "name": "Consumer Count",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.consumer_count }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality",
+            "name": "Control Quality",
+            "device_class": "enum",
+            "options": [
+              "idle",
+              "warmup",
+              "stable",
+              "off_target",
+              "limited"
+            ],
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_score": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_score",
+            "name": "Control Quality Score",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_score if value_json.control_quality_score is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_error": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_error",
+            "name": "Control Quality Mean Error",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_error_w if value_json.control_quality_error_w is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_in_band": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_in_band",
+            "name": "Control Quality Time In Band",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_in_band_pct if value_json.control_quality_in_band_pct is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_crossings": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_crossings",
+            "name": "Control Quality Zero Crossings",
+            "state_class": "measurement",
+            "unit_of_measurement": "/min",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_crossings_per_min if value_json.control_quality_crossings_per_min is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          }
+        },
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/ct002/dev1/status"
+      }
+    },
+    "ct002_device_efficiency_rotation": {
+      "topic": "ha/device/astrameter_ct002_dev1/config",
+      "payload": {
+        "device": {
+          "identifiers": "astrameter_ct002_dev1",
+          "name": "AstraMeter CT002 dev1",
+          "manufacturer": "astrameter",
+          "via_device": "abc123_astrameter"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "smooth_target": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_smooth_target",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.smooth_target }}"
+          },
+          "active_control": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_active_control",
+            "name": "Active Control",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.active_control }}",
+            "command_topic": "am/ct002/dev1/set",
+            "command_template": "{\"active_control\": {{ \"true\" if value == \"ON\" else \"false\" }}}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "consumer_count": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_consumer_count",
+            "name": "Consumer Count",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.consumer_count }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality",
+            "name": "Control Quality",
+            "device_class": "enum",
+            "options": [
+              "idle",
+              "warmup",
+              "stable",
+              "off_target",
+              "limited"
+            ],
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_score": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_score",
+            "name": "Control Quality Score",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_score if value_json.control_quality_score is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_error": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_error",
+            "name": "Control Quality Mean Error",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_error_w if value_json.control_quality_error_w is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_in_band": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_in_band",
+            "name": "Control Quality Time In Band",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_in_band_pct if value_json.control_quality_in_band_pct is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "control_quality_crossings": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_control_quality_crossings",
+            "name": "Control Quality Zero Crossings",
+            "state_class": "measurement",
+            "unit_of_measurement": "/min",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.control_quality_crossings_per_min if value_json.control_quality_crossings_per_min is not none else 'unknown' }}",
+            "entity_category": "diagnostic"
+          },
+          "force_rotation": {
+            "platform": "button",
+            "unique_id": "astrameter_ct002_dev1_force_rotation",
+            "name": "Force Rotation",
+            "command_topic": "am/ct002/dev1/set",
+            "payload_press": "{\"force_rotation\": true}",
+            "entity_category": "config"
+          }
+        },
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/ct002/dev1/status"
+      }
+    },
+    "ct002_consumer_dc_rotation": {
+      "topic": "ha/device/astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff/config",
+      "payload": {
+        "device": {
+          "identifiers": [
+            "astrameter_consumer_aabbccddeeff"
+          ],
+          "name": "AstraMeter Consumer HMJ-1 aabbccddeeff",
+          "manufacturer": "Marstek",
+          "via_device": "astrameter_ct002_dev1",
+          "model_id": "HMJ-1"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "grid_power_total": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_grid_power_total",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.grid_power.total }}"
+          },
+          "grid_power_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_grid_power_l1",
+            "name": "Grid Power L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.grid_power.l1 }}"
+          },
+          "grid_power_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_grid_power_l2",
+            "name": "Grid Power L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.grid_power.l2 }}"
+          },
+          "grid_power_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_grid_power_l3",
+            "name": "Grid Power L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.grid_power.l3 }}"
+          },
+          "target_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_target_l1",
+            "name": "Target L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.target.l1 }}"
+          },
+          "target_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_target_l2",
+            "name": "Target L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.target.l2 }}"
+          },
+          "target_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_target_l3",
+            "name": "Target L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.target.l3 }}"
+          },
+          "reported_power": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_reported_power",
+            "name": "Reported Power",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.reported_power }}"
+          },
+          "last_target": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_last_target",
+            "name": "Last Target",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.last_target }}"
+          },
+          "saturation": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_saturation",
+            "name": "Saturation",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ (value_json.saturation * 100) | round(1) }}"
+          },
+          "phase": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_phase",
+            "name": "Phase",
+            "device_class": "enum",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ],
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.phase }}",
+            "entity_category": "diagnostic"
+          },
+          "device_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_device_type",
+            "name": "Device Type",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.device_type }}",
+            "entity_category": "diagnostic"
+          },
+          "battery_ip": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_battery_ip",
+            "name": "Battery IP",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.battery_ip }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_ct_type",
+            "name": "CT Type",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.ct_type }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_mac": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_ct_mac",
+            "name": "CT MAC",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.ct_mac }}",
+            "entity_category": "diagnostic"
+          },
+          "poll_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_poll_interval",
+            "name": "Poll Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.poll_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "answer_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_answer_interval",
+            "name": "Answer Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.answer_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "manual_target": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_manual_target",
+            "name": "Manual Target",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": -10000.0,
+            "max": 10000.0,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.manual_target | default(0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/manual_target/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "auto_target": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_auto_target",
+            "name": "Auto Target",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/auto_target/set",
+            "value_template": "{{ value_json.auto_target }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "active": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_active",
+            "name": "Active",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/active/set",
+            "value_template": "{{ value_json.active }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true
+          },
+          "distribution_weight": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_distribution_weight",
+            "name": "Distribution Weight",
+            "min": 0.0,
+            "max": 10.0,
+            "step": 0.1,
+            "mode": "slider",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/distribution_weight/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "efficiency_window_weight": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_efficiency_window_weight",
+            "name": "Efficiency Window Weight",
+            "unit_of_measurement": "%",
+            "min": 0.0,
+            "max": 100.0,
+            "step": 5,
+            "mode": "slider",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ (value_json.efficiency_window_weight | default(1.0)) * 100 }}",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/efficiency_window_weight/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "min_dc_output": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_min_dc_output",
+            "name": "Min DC Output",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 1000.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.min_dc_output | default(0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/min_dc_output/set",
+            "retain": true,
+            "entity_category": "config"
+          }
+        },
+        "availability_mode": "all",
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          },
+          {
+            "topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff"
+      }
+    },
+    "ct002_consumer_plain": {
+      "topic": "ha/device/astrameter_ct002_dev1_aabbccddeeff/config",
+      "payload": {
+        "device": {
+          "identifiers": [
+            "astrameter_consumer_aabbccddeeff"
+          ],
+          "name": "AstraMeter Consumer HMG-50 aabbccddeeff",
+          "manufacturer": "Marstek",
+          "via_device": "astrameter_ct002_dev1",
+          "model_id": "HMG-50"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "grid_power_total": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_total",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.total }}"
+          },
+          "grid_power_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l1",
+            "name": "Grid Power L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l1 }}"
+          },
+          "grid_power_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l2",
+            "name": "Grid Power L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l2 }}"
+          },
+          "grid_power_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l3",
+            "name": "Grid Power L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l3 }}"
+          },
+          "target_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l1",
+            "name": "Target L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l1 }}"
+          },
+          "target_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l2",
+            "name": "Target L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l2 }}"
+          },
+          "target_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l3",
+            "name": "Target L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l3 }}"
+          },
+          "reported_power": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_reported_power",
+            "name": "Reported Power",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.reported_power }}"
+          },
+          "last_target": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_last_target",
+            "name": "Last Target",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.last_target }}"
+          },
+          "saturation": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_saturation",
+            "name": "Saturation",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ (value_json.saturation * 100) | round(1) }}"
+          },
+          "phase": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_phase",
+            "name": "Phase",
+            "device_class": "enum",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ],
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.phase }}",
+            "entity_category": "diagnostic"
+          },
+          "device_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_device_type",
+            "name": "Device Type",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.device_type }}",
+            "entity_category": "diagnostic"
+          },
+          "battery_ip": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_battery_ip",
+            "name": "Battery IP",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.battery_ip }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_ct_type",
+            "name": "CT Type",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.ct_type }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_mac": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_ct_mac",
+            "name": "CT MAC",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.ct_mac }}",
+            "entity_category": "diagnostic"
+          },
+          "poll_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_poll_interval",
+            "name": "Poll Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.poll_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "answer_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_answer_interval",
+            "name": "Answer Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.answer_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "manual_target": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_manual_target",
+            "name": "Manual Target",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": -10000.0,
+            "max": 10000.0,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.manual_target | default(0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/manual_target/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "auto_target": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_auto_target",
+            "name": "Auto Target",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/auto_target/set",
+            "value_template": "{{ value_json.auto_target }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "active": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_active",
+            "name": "Active",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/active/set",
+            "value_template": "{{ value_json.active }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true
+          },
+          "distribution_weight": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_distribution_weight",
+            "name": "Distribution Weight",
+            "min": 0.0,
+            "max": 10.0,
+            "step": 0.1,
+            "mode": "slider",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/distribution_weight/set",
+            "retain": true,
+            "entity_category": "config"
+          }
+        },
+        "availability_mode": "all",
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          },
+          {
+            "topic": "am/ct002/dev1/consumer/aabbccddeeff/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/ct002/dev1/consumer/aabbccddeeff"
+      }
+    },
+    "ct002_consumer_no_device_type": {
+      "topic": "ha/device/astrameter_ct002_dev1_aabbccddeeff/config",
+      "payload": {
+        "device": {
+          "identifiers": [
+            "astrameter_consumer_aabbccddeeff"
+          ],
+          "name": "AstraMeter Consumer aabbccddeeff",
+          "manufacturer": "Marstek",
+          "via_device": "astrameter_ct002_dev1"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "grid_power_total": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_total",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.total }}"
+          },
+          "grid_power_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l1",
+            "name": "Grid Power L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l1 }}"
+          },
+          "grid_power_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l2",
+            "name": "Grid Power L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l2 }}"
+          },
+          "grid_power_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l3",
+            "name": "Grid Power L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l3 }}"
+          },
+          "target_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l1",
+            "name": "Target L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l1 }}"
+          },
+          "target_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l2",
+            "name": "Target L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l2 }}"
+          },
+          "target_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l3",
+            "name": "Target L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l3 }}"
+          },
+          "reported_power": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_reported_power",
+            "name": "Reported Power",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.reported_power }}"
+          },
+          "last_target": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_last_target",
+            "name": "Last Target",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.last_target }}"
+          },
+          "saturation": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_saturation",
+            "name": "Saturation",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ (value_json.saturation * 100) | round(1) }}"
+          },
+          "phase": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_phase",
+            "name": "Phase",
+            "device_class": "enum",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ],
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.phase }}",
+            "entity_category": "diagnostic"
+          },
+          "device_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_device_type",
+            "name": "Device Type",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.device_type }}",
+            "entity_category": "diagnostic"
+          },
+          "battery_ip": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_battery_ip",
+            "name": "Battery IP",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.battery_ip }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_ct_type",
+            "name": "CT Type",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.ct_type }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_mac": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_ct_mac",
+            "name": "CT MAC",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.ct_mac }}",
+            "entity_category": "diagnostic"
+          },
+          "poll_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_poll_interval",
+            "name": "Poll Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.poll_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "answer_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_answer_interval",
+            "name": "Answer Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.answer_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "manual_target": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_manual_target",
+            "name": "Manual Target",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": -10000.0,
+            "max": 10000.0,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.manual_target | default(0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/manual_target/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "auto_target": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_auto_target",
+            "name": "Auto Target",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/auto_target/set",
+            "value_template": "{{ value_json.auto_target }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "active": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_active",
+            "name": "Active",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/active/set",
+            "value_template": "{{ value_json.active }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true
+          },
+          "distribution_weight": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_distribution_weight",
+            "name": "Distribution Weight",
+            "min": 0.0,
+            "max": 10.0,
+            "step": 0.1,
+            "mode": "slider",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/distribution_weight/set",
+            "retain": true,
+            "entity_category": "config"
+          }
+        },
+        "availability_mode": "all",
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          },
+          {
+            "topic": "am/ct002/dev1/consumer/aabbccddeeff/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/ct002/dev1/consumer/aabbccddeeff"
+      }
+    },
+    "powermeter": {
+      "topic": "ha/device/astrameter_powermeter_SMA_ENERGY_METER/config",
+      "payload": {
+        "device": {
+          "identifiers": "astrameter_powermeter_SMA_ENERGY_METER",
+          "name": "AstraMeter Powermeter Sma Energy Meter",
+          "manufacturer": "astrameter",
+          "via_device": "hub_id"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "grid_power_total": {
+            "platform": "sensor",
+            "unique_id": "astrameter_powermeter_SMA_ENERGY_METER_grid_power_total",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/powermeter/SMA_ENERGY_METER",
+            "value_template": "{{ value_json.grid_power.total if value_json.grid_power.total is not none else '' }}"
+          },
+          "grid_power_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_powermeter_SMA_ENERGY_METER_grid_power_l1",
+            "name": "Power L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/powermeter/SMA_ENERGY_METER",
+            "value_template": "{{ value_json.grid_power.l1 if value_json.grid_power.l1 is not none else '' }}"
+          },
+          "grid_power_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_powermeter_SMA_ENERGY_METER_grid_power_l2",
+            "name": "Power L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/powermeter/SMA_ENERGY_METER",
+            "value_template": "{{ value_json.grid_power.l2 if value_json.grid_power.l2 is not none else '' }}"
+          },
+          "grid_power_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_powermeter_SMA_ENERGY_METER_grid_power_l3",
+            "name": "Power L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/powermeter/SMA_ENERGY_METER",
+            "value_template": "{{ value_json.grid_power.l3 if value_json.grid_power.l3 is not none else '' }}"
+          },
+          "online": {
+            "platform": "binary_sensor",
+            "unique_id": "astrameter_powermeter_SMA_ENERGY_METER_online",
+            "name": "Online",
+            "device_class": "connectivity",
+            "state_topic": "am/powermeter/SMA_ENERGY_METER",
+            "value_template": "{{ value_json.online }}",
+            "payload_on": "True",
+            "payload_off": "False",
+            "entity_category": "diagnostic"
+          }
+        },
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/powermeter/SMA_ENERGY_METER"
+      }
+    },
+    "shelly_device": {
+      "topic": "ha/device/astrameter_shelly_shelly1/config",
+      "payload": {
+        "device": {
+          "identifiers": "astrameter_shelly_shelly1",
+          "name": "AstraMeter Shelly shelly1",
+          "manufacturer": "astrameter",
+          "via_device": "abc123_astrameter"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "battery_count": {
+            "platform": "sensor",
+            "unique_id": "astrameter_shelly_shelly1_battery_count",
+            "name": "Battery Count",
+            "state_topic": "am/shelly/shelly1/status",
+            "value_template": "{{ value_json.battery_count }}",
+            "entity_category": "diagnostic"
+          }
+        },
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/shelly/shelly1/status"
+      }
+    },
+    "shelly_battery": {
+      "topic": "ha/device/astrameter_shelly_shelly1_192_168_1_100/config",
+      "payload": {
+        "device": {
+          "identifiers": "astrameter_shelly_shelly1_192_168_1_100",
+          "name": "AstraMeter Shelly Battery 192.168.1.100",
+          "manufacturer": "astrameter",
+          "via_device": "astrameter_shelly_shelly1"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "grid_power_total": {
+            "platform": "sensor",
+            "unique_id": "astrameter_shelly_shelly1_192_168_1_100_grid_power_total",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/shelly/shelly1/battery/192_168_1_100",
+            "value_template": "{{ value_json.grid_power.total }}"
+          },
+          "grid_power_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_shelly_shelly1_192_168_1_100_grid_power_l1",
+            "name": "Grid Power L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/shelly/shelly1/battery/192_168_1_100",
+            "value_template": "{{ value_json.grid_power.l1 }}"
+          },
+          "grid_power_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_shelly_shelly1_192_168_1_100_grid_power_l2",
+            "name": "Grid Power L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/shelly/shelly1/battery/192_168_1_100",
+            "value_template": "{{ value_json.grid_power.l2 }}"
+          },
+          "grid_power_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_shelly_shelly1_192_168_1_100_grid_power_l3",
+            "name": "Grid Power L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/shelly/shelly1/battery/192_168_1_100",
+            "value_template": "{{ value_json.grid_power.l3 }}"
+          },
+          "active": {
+            "platform": "binary_sensor",
+            "unique_id": "astrameter_shelly_shelly1_192_168_1_100_active",
+            "name": "Active",
+            "device_class": "connectivity",
+            "state_topic": "am/shelly/shelly1/battery/192_168_1_100",
+            "value_template": "{{ value_json.active }}",
+            "payload_on": "True",
+            "payload_off": "False",
+            "entity_category": "diagnostic"
+          },
+          "poll_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_shelly_shelly1_192_168_1_100_poll_interval",
+            "name": "Poll Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/shelly/shelly1/battery/192_168_1_100",
+            "value_template": "{{ value_json.poll_interval }}",
+            "entity_category": "diagnostic"
+          }
+        },
+        "availability_mode": "all",
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          },
+          {
+            "topic": "am/shelly/shelly1/battery/192_168_1_100/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/shelly/shelly1/battery/192_168_1_100"
+      }
+    },
+    "ct002_consumer_retirement": {
+      "topic": "ha/device/astrameter_ct002_dev1_aabbccddeeff/config",
+      "payload": {
+        "device": {
+          "identifiers": [
+            "astrameter_consumer_aabbccddeeff"
+          ],
+          "name": "AstraMeter Consumer HMG-50 aabbccddeeff",
+          "manufacturer": "Marstek",
+          "via_device": "astrameter_ct002_dev1",
+          "model_id": "HMG-50"
+        },
+        "origin": {
+          "name": "astrameter",
+          "sw_version": "0123456789abcdef",
+          "support_url": "https://github.com/tomquist/astrameter"
+        },
+        "components": {
+          "grid_power_total": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_total",
+            "name": null,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.total }}"
+          },
+          "grid_power_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l1",
+            "name": "Grid Power L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l1 }}"
+          },
+          "grid_power_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l2",
+            "name": "Grid Power L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l2 }}"
+          },
+          "grid_power_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_grid_power_l3",
+            "name": "Grid Power L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.grid_power.l3 }}"
+          },
+          "target_l1": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l1",
+            "name": "Target L1",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l1 }}"
+          },
+          "target_l2": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l2",
+            "name": "Target L2",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l2 }}"
+          },
+          "target_l3": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_target_l3",
+            "name": "Target L3",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.target.l3 }}"
+          },
+          "reported_power": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_reported_power",
+            "name": "Reported Power",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.reported_power }}"
+          },
+          "last_target": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_last_target",
+            "name": "Last Target",
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.last_target }}"
+          },
+          "saturation": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_saturation",
+            "name": "Saturation",
+            "unit_of_measurement": "%",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ (value_json.saturation * 100) | round(1) }}"
+          },
+          "phase": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_phase",
+            "name": "Phase",
+            "device_class": "enum",
+            "options": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ],
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.phase }}",
+            "entity_category": "diagnostic"
+          },
+          "device_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_device_type",
+            "name": "Device Type",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.device_type }}",
+            "entity_category": "diagnostic"
+          },
+          "battery_ip": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_battery_ip",
+            "name": "Battery IP",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.battery_ip }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_type": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_ct_type",
+            "name": "CT Type",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.ct_type }}",
+            "entity_category": "diagnostic"
+          },
+          "ct_mac": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_ct_mac",
+            "name": "CT MAC",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.ct_mac }}",
+            "entity_category": "diagnostic"
+          },
+          "poll_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_poll_interval",
+            "name": "Poll Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.poll_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "answer_interval": {
+            "platform": "sensor",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_answer_interval",
+            "name": "Answer Interval",
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.answer_interval }}",
+            "entity_category": "diagnostic"
+          },
+          "manual_target": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_manual_target",
+            "name": "Manual Target",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": -10000.0,
+            "max": 10000.0,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.manual_target | default(0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/manual_target/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "auto_target": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_auto_target",
+            "name": "Auto Target",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/auto_target/set",
+            "value_template": "{{ value_json.auto_target }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "active": {
+            "platform": "switch",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_active",
+            "name": "Active",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/active/set",
+            "value_template": "{{ value_json.active }}",
+            "payload_on": "true",
+            "payload_off": "false",
+            "state_on": "True",
+            "state_off": "False",
+            "retain": true
+          },
+          "distribution_weight": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_distribution_weight",
+            "name": "Distribution Weight",
+            "min": 0.0,
+            "max": 10.0,
+            "step": 0.1,
+            "mode": "slider",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.distribution_weight | default(1.0) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/distribution_weight/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "last_seen": {
+            "platform": "sensor"
+          }
+        },
+        "availability_mode": "all",
+        "availability": [
+          {
+            "topic": "am/status",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          },
+          {
+            "topic": "am/ct002/dev1/consumer/aabbccddeeff/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline"
+          }
+        ],
+        "state_topic": "am/ct002/dev1/consumer/aabbccddeeff"
+      }
+    }
+  },
+  "session": [
+    {
+      "will": "am/status",
+      "payload": "offline",
+      "qos": 1,
+      "retain": true
+    },
+    {
+      "publish": "am/status",
+      "payload": "online",
+      "qos": 1,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_addon_abc123_astrameter/config",
+      "payload": {
+        "components": [
+          "consumer_count",
+          "status",
+          "version"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/bridge",
+      "payload": {
+        "version": "9.9.9-golden",
+        "consumer_count": 0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "subscribe": "am/ct002/+/consumer/+/+/set"
+    },
+    {
+      "subscribe": "am/ct002/+/set"
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c1",
+      "payload": {
+        "grid_power": {
+          "l1": 100.0,
+          "l2": 200.0,
+          "l3": 300.0,
+          "total": 600.0
+        },
+        "target": {
+          "l1": 50.0,
+          "l2": 100.0,
+          "l3": 150.0
+        },
+        "phase": "A",
+        "reported_power": 42,
+        "device_type": "HMJ-1",
+        "battery_ip": "192.168.1.10",
+        "ct_type": "HME-4",
+        "ct_mac": "AA:BB:CC:DD:EE:FF",
+        "saturation": 0.5,
+        "last_target": 300.0,
+        "active": true,
+        "poll_interval": 5.0,
+        "answer_interval": 7.5,
+        "last_seen": "2026-01-01T00:00:00+00:00",
+        "manual_target": null,
+        "auto_target": true,
+        "distribution_weight": 1.5,
+        "efficiency_window_weight": 0.5,
+        "min_dc_output": 25.0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c1/availability",
+      "payload": "online",
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/status",
+      "payload": {
+        "smooth_target": 500.0,
+        "active_control": true,
+        "consumer_count": 2,
+        "control_quality": "off_target",
+        "control_quality_score": 41.5,
+        "control_quality_error_w": 214.0,
+        "control_quality_in_band_pct": 11.0,
+        "control_quality_crossings_per_min": 3.4,
+        "control_quality_band_w": 25.0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_ct002_dev1/config",
+      "payload": {
+        "components": [
+          "active_control",
+          "consumer_count",
+          "control_quality",
+          "control_quality_crossings",
+          "control_quality_error",
+          "control_quality_in_band",
+          "control_quality_score",
+          "force_rotation",
+          "smooth_target"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/bridge",
+      "payload": {
+        "version": "9.9.9-golden",
+        "consumer_count": 1
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_ct002_dev1_c1/config",
+      "payload": {
+        "components": [
+          "active",
+          "answer_interval",
+          "auto_target",
+          "battery_ip",
+          "ct_mac",
+          "ct_type",
+          "device_type",
+          "distribution_weight",
+          "efficiency_window_weight",
+          "grid_power_l1",
+          "grid_power_l2",
+          "grid_power_l3",
+          "grid_power_total",
+          "last_seen",
+          "last_target",
+          "manual_target",
+          "min_dc_output",
+          "phase",
+          "poll_interval",
+          "reported_power",
+          "saturation",
+          "target_l1",
+          "target_l2",
+          "target_l3"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_ct002_dev1_c1/config",
+      "payload": {
+        "components": [
+          "active",
+          "answer_interval",
+          "auto_target",
+          "battery_ip",
+          "ct_mac",
+          "ct_type",
+          "device_type",
+          "distribution_weight",
+          "efficiency_window_weight",
+          "grid_power_l1",
+          "grid_power_l2",
+          "grid_power_l3",
+          "grid_power_total",
+          "last_target",
+          "manual_target",
+          "min_dc_output",
+          "phase",
+          "poll_interval",
+          "reported_power",
+          "saturation",
+          "target_l1",
+          "target_l2",
+          "target_l3"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c1",
+      "payload": {
+        "grid_power": {
+          "l1": 100.0,
+          "l2": 200.0,
+          "l3": 300.0,
+          "total": 600.0
+        },
+        "target": {
+          "l1": 50.0,
+          "l2": 100.0,
+          "l3": 150.0
+        },
+        "phase": "A",
+        "reported_power": 42,
+        "device_type": "HMJ-1",
+        "battery_ip": "192.168.1.10",
+        "ct_type": "HME-4",
+        "ct_mac": "AA:BB:CC:DD:EE:FF",
+        "saturation": 0.5,
+        "last_target": 300.0,
+        "active": true,
+        "poll_interval": 5.0,
+        "answer_interval": 7.5,
+        "last_seen": "2026-01-01T00:00:00+00:00",
+        "manual_target": null,
+        "auto_target": true,
+        "distribution_weight": 1.5,
+        "efficiency_window_weight": 0.5,
+        "min_dc_output": 25.0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c1/availability",
+      "payload": "online",
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/status",
+      "payload": {
+        "smooth_target": 500.0,
+        "active_control": true,
+        "consumer_count": 2,
+        "control_quality": "off_target",
+        "control_quality_score": 41.5,
+        "control_quality_error_w": 214.0,
+        "control_quality_in_band_pct": 11.0,
+        "control_quality_crossings_per_min": 3.4,
+        "control_quality_band_w": 25.0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c2",
+      "payload": {
+        "grid_power": {
+          "l1": 100.0,
+          "l2": 200.0,
+          "l3": 300.0,
+          "total": 600.0
+        },
+        "target": {
+          "l1": 50.0,
+          "l2": 100.0,
+          "l3": 150.0
+        },
+        "phase": "A",
+        "reported_power": 42,
+        "device_type": "HMJ-1",
+        "battery_ip": "192.168.1.10",
+        "ct_type": "HME-4",
+        "ct_mac": "AA:BB:CC:DD:EE:FF",
+        "saturation": 0.5,
+        "last_target": 300.0,
+        "active": true,
+        "poll_interval": 5.0,
+        "answer_interval": 7.5,
+        "last_seen": "2026-01-01T00:00:00+00:00",
+        "manual_target": null,
+        "auto_target": true,
+        "distribution_weight": 1.5,
+        "efficiency_window_weight": 0.5,
+        "min_dc_output": 25.0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c2/availability",
+      "payload": "online",
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/status",
+      "payload": {
+        "smooth_target": 500.0,
+        "active_control": true,
+        "consumer_count": 2,
+        "control_quality": "off_target",
+        "control_quality_score": 41.5,
+        "control_quality_error_w": 214.0,
+        "control_quality_in_band_pct": 11.0,
+        "control_quality_crossings_per_min": 3.4,
+        "control_quality_band_w": 25.0
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/bridge",
+      "payload": {
+        "version": "9.9.9-golden",
+        "consumer_count": 2
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_ct002_dev1_c2/config",
+      "payload": {
+        "components": [
+          "active",
+          "answer_interval",
+          "auto_target",
+          "battery_ip",
+          "ct_mac",
+          "ct_type",
+          "device_type",
+          "distribution_weight",
+          "efficiency_window_weight",
+          "grid_power_l1",
+          "grid_power_l2",
+          "grid_power_l3",
+          "grid_power_total",
+          "last_seen",
+          "last_target",
+          "manual_target",
+          "min_dc_output",
+          "phase",
+          "poll_interval",
+          "reported_power",
+          "saturation",
+          "target_l1",
+          "target_l2",
+          "target_l3"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_ct002_dev1_c2/config",
+      "payload": {
+        "components": [
+          "active",
+          "answer_interval",
+          "auto_target",
+          "battery_ip",
+          "ct_mac",
+          "ct_type",
+          "device_type",
+          "distribution_weight",
+          "efficiency_window_weight",
+          "grid_power_l1",
+          "grid_power_l2",
+          "grid_power_l3",
+          "grid_power_total",
+          "last_target",
+          "manual_target",
+          "min_dc_output",
+          "phase",
+          "poll_interval",
+          "reported_power",
+          "saturation",
+          "target_l1",
+          "target_l2",
+          "target_l3"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/ct002/dev1/consumer/c1/availability",
+      "payload": "offline",
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/bridge",
+      "payload": {
+        "version": "9.9.9-golden",
+        "consumer_count": 1
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/shelly/shelly1/battery/192_168_1_100",
+      "payload": {
+        "grid_power": {
+          "l1": 100.0,
+          "l2": 200.0,
+          "l3": 300.0,
+          "total": 600.0
+        },
+        "active": true,
+        "poll_interval": 5.0,
+        "last_seen": "2026-01-01T00:00:00+00:00"
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/shelly/shelly1/battery/192_168_1_100/availability",
+      "payload": "online",
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/shelly/shelly1/status",
+      "payload": {
+        "battery_count": 1
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_shelly_shelly1/config",
+      "payload": {
+        "components": [
+          "battery_count"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_shelly_shelly1_192_168_1_100/config",
+      "payload": {
+        "components": [
+          "active",
+          "grid_power_l1",
+          "grid_power_l2",
+          "grid_power_l3",
+          "grid_power_total",
+          "last_seen",
+          "poll_interval"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "ha/device/astrameter_shelly_shelly1_192_168_1_100/config",
+      "payload": {
+        "components": [
+          "active",
+          "grid_power_l1",
+          "grid_power_l2",
+          "grid_power_l3",
+          "grid_power_total",
+          "poll_interval"
+        ]
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/bridge",
+      "payload": {
+        "version": "9.9.9-golden",
+        "consumer_count": 2
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/shelly/shelly1/battery/192_168_1_100/availability",
+      "payload": "offline",
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/bridge",
+      "payload": {
+        "version": "9.9.9-golden",
+        "consumer_count": 1
+      },
+      "qos": 0,
+      "retain": true
+    },
+    {
+      "publish": "am/status",
+      "payload": "offline",
+      "qos": 1,
+      "retain": true
+    }
+  ]
+}

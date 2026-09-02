@@ -19,6 +19,7 @@ from astrameter.ct002.controls import (
     ControllableDevice,
     apply_device_control,
 )
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.version_info import get_version
 
 from .discovery import (
@@ -30,8 +31,6 @@ from .discovery import (
     build_retirement_payload,
     build_shelly_battery_discovery,
     build_shelly_device_discovery,
-    consumer_command_topic,
-    device_command_topic,
 )
 
 if TYPE_CHECKING:
@@ -46,14 +45,50 @@ from .marstek_mqtt import (
     parse_app_topic,
     parse_marstek_poll_payload,
 )
+from .topics import (
+    ConsumerCommandTopic,
+    MalformedCommandTopic,
+    availability_topic,
+    bridge_topic,
+    consumer_command_filter,
+    consumer_command_topic,
+    ct002_consumer_topic,
+    ct002_status_topic,
+    device_command_filter,
+    device_command_topic,
+    parse_command_topic,
+    powermeter_topic,
+    shelly_battery_topic,
+    shelly_status_topic,
+    system_status_topic,
+)
 
 RECONNECT_DELAY = 5
 QUEUE_MAX_SIZE = 100
+
+# Discovery kinds — the families ``_discovered`` tracks and the status
+# snapshot counts separately.
+CT002_DEVICE = "ct002_device"
+CT002_CONSUMER = "ct002_consumer"
+SHELLY_DEVICE = "shelly_device"
+SHELLY_BATTERY = "shelly_battery"
+POWERMETER = "powermeter"
 
 # Health loop: reuse the control loop's most recent read for a pull powermeter
 # if it happened within this many seconds; otherwise issue one bounded probe.
 POWERMETER_IDLE_THRESHOLD = 2.0
 POWERMETER_PROBE_TIMEOUT = 5.0
+
+
+async def _publish_json(client: aiomqtt.Client, topic: str, payload: Any) -> None:
+    """Publish *payload* as retained JSON at qos 0.
+
+    State and discovery are retained snapshots: a dropped message is superseded
+    by the next one, so qos 0 is enough.  Commands are the exception and go out
+    through ``MqttInsightsService._publish_command`` at qos 1 — a dashboard
+    write the broker drops is a setting that silently reverts.
+    """
+    await client.publish(topic, payload=json.dumps(payload).encode(), retain=True)
 
 
 @dataclass
@@ -142,11 +177,10 @@ class MqttInsightsService:
         self._queue: asyncio.Queue[_Event] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
         self._queue_dropped = 0
         self._task: asyncio.Task[None] | None = None
-        self._discovered_ct002_consumers: set[str] = set()
-        self._discovered_ct002_devices: set[str] = set()
-        self._discovered_shelly_batteries: set[str] = set()
-        self._discovered_shelly_devices: set[str] = set()
-        self._discovered_powermeters: set[str] = set()
+        # Discovery already published this session, as (kind, key) — one set
+        # so a new device family adds a kind instead of a sixth parallel set,
+        # a sixth ``clear()`` and a sixth counter.
+        self._discovered: set[tuple[str, str]] = set()
         # Devices whose controls MQTT commands may drive, by device id.
         self._devices: dict[str, ControllableDevice] = {}
         # Latest retained consumer command per (consumer_id, field), by device.
@@ -301,11 +335,11 @@ class MqttInsightsService:
             hub_identifier=self._hub_identifier(),
             queue_depth=self._queue.qsize(),
             queue_dropped_total=self._queue_dropped,
-            discovered_ct002_devices=len(self._discovered_ct002_devices),
-            discovered_ct002_consumers=len(self._discovered_ct002_consumers),
-            discovered_shelly_devices=len(self._discovered_shelly_devices),
-            discovered_shelly_batteries=len(self._discovered_shelly_batteries),
-            discovered_powermeters=len(self._discovered_powermeters),
+            discovered_ct002_devices=self._discovered_count(CT002_DEVICE),
+            discovered_ct002_consumers=self._discovered_count(CT002_CONSUMER),
+            discovered_shelly_devices=self._discovered_count(SHELLY_DEVICE),
+            discovered_shelly_batteries=self._discovered_count(SHELLY_BATTERY),
+            discovered_powermeters=self._discovered_count(POWERMETER),
             powermeter_health_interval=cfg.powermeter_health_interval,
             marstek_enabled=cfg.marstek_mqtt_enabled,
             marstek_interval=cfg.marstek_mqtt_interval,
@@ -385,7 +419,7 @@ class MqttInsightsService:
                     tls_context=tls_context,
                     keepalive=60,
                     will=aiomqtt.Will(
-                        topic=f"{cfg.base_topic}/status",
+                        topic=system_status_topic(cfg.base_topic),
                         payload=b"offline",
                         qos=1,
                         retain=True,
@@ -394,16 +428,11 @@ class MqttInsightsService:
                     logger.info(
                         "MQTT Insights connected to %s:%s", cfg.broker, cfg.port
                     )
-                    # Clear discovery sets on (re)connect so we re-publish
-                    self._discovered_ct002_consumers.clear()
-                    self._discovered_ct002_devices.clear()
-                    self._discovered_shelly_batteries.clear()
-                    self._discovered_shelly_devices.clear()
-                    self._discovered_powermeters.clear()
+                    # Clear discovery on (re)connect so we re-publish
+                    self._discovered.clear()
 
-                    # Publish online status
                     await client.publish(
-                        f"{cfg.base_topic}/status",
+                        system_status_topic(cfg.base_topic),
                         payload=b"online",
                         qos=1,
                         retain=True,
@@ -420,17 +449,11 @@ class MqttInsightsService:
                             self._hub_identifier(),
                             cfg.ha_discovery_prefix,
                         )
-                        await client.publish(
-                            topic, payload=json.dumps(payload).encode(), retain=True
-                        )
+                        await _publish_json(client, topic, payload)
                         await self._publish_bridge(client, cfg)
 
-                    # Subscribe to command topics.  Each per-consumer setting
-                    # has its own retained command sub-topic
-                    # ({base}/ct002/<dev>/consumer/<cid>/<field>/set); the
-                    # device-level button keeps the plain {base}/ct002/<dev>/set.
-                    await client.subscribe(f"{cfg.base_topic}/ct002/+/consumer/+/+/set")
-                    await client.subscribe(f"{cfg.base_topic}/ct002/+/set")
+                    await client.subscribe(consumer_command_filter(cfg.base_topic))
+                    await client.subscribe(device_command_filter(cfg.base_topic))
 
                     # Store the client so register_marstek() called while
                     # already connected can live-subscribe, and so the
@@ -486,10 +509,13 @@ class MqttInsightsService:
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
 
+    def _discovered_count(self, kind: str) -> int:
+        return sum(1 for k, _ in self._discovered if k == kind)
+
     def _consumer_count(self) -> int:
         """Total downstream consumers/batteries currently known to AstraMeter."""
-        return len(self._discovered_ct002_consumers) + len(
-            self._discovered_shelly_batteries
+        return self._discovered_count(CT002_CONSUMER) + self._discovered_count(
+            SHELLY_BATTERY
         )
 
     def _hub_identifier(self) -> str:
@@ -517,11 +543,7 @@ class MqttInsightsService:
             "version": get_version(),
             "consumer_count": self._consumer_count(),
         }
-        await client.publish(
-            f"{cfg.base_topic}/bridge",
-            payload=json.dumps(payload).encode(),
-            retain=True,
-        )
+        await _publish_json(client, bridge_topic(cfg.base_topic), payload)
 
     async def _publish_offline(
         self, cfg: MqttInsightsConfig, tls_context: ssl.SSLContext | None
@@ -534,7 +556,7 @@ class MqttInsightsService:
             tls_context=tls_context,
         ) as client:
             await client.publish(
-                f"{cfg.base_topic}/status",
+                system_status_topic(cfg.base_topic),
                 payload=b"offline",
                 qos=1,
                 retain=True,
@@ -555,8 +577,8 @@ class MqttInsightsService:
                     await self._mark_offline(
                         client,
                         cfg,
-                        f"{base}/ct002/{did}/consumer/{eid}",
-                        self._discovered_ct002_consumers,
+                        ct002_consumer_topic(base, did, eid),
+                        CT002_CONSUMER,
                         f"{did}/{eid}",
                     )
                 elif evt.kind == "shelly":
@@ -565,8 +587,8 @@ class MqttInsightsService:
                     await self._mark_offline(
                         client,
                         cfg,
-                        f"{base}/shelly/{did}/battery/{eid}",
-                        self._discovered_shelly_batteries,
+                        shelly_battery_topic(base, did, eid),
+                        SHELLY_BATTERY,
                         f"{did}/{eid}",
                     )
             except aiomqtt.MqttError:
@@ -591,12 +613,8 @@ class MqttInsightsService:
         then the current one.
         """
         if retire:
-            await client.publish(
-                topic,
-                payload=json.dumps(build_retirement_payload(payload)).encode(),
-                retain=True,
-            )
-        await client.publish(topic, payload=json.dumps(payload).encode(), retain=True)
+            await _publish_json(client, topic, build_retirement_payload(payload))
+        await _publish_json(client, topic, payload)
 
     async def _handle_ct002_event(
         self,
@@ -609,12 +627,10 @@ class MqttInsightsService:
         cid = evt.entity_id
         data = evt.data
 
-        # Per-consumer state
         consumer_key = f"{did}/{cid}"
-        state_topic = f"{base}/ct002/{did}/consumer/{cid}"
-        avail_topic = f"{state_topic}/availability"
+        state_topic = ct002_consumer_topic(base, did, cid)
+        avail_topic = availability_topic(state_topic)
 
-        # Extract consumer-level state
         consumer_state = {
             "grid_power": data.get("grid_power", {}),
             "target": data.get("target", {}),
@@ -637,14 +653,9 @@ class MqttInsightsService:
             "min_dc_output": data.get("min_dc_output"),
         }
 
-        await client.publish(
-            state_topic,
-            payload=json.dumps(consumer_state).encode(),
-            retain=True,
-        )
+        await _publish_json(client, state_topic, consumer_state)
         await client.publish(avail_topic, payload=b"online", retain=True)
 
-        # Device-level status
         device_status = {
             "smooth_target": data.get("smooth_target", 0),
             "active_control": data.get("active_control", False),
@@ -663,16 +674,12 @@ class MqttInsightsService:
             ),
             "control_quality_band_w": data.get("control_quality_band_w"),
         }
-        await client.publish(
-            f"{base}/ct002/{did}/status",
-            payload=json.dumps(device_status).encode(),
-            retain=True,
-        )
+        await _publish_json(client, ct002_status_topic(base, did), device_status)
 
         efficiency_rotation = bool(data.get("efficiency_rotation", False))
         await self._discover_once(
             client,
-            self._discovered_ct002_devices,
+            CT002_DEVICE,
             did,
             lambda: build_ct002_device_discovery(
                 base,
@@ -682,8 +689,13 @@ class MqttInsightsService:
                 efficiency_rotation=efficiency_rotation,
             ),
         )
-        if consumer_key not in self._discovered_ct002_consumers and cfg.ha_discovery:
-            self._discovered_ct002_consumers.add(consumer_key)
+        # Deliberately not ``_discover_once``: the bridge count has to go out
+        # between marking the consumer discovered and publishing its discovery
+        # payload, and that publish order is on the wire.  The Shelly path below
+        # publishes the bridge after instead; both orders are equally fine for
+        # Home Assistant, but neither is worth changing on a live install.
+        if (CT002_CONSUMER, consumer_key) not in self._discovered and cfg.ha_discovery:
+            self._discovered.add((CT002_CONSUMER, consumer_key))
             await self._publish_bridge(client, cfg)
             topic, payload = build_ct002_consumer_discovery(
                 base,
@@ -700,30 +712,30 @@ class MqttInsightsService:
         client: aiomqtt.Client,
         cfg: MqttInsightsConfig,
         state_topic: str,
-        discovered: set[str],
+        kind: str,
         key: str,
     ) -> None:
         """A battery went silent: flip its availability and forget its
         discovery so a return republishes it."""
         await client.publish(
-            f"{state_topic}/availability", payload=b"offline", retain=True
+            availability_topic(state_topic), payload=b"offline", retain=True
         )
-        discovered.discard(key)
+        self._discovered.discard((kind, key))
         await self._publish_bridge(client, cfg)
 
     async def _discover_once(
         self,
         client: aiomqtt.Client,
-        discovered: set[str],
+        kind: str,
         key: str,
         build: Callable[[], tuple[str, dict]],
         *,
         retire: bool = False,
     ) -> bool:
         """Publish a discovery payload the first time *key* is seen."""
-        if not self._config.ha_discovery or key in discovered:
+        if not self._config.ha_discovery or (kind, key) in self._discovered:
             return False
-        discovered.add(key)
+        self._discovered.add((kind, key))
         topic, payload = build()
         await self._publish_discovery(client, topic, payload, retire=retire)
         return True
@@ -740,8 +752,8 @@ class MqttInsightsService:
         data = evt.data
 
         battery_key = f"{did}/{ip_slug}"
-        state_topic = f"{base}/shelly/{did}/battery/{ip_slug}"
-        avail_topic = f"{state_topic}/availability"
+        state_topic = shelly_battery_topic(base, did, ip_slug)
+        avail_topic = availability_topic(state_topic)
 
         battery_state = {
             "grid_power": data.get("grid_power", {}),
@@ -750,26 +762,17 @@ class MqttInsightsService:
             "last_seen": data.get("last_seen", ""),
         }
 
-        await client.publish(
-            state_topic,
-            payload=json.dumps(battery_state).encode(),
-            retain=True,
-        )
+        await _publish_json(client, state_topic, battery_state)
         await client.publish(avail_topic, payload=b"online", retain=True)
 
-        # Device-level status
         device_status = {
             "battery_count": data.get("battery_count", 0),
         }
-        await client.publish(
-            f"{base}/shelly/{did}/status",
-            payload=json.dumps(device_status).encode(),
-            retain=True,
-        )
+        await _publish_json(client, shelly_status_topic(base, did), device_status)
 
         await self._discover_once(
             client,
-            self._discovered_shelly_devices,
+            SHELLY_DEVICE,
             did,
             lambda: build_shelly_device_discovery(
                 base, did, cfg.ha_discovery_prefix, addon_slug=self._hub_identifier()
@@ -777,7 +780,7 @@ class MqttInsightsService:
         )
         if await self._discover_once(
             client,
-            self._discovered_shelly_batteries,
+            SHELLY_BATTERY,
             battery_key,
             lambda: build_shelly_battery_discovery(
                 base, did, ip_slug, cfg.ha_discovery_prefix
@@ -788,8 +791,6 @@ class MqttInsightsService:
 
     async def _listen_commands(self, client: aiomqtt.Client) -> None:
         base = self._config.base_topic
-        prefix = f"{base}/ct002/"
-        suffix = "/set"
 
         async for message in client.messages:
             topic_str = str(message.topic)
@@ -798,10 +799,9 @@ class MqttInsightsService:
             ):
                 await self._handle_marstek_message(client, message)
                 continue
-            if not topic_str.startswith(prefix) or not topic_str.endswith(suffix):
+            parsed = parse_command_topic(base, topic_str)
+            if parsed is None:
                 continue
-
-            middle = topic_str[len(prefix) : -len(suffix)]
 
             raw = message.payload
             try:
@@ -810,32 +810,24 @@ class MqttInsightsService:
                 logger.warning("Invalid command payload on %s", topic_str)
                 continue
 
-            # Distinguish device-level vs consumer-level topics.
-            #   consumer: {base}/ct002/<dev>/consumer/<cid>/<field>/set (scalar)
-            #   device:   {base}/ct002/<dev>/set                        (JSON)
-            parts = middle.split("/consumer/", 1)
-            if len(parts) == 2:
-                device_id, rest = parts
-                consumer_id, sep, field = rest.rpartition("/")
-                if not sep:
-                    logger.warning("Malformed consumer command topic %s", topic_str)
-                    continue
+            if isinstance(parsed, MalformedCommandTopic):
+                logger.warning("Malformed consumer command topic %s", topic_str)
+                continue
+            if isinstance(parsed, ConsumerCommandTopic):
                 self._handle_consumer_field_command(
-                    device_id, consumer_id, field, payload_str
+                    parsed.device_id, parsed.consumer_id, parsed.field, payload_str
                 )
-            else:
-                # Device-level: {base}/ct002/{device_id}/set — JSON body.
-                try:
-                    cmd = json.loads(payload_str)
-                except json.JSONDecodeError:
-                    logger.warning("Invalid command payload on %s", topic_str)
-                    continue
-                if not isinstance(cmd, dict):
-                    logger.warning(
-                        "Command payload is not a JSON object on %s", topic_str
-                    )
-                    continue
-                self._handle_device_command(middle, cmd)
+                continue
+            # Device-level: JSON body.
+            try:
+                cmd = json.loads(payload_str)
+            except json.JSONDecodeError:
+                logger.warning("Invalid command payload on %s", topic_str)
+                continue
+            if not isinstance(cmd, dict):
+                logger.warning("Command payload is not a JSON object on %s", topic_str)
+                continue
+            self._handle_device_command(parsed.device_id, cmd)
 
     def _handle_consumer_field_command(
         self, device_id: str, consumer_id: str, field: str, payload: str
@@ -943,7 +935,7 @@ class MqttInsightsService:
         interval = cfg.powermeter_health_interval
         while True:
             for pm in self._powermeters:
-                name = getattr(pm, "name", "") or ""
+                name = pm.name
                 if not name:
                     continue
                 online, values = await self._powermeter_status(pm)
@@ -968,20 +960,22 @@ class MqttInsightsService:
             # (which would force a full MQTT reconnect for every device).
             logger.exception(
                 "Powermeter health: stream_online() failed for %s",
-                getattr(pm, "name", "") or pm.__class__.__name__,
+                pm.name or pm.__class__.__name__,
             )
             return False, None
         if stream is not None:
             # Push meter: readings are cached (no network I/O).
             return stream, await self._read_powermeter_values(pm)
-        last_attempt = getattr(pm, "last_attempt", None)
-        if (
-            last_attempt is not None
-            and (time.monotonic() - last_attempt) <= POWERMETER_IDLE_THRESHOLD
-        ):
-            return bool(getattr(pm, "last_outcome_ok", False)), getattr(
-                pm, "last_values", None
-            )
+        # Pull meter: reuse the control loop's read while it is fresh.  The
+        # outermost wrapper is always the health tracker (``powermeter/base.py``)
+        # — the isinstance is how the type checker is told, not a fallback.
+        if isinstance(pm, HealthTrackingPowermeter):
+            last_attempt = pm.last_attempt
+            if (
+                last_attempt is not None
+                and (time.monotonic() - last_attempt) <= POWERMETER_IDLE_THRESHOLD
+            ):
+                return pm.last_outcome_ok, pm.last_values
         # Idle pull meter: one bounded probe serves both online and readings.
         values = await self._read_powermeter_values(pm)
         return bool(values), values
@@ -1015,14 +1009,10 @@ class MqttInsightsService:
     ) -> None:
         pm_id = _sanitize_id(name)
         state = {"online": online, "grid_power": self._grid_power_payload(values)}
-        await client.publish(
-            f"{base}/powermeter/{pm_id}",
-            payload=json.dumps(state).encode(),
-            retain=True,
-        )
+        await _publish_json(client, powermeter_topic(base, pm_id), state)
         await self._discover_once(
             client,
-            self._discovered_powermeters,
+            POWERMETER,
             pm_id,
             lambda: build_powermeter_device_discovery(
                 base,

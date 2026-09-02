@@ -104,7 +104,8 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
   const std::string uid_prefix = "astrameter_ct002_" + safe_dev + "_" + safe_cid;
   const std::string meter_identifier = "astrameter_ct002_" + safe_dev;
   // mac_slug: lowercase, strip "-" / "_" — used for both the device identifier
-  // and the optional bluetooth connection. Mirrors discovery.py:190.
+  // and the optional bluetooth connection. Mirrors the mac_slug in
+  // discovery.py's build_ct002_consumer_discovery.
   std::string mac_slug = safe_cid;
   for (auto &c : mac_slug) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   std::string mac_slug_clean;

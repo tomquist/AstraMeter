@@ -35,8 +35,13 @@ from .discovery import (
 )
 from .marstek_mqtt import MarstekMqttBinding
 from .service import (
+    CT002_CONSUMER,
+    CT002_DEVICE,
+    POWERMETER,
     POWERMETER_IDLE_THRESHOLD,
     QUEUE_MAX_SIZE,
+    SHELLY_BATTERY,
+    SHELLY_DEVICE,
     MqttInsightsConfig,
     MqttInsightsService,
 )
@@ -1223,7 +1228,9 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
             # First event for consumer1
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
             # Second event for same consumer — should NOT trigger another discovery
-            await _poll(lambda: "dev1/consumer1" in service._discovered_ct002_consumers)
+            await _poll(
+                lambda: (CT002_CONSUMER, "dev1/consumer1") in service._discovered
+            )
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
             # Third event for consumer2 — SHOULD trigger new discovery
             service.on_ct002_response("dev1", "consumer2", SAMPLE_CT002_DATA)
@@ -1296,9 +1303,8 @@ async def test_publishes_addon_hub_device_and_bridge(mqtt_broker):
                         bridge_payloads.append(json.loads(m.payload))
                     # Fire a consumer event once we've seen the initial state,
                     # then wait for the updated bridge count.
-                    if (
-                        len(bridge_payloads) == 1
-                        and not service._discovered_ct002_consumers
+                    if len(bridge_payloads) == 1 and not service._discovered_count(
+                        CT002_CONSUMER
                     ):
                         service.on_ct002_response(
                             "dev1", "consumer1", SAMPLE_CT002_DATA
@@ -1407,7 +1413,7 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
 
         # First fire an event so the consumer is "discovered"
         service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
-        await _poll(lambda: "dev1/consumer1" in service._discovered_ct002_consumers)
+        await _poll(lambda: (CT002_CONSUMER, "dev1/consumer1") in service._discovered)
 
         received = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
@@ -1806,7 +1812,7 @@ async def test_shelly_battery_removal_publishes_offline(mqtt_broker):
         # First fire an event so the battery is "discovered"
         service.on_shelly_response("shelly1", "192.168.1.100", SAMPLE_SHELLY_DATA)
         await _poll(
-            lambda: "shelly1/192_168_1_100" in service._discovered_shelly_batteries
+            lambda: (SHELLY_BATTERY, "shelly1/192_168_1_100") in service._discovered
         )
 
         received = []
@@ -2319,11 +2325,16 @@ def test_status_snapshot_shape():
             marstek_mqtt_interval=120.0,
         )
     )
-    service._discovered_ct002_devices.add("dev1")
-    service._discovered_ct002_consumers.update({"dev1/c1", "dev1/c2"})
-    service._discovered_shelly_devices.add("shelly1")
-    service._discovered_shelly_batteries.add("shelly1/192_168_1_5")
-    service._discovered_powermeters.add("MQTT_1")
+    service._discovered.update(
+        {
+            (CT002_DEVICE, "dev1"),
+            (CT002_CONSUMER, "dev1/c1"),
+            (CT002_CONSUMER, "dev1/c2"),
+            (SHELLY_DEVICE, "shelly1"),
+            (SHELLY_BATTERY, "shelly1/192_168_1_5"),
+            (POWERMETER, "MQTT_1"),
+        }
+    )
 
     snapshot = service.status_snapshot()
 
