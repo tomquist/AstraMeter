@@ -2486,41 +2486,19 @@ class LoadBalancer:
             0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
         )
         previous_active = tuple(self._priority[:prev_slots])
-        probe_resolved = self._resolve_probe_state(reports, now, grid_total)
-        probe_active = self._probe_state is not None
+        # A probe owns the active set while it runs and for the tick that
+        # resolves it, so rotation, saturation swaps and starting the next
+        # probe all stand down until it is over.
+        probing = self._resolve_probe_state(reports, now, grid_total) or (
+            self._probe_state is not None
+        )
 
-        # Rotation check BEFORE cache. The active head holds its slot for
-        # ``efficiency_rotation_interval`` scaled by its efficiency window weight,
-        # so a lower-weight battery rotates out sooner (weight 0 → threshold 0 →
-        # it rotates out on the next tick).
-        if not probe_active and not probe_resolved and self._priority:
-            head_weight = _report_of(
-                reports, self._priority[0]
-            ).efficiency_window_weight
-            if (
-                now - self._last_rotation
-                >= cfg.efficiency_rotation_interval * head_weight
-            ):
-                self._last_rotation = now
-                self._priority.append(self._priority.pop(0))
+        # Both checks run BEFORE the cache lookup, because either can make the
+        # cached active set stale.
+        if not probing:
+            self._rotate_priority_head(reports, now)
+            if self._active_slot_saturated(prev_slots):
                 self._invalidate_efficiency_cache()
-
-        # Saturation swap check BEFORE cache
-        if (
-            not probe_active
-            and not probe_resolved
-            and cfg.efficiency_saturation_threshold > 0
-            and self._cache_sample is not None
-        ):
-            slots_est = len(self._priority) - len(self._deprioritized)
-            for cid in self._priority[:slots_est]:
-                state = self._consumers.get(cid)
-                if (
-                    state
-                    and state.saturation_score >= cfg.efficiency_saturation_threshold
-                ):
-                    self._invalidate_efficiency_cache()
-                    break
 
         cache_key = (sample_id, tuple(self._priority))
         if cache_key == self._cache_sample:
@@ -2533,61 +2511,43 @@ class LoadBalancer:
             was_limiting=len(self._deprioritized) > 0,
             prev_slots=prev_slots,
         )
+        pre_swap_active = set(self._priority[:slots])
+        for cid in self._deprioritized - set(self._priority[slots:]):
+            self._promote_to_active(cid, grace)
+
+        if not probing and self._maybe_force_swap_saturated(self._priority, slots, now):
+            # The swap reordered ``_priority``, so the active set and the cache
+            # key it feeds have to be taken again.
+            cache_key = (sample_id, tuple(self._priority))
+            for cid in set(self._priority[:slots]) - pre_swap_active:
+                self._promote_to_active(cid, grace)
 
         deprioritized = set(self._priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
-        pre_swap_active = set(self._priority[:slots])
-
-        # Reset saturation for consumers transitioning to active
-        for cid in self._deprioritized - deprioritized:
-            state = self._get_consumer(cid)
-            self._saturation.clear(state)
-            self._set_consumer_grace(cid, grace)
-
-        if (
-            not probe_active
-            and not probe_resolved
-            and self._maybe_force_swap_saturated(self._priority, slots, now)
-        ):
-            deprioritized = set(self._priority[slots:])
-            result = {cid: 0.0 for cid in deprioritized}
-            cache_key = (sample_id, tuple(self._priority))
-            for cid in set(self._priority[:slots]) - pre_swap_active:
-                state = self._get_consumer(cid)
-                self._saturation.clear(state)
-                self._set_consumer_grace(cid, grace)
 
         final_active = tuple(self._priority[:slots])
-        if not probe_active and not probe_resolved and previous_active:
+        if not probing and previous_active:
             promoted = [cid for cid in final_active if cid not in previous_active]
             backups = [cid for cid in previous_active if cid not in final_active]
             if promoted and backups:
                 self._begin_probe(
-                    promoted[0],
-                    final_active,
-                    tuple(backups),
-                    previous_active,
-                    now,
+                    promoted[0], final_active, tuple(backups), previous_active, now
                 )
 
         for cid in deprioritized - self._deprioritized:
-            state = self._consumers.get(cid)
-            if state:
-                # Symmetric with the deprioritized -> active clear above: the
-                # score is a memory of the previous role, and a consumer
-                # steered toward zero cannot be judged by it.  Without the
-                # clear, saturation accumulated over the fading window would
-                # bar ``_maybe_force_swap_saturated`` from ever promoting it.
-                self._saturation.clear(state)
+            # Symmetric with the promotion clear above: the score is a memory
+            # of the previous role, and a consumer steered toward zero cannot
+            # be judged by it.  Without the clear, saturation accumulated over
+            # the fading window would bar ``_maybe_force_swap_saturated`` from
+            # ever promoting it back.
+            self._forget_saturation(cid)
+        for cid, verb in (
+            *((cid, "deprioritizing") for cid in deprioritized - self._deprioritized),
+            *((cid, "activating") for cid in self._deprioritized - deprioritized),
+        ):
             logger.info(
-                "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
-                cid[:16],
-                abs_target,
-                slots,
-            )
-        for cid in self._deprioritized - deprioritized:
-            logger.info(
-                "Efficiency: activating consumer %s (demand %.0fW, %d active)",
+                "Efficiency: %s consumer %s (demand %.0fW, %d active)",
+                verb,
                 cid[:16],
                 abs_target,
                 slots,
@@ -2597,6 +2557,56 @@ class LoadBalancer:
         self._cache_sample = cache_key
         self._cache_result = result
         return result
+
+    def _rotate_priority_head(self, reports: Reports, now: float) -> None:
+        """Send the longest-serving active battery to the back of the queue.
+
+        The head holds its slot for ``efficiency_rotation_interval`` scaled by
+        its efficiency window weight, so a lower-weight battery rotates out
+        sooner — weight 0 means a threshold of 0, i.e. out on the next tick.
+        """
+        if not self._priority:
+            return
+        head_weight = _report_of(reports, self._priority[0]).efficiency_window_weight
+        if now - self._last_rotation < self._cfg.efficiency_rotation_interval * (
+            head_weight
+        ):
+            return
+        self._last_rotation = now
+        self._priority.append(self._priority.pop(0))
+        self._invalidate_efficiency_cache()
+
+    def _active_slot_saturated(self, slots_estimate: int) -> bool:
+        """Whether a battery currently holding an active slot is saturated.
+
+        Only meaningful once a set has been cached: without one there is
+        nothing stale to invalidate.
+        """
+        threshold = self._cfg.efficiency_saturation_threshold
+        if threshold <= 0 or self._cache_sample is None:
+            return False
+        return any(
+            (state := self._consumers.get(cid)) is not None
+            and state.saturation_score >= threshold
+            for cid in self._priority[:slots_estimate]
+        )
+
+    def _promote_to_active(self, consumer_id: str, grace: float) -> None:
+        """Give a consumer a clean slate as it takes an active slot.
+
+        Its saturation score is a memory of the deprioritized role — a battery
+        steered toward zero cannot be judged by it — and the grace window keeps
+        the fresh score from being read before the battery has had time to move.
+        """
+        state = self._get_consumer(consumer_id)
+        self._saturation.clear(state)
+        self._saturation.set_grace(state, grace)
+
+    def _forget_saturation(self, consumer_id: str) -> None:
+        """Drop a known consumer's saturation score; unknown ids are ignored."""
+        state = self._consumers.get(consumer_id)
+        if state is not None:
+            self._saturation.clear(state)
 
     def _maybe_force_swap_saturated(
         self, priority: list[str], slots: int, now: float
