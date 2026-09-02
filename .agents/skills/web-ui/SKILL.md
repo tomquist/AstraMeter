@@ -1,6 +1,6 @@
 ---
 name: web-ui
-description: The dashboard page compiles into two artifacts committed to the repo, and CI fails when either is stale — so a change under web/ is only half-done until it is rebuilt in the same commit. Read before editing web/: the rebuild step, why git diff won't show you those files, which changes need a browser test, and how to refresh the documentation screenshots.
+description: Builds and verifies the dashboard page: the two committed artifacts CI rejects when stale, the browser tests, and the documentation screenshots. Use when changing the dashboard UI, adding a tab or a control, or refreshing the screenshots in docs/images/.
 ---
 
 # Dashboard and screenshots

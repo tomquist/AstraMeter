@@ -1,6 +1,6 @@
 ---
 name: powermeter
-description: A new grid powermeter needs seven things besides its own module — the loader factory, the exports, the web editor and generator, an ESPHome equivalent in the docs, both doc sets, and tests — or it ships half-wired and unreachable from most config surfaces. Read before adding or renaming a meter under src/astrameter/powermeter/.
+description: Adds a grid powermeter backend end to end: the module, the config-loader factory, the web editor and generator entries, the ESPHome equivalent, both doc sets and the tests. Use when adding support for a new energy meter or smart-meter source, or renaming an existing one.
 ---
 
 # Adding a powermeter

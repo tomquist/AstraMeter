@@ -1,6 +1,6 @@
 ---
 name: config-option
-description: A config option wired into the loader alone is a bug: it also has to reach the INI example, the web editor, the config generator, the Home Assistant add-on, the dashboard's guided form and the docs, and three tests fail until it does. Read before adding or renaming a [SECTION] key, or when changing anything under ha_addon/ (it covers testing the add-on container image too).
+description: Adds or renames a user-facing config option across all seven surfaces it has to reach, from the settings dataclass through the web config generator to the Home Assistant add-on and the docs. Use when adding a new setting, renaming a config key, or changing the add-on's options or container image.
 ---
 
 # Config options reach every surface

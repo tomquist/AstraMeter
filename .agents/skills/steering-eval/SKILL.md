@@ -1,6 +1,6 @@
 ---
 name: steering-eval
-description: A change to the active-control loop needs a before/after simulation to show it did not make steering worse — CI runs one on every such PR and posts the comparison, so a regression surfaces publicly either way. Read before changing balancer behavior in src/astrameter/ct002/ or src/astrameter/simulator/: how to capture a baseline, and how to read cost_regret_ct and the guardrail flags.
+description: Runs the steering-quality evaluation and reads its base-vs-head comparison, including the cost_regret_ct headline and the do-no-harm guardrails. Use when changing how the balancer steers — reaction speed, oscillation, overshoot, battery sharing — or anything else in the active-control loop or the simulator.
 ---
 
 # Steering-quality evaluation

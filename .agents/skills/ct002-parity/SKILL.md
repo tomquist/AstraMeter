@@ -1,6 +1,6 @@
 ---
 name: ct002-parity
-description: Behavior shared by the Python CT002 stack and its C++ mirror must change on both sides in the same commit, or the two silently diverge and a value one accepts gets reverted by the other. Read before editing src/astrameter/ct002/, src/astrameter/status/ or esphome/components/ct002/: it says what is mirrored, which three divergences are deliberate, what the ESP32 constrains, and which tests actually prove parity.
+description: Keeps the Python CT002 stack and its ESPHome C++ mirror in step: what must change on both sides, which divergences are deliberate, what the ESP32 constrains, and which tests prove parity. Use when changing CT002 or balancer behavior, adding a status field or a dashboard control, or editing the ESPHome component.
 ---
 
 # CT002 parity
