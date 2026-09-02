@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from .evaluation import _reserve_udp_port
+from .eval_harness import _reserve_udp_port
 
 
 class TestReserveUdpPort:

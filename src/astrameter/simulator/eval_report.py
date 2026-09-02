@@ -1,20 +1,13 @@
 """Self-contained interactive HTML report for the steering evaluation.
 
-Bundles the per-scenario metrics tables and **zoomable, hover-able** base-vs-head
-grid-power charts into a single offline HTML file, which CI uploads as the
-``steering-eval`` artifact.  This replaces the Mermaid charts that used to sit
-inline in the PR comment: a static image (Mermaid or matplotlib) can't show two
-overlapping 1800-point traces clearly, whereas an interactive chart lets a
-reviewer zoom into a spike, toggle a series, and read exact values at the
-cursor.
+Per-scenario metrics tables plus zoomable base-vs-head grid-power and
+per-battery output charts in one offline HTML file, which CI uploads as the
+``steering-eval`` artifact (GitHub can't render an interactive chart inline in
+a PR comment). The uPlot library (``report_assets/``, MIT) and all trace data
+are inlined, so the file opens from disk with no network.
 
-The report is fully self-contained — the uPlot library (``report_assets/``,
-MIT) and all trace data are inlined, so the downloaded ``.html`` opens straight
-from disk with no network or CDN.
-
-The page is built from a static template with a handful of ``__PLACEHOLDER__``
-slots (rather than an f-string) so the embedded JavaScript's own braces don't
-need escaping.
+The page is built from a static template with ``__PLACEHOLDER__`` slots rather
+than an f-string, so the embedded JavaScript's own braces need no escaping.
 """
 
 from __future__ import annotations
@@ -24,7 +17,15 @@ import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from .eval_compare import _headline, _metric_rows
+from .eval_metrics import _Sample
+from .eval_spec import Scenario
+
 _ASSETS = Path(__file__).parent / "report_assets"
+
+# Points each trace is downsampled to for the charts. Base and head share the
+# count so the two lines align by index regardless of poll cadence.
+GRAPH_POINTS = 1800
 
 # Series colours (solid; the chart background is dark).  Base/"before" is a warm
 # orange, head/"after" a cool blue — the blue-vs-orange contrast that survives
@@ -47,12 +48,73 @@ BATTERY_COLORS = (
 )
 
 
-def _asset(name: str) -> str:
+def _downsample_series(
+    samples: list[_Sample],
+    duration_s: float,
+    pick: Callable[[_Sample], float],
+    n: int = GRAPH_POINTS,
+) -> list[float]:
+    """Bucket a per-sample value into *n* evenly spaced means over the run.
+
+    *pick* selects the value from each sample (grid, a battery's power, ...).
+    Empty buckets carry the previous value forward so the chart has no gaps;
+    the fixed length lets traces from different runs overlay by index.
+    """
+    if not samples or duration_s <= 0 or n <= 0:
+        return []
+    buckets: list[list[float]] = [[] for _ in range(n)]
+    for s in samples:
+        idx = min(int(s.t / duration_s * n), n - 1)
+        buckets[idx].append(pick(s))
+    out: list[float] = []
+    last = 0.0
+    for bucket in buckets:
+        if bucket:
+            last = sum(bucket) / len(bucket)
+        out.append(round(last, 1))
+    return out
+
+
+def _battery_power(i: int) -> Callable[[_Sample], float]:
+    """Picker for battery *i*'s output (a typed closure, so the per-battery
+    downsampling avoids an inline lambda mypy can't infer)."""
+    return lambda s: s.powers[i]
+
+
+def _chart_traces(scenario: Scenario, samples: list[_Sample]) -> dict:
+    """The downsampled series the charts draw, stored alongside the metrics.
+
+    Consumption comes straight from the load model, so it cannot carry
+    control-loop oscillation; it is the same scripted load in base and head,
+    so one trace is enough and the grid chart overlays it as context."""
+    specs = scenario.batteries
+    return {
+        "grid_trace": _downsample_series(
+            samples, scenario.duration_s, lambda s: s.grid
+        ),
+        "consumption_trace": _downsample_series(
+            samples, scenario.duration_s, lambda s: s.consumption
+        ),
+        "battery_labels": [
+            f"B{i + 1} {specs[i].device_type}" for i in range(len(specs))
+        ],
+        "battery_traces": [
+            _downsample_series(samples, scenario.duration_s, _battery_power(i))
+            for i in range(len(specs))
+        ],
+    }
+
+
+def _read_asset(name: str) -> str:
     return (_ASSETS / name).read_text(encoding="utf-8")
 
 
-def _esc(text: object) -> str:
+def _escape(text: object) -> str:
     return html.escape(str(text))
+
+
+def _cell(value: object | None) -> str:
+    return "&mdash;" if value is None else _escape(value)
 
 
 def _metrics_table(
@@ -63,44 +125,14 @@ def _metrics_table(
 ) -> str:
     rows = ["<table><thead><tr><th>Metric</th><th>Base</th><th>Head</th>"]
     rows.append("<th>&Delta;</th></tr></thead><tbody>")
-    for key in report_metrics:
-        hv = head[key]
-        # A base produced before this metric existed has no value to compare.
-        if base is None or key not in base:
-            rows.append(
-                f"<tr><td>{_esc(key)}</td><td>&mdash;</td>"
-                f"<td>{_esc(hv)}</td><td>&mdash;</td></tr>"
-            )
-            continue
-        bv = base[key]
-        delta = fmt_delta(float(bv), float(hv))
-        # Every reported metric is lower-is-better.
-        cls = ""
-        if float(hv) < float(bv):
-            cls = ' class="better"'
-        elif float(hv) > float(bv):
-            cls = ' class="worse"'
+    for row in _metric_rows(base, head, report_metrics, fmt_delta):
+        cls = {-1: ' class="better"', 1: ' class="worse"'}.get(row.direction, "")
         rows.append(
-            f"<tr><td>{_esc(key)}</td><td>{_esc(bv)}</td>"
-            f"<td>{_esc(hv)}</td><td{cls}>{_esc(delta)}</td></tr>"
+            f"<tr><td>{_escape(row.key)}</td><td>{_cell(row.base)}</td>"
+            f"<td>{_cell(row.head)}</td><td{cls}>{_cell(row.delta)}</td></tr>"
         )
     rows.append("</tbody></table>")
     return "".join(rows)
-
-
-def _summary(base: dict | None, head: dict) -> str:
-    def pair(key: str, unit: str) -> str:
-        if base is None:
-            return f"{_esc(key)} {_esc(head[key])}{unit}"
-        return f"{_esc(key)} {_esc(base[key])}&rarr;{_esc(head[key])}{unit}"
-
-    return ", ".join(
-        (
-            pair("settle_mean_s", "s"),
-            pair("overshoot_max_w", "W"),
-            pair("steady_rms_w", "W"),
-        )
-    )
 
 
 def render_html_report(
@@ -129,7 +161,7 @@ def render_html_report(
     base_by = {r["scenario"]: r for r in (base or [])}
 
     glossary_rows = "".join(
-        f"<tr><td><code>{_esc(k)}</code></td><td>{_esc(v)}</td></tr>"
+        f"<tr><td><code>{_escape(k)}</code></td><td>{_escape(v)}</td></tr>"
         for k, v in metric_glossary
     )
 
@@ -137,9 +169,9 @@ def render_html_report(
     if aggregate is not None:
         agg_base, agg_head = aggregate
         n = agg_head.get("n_scenarios", len(head))
-        agg_parts = [f"<h2>Aggregate &mdash; mean across {_esc(n)} scenarios</h2>"]
+        agg_parts = [f"<h2>Aggregate &mdash; mean across {_escape(n)} scenarios</h2>"]
         if aggregate_summary:
-            agg_parts.append(f'<p class="summary">{_esc(aggregate_summary)}</p>')
+            agg_parts.append(f'<p class="summary">{_escape(aggregate_summary)}</p>')
         agg_parts.append(_metrics_table(agg_base, agg_head, report_metrics, fmt_delta))
         sections.append(f"<section>{''.join(agg_parts)}</section>")
     # Each chart is a generic {durationMin, series:[{label,color,data}, ...]}
@@ -150,8 +182,8 @@ def render_html_report(
         b = base_by.get(res["scenario"])
         dur = round(float(res.get("duration_h", 0.0)) * 60, 3)
         parts = [
-            f"<h2>{_esc(res['scenario'])}</h2>",
-            f'<p class="summary">{_summary(b, res)}</p>',
+            f"<h2>{_escape(res['scenario'])}</h2>",
+            f'<p class="summary">{_escape(_headline(b, res))}</p>',
             _metrics_table(b, res, report_metrics, fmt_delta),
         ]
 
@@ -211,7 +243,7 @@ def render_html_report(
         if base_by
         else f'<span class="key" style="color:{COLOR_HEAD}">&#9632; head</span>'
     )
-    note_html = f"<p class='summary'>{_esc(note)}</p>" if note else ""
+    note_html = f"<p class='summary'>{_escape(note)}</p>" if note else ""
     body = (
         "<div class='wrap'>"
         "<h1>Steering evaluation &mdash; base vs head</h1>"
@@ -229,9 +261,9 @@ def render_html_report(
 
     template = _TEMPLATE
     return (
-        template.replace("__UPLOT_CSS__", _asset("uPlot.min.css"))
+        template.replace("__UPLOT_CSS__", _read_asset("uPlot.min.css"))
         .replace("__APP_CSS__", _APP_CSS)
-        .replace("__UPLOT_JS__", _asset("uPlot.iife.min.js"))
+        .replace("__UPLOT_JS__", _read_asset("uPlot.iife.min.js"))
         .replace("__BODY__", body)
         # JSON is injected last so a stray placeholder token in the data can't
         # be re-expanded. Series colours travel inside this JSON.  Escape '<'
