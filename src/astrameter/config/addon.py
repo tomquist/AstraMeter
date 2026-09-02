@@ -32,11 +32,13 @@ from astrameter.config.config_loader import (
     apply_signal_wrappers,
     parse_float_list,
     parse_mqtt_uri,
+    split_csv,
 )
 from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.logger import logger
 from astrameter.config.settings import (
     AppConfig,
+    ConfiguredPowermeter,
     CtSettings,
     GeneralSettings,
     MarstekSettings,
@@ -44,7 +46,6 @@ from astrameter.config.settings import (
 from astrameter.powermeter import HomeAssistant
 
 if TYPE_CHECKING:
-    from astrameter.config.settings import ConfiguredPowermeter
     from astrameter.mqtt_insights import MqttInsightsConfig
 
 OPTIONS_PATH = os.environ.get("ASTRAMETER_ADDON_OPTIONS", "/data/options.json")
@@ -376,11 +377,7 @@ class AddonAppConfig(AppConfig):
 
     def general(self) -> GeneralSettings:
         defaults = GeneralSettings()
-        device_types = [
-            device_type.strip()
-            for device_type in str(self._option("device_types", "")).split(",")
-            if device_type.strip()
-        ]
+        device_types = split_csv(str(self._option("device_types", "")))
         general = _force_dashboard_on(
             replace(
                 defaults,
@@ -481,7 +478,7 @@ class AddonAppConfig(AppConfig):
             multipliers=self._float_list("power_multiplier"),
         )
         return [
-            (
+            ConfiguredPowermeter(
                 apply_signal_wrappers(meter, POWER_SOURCE_NAME, signal),
                 # The add-on serves whichever battery asks.
                 ClientFilter([IPv4Network("0.0.0.0/0")]),
@@ -527,8 +524,7 @@ class AddonAppConfig(AppConfig):
 
     def _entities(self, key: str) -> list[str]:
         """Entity ids of an option; one per phase for three-phase setups."""
-        raw = self._option(key, "")
-        return [entity.strip() for entity in str(raw).split(",") if entity.strip()]
+        return split_csv(str(self._option(key, "")))
 
     def _float_list(self, key: str) -> list[float] | None:
         value = self._option(key)

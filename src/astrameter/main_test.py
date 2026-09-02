@@ -3,6 +3,7 @@ from ipaddress import IPv4Network
 
 from astrameter.config.config_loader import ClientFilter, new_config_parser
 from astrameter.config.ini_config import IniAppConfig
+from astrameter.config.settings import ConfiguredPowermeter
 from astrameter.main import _resolve_device_config, read_ct_powermeter
 from astrameter.powermeter import Powermeter
 
@@ -37,19 +38,19 @@ _LOCAL = ClientFilter([IPv4Network("127.0.0.1/32")])
 
 async def test_read_ct_powermeter_returns_none_when_no_match():
     pm = _StubPowermeter([10.0])
-    powermeters = [(pm, _LOCAL, True)]
+    powermeters = [ConfiguredPowermeter(pm, _LOCAL, True)]
     assert await read_ct_powermeter(("10.0.0.1", 0), powermeters) is None
 
 
 async def test_read_ct_powermeter_pads_to_three_phases():
     pm = _StubPowermeter([42.0])
-    powermeters = [(pm, _LOCAL, False)]
+    powermeters = [ConfiguredPowermeter(pm, _LOCAL, False)]
     assert await read_ct_powermeter(("127.0.0.1", 0), powermeters) == [42.0, 0, 0]
 
 
 async def test_read_ct_powermeter_skips_wait_when_disabled():
     pm = _StubPowermeter([1.0, 2.0, 3.0])
-    powermeters = [(pm, _LOCAL, False)]
+    powermeters = [ConfiguredPowermeter(pm, _LOCAL, False)]
     result = await read_ct_powermeter(("127.0.0.1", 0), powermeters)
     assert result == [1.0, 2.0, 3.0]
     assert pm._wait_calls == []
@@ -57,7 +58,7 @@ async def test_read_ct_powermeter_skips_wait_when_disabled():
 
 async def test_read_ct_powermeter_calls_wait_with_2s_when_enabled():
     pm = _StubPowermeter([1.0, 2.0, 3.0])
-    powermeters = [(pm, _LOCAL, True)]
+    powermeters = [ConfiguredPowermeter(pm, _LOCAL, True)]
     await read_ct_powermeter(("127.0.0.1", 0), powermeters)
     assert pm._wait_calls == [2]
 
@@ -81,7 +82,7 @@ async def test_read_ct_powermeter_swallows_timeout_and_serves_cached():
         [11.0, 22.0, 33.0],
         wait_raises=TimeoutError("simulated slow meter"),
     )
-    powermeters = [(pm, _LOCAL, True)]
+    powermeters = [ConfiguredPowermeter(pm, _LOCAL, True)]
     result = await read_ct_powermeter(("127.0.0.1", 0), powermeters)
     assert result == [11.0, 22.0, 33.0]
 

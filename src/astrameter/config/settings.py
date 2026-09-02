@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 DEFAULT_CT_UDP_PORT = 12345
 """Port a CT emulator listens on.
@@ -31,7 +31,54 @@ if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
     from astrameter.powermeter import Powermeter
 
-    ConfiguredPowermeter = tuple[Powermeter, ClientFilter, bool]
+
+class ConfiguredPowermeter(NamedTuple):
+    """A built power source, the clients it answers, and how it is read.
+
+    A tuple rather than a plain dataclass because the emulators still take the
+    whole list and unpack it positionally.
+    """
+
+    powermeter: Powermeter
+    client_filter: ClientFilter
+    wait_for_next_message: bool
+
+
+@dataclass(frozen=True)
+class DeviceType:
+    """One emulated device type.
+
+    *ct_type* is the CT protocol type a CT002/CT003 emulator announces, and is
+    empty for the Shelly emulations; *udp_port* is the port a Shelly emulation
+    listens on, which the battery firmware picks by device type; *id_prefix*
+    starts the device id generated when the user did not name one.
+    """
+
+    ct_type: str = ""
+    udp_port: int | None = None
+    id_prefix: str = ""
+
+
+#: Every ``DEVICE_TYPE`` the app accepts, in the order the command line offers
+#: them. ``shellypro3em`` has no port of its own: it is expanded into the
+#: ``_old``/``_new`` pair before a device is built (see ``_resolve_device_config``).
+DEVICE_TYPES: dict[str, DeviceType] = {
+    "ct002": DeviceType(ct_type="HME-4"),
+    "ct003": DeviceType(ct_type="HME-3"),
+    "shellypro3em": DeviceType(id_prefix="shellypro3em"),
+    "shellyemg3": DeviceType(udp_port=2222, id_prefix="shellyemg3"),
+    "shellyproem50": DeviceType(udp_port=2223, id_prefix="shellyproem50"),
+    "shellypro3em_old": DeviceType(udp_port=1010, id_prefix="shellypro3em"),
+    "shellypro3em_new": DeviceType(udp_port=2220, id_prefix="shellypro3em"),
+}
+
+#: The CT emulator types, in ``DEVICE_TYPES`` order.
+CT_DEVICE_TYPES = tuple(name for name, spec in DEVICE_TYPES.items() if spec.ct_type)
+
+
+def is_ct(device_type: str) -> bool:
+    """Whether *device_type* is a CT emulator rather than a Shelly one."""
+    return device_type in CT_DEVICE_TYPES
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import configparser
+import dataclasses
 import os
+import typing
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,7 +15,7 @@ if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
 
 from astrameter.config.logger import logger
-from astrameter.config.settings import SignalSettings
+from astrameter.config.settings import ConfiguredPowermeter, SignalSettings
 from astrameter.powermeter import (
     AmisReader,
     Emlog,
@@ -107,14 +109,109 @@ def read_option(
 
 
 def _declared(
-    config: configparser.ConfigParser, section: str, **keys: tuple[str, type]
+    config: configparser.ConfigParser,
+    section: str,
+    *,
+    blank_is_unset: bool = False,
+    **keys: tuple[str, type],
 ) -> dict[str, Any]:
-    """Keyword arguments for the keys *section* sets; the class default covers the rest."""
-    return {
-        arg: read_option(config, section, key, kind)
-        for arg, (key, kind) in keys.items()
-        if config.has_option(section, key)
-    }
+    """Keyword arguments for the keys *section* sets; the class default covers the rest.
+
+    ``blank_is_unset`` also skips a key written with no value, so
+    ``HA_DISCOVERY =`` means "leave it to the class" rather than a parse
+    error or a zero.
+    """
+    out: dict[str, Any] = {}
+    for arg, (key, kind) in keys.items():
+        if not config.has_option(section, key):
+            continue
+        if blank_is_unset and not config.get(section, key, fallback="").strip():
+            continue
+        out[arg] = read_option(config, section, key, kind)
+    return out
+
+
+# A field's INI key is its name uppercased, except for these. Readers and the
+# renderer in ``ini_config`` share the maps, and ``ini_config_test.py``
+# round-trips every field, so a key read one way and written another fails there.
+GENERAL_KEY_OVERRIDES = {
+    "device_types": "DEVICE_TYPE",
+    "dashboard": "DASHBOARD_ENABLED",
+}
+
+SIGNAL_KEY_OVERRIDES = {
+    "smooth_alpha": "SMOOTH_TARGET_ALPHA",
+    "offsets": "POWER_OFFSET",
+    "multipliers": "POWER_MULTIPLIER",
+}
+
+
+def ini_key(field: str, overrides: dict[str, str]) -> str:
+    return overrides.get(field, field.upper())
+
+
+def general_key(field: str) -> str:
+    """The ``[GENERAL]`` key backing *field* of :class:`GeneralSettings`.
+
+    Lets another backend name a key in a message without hardcoding it, so a
+    rename here cannot leave that message pointing at a key nobody reads.
+    """
+    return ini_key(field, GENERAL_KEY_OVERRIDES)
+
+
+def _field_kinds(settings_type: type) -> dict[str, type]:
+    """Each field's scalar type — ``int`` for both ``int`` and ``int | None``."""
+    kinds = {}
+    for name, hint in typing.get_type_hints(settings_type).items():
+        members = [t for t in typing.get_args(hint) or (hint,) if t is not type(None)]
+        kinds[name] = members[0]
+    return kinds
+
+
+def read_fields(
+    config: configparser.ConfigParser,
+    section: str,
+    settings_type: type[Any],
+    key_overrides: dict[str, str] | None = None,
+    *,
+    skip: tuple[str, ...] = (),
+    defaults: Any = None,
+) -> dict[str, Any]:
+    """Every field of *settings_type* but *skip*, parsed by the getter its type asks for.
+
+    An absent key yields the dataclass default, so a field typed ``X | None``
+    stays ``None`` — unset ``web_config_enabled`` is not "off", and unset
+    ``consumer_ttl`` is adaptive rather than a number. *defaults* overrides
+    those per-field fallbacks with another instance's values, which is how a
+    section inherits what ``[GENERAL]`` was configured with.
+    """
+    if defaults is None:
+        defaults = settings_type()
+    kinds = _field_kinds(settings_type)
+    values = {}
+    for f in dataclasses.fields(settings_type):
+        if f.name in skip:
+            continue
+        key = ini_key(f.name, key_overrides or {})
+        values[f.name] = read_option(
+            config, section, key, kinds[f.name], getattr(defaults, f.name)
+        )
+    return values
+
+
+def split_csv(raw: str) -> list[str]:
+    """The comma-separated items of *raw*, trimmed, blanks dropped."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def one_or_many(raw: str) -> str | list[str]:
+    """Like :func:`split_csv`, but a lone item stays a plain string.
+
+    Power sources take either shape and treat a list as one value per phase,
+    so a single-entry list would not mean the same thing as the entry itself.
+    """
+    parts = split_csv(raw)
+    return parts[0] if len(parts) == 1 else parts
 
 
 def new_config_parser() -> configparser.ConfigParser:
@@ -265,41 +362,16 @@ def read_signal_settings(
             "POWER_MULTIPLIER",
             section,
         )
-    return SignalSettings(
-        offsets=offsets,
-        multipliers=multipliers,
-        throttle_interval=config.getfloat(
-            section, "THROTTLE_INTERVAL", fallback=defaults.throttle_interval
-        ),
-        wait_for_next_message=config.getboolean(
-            section, "WAIT_FOR_NEXT_MESSAGE", fallback=defaults.wait_for_next_message
-        ),
-        hampel_window=config.getint(
-            section, "HAMPEL_WINDOW", fallback=defaults.hampel_window
-        ),
-        hampel_n_sigma=config.getfloat(
-            section, "HAMPEL_N_SIGMA", fallback=defaults.hampel_n_sigma
-        ),
-        hampel_min_threshold=config.getfloat(
-            section, "HAMPEL_MIN_THRESHOLD", fallback=defaults.hampel_min_threshold
-        ),
-        smooth_alpha=config.getfloat(
-            section, "SMOOTH_TARGET_ALPHA", fallback=defaults.smooth_alpha
-        ),
-        max_smooth_step=config.getfloat(
-            section, "MAX_SMOOTH_STEP", fallback=defaults.max_smooth_step
-        ),
-        deadband=config.getfloat(section, "DEADBAND", fallback=defaults.deadband),
-        pid_kp=config.getfloat(section, "PID_KP", fallback=defaults.pid_kp),
-        pid_ki=config.getfloat(section, "PID_KI", fallback=defaults.pid_ki),
-        pid_kd=config.getfloat(section, "PID_KD", fallback=defaults.pid_kd),
-        pid_output_max=config.getfloat(
-            section, "PID_OUTPUT_MAX", fallback=defaults.pid_output_max
-        ),
-        pid_mode=config.get(section, "PID_MODE", fallback=defaults.pid_mode)
-        .strip()
-        .lower(),
+    values = read_fields(
+        config,
+        section,
+        SignalSettings,
+        SIGNAL_KEY_OVERRIDES,
+        skip=("offsets", "multipliers"),
+        defaults=defaults,
     )
+    values["pid_mode"] = values["pid_mode"].strip().lower()
+    return SignalSettings(offsets=offsets, multipliers=multipliers, **values)
 
 
 def apply_signal_wrappers(
@@ -380,21 +452,21 @@ def apply_signal_wrappers(
 def read_all_powermeter_configs(
     config: configparser.ConfigParser,
     global_signal: SignalSettings | None = None,
-) -> list[tuple[Powermeter, ClientFilter, bool]]:
+) -> list[ConfiguredPowermeter]:
     """Build every power source the config file declares."""
     if global_signal is None:
         global_signal = read_signal_settings(
             "GENERAL", config, SignalSettings(), with_transform=False
         )
 
-    powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
+    powermeters: list[ConfiguredPowermeter] = []
     for section in config.sections():
         powermeter = create_powermeter(section, config)
         if powermeter is None:
             continue
         signal = read_signal_settings(section, config, global_signal)
         powermeters.append(
-            (
+            ConfiguredPowermeter(
                 apply_signal_wrappers(powermeter, section, signal),
                 create_client_filter(section, config),
                 signal.wait_for_next_message,
@@ -467,16 +539,14 @@ def create_mqtt_powermeter(
     # Multi-topic: TOPICS takes precedence over TOPIC
     topics_raw = config.get(section, "TOPICS", fallback=None)
     if topics_raw:
-        topic: str | list[str] = [t.strip() for t in topics_raw.split(",") if t.strip()]
+        topic: str | list[str] = split_csv(topics_raw)
     else:
         topic = config.get(section, "TOPIC", fallback="")
 
     # Multi-path: JSON_PATHS takes precedence over JSON_PATH
     json_paths_raw = config.get(section, "JSON_PATHS", fallback=None)
     if json_paths_raw:
-        json_path: str | list[str] | None = [
-            p.strip() for p in json_paths_raw.split(",") if p.strip()
-        ]
+        json_path: str | list[str] | None = split_csv(json_paths_raw)
     else:
         json_path = config.get(section, "JSON_PATH", fallback=None)
 
@@ -495,9 +565,7 @@ def create_mqtt_powermeter(
 def create_json_http_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
-    json_paths = config.get(section, "JSON_PATHS", fallback="").split(",")
-    json_paths = [p.strip() for p in json_paths if p.strip()]
-    json_path_value = json_paths[0] if len(json_paths) == 1 else json_paths
+    json_path_value = one_or_many(config.get(section, "JSON_PATHS", fallback=""))
     headers_raw = config.get(section, "HEADERS", fallback="")
     headers = (
         {
@@ -653,10 +721,8 @@ def create_shrdzm_powermeter(
 
 
 def _split_labels(raw: str) -> str | list[str]:
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    if len(parts) <= 1:
-        return parts[0] if parts else ""
-    return parts
+    """Like :func:`one_or_many`, but no label at all is "" rather than []."""
+    return one_or_many(raw) or ""
 
 
 def create_tasmota_powermeter(
@@ -845,10 +911,6 @@ def read_mqtt_insights_config(
 
     for section in config.sections():
         if section.startswith(MQTT_INSIGHTS_SECTION):
-            raw_ha_discovery = config.get(section, "HA_DISCOVERY", fallback="")
-            raw_marstek_mqtt_enabled = config.get(
-                section, "MARSTEK_MQTT_ENABLED", fallback=""
-            ).strip()
             broker = read_mqtt_connection(section, config)
             return MqttInsightsConfig(
                 broker=broker.host or "localhost",
@@ -856,34 +918,20 @@ def read_mqtt_insights_config(
                 username=broker.username,
                 password=broker.password,
                 tls=broker.tls,
-                base_topic=config.get(section, "BASE_TOPIC", fallback="")
-                or "astrameter",
-                ha_discovery=config.getboolean(section, "HA_DISCOVERY")
-                if raw_ha_discovery
-                else True,
-                ha_discovery_prefix=config.get(
-                    section, "HA_DISCOVERY_PREFIX", fallback=""
-                )
-                or "homeassistant",
-                addon_slug=(
-                    config.get(section, "ADDON_SLUG", fallback="").strip() or None
+                # Everything else keeps whatever MqttInsightsConfig declares
+                # unless this section really sets it — a key left blank means
+                # "default", not "off" or "zero".
+                **_declared(
+                    config,
+                    section,
+                    blank_is_unset=True,
+                    base_topic=("BASE_TOPIC", str),
+                    ha_discovery=("HA_DISCOVERY", bool),
+                    ha_discovery_prefix=("HA_DISCOVERY_PREFIX", str),
+                    addon_slug=("ADDON_SLUG", str),
+                    marstek_mqtt_enabled=("MARSTEK_MQTT_ENABLED", bool),
+                    marstek_mqtt_interval=("MARSTEK_MQTT_INTERVAL", float),
+                    powermeter_health_interval=("POWERMETER_HEALTH_INTERVAL", float),
                 ),
-                marstek_mqtt_enabled=config.getboolean(section, "MARSTEK_MQTT_ENABLED")
-                if raw_marstek_mqtt_enabled
-                else True,
-                marstek_mqtt_interval=float(raw_interval)
-                if (
-                    raw_interval := config.get(
-                        section, "MARSTEK_MQTT_INTERVAL", fallback=""
-                    ).strip()
-                )
-                else 300,
-                powermeter_health_interval=float(raw_health_interval)
-                if (
-                    raw_health_interval := config.get(
-                        section, "POWERMETER_HEALTH_INTERVAL", fallback=""
-                    ).strip()
-                )
-                else 30.0,
             )
     return None

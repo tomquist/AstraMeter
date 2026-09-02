@@ -25,11 +25,14 @@ from astrameter.power_units import POWER_UNIT_SCALE, is_power_unit
 
 logger = logging.getLogger(__name__)
 
-# Overridable so the add-on flows can be exercised against a stand-in
-# Supervisor; inside a real add-on the default is the only correct value.
-SUPERVISOR_BASE_URL = os.environ.get(
-    "ASTRAMETER_SUPERVISOR_URL", "http://supervisor"
-).rstrip("/")
+SUPERVISOR_BASE_URL = "http://supervisor"
+"""Where the Supervisor answers inside a real add-on.
+
+``ASTRAMETER_SUPERVISOR_URL`` overrides it so the add-on flows can be
+exercised against a stand-in Supervisor. It is read per client rather than
+once at import, so a test that sets it after importing this module is still
+heard.
+"""
 
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 # A restart tears down the container serving us, so waiting out the full
@@ -214,26 +217,45 @@ class SupervisorClient:
         out.sort(key=lambda e: e["entity_id"])
         return out
 
-    async def _request_raw(self, method: str, path: str) -> Any:
-        """A Core-proxy call whose body is not the Supervisor result envelope."""
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: aiohttp.ClientTimeout,
+        payload: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        unreachable: str,
+    ) -> tuple[str, int]:
+        """One authenticated round trip: its body and status.
+
+        *unreachable* names who did not answer, since the Core proxy and the
+        Supervisor itself are different things to the user. Never put the
+        request headers in an error — that is where the token lives.
+        """
         if not self._token:
             raise SupervisorError("Not running as a Home Assistant add-on")
+        headers = {"Authorization": f"Bearer {self._token}", **(extra_headers or {})}
         try:
             async with (
                 aiohttp.ClientSession() as session,
                 session.request(
                     method,
                     f"{self._base_url}{path}",
-                    headers={"Authorization": f"Bearer {self._token}"},
-                    timeout=_TIMEOUT,
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout,
                 ) as resp,
             ):
-                body = await resp.text()
-                status = resp.status
+                return await resp.text(), resp.status
         except (aiohttp.ClientError, TimeoutError) as exc:
-            raise SupervisorError(
-                f"Could not reach Home Assistant: {exc}", unreachable=True
-            ) from exc
+            raise SupervisorError(f"{unreachable}: {exc}", unreachable=True) from exc
+
+    async def _request_raw(self, method: str, path: str) -> Any:
+        """A Core-proxy call whose body is not the Supervisor result envelope."""
+        body, status = await self._send(
+            method, path, timeout=_TIMEOUT, unreachable="Could not reach Home Assistant"
+        )
         if status >= 400:
             raise SupervisorError(
                 f"Home Assistant returned HTTP {status}", status=status
@@ -251,31 +273,16 @@ class SupervisorClient:
         payload: dict[str, Any] | None = None,
         timeout: aiohttp.ClientTimeout,
     ) -> dict[str, Any]:
-        if not self._token:
-            raise SupervisorError("Not running as a Home Assistant add-on")
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Content-Type": "application/json",
-        }
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.request(
-                    method,
-                    f"{self._base_url}{path}",
-                    json=payload,
-                    headers=headers,
-                    timeout=timeout,
-                ) as resp,
-            ):
-                body = await resp.text()
-                status = resp.status
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            # Callers render SupervisorError verbatim; a raw aiohttp error
-            # escaping here would surface as an unhandled 500 instead.
-            raise SupervisorError(
-                f"Could not reach Supervisor: {exc}", unreachable=True
-            ) from exc
+        # Callers render SupervisorError verbatim; a raw aiohttp error
+        # escaping here would surface as an unhandled 500 instead.
+        body, status = await self._send(
+            method,
+            path,
+            timeout=timeout,
+            payload=payload,
+            extra_headers={"Content-Type": "application/json"},
+            unreachable="Could not reach Supervisor",
+        )
         try:
             parsed = json.loads(body) if body else {}
         except ValueError:

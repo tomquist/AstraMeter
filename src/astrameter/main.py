@@ -5,7 +5,7 @@ import os
 import signal
 from collections.abc import Callable, Sequence
 from dataclasses import fields, replace
-from typing import Any
+from typing import Any, cast
 
 from astrameter.cloud_reporting import (
     CloudReporter,
@@ -17,10 +17,14 @@ from astrameter.config.config_loader import ClientFilter
 from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.logger import logger, setLogLevel
 from astrameter.config.settings import (
+    CT_DEVICE_TYPES,
+    DEVICE_TYPES,
     AppConfig,
+    ConfiguredPowermeter,
     CtSettings,
     GeneralSettings,
     MarstekSettings,
+    is_ct,
 )
 from astrameter.ct002 import CT002
 from astrameter.ct002.balancer import BalancerConfig
@@ -42,16 +46,6 @@ from astrameter.shelly import Shelly
 from astrameter.status import StatusRegistry, detect_config_mode
 from astrameter.version_info import get_git_commit_sha, get_version
 from astrameter.web_server import WebServer, parse_allowed_hosts
-
-ConfiguredPowermeter = tuple[Powermeter, ClientFilter, bool]
-
-#: UDP port each Shelly emulation listens on; the battery firmware expects it.
-_SHELLY_UDP_PORTS = {
-    "shellypro3em_old": 1010,
-    "shellypro3em_new": 2220,
-    "shellyemg3": 2222,
-    "shellyproem50": 2223,
-}
 
 #: How long a read waits for a fresh push before serving the cached value.
 FRESH_READING_TIMEOUT_S = 2.0
@@ -86,10 +80,10 @@ async def read_ct_powermeter(
     """
     powermeter = None
     wait_for_next = False
-    for pm, client_filter, wait_flag in powermeters:
-        if client_filter.matches(addr[0]):
-            powermeter = pm
-            wait_for_next = wait_flag
+    for configured in powermeters:
+        if configured.client_filter.matches(addr[0]):
+            powermeter = configured.powermeter
+            wait_for_next = configured.wait_for_next_message
             break
     if powermeter is None:
         logger.debug(f"No powermeter found for client {addr[0]}")
@@ -110,9 +104,11 @@ async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[flo
     """Raw three-phase reading from the meter that serves every client (or the
     first one), waiting briefly for a fresh push so an idle meter cannot pin
     the caller."""
-    chosen = next((pm for pm, cf, _ in powermeters if cf.matches("0.0.0.0")), None)
+    chosen = next(
+        (c.powermeter for c in powermeters if c.client_filter.matches("0.0.0.0")), None
+    )
     if chosen is None and powermeters:
-        chosen = powermeters[0][0]
+        chosen = powermeters[0].powermeter
     if chosen is None:
         return [0.0, 0.0, 0.0]
     with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
@@ -150,8 +146,8 @@ async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
 
 
 def _reset_all_powermeters(powermeters: Sequence[ConfiguredPowermeter]) -> None:
-    for pm, *_ in powermeters:
-        pm.reset()
+    for configured in powermeters:
+        configured.powermeter.reset()
 
 
 def _build_ct002(
@@ -244,7 +240,7 @@ def _build_device(
     device_id: str,
 ) -> CT002 | Shelly:
     if ct is not None:
-        ct_type = "HME-4" if device_type == "ct002" else "HME-3"
+        ct_type = DEVICE_TYPES[device_type].ct_type
         debug_status = ct.debug_status or os.environ.get(
             "DEBUG_STATUS", ""
         ).lower() in ("1", "true", "yes")
@@ -262,13 +258,21 @@ def _build_device(
 
         device.before_send = update_readings
         return device
-    if device_type in _SHELLY_UDP_PORTS:
+    udp_port = (
+        DEVICE_TYPES[device_type].udp_port if device_type in DEVICE_TYPES else None
+    )
+    if udp_port is not None:
         logger.debug("Shelly settings: device id %s, type %s", device_id, device_type)
         return Shelly(
-            powermeters=powermeters,
+            # `Shelly` still declares the positional triple this named tuple
+            # replaced; the cast goes away once it takes a
+            # `Sequence[ConfiguredPowermeter]` too.
+            powermeters=cast(
+                "list[tuple[Powermeter, ClientFilter, bool]]", powermeters
+            ),
             device_id=device_id,
             device_type=device_type,
-            udp_port=_SHELLY_UDP_PORTS[device_type],
+            udp_port=udp_port,
             dedupe_time_window=general.dedupe_time_window,
         )
     raise ValueError(f"Unsupported device type: {device_type}")
@@ -393,7 +397,7 @@ async def run_device(
     config: AppConfig,
     general: GeneralSettings,
     powermeters: list[ConfiguredPowermeter],
-    device_id: str | None = None,
+    device_id: str = "",
     insights: MqttInsightsService | None = None,
     marstek_mac: str = "",
     marstek_ver_v: int | None = None,
@@ -402,8 +406,7 @@ async def run_device(
     """Run one emulated device until it stops, wiring it to the optional
     integrations (MQTT Insights, the Marstek responder, cloud reporting)."""
     logger.debug("Starting device: %s", device_type)
-    device_id = device_id or ""
-    ct = config.ct(device_type) if device_type in ("ct002", "ct003") else None
+    ct = config.ct(device_type) if is_ct(device_type) else None
     device = _build_device(device_type, ct, general, powermeters, device_id)
     if insights:
         device.event_listener = _forward_events(insights, device)
@@ -486,22 +489,22 @@ async def async_main(
         # Create powermeters
         powermeters = config.powermeters(general)
         if registry is not None:
-            registry.powermeters = [pm for pm, _, _ in powermeters]
+            registry.powermeters = [c.powermeter for c in powermeters]
             registry.bump()
 
         # Start powermeter lifecycle
-        for pm, _, _ in powermeters:
-            await pm.start()
+        for configured in powermeters:
+            await configured.powermeter.start()
 
         if not skip_test:
-            for powermeter, client_filter, _ in powermeters:
-                await check_powermeter(powermeter, client_filter)
+            for configured in powermeters:
+                await check_powermeter(configured.powermeter, configured.client_filter)
 
         # MQTT Insights (optional)
         insights_cfg = config.mqtt_insights()
         if insights_cfg:
             insights = MqttInsightsService(
-                insights_cfg, powermeters=[pm for pm, _, _ in powermeters]
+                insights_cfg, powermeters=[c.powermeter for c in powermeters]
             )
             await insights.start()
             logger.info("MQTT Insights service started")
@@ -540,11 +543,11 @@ async def async_main(
                 logger.info("MQTT Insights service stopped")
             except Exception:
                 logger.exception("Error stopping MQTT Insights service")
-        for pm, _, _ in powermeters:
+        for configured in powermeters:
             try:
-                await pm.stop()
+                await configured.powermeter.stop()
             except Exception:
-                logger.exception("Error stopping powermeter %s", pm)
+                logger.exception("Error stopping powermeter %s", configured.powermeter)
 
 
 def _build_managed_marstek(
@@ -573,7 +576,7 @@ def _build_managed_marstek(
     )
     try:
         any_ct = False
-        for dt in ("ct002", "ct003"):
+        for dt in CT_DEVICE_TYPES:
             if dt in device_types:
                 any_ct = True
                 created = ensure_managed_fake_device(marstek_cfg, dt)
@@ -588,11 +591,11 @@ def _build_managed_marstek(
             logger.info(
                 "Managed fake CT registration completed. Fake CT devices appear as offline in the Marstek app CT list (this is expected)."
             )
-            ct_names = []
-            if "ct002" in device_types:
-                ct_names.append("AstraMeter CT002")
-            if "ct003" in device_types:
-                ct_names.append("AstraMeter CT003")
+            ct_names = [
+                f"AstraMeter {dt.upper()}"
+                for dt in CT_DEVICE_TYPES
+                if dt in device_types
+            ]
             logger.info(
                 "Pairing hint: refresh the CT device list (or log out/in if needed), select %s, switch battery mode to Automatic, and choose that CT."
                 " The CT should be selectable as soon as it appears in the device list.",
@@ -648,17 +651,12 @@ def _resolve_device_config(
     device_ids: list[str] = list(args.device_ids) if args.device_ids is not None else []
     if not device_ids:
         device_ids = list(general.device_ids)
-    shelly_id_prefixes = {
-        "shellypro3em": "shellypro3em",
-        "shellypro3em_old": "shellypro3em",
-        "shellypro3em_new": "shellypro3em",
-        "shellyemg3": "shellyemg3",
-        "shellyproem50": "shellyproem50",
-    }
     while len(device_ids) < len(device_types):
         device_type = device_types[len(device_ids)]
-        prefix = shelly_id_prefixes.get(device_type)
-        if prefix is not None:
+        prefix = (
+            DEVICE_TYPES[device_type].id_prefix if device_type in DEVICE_TYPES else ""
+        )
+        if prefix:
             device_ids.append(f"{prefix}-ec4609c439c{len(device_ids) + 1}")
         else:
             device_ids.append(f"device-{len(device_ids) + 1}")
@@ -672,7 +670,7 @@ def _resolve_device_config(
     ct_ports = [
         config.ct(device_type).udp_port
         for device_type in device_types
-        if device_type in ("ct002", "ct003")
+        if is_ct(device_type)
     ]
     if len(ct_ports) != len(set(ct_ports)):
         raise ValueError(
@@ -709,7 +707,7 @@ def _load_config(
     return config
 
 
-def main():
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Power meter device emulator")
     parser.add_argument(
         "-c", "--config", default="config.ini", help="Path to the configuration file"
@@ -727,15 +725,7 @@ def main():
         "-d",
         "--device-types",
         nargs="+",
-        choices=[
-            "ct002",
-            "ct003",
-            "shellypro3em",
-            "shellyemg3",
-            "shellyproem50",
-            "shellypro3em_old",
-            "shellypro3em_new",
-        ],
+        choices=list(DEVICE_TYPES),
         help="List of device types to emulate",
     )
     parser.add_argument("--device-ids", nargs="+", help="List of device IDs")
@@ -751,8 +741,42 @@ def main():
         type=float,
         help="Throttling interval in seconds to prevent control instability",
     )
+    return parser
 
-    args = parser.parse_args()
+
+def _adopt_config(
+    registry: StatusRegistry,
+    config: AppConfig,
+    general: GeneralSettings,
+    args: argparse.Namespace,
+    web_server: WebServer | None = None,
+) -> None:
+    """Point the status registry at the configuration now in force.
+
+    Start-up and a config restart run this same copy, so a field that has to
+    follow the configuration cannot be wired up on one path and forgotten on
+    the other.
+    """
+    # The dashboard can add or remove `custom_config`, so the source
+    # the next cycle runs from may not be the one this one used.
+    registry.app_config = config
+    registry.config_path = config.path
+    # The web server outlives every cycle, so the settings it reads per
+    # request have to be re-pointed at the configuration just loaded —
+    # otherwise editing them in the dashboard and restarting from it
+    # appears to do nothing until the process itself is restarted.
+    # Only the per-request gates: `dashboard_enabled` decides which
+    # routes `build_app` registers, and those were built once at
+    # start-up, so changing it here would disagree with the route table.
+    registry.allow_write = general.dashboard_allow_write
+    registry.direct_access = general.dashboard_direct_access
+    if web_server is not None:
+        web_server.allowed_hosts = parse_allowed_hosts(general.dashboard_allowed_hosts)
+    registry.config_mode = detect_config_mode(addon=args.addon, config_path=config.path)
+
+
+def main():
+    args = _build_arg_parser().parse_args()
 
     # In add-on mode the log level is an add-on option, so the options have to
     # be read before the logger is configured — everything the config backend
@@ -784,14 +808,11 @@ def main():
         log_level=log_level,
         version=get_version(),
         git_commit=_sha,
-        app_config=config,
-        config_mode=detect_config_mode(addon=args.addon, config_path=config.path),
         addon_slug=_addon_slug(args),
         web_port=general.web_server_port,
         dashboard_enabled=general.dashboard,
-        allow_write=general.dashboard_allow_write,
-        direct_access=general.dashboard_direct_access,
     )
+    _adopt_config(registry, config, general, args)
 
     # Map SIGTERM to KeyboardInterrupt so asyncio.run cancels tasks and
     # runs finally-cleanup the same way it does for SIGINT (Ctrl+C).
@@ -804,6 +825,57 @@ def main():
     except RuntimeError as exc:
         logger.error("%s", exc)
         exit(1)
+
+
+async def _start_web_server(
+    config: AppConfig, general: GeneralSettings, registry: StatusRegistry
+) -> WebServer | None:
+    """The web server that outlives every device cycle, or ``None`` for none.
+
+    A server that cannot be started is not fatal: the devices still run, they
+    just have no dashboard.
+    """
+    if not general.enable_web_server:
+        return None
+    logger.info("Starting web server...")
+    web_server = None
+    try:
+        web_server = WebServer(
+            port=general.web_server_port,
+            config_path=config.path,
+            enable_web_config=general.web_config_enabled,
+            status=registry,
+            allowed_hosts=general.dashboard_allowed_hosts,
+        )
+        if not await web_server.start():
+            logger.error("Failed to start web server")
+            return None
+    except Exception:
+        logger.exception("Web server failed to initialize")
+        if web_server:
+            await web_server.stop()
+        return None
+    return web_server
+
+
+def _reload_config(
+    args: argparse.Namespace, config: AppConfig, general: GeneralSettings
+) -> tuple[AppConfig, GeneralSettings]:
+    """The configuration to run the next cycle from, re-read from its source.
+
+    The dashboard is what writes the file this re-reads, so a bad write must
+    not be fatal: letting the error out would stop the web server in the
+    caller's `finally` and take away the only surface that can repair the
+    configuration. Keep running the last good one.
+    """
+    try:
+        new_config = _load_config(args)
+        return new_config, _apply_cli_overrides(new_config.general(), args)
+    except Exception:
+        logger.exception(
+            "Could not reload the configuration; continuing with the previous one"
+        )
+        return config, general
 
 
 async def _supervise(
@@ -830,25 +902,7 @@ async def _supervise(
 
     loop.add_signal_handler(signal.SIGUSR1, _on_sigusr1)
 
-    web_server = None
-    if general.enable_web_server:
-        logger.info("Starting web server...")
-        try:
-            web_server = WebServer(
-                port=general.web_server_port,
-                config_path=config.path,
-                enable_web_config=general.web_config_enabled,
-                status=registry,
-                allowed_hosts=general.dashboard_allowed_hosts,
-            )
-            if not await web_server.start():
-                logger.error("Failed to start web server")
-                web_server = None
-        except Exception:
-            logger.exception("Web server failed to initialize")
-            if web_server:
-                await web_server.stop()
-            web_server = None
+    web_server = await _start_web_server(config, general, registry)
 
     try:
         while True:
@@ -902,41 +956,10 @@ async def _supervise(
 
             # Re-read the configuration off-loop: a backend may have to ask
             # the Supervisor for part of it, and prefetch() is blocking.
-            #
-            # The dashboard is what writes the file this re-reads, so a bad
-            # write must not be fatal: letting the error out would stop the
-            # web server in the `finally` below and take away the only surface
-            # that can repair the configuration. Keep running the last good one.
-            try:
-                new_config = await asyncio.to_thread(_load_config, args)
-                new_general = _apply_cli_overrides(new_config.general(), args)
-            except Exception:
-                logger.exception(
-                    "Could not reload the configuration; "
-                    "continuing with the previous one"
-                )
-            else:
-                config, general = new_config, new_general
-            # The dashboard can add or remove `custom_config`, so the source
-            # the next cycle runs from may not be the one this one used.
-            registry.app_config = config
-            registry.config_path = config.path
-            # The web server outlives every cycle, so the settings it reads per
-            # request have to be re-pointed at the configuration just loaded —
-            # otherwise editing them in the dashboard and restarting from it
-            # appears to do nothing until the process itself is restarted.
-            # Only the per-request gates: `dashboard_enabled` decides which
-            # routes `build_app` registers, and those were built once at
-            # start-up, so changing it here would disagree with the route table.
-            registry.allow_write = general.dashboard_allow_write
-            registry.direct_access = general.dashboard_direct_access
-            if web_server is not None:
-                web_server.allowed_hosts = parse_allowed_hosts(
-                    general.dashboard_allowed_hosts
-                )
-            registry.config_mode = detect_config_mode(
-                addon=args.addon, config_path=config.path
+            config, general = await asyncio.to_thread(
+                _reload_config, args, config, general
             )
+            _adopt_config(registry, config, general, args, web_server)
             registry.bump()
     finally:
         loop.remove_signal_handler(signal.SIGUSR1)

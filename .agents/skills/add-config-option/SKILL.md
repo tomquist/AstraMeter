@@ -9,10 +9,11 @@ An option only one entry point understands is a bug. Adding or renaming a
 
 1. **Settings** — field + default on the matching dataclass in
    `config/settings.py`. `ini_config.py` then reads it by itself: the INI key is
-   the field name upper-cased unless `_GENERAL_KEY_OVERRIDES` says otherwise,
-   and the getter follows the field's declared type. Powermeter keys are read
-   explicitly in `config_loader.py`. Use the field where it belongs (e.g.
-   `run_device` in `main.py`). `ini_config.py` and `config_loader.py` are the
+   the field name upper-cased unless `GENERAL_KEY_OVERRIDES` (in
+   `config_loader.py`) says otherwise, and the getter follows the field's
+   declared type. Powermeter keys are read explicitly in `config_loader.py`.
+   Use the field where it belongs (e.g. `run_device` in `main.py`).
+   `ini_config.py` and `config_loader.py` are the
    only readers of section and key names; every other backend answers the
    `AppConfig` interface. One writer names them too: the add-on's
    `render_powermeters_ini()` emits a `[HOMEASSISTANT]` section for the loader
