@@ -1,0 +1,236 @@
+name: Watermarks
+
+# Strips AI text watermarks — zero-width spaces, Unicode tag characters,
+# exotic space homoglyphs — from the text files a pull request touches, and
+# pushes the cleanup back onto the branch.
+#
+# It auto-fixes instead of failing because the marks are invisible by
+# construction: "line 42 carries U+200B" leaves the author hunting for a
+# character their editor does not draw, and the repair is mechanical with no
+# judgement in it. So CI makes it, and says what it did.
+#
+# It runs watermarks-remover's Layer A (`clean_text.py`) and only that:
+#
+#   - Layer B rewords prose to break statistical watermarks. That is a model
+#     rewrite of somebody's sentences — not something to turn loose on a diff
+#     unattended.
+#   - `clean_file.py`, the whole-file entry point, additionally strips
+#     document metadata, which on a source tree is destructive: it deletes
+#     `<meta name="description">` out of `web/generator.html`.
+#
+# Scope is tracked text files. The cleaner strips C2PA/EXIF from images too,
+# but the only images this repo tracks are the generated dashboard
+# screenshots, whose bytes `npm run screenshots` overwrites wholesale (see
+# AGENTS.md) — rewriting them here would be churn nobody reads.
+
+on:
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
+
+concurrency:
+  group: watermarks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  strip-marks:
+    runs-on: ubuntu-latest
+    permissions:
+      # To push the cleanup commit. A fork pull request gets a read-only token
+      # whatever this says, which the commit step handles separately.
+      contents: write
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@v5
+        with:
+          # The default `pull_request` ref is the ephemeral merge commit —
+          # there is no branch under it to push a fix onto. Take the head
+          # branch itself, with full history so the merge base below is
+          # present to diff against.
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Fetch watermarks-remover
+        env:
+          # Pinned pair: the tag is what a human reads in this file, the SHA is
+          # what actually gets to run. Bump both together.
+          WR_REF: v0.6.0
+          WR_SHA: 10b79b46ac6b1ea8953864dabe12ceba0aee6a77
+        run: |
+          set -euo pipefail
+          # Cloned outside the workspace on purpose — this job commits what it
+          # finds in the working tree, so nothing else may appear there.
+          git clone --quiet --depth 1 --branch "$WR_REF" \
+            https://github.com/guillaumemeyer/watermarks-remover.git \
+            "$RUNNER_TEMP/watermarks-remover"
+          got="$(git -C "$RUNNER_TEMP/watermarks-remover" rev-parse HEAD)"
+          if [ "$got" != "$WR_SHA" ]; then
+            echo "::error::watermarks-remover $WR_REF resolves to $got, expected $WR_SHA"
+            exit 1
+          fi
+
+      - name: Collect candidate files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          # Generated artifacts are excluded: their generator reproduces them
+          # byte for byte and CI compares them against a fresh run, so an edit
+          # here would only trade one red check for another. A mark that
+          # reaches one of these came in through its source, which is in the
+          # list below like everything else.
+          excludes=(
+            ':(exclude)src/astrameter/static/dashboard.html'
+            ':(exclude)esphome/components/ct002/dashboard_asset.h'
+            ':(exclude)uv.lock'
+            ':(exclude)web/package-lock.json'
+          )
+
+          if [ -n "${BASE_SHA:-}" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA...HEAD" -- . "${excludes[@]}"
+          else
+            # workflow_dispatch: sweep the whole tree.
+            git ls-files -- . "${excludes[@]}"
+          fi > "$RUNNER_TEMP/candidates"
+
+          # Let `grep -I` decide what is text rather than an extension list, so
+          # a new file type is covered the day it lands instead of the day
+          # somebody remembers to add it here. Symlinks are skipped: the
+          # cleaner refuses to write through one (rightly — the target may sit
+          # outside the tree), and `ha_addon/CHANGELOG.md` is one. Whatever it
+          # points at is in this list on its own.
+          : > "$RUNNER_TEMP/targets"
+          while IFS= read -r path; do
+            [ -f "$path" ] && [ ! -L "$path" ] || continue
+            grep -Iq '' -- "$path" 2>/dev/null && printf '%s\n' "$path" >> "$RUNNER_TEMP/targets"
+          done < "$RUNNER_TEMP/candidates"
+
+          echo "$(wc -l < "$RUNNER_TEMP/targets") text file(s) to inspect"
+
+      - name: Strip AI text watermarks
+        run: |
+          set -euo pipefail
+          mapfile -t targets < "$RUNNER_TEMP/targets"
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "Nothing to inspect."
+            exit 0
+          fi
+
+          cleaner="$RUNNER_TEMP/watermarks-remover/service/scripts/clean_text.py"
+          failed=()
+          for path in "${targets[@]}"; do
+            # --in-place writes a fresh file and gives it default permissions,
+            # which takes the executable bit off release.sh and run.sh. Note
+            # the mode and put it back.
+            mode="$(stat -c '%a' -- "$path")"
+
+            rc=0
+            # The cleaner reports its per-file stats on stderr, so hold them
+            # and print only the ones belonging to a file that went wrong.
+            err="$(python3 "$cleaner" "$path" --in-place 2>&1 >/dev/null)" || rc=$?
+
+            chmod -- "$mode" "$path"
+
+            # 0 cleaned (whether or not anything changed), 2 declined the file
+            # as binary. Anything else is a cleaner that did not finish, and
+            # that file still carries whatever it carried.
+            if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+              failed+=("$path")
+              printf '%s: %s\n' "$path" "$err"
+            fi
+
+            # --in-place keeps a sidecar copy of the original, written even
+            # when the file turns out to be clean.
+            if [ -e "$path.bak" ] && [ -z "$(git ls-files -- "$path.bak")" ]; then
+              rm -f -- "$path.bak"
+            fi
+          done
+
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf '::error::watermarks-remover could not process %s\n' "${failed[@]}"
+            exit 1
+          fi
+
+      - name: Commit the cleanup
+        env:
+          IS_FORK: ${{ (github.event.pull_request.head.repo.full_name || github.repository) != github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t targets < "$RUNNER_TEMP/targets"
+          if [ "${#targets[@]}" -eq 0 ]; then
+            exit 0
+          fi
+
+          # Stage only what this job was allowed to touch, so nothing else that
+          # happens to sit in the working tree can ride along. And let git, not
+          # the cleaner's exit code, decide whether anything actually changed.
+          git add -- "${targets[@]}"
+          if git diff --cached --quiet; then
+            echo 'No AI text watermarks found.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo '### AI text watermarks stripped'
+            echo
+            echo '```'
+            git --no-pager diff --cached --stat
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          git --no-pager diff --cached
+
+          if [ "$IS_FORK" = "true" ]; then
+            # A fork pull request's token cannot write to the fork, so the
+            # author has to apply this themselves.
+            {
+              echo
+              echo 'This pull request comes from a fork, so CI cannot push the fix.'
+              echo 'Run the same pass over your branch and commit the result:'
+              echo
+              echo '```sh'
+              echo 'git clone --depth 1 --branch v0.6.0 \'
+              echo '  https://github.com/guillaumemeyer/watermarks-remover.git /tmp/watermarks-remover'
+              echo 'git diff --name-only --diff-filter=ACMR origin/develop...HEAD \'
+              echo '  | xargs -rn1 python3 /tmp/watermarks-remover/service/scripts/clean_text.py --in-place'
+              echo "find . -name '*.bak' -delete"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo '::error::AI text watermarks found; the job summary says how to strip them'
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --message 'chore: strip AI text watermarks' \
+                     --message 'Applied automatically by .github/workflows/watermarks.yml.'
+
+          for delay in 0 2 4 8 16; do
+            [ "$delay" -eq 0 ] || sleep "$delay"
+            if git push origin "HEAD:$HEAD_REF"; then
+              # A push made with GITHUB_TOKEN starts no further workflow run, so
+              # the rest of CI stays as it was on the commit before this one.
+              # Nothing here changes behaviour, but a reviewer reading a green
+              # tick should know which commit earned it.
+              {
+                echo
+                echo "Pushed onto \`$HEAD_REF\`. This commit does not re-trigger CI —"
+                echo 'the other checks on this pull request ran against its parent.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            # Somebody may have pushed while this job ran.
+            git pull --rebase origin "$HEAD_REF" || true
+          done
+          echo "::error::Could not push the cleanup onto $HEAD_REF"
+          exit 1

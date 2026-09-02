@@ -19,6 +19,37 @@ uv run pytest
 
 CI runs the same steps (see `.github/workflows/ci.yml`).
 
+## Invisible characters in a diff
+
+`.github/workflows/watermarks.yml` runs
+[watermarks-remover](https://github.com/guillaumemeyer/watermarks-remover)'s
+Layer A over the text files a pull request touches — zero-width spaces,
+Unicode tag characters, exotic space homoglyphs, the marks that ride along in
+prose an LLM wrote — and pushes the cleanup onto the branch itself. There is
+nothing to run locally, and nothing to fix by hand: the job repairs the file
+rather than naming a line number you would then go at with a hex editor. Run
+it over the whole tree from the Actions tab (`workflow_dispatch`).
+
+The tool is pinned as a tag/SHA pair in the workflow; bump both together.
+
+Four things it deliberately does not do, so don't extend it into them without
+knowing what was left out and why:
+
+- **Layer B is off.** It rewords sentences to break statistical watermarks,
+  which is a model rewriting somebody's prose unattended.
+- **`clean_file.py` is unused**, only `clean_text.py`. The whole-file entry
+  point also strips document metadata, and on a source tree that means
+  deleting `<meta name="description">` out of `web/generator.html`.
+- **Generated artifacts are excluded** — the two dashboard bundles and the two
+  lockfiles. Regeneration would put the mark straight back, so the fix belongs
+  in whatever source the generator read.
+- **Images are excluded**, though the tool does strip C2PA/EXIF. The only ones
+  tracked here are the dashboard screenshots below, whose bytes `npm run
+  screenshots` rewrites wholesale.
+
+A fork pull request gets a read-only token, so there the job fails instead and
+the summary spells out the command to run.
+
 ## Home Assistant add-on image
 
 `tests/test_addon_container.py` runs the built add-on image against a stand-in
