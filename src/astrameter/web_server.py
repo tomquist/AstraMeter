@@ -18,6 +18,7 @@ from collections.abc import Collection, Iterable
 from aiohttp import web
 
 from astrameter.config.logger import logger
+from astrameter.ct002.controls import CONSUMER_CONTROLS_BY_FIELD, apply_device_control
 from astrameter.status import HA_SIMPLE
 from astrameter.status.secrets import redact_sections, restore_sections
 from astrameter.version_info import get_git_commit_sha
@@ -244,51 +245,6 @@ def is_allowed_host(host: str, allowed: Collection[str] = ()) -> bool:
         else:
             return True
     return name in ALWAYS_ALLOWED_HOSTS or name.endswith(ALWAYS_ALLOWED_HOST_SUFFIXES)
-
-
-_CONSUMER_SETTERS = {
-    "manual_target": "set_consumer_manual_target",
-    "auto_target": "set_consumer_auto_target",
-    "active": "set_consumer_active",
-    "distribution_weight": "set_consumer_distribution_weight",
-    "efficiency_window_weight": "set_consumer_efficiency_window_weight",
-    "min_dc_output": "set_consumer_min_dc_output",
-}
-
-# The CT002 setters themselves do not bound their inputs — the ranges live in
-# the MQTT command handlers.  The dashboard must enforce exactly the same
-# ones, or a value MQTT would reject could be set here and then silently
-# reverted on the next broker reconnect.
-_CONTROL_RANGES = {
-    "manual_target": (-10000.0, 10000.0),
-    "distribution_weight": (0.0, 10.0),
-    "efficiency_window_weight": (0.0, 100.0),
-    "min_dc_output": (0.0, 1000.0),
-}
-
-_CONTROL_BOOLS = ("active", "auto_target")
-
-# Fields the wire carries in different units from the setter, mirroring the
-# MQTT handlers: the entity is a percentage, the setter takes a fraction.
-_CONTROL_SCALE = {"efficiency_window_weight": 0.01}
-
-
-def _coerce_control_value(field, value):
-    """Validate and coerce a control value, mirroring the MQTT bounds."""
-    import math
-
-    if field in _CONTROL_BOOLS:
-        if not isinstance(value, bool):
-            raise ValueError(f"{field} must be true or false")
-        return value
-    low, high = _CONTROL_RANGES[field]
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} must be a number") from exc
-    if not math.isfinite(number) or not low <= number <= high:
-        raise ValueError(f"{field} must be between {low:g} and {high:g}")
-    return number * _CONTROL_SCALE.get(field, 1.0)
 
 
 def addon_option_names(schema) -> set[str]:
@@ -698,13 +654,11 @@ class WebServer:
             return _json({"error": f"Invalid request: {exc}"}, status=400)
 
         device = self._device(device_id)
-        setter_name = _CONSUMER_SETTERS.get(field)
-        setter = getattr(device, setter_name, None) if device and setter_name else None
-        if setter is None:
+        control = CONSUMER_CONTROLS_BY_FIELD.get(field)
+        if device is None or control is None:
             return _json({"error": "Unknown device or field"}, status=404)
         try:
-            coerced = _coerce_control_value(field, value)
-            setter(consumer_id, coerced)
+            control.apply(device, consumer_id, control.coerce(value))
         except ValueError as exc:
             return _json({"error": str(exc)}, status=400)
 
@@ -749,12 +703,9 @@ class WebServer:
         if device is None:
             return _json({"error": "Unknown device"}, status=404)
         try:
-            if field == "active_control":
-                device.set_active_control(bool(value))
-            elif field == "force_rotation":
-                device.force_efficiency_rotation()
-            else:
-                return _json({"error": "Unknown field"}, status=404)
+            apply_device_control(device, field, bool(value))
+        except KeyError:
+            return _json({"error": "Unknown field"}, status=404)
         except (AttributeError, ValueError) as exc:
             return _json({"error": str(exc)}, status=400)
 

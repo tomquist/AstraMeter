@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import math
 import ssl
 import time
 from collections.abc import Callable
@@ -15,6 +14,11 @@ from typing import TYPE_CHECKING, Any
 import aiomqtt
 
 from astrameter.config.logger import logger
+from astrameter.ct002.controls import (
+    CONSUMER_CONTROLS_BY_FIELD,
+    ControllableDevice,
+    apply_device_control,
+)
 from astrameter.version_info import get_version
 
 from .discovery import (
@@ -143,24 +147,12 @@ class MqttInsightsService:
         self._discovered_shelly_batteries: set[str] = set()
         self._discovered_shelly_devices: set[str] = set()
         self._discovered_powermeters: set[str] = set()
-        self._active_handlers: dict[str, Callable[[str, bool], None]] = {}
-        self._manual_target_handlers: dict[str, Callable[[str, float], None]] = {}
-        self._auto_target_handlers: dict[str, Callable[[str, bool], None]] = {}
-        self._distribution_weight_handlers: dict[str, Callable[[str, float], None]] = {}
-        self._efficiency_window_weight_handlers: dict[
-            str, Callable[[str, float], None]
-        ] = {}
-        self._min_dc_output_handlers: dict[str, Callable[[str, float], None]] = {}
-        self._rotation_handlers: dict[str, Callable[[], None]] = {}
-        self._active_control_handlers: dict[str, Callable[[bool], None]] = {}
-        # Latest retained consumer command per (consumer_id, field) for each
-        # device, keyed by device_id.  On (re)connect the broker redelivers
-        # retained command messages right after we subscribe — usually *before*
-        # the owning device has finished starting and registered its handlers,
-        # so the command would otherwise be dropped and the user's override
-        # (e.g. a manual target) would silently revert to its default on every
-        # app restart.  We stash the payload here and replay it the moment the
-        # matching handler registers — see _replay_consumer_commands.
+        # Devices whose controls MQTT commands may drive, by device id.
+        self._devices: dict[str, ControllableDevice] = {}
+        # Latest retained consumer command per (consumer_id, field), by device.
+        # The broker redelivers retained commands right after we subscribe,
+        # usually before the owning device has started and registered, so the
+        # payload is kept here and replayed when the device registers.
         self._pending_consumer_commands: dict[str, dict[tuple[str, str], str]] = {}
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
@@ -175,8 +167,6 @@ class MqttInsightsService:
         # reconnect / shutdown. Keyed by binding device_id so we serialize
         # work per binding (skip spawning while a prior task is in flight).
         self._marstek_tasks_by_binding: dict[str, asyncio.Task[None]] = {}
-
-    # ── Public API (called from device event listeners) ───────────────
 
     def on_ct002_response(
         self, device_id: str, consumer_id: str, data: dict[str, Any]
@@ -206,64 +196,14 @@ class MqttInsightsService:
         evt = _Event(kind="shelly_remove", device_id=device_id, entity_id=ip_slug)
         self._put_nowait(evt)
 
-    def register_active_handler(
-        self, device_id: str, handler: Callable[[str, bool], None]
-    ) -> None:
-        self._active_handlers[device_id] = handler
-        self._replay_consumer_commands(device_id, "active")
+    def register_device(self, device_id: str, device: ControllableDevice) -> None:
+        """Let MQTT commands drive *device*, applying any retained command
+        that arrived before it registered."""
+        self._devices[device_id] = device
+        self._replay_consumer_commands(device_id)
 
-    def register_manual_target_handler(
-        self, device_id: str, handler: Callable[[str, float], None]
-    ) -> None:
-        self._manual_target_handlers[device_id] = handler
-        self._replay_consumer_commands(device_id, "manual_target")
-
-    def register_auto_target_handler(
-        self, device_id: str, handler: Callable[[str, bool], None]
-    ) -> None:
-        self._auto_target_handlers[device_id] = handler
-        self._replay_consumer_commands(device_id, "auto_target")
-
-    def register_distribution_weight_handler(
-        self, device_id: str, handler: Callable[[str, float], None]
-    ) -> None:
-        self._distribution_weight_handlers[device_id] = handler
-        self._replay_consumer_commands(device_id, "distribution_weight")
-
-    def register_efficiency_window_weight_handler(
-        self, device_id: str, handler: Callable[[str, float], None]
-    ) -> None:
-        self._efficiency_window_weight_handlers[device_id] = handler
-        self._replay_consumer_commands(device_id, "efficiency_window_weight")
-
-    def register_min_dc_output_handler(
-        self, device_id: str, handler: Callable[[str, float], None]
-    ) -> None:
-        self._min_dc_output_handlers[device_id] = handler
-        self._replay_consumer_commands(device_id, "min_dc_output")
-
-    def register_rotation_handler(
-        self, device_id: str, handler: Callable[[], None]
-    ) -> None:
-        self._rotation_handlers[device_id] = handler
-
-    def register_active_control_handler(
-        self, device_id: str, handler: Callable[[bool], None]
-    ) -> None:
-        self._active_control_handlers[device_id] = handler
-
-    def unregister_handlers(self, device_id: str) -> None:
-        """Remove all command handlers for a device (e.g. on device stop)."""
-        self._active_handlers.pop(device_id, None)
-        self._manual_target_handlers.pop(device_id, None)
-        self._auto_target_handlers.pop(device_id, None)
-        self._distribution_weight_handlers.pop(device_id, None)
-        self._efficiency_window_weight_handlers.pop(device_id, None)
-        self._min_dc_output_handlers.pop(device_id, None)
-        self._rotation_handlers.pop(device_id, None)
-        self._active_control_handlers.pop(device_id, None)
-
-    # ── Marstek MQTT responder ────────────────────────────────────────
+    def unregister_device(self, device_id: str) -> None:
+        self._devices.pop(device_id, None)
 
     @property
     def marstek_mqtt_enabled(self) -> bool:
@@ -311,8 +251,6 @@ class MqttInsightsService:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pending_task
 
-    # ── Lifecycle ─────────────────────────────────────────────────────
-
     @property
     def connected(self) -> bool:
         """True once connected *and* subscribed (cleared on every drop)."""
@@ -332,8 +270,6 @@ class MqttInsightsService:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-
-    # ── Read-only status surface (dashboard / diagnostics) ────────────
 
     def status_snapshot(self) -> MqttInsightsSnapshot:
         """Broker and integration state for the status API.
@@ -387,7 +323,6 @@ class MqttInsightsService:
             ),
         )
 
-    # ── Dashboard command writes ──────────────────────────────────────
     # Published to the same retained command topics Home Assistant uses, so a
     # dashboard write survives a reconnect instead of being reverted by the
     # retained value the broker redelivers.  HTTP handlers only — never the
@@ -424,8 +359,6 @@ class MqttInsightsService:
         if client is None:
             raise RuntimeError("MQTT Insights is not connected")
         await client.publish(topic, payload=payload, qos=1, retain=True)
-
-    # ── Internal ──────────────────────────────────────────────────────
 
     def _put_nowait(self, evt: _Event) -> None:
         try:
@@ -614,15 +547,28 @@ class MqttInsightsService:
         while True:
             evt = await self._queue.get()
 
+            did, eid = evt.device_id, evt.entity_id
             try:
                 if evt.kind == "ct002":
                     await self._handle_ct002_event(client, base, cfg, evt)
                 elif evt.kind == "ct002_remove":
-                    await self._handle_ct002_remove(client, base, cfg, evt)
+                    await self._mark_offline(
+                        client,
+                        cfg,
+                        f"{base}/ct002/{did}/consumer/{eid}",
+                        self._discovered_ct002_consumers,
+                        f"{did}/{eid}",
+                    )
                 elif evt.kind == "shelly":
                     await self._handle_shelly_event(client, base, cfg, evt)
                 elif evt.kind == "shelly_remove":
-                    await self._handle_shelly_remove(client, base, cfg, evt)
+                    await self._mark_offline(
+                        client,
+                        cfg,
+                        f"{base}/shelly/{did}/battery/{eid}",
+                        self._discovered_shelly_batteries,
+                        f"{did}/{eid}",
+                    )
             except aiomqtt.MqttError:
                 raise
             except Exception:
@@ -723,48 +669,64 @@ class MqttInsightsService:
             retain=True,
         )
 
-        # Discovery on first sight
-        if cfg.ha_discovery:
-            if did not in self._discovered_ct002_devices:
-                self._discovered_ct002_devices.add(did)
-                topic, payload = build_ct002_device_discovery(
-                    base,
-                    did,
-                    cfg.ha_discovery_prefix,
-                    addon_slug=self._hub_identifier(),
-                    efficiency_rotation=bool(data.get("efficiency_rotation", False)),
-                )
-                await client.publish(
-                    topic, payload=json.dumps(payload).encode(), retain=True
-                )
+        efficiency_rotation = bool(data.get("efficiency_rotation", False))
+        await self._discover_once(
+            client,
+            self._discovered_ct002_devices,
+            did,
+            lambda: build_ct002_device_discovery(
+                base,
+                did,
+                cfg.ha_discovery_prefix,
+                addon_slug=self._hub_identifier(),
+                efficiency_rotation=efficiency_rotation,
+            ),
+        )
+        if consumer_key not in self._discovered_ct002_consumers and cfg.ha_discovery:
+            self._discovered_ct002_consumers.add(consumer_key)
+            await self._publish_bridge(client, cfg)
+            topic, payload = build_ct002_consumer_discovery(
+                base,
+                did,
+                cid,
+                cfg.ha_discovery_prefix,
+                device_type=data.get("device_type", ""),
+                efficiency_rotation=efficiency_rotation,
+            )
+            await self._publish_discovery(client, topic, payload, retire=True)
 
-            if consumer_key not in self._discovered_ct002_consumers:
-                self._discovered_ct002_consumers.add(consumer_key)
-                await self._publish_bridge(client, cfg)
-                topic, payload = build_ct002_consumer_discovery(
-                    base,
-                    did,
-                    cid,
-                    cfg.ha_discovery_prefix,
-                    device_type=data.get("device_type", ""),
-                    efficiency_rotation=bool(data.get("efficiency_rotation", False)),
-                )
-                await self._publish_discovery(client, topic, payload, retire=True)
-
-    async def _handle_ct002_remove(
+    async def _mark_offline(
         self,
         client: aiomqtt.Client,
-        base: str,
         cfg: MqttInsightsConfig,
-        evt: _Event,
+        state_topic: str,
+        discovered: set[str],
+        key: str,
     ) -> None:
-        did = evt.device_id
-        cid = evt.entity_id
-        consumer_key = f"{did}/{cid}"
-        avail_topic = f"{base}/ct002/{did}/consumer/{cid}/availability"
-        await client.publish(avail_topic, payload=b"offline", retain=True)
-        self._discovered_ct002_consumers.discard(consumer_key)
+        """A battery went silent: flip its availability and forget its
+        discovery so a return republishes it."""
+        await client.publish(
+            f"{state_topic}/availability", payload=b"offline", retain=True
+        )
+        discovered.discard(key)
         await self._publish_bridge(client, cfg)
+
+    async def _discover_once(
+        self,
+        client: aiomqtt.Client,
+        discovered: set[str],
+        key: str,
+        build: Callable[[], tuple[str, dict]],
+        *,
+        retire: bool = False,
+    ) -> bool:
+        """Publish a discovery payload the first time *key* is seen."""
+        if not self._config.ha_discovery or key in discovered:
+            return False
+        discovered.add(key)
+        topic, payload = build()
+        await self._publish_discovery(client, topic, payload, retire=retire)
+        return True
 
     async def _handle_shelly_event(
         self,
@@ -805,42 +767,24 @@ class MqttInsightsService:
             retain=True,
         )
 
-        # Discovery
-        if cfg.ha_discovery:
-            if did not in self._discovered_shelly_devices:
-                self._discovered_shelly_devices.add(did)
-                topic, payload = build_shelly_device_discovery(
-                    base,
-                    did,
-                    cfg.ha_discovery_prefix,
-                    addon_slug=self._hub_identifier(),
-                )
-                await client.publish(
-                    topic, payload=json.dumps(payload).encode(), retain=True
-                )
-
-            if battery_key not in self._discovered_shelly_batteries:
-                self._discovered_shelly_batteries.add(battery_key)
-                topic, payload = build_shelly_battery_discovery(
-                    base, did, ip_slug, cfg.ha_discovery_prefix
-                )
-                await self._publish_discovery(client, topic, payload, retire=True)
-                await self._publish_bridge(client, cfg)
-
-    async def _handle_shelly_remove(
-        self,
-        client: aiomqtt.Client,
-        base: str,
-        cfg: MqttInsightsConfig,
-        evt: _Event,
-    ) -> None:
-        did = evt.device_id
-        ip_slug = evt.entity_id
-        battery_key = f"{did}/{ip_slug}"
-        avail_topic = f"{base}/shelly/{did}/battery/{ip_slug}/availability"
-        await client.publish(avail_topic, payload=b"offline", retain=True)
-        self._discovered_shelly_batteries.discard(battery_key)
-        await self._publish_bridge(client, cfg)
+        await self._discover_once(
+            client,
+            self._discovered_shelly_devices,
+            did,
+            lambda: build_shelly_device_discovery(
+                base, did, cfg.ha_discovery_prefix, addon_slug=self._hub_identifier()
+            ),
+        )
+        if await self._discover_once(
+            client,
+            self._discovered_shelly_batteries,
+            battery_key,
+            lambda: build_shelly_battery_discovery(
+                base, did, ip_slug, cfg.ha_discovery_prefix
+            ),
+            retire=True,
+        ):
+            await self._publish_bridge(client, cfg)
 
     async def _listen_commands(self, client: aiomqtt.Client) -> None:
         base = self._config.base_topic
@@ -893,39 +837,6 @@ class MqttInsightsService:
                     continue
                 self._handle_device_command(middle, cmd)
 
-    @staticmethod
-    def _parse_bool(payload: str) -> bool | None:
-        token = payload.strip().lower()
-        if token in ("true", "on", "1"):
-            return True
-        if token in ("false", "off", "0"):
-            return False
-        return None
-
-    def _dispatch(
-        self,
-        handlers: dict,
-        label: str,
-        device_id: str,
-        consumer_id: str,
-        *args: Any,
-    ) -> None:
-        handler = handlers.get(device_id)
-        if not handler:
-            logger.debug(
-                "No %s handler for device %s (consumer %s)",
-                label,
-                device_id,
-                consumer_id,
-            )
-            return
-        try:
-            handler(consumer_id, *args)
-        except Exception:
-            logger.exception(
-                "%s handler error for %s/%s", label, device_id, consumer_id
-            )
-
     def _handle_consumer_field_command(
         self, device_id: str, consumer_id: str, field: str, payload: str
     ) -> None:
@@ -936,170 +847,20 @@ class MqttInsightsService:
             self._forget_consumer_command(device_id, consumer_id, field)
             return
 
-        # Validate and dispatch first; only a known field that parsed to an
-        # in-range value gets buffered, so a malformed or unknown retained
-        # command isn't cached and replayed to every future handler.
-        if self._dispatch_consumer_field(device_id, consumer_id, field, payload):
-            # Remember the latest valid payload so a handler registering *after*
-            # the broker redelivered this retained command (the usual order on an
-            # app restart) still receives it — see _replay_consumer_commands.
+        # Only a known field with a valid value is remembered for replay, so a
+        # malformed retained command is never handed to a device later.
+        if self._apply_consumer_command(device_id, consumer_id, field, payload):
             self._pending_consumer_commands.setdefault(device_id, {})[
                 (consumer_id, field)
             ] = payload
 
-    def _dispatch_consumer_field(
+    def _apply_consumer_command(
         self, device_id: str, consumer_id: str, field: str, payload: str
     ) -> bool:
-        """Validate and dispatch a consumer command.
-
-        Returns True when the field is known and the value valid (the command is
-        dispatched even if no handler is registered yet, so the caller may buffer
-        it for replay); False on an unknown field or an invalid/out-of-range
-        value (which must not be buffered).
-        """
-        if field == "active":
-            value = self._parse_bool(payload)
-            if value is None:
-                logger.warning(
-                    "Invalid active value for %s/%s: %r",
-                    device_id,
-                    consumer_id,
-                    payload,
-                )
-                return False
-            self._dispatch(
-                self._active_handlers, "active", device_id, consumer_id, value
-            )
-            return True
-        elif field == "auto_target":
-            value = self._parse_bool(payload)
-            if value is None:
-                logger.warning(
-                    "Invalid auto_target value for %s/%s: %r",
-                    device_id,
-                    consumer_id,
-                    payload,
-                )
-                return False
-            self._dispatch(
-                self._auto_target_handlers,
-                "auto_target",
-                device_id,
-                consumer_id,
-                value,
-            )
-            return True
-        elif field == "manual_target":
-            try:
-                target = float(payload)
-            except ValueError:
-                logger.warning(
-                    "Invalid manual_target value for %s/%s: %r",
-                    device_id,
-                    consumer_id,
-                    payload,
-                )
-                return False
-            if not math.isfinite(target) or not -10000 <= target <= 10000:
-                logger.warning(
-                    "Out-of-range manual_target for %s/%s: %s",
-                    device_id,
-                    consumer_id,
-                    target,
-                )
-                return False
-            self._dispatch(
-                self._manual_target_handlers,
-                "manual_target",
-                device_id,
-                consumer_id,
-                target,
-            )
-            return True
-        elif field == "distribution_weight":
-            try:
-                weight = float(payload)
-            except ValueError:
-                logger.warning(
-                    "Invalid distribution_weight value for %s/%s: %r",
-                    device_id,
-                    consumer_id,
-                    payload,
-                )
-                return False
-            if not math.isfinite(weight) or not 0.0 <= weight <= 10.0:
-                logger.warning(
-                    "Out-of-range distribution_weight for %s/%s: %s",
-                    device_id,
-                    consumer_id,
-                    weight,
-                )
-                return False
-            self._dispatch(
-                self._distribution_weight_handlers,
-                "distribution_weight",
-                device_id,
-                consumer_id,
-                weight,
-            )
-            return True
-        elif field == "efficiency_window_weight":
-            # HA surfaces this as a percentage (0-100 %); convert to the internal
-            # 0-1 fraction before dispatching.
-            try:
-                pct = float(payload)
-            except ValueError:
-                logger.warning(
-                    "Invalid efficiency_window_weight value for %s/%s: %r",
-                    device_id,
-                    consumer_id,
-                    payload,
-                )
-                return False
-            if not math.isfinite(pct) or not 0.0 <= pct <= 100.0:
-                logger.warning(
-                    "Out-of-range efficiency_window_weight for %s/%s: %s",
-                    device_id,
-                    consumer_id,
-                    pct,
-                )
-                return False
-            self._dispatch(
-                self._efficiency_window_weight_handlers,
-                "efficiency_window_weight",
-                device_id,
-                consumer_id,
-                pct / 100.0,
-            )
-            return True
-        elif field == "min_dc_output":
-            try:
-                min_dc = float(payload)
-            except ValueError:
-                logger.warning(
-                    "Invalid min_dc_output value for %s/%s: %r",
-                    device_id,
-                    consumer_id,
-                    payload,
-                )
-                return False
-            if not math.isfinite(min_dc) or not 0.0 <= min_dc <= 1000.0:
-                logger.warning(
-                    "Out-of-range min_dc_output for %s/%s: %s",
-                    device_id,
-                    consumer_id,
-                    min_dc,
-                )
-                return False
-            self._dispatch(
-                self._min_dc_output_handlers,
-                "min_dc_output",
-                device_id,
-                consumer_id,
-                min_dc,
-            )
-            return True
-        else:
+        """Apply one consumer command; True when the field is known and the
+        value valid, whether or not the device has registered yet."""
+        control = CONSUMER_CONTROLS_BY_FIELD.get(field)
+        if control is None:
             logger.debug(
                 "Unknown consumer command field %r for %s/%s",
                 field,
@@ -1107,6 +868,33 @@ class MqttInsightsService:
                 consumer_id,
             )
             return False
+        try:
+            value = control.parse(payload)
+        except ValueError as exc:
+            logger.warning(
+                "Rejected command for %s/%s: %s (got %r)",
+                device_id,
+                consumer_id,
+                exc,
+                payload,
+            )
+            return False
+        device = self._devices.get(device_id)
+        if device is None:
+            logger.debug(
+                "No device %s registered yet for %s of consumer %s",
+                device_id,
+                field,
+                consumer_id,
+            )
+            return True
+        try:
+            control.apply(device, consumer_id, value)
+        except Exception:
+            logger.exception(
+                "Applying %s to %s/%s failed", field, device_id, consumer_id
+            )
+        return True
 
     def _forget_consumer_command(
         self, device_id: str, consumer_id: str, field: str
@@ -1118,53 +906,30 @@ class MqttInsightsService:
         if not pending:
             self._pending_consumer_commands.pop(device_id, None)
 
-    def _replay_consumer_commands(self, device_id: str, field: str) -> None:
-        """Re-dispatch any buffered command for ``(device_id, field)``.
-
-        Called right after a handler registers so a retained command the broker
-        redelivered before that handler existed (the normal ordering on an app
-        restart) gets applied instead of silently dropped.
-        """
+    def _replay_consumer_commands(self, device_id: str) -> None:
+        """Apply the retained commands that arrived before *device_id*
+        registered (the normal order on an app restart)."""
         pending = self._pending_consumer_commands.get(device_id)
-        if not pending:
-            return
-        for (consumer_id, fld), payload in list(pending.items()):
-            if fld == field:
-                self._handle_consumer_field_command(
-                    device_id, consumer_id, fld, payload
-                )
+        for (consumer_id, name), payload in list((pending or {}).items()):
+            self._handle_consumer_field_command(device_id, consumer_id, name, payload)
 
     def _handle_device_command(self, device_id: str, cmd: dict) -> None:
+        device = self._devices.get(device_id)
+        if device is None:
+            logger.debug("No device %s registered for %r", device_id, cmd)
+            return
+        names = []
         if cmd.get("force_rotation") is True:
-            handler = self._rotation_handlers.get(device_id)
-            if handler:
-                try:
-                    handler()
-                except Exception:
-                    logger.exception("Rotation handler error for device %s", device_id)
-            else:
-                logger.debug("No rotation handler for device %s", device_id)
+            names.append("force_rotation")
         if "active_control" in cmd:
-            value = cmd["active_control"]
-            if not isinstance(value, bool):
-                logger.warning(
-                    "Invalid active_control value for device %s: %r",
-                    device_id,
-                    value,
-                )
-                return
-            ac_handler = self._active_control_handlers.get(device_id)
-            if ac_handler:
-                try:
-                    ac_handler(value)
-                except Exception:
-                    logger.exception(
-                        "Active control handler error for device %s", device_id
-                    )
-            else:
-                logger.debug("No active_control handler for device %s", device_id)
-
-    # ── Powermeter health ─────────────────────────────────────────────
+            names.append("active_control")
+        for name in names:
+            try:
+                apply_device_control(device, name, cmd.get(name))
+            except ValueError as exc:
+                logger.warning("Rejected command for %s: %s", device_id, exc)
+            except Exception:
+                logger.exception("Applying %s to %s failed", name, device_id)
 
     async def _powermeter_health_loop(self, client: aiomqtt.Client) -> None:
         """Publish a per-powermeter "Online" diagnostic sensor.
@@ -1255,18 +1020,18 @@ class MqttInsightsService:
             payload=json.dumps(state).encode(),
             retain=True,
         )
-        if cfg.ha_discovery and pm_id not in self._discovered_powermeters:
-            self._discovered_powermeters.add(pm_id)
-            topic, payload = build_powermeter_device_discovery(
+        await self._discover_once(
+            client,
+            self._discovered_powermeters,
+            pm_id,
+            lambda: build_powermeter_device_discovery(
                 base,
                 pm_id,
                 name,
                 cfg.ha_discovery_prefix,
                 addon_slug=self._hub_identifier(),
-            )
-            await client.publish(
-                topic, payload=json.dumps(payload).encode(), retain=True
-            )
+            ),
+        )
 
     async def _marstek_broadcast_loop(self, client: aiomqtt.Client) -> None:
         """Periodically publish power values for all registered bindings."""
@@ -1338,53 +1103,35 @@ class MqttInsightsService:
         binding: MarstekMqttBinding,
         poll: MarstekPollContext,
     ) -> None:
-        if poll.echo_cd == 4:
-            try:
-                if binding.get_cd4_slave_csv is None:
-                    slv = ""
-                else:
-                    slv = binding.get_cd4_slave_csv()
-                payload = build_cd4_response(slv)
-            except Exception:
-                if binding.device_id not in self._marstek_get_values_failed:
-                    logger.exception(
-                        "Marstek MQTT: cd=4 slave list failed for %s; suppressing "
-                        "further failures until recovery",
-                        binding.device_id,
-                    )
-                    self._marstek_get_values_failed.add(binding.device_id)
-                return
-            if binding.device_id in self._marstek_get_values_failed:
-                logger.info(
-                    "Marstek MQTT: poll value fetch recovered for %s",
-                    binding.device_id,
-                )
-                self._marstek_get_values_failed.discard(binding.device_id)
-        else:
-            try:
+        try:
+            if poll.echo_cd == 4:
+                slaves = ""
+                if binding.get_cd4_slave_csv is not None:
+                    slaves = binding.get_cd4_slave_csv()
+                payload = build_cd4_response(slaves)
+            else:
                 watts = await binding.get_values()
-            except Exception:
-                if binding.device_id not in self._marstek_get_values_failed:
-                    logger.exception(
-                        "Marstek MQTT: poll value fetch failed for %s; suppressing "
-                        "further failures until values recover",
-                        binding.device_id,
-                    )
-                    self._marstek_get_values_failed.add(binding.device_id)
-                return
-            if binding.device_id in self._marstek_get_values_failed:
-                logger.info(
-                    "Marstek MQTT: poll value fetch recovered for %s",
+                n_slaves = 0
+                if binding.get_connected_slave_count is not None:
+                    n_slaves = binding.get_connected_slave_count()
+                payload = build_response(
+                    binding, list(watts), poll=poll, connected_slave_count=n_slaves
+                )
+        except Exception:
+            # Log the first failure only: hm2mqtt polls every few seconds.
+            if binding.device_id not in self._marstek_get_values_failed:
+                logger.exception(
+                    "Marstek MQTT: poll value fetch failed for %s; suppressing "
+                    "further failures until values recover",
                     binding.device_id,
                 )
-                self._marstek_get_values_failed.discard(binding.device_id)
-
-            n_slaves = 0
-            if binding.get_connected_slave_count is not None:
-                n_slaves = binding.get_connected_slave_count()
-            payload = build_response(
-                binding, list(watts), poll=poll, connected_slave_count=n_slaves
+                self._marstek_get_values_failed.add(binding.device_id)
+            return
+        if binding.device_id in self._marstek_get_values_failed:
+            logger.info(
+                "Marstek MQTT: poll value fetch recovered for %s", binding.device_id
             )
+            self._marstek_get_values_failed.discard(binding.device_id)
 
         # Re-check the active binding before publishing: unregister_marstek
         # may have run while we awaited get_values, in which case publishing

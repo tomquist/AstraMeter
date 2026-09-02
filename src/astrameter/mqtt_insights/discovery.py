@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from astrameter.ct002.balancer import CONTROL_QUALITY_STATES, _needs_dc_output_floor
+from astrameter.ct002.controls import CONSUMER_CONTROLS_BY_FIELD
 from astrameter.version_info import get_git_commit_sha
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -41,21 +42,87 @@ def _system_availability(base_topic: str) -> dict:
     }
 
 
-# ── Retired components ────────────────────────────────────────────────────
-# Home Assistant keeps an entity that merely stops appearing in a later device
-# discovery payload, so anything we drop has to be retired explicitly: a
-# component config that is empty apart from ``platform`` reads as "remove this
-# entity".  ``build_retirement_payload`` produces that update; the service
-# publishes it right before the current payload, whose omission of the key then
-# leaves the retained discovery message up to date.
-#
-# ``last_seen`` was a wall-clock timestamp stamped at publish time, so it
-# changed on every poll — and a ``timestamp`` sensor can carry neither a unit
-# nor a state class, the two attributes HA's logbook uses to recognise a
-# continuous sensor.  Every poll therefore became a logbook row and a recorder
-# state (issue #576).  The field stays in the MQTT payload, and HA's own
-# ``last_reported`` on any entity of the device carries the same information.
+# Home Assistant keeps an entity that merely stops appearing in a device's
+# discovery payload; a component that is empty apart from ``platform`` removes
+# it.  ``last_seen`` changed on every poll and filled the logbook (issue #576);
+# HA's own ``last_reported`` carries the same information.
 RETIRED_COMPONENTS: dict[str, str] = {"last_seen": "sensor"}
+
+
+def _entity_availability(avail_topic: str) -> dict:
+    return {
+        "topic": avail_topic,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+    }
+
+
+def _device_discovery(
+    ha_prefix: str,
+    node_id: str,
+    device: dict,
+    components: dict[str, dict],
+    base_topic: str,
+    state_topic: str,
+    *,
+    avail_topic: str | None = None,
+    via_device: str | None = None,
+) -> tuple[str, dict]:
+    """Assemble one device-based discovery message.
+
+    Every device is unavailable while AstraMeter itself is offline; a battery
+    additionally has its own availability topic, and both must say online.
+    """
+    if via_device:
+        device["via_device"] = via_device
+    payload: dict = {
+        "device": device,
+        "origin": _origin(),
+        "components": components,
+    }
+    if avail_topic is None:
+        payload["availability"] = [_system_availability(base_topic)]
+    else:
+        payload["availability_mode"] = "all"
+        payload["availability"] = [
+            _system_availability(base_topic),
+            _entity_availability(avail_topic),
+        ]
+    payload["state_topic"] = state_topic
+    return f"{ha_prefix}/device/{node_id}/config", payload
+
+
+def _power_sensors(
+    uid_prefix: str, state_topic: str, sensors: list[tuple[str, str | None, str]]
+) -> dict[str, dict]:
+    """Power sensors for (key, name, value template); a ``None`` name marks
+    the device's primary entity."""
+    return {
+        key: {
+            "platform": "sensor",
+            "unique_id": f"{uid_prefix}_{key}",
+            "name": name,
+            "device_class": "power",
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "state_topic": state_topic,
+            "value_template": template,
+        }
+        for key, name, template in sensors
+    }
+
+
+def _poll_interval_sensor(uid_prefix: str, state_topic: str) -> dict:
+    return {
+        "platform": "sensor",
+        "unique_id": f"{uid_prefix}_poll_interval",
+        "name": "Poll Interval",
+        "device_class": "duration",
+        "unit_of_measurement": "s",
+        "state_topic": state_topic,
+        "value_template": "{{ value_json.poll_interval }}",
+        "entity_category": "diagnostic",
+    }
 
 
 def build_retirement_payload(payload: dict) -> dict:
@@ -66,11 +133,16 @@ def build_retirement_payload(payload: dict) -> dict:
     return {**payload, "components": components}
 
 
-# ── Command topics ────────────────────────────────────────────────────────
-# One definition shared by the discovery payloads below, the service's
-# subscription/replay path, and the dashboard write path — a dashboard write
-# that missed this topic would be reverted by the retained value the broker
-# redelivers on the next reconnect.
+# Command topics are shared by the discovery payloads, the service's
+# subscription/replay path and the dashboard write path.
+
+
+def _bounds(field: str) -> tuple[float, float]:
+    """The range a number entity offers: the same one the command handler
+    enforces, so Home Assistant never offers a value that would be refused."""
+    control = CONSUMER_CONTROLS_BY_FIELD[field]
+    assert control.low is not None and control.high is not None
+    return control.low, control.high
 
 
 def consumer_command_topic(
@@ -85,9 +157,6 @@ def device_command_topic(base_topic: str, device_id: str) -> str:
     return f"{base_topic}/ct002/{device_id}/set"
 
 
-# ── CT002 consumer (per-battery) ──────────────────────────────────────────
-
-
 def build_ct002_consumer_discovery(
     base_topic: str,
     device_id: str,
@@ -97,41 +166,26 @@ def build_ct002_consumer_discovery(
     efficiency_rotation: bool = False,
 ) -> tuple[str, dict]:
     safe_dev = _sanitize_id(device_id)
-    safe_cid = _sanitize_id(consumer_id)
-    node_id = f"astrameter_ct002_{safe_dev}_{safe_cid}"
+    node_id = f"astrameter_ct002_{safe_dev}_{_sanitize_id(consumer_id)}"
     state_topic = f"{base_topic}/ct002/{device_id}/consumer/{consumer_id}"
-    avail_topic = f"{state_topic}/availability"
-    uid_prefix = f"astrameter_ct002_{safe_dev}_{safe_cid}"
+    uid_prefix = node_id
     meter_identifier = f"astrameter_ct002_{safe_dev}"
 
-    components: dict[str, dict] = {}
-
-    # Power sensors
-    for key, label, tmpl in [
-        ("grid_power_total", "Grid Power", "{{ value_json.grid_power.total }}"),
-        ("grid_power_l1", "Grid Power L1", "{{ value_json.grid_power.l1 }}"),
-        ("grid_power_l2", "Grid Power L2", "{{ value_json.grid_power.l2 }}"),
-        ("grid_power_l3", "Grid Power L3", "{{ value_json.grid_power.l3 }}"),
-        ("target_l1", "Target L1", "{{ value_json.target.l1 }}"),
-        ("target_l2", "Target L2", "{{ value_json.target.l2 }}"),
-        ("target_l3", "Target L3", "{{ value_json.target.l3 }}"),
-        ("reported_power", "Reported Power", "{{ value_json.reported_power }}"),
-        ("last_target", "Last Target", "{{ value_json.last_target }}"),
-    ]:
-        comp: dict = {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_{key}",
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": tmpl,
-        }
-        if key == "grid_power_total":
-            comp["name"] = None  # primary entity
-        else:
-            comp["name"] = label
-        components[key] = comp
+    components = _power_sensors(
+        uid_prefix,
+        state_topic,
+        [
+            ("grid_power_total", None, "{{ value_json.grid_power.total }}"),
+            ("grid_power_l1", "Grid Power L1", "{{ value_json.grid_power.l1 }}"),
+            ("grid_power_l2", "Grid Power L2", "{{ value_json.grid_power.l2 }}"),
+            ("grid_power_l3", "Grid Power L3", "{{ value_json.grid_power.l3 }}"),
+            ("target_l1", "Target L1", "{{ value_json.target.l1 }}"),
+            ("target_l2", "Target L2", "{{ value_json.target.l2 }}"),
+            ("target_l3", "Target L3", "{{ value_json.target.l3 }}"),
+            ("reported_power", "Reported Power", "{{ value_json.reported_power }}"),
+            ("last_target", "Last Target", "{{ value_json.last_target }}"),
+        ],
+    )
 
     # Saturation
     components["saturation"] = {
@@ -176,19 +230,7 @@ def build_ct002_consumer_discovery(
         }
         components[key] = comp
 
-    # No "Last Seen" sensor: see RETIRED_COMPONENTS above (issue #576).
-
-    # Poll interval (EMA-smoothed seconds between consecutive polls)
-    components["poll_interval"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_poll_interval",
-        "name": "Poll Interval",
-        "device_class": "duration",
-        "unit_of_measurement": "s",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.poll_interval }}",
-        "entity_category": "diagnostic",
-    }
+    components["poll_interval"] = _poll_interval_sensor(uid_prefix, state_topic)
 
     # Answer interval — how often this battery actually gets a reply.  Equal to
     # the poll interval unless DEDUPE_TIME_WINDOW is suppressing replies, which
@@ -218,8 +260,8 @@ def build_ct002_consumer_discovery(
         "name": "Manual Target",
         "unit_of_measurement": "W",
         "device_class": "power",
-        "min": -10000,
-        "max": 10000,
+        "min": _bounds("manual_target")[0],
+        "max": _bounds("manual_target")[1],
         "mode": "box",
         "state_topic": state_topic,
         "value_template": "{{ value_json.manual_target | default(0) }}",
@@ -272,8 +314,8 @@ def build_ct002_consumer_discovery(
         "platform": "number",
         "unique_id": f"{uid_prefix}_distribution_weight",
         "name": "Distribution Weight",
-        "min": 0,
-        "max": 10,
+        "min": _bounds("distribution_weight")[0],
+        "max": _bounds("distribution_weight")[1],
         "step": 0.1,
         "mode": "slider",
         "state_topic": state_topic,
@@ -298,8 +340,8 @@ def build_ct002_consumer_discovery(
             "unique_id": f"{uid_prefix}_efficiency_window_weight",
             "name": "Efficiency Window Weight",
             "unit_of_measurement": "%",
-            "min": 0,
-            "max": 100,
+            "min": _bounds("efficiency_window_weight")[0],
+            "max": _bounds("efficiency_window_weight")[1],
             "step": 5,
             "mode": "slider",
             "state_topic": state_topic,
@@ -324,8 +366,8 @@ def build_ct002_consumer_discovery(
             "name": "Min DC Output",
             "unit_of_measurement": "W",
             "device_class": "power",
-            "min": 0,
-            "max": 1000,
+            "min": _bounds("min_dc_output")[0],
+            "max": _bounds("min_dc_output")[1],
             "step": 1,
             "mode": "box",
             "state_topic": state_topic,
@@ -355,27 +397,15 @@ def build_ct002_consumer_discovery(
     if device_type:
         device_info["model_id"] = device_type
 
-    payload = {
-        "device": device_info,
-        "origin": _origin(),
-        "components": components,
-        "availability_mode": "all",
-        "availability": [
-            _system_availability(base_topic),
-            {
-                "topic": avail_topic,
-                "payload_available": "online",
-                "payload_not_available": "offline",
-            },
-        ],
-        "state_topic": state_topic,
-    }
-
-    topic = f"{ha_prefix}/device/{node_id}/config"
-    return topic, payload
-
-
-# ── Add-on hub device ─────────────────────────────────────────────────────
+    return _device_discovery(
+        ha_prefix,
+        node_id,
+        device_info,
+        components,
+        base_topic,
+        state_topic,
+        avail_topic=f"{state_topic}/availability",
+    )
 
 
 def build_addon_device_discovery(
@@ -383,21 +413,15 @@ def build_addon_device_discovery(
     addon_slug: str,
     ha_prefix: str,
 ) -> tuple[str, dict]:
-    """Discovery for the top-level "AstraMeter" device.
+    """The top-level "AstraMeter" hub device the per-meter devices link to.
 
-    Its ``identifiers`` is the add-on slug so the ``via_device`` references on
-    the per-meter devices resolve to a real, named MQTT device instead of an
-    empty HA placeholder. (MQTT ``via_device`` only ever resolves within the
-    MQTT identifier namespace, so it can't point at the Supervisor's own
-    hassio add-on device — this is the MQTT-native stand-in for it.)
-
-    Exposes a connectivity ``status`` sensor (driven by the system LWT topic),
-    plus diagnostic ``version`` and ``consumer_count`` sensors fed from the
-    retained ``{base}/bridge`` topic.
+    MQTT ``via_device`` only resolves within the MQTT identifier namespace, so
+    the hub is an MQTT device of its own rather than the Supervisor's add-on
+    device.
     """
     safe_slug = _sanitize_id(addon_slug)
     node_id = f"astrameter_addon_{safe_slug}"
-    uid_prefix = f"astrameter_addon_{safe_slug}"
+    uid_prefix = node_id
     bridge_topic = f"{base_topic}/bridge"
 
     components: dict[str, dict] = {
@@ -449,9 +473,6 @@ def build_addon_device_discovery(
     return topic, payload
 
 
-# ── CT002 device-level ────────────────────────────────────────────────────
-
-
 def build_ct002_device_discovery(
     base_topic: str,
     device_id: str,
@@ -462,7 +483,7 @@ def build_ct002_device_discovery(
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_ct002_{safe_dev}"
     state_topic = f"{base_topic}/ct002/{device_id}/status"
-    uid_prefix = f"astrameter_ct002_{safe_dev}"
+    uid_prefix = node_id
 
     components: dict[str, dict] = {
         "smooth_target": {
@@ -588,22 +609,15 @@ def build_ct002_device_discovery(
         "name": f"AstraMeter CT002 {device_id}",
         "manufacturer": "astrameter",
     }
-    if addon_slug:
-        device_info["via_device"] = addon_slug
-
-    payload = {
-        "device": device_info,
-        "origin": _origin(),
-        "components": components,
-        "availability": [_system_availability(base_topic)],
-        "state_topic": state_topic,
-    }
-
-    topic = f"{ha_prefix}/device/{node_id}/config"
-    return topic, payload
-
-
-# ── Powermeter (grid power source) ────────────────────────────────────────
+    return _device_discovery(
+        ha_prefix,
+        node_id,
+        device_info,
+        components,
+        base_topic,
+        state_topic,
+        via_device=addon_slug,
+    )
 
 
 def build_powermeter_device_discovery(
@@ -625,31 +639,25 @@ def build_powermeter_device_discovery(
     uid_prefix = node_id
     state_topic = f"{base_topic}/powermeter/{pm_id}"
 
-    components: dict[str, dict] = {}
+    # A ``null`` phase (a single-phase meter, or a meter that is down) renders
+    # to an empty string so Home Assistant leaves the entity untouched rather
+    # than logging a parse error.
+    def reading(field: str) -> str:
+        return (
+            f"{{{{ value_json.grid_power.{field} "
+            f"if value_json.grid_power.{field} is not none else '' }}}}"
+        )
 
-    # Latest readings (per phase + total). ``grid_power_total`` is the device's
-    # primary entity. A ``null`` phase (e.g. a single-phase meter has no L2/L3,
-    # or the meter is currently down) renders to an empty string so Home
-    # Assistant leaves the entity untouched rather than logging a parse error.
-    for key, label, field in [
-        ("grid_power_total", None, "total"),
-        ("grid_power_l1", "Power L1", "l1"),
-        ("grid_power_l2", "Power L2", "l2"),
-        ("grid_power_l3", "Power L3", "l3"),
-    ]:
-        components[key] = {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_{key}",
-            "name": label,
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": (
-                f"{{{{ value_json.grid_power.{field} "
-                f"if value_json.grid_power.{field} is not none else '' }}}}"
-            ),
-        }
+    components = _power_sensors(
+        uid_prefix,
+        state_topic,
+        [
+            ("grid_power_total", None, reading("total")),
+            ("grid_power_l1", "Power L1", reading("l1")),
+            ("grid_power_l2", "Power L2", reading("l2")),
+            ("grid_power_l3", "Power L3", reading("l3")),
+        ],
+    )
 
     components["online"] = {
         "platform": "binary_sensor",
@@ -670,22 +678,15 @@ def build_powermeter_device_discovery(
         "name": f"AstraMeter Powermeter {name.replace('_', ' ').title()}",
         "manufacturer": "astrameter",
     }
-    if addon_slug:
-        device_info["via_device"] = addon_slug
-
-    payload = {
-        "device": device_info,
-        "origin": _origin(),
-        "components": components,
-        "availability": [_system_availability(base_topic)],
-        "state_topic": state_topic,
-    }
-
-    topic = f"{ha_prefix}/device/{node_id}/config"
-    return topic, payload
-
-
-# ── Shelly per-battery ────────────────────────────────────────────────────
+    return _device_discovery(
+        ha_prefix,
+        node_id,
+        device_info,
+        components,
+        base_topic,
+        state_topic,
+        via_device=addon_slug,
+    )
 
 
 def build_shelly_battery_discovery(
@@ -698,31 +699,18 @@ def build_shelly_battery_discovery(
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_shelly_{safe_dev}_{ip_slug}"
     state_topic = f"{base_topic}/shelly/{device_id}/battery/{ip_slug}"
-    avail_topic = f"{state_topic}/availability"
-    uid_prefix = f"astrameter_shelly_{safe_dev}_{ip_slug}"
+    uid_prefix = node_id
 
-    components: dict[str, dict] = {}
-
-    for key, label, tmpl in [
-        ("grid_power_total", "Grid Power", "{{ value_json.grid_power.total }}"),
-        ("grid_power_l1", "Grid Power L1", "{{ value_json.grid_power.l1 }}"),
-        ("grid_power_l2", "Grid Power L2", "{{ value_json.grid_power.l2 }}"),
-        ("grid_power_l3", "Grid Power L3", "{{ value_json.grid_power.l3 }}"),
-    ]:
-        comp: dict = {
-            "platform": "sensor",
-            "unique_id": f"{uid_prefix}_{key}",
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-            "state_topic": state_topic,
-            "value_template": tmpl,
-        }
-        if key == "grid_power_total":
-            comp["name"] = None
-        else:
-            comp["name"] = label
-        components[key] = comp
+    components = _power_sensors(
+        uid_prefix,
+        state_topic,
+        [
+            ("grid_power_total", None, "{{ value_json.grid_power.total }}"),
+            ("grid_power_l1", "Grid Power L1", "{{ value_json.grid_power.l1 }}"),
+            ("grid_power_l2", "Grid Power L2", "{{ value_json.grid_power.l2 }}"),
+            ("grid_power_l3", "Grid Power L3", "{{ value_json.grid_power.l3 }}"),
+        ],
+    )
 
     components["active"] = {
         "platform": "binary_sensor",
@@ -736,46 +724,22 @@ def build_shelly_battery_discovery(
         "entity_category": "diagnostic",
     }
 
-    # No "Last Seen" sensor: see RETIRED_COMPONENTS above (issue #576).
+    components["poll_interval"] = _poll_interval_sensor(uid_prefix, state_topic)
 
-    # Poll interval (EMA-smoothed seconds between consecutive polls)
-    components["poll_interval"] = {
-        "platform": "sensor",
-        "unique_id": f"{uid_prefix}_poll_interval",
-        "name": "Poll Interval",
-        "device_class": "duration",
-        "unit_of_measurement": "s",
-        "state_topic": state_topic,
-        "value_template": "{{ value_json.poll_interval }}",
-        "entity_category": "diagnostic",
-    }
-
-    payload = {
-        "device": {
+    return _device_discovery(
+        ha_prefix,
+        node_id,
+        {
             "identifiers": node_id,
             "name": f"AstraMeter Shelly Battery {battery_ip}",
             "manufacturer": "astrameter",
-            "via_device": f"astrameter_shelly_{safe_dev}",
         },
-        "origin": _origin(),
-        "components": components,
-        "availability_mode": "all",
-        "availability": [
-            _system_availability(base_topic),
-            {
-                "topic": avail_topic,
-                "payload_available": "online",
-                "payload_not_available": "offline",
-            },
-        ],
-        "state_topic": state_topic,
-    }
-
-    topic = f"{ha_prefix}/device/{node_id}/config"
-    return topic, payload
-
-
-# ── Shelly device-level ───────────────────────────────────────────────────
+        components,
+        base_topic,
+        state_topic,
+        avail_topic=f"{state_topic}/availability",
+        via_device=f"astrameter_shelly_{safe_dev}",
+    )
 
 
 def build_shelly_device_discovery(
@@ -787,7 +751,7 @@ def build_shelly_device_discovery(
     safe_dev = _sanitize_id(device_id)
     node_id = f"astrameter_shelly_{safe_dev}"
     state_topic = f"{base_topic}/shelly/{device_id}/status"
-    uid_prefix = f"astrameter_shelly_{safe_dev}"
+    uid_prefix = node_id
 
     components: dict[str, dict] = {
         "battery_count": {
@@ -805,16 +769,12 @@ def build_shelly_device_discovery(
         "name": f"AstraMeter Shelly {device_id}",
         "manufacturer": "astrameter",
     }
-    if addon_slug:
-        device_info["via_device"] = addon_slug
-
-    payload = {
-        "device": device_info,
-        "origin": _origin(),
-        "components": components,
-        "availability": [_system_availability(base_topic)],
-        "state_topic": state_topic,
-    }
-
-    topic = f"{ha_prefix}/device/{node_id}/config"
-    return topic, payload
+    return _device_discovery(
+        ha_prefix,
+        node_id,
+        device_info,
+        components,
+        base_topic,
+        state_topic,
+        via_device=addon_slug,
+    )

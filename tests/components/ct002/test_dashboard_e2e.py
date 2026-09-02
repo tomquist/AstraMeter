@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from test_shared_e2e import _running_esphome_backend
 
-from astrameter.web_server import _coerce_control_value
+from astrameter.ct002.controls import coerce_consumer_control
 
 pytestmark = pytest.mark.esphome_e2e
 
@@ -182,7 +182,7 @@ def test_out_of_range_is_refused_with_python_s_own_message(
     reply = esphome.control(field, value, CONSUMER_ID)
     assert reply.startswith("err ")
     with pytest.raises(ValueError) as exc_info:
-        _coerce_control_value(field, float(value))
+        coerce_consumer_control(field, float(value))
     assert str(exc_info.value) in reply
 
 

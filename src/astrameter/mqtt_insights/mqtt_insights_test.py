@@ -19,6 +19,7 @@ from astrameter.config.config_loader import (
 )
 from astrameter.conftest import needs_mosquitto
 from astrameter.ct002.balancer import CONTROL_QUALITY_STATES
+from astrameter.ct002.controls import parse_bool
 from astrameter.powermeter.base import Powermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
@@ -1321,17 +1322,55 @@ async def test_publishes_addon_hub_device_and_bridge(mqtt_broker):
         await service.stop()
 
 
+class _FakeDevice:
+    """Records every control write, keyed by the control's wire field."""
+
+    def __init__(self) -> None:
+        self.calls: dict[str, list] = {}
+
+    def _record(self, field: str, *args: object) -> None:
+        self.calls.setdefault(field, []).append(args if len(args) > 1 else args[0])
+
+    def set_consumer_active(self, cid: str, v: bool) -> None:
+        self._record("active", cid, v)
+
+    def set_consumer_auto_target(self, cid: str, v: bool) -> None:
+        self._record("auto_target", cid, v)
+
+    def set_consumer_manual_target(self, cid: str, v: float) -> None:
+        self._record("manual_target", cid, v)
+
+    def set_consumer_distribution_weight(self, cid: str, v: float) -> None:
+        self._record("distribution_weight", cid, v)
+
+    def set_consumer_efficiency_window_weight(self, cid: str, v: float) -> None:
+        self._record("efficiency_window_weight", cid, v)
+
+    def set_consumer_min_dc_output(self, cid: str, v: float) -> None:
+        self._record("min_dc_output", cid, v)
+
+    def set_active_control(self, v: bool) -> None:
+        self._record("active_control", v)
+
+    def force_efficiency_rotation(self) -> None:
+        self._record("force_rotation", True)
+
+    def latest(self) -> dict[str, object]:
+        """The last value written per field, without the consumer id."""
+        return {
+            field: writes[-1][1] if isinstance(writes[-1], tuple) else writes[-1]
+            for field, writes in self.calls.items()
+        }
+
+
 @needs_mosquitto
 async def test_active_toggle_via_mqtt(mqtt_broker):
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
-    handler_calls = []
-
-    def mock_handler(consumer_id, active):
-        handler_calls.append((consumer_id, active))
-
-    service.register_active_handler("dev1", mock_handler)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    handler_calls = device.calls.setdefault("active", [])
     await service.start()
 
     try:
@@ -1440,12 +1479,9 @@ async def test_manual_target_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
-    handler_calls: list[tuple[str, float]] = []
-
-    def mock_handler(consumer_id, target):
-        handler_calls.append((consumer_id, target))
-
-    service.register_manual_target_handler("dev1", mock_handler)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    handler_calls = device.calls.setdefault("manual_target", [])
     await service.start()
 
     try:
@@ -1468,12 +1504,9 @@ async def test_auto_target_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
-    handler_calls: list[tuple[str, bool]] = []
-
-    def mock_handler(consumer_id, auto):
-        handler_calls.append((consumer_id, auto))
-
-    service.register_auto_target_handler("dev1", mock_handler)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    handler_calls = device.calls.setdefault("auto_target", [])
     await service.start()
 
     try:
@@ -1496,12 +1529,9 @@ async def test_distribution_weight_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
-    handler_calls: list[tuple[str, float]] = []
-
-    def mock_handler(consumer_id, weight):
-        handler_calls.append((consumer_id, weight))
-
-    service.register_distribution_weight_handler("dev1", mock_handler)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    handler_calls = device.calls.setdefault("distribution_weight", [])
     await service.start()
 
     try:
@@ -1525,25 +1555,8 @@ def test_handle_consumer_field_command_dispatch() -> None:
     Broker-free: exercises ``_handle_consumer_field_command`` directly.
     """
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
-    calls: dict[str, object] = {}
-    service.register_active_handler(
-        "dev1", lambda cid, v: calls.__setitem__("active", v)
-    )
-    service.register_auto_target_handler(
-        "dev1", lambda cid, v: calls.__setitem__("auto", v)
-    )
-    service.register_manual_target_handler(
-        "dev1", lambda cid, v: calls.__setitem__("manual", v)
-    )
-    service.register_distribution_weight_handler(
-        "dev1", lambda cid, v: calls.__setitem__("weight", v)
-    )
-    service.register_efficiency_window_weight_handler(
-        "dev1", lambda cid, v: calls.__setitem__("eff_weight", v)
-    )
-    service.register_min_dc_output_handler(
-        "dev1", lambda cid, v: calls.__setitem__("min_dc", v)
-    )
+    device = _FakeDevice()
+    service.register_device("dev1", device)
 
     service._handle_consumer_field_command("dev1", "c1", "active", "false")
     service._handle_consumer_field_command("dev1", "c1", "auto_target", "true")
@@ -1554,32 +1567,35 @@ def test_handle_consumer_field_command_dispatch() -> None:
         "dev1", "c1", "efficiency_window_weight", "50"
     )
     service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "25")
-    assert calls == {
+    assert device.latest() == {
         "active": False,
-        "auto": True,
-        "manual": 250.0,
-        "weight": 2.5,
-        "eff_weight": 0.5,
-        "min_dc": 25.0,
+        "auto_target": True,
+        "manual_target": 250.0,
+        "distribution_weight": 2.5,
+        "efficiency_window_weight": 0.5,
+        "min_dc_output": 25.0,
     }
 
     # 0.0 is a valid weight (battery takes no share / skipped for efficiency).
-    calls.clear()
+    device.calls.clear()
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "0")
     service._handle_consumer_field_command(
         "dev1", "c1", "efficiency_window_weight", "0"
     )
-    assert calls == {"weight": 0.0, "eff_weight": 0.0}
+    assert device.latest() == {
+        "distribution_weight": 0.0,
+        "efficiency_window_weight": 0.0,
+    }
 
     # 100 % maps to the full 1.0 fraction.
-    calls.clear()
+    device.calls.clear()
     service._handle_consumer_field_command(
         "dev1", "c1", "efficiency_window_weight", "100"
     )
-    assert calls == {"eff_weight": 1.0}
+    assert device.latest() == {"efficiency_window_weight": 1.0}
 
     # Out-of-range and unparseable values are dropped, not dispatched.
-    calls.clear()
+    device.calls.clear()
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "11")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
     service._handle_consumer_field_command("dev1", "c1", "active", "maybe")
@@ -1595,102 +1611,82 @@ def test_handle_consumer_field_command_dispatch() -> None:
     # An empty (cleared) retained payload is ignored silently.
     service._handle_consumer_field_command("dev1", "c1", "distribution_weight", "")
     service._handle_consumer_field_command("dev1", "c1", "efficiency_window_weight", "")
-    assert calls == {}
+    assert device.calls == {}
 
 
-def test_retained_command_replayed_when_handler_registers_late() -> None:
-    """A retained command redelivered before the device registered its handler
-    (the usual order on an app restart) is replayed once the handler appears,
-    instead of being silently dropped.
+def test_retained_command_replayed_when_device_registers_late() -> None:
+    """A retained command redelivered before the device registered (the usual
+    order on an app restart) is applied once the device appears, instead of
+    being silently dropped.
 
     Broker-free: exercises the buffer/replay path directly.
     """
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
-    manual_calls: list[tuple[str, float]] = []
-    auto_calls: list[tuple[str, bool]] = []
+    device = _FakeDevice()
 
-    # Commands arrive first — no handlers yet (mirrors the broker redelivering
-    # retained commands on reconnect before run_device() has registered them).
+    # Commands arrive first: no device yet (mirrors the broker redelivering
+    # retained commands on reconnect before run_device() has registered it).
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "150")
     service._handle_consumer_field_command("dev1", "c1", "auto_target", "false")
-    assert manual_calls == []
-    assert auto_calls == []
+    assert device.calls == {}
 
-    service.register_manual_target_handler(
-        "dev1", lambda cid, v: manual_calls.append((cid, v))
-    )
-    service.register_auto_target_handler(
-        "dev1", lambda cid, v: auto_calls.append((cid, v))
-    )
+    service.register_device("dev1", device)
 
-    # Registering each handler replays the buffered command for its own field.
-    assert manual_calls == [("c1", 150.0)]
-    assert auto_calls == [("c1", False)]
+    assert device.calls == {
+        "manual_target": [("c1", 150.0)],
+        "auto_target": [("c1", False)],
+    }
 
 
-def test_retained_command_replay_is_per_field() -> None:
-    """Registering one field's handler only replays that field, and a handler
-    for a device with no buffered command is a no-op."""
+def test_retained_command_replay_is_per_device() -> None:
+    """Registering a device replays only the commands buffered for it."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
-    manual_calls: list[tuple[str, float]] = []
-    auto_calls: list[tuple[str, bool]] = []
+    dev1 = _FakeDevice()
+    dev2 = _FakeDevice()
 
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "150")
 
-    # A device with no buffered command replays nothing.
-    service.register_manual_target_handler("dev2", lambda cid, v: None)
+    service.register_device("dev2", dev2)
+    assert dev2.calls == {}
 
-    service.register_auto_target_handler(
-        "dev1", lambda cid, v: auto_calls.append((cid, v))
-    )
-    # No auto_target was buffered for dev1, so nothing fires for it.
-    assert auto_calls == []
-
-    service.register_manual_target_handler(
-        "dev1", lambda cid, v: manual_calls.append((cid, v))
-    )
-    assert manual_calls == [("c1", 150.0)]
+    service.register_device("dev1", dev1)
+    assert dev1.calls == {"manual_target": [("c1", 150.0)]}
 
 
 def test_cleared_retained_command_not_replayed() -> None:
     """An empty payload clears the retained command, so a handler registering
     afterwards must not be handed the stale pre-clear value."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
-    manual_calls: list[tuple[str, float]] = []
+    device = _FakeDevice()
 
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "150")
     # User clears the override; HA publishes an empty retained payload.
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "")
 
-    service.register_manual_target_handler(
-        "dev1", lambda cid, v: manual_calls.append((cid, v))
-    )
-    assert manual_calls == []
+    service.register_device("dev1", device)
+    assert device.calls == {}
 
 
 def test_invalid_or_unknown_retained_command_not_buffered() -> None:
     """A malformed, out-of-range, or unknown-field retained command must not be
-    cached — otherwise it would be replayed to every handler that registers."""
+    cached, or it would be replayed to every device that registers."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
-    manual_calls: list[tuple[str, float]] = []
+    dev1 = _FakeDevice()
+    dev2 = _FakeDevice()
 
-    # All arrive before any handler is registered.
+    # All arrive before any device is registered.
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "99999")
     service._handle_consumer_field_command("dev1", "c1", "manual_target", "nan")
     service._handle_consumer_field_command("dev1", "c1", "bogus_field", "1")
     assert service._pending_consumer_commands == {}
 
-    service.register_manual_target_handler(
-        "dev1", lambda cid, v: manual_calls.append((cid, v))
-    )
-    assert manual_calls == []
+    service.register_device("dev1", dev1)
+    assert dev1.calls == {}
 
     # A subsequent valid value is still buffered and replayed normally.
     service._handle_consumer_field_command("dev2", "c1", "manual_target", "150")
-    service.register_manual_target_handler(
-        "dev2", lambda cid, v: manual_calls.append((cid, v))
-    )
-    assert manual_calls == [("c1", 150.0)]
+    service.register_device("dev2", dev2)
+    assert dev2.calls == {"manual_target": [("c1", 150.0)]}
 
 
 @needs_mosquitto
@@ -1707,7 +1703,7 @@ async def test_retained_command_redelivered_on_restart(mqtt_broker) -> None:
     async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
         await pub.publish(topic, payload=b"150", retain=True)
 
-    handler_calls: list[tuple[str, float]] = []
+    device = _FakeDevice()
     await service.start()
     try:
         await service.wait_connected()
@@ -1715,11 +1711,9 @@ async def test_retained_command_redelivered_on_restart(mqtt_broker) -> None:
         # Wait for the listener to receive & buffer the redelivered retained
         # command, then register the handler (post-subscribe, as on restart).
         await _poll(lambda: service._pending_consumer_commands.get("dev1") is not None)
-        service.register_manual_target_handler(
-            "dev1", lambda cid, t: handler_calls.append((cid, t))
-        )
+        service.register_device("dev1", device)
 
-        assert handler_calls == [("consumer1", 150.0)]
+        assert device.calls == {"manual_target": [("consumer1", 150.0)]}
     finally:
         # Clean up the retained command so it doesn't leak into other tests.
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
@@ -1732,12 +1726,9 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
-    handler_calls: list[str] = []
-
-    def mock_handler():
-        handler_calls.append("rotated")
-
-    service.register_rotation_handler("dev1", mock_handler)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    handler_calls = device.calls.setdefault("force_rotation", [])
     await service.start()
 
     try:
@@ -1750,7 +1741,7 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
             )
 
         await _poll(lambda: len(handler_calls) >= 1)
-        assert handler_calls[0] == "rotated"
+        assert handler_calls[0] is True
     finally:
         await service.stop()
 
@@ -1759,8 +1750,9 @@ def test_active_control_device_command_dispatch():
     """The device-level active_control field routes booleans to the handler
     and rejects non-boolean payloads."""
     service = _make_service(1883)
-    calls: list[bool] = []
-    service.register_active_control_handler("dev1", calls.append)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    calls = device.calls.setdefault("active_control", [])
 
     service._handle_device_command("dev1", {"active_control": False})
     service._handle_device_command("dev1", {"active_control": True})
@@ -1771,7 +1763,7 @@ def test_active_control_device_command_dispatch():
     service._handle_device_command("other", {"active_control": False})
     assert calls == [False, True]
 
-    service.unregister_handlers("dev1")
+    service.unregister_device("dev1")
     service._handle_device_command("dev1", {"active_control": True})
     assert calls == [False, True]
 
@@ -1781,9 +1773,9 @@ async def test_active_control_toggle_via_mqtt(mqtt_broker) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
-    handler_calls: list[bool] = []
-
-    service.register_active_control_handler("dev1", handler_calls.append)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    handler_calls = device.calls.setdefault("active_control", [])
     await service.start()
 
     try:
@@ -2427,10 +2419,9 @@ async def test_publish_consumer_command_lands_where_the_replay_path_reads():
 
     # Feed the published message back through the listener that receives the
     # retained redelivery: it must reach the manual-target handler.
-    calls: list[tuple[str, float]] = []
-    service.register_manual_target_handler(
-        "dev1", lambda cid, v: calls.append((cid, v))
-    )
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    calls = device.calls.setdefault("manual_target", [])
     listener = AsyncMock()
     listener.messages = _async_iter(
         [_FakeMessage(call.args[0], call.kwargs["payload"])]
@@ -2456,7 +2447,7 @@ async def test_publish_consumer_command_accepts_the_native_scalars_it_is_given()
     await service.publish_consumer_command("dev1", "c1", "active", False)
     payload = service._client.publish.call_args.kwargs["payload"]
     # The reader lower-cases before parsing, so "False" round-trips.
-    assert MqttInsightsService._parse_bool(payload.decode()) is False
+    assert parse_bool(payload.decode()) is False
 
 
 async def test_publish_device_command_lands_where_the_listener_reads():
@@ -2471,8 +2462,9 @@ async def test_publish_device_command_lands_where_the_listener_reads():
     assert call.args[0] == "am/ct002/dev1/set"
     assert call.kwargs["retain"] is True
 
-    seen: list[bool] = []
-    service.register_active_control_handler("dev1", seen.append)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    seen = device.calls.setdefault("active_control", [])
     listener = AsyncMock()
     listener.messages = _async_iter(
         [_FakeMessage(call.args[0], call.kwargs["payload"])]
