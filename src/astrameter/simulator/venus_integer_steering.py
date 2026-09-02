@@ -104,8 +104,15 @@ documented as ``out``. The inference is also cheap: at the default
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass
+
+from .steering_common import (
+    SMALL_IMPORT_HOLD_W,
+    SPIKE_JUMP_W,
+    SPIKE_OWN_DELTA_W,
+    _f32,
+    _share_split,
+)
 
 __all__ = [
     "DEADBAND_HMG50_W",
@@ -116,9 +123,6 @@ __all__ = [
     "PARK_ALONE_VENUS",
     "PARK_SHARED_W",
     "PARK_SINGLE_W",
-    "SMALL_IMPORT_HOLD_W",
-    "SPIKE_JUMP_W",
-    "SPIKE_OWN_DELTA_W",
     "STEP_BIAS_W",
     "VenusIntegerSteeringController",
 ]
@@ -141,37 +145,17 @@ IMPORT_THRESHOLD_W = 11
 STEP_BIAS_W = 5
 # Input-conditioning thresholds. The gate's rest deadband is ±10 W on a Venus
 # and ±20 W on an HMG-50 (see ``deadband``); the spike thresholds and the
-# small-import hold are the same on both.
+# small-import hold are the same on both (``steering_common``).
 DEADBAND_W = 10
 DEADBAND_HMG50_W = 20
-SPIKE_JUMP_W = 50
-SPIKE_OWN_DELTA_W = 20
-SMALL_IMPORT_HOLD_W = 10
 # Loop gain in percent. The device accepts 30..100 and falls back to 100 (unity)
 # for anything outside that range.
 DEFAULT_CTRL_RATIO = 100
 _RATIO_MIN, _RATIO_MAX = 30, 100
 
 
-def _f32(x: float) -> float:
-    """Round *x* to single precision, mirroring the device's 32-bit FPU."""
-    return struct.unpack("<f", struct.pack("<f", x))[0]
-
-
 # Percent -> gain fraction (``ctrl_ratio * 0.01`` in single precision).
 _RATIO_SCALE = _f32(0.009999999776482582)
-
-
-def _share_split(g: float, device_count: int) -> int:
-    """Divide the bucket value across the batteries sharing it.
-
-    Signed division truncating toward zero, matching the firmware's ``sdiv``.
-    """
-    nb = max(1, int(device_count))
-    g = int(g)
-    if nb > 1:
-        g = int(g / nb)
-    return g
 
 
 @dataclass

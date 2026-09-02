@@ -9,11 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from .venus_integer_steering import (
-    DEADBAND_W,
-    SMALL_IMPORT_HOLD_W,
-    VenusIntegerSteeringController,
-)
+from .steering_common import SMALL_IMPORT_HOLD_W
+from .venus_integer_steering import DEADBAND_W, VenusIntegerSteeringController
 
 
 def _run(steps, **kwargs):

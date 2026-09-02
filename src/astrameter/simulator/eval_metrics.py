@@ -1,16 +1,15 @@
 """Per-scenario metrics computed from the samples a run records: reaction
 (settle time), oscillation (overshoot, hunting), energy (grid exchange the
 pack could have covered) and the cost regret against a perfect-foresight
-battery."""
+battery, plus the downsampled chart traces stored alongside them."""
 
 from __future__ import annotations
 
 import itertools
 import math
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
 
-from .eval_spec import Scenario
+from .eval_spec import Scenario, _Sample
 
 # |grid| below this counts as "settled" (just above the battery's own
 # ±20 W deadband, matching the main e2e convergence assertion).
@@ -41,23 +40,9 @@ _MAX_SAMPLE_GAP_S = 5.0
 RETAIL_CT_PER_KWH = 30.0
 FEEDIN_CT_PER_KWH = 8.0
 
-
-@dataclass(frozen=True)
-class _Sample:
-    """What the harness records at every battery poll."""
-
-    t: float  # seconds since scenario start
-    # Instantaneous *true* grid total (W): the physical ground truth, not the
-    # delayed value the controller reads from the meter cache.
-    grid: float
-    # Raw whole-house consumption (load + noise - solar) straight from the load
-    # model, so a plotted consumption can never carry control-loop oscillation.
-    consumption: float
-    powers: tuple[float, ...]
-    socs: tuple[float, ...]
-    # PV wired straight into a battery's DC side (B2500, hybrid Venus): energy
-    # that never crosses the house meter, so it is not in ``consumption``.
-    dc_input: float = 0.0
+# Points each trace is downsampled to for the charts. Base and head share the
+# count so the two lines align by index regardless of poll cadence.
+GRAPH_POINTS = 1800
 
 
 def _percentile(values: Sequence[float], pct: float) -> float:
@@ -303,4 +288,61 @@ def _compute_metrics(
         "oracle_cost_ct": round(oracle_cost, 2),
         "cost_regret_ct": round(cost_regret, 2),
         "battery_travel_w_per_h": round(travel_w / duration_h, 0),
+    }
+
+
+def _downsample_series(
+    samples: list[_Sample],
+    duration_s: float,
+    pick: Callable[[_Sample], float],
+    n: int = GRAPH_POINTS,
+) -> list[float]:
+    """Bucket a per-sample value into *n* evenly spaced means over the run.
+
+    *pick* selects the value from each sample (grid, a battery's power, ...).
+    Empty buckets carry the previous value forward so the chart has no gaps;
+    the fixed length lets traces from different runs overlay by index.
+    """
+    if not samples or duration_s <= 0 or n <= 0:
+        return []
+    buckets: list[list[float]] = [[] for _ in range(n)]
+    for s in samples:
+        idx = min(int(s.t / duration_s * n), n - 1)
+        buckets[idx].append(pick(s))
+    out: list[float] = []
+    last = 0.0
+    for bucket in buckets:
+        if bucket:
+            last = sum(bucket) / len(bucket)
+        out.append(round(last, 1))
+    return out
+
+
+def _battery_power(i: int) -> Callable[[_Sample], float]:
+    """Picker for battery *i*'s output (a typed closure, so the per-battery
+    downsampling avoids an inline lambda mypy can't infer)."""
+    return lambda s: s.powers[i]
+
+
+def _chart_traces(scenario: Scenario, samples: list[_Sample]) -> dict:
+    """The downsampled series the charts draw, stored alongside the metrics.
+
+    Consumption comes straight from the load model, so it cannot carry
+    control-loop oscillation; it is the same scripted load in base and head,
+    so one trace is enough and the grid chart overlays it as context."""
+    specs = scenario.batteries
+    return {
+        "grid_trace": _downsample_series(
+            samples, scenario.duration_s, lambda s: s.grid
+        ),
+        "consumption_trace": _downsample_series(
+            samples, scenario.duration_s, lambda s: s.consumption
+        ),
+        "battery_labels": [
+            f"B{i + 1} {specs[i].device_type}" for i in range(len(specs))
+        ],
+        "battery_traces": [
+            _downsample_series(samples, scenario.duration_s, _battery_power(i))
+            for i in range(len(specs))
+        ],
     }
