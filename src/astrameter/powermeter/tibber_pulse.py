@@ -1,12 +1,12 @@
 import time
 from collections.abc import Callable
+from typing import Any
 
-import aiohttp
 from aiohttp import BasicAuth, ClientTimeout
 
 from astrameter.config.logger import logger
 
-from .base import Powermeter
+from .http_client import HttpPowermeter
 from .sml import (
     _OBIS_POWER_CURRENT,
     _OBIS_POWER_L1,
@@ -27,7 +27,7 @@ _STALE_AFTER_S = 15.0
 DEFAULT_TIMEOUT_S = 5.0
 
 
-class TibberPulse(Powermeter):
+class TibberPulse(HttpPowermeter):
     """Reads a Tibber Pulse via the local Pulse Bridge HTTP API.
 
     Fetches the raw SML telegram from the bridge's ``/data.json`` endpoint
@@ -64,33 +64,23 @@ class TibberPulse(Powermeter):
         self._obis_l1 = obis_power_l1
         self._obis_l2 = obis_power_l2
         self._obis_l3 = obis_power_l3
-        self.session: aiohttp.ClientSession | None = None
         self._clock = clock or time.monotonic
         # Last successfully decoded reading and when it was decoded, so a
         # transient undecodable telegram can reuse it instead of erroring.
         self._last_powers: list[float] | None = None
         self._last_good: float | None = None
 
-    async def start(self) -> None:
-        if self.session:
-            return
+    def _session_options(self) -> dict[str, Any]:
         # No separate connect timeout: the bridge's accept alone can exceed
         # 1 s (#551), and a bounded total already caps a stuck request.
-        self.session = aiohttp.ClientSession(
-            auth=BasicAuth(self.user, self.password),
-            timeout=ClientTimeout(total=self.timeout),
-        )
-
-    async def stop(self) -> None:
-        if self.session:
-            await self.session.close()
-            self.session = None
+        return {
+            "auth": BasicAuth(self.user, self.password),
+            "timeout": ClientTimeout(total=self.timeout),
+        }
 
     async def get_powermeter_watts(self) -> list[float]:
-        if not self.session:
-            raise RuntimeError("Session not started; call start() first")
         url = f"http://{self.ip}/data.json?node_id={self.node_id}"
-        async with self.session.get(url) as resp:
+        async with self._require_session().get(url) as resp:
             resp.raise_for_status()
             data = await resp.read()
         powers = parse_sml_powers(

@@ -1,4 +1,8 @@
-# Powermeter classes
+# The lifecycle and wait hooks are deliberate no-op defaults, not forgotten
+# abstract methods.
+# ruff: noqa: B027
+import asyncio
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 
@@ -20,13 +24,13 @@ def stream_fresh(
     return (clock() - last_monotonic) <= max_age
 
 
-class Powermeter:
+class Powermeter(ABC):
     # Labels the powermeter's diagnostic device in MQTT Insights. Set by the
     # outermost HealthTrackingPowermeter wrapper to the config section name.
     name: str = ""
 
-    async def get_powermeter_watts(self) -> list[float]:
-        raise NotImplementedError()
+    @abstractmethod
+    async def get_powermeter_watts(self) -> list[float]: ...
 
     async def get_powermeter_watts_raw(self) -> list[float]:
         """Per-phase watts before section/global processing wrappers.
@@ -49,10 +53,10 @@ class Powermeter:
         """
         return None
 
-    async def wait_for_message(self, timeout=5):
+    async def wait_for_message(self, timeout: float = 5) -> None:
         pass
 
-    async def wait_for_next_message(self, timeout=5):
+    async def wait_for_next_message(self, timeout: float = 5) -> None:
         """Block until a *new* measurement arrives (push-based powermeters).
 
         Unlike ``wait_for_message`` (which returns immediately once data has
@@ -61,13 +65,42 @@ class Powermeter:
         powermeters leave the default no-op.
         """
 
-    # --- Lifecycle (no-op by default, override for push-based powermeters) ---
-
-    async def start(self):
+    async def start(self) -> None:
         pass
 
-    async def stop(self):
+    async def stop(self) -> None:
         pass
 
-    def reset(self):
+    def reset(self) -> None:
         pass
+
+
+class PushPowermeter(Powermeter):
+    """Source that receives measurements instead of polling for them.
+
+    Subclasses set ``_message_event`` on every measurement they receive, so
+    ``wait_for_message`` returns once one has arrived and
+    ``wait_for_next_message`` (which clears the event first) blocks until the
+    next.
+    """
+
+    _TIMEOUT_MESSAGE = "Timeout waiting for message"
+
+    def __init__(self) -> None:
+        self._message_event = asyncio.Event()
+
+    async def _wait(self, event: asyncio.Event, timeout: float) -> None:
+        # Normalize to the builtin TimeoutError so callers get the same exception
+        # on every Python version (asyncio.TimeoutError is only an alias for it
+        # from 3.11 on).
+        try:
+            await asyncio.wait_for(event.wait(), timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError(self._TIMEOUT_MESSAGE) from None
+
+    async def wait_for_message(self, timeout: float = 5) -> None:
+        await self._wait(self._message_event, timeout)
+
+    async def wait_for_next_message(self, timeout: float = 5) -> None:
+        self._message_event.clear()
+        await self._wait(self._message_event, timeout)

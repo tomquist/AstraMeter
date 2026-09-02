@@ -3,7 +3,7 @@
 import dataclasses
 import time
 
-from astrameter.ct002.balancer import ProbeState
+from astrameter.ct002.balancer import ProbeState, split_balancer_knobs
 from astrameter.ct002.ct002 import CT002
 
 
@@ -15,7 +15,8 @@ def _ct002(**kwargs) -> CT002:
     (tests/test_balancer.py::TestPaceReading) and e2e coverage.
     """
     kwargs.setdefault("pace_base_step", 0)
-    return CT002(**kwargs)
+    balancer, other = split_balancer_knobs(kwargs)
+    return CT002(balancer=balancer, **other)
 
 
 class TestActiveControl:

@@ -68,33 +68,23 @@ class GeneralSettings:
     skip_powermeter_test: bool = False
     dedupe_time_window: float = 0.0
     enable_web_server: bool = True
-    #: The ``config.ini`` editor. ``None`` — the default — leaves it to the
-    #: dashboard, whose Configuration tab is that editor. ``True`` serves it
-    #: without a dashboard, and ``False`` refuses it even with one: a setting
-    #: someone chose in an earlier release must keep meaning what it said
-    #: (see ``WebServer.serve_config_editor``).
+    #: The ``config.ini`` editor. Tri-state: ``None`` leaves it to the dashboard's
+    #: Configuration tab, while an explicit ``True``/``False`` from an earlier
+    #: release keeps meaning what it said (``WebServer.serve_config_editor``).
     web_config_enabled: bool | None = None
     web_server_port: int = 52500
-    #: The live status dashboard. On by default — it is how most users see
-    #: what AstraMeter is doing. Set it to ``False`` to serve nothing.
+    #: The live status dashboard; ``False`` serves nothing.
     dashboard: bool = True
-    #: Whether the dashboard may write — edit the configuration and steer
-    #: batteries — rather than only display. On by default: a dashboard that
-    #: cannot change anything is half a dashboard, and the add-on has shipped
-    #: it this way from the start. Outside Home Assistant nothing authenticates
-    #: the web port, so anyone who can reach it can use those controls; set
-    #: this to ``False`` for a read-only page.
+    #: Whether the dashboard may edit the configuration and steer batteries.
+    #: Nothing authenticates the web port outside Home Assistant, so ``False``
+    #: is the read-only option.
     dashboard_allow_write: bool = True
-    #: Serve the dashboard on the plain web port as well as through Home
-    #: Assistant ingress. Ingress carries the user's identity; the port does
-    #: not, so reaching it directly is a separate opt-in.
+    #: Serve the dashboard on the plain web port, not just through ingress.
+    #: Ingress carries the user's identity; the port does not, hence the opt-in.
     dashboard_direct_access: bool = False
-    #: Extra host names the web port answers under, comma-separated. IP
-    #: addresses, ``localhost`` and ``.local`` names always work; a name that
-    #: resolves through a nameserver has to be listed here, because a name is
-    #: the one part of the address an outside site can point at this port
-    #: (see ``is_allowed_host`` in ``web_server.py``). Needed for a reverse
-    #: proxy or a private DNS entry, and for nothing else.
+    #: Extra host names the web port answers under, comma-separated. A DNS name
+    #: is the one thing an outside site can point at this port, so unlike IPs,
+    #: ``localhost`` and ``.local`` it must be listed (``is_allowed_host``).
     dashboard_allowed_hosts: str = ""
     #: Conditioning every power source starts from; a source may override it.
     signal: SignalSettings = SignalSettings()
@@ -208,12 +198,7 @@ class AppConfig(ABC):
     def render_powermeters_ini(self) -> str:
         """The power-source sections of an equivalent ``config.ini``.
 
-        Only needed by a backend with no file of its own, so that the
-        dashboard can hand its user a config file to take over from. Power
-        sources are the one part of the configuration that never becomes
-        settings — :meth:`powermeters` goes straight from the source to built
-        objects — so unlike the rest they cannot be rendered generically.
-        Deleting this hook is the natural follow-up to giving them a settings
-        type of their own.
+        Power sources are built objects rather than settings, so a backend with
+        no file of its own renders them here for the dashboard's hand-over file.
         """
         return ""

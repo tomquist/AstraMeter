@@ -1,7 +1,7 @@
 // Validation for the dashboard's write path.
 //
-// This is the C++ side of `_CONTROL_RANGES` / `_CONTROL_SCALE` /
-// `_coerce_control_value` in `src/astrameter/web_server.py`, and the bounds
+// This is the C++ side of `CONSUMER_CONTROLS` / `coerce_consumer_control` in
+// `src/astrameter/ct002/controls.py`, and the bounds
 // MUST stay identical on both. The CT002 setters do not bound their inputs —
 // the ranges live in the MQTT command handlers — so a value one stack accepts
 // and the other rejects would be settable here and then silently reverted the
@@ -66,7 +66,7 @@ bool is_device_field(const std::string &field);
 /// no value, and nothing about it is worth mirroring onto a retained topic.
 bool is_device_button(const std::string &field);
 
-/// Validate and scale *value* for *field*, mirroring _coerce_control_value.
+/// Validate and scale *value* for *field*, mirroring coerce_consumer_control.
 ///
 /// Returns an empty string on success (with *value* scaled to the unit the
 /// setter expects), or the message to report back — worded like the Python

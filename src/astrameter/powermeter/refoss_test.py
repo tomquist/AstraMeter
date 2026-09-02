@@ -121,7 +121,7 @@ async def test_get_json_rejects_redirect(mock_aiohttp_session):
         meter = Refoss("192.168.1.150", [1])
         await meter.start()
         with pytest.raises(ValueError, match="must not redirect"):
-            await meter.get_json("/rpc/Em.Status.Get?id=65535")
+            await meter.get_json("http://192.168.1.150/rpc/Em.Status.Get?id=65535")
         mock_aiohttp_session.get.assert_called_with(
             "http://192.168.1.150/rpc/Em.Status.Get?id=65535",
             allow_redirects=False,

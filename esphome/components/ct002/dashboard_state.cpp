@@ -182,8 +182,8 @@ status::PowermeterStatus CT002Component::powermeter_status() const {
 
 // ── write path ──────────────────────────────────────────────────────────
 //
-// Mirrors the _CONSUMER_SETTERS table and the device-wide branch of
-// src/astrameter/web_server.py: the same field names reach the same setters,
+// Mirrors the setter column of CONSUMER_CONTROLS and apply_device_control in
+// src/astrameter/ct002/controls.py: the same field names reach the same setters,
 // so a control behaves identically whichever stack is answering. The value has
 // already been validated and scaled by controls::coerce_consumer_control.
 

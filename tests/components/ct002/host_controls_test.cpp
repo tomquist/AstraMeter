@@ -1,6 +1,6 @@
 // Host-gcc tests for the dashboard's write-path validation. Mirrors
-// _CONTROL_RANGES / _CONTROL_SCALE / _coerce_control_value in
-// src/astrameter/web_server.py — the bounds must be identical on both stacks,
+// CONSUMER_CONTROLS / coerce_consumer_control in
+// src/astrameter/ct002/controls.py — the bounds must be identical on both stacks,
 // or a value one accepts and the other refuses would be settable from one
 // dashboard and then silently reverted by the next retained MQTT replay.
 // Compiles only controls.cpp (no ESPHome deps).

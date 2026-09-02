@@ -28,6 +28,7 @@ from _ct002_e2e_backend import (
     PollScheduler,
 )
 
+from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import LoadModel
@@ -180,10 +181,13 @@ class _Harness:
                 udp_port=ct_port,
                 ct_mac=ct_mac,
                 active_control=True,
-                fair_distribution=True,
-                min_efficient_power=min_efficient_power,
-                efficiency_rotation_interval=efficiency_rotation_interval,
-                probe_min_power=20,  # lower so the test's small loads can probe
+                balancer=BalancerConfig(
+                    fair_distribution=True,
+                    min_efficient_power=min_efficient_power,
+                    efficiency_rotation_interval=efficiency_rotation_interval,
+                    # lower so the test's small loads can probe
+                    probe_min_power=20,
+                ),
                 clock=self.clock,
                 reset_fn=None,
                 consumer_ttl=100000,  # avoid eviction during long mock-time sims

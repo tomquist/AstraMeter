@@ -156,7 +156,7 @@ struct Range {
   float scale;
 };
 
-// Mirrors _CONTROL_RANGES + _CONTROL_SCALE in src/astrameter/web_server.py.
+// Mirrors the numeric entries of CONSUMER_CONTROLS in src/astrameter/ct002/controls.py.
 constexpr Range NUMERIC_FIELDS[] = {
     {"manual_target", -10000.0f, 10000.0f, 1.0f},
     {"distribution_weight", 0.0f, 10.0f, 1.0f},
@@ -164,10 +164,10 @@ constexpr Range NUMERIC_FIELDS[] = {
     {"min_dc_output", 0.0f, 1000.0f, 1.0f},
 };
 
-// Mirrors _CONTROL_BOOLS.
+// Mirrors the switch entries of CONSUMER_CONTROLS.
 constexpr const char *BOOL_FIELDS[] = {"active", "auto_target"};
 
-// Mirrors the device-wide branch of _handle_control_device.
+// Mirrors apply_device_control in src/astrameter/ct002/controls.py.
 constexpr const char *DEVICE_FIELDS[] = {"active_control", "force_rotation"};
 // Buttons, not settings: they carry no value, so a write may arrive bare, and
 // there is no retained state for a dashboard write to mirror onto MQTT — a

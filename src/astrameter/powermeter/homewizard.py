@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import aiohttp
 
-from .base import Powermeter, stream_fresh
+from .base import PushPowermeter, stream_fresh
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -37,7 +37,9 @@ DEFAULT_MAX_MEASUREMENT_AGE_SECONDS = 30.0
 WATCHDOG_TIMEOUT_SECONDS = 45.0
 
 
-class HomeWizardPowermeter(Powermeter):
+class HomeWizardPowermeter(PushPowermeter):
+    _TIMEOUT_MESSAGE = "Timeout waiting for HomeWizard measurement"
+
     def __init__(
         self,
         ip: str,
@@ -48,6 +50,7 @@ class HomeWizardPowermeter(Powermeter):
         max_measurement_age_seconds: float = DEFAULT_MAX_MEASUREMENT_AGE_SECONDS,
         clock: Callable[[], float] | None = None,
     ) -> None:
+        super().__init__()
         self.ip = ip
         self.token = token
         self.serial = serial
@@ -67,7 +70,6 @@ class HomeWizardPowermeter(Powermeter):
         self._stream_healthy = False
         self._session: aiohttp.ClientSession | None = None
         self._ws_task: asyncio.Task[None] | None = None
-        self._message_event = asyncio.Event()
         # Set whenever we receive a new measurement; the ws_loop watchdog
         # clears it after checking staleness to re-arm the timer.
         self._fresh_measurement_event = asyncio.Event()
@@ -96,14 +98,14 @@ class HomeWizardPowermeter(Powermeter):
         self._last_measurement_time = None
         self._connected = False
         self._stream_healthy = False
-        self._message_event = asyncio.Event()
-        self._fresh_measurement_event = asyncio.Event()
+        self._message_event.clear()
+        self._fresh_measurement_event.clear()
         self._session = aiohttp.ClientSession()
         self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def stop(self) -> None:
-        # Clear before cancelling: the ws_loop re-raises CancelledError before
-        # its own reset runs, so stream_online() would otherwise stay True.
+        # Clear before cancelling: cancellation leaves the ws_loop before its
+        # own reset runs, so stream_online() would otherwise stay True.
         self._connected = False
         if self._ws_task:
             self._ws_task.cancel()
@@ -151,8 +153,6 @@ class HomeWizardPowermeter(Powermeter):
                         with contextlib.suppress(asyncio.CancelledError):
                             await watchdog
                     logger.info("HomeWizard WebSocket closed")
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.error("HomeWizard WebSocket error: %s", e, exc_info=True)
             self._connected = False
@@ -170,24 +170,21 @@ class HomeWizardPowermeter(Powermeter):
         ``async for msg in ws`` — the exact failure mode observed in
         the user's report.
         """
-        try:
-            while True:
-                self._fresh_measurement_event.clear()
-                try:
-                    await asyncio.wait_for(
-                        self._fresh_measurement_event.wait(),
-                        timeout=WATCHDOG_TIMEOUT_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "HomeWizard watchdog: no measurement for %.0fs, "
-                        "force-closing WebSocket to trigger a reconnect",
-                        WATCHDOG_TIMEOUT_SECONDS,
-                    )
-                    await ws.close()
-                    return
-        except asyncio.CancelledError:
-            raise
+        while True:
+            self._fresh_measurement_event.clear()
+            try:
+                await asyncio.wait_for(
+                    self._fresh_measurement_event.wait(),
+                    timeout=WATCHDOG_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "HomeWizard watchdog: no measurement for %.0fs, "
+                    "force-closing WebSocket to trigger a reconnect",
+                    WATCHDOG_TIMEOUT_SECONDS,
+                )
+                await ws.close()
+                return
 
     async def _handle_message(
         self, ws: aiohttp.ClientWebSocketResponse[bool], raw: str
@@ -260,29 +257,13 @@ class HomeWizardPowermeter(Powermeter):
         )
 
     async def get_powermeter_watts(self) -> list[float]:
-        if self.values is None:
+        last = self._last_measurement_time
+        if self.values is None or last is None:
             raise ValueError("No value received from HomeWizard")
-        if (
-            self._max_measurement_age_seconds > 0
-            and self._last_measurement_time is not None
-        ):
-            age = self._clock() - self._last_measurement_time
-            if age > self._max_measurement_age_seconds:
-                raise ValueError(
-                    f"HomeWizard measurement is stale "
-                    f"({age:.1f}s old, max {self._max_measurement_age_seconds:.1f}s)"
-                )
+        max_age = self._max_measurement_age_seconds
+        if not stream_fresh(last, max_age, self._clock):
+            age = self._clock() - last
+            raise ValueError(
+                f"HomeWizard measurement is stale ({age:.1f}s old, max {max_age:.1f}s)"
+            )
         return list(self.values)
-
-    async def wait_for_message(self, timeout: float = 5) -> None:
-        try:
-            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for HomeWizard measurement") from None
-
-    async def wait_for_next_message(self, timeout: float = 5) -> None:
-        self._message_event.clear()
-        try:
-            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for HomeWizard measurement") from None

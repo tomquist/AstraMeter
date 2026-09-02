@@ -1,24 +1,23 @@
 import json
+from typing import Any
 
 import aiohttp
-from aiohttp import BasicAuth, ClientTimeout
+from aiohttp import BasicAuth
 from jsonpath_ng.ext import parse
 
 from astrameter.config.logger import logger
 
-from .base import Powermeter
+from .http_client import HttpPowermeter
 
 
-def extract_json_value(data, path):
-    jsonpath_expr = parse(path)
-    match = jsonpath_expr.find(data)
+def extract_json_value(data: Any, path: str) -> float:
+    match = parse(path).find(data)
     if match:
         return float(match[0].value)
-    else:
-        raise ValueError("No match found for the JSON path")
+    raise ValueError("No match found for the JSON path")
 
 
-class JsonHttpPowermeter(Powermeter):
+class JsonHttpPowermeter(HttpPowermeter):
     def __init__(
         self,
         url: str,
@@ -33,41 +32,21 @@ class JsonHttpPowermeter(Powermeter):
             BasicAuth(username or "", password or "") if username or password else None
         )
         self.headers = headers or {}
-        self.session: aiohttp.ClientSession | None = None
 
-    async def start(self) -> None:
-        if self.session:
-            return
-        self.session = aiohttp.ClientSession(
-            auth=self.auth,
-            headers=self.headers,
-            # Fail fast: the battery polls ~1/s, so a slow source should error
-            # quickly and let the next poll retry rather than pin a handler.
-            timeout=ClientTimeout(total=2, connect=1),
-        )
+    def _session_options(self) -> dict[str, Any]:
+        return {
+            **super()._session_options(),
+            "auth": self.auth,
+            "headers": self.headers,
+        }
 
-    async def stop(self) -> None:
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-    async def get_json(self):
-        if not self.session:
-            raise RuntimeError("Session not started; call start() first")
+    async def get_powermeter_watts(self) -> list[float]:
         try:
-            async with self.session.get(self.url) as resp:
-                resp.raise_for_status()
-                return await resp.json(content_type=None)
+            data = await self.get_json(self.url)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON: {e}")
             raise ValueError(f"Invalid JSON response: {e}") from e
         except aiohttp.ClientError as e:
             logger.error(f"HTTP request error: {e}")
             raise ValueError(f"HTTP request error: {e}") from e
-
-    async def get_powermeter_watts(self) -> list[float]:
-        data = await self.get_json()
-        values = []
-        for path in self.json_paths:
-            values.append(extract_json_value(data, path))
-        return values
+        return [extract_json_value(data, path) for path in self.json_paths]

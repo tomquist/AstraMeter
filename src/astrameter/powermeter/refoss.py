@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
-import aiohttp
-from aiohttp import ClientTimeout
-
-from .base import Powermeter
+from .http_client import HttpPowermeter
 
 
 def parse_channels(raw: str) -> list[int]:
@@ -44,7 +42,7 @@ def parse_channels(raw: str) -> list[int]:
     return channels
 
 
-class Refoss(Powermeter):
+class Refoss(HttpPowermeter):
     """Reads a Refoss / Meross energy monitor over the local HTTP Open API.
 
     Polls ``/rpc/Em.Status.Get?id=65535`` (all CT channels) and returns the
@@ -65,28 +63,9 @@ class Refoss(Powermeter):
             raise ValueError("CHANNELS must list at least one channel id")
         self.ip = ip
         self.channels = list(channels)
-        self.session: aiohttp.ClientSession | None = None
 
-    async def start(self) -> None:
-        """Open the shared HTTP session used to poll the device."""
-        if self.session:
-            return
-        # Fail fast: the battery polls ~1/s, so a slow source should error
-        # quickly and let the next poll retry rather than pin a handler.
-        self.session = aiohttp.ClientSession(timeout=ClientTimeout(total=2, connect=1))
-
-    async def stop(self) -> None:
-        """Close the HTTP session if one is open."""
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-    async def get_json(self, path: str):
-        """GET ``path`` on the device and return the decoded JSON body."""
-        if not self.session:
-            raise RuntimeError("Session not started; call start() first")
-        url = f"http://{self.ip}{path}"
-        async with self.session.get(url, allow_redirects=False) as resp:
+    async def get_json(self, url: str) -> Any:
+        async with self._require_session().get(url, allow_redirects=False) as resp:
             if 300 <= resp.status < 400:
                 raise ValueError("Refoss API must not redirect")
             resp.raise_for_status()
@@ -94,7 +73,7 @@ class Refoss(Powermeter):
 
     async def get_powermeter_watts(self) -> list[float]:
         """Return watts for each configured channel, in CHANNELS order."""
-        response = await self.get_json("/rpc/Em.Status.Get?id=65535")
+        response = await self.get_json(f"http://{self.ip}/rpc/Em.Status.Get?id=65535")
         if not isinstance(response, dict):
             raise ValueError("Refoss Em.Status.Get response must be an object")
         status = response.get("status")

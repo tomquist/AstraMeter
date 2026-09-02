@@ -542,7 +542,6 @@ class LoadBalancer {
   BalancerConsumerState &get_consumer_(const std::string &consumer_id);
   void invalidate_efficiency_cache_();
   std::unordered_set<std::string> probe_participants_() const;
-  float effective_probe_min_power_() const;
   float next_probe_requested_abs_(float current_requested_abs, float ceiling) const;
   void clear_probe_state_(const std::string &reason);
   void clear_post_probe_fade_();

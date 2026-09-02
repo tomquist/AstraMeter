@@ -23,6 +23,7 @@ from _ct002_e2e_backend import (
     find_free_ports,
 )
 
+from astrameter.ct002.balancer import split_balancer_knobs
 from astrameter.ct002.ct002 import CT002
 from astrameter.simulator.battery import BatterySimulator
 from astrameter.simulator.load_model import Load, LoadModel
@@ -146,17 +147,23 @@ class _SimHarness:
             )
 
         if self.backend == "python":
+            balancer, other_kwargs = split_balancer_knobs(
+                {
+                    "fair_distribution": True,
+                    "min_efficient_power": min_efficient_power,
+                    "efficiency_rotation_interval": efficiency_rotation_interval,
+                    **ct_kwargs,
+                }
+            )
             self.ct002 = CT002(
                 udp_port=ct_port,
                 ct_mac=ct_mac,
                 active_control=True,
-                fair_distribution=True,
-                min_efficient_power=min_efficient_power,
-                efficiency_rotation_interval=efficiency_rotation_interval,
+                balancer=balancer,
                 clock=self.clock,
                 reset_fn=None,
                 consumer_ttl=100000,  # avoid eviction during long mock-time sims
-                **ct_kwargs,
+                **other_kwargs,
             )
 
             async def update_readings(_addr, _fields=None, _consumer_id=None):

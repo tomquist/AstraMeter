@@ -17,6 +17,15 @@ from astrameter.config.addon import (
     _GLOBAL_SIGNAL_FIELDS,
     _MARSTEK_FIELDS,
     _SOURCE_SIGNAL_FIELDS,
+    option_name,
+)
+
+FIELD_LISTS = (
+    _GENERAL_FIELDS,
+    _GLOBAL_SIGNAL_FIELDS,
+    _SOURCE_SIGNAL_FIELDS,
+    _CT_FIELDS,
+    _MARSTEK_FIELDS,
 )
 
 CONFIG_YAML = Path(__file__).parents[3] / "ha_addon" / "config.yaml"
@@ -55,14 +64,7 @@ def schema_options() -> set[str]:
 
 
 def mapped_options() -> set[str]:
-    maps = (
-        _GENERAL_FIELDS,
-        _GLOBAL_SIGNAL_FIELDS,
-        _SOURCE_SIGNAL_FIELDS,
-        _CT_FIELDS,
-        _MARSTEK_FIELDS,
-    )
-    return {option for field_map in maps for option in field_map.values()}
+    return {option_name(field) for fields in FIELD_LISTS for field in fields}
 
 
 def test_the_schema_block_was_parsed():
@@ -91,14 +93,8 @@ def test_no_stale_entries_in_the_handled_in_code_list():
 
 def test_an_option_is_read_by_exactly_one_mapping():
     seen: dict[str, int] = {}
-    for field_map in (
-        _GENERAL_FIELDS,
-        _GLOBAL_SIGNAL_FIELDS,
-        _SOURCE_SIGNAL_FIELDS,
-        _CT_FIELDS,
-        _MARSTEK_FIELDS,
-    ):
-        for option in field_map.values():
+    for fields in FIELD_LISTS:
+        for option in map(option_name, fields):
             seen[option] = seen.get(option, 0) + 1
     duplicates = {option for option, count in seen.items() if count > 1}
     assert not duplicates, f"options read by more than one mapping: {duplicates}"

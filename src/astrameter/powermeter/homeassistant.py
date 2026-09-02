@@ -9,7 +9,7 @@ import aiohttp
 
 from astrameter.power_units import POWER_UNIT_SCALE, POWER_UNITS
 
-from .base import Powermeter
+from .base import PushPowermeter
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -27,7 +27,9 @@ _ATTR_UNIT_OF_MEASUREMENT = "unit_of_measurement"
 WS_HEARTBEAT_SECONDS = 30.0
 
 
-class HomeAssistant(Powermeter):
+class HomeAssistant(PushPowermeter):
+    _TIMEOUT_MESSAGE = "Timeout waiting for Home Assistant state"
+
     def __init__(
         self,
         ip: str,
@@ -40,6 +42,7 @@ class HomeAssistant(Powermeter):
         power_output_alias: str | list[str],
         path_prefix: str | None,
     ):
+        super().__init__()
         self.ip = ip
         self.port = port
         self.use_https = use_https
@@ -87,7 +90,6 @@ class HomeAssistant(Powermeter):
         self._ws_task: asyncio.Task[None] | None = None
         self._fetch_states_task: asyncio.Task[None] | None = None
         self._entities_ready = asyncio.Event()
-        self._message_event = asyncio.Event()
         # Read-only health flag for stream_online(): set on auth_ok, cleared on
         # disconnect (via _reset_for_reconnect).
         self._connected = False
@@ -154,8 +156,6 @@ class HomeAssistant(Powermeter):
                         ):
                             break
                     logger.info("Home Assistant WebSocket closed")
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.error("Home Assistant WebSocket error: %s", e, exc_info=True)
             self._reset_for_reconnect()
@@ -291,8 +291,6 @@ class HomeAssistant(Powermeter):
                         )
                         continue
                     data = await resp.json()
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.debug(
                     "Home Assistant: REST state fetch for %s failed: %s", eid, e
@@ -409,14 +407,4 @@ class HomeAssistant(Powermeter):
         return results
 
     async def wait_for_message(self, timeout: float = 5) -> None:
-        try:
-            await asyncio.wait_for(self._entities_ready.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for Home Assistant state") from None
-
-    async def wait_for_next_message(self, timeout: float = 5) -> None:
-        self._message_event.clear()
-        try:
-            await asyncio.wait_for(self._message_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for Home Assistant state") from None
+        await self._wait(self._entities_ready, timeout)
