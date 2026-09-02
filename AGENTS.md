@@ -287,6 +287,27 @@ GitHub reads that workflow and `.github/pull_request_template.md` from the
 **default branch**, so edits to either do nothing until they reach `main` at the
 next release.
 
+### Commenting on a pull request
+
+**Never post a top-level PR comment.** An agent posts under the maintainer's
+account, so a comment on the PR itself reads as if the maintainer wrote it —
+about their own pull request. Status updates, verification results and
+"here's what I changed" summaries do not belong there at all.
+
+Say it in the place that carries the right attribution and scope:
+
+- **Disagreeing with a review finding** (a bot's or a person's) — reply **on
+  that finding's review thread**. It is scoped to the code in question and
+  reads as a response rather than a pronouncement. This is the one place an
+  agent should be writing on GitHub.
+- **What the change is, how it was verified, what is still open** — the **PR
+  description**. Edit it as the work moves; don't narrate the same thing in a
+  comment.
+- **Anything else** — say it to the person you are working with, not on the
+  PR.
+
+A finding you accept needs no reply: push the fix and let the diff answer.
+
 ## Changelog
 
 For user-facing work, contribute **exactly one bullet under `## Next`** that summarizes the **overall** outcome of *that change*. The unit is the **change (feature/fix), not the branch or PR**: a single change may span several branches or PRs, and they all **edit the same bullet** rather than each adding their own. `## Next` accumulates **one bullet per change**, so it normally holds **several** bullets at once (one for each change heading into the next release) — multiple bullets under `## Next` are correct and expected, never a violation. What you must not do is author **more than one** bullet for **your own** change, or consolidate/remove a bullet belonging to a *different* change. **Add** your bullet when you first document the change; on **later iterations** (more commits, or a follow-up PR for the same change), **edit that same bullet** if the scope or wording shifts—do **not** append extra bullets for each follow-up. Skip `CHANGELOG.md` entirely when nothing users would notice changes (refactors, tests-only, etc.).
