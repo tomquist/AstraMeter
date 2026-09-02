@@ -1,12 +1,14 @@
 import asyncio
+import logging
 
 import aioesphomeapi
 from aioesphomeapi import EntityInfo, EntityState, SensorState
 from aioesphomeapi.reconnect_logic import ReconnectLogic
 
-from astrameter.config.logger import logger
-
 from .base import PushPowermeter
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 
 class ESPHomeNative(PushPowermeter):

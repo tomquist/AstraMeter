@@ -2,6 +2,7 @@
 the control-write validation."""
 
 import asyncio
+import dataclasses
 import json
 from typing import Any
 
@@ -12,6 +13,13 @@ from astrameter.ct002 import CT002
 from astrameter.status import StatusRegistry
 from astrameter.status.secrets import SENTINEL
 from astrameter.web_server import WebServer
+
+
+@dataclasses.dataclass
+class _InsightsSnapshot:
+    """The shape `_as_wire_dict` expects from an integration snapshot."""
+
+    connected: bool = True
 
 
 def _registry(tmp_path, **kwargs) -> StatusRegistry:
@@ -603,6 +611,25 @@ async def test_a_refused_host_explains_itself_in_prose(tmp_path):
     await client.close()
 
 
+def test_a_refused_host_is_logged_once_and_the_log_is_capped(caplog):
+    """The name is the caller's to choose, so the set that dedupes the log is
+    a set an attacker could otherwise grow without bound."""
+    from astrameter.web_guard import _REFUSED_HOST_LOG_CAP, RefusedHostLog
+
+    log = RefusedHostLog()
+    with caplog.at_level("WARNING"):
+        log.log("astra.example.lan", "/")
+        log.log("astra.example.lan", "/api/status")
+        assert caplog.text.count("astra.example.lan") == 1
+
+        caplog.clear()
+        for i in range(_REFUSED_HOST_LOG_CAP + 5):
+            log.log(f"sweep{i}.example", "/")
+        # One line per name up to the cap, then a single "going quiet" notice.
+        assert caplog.text.count("is not an address") == _REFUSED_HOST_LOG_CAP - 1
+        assert caplog.text.count("not logging") == 1
+
+
 def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it():
     """Unit-level edges the route tests would need a server to reach."""
     from astrameter.web_server import is_allowed_host, parse_allowed_hosts
@@ -991,6 +1018,12 @@ async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
     mirrored: list[tuple] = []
 
     class _Insights:
+        # The registry serialises whatever `status_snapshot` returns into the
+        # `integrations` block, so a fake standing in for the service has to
+        # answer it too.
+        def status_snapshot(self):
+            return _InsightsSnapshot()
+
         async def publish_consumer_command(self, device_id, consumer_id, field, value):
             mirrored.append((device_id, consumer_id, field, value))
 

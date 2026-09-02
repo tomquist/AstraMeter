@@ -83,6 +83,16 @@ def debug_traceback() -> bool:
     return logger.isEnabledFor(logging.DEBUG)
 
 
+levels = {
+    "critical": logging.CRITICAL,
+    "error": logging.ERROR,
+    "warn": logging.WARNING,
+    "warning": logging.WARNING,
+    "info": logging.INFO,
+    "debug": logging.DEBUG,
+}
+
+
 def setLogLevel(inLevel: str):
     level = levels.get(inLevel.lower())
     if level is None:
@@ -109,14 +119,5 @@ def _install_auto_exc_info_filter() -> None:
         if not any(isinstance(f, _AutoExcInfoFilter) for f in handler.filters):
             handler.addFilter(_AutoExcInfoFilter())
 
-
-levels = {
-    "critical": logging.CRITICAL,
-    "error": logging.ERROR,
-    "warn": logging.WARNING,
-    "warning": logging.WARNING,
-    "info": logging.INFO,
-    "debug": logging.DEBUG,
-}
 
 logger = logging.getLogger("astrameter")

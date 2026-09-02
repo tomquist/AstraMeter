@@ -11,35 +11,33 @@ import asyncio
 
 import pytest
 
-from astrameter.simulator.eval_report import render_html_report
-from astrameter.simulator.evaluation import (
+from astrameter.simulator.eval_compare import (
     _METRIC_GLOSSARY,
     _REPORT_METRICS,
-    FEEDIN_CT_PER_KWH,
-    GRAPH_POINTS,
-    RETAIL_CT_PER_KWH,
-    BatterySpec,
-    Event,
-    Scenario,
     _aggregate,
     _compare_aggregates,
-    _fmt_delta,
-    _grid_cost_ct,
     _guardrail_regressions,
     _merge_seeds,
     _metric_ndp,
-    _oracle_cost_ct,
     _overall_summary,
     _priority_summary,
-    _run_all,
-    _Sample,
     _seed_label,
     _weighted_overall,
-    build_scenarios,
     render_markdown_compare,
     render_text,
-    run_scenario,
 )
+from astrameter.simulator.eval_harness import run_scenario
+from astrameter.simulator.eval_metrics import (
+    FEEDIN_CT_PER_KWH,
+    GRAPH_POINTS,
+    RETAIL_CT_PER_KWH,
+    _grid_cost_ct,
+    _oracle_cost_ct,
+)
+from astrameter.simulator.eval_report import render_html_report
+from astrameter.simulator.eval_scenarios import build_scenarios
+from astrameter.simulator.eval_spec import BatterySpec, Event, Scenario, _Sample
+from astrameter.simulator.evaluation import _run_all
 
 
 def _steady_samples(
@@ -307,26 +305,14 @@ def test_compare_tolerates_base_missing_a_new_metric():
     base_old = {k: v for k, v in res.items() if k != "grid_p2p_w"}
     md = render_markdown_compare([base_old], [res])
     assert "grid_p2p_w" in md  # row still rendered (Base shows —)
-    h = render_html_report(
-        [base_old],
-        [res],
-        report_metrics=_REPORT_METRICS,
-        metric_glossary=_METRIC_GLOSSARY,
-        fmt_delta=_fmt_delta,
-    )
+    h = render_html_report([base_old], [res])
     assert "grid_p2p_w" in h
 
 
 def test_html_report_is_self_contained_and_interactive():
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     base = dict(res, overshoot_max_w=res["overshoot_max_w"] + 100.0)
-    h = render_html_report(
-        [base],
-        [res],
-        report_metrics=_REPORT_METRICS,
-        metric_glossary=_METRIC_GLOSSARY,
-        fmt_delta=_fmt_delta,
-    )
+    h = render_html_report([base], [res])
     # Self-contained: the uPlot library and CSS are inlined (no CDN/network).
     assert "uPlot" in h and "https://cdn." not in h
     assert ".uplot" in h  # vendored CSS
@@ -348,13 +334,7 @@ def test_html_report_escapes_script_breakout_in_chart_data():
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     # A label that would close the inline <script> if embedded verbatim.
     res = dict(res, battery_labels=["</script><b>x"])
-    h = render_html_report(
-        None,
-        [res],
-        report_metrics=_REPORT_METRICS,
-        metric_glossary=_METRIC_GLOSSARY,
-        fmt_delta=_fmt_delta,
-    )
+    h = render_html_report(None, [res])
     # The raw breakout sequence must not survive into the chart JSON; '<' is
     # escaped to the JSON-valid <.
     assert "</script><b>x" not in h
@@ -363,13 +343,7 @@ def test_html_report_escapes_script_breakout_in_chart_data():
 
 def test_html_report_handles_missing_baseline():
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
-    h = render_html_report(
-        None,
-        [res],
-        report_metrics=_REPORT_METRICS,
-        metric_glossary=_METRIC_GLOSSARY,
-        fmt_delta=_fmt_delta,
-    )
+    h = render_html_report(None, [res])
     # Head-only still renders the grid (head series) and per-battery charts.
     assert 'id="grid0"' in h
     assert 'id="batt0"' in h
@@ -591,16 +565,7 @@ def test_markdown_compare_leads_with_aggregate_rollup():
 def test_html_report_renders_aggregate_section():
     results = _two_results()
     base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
-    base_agg, head_agg = _aggregate(base), _aggregate(results)
-    h = render_html_report(
-        base,
-        results,
-        report_metrics=_REPORT_METRICS,
-        metric_glossary=_METRIC_GLOSSARY,
-        fmt_delta=_fmt_delta,
-        aggregate=(base_agg, head_agg),
-        aggregate_summary=_overall_summary(base_agg, head_agg),
-    )
+    h = render_html_report(base, results)
     assert "Aggregate &mdash; mean across 2 scenarios" in h
     assert "improved" in h  # the one-line verdict is rendered
 

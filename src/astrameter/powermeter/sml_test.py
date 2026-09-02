@@ -1,5 +1,6 @@
 import asyncio
 import configparser
+import logging
 import os
 import struct
 import threading
@@ -411,3 +412,16 @@ async def test_e2e_pty_serial_read():
         await sml.stop()
         os.close(master_fd)
         os.close(slave_fd)
+
+
+@pytest.mark.asyncio
+async def test_empty_first_read_reports_a_closed_connection(caplog):
+    """EOF on the first read is end-of-stream, not an unparseable frame."""
+    sml = Sml("/dev/null")
+    sml._reader = SimpleNamespace(read=AsyncMock(return_value=b""))
+    with caplog.at_level(logging.ERROR):
+        await sml._read_serial()
+    assert "serial connection closed" in caplog.text
+    assert "failed to read SML frame" not in caplog.text
+    # One read, then stop -- no futile frame attempts against an empty stream.
+    assert sml._reader.read.await_count == 1

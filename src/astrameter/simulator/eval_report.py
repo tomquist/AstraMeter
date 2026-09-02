@@ -17,15 +17,19 @@ import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from .eval_compare import _headline, _metric_rows
-from .eval_metrics import _Sample
-from .eval_spec import Scenario
+from .eval_compare import (
+    _METRIC_GLOSSARY,
+    _REPORT_METRICS,
+    _compare_aggregates,
+    _fmt_delta,
+    _headline,
+    _metric_rows,
+    _overall_summary,
+    _priority_summary,
+    _seeds_caption,
+)
 
 _ASSETS = Path(__file__).parent / "report_assets"
-
-# Points each trace is downsampled to for the charts. Base and head share the
-# count so the two lines align by index regardless of poll cadence.
-GRAPH_POINTS = 1800
 
 # Series colours (solid; the chart background is dark).  Base/"before" is a warm
 # orange, head/"after" a cool blue — the blue-vs-orange contrast that survives
@@ -46,63 +50,6 @@ BATTERY_COLORS = (
     "#A371F7",  # purple
     "#56D4DD",  # cyan
 )
-
-
-def _downsample_series(
-    samples: list[_Sample],
-    duration_s: float,
-    pick: Callable[[_Sample], float],
-    n: int = GRAPH_POINTS,
-) -> list[float]:
-    """Bucket a per-sample value into *n* evenly spaced means over the run.
-
-    *pick* selects the value from each sample (grid, a battery's power, ...).
-    Empty buckets carry the previous value forward so the chart has no gaps;
-    the fixed length lets traces from different runs overlay by index.
-    """
-    if not samples or duration_s <= 0 or n <= 0:
-        return []
-    buckets: list[list[float]] = [[] for _ in range(n)]
-    for s in samples:
-        idx = min(int(s.t / duration_s * n), n - 1)
-        buckets[idx].append(pick(s))
-    out: list[float] = []
-    last = 0.0
-    for bucket in buckets:
-        if bucket:
-            last = sum(bucket) / len(bucket)
-        out.append(round(last, 1))
-    return out
-
-
-def _battery_power(i: int) -> Callable[[_Sample], float]:
-    """Picker for battery *i*'s output (a typed closure, so the per-battery
-    downsampling avoids an inline lambda mypy can't infer)."""
-    return lambda s: s.powers[i]
-
-
-def _chart_traces(scenario: Scenario, samples: list[_Sample]) -> dict:
-    """The downsampled series the charts draw, stored alongside the metrics.
-
-    Consumption comes straight from the load model, so it cannot carry
-    control-loop oscillation; it is the same scripted load in base and head,
-    so one trace is enough and the grid chart overlays it as context."""
-    specs = scenario.batteries
-    return {
-        "grid_trace": _downsample_series(
-            samples, scenario.duration_s, lambda s: s.grid
-        ),
-        "consumption_trace": _downsample_series(
-            samples, scenario.duration_s, lambda s: s.consumption
-        ),
-        "battery_labels": [
-            f"B{i + 1} {specs[i].device_type}" for i in range(len(specs))
-        ],
-        "battery_traces": [
-            _downsample_series(samples, scenario.duration_s, _battery_power(i))
-            for i in range(len(specs))
-        ],
-    }
 
 
 def _read_asset(name: str) -> str:
@@ -135,45 +82,36 @@ def _metrics_table(
     return "".join(rows)
 
 
-def render_html_report(
-    base: list[dict] | None,
-    head: list[dict],
-    *,
-    report_metrics: Sequence[str],
-    metric_glossary: Sequence[tuple[str, str]],
-    fmt_delta: Callable[[float, float], str],
-    aggregate: tuple[dict | None, dict] | None = None,
-    aggregate_summary: str = "",
-    note: str = "",
-) -> str:
+def render_html_report(base: list[dict] | None, head: list[dict]) -> str:
     """Return a self-contained HTML report comparing *base* and *head*.
 
     *base* may be ``None`` / empty (no baseline on the PR base branch), in which
     case each scenario renders head-only.
 
-    *aggregate*, when given, is a ``(base_agg, head_agg)`` pair of synthetic
-    roll-up rows (means across scenarios). It renders as a leading "Aggregate"
-    section so the overall direction of a change is visible before any
-    per-scenario table; *aggregate_summary* is a one-line verdict shown with it.
-    *note* is an optional caption (e.g. how many seeds were averaged) shown
-    under the page heading.
+    The page opens with an "Aggregate" section — the roll-up rows
+    :func:`_compare_aggregates` derives plus the two one-line verdicts — so the
+    overall direction of a change is visible before any per-scenario table, and
+    carries a caption naming how many seeds each side averaged.
     """
     base_by = {r["scenario"]: r for r in (base or [])}
 
     glossary_rows = "".join(
         f"<tr><td><code>{_escape(k)}</code></td><td>{_escape(v)}</td></tr>"
-        for k, v in metric_glossary
+        for k, v in _METRIC_GLOSSARY
     )
 
-    sections: list[str] = []
-    if aggregate is not None:
-        agg_base, agg_head = aggregate
-        n = agg_head.get("n_scenarios", len(head))
-        agg_parts = [f"<h2>Aggregate &mdash; mean across {_escape(n)} scenarios</h2>"]
-        if aggregate_summary:
-            agg_parts.append(f'<p class="summary">{_escape(aggregate_summary)}</p>')
-        agg_parts.append(_metrics_table(agg_base, agg_head, report_metrics, fmt_delta))
-        sections.append(f"<section>{''.join(agg_parts)}</section>")
+    agg_base, agg_head = _compare_aggregates(base, head)
+    n = agg_head.get("n_scenarios", len(head))
+    agg_parts = [f"<h2>Aggregate &mdash; mean across {_escape(n)} scenarios</h2>"]
+    if agg_base is not None:
+        summary = (
+            _overall_summary(agg_base, agg_head)
+            + " · "
+            + _priority_summary(agg_base, agg_head)
+        )
+        agg_parts.append(f'<p class="summary">{_escape(summary)}</p>')
+    agg_parts.append(_metrics_table(agg_base, agg_head, _REPORT_METRICS, _fmt_delta))
+    sections: list[str] = [f"<section>{''.join(agg_parts)}</section>"]
     # Each chart is a generic {durationMin, series:[{label,color,data}, ...]}
     # so the same JS builder draws both the grid (base vs head) and the
     # per-battery output overlays.
@@ -184,7 +122,7 @@ def render_html_report(
         parts = [
             f"<h2>{_escape(res['scenario'])}</h2>",
             f'<p class="summary">{_escape(_headline(b, res))}</p>',
-            _metrics_table(b, res, report_metrics, fmt_delta),
+            _metrics_table(b, res, _REPORT_METRICS, _fmt_delta),
         ]
 
         # Grid power: base vs head overlay.
@@ -243,6 +181,7 @@ def render_html_report(
         if base_by
         else f'<span class="key" style="color:{COLOR_HEAD}">&#9632; head</span>'
     )
+    note = _seeds_caption(base, head)
     note_html = f"<p class='summary'>{_escape(note)}</p>" if note else ""
     body = (
         "<div class='wrap'>"

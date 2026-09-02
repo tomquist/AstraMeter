@@ -41,7 +41,7 @@ async def test_shellyem_get_powermeter_watts() -> None:
 
 async def test_shellyplus1pm_get_powermeter_watts() -> None:
     shelly = ShellyPlus1PM("192.168.1.11", "user", "pass", "")
-    shelly._rpc_session = _mock_session({"apower": 150})
+    shelly.session = _mock_session({"apower": 150})
 
     assert await shelly.get_powermeter_watts() == [150]
 
@@ -62,6 +62,6 @@ async def test_shellyem_get_powermeter_watts_indexed() -> None:
 
 async def test_shelly3empro_get_powermeter_watts() -> None:
     shelly = Shelly3EMPro("192.168.1.13", "user", "pass", "")
-    shelly._rpc_session = _mock_session({"total_act_power": 450})
+    shelly.session = _mock_session({"total_act_power": 450})
 
     assert await shelly.get_powermeter_watts() == [450]

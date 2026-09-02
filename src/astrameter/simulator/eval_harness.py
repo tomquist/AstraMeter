@@ -16,10 +16,9 @@ from astrameter.ct002.balancer import split_balancer_knobs
 from astrameter.ct002.ct002 import CT002
 
 from .battery import BatterySimulator
-from .eval_metrics import _compute_metrics, _Sample
-from .eval_report import _chart_traces
+from .eval_metrics import _chart_traces, _compute_metrics
 from .eval_scenarios import build_scenarios
-from .eval_spec import EvalWorld, Scenario
+from .eval_spec import EvalWorld, Scenario, _Sample
 from .load_model import Load, LoadModel
 from .powermeter_sim import PowermeterSimulator
 

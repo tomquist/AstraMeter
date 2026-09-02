@@ -1,6 +1,7 @@
 import asyncio
 import configparser
 import datetime
+import logging
 import re
 from dataclasses import dataclass, field
 
@@ -9,9 +10,10 @@ import smllib.errors
 from smllib import SmlFrame, SmlStreamReader
 from smllib.const import UNITS
 
-from astrameter.config.logger import logger
-
 from .base import Powermeter
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 # Default OBIS hex (smllib const / German eHZ-style meters)
 # Aggregate instantaneous active power (1-0:16.7.0)
@@ -142,10 +144,11 @@ class Sml(Powermeter):
         if self._reader is None:
             raise RuntimeError("Sml not started; call start() first")
         stream = SmlStreamReader()
-        try:
-            data = await asyncio.wait_for(self._reader.read(512), timeout=10)
-        except asyncio.TimeoutError:
-            logger.error("serial read timed out")
+        data = await self._read_chunk()
+        if data is None:
+            return
+        if not data:
+            logger.error("serial connection closed")
             return
         stream.add(data)
         for i in range(10):
@@ -162,6 +165,15 @@ class Sml(Powermeter):
                 return
         logger.error("failed to read SML frame after 10 attempts")
 
+    async def _read_chunk(self) -> bytes | None:
+        """Read the next chunk from the serial port, or ``None`` on timeout."""
+        assert self._reader is not None
+        try:
+            return await asyncio.wait_for(self._reader.read(512), timeout=10)
+        except asyncio.TimeoutError:
+            logger.error("serial read timed out")
+            return None
+
     async def _try_read_frame(self, stream: SmlStreamReader) -> SmlFrame | None:
         try:
             sml_frame = stream.get_frame()
@@ -172,11 +184,8 @@ class Sml(Powermeter):
             logger.error("error reading frame: %s", e)
             sml_frame = None
         if sml_frame is None:
-            assert self._reader is not None
-            try:
-                data = await asyncio.wait_for(self._reader.read(512), timeout=10)
-            except asyncio.TimeoutError:
-                logger.error("serial read timed out")
+            data = await self._read_chunk()
+            if data is None:
                 return None
             if not data:
                 logger.error("serial connection closed")

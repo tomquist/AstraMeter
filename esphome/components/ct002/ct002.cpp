@@ -71,6 +71,20 @@ int parse_int_strict(const std::string &s, int default_value) {
 
 }  // namespace
 
+bool is_steered_phase(const std::string &phase) {
+  return phase == "A" || phase == "B" || phase == "C" || phase == "D";
+}
+
+std::string normalize_phase(const std::string &raw) {
+  std::string phase = raw;
+  for (auto &c : phase) c = static_cast<char>(std::toupper(c));
+  while (!phase.empty() && std::isspace(static_cast<unsigned char>(phase.front())))
+    phase.erase(phase.begin());
+  while (!phase.empty() && std::isspace(static_cast<unsigned char>(phase.back())))
+    phase.pop_back();
+  return is_steered_phase(phase) ? phase : std::string("0");
+}
+
 // Mirror of Python's _bucket_for_phase: A/B/C → their buckets, "D" → the
 // combined ABC bucket, anything else (the normalized "0") → x.
 size_t bucket_index_for_phase(const std::string &phase) {
@@ -308,8 +322,7 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   // is combined / whole-home mode (newer Marstek firmware) — all four are
   // valid, actively-steered phases, so they are NOT inspection. Mirrors
   // ct002.py _handle_request.
-  const bool in_inspection_mode = reported_phase != "A" && reported_phase != "B" &&
-                                  reported_phase != "C" && reported_phase != "D";
+  const bool in_inspection_mode = !is_steered_phase(reported_phase);
   int reported_power = 0;
   if (fields.size() > 5) {
     // Match Python's parse_int (int()): reject trailing garbage / float
@@ -393,10 +406,7 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
       // power plus the whole target, not a single phase.
       delta = values[0] + values[1] + values[2];
     } else {
-      size_t phase_idx = 0;
-      if (consumer.phase == "B") phase_idx = 1;
-      else if (consumer.phase == "C") phase_idx = 2;
-      delta = values[phase_idx];
+      delta = values[phase_index(consumer.phase)];
     }
     consumer.last_instructed_power = reported_power + delta;
   }
@@ -482,15 +492,7 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
                                             const std::string &phase, float power,
                                             const std::string &device_type,
                                             const std::string &source_ip, bool participates) {
-  std::string normalized_phase = phase;
-  for (auto &c : normalized_phase) c = static_cast<char>(std::toupper(c));
-  if (normalized_phase != "A" && normalized_phase != "B" && normalized_phase != "C" &&
-      normalized_phase != "D") {
-    // Anything else ("0", empty, future markers) is the unassigned/
-    // inspection state; store the wire's canonical "0" so aggregation
-    // routes it to the x bucket instead of inventing a phase (issue #460).
-    normalized_phase = "0";
-  }
+  const std::string normalized_phase = normalize_phase(phase);
   auto &consumer = this->get_consumer_(consumer_id);
   const double now = now_seconds_();
   // Capture the prior phase BEFORE the update. Python keys "is there a
@@ -516,12 +518,8 @@ void CT002Component::update_consumer_report_(const std::string &consumer_id,
   // different leg) — mirrors Python's _update_consumer_report. Only fires
   // for a declared A/B/C/D phase that differs from the prior one;
   // inspection-mode polls (normalized to "0") never trigger it.
-  const auto is_declared = [](const std::string &p) {
-    return p == "A" || p == "B" || p == "C" || p == "D";
-  };
-  if (is_declared(normalized_phase) && previous_phase != normalized_phase) {
-    const bool prior_valid = is_declared(previous_phase);
-    if (prior_valid) {
+  if (is_steered_phase(normalized_phase) && previous_phase != normalized_phase) {
+    if (is_steered_phase(previous_phase)) {
       ESP_LOGI(TAG, "CT002 consumer %s phase changed: %s -> %s", consumer_id.c_str(),
                previous_phase.c_str(), normalized_phase.c_str());
     } else {

@@ -12,9 +12,9 @@ import logging
 import random
 import time
 
+from astrameter.ct002 import protocol
 from astrameter.ct002.balancer import device_capabilities
 
-from . import protocol
 from .b2500_steering import MIN_CHANNEL_OUTPUT_W, B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
 from .venus_integer_steering import (
@@ -26,6 +26,10 @@ from .venus_integer_steering import (
 )
 
 logger = logging.getLogger("astra_sim.battery")
+
+# Phase letters a battery can sit on, mapped to the index of its power field in
+# ``protocol.RESPONSE_LABELS`` (``A_phase_power`` at 4).
+PHASE_FIELD_INDEX: dict[str, int] = {"A": 4, "B": 5, "C": 6}
 
 
 class BatterySimulator:
@@ -55,10 +59,9 @@ class BatterySimulator:
         initial_power: float = 0.0,
         min_channel_output: int = MIN_CHANNEL_OUTPUT_W,
     ) -> None:
-        if phase not in protocol.PHASE_FIELD_INDEX:
+        if phase not in PHASE_FIELD_INDEX:
             raise ValueError(
-                f"Invalid phase {phase!r}, must be one of "
-                f"{list(protocol.PHASE_FIELD_INDEX)}"
+                f"Invalid phase {phase!r}, must be one of {list(PHASE_FIELD_INDEX)}"
             )
 
         self.mac = mac.upper()
@@ -97,13 +100,11 @@ class BatterySimulator:
         # referenced and would otherwise be collectable mid-flight).
         self._poll_tasks: set[asyncio.Task] = set()
 
-        # Self-consumption control law. Most Marstek batteries (Venus class) run
-        # the firmware ramp controller on the grid value read back from the CT;
-        # ``hi``/``lo`` are the charge / discharge limits in its convention
-        # (setpoint positive = charge, negative = discharge).
+        # Self-consumption control law, run on the grid value read back from the
+        # CT. This ramp controller is the fallback: the Venus/HMG-50 and the
+        # DC-coupled B2500 controllers built below take over for those families,
+        # leaving Jupiter (HMN/HMM/JPLS) and any unrecognised device type here.
         self._steering = FirmwareSteeringController()
-        self._steer_hi = float(self.max_charge_power)
-        self._steer_lo = -float(self.max_discharge_power)
 
         # The B2500 family (HMA/HMJ/HMK) is DC-coupled (see :mod:`b2500_steering`):
         # two DC output channels, each its own regulator running every cycle, so
@@ -351,7 +352,7 @@ class BatterySimulator:
             if transport is not None:
                 transport.close()
 
-        response_fields, err = protocol.parse_message(data)
+        response_fields, err = protocol.parse_request(data)
         if err:
             logger.debug("Battery %s: bad response: %s", self.mac, err)
             return None
@@ -375,8 +376,10 @@ class BatterySimulator:
         the HMG-50 differs only in its rest deadband and single-unit park. A
         DC-coupled B2500 instead runs :class:`B2500SteeringController` on its
         DC output (see :meth:`_steer_b2500_output`).
-        :class:`FirmwareSteeringController` is the ramp law for the code-1
-        path and is not reached from here.
+        :class:`FirmwareSteeringController` — the ramp law for the code-1 path
+        — is the fallback for everything else: Jupiter (``HMN``/``HMM``/
+        ``JPLS``), which is AC-coupled but not a Venus, and any device type
+        :func:`device_capabilities` does not recognise.
 
         Cross-battery share-split: a real battery divides the grid value by the
         number of batteries reported on its phase (the ``*_chrg_nb`` count), so
@@ -417,10 +420,13 @@ class BatterySimulator:
             self._apply_ct_derived_target(float(venus_setpoint))
             return
 
+        # Charge / discharge limits in the ramp controller's convention
+        # (setpoint positive = charge), read live like the Venus path above so
+        # a runtime change to either cap takes effect.
         setpoint = self._steering.step(
             grid_reading,
-            self._steer_hi,
-            self._steer_lo,
+            float(self.max_charge_power),
+            -float(self.max_discharge_power),
             device_count=phase_count,
             out=self._current_power,
         )

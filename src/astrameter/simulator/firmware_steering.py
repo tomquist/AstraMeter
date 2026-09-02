@@ -86,12 +86,17 @@ import math
 import struct
 from dataclasses import dataclass
 
+from .steering_common import (
+    SMALL_IMPORT_HOLD_W,
+    SPIKE_JUMP_W,
+    SPIKE_OWN_DELTA_W,
+    _f32,
+    _share_split,
+)
+
 __all__ = [
     "DEADBAND_W",
     "HARD_CLAMP_W",
-    "SMALL_IMPORT_HOLD_W",
-    "SPIKE_JUMP_W",
-    "SPIKE_OWN_DELTA_W",
     "STEP_BASE_W",
     "FirmwareSteeringController",
 ]
@@ -99,18 +104,10 @@ __all__ = [
 HARD_CLAMP_W = 2500.0
 STEP_BASE_W = 10.0
 WINDOW_PULLBACK_W = 100.0
-# Input-conditioning thresholds the HMG-50 applies before the ramp law (see
-# the module docstring).
+# The gate's rest deadband; the spike thresholds and the small-import hold it
+# also applies are shared with the Venus law (``steering_common``).
 DEADBAND_W = 20
-SPIKE_JUMP_W = 50
-SPIKE_OWN_DELTA_W = 20
-SMALL_IMPORT_HOLD_W = 10
 _RAMP_MIN, _RAMP_MAX = -5, 5
-
-
-def _f32(x: float) -> float:
-    """Round *x* to single precision, mirroring the device's 32-bit FPU."""
-    return struct.unpack("<f", struct.pack("<f", x))[0]
 
 
 def _hex_f32(bits: int) -> float:
@@ -137,15 +134,6 @@ GAIN: dict[int, float] = {
 
 def _u32(x: int) -> int:
     return x & 0xFFFFFFFF
-
-
-def _share_split(g: float, device_count: int) -> int:
-    """Split the grid value across the batteries sharing the bucket."""
-    nb = max(1, int(device_count))
-    g = int(g)
-    if nb > 1:
-        g = int(g / nb)  # signed integer division, truncated toward zero
-    return g
 
 
 @dataclass

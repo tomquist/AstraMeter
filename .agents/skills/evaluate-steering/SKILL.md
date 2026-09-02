@@ -14,11 +14,12 @@ several seeds (`--seeds`, default 5; `--seed N` sets the first) in parallel
 across cores, and every metric is the mean over those seeds — so the figures are
 a seed-averaged signal, not one noisy draw. `--seeds 1` for a quick look.
 
-`evaluation.py` is the CLI; the work lives in `eval_spec.py` (types),
-`eval_scenarios.py` (the catalogue), `eval_harness.py` (running one scenario),
-`eval_metrics.py` (every metric) and `eval_compare.py` / `eval_report.py` (the
-comparison and the HTML report). The names CI and the tests import stay
-re-exported from `evaluation`.
+`evaluation.py` is the CLI and nothing else; the work lives in `eval_spec.py`
+(types), `eval_scenarios.py` (the catalogue), `eval_harness.py` (running one
+scenario), `eval_metrics.py` (every metric and the chart traces) and
+`eval_compare.py` / `eval_report.py` (the comparison and the HTML report). CI
+only ever invokes the CLI, and `tests/test_steering_eval.py` imports from those
+modules directly, so nothing needs re-exporting from `evaluation`.
 
 ## Comparing a change
 

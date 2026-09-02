@@ -1,5 +1,6 @@
 import asyncio
 
+from .base import as_list
 from .http_client import HttpPowermeter
 
 
@@ -7,7 +8,7 @@ class VZLogger(HttpPowermeter):
     def __init__(self, ip: str, port: str, uuid: str | list[str]):
         self.ip = ip
         self.port = port
-        self.uuids = [uuid] if isinstance(uuid, str) else list(uuid)
+        self.uuids = as_list(uuid)
 
     async def get_powermeter_watts(self) -> list[float]:
         results = await asyncio.gather(

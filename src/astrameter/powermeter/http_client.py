@@ -1,4 +1,5 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any, TypeVar
 
 import aiohttp
@@ -9,21 +10,38 @@ from .base import Powermeter
 # let the next poll retry rather than pin a handler.
 POLL_TIMEOUT = aiohttp.ClientTimeout(total=2, connect=1)
 
+_NO_EXPIRED_STATUSES: frozenset[int] = frozenset()
+
 T = TypeVar("T")
+
+
+class SessionExpired(RuntimeError):
+    """The device no longer accepts the login; see :func:`retry_after_relogin`."""
 
 
 class HttpPowermeter(Powermeter):
     """Polls a device over HTTP; subclasses build the URLs and decode the body."""
 
     session: aiohttp.ClientSession | None = None
+    # Total request timeout in seconds; ``None`` keeps POLL_TIMEOUT.
+    timeout: float | None = None
+
+    def __init__(self, *, timeout: float | None = None) -> None:
+        if timeout is not None:
+            self.timeout = timeout
 
     def _session_options(self) -> dict[str, Any]:
         """Keyword arguments for the ``aiohttp.ClientSession``.
 
-        Override to add auth or headers, or to give a slow device more time
-        than :data:`POLL_TIMEOUT`.
+        Override to add auth, headers or a connector. A device slower than
+        :data:`POLL_TIMEOUT` passes ``timeout`` to the constructor instead;
+        that drops the separate connect cap, because on such a device the
+        accept alone can exceed 1 s (#551) while a bounded total still caps a
+        stuck request.
         """
-        return {"timeout": POLL_TIMEOUT}
+        if self.timeout is None:
+            return {"timeout": POLL_TIMEOUT}
+        return {"timeout": aiohttp.ClientTimeout(total=self.timeout)}
 
     async def start(self) -> None:
         if self.session:
@@ -40,14 +58,36 @@ class HttpPowermeter(Powermeter):
             raise RuntimeError("Session not started; call start() first")
         return self.session
 
-    async def get_json(self, url: str) -> Any:
-        async with self._require_session().get(url) as resp:
+    @asynccontextmanager
+    async def _get(
+        self,
+        url: str,
+        *,
+        expired_statuses: frozenset[int] = _NO_EXPIRED_STATUSES,
+        **kwargs: Any,
+    ) -> AsyncIterator[aiohttp.ClientResponse]:
+        """GET *url*, turning ``expired_statuses`` into :class:`SessionExpired`.
+
+        Devices that answer a lapsed login with a status instead of an error
+        body name it here so the caller only has to build the URL.
+        """
+        async with self._require_session().get(url, **kwargs) as resp:
+            if resp.status in expired_statuses:
+                raise SessionExpired
             resp.raise_for_status()
+            yield resp
+
+    async def get_json(self, url: str, **kwargs: Any) -> Any:
+        async with self._get(url, **kwargs) as resp:
             return await resp.json(content_type=None)
 
+    async def get_text(self, url: str, **kwargs: Any) -> str:
+        async with self._get(url, **kwargs) as resp:
+            return await resp.text()
 
-class SessionExpired(RuntimeError):
-    """The device no longer accepts the login; see :func:`retry_after_relogin`."""
+    async def get_bytes(self, url: str, **kwargs: Any) -> bytes:
+        async with self._get(url, **kwargs) as resp:
+            return await resp.read()
 
 
 async def retry_after_relogin(

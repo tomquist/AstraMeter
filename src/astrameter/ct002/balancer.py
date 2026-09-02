@@ -36,6 +36,16 @@ def to_grid_reading(target: NetOutputW, reported: float) -> float:
     return float(target) - reported
 
 
+def phase_index(phase: str) -> int:
+    """Index of *phase* in a ``[phase_A, phase_B, phase_C]`` vector.
+
+    Anything that isn't A/B/C — including the combined-mode "D" — falls back to
+    phase A, which is where a single-phase command goes when the reported phase
+    is unknown.
+    """
+    return {"A": 0, "B": 1, "C": 2}.get(phase.upper(), 0)
+
+
 def _report_weight(report: dict) -> float:
     """Per-battery fair-share weight from a report dict (defaults to 1.0).
 
@@ -1226,7 +1236,6 @@ class LoadBalancer:
             sum(parse_int(report.get("power", 0)) for report in reports.values())
             + grid_total
         )
-        state = self._get_consumer(consumer_id)
         probe_actual = parse_int(reports.get(candidate_id, {}).get("power", 0))
         probe_ceiling = max(abs(desired_total), self._cfg.probe_min_power)
 
@@ -1252,11 +1261,12 @@ class LoadBalancer:
             if desired_total < 0 and desired_probe > 0:
                 desired_probe = -desired_probe
             probe.requested_power_abs = abs(desired_probe)
-            reading = to_grid_reading(NetOutputW(desired_probe), probe_actual)
-            state.last_target = reading
-            state.last_intent = desired_probe
-            state.last_intent_reading = reading
-            return self._split_by_phase(reading, {candidate_id: reports[candidate_id]})
+            return self._emit(
+                consumer_id,
+                NetOutputW(desired_probe),
+                probe_actual,
+                {candidate_id: reports[candidate_id]},
+            )
 
         backup_weights = {
             cid: max(0.01, eff_part.get(cid, 1.0))
@@ -1271,11 +1281,9 @@ class LoadBalancer:
             desired_total - qualified_probe_actual,
         )
         reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
-        reading = to_grid_reading(NetOutputW(desired), reported)
-        state.last_target = reading
-        state.last_intent = desired
-        state.last_intent_reading = reading
-        return self._split_by_phase(reading, support_reports, backup_weights)
+        return self._emit(
+            consumer_id, NetOutputW(desired), reported, support_reports, backup_weights
+        )
 
     # ------------------------------------------------------------------
     # Primary interface
@@ -1315,9 +1323,7 @@ class LoadBalancer:
             "share=%s reported=%s intent=%s send=%s unpaced=%s pace_cap=%s "
             "sat=%.2f",
             consumer_id,
-            f"manual={mode.manual_value:g}"
-            if mode.mode == "manual" and mode.manual_value is not None
-            else mode.mode,
+            f"manual={mode.manual_value:g}" if mode.mode == "manual" else mode.mode,
             rotation,
             _report_weight(reports.get(consumer_id, {})),
             self._diag_num(grid_total),
@@ -1353,7 +1359,6 @@ class LoadBalancer:
         self._diag_control_grid = None
         self._diag_fair_share = None
 
-        # --- Inactive consumer: steer to zero ---
         if consumer_mode.mode == "inactive":
             result = self._steer_to_zero(consumer_id, all_reports)
             self._log_steer(consumer_id, consumer_mode, all_reports, grid_total, result)
@@ -1397,14 +1402,14 @@ class LoadBalancer:
                 ),
             )
 
-        # --- Manual override ---
         if consumer_mode.mode == "manual" and state is not None:
             reported = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
-            reading = to_grid_reading(NetOutputW(consumer_mode.manual_value), reported)
-            state.last_target = reading
-            state.last_intent = consumer_mode.manual_value
-            state.last_intent_reading = reading
-            result = self._split_by_phase(reading, active_reports)
+            result = self._emit(
+                consumer_id,
+                NetOutputW(consumer_mode.manual_value),
+                reported,
+                active_reports,
+            )
             self._log_steer(
                 consumer_id, consumer_mode, active_reports, grid_total, result
             )
@@ -1447,20 +1452,13 @@ class LoadBalancer:
         Called when a consumer transitions back to auto mode or resumes
         from inactive.
         """
-        state = self._get_consumer(consumer_id)
-        state.last_target = None
-        state.last_intent = None
-        state.last_intent_reading = None
-        state.pace_cap = 0.0
-        state.pace_sign = 0
-        state.pace_prev_reported = None
-        state.pace_last_at = 0.0
-        state.pace_stall_polls = 0
-        state.pace_responded_at = 0.0
-        state.pace_last_sent = 0.0
-        state.osc_score = 0.0
-        state.osc_last_sign = 0
-        state.saturation_score = 0.0
+        # ``fade_weight`` is the one field that survives: a consumer returning
+        # to the auto pool resumes the rotation fade it was mid-way through
+        # rather than snapping to full participation.  The three saturation
+        # grace fields are reset here and immediately re-set by ``set_grace``.
+        fade_weight = self._get_consumer(consumer_id).fade_weight
+        state = BalancerConsumerState(fade_weight=fade_weight)
+        self._consumers[consumer_id] = state
         grace = self._clock() + min(
             self._saturation_grace_seconds, self._cfg.efficiency_rotation_interval
         )
@@ -1484,11 +1482,9 @@ class LoadBalancer:
         self._last_rotation = self._clock()
         self._probe_state = None
         self._invalidate_efficiency_cache()
-        for cid in list(self._consumers):
-            if cid in current_pool:
-                self._consumers[cid].fade_weight = 1.0
-            else:
-                self._consumers.pop(cid, None)
+        self._prune_pool(current_pool)
+        for state in self._consumers.values():
+            state.fade_weight = 1.0
         logger.info(
             "Efficiency: forced rotation, new order: %s",
             [c[:16] for c in self._priority],
@@ -1694,15 +1690,13 @@ class LoadBalancer:
         # also holds a minimum discharge — the user opted in by setting it.
         if net_self >= eff_min:
             return result
-        reading = to_grid_reading(NetOutputW(eff_min), reported)
-        phase = (report.get("phase") or "A").upper()
-        out = [0.0, 0.0, 0.0]
-        out[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = reading
-        state = self._get_consumer(consumer_id)
-        state.last_target = reading
-        state.last_intent = eff_min
-        state.last_intent_reading = reading
-        return out
+        return self._emit(
+            consumer_id,
+            NetOutputW(eff_min),
+            reported,
+            reports,
+            single_phase=report.get("phase") or "A",
+        )
 
     def _steer_to_zero(
         self, consumer_id: str | None, reports: dict, *, paced: bool = False
@@ -1716,27 +1710,64 @@ class LoadBalancer:
         (issue #469).  Inactive consumers keep the one-shot behaviour — a
         user-initiated mode change, not a closed-loop handoff.
         """
-        reported = parse_int(
-            reports.get(consumer_id, {}).get("power", 0) if consumer_id else 0
+        report = reports.get(consumer_id, {}) if consumer_id else {}
+        reported = parse_int(report.get("power", 0))
+        return self._emit(
+            consumer_id,
+            NetOutputW(0),
+            reported,
+            reports,
+            pace=paced,
+            single_phase=report.get("phase") or "A",
+            # An unpaced wind-down is a one-shot command, recorded as 0 rather
+            # than as the reading that carries it.
+            last_target=None if paced else 0.0,
+            intent_reading=0.0,
         )
-        reading = to_grid_reading(NetOutputW(0), reported)
-        if paced and consumer_id:
+
+    def _emit(
+        self,
+        consumer_id: str | None,
+        desired: NetOutputW,
+        reported: float,
+        reports: dict,
+        weights: dict[str, float] | None = None,
+        *,
+        pace: bool = False,
+        single_phase: str | None = None,
+        last_target: float | None = None,
+        intent_reading: float | None = None,
+    ) -> list[float]:
+        """Turn an absolute net-output target into the phase vector to send.
+
+        The tail every steering path shares: convert *desired* to a grid
+        reading, optionally ramp-pace it, record the intent triplet
+        (``last_target`` / ``last_intent`` / ``last_intent_reading`` — see
+        :class:`BalancerConsumerState`) and split the scalar across phases.
+
+        *single_phase* puts the whole reading on that one phase instead of the
+        weighted :meth:`_split_by_phase`.  *last_target* and *intent_reading*
+        override what is recorded, for the steer-to-zero path: an unpaced
+        wind-down records 0, and driving to zero is an intentional "produce
+        nothing" command rather than a failed-to-follow one, so it registers as
+        idle and lets saturation decay.
+        """
+        reading = to_grid_reading(desired, reported)
+        unpaced = reading
+        if pace and consumer_id:
             reading = self._pace_reading(consumer_id, reading, reported, reports)
         if consumer_id:
             state = self._get_consumer(consumer_id)
-            state.last_target = reading if paced else 0
-            state.last_intent = 0
-            # Driving to zero is an intentional "produce nothing" command, not a
-            # failed-to-follow one — treat it as idle so saturation decays.
-            state.last_intent_reading = 0
-        if reading == 0:
-            return [0, 0, 0]
-        phase = (
-            reports.get(consumer_id, {}).get("phase") or "A" if consumer_id else "A"
-        ).upper()
-        result = [0.0, 0.0, 0.0]
-        result[{"A": 0, "B": 1, "C": 2}.get(phase, 0)] = reading
-        return result
+            state.last_target = reading if last_target is None else last_target
+            state.last_intent = float(desired)
+            state.last_intent_reading = (
+                unpaced if intent_reading is None else intent_reading
+            )
+        if single_phase is not None:
+            out = [0.0, 0.0, 0.0]
+            out[phase_index(single_phase)] = reading
+            return out
+        return self._split_by_phase(reading, reports, weights)
 
     @staticmethod
     def _split_by_phase(
@@ -1801,41 +1832,9 @@ class LoadBalancer:
         self._diag_control_grid = control_grid
 
         saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
-        num_consumers = max(1, len(reports))
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
 
-        # Exclude batteries that can't charge from AC (B2500 family, Jupiter;
-        # unknown types count as AC-chargeable) from charge distribution while
-        # the grid is in charge territory: ``grid_total < 0``, extended to the
-        # exact zero-crossing when an AC-chargeable battery is already charging
-        # — the pass-through equilibrium of a full B2500 passing its PV through
-        # while a Venus absorbs it, where the balance correction would otherwise
-        # oscillate the Venus out of its steady state (issue #338).  Not on
-        # ``grid_total == 0`` during pure discharge, since nothing is charging.
-        # Conditioned on ``any_ac_chargeable``: with no AC-coupled battery
-        # there is nothing to protect, and the fair-share path handles brief
-        # negative-grid transients by reducing discharge smoothly instead of
-        # slamming the pool to 0 W (issue #359).
-        ac_charging = any(
-            _is_ac_chargeable(r.get("device_type", ""))
-            and parse_int(r.get("power", 0)) < 0
-            for r in reports.values()
-        )
-        any_ac_chargeable = any(
-            _is_ac_chargeable(r.get("device_type", "")) for r in reports.values()
-        )
-        in_charge_territory = any_ac_chargeable and (
-            grid_total < 0 or (grid_total == 0 and ac_charging)
-        )
-        charge_blind = (
-            {
-                cid
-                for cid, r in reports.items()
-                if not _is_ac_chargeable(r.get("device_type", ""))
-            }
-            if in_charge_territory
-            else set()
-        )
+        charge_blind, any_ac_chargeable = self._charge_blind(reports, grid_total)
         for cid in charge_blind:
             eff_part[cid] = 0.0
 
@@ -1853,25 +1852,7 @@ class LoadBalancer:
         if probe_target is not None:
             return probe_target
 
-        # Every reporter is DC-only under surplus: nothing can absorb it, so
-        # log once.  ``in_charge_territory`` stays off here (see above) so the
-        # fair-share path can still reduce discharge smoothly through brief
-        # negative-grid transients (issue #359); the B2500s' own AC-charge
-        # clamp holds them at 0 W under a sustained surplus regardless.
-        all_dc_under_surplus = (
-            grid_total < 0 and bool(reports) and not any_ac_chargeable
-        )
-        if all_dc_under_surplus and not self._all_dc_surplus_warned:
-            logger.info(
-                "CT002: %.0f W surplus but no AC-chargeable battery "
-                "reporting — nothing here can absorb it. Reporting "
-                "device_types: %s",
-                -grid_total,
-                sorted({reports[cid].get("device_type", "") or "?" for cid in reports}),
-            )
-            self._all_dc_surplus_warned = True
-        elif not all_dc_under_surplus:
-            self._all_dc_surplus_warned = False
+        self._note_all_dc_surplus(reports, grid_total, any_ac_chargeable)
 
         # A DC-only consumer under surplus must be told explicitly to hold
         # at 0 — don't fall through to the fair-share math where a residual
@@ -1879,31 +1860,9 @@ class LoadBalancer:
         if consumer_id and consumer_id in charge_blind:
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
-        # --- Fading path ---
         if any_fading and consumer_id:
-            state = self._get_consumer(consumer_id)
-            fade_w = state.fade_weight
-            reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-            if fade_w == 0.0:
-                return self._steer_to_zero(consumer_id, reports, paced=True)
+            return self._fading_target(consumer_id, reports, grid_total, eff_part)
 
-            total_battery = sum(
-                parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
-            )
-            demand = total_battery + grid_total
-            total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
-            desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
-            reading = to_grid_reading(NetOutputW(desired), reported)
-            unpaced_reading = reading
-            reading = self._pace_reading(consumer_id, reading, reported, reports)
-
-            state.last_target = reading
-            state.last_intent = desired
-            state.last_intent_reading = unpaced_reading
-
-            return self._split_by_phase(reading, reports, eff_part)
-
-        # --- Non-fading path ---
         for cid, fade_w in faded_adjustments.items():
             if cid in eff_part and fade_w == 0.0:
                 eff_part[cid] = 0.0
@@ -1914,55 +1873,15 @@ class LoadBalancer:
         ):
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
-        # Fold the per-battery user weight into the effectiveness map so the
-        # fair-share split honours the configured ratio; ``eff_part`` stays the
-        # pure health map (participation and probing).  The ``total_effective
-        # > 0`` guard also covers every share rounding to zero (charge-blind /
-        # faded / zero-weight): fall back to an even split.
-        share_part = {
-            cid: eff_part[cid] * _report_weight(reports.get(cid, {}))
-            for cid in eff_part
-        }
-        total_effective = sum(share_part.values())
-        fair_share = (
-            (control_grid / total_effective) * share_part.get(consumer_id, 1.0)
-            if consumer_id and consumer_id in reports and total_effective > 0
-            else control_grid / num_consumers
+        fair_share = self._fair_share(consumer_id, reports, control_grid, eff_part)
+        concentrated = self._concentrated_share(
+            consumer_id, reports, control_grid, eff_part, charge_blind
         )
+        if concentrated is not None:
+            fair_share = concentrated
+        self._diag_fair_share = fair_share
 
         cfg = self._cfg
-        # Deadband concentration (``concentrate_deadband``): hand the whole
-        # small correction to the most-active battery (deterministic id
-        # tiebreak) so it clears the firmware deadband, bypassing balance
-        # correction this tick.  Restricted to participating batteries (a
-        # charge-blind B2500 passing PV can't absorb; zero-weight units take no
-        # share) on the *same* phase (``control_grid`` sums phases), gated on
-        # ``fair_distribution`` and on the pool already being balanced so it
-        # never suppresses the equalization of a real imbalance (issue #523).
-        conc_ids = [
-            cid
-            for cid in reports
-            if cid not in charge_blind
-            and eff_part.get(cid, 0.0) > 0.1
-            and _report_weight(reports[cid]) > 0.0
-        ]
-        concentrate = False
-        if (
-            cfg.fair_distribution
-            and cfg.concentrate_deadband > 0
-            and len(conc_ids) > 1
-            and consumer_id in conc_ids
-            and 0 < abs(control_grid) < cfg.concentrate_deadband
-            and len({(reports[c].get("phase") or "A").upper() for c in conc_ids}) == 1
-            and self._concentration_pool_balanced(reports, conc_ids)
-        ):
-            designated = max(
-                conc_ids,
-                key=lambda c: (abs(parse_int(reports[c].get("power", 0))), c),
-            )
-            fair_share = control_grid if consumer_id == designated else 0.0
-            concentrate = True
-        self._diag_fair_share = fair_share
 
         # ``fair_share`` / ``_balance_correction`` produce the residual: this
         # consumer's slice of the grid imbalance to fold into its current
@@ -1972,7 +1891,7 @@ class LoadBalancer:
             not cfg.fair_distribution
             or consumer_id is None
             or consumer_id not in reports
-            or concentrate
+            or concentrated is not None
         ):
             residual = fair_share
         elif consumer_id in eff_part:
@@ -2000,17 +1919,167 @@ class LoadBalancer:
             if consumer_id
             else 0
         )
-        reading = to_grid_reading(NetOutputW(reported + residual), reported)
-        unpaced_reading = reading
+        return self._emit(
+            consumer_id,
+            NetOutputW(reported + residual),
+            reported,
+            reports,
+            eff_part,
+            pace=True,
+        )
 
-        if consumer_id:
-            reading = self._pace_reading(consumer_id, reading, reported, reports)
-            state = self._get_consumer(consumer_id)
-            state.last_target = reading
-            state.last_intent = reported + residual
-            state.last_intent_reading = unpaced_reading
+    @staticmethod
+    def _charge_blind(reports: dict, grid_total: float) -> tuple[set[str], bool]:
+        """Batteries that can't absorb the current surplus, and whether any can.
 
-        return self._split_by_phase(reading, reports, eff_part)
+        Excludes batteries that can't charge from AC (B2500 family, Jupiter;
+        unknown types count as AC-chargeable) from charge distribution while the
+        grid is in charge territory: ``grid_total < 0``, extended to the exact
+        zero-crossing when an AC-chargeable battery is already charging — the
+        pass-through equilibrium of a full B2500 passing its PV through while a
+        Venus absorbs it, where the balance correction would otherwise oscillate
+        the Venus out of its steady state (issue #338).  Not on ``grid_total ==
+        0`` during pure discharge, since nothing is charging.  Conditioned on
+        ``any_ac_chargeable``: with no AC-coupled battery there is nothing to
+        protect, and the fair-share path handles brief negative-grid transients
+        by reducing discharge smoothly instead of slamming the pool to 0 W
+        (issue #359).
+        """
+        ac_charging = any(
+            _is_ac_chargeable(r.get("device_type", ""))
+            and parse_int(r.get("power", 0)) < 0
+            for r in reports.values()
+        )
+        any_ac_chargeable = any(
+            _is_ac_chargeable(r.get("device_type", "")) for r in reports.values()
+        )
+        in_charge_territory = any_ac_chargeable and (
+            grid_total < 0 or (grid_total == 0 and ac_charging)
+        )
+        charge_blind = (
+            {
+                cid
+                for cid, r in reports.items()
+                if not _is_ac_chargeable(r.get("device_type", ""))
+            }
+            if in_charge_territory
+            else set()
+        )
+        return charge_blind, any_ac_chargeable
+
+    def _note_all_dc_surplus(
+        self, reports: dict, grid_total: float, any_ac_chargeable: bool
+    ) -> None:
+        """Log once while every reporter is DC-only under surplus.
+
+        Nothing in the pool can absorb it.  Charge territory (see
+        :meth:`_charge_blind`) stays off in this case so the fair-share path can
+        still reduce discharge smoothly through brief negative-grid transients
+        (issue #359); the B2500s' own AC-charge clamp holds them at 0 W under a
+        sustained surplus regardless.
+        """
+        all_dc_under_surplus = (
+            grid_total < 0 and bool(reports) and not any_ac_chargeable
+        )
+        if all_dc_under_surplus and not self._all_dc_surplus_warned:
+            logger.info(
+                "CT002: %.0f W surplus but no AC-chargeable battery "
+                "reporting — nothing here can absorb it. Reporting "
+                "device_types: %s",
+                -grid_total,
+                sorted({reports[cid].get("device_type", "") or "?" for cid in reports}),
+            )
+            self._all_dc_surplus_warned = True
+        elif not all_dc_under_surplus:
+            self._all_dc_surplus_warned = False
+
+    def _fading_target(
+        self,
+        consumer_id: str,
+        reports: dict,
+        grid_total: float,
+        eff_part: dict[str, float],
+    ) -> list[float]:
+        """Share the pool's demand by fade weight while a rotation is in flight."""
+        fade_w = self._get_consumer(consumer_id).fade_weight
+        if fade_w == 0.0:
+            return self._steer_to_zero(consumer_id, reports, paced=True)
+        reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
+        total_battery = sum(
+            parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
+        )
+        demand = total_battery + grid_total
+        total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
+        desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
+        return self._emit(
+            consumer_id, NetOutputW(desired), reported, reports, eff_part, pace=True
+        )
+
+    @staticmethod
+    def _fair_share(
+        consumer_id: str | None,
+        reports: dict,
+        control_grid: float,
+        eff_part: dict[str, float],
+    ) -> float:
+        """This consumer's weight-proportional slice of the grid error.
+
+        Folds the per-battery user weight into the effectiveness map so the
+        split honours the configured ratio; ``eff_part`` stays the pure health
+        map (participation and probing).  The ``total_effective > 0`` guard also
+        covers every share rounding to zero (charge-blind / faded / zero-weight):
+        fall back to an even split.
+        """
+        share_part = {
+            cid: eff_part[cid] * _report_weight(reports.get(cid, {}))
+            for cid in eff_part
+        }
+        total_effective = sum(share_part.values())
+        if consumer_id and consumer_id in reports and total_effective > 0:
+            return (control_grid / total_effective) * share_part.get(consumer_id, 1.0)
+        return control_grid / max(1, len(reports))
+
+    def _concentrated_share(
+        self,
+        consumer_id: str | None,
+        reports: dict,
+        control_grid: float,
+        eff_part: dict[str, float],
+        charge_blind: set[str],
+    ) -> float | None:
+        """Deadband concentration, or ``None`` when it doesn't apply this tick.
+
+        Hands the whole small correction to the most-active battery
+        (deterministic id tiebreak) so it clears the firmware deadband,
+        bypassing balance correction this tick.  Restricted to participating
+        batteries (a charge-blind B2500 passing PV can't absorb; zero-weight
+        units take no share) on the *same* phase (``control_grid`` sums phases),
+        gated on ``fair_distribution`` and on the pool already being balanced so
+        it never suppresses the equalization of a real imbalance (issue #523).
+        """
+        cfg = self._cfg
+        conc_ids = [
+            cid
+            for cid in reports
+            if cid not in charge_blind
+            and eff_part.get(cid, 0.0) > 0.1
+            and _report_weight(reports[cid]) > 0.0
+        ]
+        if not (
+            cfg.fair_distribution
+            and cfg.concentrate_deadband > 0
+            and len(conc_ids) > 1
+            and consumer_id in conc_ids
+            and 0 < abs(control_grid) < cfg.concentrate_deadband
+            and len({(reports[c].get("phase") or "A").upper() for c in conc_ids}) == 1
+            and self._concentration_pool_balanced(reports, conc_ids)
+        ):
+            return None
+        designated = max(
+            conc_ids,
+            key=lambda c: (abs(parse_int(reports[c].get("power", 0))), c),
+        )
+        return control_grid if consumer_id == designated else 0.0
 
     def _predict_control_grid(
         self, reports: dict, grid_total: float, sample_id: tuple
@@ -2316,6 +2385,71 @@ class LoadBalancer:
     # Efficiency deprioritization
     # ------------------------------------------------------------------
 
+    def _sync_pool(self, reports: dict, grace: float) -> None:
+        """Reconcile the rotation order with the reporting pool.
+
+        Drops departed consumers, appends new arrivals (in id order, each with a
+        settling grace), then sinks low-weight batteries to the back so they fall
+        into the deprioritized tail first while limiting; the *stable* sort
+        preserves the fair-wear rotation cycle within each weight tier.
+        """
+        current = set(reports)
+        self._priority = [c for c in self._priority if c in current]
+        self._deprioritized.intersection_update(current)
+        for cid in sorted(current):
+            if cid not in self._priority:
+                self._priority.append(cid)
+                self._set_consumer_grace(cid, grace)
+        self._priority.sort(
+            key=lambda cid: _efficiency_window_weight(reports.get(cid, {})),
+            reverse=True,
+        )
+
+    def _demand_estimate(self, reports: dict, grid_total: float) -> float:
+        """Low-pass-filtered household demand driving the active-set decision.
+
+        ``|total_battery_power + grid_total|`` is the true house load; filtering
+        it by ``efficiency_demand_alpha`` makes the active set follow *sustained*
+        demand rather than meter noise (see the config field).  The regulation
+        loop still acts on the unsmoothed grid, so tracking is unaffected.
+        """
+        total_battery_power = sum(
+            parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
+        )
+        raw_abs_target = abs(total_battery_power + grid_total)
+        alpha = self._cfg.efficiency_demand_alpha
+        if self._demand_ema is None or alpha >= 1.0:
+            self._demand_ema = raw_abs_target
+        else:
+            self._demand_ema += alpha * (raw_abs_target - self._demand_ema)
+        return self._demand_ema
+
+    def _active_slots(
+        self, abs_target: float, n: int, was_limiting: bool, prev_slots: int
+    ) -> int:
+        """How many of *n* pooled batteries keep an active slot at *abs_target*.
+
+        Entering the limiting regime is immediate; leaving it takes a 20% margin
+        (``EFFICIENCY_HYSTERESIS_FACTOR``), and so does *growing* the active set
+        while limiting — without that, demand sitting at an exact multiple of
+        ``min_efficient_power`` toggles a unit on every meter-noise tick (issue
+        #469).  Shrinking stays immediate, like entering.
+        """
+        cfg = self._cfg
+        per_consumer = abs_target / n
+        floor = cfg.min_efficient_power
+        if was_limiting:
+            floor = floor * EFFICIENCY_HYSTERESIS_FACTOR
+        if not (per_consumer < floor and n > 1):
+            return n
+        slots = max(1, min(n - 1, int(abs_target / cfg.min_efficient_power)))
+        if was_limiting and 1 <= prev_slots < slots:
+            grown = int(
+                abs_target / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR)
+            )
+            slots = max(prev_slots, min(n - 1, grown))
+        return slots
+
     def _compute_efficiency_deprioritized(
         self, reports: dict, sample_id: tuple, grid_total: float
     ) -> dict[str, float]:
@@ -2328,24 +2462,10 @@ class LoadBalancer:
             return {}
 
         now = self._clock()
-        current = set(reports)
-        self._priority = [c for c in self._priority if c in current]
-        self._deprioritized.intersection_update(current)
         grace = now + min(
             self._saturation_grace_seconds, cfg.efficiency_rotation_interval
         )
-        for cid in sorted(current):
-            if cid not in self._priority:
-                self._priority.append(cid)
-                self._set_consumer_grace(cid, grace)
-
-        # Sink low-weight batteries to the back of the priority order so they
-        # fall into the deprioritized tail first while limiting; the *stable*
-        # sort preserves the fair-wear rotation cycle within each weight tier.
-        self._priority.sort(
-            key=lambda cid: _efficiency_window_weight(reports.get(cid, {})),
-            reverse=True,
-        )
+        self._sync_pool(reports, grace)
 
         prev_slots = max(
             0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
@@ -2389,47 +2509,13 @@ class LoadBalancer:
         if cache_key == self._cache_sample:
             return self._cache_result or {}
 
-        # Estimate household demand (``|total_battery_power + grid_total|`` == the
-        # true house load) and low-pass filter it by ``efficiency_demand_alpha`` so
-        # the active-set decision below follows *sustained* demand rather than meter
-        # noise (see the config field). The regulation loop still acts on the
-        # unsmoothed grid, so tracking is unaffected.
-        total_battery_power = sum(
-            parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
+        abs_target = self._demand_estimate(reports, grid_total)
+        slots = self._active_slots(
+            abs_target,
+            len(self._priority),
+            was_limiting=len(self._deprioritized) > 0,
+            prev_slots=prev_slots,
         )
-        raw_abs_target = abs(total_battery_power + grid_total)
-        alpha = cfg.efficiency_demand_alpha
-        if self._demand_ema is None or alpha >= 1.0:
-            self._demand_ema = raw_abs_target
-        else:
-            self._demand_ema += alpha * (raw_abs_target - self._demand_ema)
-        abs_target = self._demand_ema
-        n = len(self._priority)
-        per_consumer = abs_target / n
-
-        # Hysteresis
-        was_limiting = len(self._deprioritized) > 0
-        if was_limiting:
-            enter_limiting = per_consumer < (
-                cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR
-            )
-        else:
-            enter_limiting = per_consumer < cfg.min_efficient_power
-
-        if enter_limiting and n > 1:
-            slots = max(1, min(n - 1, int(abs_target / cfg.min_efficient_power)))
-            if was_limiting and 1 <= prev_slots < slots:
-                # Growing the active set while limiting takes the same 20%
-                # margin as exiting limiting, or demand at an exact multiple of
-                # min_efficient_power toggles a unit on every meter-noise tick
-                # (issue #469).  Shrinking stays immediate, like entering.
-                grown = int(
-                    abs_target
-                    / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR)
-                )
-                slots = max(prev_slots, min(n - 1, grown))
-        else:
-            slots = n
 
         deprioritized = set(self._priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
@@ -2540,10 +2626,25 @@ class LoadBalancer:
         self._last_rotation = now
         return True
 
+    def _prune_pool(self, keep: set[str]) -> None:
+        """Drop the control state of consumers that have left the pool.
+
+        ``_consumers`` runs parallel to ``_priority``, so a consumer that stops
+        reporting but still holds a rotation slot keeps its state until the slot
+        goes too.
+        """
+        for cid in list(self._consumers):
+            if cid not in keep and cid not in self._priority:
+                del self._consumers[cid]
+
     def _fade_efficiency_weights(
         self, raw_adjustments: dict[str, float], consumer_ids: set[str]
     ) -> dict[str, float]:
-        """Apply EMA fade to efficiency weights for smooth transitions."""
+        """Apply EMA fade to efficiency weights for smooth transitions.
+
+        This is also the per-poll pass that drops control state for consumers
+        that have left the pool (see :meth:`_prune_pool`).
+        """
         alpha = self._cfg.efficiency_fade_alpha
         result: dict[str, float] = {}
         frozen = self._probe_participants()
@@ -2567,8 +2668,5 @@ class LoadBalancer:
                 result[cid] = new
         if not post_probe_active:
             self._clear_post_probe_fade()
-        # Clean up consumers no longer in the pool
-        for cid in list(self._consumers):
-            if cid not in consumer_ids and cid not in self._priority:
-                self._consumers.pop(cid, None)
+        self._prune_pool(consumer_ids)
         return result

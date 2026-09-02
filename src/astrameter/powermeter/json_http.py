@@ -1,13 +1,16 @@
 import json
+import logging
 from typing import Any
 
 import aiohttp
 from aiohttp import BasicAuth
 from jsonpath_ng.ext import parse
 
-from astrameter.config.logger import logger
-
+from .base import as_list
 from .http_client import HttpPowermeter
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 
 def extract_json_value(data: Any, path: str) -> float:
@@ -27,7 +30,7 @@ class JsonHttpPowermeter(HttpPowermeter):
         headers: dict[str, str] | None = None,
     ):
         self.url = url
-        self.json_paths = [json_path] if isinstance(json_path, str) else list(json_path)
+        self.json_paths = as_list(json_path)
         self.auth = (
             BasicAuth(username or "", password or "") if username or password else None
         )

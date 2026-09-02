@@ -14,60 +14,48 @@ from pathlib import Path
 PHASES = ("A", "B", "C")
 
 
-def load_power_trace(path: str | Path) -> list[tuple[float, float]]:
-    """Read a ``t_s,watts`` power trace into ``[(seconds, watts), ...]``.
+def _read_trace(path: str | Path, columns: str) -> list[tuple[float, ...]]:
+    """Read a numeric CSV trace into ``[(col0, col1, ...), ...]``, sorted by the
+    first column. *columns* is the expected header (e.g. ``"t_s,watts"``), whose
+    field count is how many numbers each row must yield.
 
     Lines starting with ``#`` (the attribution/license header), blank lines and
-    a single ``t_s,watts`` column header are ignored, so the vendored CSVs under
-    ``traces/`` (real household data, see ``traces/README.md``) load directly.
-    Samples are returned sorted by time. Raises :class:`ValueError` if the file
-    yields no valid samples (so a corrupt/empty fixture fails fast and clearly
-    rather than as a late ``IndexError`` downstream).
+    the column header itself are ignored, so the vendored CSVs under ``traces/``
+    (real household data, see ``traces/README.md``) load directly. Raises
+    :class:`ValueError` if the file yields no valid samples (so a corrupt/empty
+    fixture fails fast and clearly rather than as a late ``IndexError``
+    downstream).
     """
-    points: list[tuple[float, float]] = []
-    for raw in Path(path).read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        a, _, b = line.partition(",")
-        try:
-            points.append((float(a), float(b)))
-        except ValueError:
-            continue  # header row (``t_s,watts``) or stray text
-    if not points:
-        raise ValueError(
-            f"No valid trace samples found in {Path(path)!s} (expected: t_s,watts)"
-        )
-    points.sort(key=lambda p: p[0])
-    return points
-
-
-def load_net_trace(path: str | Path) -> list[tuple[float, float, float]]:
-    """Read a ``t_s,load_w,pv_w`` trace into ``[(seconds, load, pv), ...]``.
-
-    Same comment/blank/header handling as :func:`load_power_trace`, for the
-    vendored real prosumer net-load CSVs (load + PV from one site, see
-    ``traces/README.md``). Samples are returned sorted by time. Raises
-    :class:`ValueError` if the file yields no valid samples.
-    """
-    points: list[tuple[float, float, float]] = []
+    ncols = len(columns.split(","))
+    points: list[tuple[float, ...]] = []
     for raw in Path(path).read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         parts = line.split(",")
-        if len(parts) < 3:
+        if len(parts) < ncols:
             continue
         try:
-            points.append((float(parts[0]), float(parts[1]), float(parts[2])))
+            points.append(tuple(float(p) for p in parts[:ncols]))
         except ValueError:
-            continue  # header row (``t_s,load_w,pv_w``) or stray text
+            continue  # header row or stray text
     if not points:
         raise ValueError(
-            f"No valid trace samples found in {Path(path)!s} (expected: t_s,load_w,pv_w)"
+            f"No valid trace samples found in {Path(path)!s} (expected: {columns})"
         )
     points.sort(key=lambda p: p[0])
     return points
+
+
+def load_power_trace(path: str | Path) -> list[tuple[float, float]]:
+    """Read a ``t_s,watts`` power trace into ``[(seconds, watts), ...]``."""
+    return [(t, w) for t, w in _read_trace(path, "t_s,watts")]
+
+
+def load_net_trace(path: str | Path) -> list[tuple[float, float, float]]:
+    """Read a ``t_s,load_w,pv_w`` trace into ``[(seconds, load, pv), ...]``, for
+    the vendored real prosumer net-load CSVs (load + PV from one site)."""
+    return [(t, load, pv) for t, load, pv in _read_trace(path, "t_s,load_w,pv_w")]
 
 
 @dataclass

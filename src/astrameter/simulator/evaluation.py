@@ -20,69 +20,12 @@ import argparse
 import json
 import sys
 
-from .eval_compare import (
-    _GUARDRAIL_METRICS,
-    _METRIC_GLOSSARY,
-    _METRIC_WEIGHTS,
-    _REPORT_METRICS,
-    _aggregate,
-    _compare_aggregates,
-    _fmt_delta,
-    _guardrail_regressions,
-    _merge_seeds,
-    _metric_ndp,
-    _overall_summary,
-    _priority_summary,
-    _seed_label,
-    _seeds_caption,
-    _weighted_overall,
-    render_markdown_compare,
-    render_text,
-)
-from .eval_harness import _reserve_udp_port, _run_tasks, run_scenario
-from .eval_metrics import (
-    FEEDIN_CT_PER_KWH,
-    RETAIL_CT_PER_KWH,
-    _grid_cost_ct,
-    _oracle_cost_ct,
-    _Sample,
-)
-from .eval_report import GRAPH_POINTS, render_html_report
+from .eval_compare import _merge_seeds, render_markdown_compare, render_text
+from .eval_harness import _run_tasks, run_scenario
+from .eval_report import render_html_report
 from .eval_scenarios import build_scenarios
-from .eval_spec import BatterySpec, Event, Scenario
 
-__all__ = [
-    "FEEDIN_CT_PER_KWH",
-    "GRAPH_POINTS",
-    "RETAIL_CT_PER_KWH",
-    "_GUARDRAIL_METRICS",
-    "_METRIC_GLOSSARY",
-    "_METRIC_WEIGHTS",
-    "_REPORT_METRICS",
-    "BatterySpec",
-    "Event",
-    "Scenario",
-    "_Sample",
-    "_aggregate",
-    "_compare_aggregates",
-    "_fmt_delta",
-    "_grid_cost_ct",
-    "_guardrail_regressions",
-    "_merge_seeds",
-    "_metric_ndp",
-    "_oracle_cost_ct",
-    "_overall_summary",
-    "_priority_summary",
-    "_reserve_udp_port",
-    "_run_all",
-    "_seed_label",
-    "_weighted_overall",
-    "build_scenarios",
-    "main",
-    "render_markdown_compare",
-    "render_text",
-    "run_scenario",
-]
+__all__ = ["build_scenarios", "main", "run_scenario"]
 
 
 def _parse_overrides(pairs: list[str]) -> dict[str, float]:
@@ -198,25 +141,8 @@ def main(argv: list[str] | None = None) -> None:
         print(render_text(results))
 
     if args.html:
-        base_agg, head_agg = _compare_aggregates(base, results)
-        report = render_html_report(
-            base,
-            results,
-            report_metrics=_REPORT_METRICS,
-            metric_glossary=_METRIC_GLOSSARY,
-            fmt_delta=_fmt_delta,
-            aggregate=(base_agg, head_agg),
-            aggregate_summary=(
-                _overall_summary(base_agg, head_agg)
-                + " · "
-                + _priority_summary(base_agg, head_agg)
-                if base_agg is not None
-                else ""
-            ),
-            note=_seeds_caption(base, results),
-        )
         with open(args.html, "w", encoding="utf-8") as fh:
-            fh.write(report)
+            fh.write(render_html_report(base, results))
 
 
 if __name__ == "__main__":

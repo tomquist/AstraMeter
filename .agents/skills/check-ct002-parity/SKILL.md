@@ -23,7 +23,7 @@ stack. Shared behavior lands on **both** sides in the same change;
   the Home Assistant discovery payloads, so a bound exists once per stack rather
   than once per surface. Both stacks require `Content-Type: application/json` on
   writes and compare the parsed media type, never a substring — see the
-  `JSON_CONTENT_TYPE` comment in `web_server.py` for what a substring test
+  `JSON_CONTENT_TYPE` comment in `web_guard.py` for what a substring test
   lets through. Python enforces it in `WebServer._add`, so every `POST` route
   is covered by construction; the firmware calls `controls::is_json_content_type`,
   which lives in `controls.{h,cpp}` rather than `dashboard.cpp` so a host gtest

@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from .load_model import PHASES
+
 if TYPE_CHECKING:
     from .battery import BatterySimulator
     from .load_model import LoadModel
 
 logger = logging.getLogger("astra_sim.powermeter")
-
-PHASES = ("A", "B", "C")
 
 
 class PowermeterSimulator:
@@ -88,7 +88,7 @@ class PowermeterSimulator:
         """Parse JSON body, returning a dict or a 400 error response."""
         try:
             return await request.json()
-        except (json.JSONDecodeError, Exception):
+        except Exception:
             return web.json_response({"error": "invalid or missing JSON"}, status=400)
 
     # -- handlers ----------------------------------------------------------

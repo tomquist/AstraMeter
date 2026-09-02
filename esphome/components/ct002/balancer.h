@@ -141,6 +141,13 @@ constexpr float DC_MIN_ACTIONABLE_OUTPUT_W = 80.0f;
 float min_actionable_output(const std::string &device_type);
 
 
+// Index of *phase* in a [phase_A, phase_B, phase_C] vector. Anything that
+// isn't A/B/C -- including the combined-mode "D" -- falls back to phase A,
+// where a single-phase command goes when the reported phase is unknown.
+// Mirrors balancer.py phase_index.
+size_t phase_index(const std::string &phase);
+
+
 // Absolute net-output target in watts: the single currency of all control
 // logic (mirrors balancer.py NetOutputW). Sign convention, defined once:
 //   +  =  net discharge (export to grid / serve load)
@@ -572,6 +579,21 @@ class LoadBalancer {
 
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
                                       const ReportMap &reports, bool paced = false);
+  // Turn an absolute net-output target into the phase vector to send: the tail
+  // every steering path shares. Converts *desired* to a grid reading,
+  // optionally ramp-paces it, records the intent triplet (last_target /
+  // last_intent / last_intent_reading) and splits the scalar across phases.
+  // *single_phase* puts the whole reading on that one phase instead of the
+  // weighted split_by_phase_; *last_target* and *intent_reading* override what
+  // is recorded, for the steer-to-zero path. Mirrors balancer.py _emit.
+  std::array<float, 3> emit_(const std::optional<std::string> &consumer_id,
+                             NetOutputW desired, float reported,
+                             const ReportMap &reports,
+                             const std::unordered_map<std::string, float> *weights = nullptr,
+                             bool pace = false,
+                             const std::string *single_phase = nullptr,
+                             std::optional<float> last_target = std::nullopt,
+                             std::optional<float> intent_reading = std::nullopt);
   static std::array<float, 3> split_by_phase_(
       float target, const ReportMap &reports,
       const std::unordered_map<std::string, float> *weights = nullptr);
@@ -579,6 +601,30 @@ class LoadBalancer {
   std::array<float, 3> compute_auto_target_(const std::optional<std::string> &consumer_id,
                                             const ReportMap &reports, float grid_total,
                                             const std::vector<float> &sample_id);
+  // Batteries that cannot absorb the current surplus, plus whether any battery
+  // in the pool can charge from AC at all. Mirrors balancer.py _charge_blind.
+  static std::pair<std::unordered_set<std::string>, bool> charge_blind_(
+      const ReportMap &reports, float grid_total);
+  // Latch the "surplus with no AC-chargeable battery" notice so it is logged
+  // once per transition. Mirrors balancer.py _note_all_dc_surplus.
+  void note_all_dc_surplus_(const ReportMap &reports, float grid_total,
+                            bool any_ac_chargeable);
+  // Share the pool's demand by fade weight while a rotation is in flight.
+  // Mirrors balancer.py _fading_target.
+  std::array<float, 3> fading_target_(const std::string &consumer_id,
+                                      const ReportMap &reports, float grid_total,
+                                      const std::unordered_map<std::string, float> &eff_part);
+  // This consumer's weight-proportional slice of the grid error. Mirrors
+  // balancer.py _fair_share.
+  static float fair_share_(const std::optional<std::string> &consumer_id,
+                           const ReportMap &reports, float control_grid,
+                           const std::unordered_map<std::string, float> &eff_part);
+  // Deadband concentration, or absent when it doesn't apply this tick. Mirrors
+  // balancer.py _concentrated_share.
+  std::optional<float> concentrated_share_(
+      const std::optional<std::string> &consumer_id, const ReportMap &reports,
+      float control_grid, const std::unordered_map<std::string, float> &eff_part,
+      const std::unordered_set<std::string> &charge_blind);
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
@@ -600,8 +646,22 @@ class LoadBalancer {
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
+  // Reconcile the rotation order with the reporting pool. Mirrors balancer.py
+  // _sync_pool.
+  void sync_pool_(const ReportMap &reports, double grace);
+  // Low-pass-filtered household demand driving the active-set decision.
+  // Mirrors balancer.py _demand_estimate.
+  float demand_estimate_(const ReportMap &reports, float grid_total);
+  // How many of *n* pooled batteries keep an active slot at *abs_target*.
+  // Mirrors balancer.py _active_slots.
+  size_t active_slots_(float abs_target, size_t n, bool was_limiting,
+                       size_t prev_slots) const;
   bool maybe_force_swap_saturated_(std::vector<std::string> &priority, size_t slots,
                                    double now);
+  // Drop the control state of consumers that have left the pool. consumers_
+  // runs parallel to priority_, so a consumer that stops reporting but still
+  // holds a rotation slot keeps its state. Mirrors balancer.py _prune_pool.
+  void prune_pool_(const std::unordered_set<std::string> &keep);
   std::unordered_map<std::string, float> fade_efficiency_weights_(
       const std::unordered_map<std::string, float> &raw_adjustments,
       const std::unordered_set<std::string> &consumer_ids);

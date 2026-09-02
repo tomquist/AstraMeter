@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from astrameter.config.logger import logger
+import logging
+
 from astrameter.powermeter.base import Powermeter
 
 from .base import PowermeterWrapper
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 
 class SmoothedPowermeter(PowermeterWrapper):

@@ -1,5 +1,5 @@
 """What an evaluation scenario is made of: battery specs, timed events and the
-world handle those events mutate."""
+world handle those events mutate, plus the per-poll sample a run records."""
 
 from __future__ import annotations
 
@@ -120,3 +120,21 @@ class EvalWorld:
 
     def set_dc_input(self, battery_index: int, watts: float) -> None:
         self.batteries[battery_index].dc_input_power = watts
+
+
+@dataclass(frozen=True)
+class _Sample:
+    """What the harness records at every battery poll."""
+
+    t: float  # seconds since scenario start
+    # Instantaneous *true* grid total (W): the physical ground truth, not the
+    # delayed value the controller reads from the meter cache.
+    grid: float
+    # Raw whole-house consumption (load + noise - solar) straight from the load
+    # model, so a plotted consumption can never carry control-loop oscillation.
+    consumption: float
+    powers: tuple[float, ...]
+    socs: tuple[float, ...]
+    # PV wired straight into a battery's DC side (B2500, hybrid Venus): energy
+    # that never crosses the house meter, so it is not in ``consumption``.
+    dc_input: float = 0.0

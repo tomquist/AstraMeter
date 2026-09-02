@@ -9,7 +9,7 @@ import aiohttp
 
 from astrameter.power_units import POWER_UNIT_SCALE, POWER_UNITS
 
-from .base import PushPowermeter
+from .base import PushPowermeter, as_list
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -47,22 +47,10 @@ class HomeAssistant(PushPowermeter):
         self.port = port
         self.use_https = use_https
         self._token = token
-        self.current_power_entity = (
-            [current_power_entity]
-            if isinstance(current_power_entity, str)
-            else current_power_entity
-        )
+        self.current_power_entity = as_list(current_power_entity)
         self.power_calculate = power_calculate
-        self.power_input_alias = (
-            [power_input_alias]
-            if isinstance(power_input_alias, str)
-            else power_input_alias
-        )
-        self.power_output_alias = (
-            [power_output_alias]
-            if isinstance(power_output_alias, str)
-            else power_output_alias
-        )
+        self.power_input_alias = as_list(power_input_alias)
+        self.power_output_alias = as_list(power_output_alias)
         self.path_prefix = path_prefix
 
         if self.power_calculate and len(self.power_input_alias) != len(

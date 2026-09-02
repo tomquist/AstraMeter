@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import ssl
+from functools import partial
 from typing import Any
 
 import aiohttp
-from aiohttp import ClientResponseError, ClientTimeout, TCPConnector
+from aiohttp import ClientResponseError, TCPConnector
 
-from .base import Powermeter
+from .http_client import HttpPowermeter, SessionExpired, retry_after_relogin
 
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
 
 ENLIGHTEN_LOGIN_URL = "https://enlighten.enphaseenergy.com/login/login.json"
@@ -71,7 +73,7 @@ async def _obtain_token(
     return token
 
 
-class Envoy(Powermeter):
+class Envoy(HttpPowermeter):
     def __init__(
         self,
         host: str,
@@ -81,6 +83,7 @@ class Envoy(Powermeter):
         serial: str = "",
         verify_ssl: bool = False,
     ) -> None:
+        super().__init__(timeout=DEFAULT_TIMEOUT_SECONDS)
         if not host:
             raise ValueError("Envoy: HOST is required")
         has_credentials = bool(username and password and serial)
@@ -96,7 +99,6 @@ class Envoy(Powermeter):
         self._ssl_context = _build_ssl_context(verify_ssl)
         self._token = token
         self._token_lock = asyncio.Lock()
-        self._session: aiohttp.ClientSession | None = None
         self._cloud_session: aiohttp.ClientSession | None = None
 
         if not verify_ssl:
@@ -106,70 +108,68 @@ class Envoy(Powermeter):
                 "Enlighten cloud requests are unaffected and always use system TLS."
             )
 
+    def _session_options(self) -> dict[str, Any]:
+        return {
+            **super()._session_options(),
+            "connector": TCPConnector(ssl=self._ssl_context),
+        }
+
     async def start(self) -> None:
-        if self._session is not None:
-            return
-        timeout = ClientTimeout(total=DEFAULT_TIMEOUT_SECONDS)
-        self._session = aiohttp.ClientSession(
-            connector=TCPConnector(ssl=self._ssl_context),
-            timeout=timeout,
-        )
-        # Separate session for the Enphase cloud: always uses default system TLS,
-        # never weakened by VERIFY_SSL=False on the local Envoy.
-        self._cloud_session = aiohttp.ClientSession(timeout=timeout)
+        await super().start()
+        if self._cloud_session is None:
+            # Separate session for the Enphase cloud: always uses default system
+            # TLS, never weakened by VERIFY_SSL=False on the local Envoy.
+            self._cloud_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT_SECONDS)
+            )
 
     async def stop(self) -> None:
-        if self._session is not None:
-            await self._session.close()
-            self._session = None
+        await super().stop()
         if self._cloud_session is not None:
             await self._cloud_session.close()
             self._cloud_session = None
 
-    async def _ensure_token(self) -> None:
-        if self._token:
+    async def _ensure_token(self, rejected: str | None = None) -> None:
+        """Obtain a JWT from the Enlighten cloud unless a usable one is held.
+
+        Passing the token the Envoy just rejected forces a refresh — unless
+        another coroutine already replaced it, in which case that one is used.
+        """
+        if self._token and self._token != rejected:
             return
         async with self._token_lock:
-            if self._token:
+            if self._token and self._token != rejected:
                 return
             if self._cloud_session is None:
                 raise RuntimeError("Cloud session not started; call start() first")
-            self._token = await _obtain_token(
-                self._cloud_session, self._username, self._password, self._serial
-            )
-
-    async def _refresh_token(self) -> None:
-        async with self._token_lock:
-            if self._cloud_session is None:
-                raise RuntimeError("Cloud session not started; call start() first")
+            if rejected is not None:
+                logger.info("Envoy: token rejected (401), refreshing")
             self._token = await _obtain_token(
                 self._cloud_session, self._username, self._password, self._serial
             )
 
     async def _get_production(self) -> dict[str, Any]:
-        if self._session is None:
-            raise RuntimeError("Session not started; call start() first")
-        url = f"https://{self.host}/production.json?details=1"
-        headers = {"Authorization": f"Bearer {self._token}"}
-        async with self._session.get(url, headers=headers) as resp:
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
+        try:
+            data = await self.get_json(
+                f"https://{self.host}/production.json?details=1",
+                headers={"Authorization": f"Bearer {self._token}"},
+            )
+        except ClientResponseError as e:
+            if e.status != 401 or not self._has_credentials:
+                raise
+            # Keep the 401's text: this is what surfaces if the fresh token is
+            # rejected too.
+            raise SessionExpired(str(e)) from e
         return data if isinstance(data, dict) else {}
 
     async def _fetch_production(self) -> dict[str, Any]:
         await self._ensure_token()
-        old_token = self._token
-        try:
-            return await self._get_production()
-        except ClientResponseError as e:
-            if e.status != 401 or not self._has_credentials:
-                raise
-            # If another coroutine already refreshed while we were awaiting,
-            # skip our own refresh and retry with the fresh token.
-            if self._token == old_token:
-                logger.info("Envoy: token rejected (401), refreshing")
-                await self._refresh_token()
-            return await self._get_production()
+        # The token this request will carry: if it comes back rejected while
+        # another coroutine has already replaced it, retry instead of refreshing.
+        rejected = self._token
+        return await retry_after_relogin(
+            self._get_production, partial(self._ensure_token, rejected)
+        )
 
     async def get_powermeter_watts(self) -> list[float]:
         data = await self._fetch_production()

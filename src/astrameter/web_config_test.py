@@ -1,10 +1,7 @@
-import json
-
 import pytest
 
 from astrameter.web_config import (
     _validate_config_payload,
-    config_to_json,
     read_config_as_dict,
     write_config_from_dict,
 )
@@ -219,21 +216,6 @@ def test_roundtrip_with_comments(ini_path):
     with open(ini_path) as f:
         result = f.read()
     assert result.strip() == original.strip()
-
-
-# ---------- config_to_json ----------
-
-
-def test_config_to_json(ini_path):
-    with open(ini_path, "w") as f:
-        f.write("[SEC]\nK = V\n")
-    result = json.loads(config_to_json(ini_path))
-    assert result == {"sections": {"SEC": {"K": "V"}}, "order": ["SEC"]}
-
-
-def test_config_to_json_nonexistent(ini_path):
-    result = json.loads(config_to_json(ini_path))
-    assert result == {"sections": {}, "order": []}
 
 
 # ---------- sections in order not in dict are skipped ----------

@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import configparser
 import dataclasses
-import typing
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from astrameter.config.config_loader import (
+    GENERAL_KEY_OVERRIDES,
+    SIGNAL_KEY_OVERRIDES,
+    general_key,
+    ini_key,
     new_config_parser,
     read_all_powermeter_configs,
+    read_fields,
     read_mqtt_insights_config,
-    read_option,
     read_signal_settings,
+    split_csv,
 )
 from astrameter.config.settings import (
     AppConfig,
@@ -25,6 +29,7 @@ from astrameter.config.settings import (
     GeneralSettings,
     MarstekSettings,
     SignalSettings,
+    is_ct,
 )
 
 if TYPE_CHECKING:
@@ -33,69 +38,6 @@ if TYPE_CHECKING:
 
 GENERAL_SECTION = "GENERAL"
 MARSTEK_SECTION = "MARSTEK"
-
-# A field's INI key is its name uppercased, except for these. The reader and
-# the renderer below share the maps, and `ini_config_test.py` round-trips every
-# field, so a key read one way and written another fails there.
-_GENERAL_KEY_OVERRIDES = {
-    "device_types": "DEVICE_TYPE",
-    "dashboard": "DASHBOARD_ENABLED",
-}
-
-_SIGNAL_KEY_OVERRIDES = {
-    "smooth_alpha": "SMOOTH_TARGET_ALPHA",
-    "offsets": "POWER_OFFSET",
-    "multipliers": "POWER_MULTIPLIER",
-}
-
-
-def _ini_key(field: str, overrides: dict[str, str]) -> str:
-    return overrides.get(field, field.upper())
-
-
-def general_key(field: str) -> str:
-    """The ``[GENERAL]`` key backing *field* of :class:`GeneralSettings`.
-
-    Lets another backend name a key in a message without hardcoding it, so a
-    rename here cannot leave that message pointing at a key nobody reads.
-    """
-    return _ini_key(field, _GENERAL_KEY_OVERRIDES)
-
-
-def _field_kinds(settings_type: type) -> dict[str, type]:
-    """Each field's scalar type — ``int`` for both ``int`` and ``int | None``."""
-    kinds = {}
-    for name, hint in typing.get_type_hints(settings_type).items():
-        members = [t for t in typing.get_args(hint) or (hint,) if t is not type(None)]
-        kinds[name] = members[0]
-    return kinds
-
-
-def _read_fields(
-    config: configparser.ConfigParser,
-    section: str,
-    settings_type: type[Any],
-    key_overrides: dict[str, str] | None = None,
-    *,
-    skip: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    """Every field of *settings_type* but *skip*, parsed by the getter its type asks for.
-
-    An absent key yields the dataclass default, so a field typed ``X | None``
-    stays ``None`` — unset ``web_config_enabled`` is not "off", and unset
-    ``consumer_ttl`` is adaptive rather than a number.
-    """
-    defaults = settings_type()
-    kinds = _field_kinds(settings_type)
-    values = {}
-    for f in dataclasses.fields(settings_type):
-        if f.name in skip:
-            continue
-        key = _ini_key(f.name, key_overrides or {})
-        values[f.name] = read_option(
-            config, section, key, kinds[f.name], getattr(defaults, f.name)
-        )
-    return values
 
 
 class IniAppConfig(AppConfig):
@@ -127,19 +69,21 @@ class IniAppConfig(AppConfig):
         config = self._config
         defaults = GeneralSettings()
         return GeneralSettings(
-            device_types=_split(
+            device_types=split_csv(
                 config.get(GENERAL_SECTION, general_key("device_types"), fallback="")
             )
             or defaults.device_types,
-            device_ids=_split(config.get(GENERAL_SECTION, "DEVICE_IDS", fallback="")),
+            device_ids=split_csv(
+                config.get(GENERAL_SECTION, general_key("device_ids"), fallback="")
+            ),
             signal=read_signal_settings(
                 GENERAL_SECTION, config, SignalSettings(), with_transform=False
             ),
-            **_read_fields(
+            **read_fields(
                 config,
                 GENERAL_SECTION,
                 GeneralSettings,
-                _GENERAL_KEY_OVERRIDES,
+                GENERAL_KEY_OVERRIDES,
                 skip=("device_types", "device_ids", "signal"),
             ),
         )
@@ -150,7 +94,9 @@ class IniAppConfig(AppConfig):
         section = self.ct_section(device_type)
         # An emulator without a window of its own inherits [GENERAL]'s.
         global_dedupe = config.getfloat(
-            GENERAL_SECTION, "DEDUPE_TIME_WINDOW", fallback=defaults.dedupe_time_window
+            GENERAL_SECTION,
+            general_key("dedupe_time_window"),
+            fallback=defaults.dedupe_time_window,
         )
         # A blank host means the default, not "no host".
         host = config.get(section, "CLOUD_REPORTING_HOST", fallback="").strip()
@@ -159,7 +105,7 @@ class IniAppConfig(AppConfig):
                 section, "DEDUPE_TIME_WINDOW", fallback=global_dedupe
             ),
             cloud_reporting_host=host or defaults.cloud_reporting_host,
-            **_read_fields(
+            **read_fields(
                 config,
                 section,
                 CtSettings,
@@ -175,7 +121,7 @@ class IniAppConfig(AppConfig):
 
     def marstek(self) -> MarstekSettings:
         return MarstekSettings(
-            **_read_fields(self._config, MARSTEK_SECTION, MarstekSettings)
+            **read_fields(self._config, MARSTEK_SECTION, MarstekSettings)
         )
 
     def mqtt_insights(self) -> MqttInsightsConfig | None:
@@ -183,10 +129,6 @@ class IniAppConfig(AppConfig):
 
     def powermeters(self, general: GeneralSettings) -> list[ConfiguredPowermeter]:
         return read_all_powermeter_configs(self._config, general.signal)
-
-
-def _split(raw: str) -> list[str]:
-    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 # Rendering settings back into a ``config.ini`` is what lets the dashboard hand
@@ -218,7 +160,7 @@ def _changed(
         value = getattr(settings, f.name)
         if value is None or value == getattr(defaults, f.name):
             continue
-        out.append((_ini_key(f.name, overrides), _render_value(value)))
+        out.append((ini_key(f.name, overrides), _render_value(value)))
     return out
 
 
@@ -241,12 +183,12 @@ def render_ini(config: AppConfig, device_types: list[str] | None = None) -> str:
     general = config.general()
     lines = _section(
         GENERAL_SECTION,
-        _changed(general, GeneralSettings(), _GENERAL_KEY_OVERRIDES)
-        + _changed(general.signal, SignalSettings(), _SIGNAL_KEY_OVERRIDES),
+        _changed(general, GeneralSettings(), GENERAL_KEY_OVERRIDES)
+        + _changed(general.signal, SignalSettings(), SIGNAL_KEY_OVERRIDES),
     )
 
     for device_type in device_types or general.device_types:
-        if device_type not in ("ct002", "ct003"):
+        if not is_ct(device_type):
             continue
         # Emitted even when every value is a default: `ct_section` falls back
         # to [CT002] for a missing [CT003], so leaving an all-default CT003

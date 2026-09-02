@@ -188,7 +188,8 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
                                   "/consumer/" + consumer_id;
 
   // Build per-consumer state JSON. Field set + value TYPES mirror
-  // service.py's consumer_state dict (ct002.py:719-744): grid_power.* and
+  // service.py's consumer_state dict, fed by the event payload CT002's
+  // _handle_request builds for _call_event_listener: grid_power.* and
   // target.* are floats; reported_power is an int (parse_int upstream);
   // last_target is the balancer's raw float. Emitting floats here matters
   // because the HA value_templates pass the value through unrounded, so
@@ -258,7 +259,8 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
   this->mqtt_->publish(state_topic + "/availability", "online", 6, 0, true);
 
   // Device-level status — published on every consumer update so HA sees
-  // fresh smooth_target / consumer_count. Mirrors service.py:425.
+  // fresh smooth_target / consumer_count. Mirrors the device_status dict in
+  // service.py's MqttInsightsService._handle_ct002_event.
   auto device_buf = json::build_json([&](JsonObject root) {
     // smooth_target is the total input grid power (post-filter,
     // pre-balancer), mirroring Python's _last_smooth_target — NOT the sum
