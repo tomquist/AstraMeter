@@ -129,10 +129,11 @@ def _json(payload, status=200, **headers):
 #: essence, lowercased, and is what the comparison below uses.
 #:
 #: ``esphome/components/ct002/dashboard.cpp`` enforces the same header, for the
-#: same reason (see AGENTS.md — the write path has parity). The two must not
-#: diverge: a request one stack accepts and the other refuses means the risk is
-#: real on whichever half forgot — which is why that side parses the essence too
-#: rather than calling ``find()`` on the header.
+#: same reason — the write path has parity (see the ``ct002-parity`` notes under
+#: ``.agents/skills/``). The two must not diverge: a request one stack accepts
+#: and the other refuses means the risk is real on whichever half forgot, which
+#: is why that side parses the essence too rather than calling ``find()`` on the
+#: header.
 JSON_CONTENT_TYPE = "application/json"
 
 
@@ -224,8 +225,8 @@ def is_allowed_host(host: str, allowed: Collection[str] = ()) -> bool:
 
     Mirrored by ``controls::is_allowed_host`` in
     ``esphome/components/ct002/controls.cpp`` — the firmware's dashboard has no
-    login either (see AGENTS.md: the write path has parity, and the bounds must
-    match).
+    login either: the write path has parity, and the bounds must match (see the
+    ``ct002-parity`` notes in ``.agents/skills/``).
     """
     name = _normalise_host(_host_name(host))
     if not name:

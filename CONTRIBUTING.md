@@ -45,7 +45,7 @@ CI runs the same (ruff format check, ruff check, mypy on `src/`, pytest with cov
 
 ## Adding a powermeter
 
-Follow the checklist in [AGENTS.md](AGENTS.md) (**Adding a powermeter**), using paths under `src/astrameter/` (e.g. `src/astrameter/powermeter/<module>.py`, `src/astrameter/config/config_loader.py`).
+Follow the checklist in [`.agents/skills/powermeter/SKILL.md`](.agents/skills/powermeter/SKILL.md), using paths under `src/astrameter/` (e.g. `src/astrameter/powermeter/<module>.py`, `src/astrameter/config/config_loader.py`).
 
 ## ESPHome external component (parity rule)
 
@@ -108,7 +108,7 @@ document behind it does follow the parity rule
 `esphome/components/ct002/status_json.{h,cpp}`, and the `status_snapshot`
 methods on each side); the *configuration* half is Python-only, because an
 ESPHome device's config is compiled into its firmware. See the
-"Dashboard / web UI" section in `AGENTS.md` for the full split and for the
+`.agents/skills/ct002-parity/SKILL.md` for the full split and for the
 constraints the firmware puts on the page.
 
 The page ships as a committed, generated single-file bundle at
