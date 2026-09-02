@@ -137,3 +137,27 @@ def test_slot_count_holds_through_boundary_noise_but_tracks_real_steps() -> None
     # (per-consumer 550/3 > 150 x 1.2).
     run(550.0)
     assert len(lb._deprioritized) == 0
+
+
+def test_active_slots_arithmetic() -> None:
+    """The slot count in isolation, without the pool state around it."""
+    lb = _make_balancer(_FakeClock())
+
+    # Above the floor for everyone: nobody is deprioritized.
+    assert lb._active_slots(550.0, 3, was_limiting=False, prev_slots=3) == 3
+    # Entering limiting is immediate, at the plain floor.
+    assert lb._active_slots(295.0, 3, was_limiting=False, prev_slots=3) == 1
+    # Leaving it takes the 20% margin: 3 x 150 = 450 W is still limiting.
+    assert lb._active_slots(460.0, 3, was_limiting=True, prev_slots=1) == 2
+    assert lb._active_slots(550.0, 3, was_limiting=True, prev_slots=1) == 3
+    # Growth needs the same margin (2 x 150 x 1.2 = 360 W), so boundary noise
+    # around 2 x 150 holds the count (issue #469) ...
+    assert lb._active_slots(308.0, 3, was_limiting=True, prev_slots=1) == 1
+    # ... while a real step past it grows the active set.
+    assert lb._active_slots(365.0, 3, was_limiting=True, prev_slots=1) == 2
+    # Shrinking stays immediate, like entering.
+    assert lb._active_slots(290.0, 3, was_limiting=True, prev_slots=2) == 1
+    # At least one battery always keeps a slot, and a lone battery is never
+    # deprioritized however small the demand.
+    assert lb._active_slots(0.0, 3, was_limiting=True, prev_slots=1) == 1
+    assert lb._active_slots(0.0, 1, was_limiting=False, prev_slots=1) == 1

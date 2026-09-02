@@ -38,6 +38,18 @@ namespace ct002 {
 // the PhaseBucket enum below and status::BUCKET_NAMES.
 size_t bucket_index_for_phase(const std::string &phase);
 
+// Whether *phase* is one active control steers: A/B/C are physical legs and
+// "D" is combined / whole-home mode (newer Marstek firmware). Anything else --
+// "0", empty, a future marker -- marks an unassigned / inspection reporter.
+// Mirrors ct002.py STEERED_PHASES.
+bool is_steered_phase(const std::string &phase);
+
+// Canonical stored phase for a reported value: a steered phase, or the wire's
+// canonical "0" for the unassigned / inspection state, so aggregation routes it
+// to the x bucket instead of inventing a phase (issue #460). Mirrors ct002.py
+// normalize_phase.
+std::string normalize_phase(const std::string &raw);
+
 // Cross-talk aggregation bucket indices, mirroring Python's PHASE_BUCKETS
 // ("x", "A", "B", "C", "ABC"): x collects unassigned/inspection ("0")
 // reporters, ABC collects combined-mode (phase "D") reporters.

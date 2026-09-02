@@ -22,6 +22,7 @@ from .balancer import (
     LoadBalancer,
     _needs_dc_output_floor,
     device_capabilities,
+    phase_index,
 )
 from .protocol import (
     ETX,
@@ -85,14 +86,31 @@ def _ema_interval(previous: float | None, raw: float) -> float:
     )
 
 
+# The phases active control steers: A/B/C are physical legs and "D" is
+# combined / whole-home mode (newer Marstek firmware).  Anything else — "0",
+# empty, a future marker — marks an unassigned / inspection reporter.
+STEERED_PHASES = frozenset("ABCD")
+
+
+def normalize_phase(raw: object) -> str:
+    """Canonical stored phase for a reported value.
+
+    One of :data:`STEERED_PHASES`, or the wire's canonical ``"0"`` for the
+    unassigned / inspection state, so aggregation routes it to the x bucket
+    instead of inventing a phase (issue #460).
+    """
+    phase = str(raw).strip().upper() if raw else ""
+    return phase if phase in STEERED_PHASES else "0"
+
+
 def _bucket_for_phase(phase: str) -> str:
     """Map a stored consumer phase to its aggregation bucket."""
-    p = (phase or "").strip().upper()
-    if p in ("A", "B", "C"):
-        return p
+    p = normalize_phase(phase)
     if p == "D":
         return "ABC"
-    return "x"
+    if p == "0":
+        return "x"
+    return p
 
 
 def _control_quality_evidence(quality) -> dict[str, Any]:
@@ -601,13 +619,7 @@ class CT002:
         source_ip: str | None = None,
         participates: bool = True,
     ):
-        normalized_phase = str(phase).strip().upper() if phase else ""
-        if normalized_phase not in ("A", "B", "C", "D"):
-            # Anything else ("0", empty, future markers) is the
-            # unassigned/inspection state; store the wire's canonical "0" so
-            # aggregation routes it to the x bucket instead of inventing a
-            # phase (issue #460).
-            normalized_phase = "0"
+        normalized_phase = normalize_phase(phase)
         consumer = self._get_consumer(consumer_id)
         previous_phase = consumer.phase if consumer.timestamp > 0 else None
         now = self._clock()
@@ -623,11 +635,8 @@ class CT002:
         if source_ip:
             consumer.last_ip = source_ip
 
-        if (
-            normalized_phase in ("A", "B", "C", "D")
-            and previous_phase != normalized_phase
-        ):
-            if previous_phase in ("A", "B", "C", "D"):
+        if normalized_phase in STEERED_PHASES and previous_phase != normalized_phase:
+            if previous_phase in STEERED_PHASES:
                 logger.info(
                     "CT002 consumer %s phase changed: %s -> %s",
                     consumer_id,
@@ -936,9 +945,7 @@ class CT002:
         )
         out: list[ReportingConsumerRow] = []
         for c in reporters:
-            pu = (c.phase or "0").strip().lower()
-            if pu not in ("a", "b", "c", "d"):
-                pu = "0"
+            pu = normalize_phase(c.phase).lower()
             host = c.last_ip.strip() if c.last_ip else ""
             out.append(
                 ReportingConsumerRow(
@@ -1179,7 +1186,7 @@ class CT002:
         # — all four are valid, actively-steered operating phases, so they are
         # NOT inspection.  Accept any other value as inspection so a future
         # marker doesn't get mistaken for a real phase.
-        in_inspection_mode = reported_phase not in ("A", "B", "C", "D")
+        in_inspection_mode = reported_phase not in STEERED_PHASES
         if in_inspection_mode:
             logger.debug(
                 "CT002 request from %s in inspection mode (phase=%r)",
@@ -1328,8 +1335,7 @@ class CT002:
                     # single phase.
                     delta = sum(values)
                 else:
-                    phase_idx = {"A": 0, "B": 1, "C": 2}.get(consumer.phase.upper(), 0)
-                    delta = values[phase_idx]
+                    delta = values[phase_index(consumer.phase)]
                 consumer.last_instructed_power = float(reported_power + delta)
 
             try:

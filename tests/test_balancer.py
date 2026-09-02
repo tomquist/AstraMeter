@@ -476,11 +476,15 @@ class TestLoadBalancerLifecycle:
         state = lb._get_consumer("x")
         state.last_target = 100.0
         state.saturation_score = 0.5
+        state.fade_weight = 0.4
         lb.reset_consumer("x")
+        state = lb._get_consumer("x")
         assert state.last_target is None
         assert state.saturation_score == 0.0
         assert state.saturation_grace_until > time.time()
         assert state.saturation_grace_started_at > 0.0
+        # The rotation fade is the one thing a returning consumer keeps.
+        assert state.fade_weight == 0.4
 
     def test_detach_from_auto_pool(self):
         lb = self._make_balancer()
