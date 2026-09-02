@@ -28,6 +28,7 @@ Application code lives under **`src/astrameter/`** (src layout). Notable pieces:
 | `src/astrameter/powermeter/` | Powermeter backends |
 | `src/astrameter/ct002/` | CT002/CT003 UDP emulator |
 | `src/astrameter/shelly/` | Shelly protocol emulation |
+| `src/astrameter/udp_server.py` | The listening socket both emulators serve on |
 | `tests/` | Integration-style tests |
 
 Co-located tests use `*_test.py` next to modules under `src/astrameter/`.
