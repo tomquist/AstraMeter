@@ -5,12 +5,14 @@ import contextlib
 import dataclasses
 import math
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
-from typing import Any, Literal, cast
+from typing import Any, Literal, NamedTuple, cast
 
 from astrameter.config.logger import debug_traceback, logger
+from astrameter.power_units import three_phases
 from astrameter.request_dedupe import RequestDeduplicator
+from astrameter.udp_server import UdpServer
 
 from .balancer import (
     SATURATION_GRACE_SECONDS,
@@ -19,6 +21,7 @@ from .balancer import (
     BalancerConsumerSnapshot,
     BalancerSnapshot,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     _needs_dc_output_floor,
     device_capabilities,
@@ -46,6 +49,7 @@ __all__ = [
     "SOH",
     "STX",
     "UDP_PORT",
+    "PhaseBucket",
     "ReportingConsumerRow",
     "ReportingPhase",
     "build_payload",
@@ -152,6 +156,68 @@ def _values_finite(values) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# The incoming poll
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class CT002Request:
+    """One battery's poll, decoded (see docs/ct002-ct003-protocol.md).
+
+    Fields 1-6 appear in all observed traffic.  Field 7 ("participate") is a
+    newer addition older senders omit; absent or empty means the reporter
+    takes part in aggregation, an explicit 0 opts out.
+    """
+
+    meter_dev_type: str
+    meter_mac: str
+    ct_type: str
+    ct_mac: str
+    phase: str
+    power: int
+    participates: bool
+    addr: tuple
+
+    @classmethod
+    def from_fields(cls, fields: Sequence[str], addr: tuple = ("", 0)) -> CT002Request:
+        """Decode a parsed field list.  Requires at least the four id fields."""
+
+        def field(index: int) -> str:
+            return fields[index] if len(fields) > index else ""
+
+        participate = field(6).strip()
+        return cls(
+            meter_dev_type=field(0),
+            meter_mac=field(1),
+            ct_type=field(2),
+            ct_mac=field(3),
+            phase=field(4).strip().upper(),
+            power=parse_int(field(5), 0),
+            participates=participate == "" or parse_int(participate, 1) != 0,
+            addr=addr,
+        )
+
+    @property
+    def consumer_id(self) -> str:
+        """Stable id for the reporting battery: its MAC, else its socket."""
+        if self.meter_mac:
+            return self.meter_mac.lower()
+        return f"{self.addr[0]}:{self.addr[1]}"
+
+    @property
+    def in_inspection_mode(self) -> bool:
+        """Whether this is an unassigned / diagnostic reporter.
+
+        "A"/"B"/"C" are the physical phases and "D" is combined / whole-home
+        mode (newer Marstek firmware) — all four are valid, actively-steered
+        operating phases.  Anything else ("0", empty, a marker we have yet to
+        meet) counts as inspection, so a future value cannot be mistaken for a
+        real phase.
+        """
+        return self.phase not in STEERED_PHASES
+
+
+# ---------------------------------------------------------------------------
 # Per-consumer state
 # ---------------------------------------------------------------------------
 
@@ -236,6 +302,47 @@ class ConsumerOverride:
 ReportingPhase = Literal["a", "b", "c", "d", "0"]
 
 
+class _ServedTarget(NamedTuple):
+    """What one poll resolved to, before it goes on the wire."""
+
+    raw_values: list
+    """The meter reading as read, padded to [L1, L2, L3]."""
+
+    values: list
+    """The per-phase instruction to send — a hold of zeros on a meter failure."""
+
+    meter_failed: bool
+    """True when the reading is a hold sentinel rather than a sample."""
+
+
+@dataclasses.dataclass
+class PhaseBucket:
+    """What one cross-talk bucket aggregates over the batteries reporting into it.
+
+    ``chrg_power`` is never positive and ``dchrg_power`` never negative — the
+    same sign split the UDP response carries.  ``count`` includes every battery
+    in the bucket, idle ones too, because relay mode forwards it as the divisor
+    each battery takes its 1/N share by; ``active`` says whether any of them is
+    actually moving power.
+    """
+
+    chrg_power: int = 0
+    dchrg_power: int = 0
+    count: int = 0
+    active: bool = False
+
+    def add(self, power: int) -> None:
+        """Fold one battery's net power into the bucket."""
+        self.count += 1
+        if power == 0:
+            return
+        self.active = True
+        if power < 0:
+            self.chrg_power += power
+        else:
+            self.dchrg_power += power
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class ReportingConsumerRow:
     """One UDP-reporting consumer, for integrations that need a stable device list."""
@@ -307,26 +414,10 @@ class CT002Snapshot:
     grid_sample_at: float | None
     meter_failed: bool
     consecutive_meter_failures: int
-    buckets: dict[str, dict[str, int | bool]]
+    buckets: dict[str, PhaseBucket]
     consumers: tuple[ConsumerSnapshot, ...]
     orphan_overrides: tuple[tuple[str, ConsumerOverride], ...]
     balancer: BalancerSnapshot
-
-
-class _CT002Protocol(asyncio.DatagramProtocol):
-    def __init__(self, ct002: CT002):
-        self.ct002 = ct002
-        self._tasks: set[asyncio.Task] = set()
-
-    def connection_made(self, transport):
-        self.transport = transport
-
-    def datagram_received(self, data, addr):
-        task = asyncio.create_task(
-            self.ct002._safe_handle_request(data, addr, self.transport)
-        )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
 
 
 class CT002:
@@ -363,7 +454,7 @@ class CT002:
         self.debug_status = debug_status
         self.active_control = active_control
         self.before_send: (
-            Callable[[tuple, list, str], Awaitable[list[float] | None]] | None
+            Callable[[tuple, CT002Request, str], Awaitable[list[float] | None]] | None
         ) = None
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
         self._device_id = device_id
@@ -389,8 +480,7 @@ class CT002:
         self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
             dedupe_time_window, clock=clock or time.time
         )
-        self._transport = None
-        self._protocol: _CT002Protocol | None = None
+        self._server: UdpServer | None = None
         self._cleanup_task = None
         self._stopped = asyncio.Event()
         # Clock used for rate-limiting ``before_send`` warning logs.
@@ -428,12 +518,6 @@ class CT002:
             clock=clock,
             reset_fn=reset_fn,
         )
-
-    def _consumer_key(self, addr, fields):
-        battery_mac = fields[1] if len(fields) > 1 else ""
-        if battery_mac:
-            return battery_mac.lower()
-        return f"{addr[0]}:{addr[1]}"
 
     def _get_consumer(self, consumer_id: str) -> Consumer:
         consumer = self._consumers.get(consumer_id)
@@ -722,14 +806,14 @@ class CT002:
         mode = self._consumer_mode(consumer_id)
 
         reports = {
-            cid: {
-                "phase": c.phase,
-                "power": c.power,
-                "device_type": c.device_type,
-                "weight": c.distribution_weight,
-                "efficiency_window_weight": c.efficiency_window_weight,
-                "min_dc_output": c.min_dc_output,
-            }
+            cid: ConsumerReport(
+                phase=c.phase,
+                power=c.power,
+                device_type=c.device_type,
+                weight=c.distribution_weight,
+                efficiency_window_weight=c.efficiency_window_weight,
+                min_dc_output=c.min_dc_output,
+            )
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }
@@ -755,11 +839,8 @@ class CT002:
             sample_id,
         )
 
-    def _collect_reports_by_phase(self):
-        by_phase = {
-            bucket: {"chrg_power": 0, "dchrg_power": 0, "active": False, "count": 0}
-            for bucket in PHASE_BUCKETS
-        }
+    def _collect_reports_by_phase(self) -> dict[str, PhaseBucket]:
+        by_phase = {bucket: PhaseBucket() for bucket in PHASE_BUCKETS}
 
         now = self._clock()
         for consumer in self._consumers.values():
@@ -777,11 +858,6 @@ class CT002:
             if self._consumer_expired(consumer, now):
                 continue
             bucket = _bucket_for_phase(consumer.phase)
-            # Count every battery reporting into the bucket (regardless of its
-            # current power) so relay mode can forward the real per-phase
-            # battery count — each battery divides the forwarded aggregate by it
-            # to take its 1/N share.
-            by_phase[bucket]["count"] += 1
             if self.active_control and bucket in ("A", "B", "C", "ABC"):
                 # Active control: use the net AC power we *instructed* this
                 # consumer to be at (its reported output plus the delta in the
@@ -808,13 +884,7 @@ class CT002:
                 # never actively instructed, so their reported power is the only
                 # truthful signal in either mode.
                 power = consumer.power
-            if power == 0:
-                continue
-            by_phase[bucket]["active"] = True
-            if power < 0:
-                by_phase[bucket]["chrg_power"] += power
-            else:
-                by_phase[bucket]["dchrg_power"] += power
+            by_phase[bucket].add(power)
         return by_phase
 
     # ------------------------------------------------------------------
@@ -920,13 +990,11 @@ class CT002:
         """Number of consumers that have reported at least once over UDP."""
         return sum(1 for c in self._consumers.values() if c.timestamp > 0)
 
-    def reporting_phase_buckets(self) -> dict[str, dict[str, int | bool]]:
+    def reporting_phase_buckets(self) -> dict[str, PhaseBucket]:
         """Per-bucket charge/discharge power (W) and counts for integrations.
 
-        Keys are :data:`PHASE_BUCKETS` (``x``/``A``/``B``/``C``/``ABC``); each
-        value has ``chrg_power`` (≤0), ``dchrg_power`` (≥0), ``count`` and
-        ``active`` — the same sign-split the UDP response carries. Used by the
-        opt-in HTTP cloud reporter for its ``cz…cd`` / ``dz…dd`` fields.
+        Keyed by :data:`PHASE_BUCKETS` (``x``/``A``/``B``/``C``/``ABC``).  Used
+        by the opt-in HTTP cloud reporter for its ``cz…cd`` / ``dz…dd`` fields.
         """
         return self._collect_reports_by_phase()
 
@@ -969,8 +1037,8 @@ class CT002:
         if meter_value is not None:
             parts.append(f"meter {meter_value}W")
         phases = " ".join(f"{p}:{int(v)}W" for p, v in zip("ABC", values, strict=False))
-        chrg = " ".join(f"{p}:{phase_values[p]['chrg_power']}" for p in PHASE_BUCKETS)
-        dchrg = " ".join(f"{p}:{phase_values[p]['dchrg_power']}" for p in PHASE_BUCKETS)
+        chrg = " ".join(f"{p}:{phase_values[p].chrg_power}" for p in PHASE_BUCKETS)
+        dchrg = " ".join(f"{p}:{phase_values[p].dchrg_power}" for p in PHASE_BUCKETS)
         consumers_with_reports = sorted(
             ((c.consumer_id, c) for c in self._consumers.values() if c.timestamp > 0),
             key=lambda x: x[0],
@@ -991,24 +1059,16 @@ class CT002:
         )
         return " | ".join(parts)
 
-    def _build_response_fields(self, request_fields, values):
+    def _build_response_fields(self, request: CT002Request, values):
         if not values or len(values) != 3:
             values = [0, 0, 0]
         phase_a, phase_b, phase_c = values
         measured_total_power = phase_a + phase_b + phase_c
-        meter_dev_type = request_fields[0] if len(request_fields) > 0 else "HMG-50"
-        meter_mac = request_fields[1] if len(request_fields) > 1 else ""
-        ct_type = self.ct_type
-        ct_mac = (
-            self.ct_mac
-            if self.ct_mac
-            else (request_fields[3] if len(request_fields) > 3 else "")
-        )
         response_fields = [
-            ct_type,
-            ct_mac,
-            meter_dev_type,
-            meter_mac,
+            self.ct_type,
+            self.ct_mac or request.ct_mac,
+            request.meter_dev_type,
+            request.meter_mac,
             str(round(phase_a)),
             str(round(phase_b)),
             str(round(phase_c)),
@@ -1048,19 +1108,19 @@ class CT002:
                 # a real count N would make every battery under-respond by a
                 # factor of N.  The issue #455 relay-count fix applies to the
                 # relay branch below only; don't generalize it here.
-                if pv["active"] or phase_power[idx] != 0:
+                if pv.active or phase_power[idx] != 0:
                     response_fields[8 + idx] = "1"
             else:
                 # Relay mode forwards the per-phase aggregate; report the real
                 # battery count so each battery takes its 1/N share.
-                response_fields[8 + idx] = str(pv["count"])
-            response_fields[15 + idx] = str(pv["chrg_power"])
-            response_fields[20 + idx] = str(pv["dchrg_power"])
+                response_fields[8 + idx] = str(pv.count)
+            response_fields[15 + idx] = str(pv.chrg_power)
+            response_fields[20 + idx] = str(pv.dchrg_power)
 
         # x (unassigned/inspection) bucket — chrg/dchrg only; the response
         # carries no x count field.
-        response_fields[14] = str(phase_values["x"]["chrg_power"])
-        response_fields[19] = str(phase_values["x"]["dchrg_power"])
+        response_fields[14] = str(phase_values["x"].chrg_power)
+        response_fields[19] = str(phase_values["x"].dchrg_power)
         # ABC (combined, phase "D") bucket.  A combined-mode battery reads the
         # summed grid field (field 7, ``measured_total_power``) and divides it
         # by this count.  Under active control we deliver a per-consumer target
@@ -1072,23 +1132,20 @@ class CT002:
         # scoped to a phase-"D" requester: a per-phase target also sums into
         # that field, so an unscoped check would spuriously set the ABC count on
         # phase-A/B/C responses (where the battery ignores it anyway).
-        reported_phase = (
-            (request_fields[4] if len(request_fields) > 4 else "").strip().upper()
-        )
         abc = phase_values["ABC"]
         if self.active_control:
-            if abc["active"] or (reported_phase == "D" and measured_total_power != 0):
+            if abc.active or (request.phase == "D" and measured_total_power != 0):
                 response_fields[11] = "1"
         else:
-            response_fields[11] = str(abc["count"])
-        response_fields[18] = str(abc["chrg_power"])
-        response_fields[23] = str(abc["dchrg_power"])
+            response_fields[11] = str(abc.count)
+        response_fields[18] = str(abc.chrg_power)
+        response_fields[23] = str(abc.dchrg_power)
 
         response_fields += ["0"] * (len(RESPONSE_LABELS) - len(response_fields))
         self._info_idx_counter = (self._info_idx_counter + 1) % 256
         return response_fields
 
-    async def _call_before_send(self, addr, fields, consumer_id):
+    async def _call_before_send(self, request: CT002Request):
         """Invoke the ``before_send`` powermeter hook.
 
         Returns ``(result, failed)``.  ``failed`` is ``True`` only when the
@@ -1100,7 +1157,7 @@ class CT002:
         if not self.before_send:
             return None, False
         try:
-            result = await self.before_send(addr, fields, consumer_id)
+            result = await self.before_send(request.addr, request, request.consumer_id)
         except Exception as exc:
             # Rate-limit: log loudly on the first failure after a
             # healthy spell, then at most once every 30 s while the
@@ -1122,7 +1179,7 @@ class CT002:
                     "batteries hold their current output until the "
                     "powermeter recovers.",
                     self._before_send_failure_count,
-                    addr,
+                    request.addr,
                     exc,
                     exc_info=debug_traceback(),
                 )
@@ -1138,15 +1195,11 @@ class CT002:
             self._before_send_last_warn = 0.0
         return result, False
 
-    def _validate_ct_mac(self, request_fields):
+    def _ct_mac_matches(self, request: CT002Request) -> bool:
+        """Whether *request* names the CT MAC we are configured to answer for."""
         if not self.ct_mac:
             return True
-        if len(request_fields) < 4:
-            return False
-        req_ct_mac = request_fields[3]
-        if not req_ct_mac:
-            return False
-        return req_ct_mac.lower() == self.ct_mac.lower()
+        return bool(request.ct_mac) and request.ct_mac.lower() == self.ct_mac.lower()
 
     async def _safe_handle_request(self, data, addr, transport):
         try:
@@ -1155,59 +1208,11 @@ class CT002:
             logger.exception("Error handling CT002 request from %s", addr)
 
     async def _handle_request(self, data, addr, transport):
-        logger.debug("CT002 request from %s: %s", addr, data.hex())
-        fields, error = parse_request(data)
-        if error:
-            logger.debug("Invalid CT002 request from %s: %s", addr, error)
+        request = self._decode_request(data, addr)
+        if request is None:
             return
-        if len(fields) < 4:
-            logger.debug("CT002 request from %s missing required fields", addr)
-            return
-        if not self._validate_ct_mac(fields):
-            logger.debug(
-                "Ignoring CT002 request from %s due to CT MAC mismatch (req=%s, cfg=%s)",
-                addr,
-                fields[3] if len(fields) > 3 else None,
-                self.ct_mac,
-            )
-            return
-        consumer_id = self._consumer_key(addr, fields)
-        reported_phase = (fields[4] if len(fields) > 4 else "").strip().upper()
-        reported_power = parse_int(fields[5] if len(fields) > 5 else 0)
-        # Optional 7th field: "participate" flag (newer senders, e.g. B2500).
-        # Absent/empty defaults to participating; an explicit 0 opts out of
-        # aggregation.
-        participate_raw = fields[6].strip() if len(fields) > 6 else ""
-        participates = participate_raw == "" or parse_int(participate_raw, 1) != 0
+        consumer_id = request.consumer_id
 
-        # Only an unassigned / diagnostic reporter is in inspection mode: "0",
-        # empty, or any other unexpected marker.  "A"/"B"/"C" are the physical
-        # phases and "D" is combined / whole-home mode (newer Marstek firmware)
-        # — all four are valid, actively-steered operating phases, so they are
-        # NOT inspection.  Accept any other value as inspection so a future
-        # marker doesn't get mistaken for a real phase.
-        in_inspection_mode = reported_phase not in STEERED_PHASES
-        if in_inspection_mode:
-            logger.debug(
-                "CT002 request from %s in inspection mode (phase=%r)",
-                addr,
-                reported_phase,
-            )
-
-        logger.debug(
-            "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s ct_mac=%s phase=%r power=%s consumer_id=%s%s",
-            addr,
-            fields[0] if len(fields) > 0 else None,
-            fields[1] if len(fields) > 1 else None,
-            fields[2] if len(fields) > 2 else None,
-            fields[3] if len(fields) > 3 else None,
-            reported_phase,
-            reported_power,
-            consumer_id,
-            " in inspection mode" if in_inspection_mode else "",
-        )
-
-        meter_dev_type = fields[0] if len(fields) > 0 else ""
         # Record the report for *every* poll, before the dedupe decision: the
         # window suppresses our reply, it does not mean the battery went quiet.
         # Booking it here keeps `poll_interval` measuring the battery's real
@@ -1221,27 +1226,81 @@ class CT002:
         # inspection and combined reporters into phase A (issue #460).
         self._update_consumer_report(
             consumer_id,
-            phase=reported_phase,
-            power=reported_power,
-            device_type=meter_dev_type,
+            phase=request.phase,
+            power=request.power,
+            device_type=request.meter_dev_type,
             source_ip=str(addr[0]),
-            participates=participates,
+            participates=request.participates,
         )
 
+        if not self._should_serve(request):
+            return
+
+        self._inflight_consumers.add(consumer_id)
+        try:
+            await self._serve(request, transport)
+        finally:
+            self._inflight_consumers.discard(consumer_id)
+
+    def _decode_request(self, data, addr) -> CT002Request | None:
+        """Decode one datagram, or ``None`` when it is not ours to answer."""
+        logger.debug("CT002 request from %s: %s", addr, data.hex())
+        fields, error = parse_request(data)
+        if error:
+            logger.debug("Invalid CT002 request from %s: %s", addr, error)
+            return None
+        if len(fields) < 4:
+            logger.debug("CT002 request from %s missing required fields", addr)
+            return None
+
+        request = CT002Request.from_fields(fields, addr)
+        if not self._ct_mac_matches(request):
+            logger.debug(
+                "Ignoring CT002 request from %s due to CT MAC mismatch (req=%s, cfg=%s)",
+                addr,
+                request.ct_mac,
+                self.ct_mac,
+            )
+            return None
+
+        if request.in_inspection_mode:
+            logger.debug(
+                "CT002 request from %s in inspection mode (phase=%r)",
+                addr,
+                request.phase,
+            )
+        logger.debug(
+            "CT002 parsed fields from %s: meter_dev_type=%s meter_mac=%s ct_type=%s "
+            "ct_mac=%s phase=%r power=%s consumer_id=%s%s",
+            addr,
+            request.meter_dev_type,
+            request.meter_mac,
+            request.ct_type,
+            request.ct_mac,
+            request.phase,
+            request.power,
+            request.consumer_id,
+            " in inspection mode" if request.in_inspection_mode else "",
+        )
+        return request
+
+    def _should_serve(self, request: CT002Request) -> bool:
+        """Whether this poll earns a reply, or is a duplicate we drop."""
+        consumer_id = request.consumer_id
         # Deduplication check (keyed by consumer id so repeats from the
         # same battery are suppressed regardless of source UDP port).
         if not self._dedup.should_process(consumer_id):
             logger.debug(
                 "Ignoring request from %s (consumer=%s) due to dedupe window",
-                addr,
+                request.addr,
                 consumer_id,
             )
-            # The report above moved liveness and poll_interval on, and this
+            # The report already moved liveness and poll_interval on, and this
             # path never reaches the increment at the end of a served poll.
             # Without this a status client that skips unchanged revisions
             # would show a deduped battery frozen at its last answered poll.
             self._rev += 1
-            return
+            return False
 
         # Coalesce concurrent polls from the same battery.  If a handler for
         # this consumer is already parked awaiting the next meter reading, the
@@ -1250,203 +1309,204 @@ class CT002:
         # multiple deltas on the wire milliseconds apart the moment the meter
         # updates and wakes every parked handler, winding the battery up by N
         # times the intended correction and stepping the stateful balancer N
-        # times per real sample.  Drop it; the report update above already
-        # refreshed the per-consumer state, and the in-flight handler emits the
-        # one response.
+        # times per real sample.  Drop it; the report update already refreshed
+        # the per-consumer state, and the in-flight handler emits the one
+        # response.
         if consumer_id in self._inflight_consumers:
             logger.debug(
                 "Coalescing CT002 poll from %s (consumer=%s): a handler is "
                 "already awaiting the next meter reading; dropping this "
                 "duplicate to avoid a burst of deltas",
-                addr,
+                request.addr,
                 consumer_id,
             )
-            return
-        self._inflight_consumers.add(consumer_id)
+            return False
+        return True
+
+    async def _serve(self, request: CT002Request, transport) -> None:
+        """Read the meter, answer the poll, and publish what we served."""
+        consumer_id = request.consumer_id
+        updated, meter_failed = await self._call_before_send(request)
+        if updated is not None:
+            self.set_consumer_value(consumer_id, updated)
+
+        raw_values, values, meter_failed = self._resolve_target(request, meter_failed)
+        if not request.in_inspection_mode:
+            self._record_instructed_power(request, values)
+
         try:
-            updated, meter_failed = await self._call_before_send(
-                addr, fields, consumer_id
+            response_fields = self._build_response_fields(request, values)
+            response = build_payload(response_fields)
+        except Exception as exc:
+            logger.warning(
+                "Failed to build CT002 response for %s (%s): %s",
+                request.addr,
+                request,
+                exc,
+                exc_info=True,
             )
-            if updated is not None:
-                self.set_consumer_value(consumer_id, updated)
-
-            if meter_failed:
-                # Powermeter unavailable: do NOT re-drive control from the stale
-                # cached reading.  The CT002 instruction is a delta
-                # (``new_target = current_power + grid_field``), so re-issuing a
-                # delta derived from a frozen reading winds the battery up in
-                # active control, and feeds frozen per-phase values into a phase
-                # self-diagnosis in inspection mode (issue #403).  Send a zero
-                # adjustment instead so each battery holds its current output —
-                # matching the ESPHome component, which uses ``[0, 0, 0]`` when
-                # its sensor ages out (see esphome/components/ct002/ct002.cpp).
-                values = [0, 0, 0]
-            else:
-                values = self._get_consumer_value(consumer_id)
-                if values is None:
-                    values = [0, 0, 0]
-                elif not _values_finite(values):
-                    # A non-finite reading (NaN/Inf from a flaky source or a
-                    # filter chain fed one) is a meter failure, not a sample.
-                    # One NaN fed into the stateful controller poisons the
-                    # grid-state predictor permanently: every later innovation
-                    # is NaN, so no fresh meter sample can ever correct the
-                    # estimate, and each battery ends up pinned at the
-                    # ramp-pacing base step until restart (issue #548). Take
-                    # the same hold path as an unavailable meter.
-                    meter_failed = True
-                    values = [0, 0, 0]
-            raw_values = ([*list(values), 0, 0, 0])[:3]
-            meter_value = sum(parse_int(v, 0) for v in raw_values)
-            is_active = self.is_consumer_active(consumer_id)
-            # On a meter failure the ``[0, 0, 0]`` above is a *sentinel*, not a
-            # real reading: run active control only when the meter is healthy.
-            # Feeding the sentinel through the balancer would let the stateful
-            # controller (the grid-state predictor, saturation EMA, ...) treat a
-            # fabricated zero grid as a fresh sample and emit a non-zero delta
-            # from its internal state — exactly the wind-up issue #403 guards
-            # against — so the battery must instead hold on the literal zero
-            # adjustment.
-            if self.active_control and not in_inspection_mode and not meter_failed:
-                values = self._compute_smooth_target(values, consumer_id)
-            values = ([*list(values), 0, 0, 0])[:3]
-
-            # Record the *net* power we expect this battery to be at after
-            # applying the instruction (its reported output plus the delta we
-            # deliver — the battery's firmware computes
-            # ``new_target = current_power + grid_reading_field``).  In active
-            # control the cross-talk *_chrg_power / *_dchrg_power fields convey
-            # this net power per phase so other batteries can see who is actively
-            # charging/discharging cells; storing only the delta would lose
-            # the steady-state signal and flip signs on small corrections
-            # (issue #376).  In relay mode the buckets forward the *reported*
-            # power instead, like the real CT (issue #457) — this value is then
-            # only a diagnostic.  Skip during inspection mode: there is no
-            # instruction to record (we send raw meter readings as information,
-            # not a target; the battery is running its phase-discovery routine,
-            # not our integral controller); its reported power is aggregated
-            # into the x bucket from ``consumer.power`` instead.
-            if not in_inspection_mode:
-                consumer = self._get_consumer(consumer_id)
-                if consumer.phase.upper() == "D":
-                    # Combined / whole-home mode: the battery reads the summed
-                    # grid field (field 7 == sum of the per-phase values), so its
-                    # net is the reported power plus the whole target, not a
-                    # single phase.
-                    delta = sum(values)
-                else:
-                    delta = values[phase_index(consumer.phase)]
-                consumer.last_instructed_power = float(reported_power + delta)
-
-            try:
-                response_fields = self._build_response_fields(fields, values)
-                response = build_payload(response_fields)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to build CT002 response for %s (%s): %s",
-                    addr,
-                    fields,
-                    exc,
-                    exc_info=True,
-                )
-                return
-            logger.debug(
-                "CT002 response to %s: %s (fields=%s)",
-                addr,
-                response.hex(),
-                response_fields,
-            )
-            if self.debug_status:
-                phase_values = self._collect_reports_by_phase()
-                logger.info(
-                    "CT002 status: %s",
-                    self._format_status(values, phase_values, consumer_id, meter_value),
-                )
-            transport.sendto(response, addr)
-            self._track_answer(consumer_id)
-
-            # Record what we just served for the read-only status surface.
-            # This is the one point where the raw meter reading, the emitted
-            # target and the meter-health verdict are all in scope, so the
-            # dashboard cannot observe a half-updated combination.
-            self._last_grid_values = [float(v) for v in raw_values]
-            self._last_grid_at = self._clock()
-            self._last_meter_failed = meter_failed
-            self._last_target_by_consumer[consumer_id] = [float(v) for v in values]
-            self._rev += 1
-
-            # Fire event listener after response is sent
-            if not in_inspection_mode:
-                consumer = self._consumers.get(consumer_id)
-                quality = self._balancer.control_quality()
-                self._call_event_listener(
+            return
+        logger.debug(
+            "CT002 response to %s: %s (fields=%s)",
+            request.addr,
+            response.hex(),
+            response_fields,
+        )
+        if self.debug_status:
+            logger.info(
+                "CT002 status: %s",
+                self._format_status(
+                    values,
+                    self._collect_reports_by_phase(),
                     consumer_id,
-                    {
-                        "grid_power": {
-                            "l1": float(raw_values[0]),
-                            "l2": float(raw_values[1]),
-                            "l3": float(raw_values[2]),
-                            "total": sum(float(v) for v in raw_values),
-                        },
-                        "target": {
-                            "l1": float(values[0]),
-                            "l2": float(values[1]),
-                            "l3": float(values[2]),
-                        },
-                        "phase": consumer.phase if consumer else reported_phase,
-                        "reported_power": reported_power,
-                        "device_type": consumer.device_type if consumer else "",
-                        "battery_ip": addr[0],
-                        "ct_type": fields[2] if len(fields) > 2 else "",
-                        "ct_mac": fields[3] if len(fields) > 3 else "",
-                        "saturation": self._balancer.get_saturation(consumer_id),
-                        "last_target": self._balancer.get_last_target(consumer_id),
-                        "active": is_active,
-                        "poll_interval": consumer.poll_interval if consumer else None,
-                        "answer_interval": (
-                            consumer.answer_interval if consumer else None
-                        ),
-                        "last_seen": datetime.now(timezone.utc).isoformat(),
-                        "smooth_target": self._last_smooth_target,
-                        "manual_target": consumer.manual_target if consumer else None,
-                        "auto_target": (
-                            not consumer.manual_enabled if consumer else True
-                        ),
-                        "distribution_weight": (
-                            consumer.distribution_weight if consumer else 1.0
-                        ),
-                        "efficiency_window_weight": (
-                            consumer.efficiency_window_weight if consumer else 1.0
-                        ),
-                        "min_dc_output": consumer.min_dc_output if consumer else None,
-                        "active_control": self.active_control,
-                        "efficiency_rotation": (
-                            self._balancer.efficiency_rotation_enabled
-                        ),
-                        "consumer_count": sum(
-                            1 for c in self._consumers.values() if c.timestamp > 0
-                        ),
-                        "control_quality": quality.verdict,
-                        # None until the window says something; published as
-                        # JSON null so the HA sensor reads "unknown" rather
-                        # than a flawless 100 it has no evidence for.
-                        "control_quality_score": (
-                            round(quality.score, 1)
-                            if quality.score is not None
-                            else None
-                        ),
-                        # The evidence behind the verdict.  It deliberately
-                        # names no cause, so whatever reads the verdict needs
-                        # these to act on it — MQTT clients included, not just
-                        # the dashboard.  Null until at least one sample has
-                        # been folded in: the EMAs read as a perfectly held
-                        # grid before that, and a 0 W mean error next to an
-                        # "idle" verdict is a lie a graph would record.
-                        **_control_quality_evidence(quality),
-                    },
-                )
-        finally:
-            self._inflight_consumers.discard(consumer_id)
+                    sum(parse_int(v, 0) for v in raw_values),
+                ),
+            )
+        transport.sendto(response, request.addr)
+        self._track_answer(consumer_id)
+
+        # Record what we just served for the read-only status surface.  This is
+        # the one point where the raw meter reading, the emitted target and the
+        # meter-health verdict are all in scope, so the dashboard cannot observe
+        # a half-updated combination.
+        self._last_grid_values = [float(v) for v in raw_values]
+        self._last_grid_at = self._clock()
+        self._last_meter_failed = meter_failed
+        self._last_target_by_consumer[consumer_id] = [float(v) for v in values]
+        self._rev += 1
+
+        if not request.in_inspection_mode:
+            self._call_event_listener(
+                consumer_id, self._consumer_event(request, raw_values, values)
+            )
+
+    def _resolve_target(
+        self, request: CT002Request, meter_failed: bool
+    ) -> _ServedTarget:
+        """The raw meter reading, the per-phase target, and the meter verdict.
+
+        On a meter failure the target is a literal ``[0, 0, 0]`` *hold*, not a
+        reading: the CT002 instruction is a delta
+        (``new_target = current_power + grid_field``), so re-issuing one derived
+        from a frozen reading winds the battery up in active control, and feeds
+        frozen per-phase values into a phase self-diagnosis in inspection mode
+        (issue #403).  The ESPHome component does the same when its sensor ages
+        out (see esphome/components/ct002/ct002.cpp).
+        """
+        if meter_failed:
+            values: list = [0, 0, 0]
+        else:
+            values = self._get_consumer_value(request.consumer_id)
+            if values is None:
+                values = [0, 0, 0]
+            elif not _values_finite(values):
+                # A non-finite reading (NaN/Inf from a flaky source or a filter
+                # chain fed one) is a meter failure, not a sample.  One NaN fed
+                # into the stateful controller poisons the grid-state predictor
+                # permanently: every later innovation is NaN, so no fresh meter
+                # sample can ever correct the estimate, and each battery ends up
+                # pinned at the ramp-pacing base step until restart (issue #548).
+                # Take the same hold path as an unavailable meter.
+                meter_failed = True
+                values = [0, 0, 0]
+
+        raw_values = three_phases(values)
+        # The hold above is a *sentinel*, not a real reading, so active control
+        # runs only when the meter is healthy.  Feeding the sentinel through the
+        # balancer would let the stateful controller (the grid-state predictor,
+        # saturation EMA, ...) treat a fabricated zero grid as a fresh sample
+        # and emit a non-zero delta from its internal state — exactly the
+        # wind-up issue #403 guards against — so the battery must instead hold
+        # on the literal zero adjustment.
+        if self.active_control and not request.in_inspection_mode and not meter_failed:
+            values = self._compute_smooth_target(values, request.consumer_id)
+        return _ServedTarget(raw_values, three_phases(values), meter_failed)
+
+    def _record_instructed_power(self, request: CT002Request, values: list) -> None:
+        """Book the net power we expect this battery to reach.
+
+        Its reported output plus the delta we deliver — the firmware computes
+        ``new_target = current_power + grid_reading_field``.  In active control
+        the cross-talk ``*_chrg_power`` / ``*_dchrg_power`` fields convey this
+        net power per phase so other batteries can see who is actively
+        charging/discharging cells; storing only the delta would lose the
+        steady-state signal and flip signs on small corrections (issue #376).
+        In relay mode the buckets forward the *reported* power instead, like the
+        real CT (issue #457), and this value is then only a diagnostic.
+
+        Inspection mode has nothing to record — we send raw meter readings as
+        information, not a target, and the battery's reported power reaches the
+        x bucket from ``consumer.power`` instead — so callers skip it there.
+        """
+        consumer = self._get_consumer(request.consumer_id)
+        if consumer.phase.upper() == "D":
+            # Combined / whole-home mode: the battery reads the summed grid
+            # field (field 7 == sum of the per-phase values), so its net is the
+            # reported power plus the whole target, not a single phase.
+            delta = sum(values)
+        else:
+            delta = values[phase_index(consumer.phase)]
+        consumer.last_instructed_power = float(request.power + delta)
+
+    def _consumer_event(
+        self, request: CT002Request, raw_values: list, values: list
+    ) -> dict[str, Any]:
+        """The per-consumer payload MQTT and the dashboard subscribe to."""
+        consumer_id = request.consumer_id
+        consumer = self._consumers.get(consumer_id)
+        quality = self._balancer.control_quality()
+        return {
+            "grid_power": {
+                "l1": float(raw_values[0]),
+                "l2": float(raw_values[1]),
+                "l3": float(raw_values[2]),
+                "total": sum(float(v) for v in raw_values),
+            },
+            "target": {
+                "l1": float(values[0]),
+                "l2": float(values[1]),
+                "l3": float(values[2]),
+            },
+            "phase": consumer.phase if consumer else request.phase,
+            "reported_power": request.power,
+            "device_type": consumer.device_type if consumer else "",
+            "battery_ip": request.addr[0],
+            "ct_type": request.ct_type,
+            "ct_mac": request.ct_mac,
+            "saturation": self._balancer.get_saturation(consumer_id),
+            "last_target": self._balancer.get_last_target(consumer_id),
+            "active": self.is_consumer_active(consumer_id),
+            "poll_interval": consumer.poll_interval if consumer else None,
+            "answer_interval": consumer.answer_interval if consumer else None,
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "smooth_target": self._last_smooth_target,
+            "manual_target": consumer.manual_target if consumer else None,
+            "auto_target": not consumer.manual_enabled if consumer else True,
+            "distribution_weight": consumer.distribution_weight if consumer else 1.0,
+            "efficiency_window_weight": (
+                consumer.efficiency_window_weight if consumer else 1.0
+            ),
+            "min_dc_output": consumer.min_dc_output if consumer else None,
+            "active_control": self.active_control,
+            "efficiency_rotation": self._balancer.efficiency_rotation_enabled,
+            "consumer_count": sum(
+                1 for c in self._consumers.values() if c.timestamp > 0
+            ),
+            "control_quality": quality.verdict,
+            # None until the window says something; published as JSON null so
+            # the HA sensor reads "unknown" rather than a flawless 100 it has
+            # no evidence for.
+            "control_quality_score": (
+                round(quality.score, 1) if quality.score is not None else None
+            ),
+            # The evidence behind the verdict.  It deliberately names no cause,
+            # so whatever reads the verdict needs these to act on it — MQTT
+            # clients included, not just the dashboard.  Null until at least one
+            # sample has been folded in: the EMAs read as a perfectly held grid
+            # before that, and a 0 W mean error next to an "idle" verdict is a
+            # lie a graph would record.
+            **_control_quality_evidence(quality),
+        }
 
     async def _cleanup_loop(self):
         try:
@@ -1457,13 +1517,10 @@ class CT002:
             pass
 
     async def start(self):
-        loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: _CT002Protocol(self),
-            local_addr=("0.0.0.0", self.udp_port),
-        )
-        self._transport = transport
-        self._protocol = protocol
+        self._server = await UdpServer.serve(self.udp_port, self._safe_handle_request)
+        # Read the bound port back: a configured 0 asks the OS to pick one, and
+        # the log line and status document below would otherwise both say "0".
+        self.udp_port = self._server.port or self.udp_port
         self._stopped.clear()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._started_at = self._clock()
@@ -1480,14 +1537,9 @@ class CT002:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
             self._cleanup_task = None
-        if self._transport:
-            self._transport.close()
-            self._transport = None
-        if self._protocol:
-            for task in list(self._protocol._tasks):
-                task.cancel()
-            await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
-        self._protocol = None
+        if self._server:
+            await self._server.close()
+            self._server = None
         self._running = False
         self._rev += 1
         self._stopped.set()

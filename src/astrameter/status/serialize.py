@@ -314,10 +314,10 @@ def ct002_to_wire(device) -> dict[str, Any]:
             "buckets": {
                 name: compact(
                     {
-                        "chrg_w": bucket.get("chrg_power"),
-                        "dchrg_w": bucket.get("dchrg_power"),
-                        "count": bucket.get("count"),
-                        "active": bucket.get("active"),
+                        "chrg_w": bucket.chrg_power,
+                        "dchrg_w": bucket.dchrg_power,
+                        "count": bucket.count,
+                        "active": bucket.active,
                     }
                 )
                 for name, bucket in device.buckets.items()

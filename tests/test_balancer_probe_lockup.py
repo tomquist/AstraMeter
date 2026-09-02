@@ -24,6 +24,7 @@ from collections.abc import Callable
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     ProbeState,
 )
@@ -81,8 +82,8 @@ def _reports(active_power: int, backup_power: int) -> dict:
     """Build the ``reports`` dict the balancer expects: both batteries
     are self-reporting on phase B (matching log2)."""
     return {
-        "24215edb1936": {"phase": "B", "power": active_power},
-        "acd929a74b20": {"phase": "B", "power": backup_power},
+        "24215edb1936": ConsumerReport(phase="B", power=active_power),
+        "acd929a74b20": ConsumerReport(phase="B", power=backup_power),
     }
 
 
@@ -150,8 +151,8 @@ class TestProbeReseedsSmoother:
         )
         lb._commit_probe(  # type: ignore[attr-defined]
             reports={
-                "24215edb1936": {"phase": "B", "power": 22},
-                "acd929a74b20": {"phase": "B", "power": 94},
+                "24215edb1936": ConsumerReport(phase="B", power=22),
+                "acd929a74b20": ConsumerReport(phase="B", power=94),
             },
             now=clock(),
             actual=22.0,

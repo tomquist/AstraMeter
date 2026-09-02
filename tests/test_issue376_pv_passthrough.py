@@ -119,7 +119,7 @@ class _Issue376Harness:
                 consumer_ttl=100000,
             )
 
-            async def update_readings(_addr, _fields=None, _consumer_id=None):
+            async def update_readings(_addr, _request=None, _consumer_id=None):
                 grid = self.powermeter.compute_grid()
                 return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
 
@@ -167,7 +167,7 @@ class _Issue376Harness:
     def phase_dchrg(self, phase: str) -> float:
         """Aggregated *_dchrg_power for a phase (positive instructed power)."""
         if self.backend == "python":
-            return self.ct002._collect_reports_by_phase()[phase]["dchrg_power"]
+            return self.ct002._collect_reports_by_phase()[phase].dchrg_power
         total = 0.0
         for c in self._esphome.dump()["consumers"].values():
             if c["phase"] != phase:

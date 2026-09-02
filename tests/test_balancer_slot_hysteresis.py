@@ -27,6 +27,7 @@ import time
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
 )
 
@@ -73,9 +74,9 @@ def _make_balancer(clock: _FakeClock) -> LoadBalancer:
 def _tick(lb: LoadBalancer, demand: float, carried: float, tick: int) -> None:
     """One balancer pass: the first battery carries *carried* W of *demand*."""
     reports = {
-        MACS[0]: {"phase": "A", "power": round(carried)},
-        MACS[1]: {"phase": "A", "power": 0},
-        MACS[2]: {"phase": "A", "power": 0},
+        MACS[0]: ConsumerReport(phase="A", power=round(carried)),
+        MACS[1]: ConsumerReport(phase="A", power=0),
+        MACS[2]: ConsumerReport(phase="A", power=0),
     }
     grid_total = demand - carried
     for mac in MACS:

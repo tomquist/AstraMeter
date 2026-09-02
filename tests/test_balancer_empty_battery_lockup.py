@@ -29,6 +29,7 @@ import time
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
 )
 
@@ -110,7 +111,9 @@ def test_full_batteries_eventually_get_active_slot() -> None:
     active_membership: list[set[str]] = []
 
     for tick in range(1800):
-        reports = {b.mac: {"phase": "A", "power": round(b.power)} for b in batteries}
+        reports = {
+            b.mac: ConsumerReport(phase="A", power=round(b.power)) for b in batteries
+        }
         grid_total = phase_a_load - sum(b.power for b in batteries)
 
         deltas: dict[str, float] = {}
@@ -127,7 +130,7 @@ def test_full_batteries_eventually_get_active_slot() -> None:
             deltas[b.mac] = phase_targets[0]
 
         for b in batteries:
-            b.step(deltas[b.mac], reports[b.mac]["power"])
+            b.step(deltas[b.mac], reports[b.mac].power)
 
         slots = max(1, len(lb._priority) - len(lb._deprioritized))
         active_membership.append(set(lb._priority[:slots]))

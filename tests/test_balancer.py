@@ -12,6 +12,7 @@ from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     NetOutputW,
     SaturationTracker,
@@ -534,7 +535,7 @@ class TestPaceReading:
 
     def _auto(self, lb, reported, grid, dt=1.0):
         self.clock.advance(dt)
-        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": reported}}
+        reports = {"a": ConsumerReport(device_type="HMG-50", phase="A", power=reported)}
         return lb.compute_target(
             "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), ()
         )[0]
@@ -611,8 +612,8 @@ class TestPaceReading:
             pace_base_step=50, pace_max_step=200, min_efficient_power=400
         )
         reports = {
-            "a": {"device_type": "HMG-50", "phase": "A", "power": 300},
-            "b": {"device_type": "HMG-50", "phase": "A", "power": 300},
+            "a": ConsumerReport(device_type="HMG-50", phase="A", power=300),
+            "b": ConsumerReport(device_type="HMG-50", phase="A", power=300),
         }
 
         def target_for(cid):
@@ -650,7 +651,7 @@ class TestPaceReading:
 
     def test_manual_and_inactive_paths_are_not_paced(self):
         lb = self._make_balancer(pace_base_step=50, pace_max_step=200)
-        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 600}}
+        reports = {"a": ConsumerReport(device_type="HMG-50", phase="A", power=600)}
         manual = lb.compute_target(
             "a", ConsumerMode("manual", 0.0), reports, 0, frozenset(), frozenset(), ()
         )
@@ -692,7 +693,7 @@ class TestGridPredictor:
     def _grid(self, lb, reported, grid):
         # sample_id = (grid,) mirrors production (the meter reading), so a
         # changed grid is a fresh sample.
-        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": reported}}
+        reports = {"a": ConsumerReport(device_type="HMG-50", phase="A", power=reported)}
         return lb.compute_target(
             "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), (grid,)
         )[0]
@@ -761,8 +762,8 @@ class TestConcentrateDeadband:
 
     def _reports(self):
         return {
-            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
-            "b": {"device_type": "HMG-50", "phase": "A", "power": 100},
+            "a": ConsumerReport(device_type="HMG-50", phase="A", power=200),
+            "b": ConsumerReport(device_type="HMG-50", phase="A", power=100),
         }
 
     def _target(self, lb, cid, reports, grid):
@@ -782,8 +783,8 @@ class TestConcentrateDeadband:
         # batteries are on different phases (it would over-correct one phase).
         lb = self._lb(concentrate_deadband=60)
         reports = {
-            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
-            "b": {"device_type": "HMG-50", "phase": "B", "power": 100},
+            "a": ConsumerReport(device_type="HMG-50", phase="A", power=200),
+            "b": ConsumerReport(device_type="HMG-50", phase="B", power=100),
         }
 
         def total(cid):
@@ -804,8 +805,8 @@ class TestConcentrateDeadband:
         # threshold, so the most-active battery (a, 160 W) takes the whole
         # correction and the other is left untouched.
         reports = {
-            "a": {"device_type": "HMG-50", "phase": "A", "power": 160},
-            "b": {"device_type": "HMG-50", "phase": "A", "power": 140},
+            "a": ConsumerReport(device_type="HMG-50", phase="A", power=160),
+            "b": ConsumerReport(device_type="HMG-50", phase="A", power=140),
         }
         a = self._target(lb, "a", reports, 30)
         b = self._target(lb, "b", reports, 30)
@@ -822,8 +823,8 @@ class TestConcentrateDeadband:
         # fair share instead of being left at 0.
         lb = self._lb(concentrate_deadband=60)
         reports = {
-            "a": {"device_type": "VNSE3", "phase": "A", "power": -890},
-            "b": {"device_type": "VNSE3", "phase": "A", "power": -88},
+            "a": ConsumerReport(device_type="VNSE3", phase="A", power=-890),
+            "b": ConsumerReport(device_type="VNSE3", phase="A", power=-88),
         }
         # Small surplus (charge territory): the lagging battery (b) must keep
         # charging more rather than being parked at 0 by concentration.
@@ -841,8 +842,8 @@ class TestConcentrateDeadband:
         # lets the grid-neutral swap through.
         lb = self._lb(concentrate_deadband=60)
         reports = {
-            "a": {"device_type": "VNSE3", "phase": "A", "power": -890},
-            "b": {"device_type": "VNSE3", "phase": "A", "power": -88},
+            "a": ConsumerReport(device_type="VNSE3", phase="A", power=-890),
+            "b": ConsumerReport(device_type="VNSE3", phase="A", power=-88),
         }
         a = self._target(lb, "a", reports, -30)
         b = self._target(lb, "b", reports, -30)
@@ -859,7 +860,7 @@ class TestConcentrateDeadband:
 
     def test_single_battery_unaffected(self):
         lb = self._lb(concentrate_deadband=60)
-        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 200}}
+        reports = {"a": ConsumerReport(device_type="HMG-50", phase="A", power=200)}
         assert self._target(lb, "a", reports, 30) == pytest.approx(30.0, abs=1.0)
 
     def test_zero_weight_battery_not_designated(self):
@@ -875,9 +876,9 @@ class TestConcentrateDeadband:
         # grid-neutral redistribution the active pool absorbs), not frozen at
         # 200 — so it reduces output rather than being designated.
         reports = {
-            "a": {"device_type": "HMG-50", "phase": "A", "power": 200, "weight": 0.0},
-            "b": {"device_type": "HMG-50", "phase": "A", "power": 80},
-            "c": {"device_type": "HMG-50", "phase": "A", "power": 70},
+            "a": ConsumerReport(device_type="HMG-50", phase="A", power=200, weight=0.0),
+            "b": ConsumerReport(device_type="HMG-50", phase="A", power=80),
+            "c": ConsumerReport(device_type="HMG-50", phase="A", power=70),
         }
         a = self._target(lb, "a", reports, 30)
         assert self._target(lb, "b", reports, 30) == pytest.approx(30.0, abs=1.0)
@@ -915,7 +916,7 @@ class TestImportTrim:
         # Each call is a fresh meter sample by default (a distinct sample_id),
         # which the trim requires; pass an explicit ``sample`` to repeat a reading
         # (a stale / frozen meter).
-        reports = {"a": {"device_type": "HMG-50", "phase": "A", "power": 200}}
+        reports = {"a": ConsumerReport(device_type="HMG-50", phase="A", power=200)}
         if sample is None:
             self._tick = getattr(self, "_tick", 0) + 1
             sample = (float(self._tick), grid)
@@ -994,8 +995,8 @@ class TestEfficiencyDemandSmoothing:
         # Two batteries on one phase, 200 W each: demand = |400 + grid|. A fresh
         # sample_id per poll so the efficiency demand EMA advances each call.
         reports = {
-            "a": {"device_type": "HMG-50", "phase": "A", "power": 200},
-            "b": {"device_type": "HMG-50", "phase": "A", "power": 200},
+            "a": ConsumerReport(device_type="HMG-50", phase="A", power=200),
+            "b": ConsumerReport(device_type="HMG-50", phase="A", power=200),
         }
         lb.compute_target(
             "a", ConsumerMode("auto"), reports, grid, frozenset(), frozenset(), (tick,)

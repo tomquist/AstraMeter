@@ -230,7 +230,7 @@ async def _gated_before_send(ct: CT002, gate: asyncio.Event) -> list[int]:
     returns a fixed grid reading.  Returns a one-element call counter list."""
     calls = [0]
 
-    async def before_send(_addr, _fields=None, _consumer_id=None):
+    async def before_send(_addr, _request=None, _consumer_id=None):
         calls[0] += 1
         await gate.wait()
         return [150.0, 0.0, 0.0]
@@ -334,7 +334,7 @@ async def test_non_finite_reading_holds_and_control_recovers(bad: float) -> None
     ct = CT002(ct_mac="", active_control=True, clock=clock)
     grid = [300.0]
 
-    async def before_send(_addr, _fields=None, _consumer_id=None):
+    async def before_send(_addr, _request=None, _consumer_id=None):
         return [grid[0], 0.0, 0.0]
 
     ct.before_send = before_send
@@ -372,3 +372,19 @@ def test_values_finite_helper() -> None:
     assert _values_finite(["abc"]) is False
     assert _values_finite([None]) is False
     assert _values_finite([10**400]) is False  # float() raises OverflowError
+
+
+async def test_start_reports_the_port_the_os_assigned() -> None:
+    """``udp_port=0`` asks the OS for a free port; the CT must report the real one.
+
+    The log line and the status document both read ``self.udp_port``, so leaving
+    it at the configured 0 would tell an operator the emulator is listening on
+    port 0.
+    """
+    ct = CT002(udp_port=0)
+    await ct.start()
+    try:
+        assert ct.udp_port != 0
+        assert ct.status_snapshot().udp_port == ct.udp_port
+    finally:
+        await ct.stop()

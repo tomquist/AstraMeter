@@ -22,7 +22,12 @@ from __future__ import annotations
 
 import time
 
-from astrameter.ct002.balancer import BalancerConfig, ConsumerMode, LoadBalancer
+from astrameter.ct002.balancer import (
+    BalancerConfig,
+    ConsumerMode,
+    ConsumerReport,
+    LoadBalancer,
+)
 
 PHASE_IDX = {"A": 0, "B": 1, "C": 2}
 
@@ -79,7 +84,8 @@ def _run(pace_base_step: float, pace_max_step: float) -> dict[str, float]:
 
     for tick in range(600):
         reports = {
-            b.mac: {"phase": b.phase, "power": round(b.power)} for b in batteries
+            b.mac: ConsumerReport(phase=b.phase, power=round(b.power))
+            for b in batteries
         }
         grid = dict(base)
         for b in batteries:
@@ -98,7 +104,7 @@ def _run(pace_base_step: float, pace_max_step: float) -> dict[str, float]:
             for b in batteries
         }
         for b in batteries:
-            b.step(targets[b.mac][PHASE_IDX[b.phase]], reports[b.mac]["power"])
+            b.step(targets[b.mac][PHASE_IDX[b.phase]], reports[b.mac].power)
         clock.advance(0.5)
 
     grid = dict(base)

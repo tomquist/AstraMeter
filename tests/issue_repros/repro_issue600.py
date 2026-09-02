@@ -40,7 +40,12 @@ from __future__ import annotations
 
 import time
 
-from astrameter.ct002.balancer import BalancerConfig, ConsumerMode, LoadBalancer
+from astrameter.ct002.balancer import (
+    BalancerConfig,
+    ConsumerMode,
+    ConsumerReport,
+    LoadBalancer,
+)
 from astrameter.simulator.b2500_steering import (
     MIN_OUTPUT_W,
     B2500SteeringController,
@@ -163,11 +168,9 @@ def _run(
         if t >= stuck_s:
             stuck.healthy = True  # the mode is fixed / the battery is charged
         reports = {
-            b.mac: {
-                "phase": b.phase,
-                "power": round(b.power),
-                "device_type": b.device_type,
-            }
+            b.mac: ConsumerReport(
+                phase=b.phase, power=round(b.power), device_type=b.device_type
+            )
             for b in bats
         }
         grid = house - sum(b.power for b in bats)

@@ -405,6 +405,73 @@ class MqttInsightsService:
             with contextlib.suppress(asyncio.QueueFull):
                 self._queue.put_nowait(evt)
 
+    def _client_args(self, tls_context: ssl.SSLContext | None) -> dict[str, Any]:
+        """Connection arguments shared by the service loop and the parting
+        "offline" publish, which reconnects after the loop has been cancelled."""
+        cfg = self._config
+        return {
+            "hostname": cfg.broker,
+            "port": cfg.port,
+            "username": cfg.username,
+            "password": cfg.password,
+            "tls_context": tls_context,
+        }
+
+    async def _announce(self, client: aiomqtt.Client) -> None:
+        """Publish presence and discovery, then subscribe, on every connect."""
+        cfg = self._config
+        # Clear discovery on (re)connect so we re-publish.
+        self._discovered.clear()
+        await client.publish(
+            system_status_topic(cfg.base_topic), payload=b"online", qos=1, retain=True
+        )
+
+        # Top-level "AstraMeter" hub device that the per-meter devices link up
+        # to via via_device. Uses ADDON_SLUG as the identifier on the HA add-on,
+        # falling back to a stable base-topic-derived id so the grouping also
+        # works in standalone/Docker. Republished on every reconnect.
+        if cfg.ha_discovery:
+            topic, payload = build_addon_device_discovery(
+                cfg.base_topic, self._hub_identifier(), cfg.ha_discovery_prefix
+            )
+            await _publish_json(client, topic, payload)
+            await self._publish_bridge(client, cfg)
+
+        await client.subscribe(consumer_command_filter(cfg.base_topic))
+        await client.subscribe(device_command_filter(cfg.base_topic))
+
+        # Store the client so register_marstek() called while already connected
+        # can live-subscribe, and so the dashboard write path has a connection
+        # to publish on — both need it whether or not Marstek MQTT is enabled.
+        # Then subscribe every registered binding's App topics.
+        async with self._marstek_lock:
+            self._client = client
+            if cfg.marstek_mqtt_enabled:
+                for binding in self._marstek_bindings.values():
+                    for topic in app_topics_for(binding):
+                        await client.subscribe(topic)
+
+    def _session_loops(self, client: aiomqtt.Client) -> list[Any]:
+        """The concurrent loops one connection runs until it drops."""
+        cfg = self._config
+        loops: list[Any] = [self._publish_loop(client), self._listen_commands(client)]
+        if cfg.marstek_mqtt_enabled and cfg.marstek_mqtt_interval > 0:
+            loops.append(self._marstek_broadcast_loop(client))
+        if self._powermeters and cfg.powermeter_health_interval > 0:
+            loops.append(self._powermeter_health_loop(client))
+        return loops
+
+    async def _serve_connection(self, client: aiomqtt.Client) -> None:
+        """Announce ourselves, then run the session loops until one ends."""
+        await self._announce(client)
+        self._connected.set()
+        try:
+            await asyncio.gather(*self._session_loops(client))
+        finally:
+            async with self._marstek_lock:
+                self._client = None
+            await self._cancel_marstek_tasks()
+
     async def _run(self) -> None:
         cfg = self._config
         tls_context = ssl.create_default_context() if cfg.tls else None
@@ -412,11 +479,7 @@ class MqttInsightsService:
         while True:
             try:
                 async with aiomqtt.Client(
-                    hostname=cfg.broker,
-                    port=cfg.port,
-                    username=cfg.username,
-                    password=cfg.password,
-                    tls_context=tls_context,
+                    **self._client_args(tls_context),
                     keepalive=60,
                     will=aiomqtt.Will(
                         topic=system_status_topic(cfg.base_topic),
@@ -428,68 +491,14 @@ class MqttInsightsService:
                     logger.info(
                         "MQTT Insights connected to %s:%s", cfg.broker, cfg.port
                     )
-                    # Clear discovery on (re)connect so we re-publish
-                    self._discovered.clear()
-
-                    await client.publish(
-                        system_status_topic(cfg.base_topic),
-                        payload=b"online",
-                        qos=1,
-                        retain=True,
-                    )
-
-                    # Top-level "AstraMeter" hub device that the per-meter
-                    # devices link up to via via_device. Uses ADDON_SLUG as the
-                    # identifier on the HA add-on, falling back to a stable
-                    # base-topic-derived id so the grouping also works in
-                    # standalone/Docker. Republished on every reconnect.
-                    if cfg.ha_discovery:
-                        topic, payload = build_addon_device_discovery(
-                            cfg.base_topic,
-                            self._hub_identifier(),
-                            cfg.ha_discovery_prefix,
-                        )
-                        await _publish_json(client, topic, payload)
-                        await self._publish_bridge(client, cfg)
-
-                    await client.subscribe(consumer_command_filter(cfg.base_topic))
-                    await client.subscribe(device_command_filter(cfg.base_topic))
-
-                    # Store the client so register_marstek() called while
-                    # already connected can live-subscribe, and so the
-                    # dashboard write path has a connection to publish on —
-                    # both need it whether or not Marstek MQTT is enabled.
-                    # Then subscribe every registered binding's App topics.
-                    async with self._marstek_lock:
-                        self._client = client
-                        if cfg.marstek_mqtt_enabled:
-                            for binding in self._marstek_bindings.values():
-                                for topic in app_topics_for(binding):
-                                    await client.subscribe(topic)
-
-                    self._connected.set()
-
-                    try:
-                        coros: list[Any] = [
-                            self._publish_loop(client),
-                            self._listen_commands(client),
-                        ]
-                        if cfg.marstek_mqtt_enabled and cfg.marstek_mqtt_interval > 0:
-                            coros.append(self._marstek_broadcast_loop(client))
-                        if self._powermeters and cfg.powermeter_health_interval > 0:
-                            coros.append(self._powermeter_health_loop(client))
-                        await asyncio.gather(*coros)
-                    finally:
-                        async with self._marstek_lock:
-                            self._client = None
-                        await self._cancel_marstek_tasks()
+                    await self._serve_connection(client)
 
             except asyncio.CancelledError:
                 self._connected.clear()
                 # Graceful shutdown: publish offline in a shielded scope
                 # so the pending cancellation doesn't abort the publish.
                 with contextlib.suppress(Exception):
-                    await asyncio.shield(self._publish_offline(cfg, tls_context))
+                    await asyncio.shield(self._publish_offline(tls_context))
                 raise
             except (aiomqtt.MqttError, OSError) as exc:
                 self._connected.clear()
@@ -545,18 +554,11 @@ class MqttInsightsService:
         }
         await _publish_json(client, bridge_topic(cfg.base_topic), payload)
 
-    async def _publish_offline(
-        self, cfg: MqttInsightsConfig, tls_context: ssl.SSLContext | None
-    ) -> None:
-        async with aiomqtt.Client(
-            hostname=cfg.broker,
-            port=cfg.port,
-            username=cfg.username,
-            password=cfg.password,
-            tls_context=tls_context,
-        ) as client:
+    async def _publish_offline(self, tls_context: ssl.SSLContext | None) -> None:
+        """Reconnect just long enough to retract the retained "online" status."""
+        async with aiomqtt.Client(**self._client_args(tls_context)) as client:
             await client.publish(
-                system_status_topic(cfg.base_topic),
+                system_status_topic(self._config.base_topic),
                 payload=b"offline",
                 qos=1,
                 retain=True,

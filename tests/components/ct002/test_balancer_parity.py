@@ -22,7 +22,12 @@ from pathlib import Path
 
 import pytest
 
-from astrameter.ct002.balancer import BalancerConfig, ConsumerMode, LoadBalancer
+from astrameter.ct002.balancer import (
+    BalancerConfig,
+    ConsumerMode,
+    ConsumerReport,
+    LoadBalancer,
+)
 
 HERE = Path(__file__).parent
 REPO_ROOT = HERE.parent.parent.parent
@@ -165,13 +170,13 @@ class PyDriver:
             i = 6
             for _ in range(n):
                 rc, dev, phase, power, md, eww = parts[i : i + 6]
-                reports[rc] = {
-                    "device_type": dev,
-                    "phase": phase,
-                    "power": int(power),
-                    "min_dc_output": None if float(md) < 0 else float(md),
-                    "efficiency_window_weight": float(eww),
-                }
+                reports[rc] = ConsumerReport(
+                    device_type=dev,
+                    phase=phase,
+                    power=int(power),
+                    min_dc_output=None if float(md) < 0 else float(md),
+                    efficiency_window_weight=float(eww),
+                )
                 i += 6
             res = self.balancer.compute_target(
                 cid,

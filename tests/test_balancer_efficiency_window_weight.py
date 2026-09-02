@@ -16,6 +16,7 @@ import time
 
 from astrameter.ct002.balancer import (
     BalancerConfig,
+    ConsumerReport,
     LoadBalancer,
 )
 
@@ -51,13 +52,13 @@ def _make_balancer(clock, *, rotation_interval: float = 900.0) -> LoadBalancer:
     )
 
 
-def _report(power: float, eff_weight: float = 1.0) -> dict:
-    return {
-        "phase": "A",
-        "power": power,
-        "device_type": "HMG-50",
-        "efficiency_window_weight": eff_weight,
-    }
+def _report(power: float, eff_weight: float = 1.0) -> ConsumerReport:
+    return ConsumerReport(
+        phase="A",
+        power=power,
+        device_type="HMG-50",
+        efficiency_window_weight=eff_weight,
+    )
 
 
 def test_zero_weight_battery_stays_deprioritized_while_limiting():

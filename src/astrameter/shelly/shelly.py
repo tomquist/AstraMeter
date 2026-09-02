@@ -13,6 +13,7 @@ from astrameter.config import ClientFilter
 from astrameter.config.logger import debug_traceback, logger
 from astrameter.powermeter import Powermeter
 from astrameter.request_dedupe import RequestDeduplicator
+from astrameter.udp_server import UdpServer
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_EMA_ALPHA = 0.3
@@ -48,22 +49,6 @@ class ShellySnapshot:
     batteries: tuple[ShellyBatterySnapshot, ...]
 
 
-class _ShellyProtocol(asyncio.DatagramProtocol):
-    def __init__(self, shelly: Shelly):
-        self.shelly = shelly
-        self._tasks: set[asyncio.Task] = set()
-
-    def connection_made(self, transport):
-        self.transport = transport
-
-    def datagram_received(self, data, addr):
-        task = asyncio.create_task(
-            self.shelly._safe_handle_request(self.transport, data, addr)
-        )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-
 class Shelly:
     def __init__(
         self,
@@ -77,8 +62,7 @@ class Shelly:
         self._device_id = device_id
         self._device_type = device_type
         self._powermeters = powermeters
-        self._transport = None
-        self._protocol: _ShellyProtocol | None = None
+        self._server: UdpServer | None = None
         self._battery_last_seen: dict[str, float] = {}
         self._battery_poll_interval: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
@@ -232,7 +216,7 @@ class Shelly:
                 "event_listener failed for %s: %s", battery_ip, exc, exc_info=True
             )
 
-    async def _safe_handle_request(self, transport, data, addr):
+    async def _safe_handle_request(self, data, addr, transport):
         try:
             await self._handle_request(transport, data, addr)
         except Exception:
@@ -373,18 +357,10 @@ class Shelly:
             pass
 
     async def start(self):
-        loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: _ShellyProtocol(self),
-            local_addr=("0.0.0.0", self._udp_port),
-        )
-        self._transport = transport
-        self._protocol = protocol
+        self._server = await UdpServer.serve(self._udp_port, self._safe_handle_request)
         self._stopped.clear()
         self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
-        bound = self._transport.get_extra_info("sockname")
-        if bound:
-            self._udp_port = bound[1]
+        self._udp_port = self._server.port or self._udp_port
         self._started_at = time.time()
         self._running = True
         logger.info(f"Shelly emulator listening on UDP port {self._udp_port}...")
@@ -432,15 +408,8 @@ class Shelly:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._inactive_check_task
             self._inactive_check_task = None
-        # Close transport first to stop new datagrams from spawning tasks,
-        # then cancel and await any in-flight handler tasks.
-        if self._transport:
-            self._transport.close()
-            self._transport = None
-        if self._protocol:
-            for task in list(self._protocol._tasks):
-                task.cancel()
-            await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
-        self._protocol = None
+        if self._server:
+            await self._server.close()
+            self._server = None
         self._running = False
         self._stopped.set()

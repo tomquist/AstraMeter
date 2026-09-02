@@ -40,6 +40,7 @@ from astrameter.mqtt_insights import (
     normalize_mac,
     ver_v_from_marstek_api_version,
 )
+from astrameter.power_units import three_phases
 from astrameter.powermeter import Powermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.shelly import Shelly
@@ -59,12 +60,6 @@ def _powermeter_log_name(powermeter: Powermeter) -> str:
         else powermeter
     )
     return type(inner).__name__
-
-
-def _three_phases(values) -> list:
-    """Pad or trim a reading to the three phase values the CT protocol carries."""
-    phases = list(values)[:3]
-    return phases + [0.0] * (3 - len(phases))
 
 
 async def read_ct_powermeter(
@@ -97,7 +92,7 @@ async def read_ct_powermeter(
                 "serving last known value",
                 _powermeter_log_name(powermeter),
             )
-    return _three_phases(await powermeter.get_powermeter_watts())
+    return three_phases(await powermeter.get_powermeter_watts())
 
 
 async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
@@ -115,7 +110,7 @@ async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[flo
         await asyncio.wait_for(
             chosen.wait_for_next_message(), timeout=FRESH_READING_TIMEOUT_S
         )
-    return [float(v) for v in _three_phases(await chosen.get_powermeter_watts_raw())]
+    return [float(v) for v in three_phases(await chosen.get_powermeter_watts_raw())]
 
 
 async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
@@ -253,7 +248,7 @@ def _build_device(
             lambda: _reset_all_powermeters(powermeters),
         )
 
-        async def update_readings(addr, _fields=None, _consumer_id=None):
+        async def update_readings(addr, _request=None, _consumer_id=None):
             return await read_ct_powermeter(addr, powermeters)
 
         device.before_send = update_readings
@@ -326,10 +321,10 @@ def _ct_measurement(
     buckets = device.reporting_phase_buckets()
 
     def charge(bucket: str) -> int:
-        return int(buckets.get(bucket, {}).get("chrg_power", 0))
+        return buckets[bucket].chrg_power
 
     def discharge(bucket: str) -> int:
-        return int(buckets.get(bucket, {}).get("dchrg_power", 0))
+        return buckets[bucket].dchrg_power
 
     return CtMeasurement(
         ap=ap,

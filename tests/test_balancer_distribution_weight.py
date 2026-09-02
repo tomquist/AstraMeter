@@ -9,6 +9,7 @@ the unweighted behaviour.
 from astrameter.ct002.balancer import (
     BalancerConfig,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
 )
 
@@ -33,8 +34,8 @@ def _make_balancer(*, fair_distribution: bool = True) -> LoadBalancer:
     )
 
 
-def _report(power: float, weight: float = 1.0, phase: str = "A") -> dict:
-    return {"phase": phase, "power": power, "device_type": "HMA-2", "weight": weight}
+def _report(power: float, weight: float = 1.0, phase: str = "A") -> ConsumerReport:
+    return ConsumerReport(phase=phase, power=power, device_type="HMA-2", weight=weight)
 
 
 def test_fair_share_honours_weight():
@@ -71,8 +72,8 @@ def test_neutral_weight_matches_equal_split():
     weighted = {"a": _report(0.0), "b": _report(0.0)}
     # An absent "weight" key must behave exactly like the neutral default.
     bare = {
-        "a": {"phase": "A", "power": 0, "device_type": "HMA-2"},
-        "b": {"phase": "A", "power": 0, "device_type": "HMA-2"},
+        "a": ConsumerReport(phase="A", power=0, device_type="HMA-2"),
+        "b": ConsumerReport(phase="A", power=0, device_type="HMA-2"),
     }
     for reports in (weighted, bare):
         lb = _make_balancer(fair_distribution=False)

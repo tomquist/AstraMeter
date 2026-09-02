@@ -46,28 +46,67 @@ def phase_index(phase: str) -> int:
     return {"A": 0, "B": 1, "C": 2}.get(phase.upper(), 0)
 
 
-def _report_weight(report: dict) -> float:
-    """Per-battery fair-share weight from a report dict (defaults to 1.0).
+@dataclasses.dataclass(frozen=True)
+class ConsumerReport:
+    """One consumer's latest poll, as the balancer sees it.
 
-    A missing key (or an explicit ``None``) means "neutral" and maps to 1.0;
-    an explicit ``0.0`` is preserved (the battery takes no share). The setter
-    keeps real weights in ``[0, 10]``.
+    Every field is normalized on construction, so the control path reads plain
+    numbers and never re-parses or re-defaults. Only ``min_dc_output`` is
+    nullable, where ``None`` means "no override".
     """
-    weight = report.get("weight", 1.0)
-    return 1.0 if weight is None else float(weight)
+
+    power: int = 0
+    """Reported net output in watts; positive discharges, negative charges."""
+
+    phase: str = "A"
+    """Steered phase (A/B/C, or D for combined mode); A when unknown."""
+
+    device_type: str = ""
+
+    weight: float = 1.0
+    """Fair-share weight. ``0.0`` parks the battery; the setter bounds it to [0, 10]."""
+
+    efficiency_window_weight: float = 1.0
+    """Fraction of ``efficiency_rotation_interval`` an active slot is held for,
+    clamped to [0, 1]. ``0.0`` rotates out on the next tick."""
+
+    min_dc_output: float | None = None
+    """Per-device MIN_DC_OUTPUT override in watts; ``None`` uses the global rule."""
+
+    def __post_init__(self) -> None:
+        floor = self.min_dc_output
+        for field, value in (
+            ("power", parse_int(self.power)),
+            ("phase", (self.phase or "A").upper()),
+            ("device_type", self.device_type or ""),
+            ("weight", float(self.weight)),
+            (
+                "efficiency_window_weight",
+                max(0.0, min(1.0, float(self.efficiency_window_weight))),
+            ),
+            ("min_dc_output", None if floor is None else max(0.0, float(floor))),
+        ):
+            object.__setattr__(self, field, value)
 
 
-def _efficiency_window_weight(report: dict) -> float:
-    """Per-battery efficiency-rotation weight from a report dict, clamped to [0, 1].
+# Reports keyed by consumer id — what the balancer is handed every poll.
+Reports = Mapping[str, ConsumerReport]
 
-    ``1.0`` holds an active slot for the whole ``efficiency_rotation_interval``,
-    ``0.0`` is parked while limiting (as long as enough non-zero-weight batteries
-    fill the active slots); a missing key or ``None`` is neutral (1.0).
+NO_REPORT = ConsumerReport()
+"""Stand-in for a consumer that did not report this tick (unknown or just removed)."""
+
+
+def _report_of(reports: Reports, consumer_id: str | None) -> ConsumerReport:
+    """*consumer_id*'s report, or :data:`NO_REPORT` when it did not report.
+
+    A consumer can drop out between the snapshot a caller took and the
+    allocation that reads it (evicted, deprioritized, filtered out of the auto
+    pool), and the neutral report keeps every reader on plain attribute access
+    instead of inventing its own default.
     """
-    weight = report.get("efficiency_window_weight", 1.0)
-    if weight is None:
-        return 1.0
-    return max(0.0, min(1.0, float(weight)))
+    if not consumer_id:
+        return NO_REPORT
+    return reports.get(consumer_id, NO_REPORT)
 
 
 # Ramp pacing (issue #458).  The pace cap grows only once the battery's reported
@@ -247,7 +286,7 @@ def min_actionable_output(device_type: str) -> float:
 
 
 def saturation_floor(
-    state: BalancerConsumerState, report: dict, configured_floor: float
+    state: BalancerConsumerState, report: ConsumerReport, configured_floor: float
 ) -> float:
     """Smallest command worth judging this consumer by (W).
 
@@ -262,7 +301,7 @@ def saturation_floor(
     (issue #600): a too-low gate starves the battery for good (issue #624), a
     too-high one only delays detecting a full or empty one.
     """
-    nominal = min_actionable_output(report.get("device_type", ""))
+    nominal = min_actionable_output(report.device_type)
     if nominal > 0.0:
         observed = state.pace_responded_at
         if observed > 0.0:
@@ -1076,19 +1115,17 @@ class LoadBalancer:
         )
         self._invalidate_efficiency_cache()
 
-    def _commit_probe(self, reports: dict, now: float, actual: float) -> None:
+    def _commit_probe(self, reports: Reports, now: float, actual: float) -> None:
         probe = self._probe_state
         if probe is None:
             return
         participants = [
             cid for cid in (*probe.active_ids, *probe.backup_ids) if cid in reports
         ]
-        total_actual = sum(
-            abs(parse_int(reports.get(cid, {}).get("power", 0))) for cid in participants
-        )
+        total_actual = sum(abs(_report_of(reports, cid).power) for cid in participants)
         if total_actual > 0:
             for cid in participants:
-                actual_share = abs(parse_int(reports.get(cid, {}).get("power", 0)))
+                actual_share = abs(_report_of(reports, cid).power)
                 self._get_consumer(cid).fade_weight = actual_share / total_actual
         else:
             active_count = max(1, len(probe.active_ids))
@@ -1149,7 +1186,7 @@ class LoadBalancer:
             self._reset_fn()
 
     def _resolve_probe_state(
-        self, reports: dict, now: float, grid_total: float
+        self, reports: Reports, now: float, grid_total: float
     ) -> bool:
         probe = self._probe_state
         if probe is None:
@@ -1161,11 +1198,8 @@ class LoadBalancer:
                 f"participants disappeared: {[cid[:16] for cid in missing]}"
             )
             return True
-        actual = parse_int(reports.get(probe.candidate_id, {}).get("power", 0))
-        desired_total = (
-            sum(parse_int(report.get("power", 0)) for report in reports.values())
-            + grid_total
-        )
+        actual = _report_of(reports, probe.candidate_id).power
+        desired_total = sum(report.power for report in reports.values()) + grid_total
         probe_success_threshold = self._probe_success_threshold
         demand_sign = 1 if desired_total > 0 else -1 if desired_total < 0 else 0
         actual_sign = 1 if actual > 0 else -1 if actual < 0 else 0
@@ -1188,7 +1222,7 @@ class LoadBalancer:
     def _compute_desired_contribution(
         self,
         consumer_id: str,
-        reports: dict,
+        reports: Reports,
         weights: dict[str, float],
         desired_total: float,
     ) -> float:
@@ -1211,7 +1245,7 @@ class LoadBalancer:
     def _compute_probe_target(
         self,
         consumer_id: str | None,
-        reports: dict,
+        reports: Reports,
         grid_total: float,
         eff_part: dict[str, float],
     ) -> list[float] | None:
@@ -1232,11 +1266,8 @@ class LoadBalancer:
         if consumer_id != candidate_id and consumer_id not in support_reports:
             return None
 
-        desired_total = (
-            sum(parse_int(report.get("power", 0)) for report in reports.values())
-            + grid_total
-        )
-        probe_actual = parse_int(reports.get(candidate_id, {}).get("power", 0))
+        desired_total = sum(report.power for report in reports.values()) + grid_total
+        probe_actual = _report_of(reports, candidate_id).power
         probe_ceiling = max(abs(desired_total), self._cfg.probe_min_power)
 
         if consumer_id == candidate_id:
@@ -1269,8 +1300,7 @@ class LoadBalancer:
             )
 
         backup_weights = {
-            cid: max(0.01, eff_part.get(cid, 1.0))
-            * _report_weight(reports.get(cid, {}))
+            cid: max(0.01, eff_part.get(cid, 1.0)) * _report_of(reports, cid).weight
             for cid in support_reports
         }
         qualified_probe_actual = probe_actual if probe.proof_samples > 0 else 0
@@ -1280,7 +1310,7 @@ class LoadBalancer:
             backup_weights,
             desired_total - qualified_probe_actual,
         )
-        reported = parse_int(support_reports.get(consumer_id, {}).get("power", 0))
+        reported = _report_of(support_reports, consumer_id).power
         return self._emit(
             consumer_id, NetOutputW(desired), reported, support_reports, backup_weights
         )
@@ -1298,7 +1328,7 @@ class LoadBalancer:
         self,
         consumer_id: str | None,
         mode: ConsumerMode,
-        reports: dict,
+        reports: Reports,
         grid_total: float,
         result: list[float],
     ) -> None:
@@ -1325,11 +1355,11 @@ class LoadBalancer:
             consumer_id,
             f"manual={mode.manual_value:g}" if mode.mode == "manual" else mode.mode,
             rotation,
-            _report_weight(reports.get(consumer_id, {})),
+            _report_of(reports, consumer_id).weight,
             self._diag_num(grid_total),
             self._diag_num(self._diag_control_grid),
             self._diag_num(self._diag_fair_share),
-            self._diag_num(parse_int(reports.get(consumer_id, {}).get("power", 0))),
+            self._diag_num(_report_of(reports, consumer_id).power),
             self._diag_num(state.last_intent if state else None),
             self._diag_num(sum(result)),
             self._diag_num(state.last_intent_reading if state else None),
@@ -1341,7 +1371,7 @@ class LoadBalancer:
         self,
         consumer_id: str | None,
         consumer_mode: ConsumerMode,
-        all_reports: dict,
+        all_reports: Reports,
         grid_total: float,
         inactive: frozenset[str],
         manual: frozenset[str],
@@ -1349,7 +1379,7 @@ class LoadBalancer:
     ) -> list[float]:
         """Return ``[phase_A, phase_B, phase_C]`` target for *consumer_id*.
 
-        *all_reports* contains every known consumer's report dict.
+        *all_reports* holds every known consumer's :class:`ConsumerReport`.
         *inactive* / *manual* are the sets of paused and manual-override
         consumer IDs; this method filters internally.
         *sample_id* identifies the current meter reading for cache keying.
@@ -1386,8 +1416,8 @@ class LoadBalancer:
             and consumer_id not in self._probe_participants()
             and consumer_id not in self._deprioritized
         ):
-            report = active_reports.get(consumer_id, {})
-            actual = parse_int(report.get("power", 0))
+            report = _report_of(active_reports, consumer_id)
+            actual = report.power
             # The floor is compared against the unpaced intent too: a battery
             # the clamp holds below its floor must still register as pushed
             # (issue #522); the stall escape bounds how long that lasts.
@@ -1403,7 +1433,7 @@ class LoadBalancer:
             )
 
         if consumer_mode.mode == "manual" and state is not None:
-            reported = parse_int(active_reports.get(consumer_id, {}).get("power", 0))
+            reported = _report_of(active_reports, consumer_id).power
             result = self._emit(
                 consumer_id,
                 NetOutputW(consumer_mode.manual_value),
@@ -1581,7 +1611,7 @@ class LoadBalancer:
         """
         return self._control_quality.snapshot()
 
-    def _pool_out_of_headroom(self, reports: dict, grid_total: float) -> bool:
+    def _pool_out_of_headroom(self, reports: Reports, grid_total: float) -> bool:
         """Whether the pool physically cannot close the remaining error.
 
         Either every battery is saturated, or there is a surplus nothing
@@ -1600,7 +1630,7 @@ class LoadBalancer:
             for cid in reports
         )
 
-    def _cannot_absorb(self, reports: dict) -> bool:
+    def _cannot_absorb(self, reports: Reports) -> bool:
         """Whether a surplus is genuinely beyond what the pool can take.
 
         Not simply "no AC-chargeable battery reporting": a DC-only battery
@@ -1610,12 +1640,12 @@ class LoadBalancer:
         symmetrically about zero on an all-DC pool as a full pack.
         """
         for cid, report in reports.items():
-            if _is_ac_chargeable(report.get("device_type", "")):
+            if _is_ac_chargeable(report.device_type):
                 return False
             # Output it could still give back.  The floor is where the battery
             # stops being able to reduce, so anything above it is headroom.
             floor = self._effective_min_dc_output(cid, reports)
-            if parse_int(report.get("power", 0)) > floor + self._cfg.balance_deadband:
+            if report.power > floor + self._cfg.balance_deadband:
                 return False
         return True
 
@@ -1640,23 +1670,24 @@ class LoadBalancer:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _effective_min_dc_output(self, consumer_id: str | None, reports: dict) -> float:
+    def _effective_min_dc_output(
+        self, consumer_id: str | None, reports: Reports
+    ) -> float:
         """Per-consumer MIN_DC_OUTPUT floor (W); 0 means no floor.
 
         An explicit per-device override (``min_dc_output`` in the report) wins
         for any battery; otherwise the global floor applies only to batteries
         that depend on a sleep-prone external inverter (``_needs_dc_output_floor``).
         """
-        report = reports.get(consumer_id, {}) if consumer_id else {}
-        override = report.get("min_dc_output")
-        if override is not None:
-            return max(0.0, float(override))
-        if _needs_dc_output_floor(report.get("device_type", "")):
+        report = _report_of(reports, consumer_id)
+        if report.min_dc_output is not None:
+            return report.min_dc_output
+        if _needs_dc_output_floor(report.device_type):
             return self._cfg.min_dc_output
         return 0.0
 
     def _apply_min_dc_output(
-        self, consumer_id: str | None, reports: dict, result: list[float]
+        self, consumer_id: str | None, reports: Reports, result: list[float]
     ) -> list[float]:
         """Hold an external-inverter DC battery at ``MIN_DC_OUTPUT`` discharge.
 
@@ -1675,9 +1706,9 @@ class LoadBalancer:
         report = reports[consumer_id]
         # Respect an explicit park: distribution_weight=0 means "take no share",
         # i.e. sit at 0 — don't silently wake it (mirrors manual/inactive).
-        if _report_weight(report) == 0:
+        if report.weight == 0:
             return result
-        reported = parse_int(report.get("power", 0))
+        reported = report.power
         # Use the consumer's FULL intended reading: ``_split_by_phase`` spreads
         # the scalar across phases but preserves the total, so sum(result)
         # recovers it regardless of phase distribution. ``result[idx]`` alone is
@@ -1695,11 +1726,11 @@ class LoadBalancer:
             NetOutputW(eff_min),
             reported,
             reports,
-            single_phase=report.get("phase") or "A",
+            single_phase=report.phase,
         )
 
     def _steer_to_zero(
-        self, consumer_id: str | None, reports: dict, *, paced: bool = False
+        self, consumer_id: str | None, reports: Reports, *, paced: bool = False
     ) -> list[float]:
         """Drive a consumer's output to zero (``NetOutputW(0)``).
 
@@ -1710,15 +1741,15 @@ class LoadBalancer:
         (issue #469).  Inactive consumers keep the one-shot behaviour — a
         user-initiated mode change, not a closed-loop handoff.
         """
-        report = reports.get(consumer_id, {}) if consumer_id else {}
-        reported = parse_int(report.get("power", 0))
+        report = _report_of(reports, consumer_id)
+        reported = report.power
         return self._emit(
             consumer_id,
             NetOutputW(0),
             reported,
             reports,
             pace=paced,
-            single_phase=report.get("phase") or "A",
+            single_phase=report.phase,
             # An unpaced wind-down is a one-shot command, recorded as 0 rather
             # than as the reading that carries it.
             last_target=None if paced else 0.0,
@@ -1730,7 +1761,7 @@ class LoadBalancer:
         consumer_id: str | None,
         desired: NetOutputW,
         reported: float,
-        reports: dict,
+        reports: Reports,
         weights: dict[str, float] | None = None,
         *,
         pace: bool = False,
@@ -1772,13 +1803,13 @@ class LoadBalancer:
     @staticmethod
     def _split_by_phase(
         target: float,
-        reports: dict,
+        reports: Reports,
         weights: dict[str, float] | None = None,
     ) -> list[float]:
         """Distribute *target* across phases proportional to weights."""
         phase_effective: dict[str, float] = {"A": 0.0, "B": 0.0, "C": 0.0}
         for cid, report in reports.items():
-            phase = (report.get("phase") or "A").upper()
+            phase = report.phase
             if phase not in phase_effective:
                 phase = "A"
             w = (weights or {}).get(cid, 1.0)
@@ -1800,7 +1831,7 @@ class LoadBalancer:
     def _compute_auto_target(
         self,
         consumer_id: str | None,
-        reports: dict,
+        reports: Reports,
         grid_total: float,
         sample_id: tuple = (),
     ) -> list[float]:
@@ -1914,11 +1945,7 @@ class LoadBalancer:
         if consumer_id:
             residual = self._damp_oscillation(consumer_id, residual)
 
-        reported = (
-            parse_int(reports.get(consumer_id, {}).get("power", 0))
-            if consumer_id
-            else 0
-        )
+        reported = _report_of(reports, consumer_id).power if consumer_id else 0
         return self._emit(
             consumer_id,
             NetOutputW(reported + residual),
@@ -1929,7 +1956,7 @@ class LoadBalancer:
         )
 
     @staticmethod
-    def _charge_blind(reports: dict, grid_total: float) -> tuple[set[str], bool]:
+    def _charge_blind(reports: Reports, grid_total: float) -> tuple[set[str], bool]:
         """Batteries that can't absorb the current surplus, and whether any can.
 
         Excludes batteries that can't charge from AC (B2500 family, Jupiter;
@@ -1946,29 +1973,23 @@ class LoadBalancer:
         (issue #359).
         """
         ac_charging = any(
-            _is_ac_chargeable(r.get("device_type", ""))
-            and parse_int(r.get("power", 0)) < 0
-            for r in reports.values()
+            _is_ac_chargeable(r.device_type) and r.power < 0 for r in reports.values()
         )
         any_ac_chargeable = any(
-            _is_ac_chargeable(r.get("device_type", "")) for r in reports.values()
+            _is_ac_chargeable(r.device_type) for r in reports.values()
         )
         in_charge_territory = any_ac_chargeable and (
             grid_total < 0 or (grid_total == 0 and ac_charging)
         )
         charge_blind = (
-            {
-                cid
-                for cid, r in reports.items()
-                if not _is_ac_chargeable(r.get("device_type", ""))
-            }
+            {cid for cid, r in reports.items() if not _is_ac_chargeable(r.device_type)}
             if in_charge_territory
             else set()
         )
         return charge_blind, any_ac_chargeable
 
     def _note_all_dc_surplus(
-        self, reports: dict, grid_total: float, any_ac_chargeable: bool
+        self, reports: Reports, grid_total: float, any_ac_chargeable: bool
     ) -> None:
         """Log once while every reporter is DC-only under surplus.
 
@@ -1987,7 +2008,7 @@ class LoadBalancer:
                 "reporting — nothing here can absorb it. Reporting "
                 "device_types: %s",
                 -grid_total,
-                sorted({reports[cid].get("device_type", "") or "?" for cid in reports}),
+                sorted({r.device_type or "?" for r in reports.values()}),
             )
             self._all_dc_surplus_warned = True
         elif not all_dc_under_surplus:
@@ -1996,7 +2017,7 @@ class LoadBalancer:
     def _fading_target(
         self,
         consumer_id: str,
-        reports: dict,
+        reports: Reports,
         grid_total: float,
         eff_part: dict[str, float],
     ) -> list[float]:
@@ -2004,10 +2025,8 @@ class LoadBalancer:
         fade_w = self._get_consumer(consumer_id).fade_weight
         if fade_w == 0.0:
             return self._steer_to_zero(consumer_id, reports, paced=True)
-        reported = parse_int(reports.get(consumer_id, {}).get("power", 0))
-        total_battery = sum(
-            parse_int(reports.get(cid, {}).get("power", 0)) for cid in reports
-        )
+        reported = _report_of(reports, consumer_id).power
+        total_battery = sum(report.power for report in reports.values())
         demand = total_battery + grid_total
         total_fade = sum(self._get_consumer(cid).fade_weight for cid in reports)
         desired = demand * fade_w / total_fade if total_fade > 0 else 0.0
@@ -2018,7 +2037,7 @@ class LoadBalancer:
     @staticmethod
     def _fair_share(
         consumer_id: str | None,
-        reports: dict,
+        reports: Reports,
         control_grid: float,
         eff_part: dict[str, float],
     ) -> float:
@@ -2031,8 +2050,7 @@ class LoadBalancer:
         fall back to an even split.
         """
         share_part = {
-            cid: eff_part[cid] * _report_weight(reports.get(cid, {}))
-            for cid in eff_part
+            cid: eff_part[cid] * _report_of(reports, cid).weight for cid in eff_part
         }
         total_effective = sum(share_part.values())
         if consumer_id and consumer_id in reports and total_effective > 0:
@@ -2042,7 +2060,7 @@ class LoadBalancer:
     def _concentrated_share(
         self,
         consumer_id: str | None,
-        reports: dict,
+        reports: Reports,
         control_grid: float,
         eff_part: dict[str, float],
         charge_blind: set[str],
@@ -2063,7 +2081,7 @@ class LoadBalancer:
             for cid in reports
             if cid not in charge_blind
             and eff_part.get(cid, 0.0) > 0.1
-            and _report_weight(reports[cid]) > 0.0
+            and reports[cid].weight > 0.0
         ]
         if not (
             cfg.fair_distribution
@@ -2071,18 +2089,18 @@ class LoadBalancer:
             and len(conc_ids) > 1
             and consumer_id in conc_ids
             and 0 < abs(control_grid) < cfg.concentrate_deadband
-            and len({(reports[c].get("phase") or "A").upper() for c in conc_ids}) == 1
+            and len({reports[c].phase for c in conc_ids}) == 1
             and self._concentration_pool_balanced(reports, conc_ids)
         ):
             return None
         designated = max(
             conc_ids,
-            key=lambda c: (abs(parse_int(reports[c].get("power", 0))), c),
+            key=lambda c: (abs(reports[c].power), c),
         )
         return control_grid if consumer_id == designated else 0.0
 
     def _predict_control_grid(
-        self, reports: dict, grid_total: float, sample_id: tuple
+        self, reports: Reports, grid_total: float, sample_id: tuple
     ) -> float:
         """Return the grid power the control path should act on.
 
@@ -2098,7 +2116,7 @@ class LoadBalancer:
         """
         if self._cfg.grid_predict_trust <= 0.0:
             return grid_total
-        pool_output = sum(parse_int(r.get("power", 0)) for r in reports.values())
+        pool_output = sum(r.power for r in reports.values())
         if self._pred_grid is None:
             self._pred_grid = grid_total
             self._pred_pool_output = pool_output
@@ -2186,7 +2204,7 @@ class LoadBalancer:
         return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
 
     def _pace_reading(
-        self, consumer_id: str, reading: float, reported: float, reports: dict
+        self, consumer_id: str, reading: float, reported: float, reports: Reports
     ) -> float:
         """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
 
@@ -2228,9 +2246,7 @@ class LoadBalancer:
         # with a minimum actionable command (the DC-output family); any other
         # battery can execute an arbitrarily small command and can never be
         # deadlocked by the clamp, so it stays on the unmodified path.
-        can_stall = _needs_dc_output_floor(
-            (reports.get(consumer_id) or {}).get("device_type", "")
-        )
+        can_stall = _needs_dc_output_floor(_report_of(reports, consumer_id).device_type)
         stalled = False
         if sign == 0 or sign != state.pace_sign:
             cap = base
@@ -2302,7 +2318,9 @@ class LoadBalancer:
         state.pace_last_sent = abs(out)
         return out
 
-    def _concentration_pool_balanced(self, reports: dict, conc_ids: list[str]) -> bool:
+    def _concentration_pool_balanced(
+        self, reports: Reports, conc_ids: list[str]
+    ) -> bool:
         """True iff every battery in *conc_ids* already sits at its fair share.
 
         Deadband concentration bypasses balance correction for the tick, so it
@@ -2316,13 +2334,11 @@ class LoadBalancer:
             # No deadband means balance correction always runs at full authority;
             # never let concentration suppress it.
             return False
-        actual_total = sum(
-            parse_int(reports.get(cid, {}).get("power", 0)) for cid in conc_ids
-        )
-        weights = {cid: _report_weight(reports.get(cid, {})) for cid in conc_ids}
+        actual_total = sum(_report_of(reports, cid).power for cid in conc_ids)
+        weights = {cid: _report_of(reports, cid).weight for cid in conc_ids}
         total_weight = sum(weights.values())
         for cid in conc_ids:
-            actual_self = parse_int(reports.get(cid, {}).get("power", 0))
+            actual_self = _report_of(reports, cid).power
             if total_weight > 0:
                 target_share = actual_total * weights[cid] / total_weight
             else:
@@ -2334,26 +2350,24 @@ class LoadBalancer:
     def _balance_correction(
         self,
         consumer_id: str,
-        reports: dict,
+        reports: Reports,
         eff_part: dict[str, float],
         fair_share: float,
     ) -> float:
         """Apply fair-share balance correction for *consumer_id*."""
         cfg = self._cfg
-        actual_self = parse_int(reports.get(consumer_id, {}).get("power", 0))
+        actual_self = _report_of(reports, consumer_id).power
         participating = [cid for cid in reports if eff_part.get(cid, 1.0) > 0.1]
         if not participating:
             return fair_share
 
-        actual_total = sum(
-            parse_int(reports.get(cid, {}).get("power", 0)) for cid in participating
-        )
+        actual_total = sum(_report_of(reports, cid).power for cid in participating)
         # Pull each battery toward its weight-proportional share of the pool's
         # total output, so the configured ratio is the steady state; with
         # neutral weights this is the plain average.  Participation is still
         # decided by ``eff_part`` above, so a small weight never drops a
         # healthy battery from the pool.
-        weights = {cid: _report_weight(reports.get(cid, {})) for cid in participating}
+        weights = {cid: _report_of(reports, cid).weight for cid in participating}
         total_weight = sum(weights.values())
         if total_weight > 0:
             target_share = actual_total * weights.get(consumer_id, 0.0) / total_weight
@@ -2385,7 +2399,7 @@ class LoadBalancer:
     # Efficiency deprioritization
     # ------------------------------------------------------------------
 
-    def _sync_pool(self, reports: dict, grace: float) -> None:
+    def _sync_pool(self, reports: Reports, grace: float) -> None:
         """Reconcile the rotation order with the reporting pool.
 
         Drops departed consumers, appends new arrivals (in id order, each with a
@@ -2401,11 +2415,11 @@ class LoadBalancer:
                 self._priority.append(cid)
                 self._set_consumer_grace(cid, grace)
         self._priority.sort(
-            key=lambda cid: _efficiency_window_weight(reports.get(cid, {})),
+            key=lambda cid: _report_of(reports, cid).efficiency_window_weight,
             reverse=True,
         )
 
-    def _demand_estimate(self, reports: dict, grid_total: float) -> float:
+    def _demand_estimate(self, reports: Reports, grid_total: float) -> float:
         """Low-pass-filtered household demand driving the active-set decision.
 
         ``|total_battery_power + grid_total|`` is the true house load; filtering
@@ -2414,7 +2428,7 @@ class LoadBalancer:
         loop still acts on the unsmoothed grid, so tracking is unaffected.
         """
         total_battery_power = sum(
-            parse_int(reports.get(cid, {}).get("power", 0)) for cid in self._priority
+            _report_of(reports, cid).power for cid in self._priority
         )
         raw_abs_target = abs(total_battery_power + grid_total)
         alpha = self._cfg.efficiency_demand_alpha
@@ -2451,7 +2465,7 @@ class LoadBalancer:
         return slots
 
     def _compute_efficiency_deprioritized(
-        self, reports: dict, sample_id: tuple, grid_total: float
+        self, reports: Reports, sample_id: tuple, grid_total: float
     ) -> dict[str, float]:
         """Decide which consumers to deprioritize for efficiency."""
         cfg = self._cfg
@@ -2471,39 +2485,19 @@ class LoadBalancer:
             0, min(len(self._priority), len(self._priority) - len(self._deprioritized))
         )
         previous_active = tuple(self._priority[:prev_slots])
-        probe_resolved = self._resolve_probe_state(reports, now, grid_total)
-        probe_active = self._probe_state is not None
+        # A probe owns the active set while it runs and for the tick that
+        # resolves it, so rotation, saturation swaps and starting the next
+        # probe all stand down until it is over.
+        probing = self._resolve_probe_state(reports, now, grid_total) or (
+            self._probe_state is not None
+        )
 
-        # Rotation check BEFORE cache. The active head holds its slot for
-        # ``efficiency_rotation_interval`` scaled by its efficiency window weight,
-        # so a lower-weight battery rotates out sooner (weight 0 → threshold 0 →
-        # it rotates out on the next tick).
-        if not probe_active and not probe_resolved and self._priority:
-            head_weight = _efficiency_window_weight(reports.get(self._priority[0], {}))
-            if (
-                now - self._last_rotation
-                >= cfg.efficiency_rotation_interval * head_weight
-            ):
-                self._last_rotation = now
-                self._priority.append(self._priority.pop(0))
+        # Both checks run BEFORE the cache lookup, because either can make the
+        # cached active set stale.
+        if not probing:
+            self._rotate_priority_head(reports, now)
+            if self._active_slot_saturated(prev_slots):
                 self._invalidate_efficiency_cache()
-
-        # Saturation swap check BEFORE cache
-        if (
-            not probe_active
-            and not probe_resolved
-            and cfg.efficiency_saturation_threshold > 0
-            and self._cache_sample is not None
-        ):
-            slots_est = len(self._priority) - len(self._deprioritized)
-            for cid in self._priority[:slots_est]:
-                state = self._consumers.get(cid)
-                if (
-                    state
-                    and state.saturation_score >= cfg.efficiency_saturation_threshold
-                ):
-                    self._invalidate_efficiency_cache()
-                    break
 
         cache_key = (sample_id, tuple(self._priority))
         if cache_key == self._cache_sample:
@@ -2516,61 +2510,43 @@ class LoadBalancer:
             was_limiting=len(self._deprioritized) > 0,
             prev_slots=prev_slots,
         )
+        pre_swap_active = set(self._priority[:slots])
+        for cid in self._deprioritized - set(self._priority[slots:]):
+            self._promote_to_active(cid, grace)
+
+        if not probing and self._maybe_force_swap_saturated(self._priority, slots, now):
+            # The swap reordered ``_priority``, so the active set and the cache
+            # key it feeds have to be taken again.
+            cache_key = (sample_id, tuple(self._priority))
+            for cid in set(self._priority[:slots]) - pre_swap_active:
+                self._promote_to_active(cid, grace)
 
         deprioritized = set(self._priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
-        pre_swap_active = set(self._priority[:slots])
-
-        # Reset saturation for consumers transitioning to active
-        for cid in self._deprioritized - deprioritized:
-            state = self._get_consumer(cid)
-            self._saturation.clear(state)
-            self._set_consumer_grace(cid, grace)
-
-        if (
-            not probe_active
-            and not probe_resolved
-            and self._maybe_force_swap_saturated(self._priority, slots, now)
-        ):
-            deprioritized = set(self._priority[slots:])
-            result = {cid: 0.0 for cid in deprioritized}
-            cache_key = (sample_id, tuple(self._priority))
-            for cid in set(self._priority[:slots]) - pre_swap_active:
-                state = self._get_consumer(cid)
-                self._saturation.clear(state)
-                self._set_consumer_grace(cid, grace)
 
         final_active = tuple(self._priority[:slots])
-        if not probe_active and not probe_resolved and previous_active:
+        if not probing and previous_active:
             promoted = [cid for cid in final_active if cid not in previous_active]
             backups = [cid for cid in previous_active if cid not in final_active]
             if promoted and backups:
                 self._begin_probe(
-                    promoted[0],
-                    final_active,
-                    tuple(backups),
-                    previous_active,
-                    now,
+                    promoted[0], final_active, tuple(backups), previous_active, now
                 )
 
         for cid in deprioritized - self._deprioritized:
-            state = self._consumers.get(cid)
-            if state:
-                # Symmetric with the deprioritized -> active clear above: the
-                # score is a memory of the previous role, and a consumer
-                # steered toward zero cannot be judged by it.  Without the
-                # clear, saturation accumulated over the fading window would
-                # bar ``_maybe_force_swap_saturated`` from ever promoting it.
-                self._saturation.clear(state)
+            # Symmetric with the promotion clear above: the score is a memory
+            # of the previous role, and a consumer steered toward zero cannot
+            # be judged by it.  Without the clear, saturation accumulated over
+            # the fading window would bar ``_maybe_force_swap_saturated`` from
+            # ever promoting it back.
+            self._forget_saturation(cid)
+        for cid, verb in (
+            *((cid, "deprioritizing") for cid in deprioritized - self._deprioritized),
+            *((cid, "activating") for cid in self._deprioritized - deprioritized),
+        ):
             logger.info(
-                "Efficiency: deprioritizing consumer %s (demand %.0fW, %d active)",
-                cid[:16],
-                abs_target,
-                slots,
-            )
-        for cid in self._deprioritized - deprioritized:
-            logger.info(
-                "Efficiency: activating consumer %s (demand %.0fW, %d active)",
+                "Efficiency: %s consumer %s (demand %.0fW, %d active)",
+                verb,
                 cid[:16],
                 abs_target,
                 slots,
@@ -2580,6 +2556,56 @@ class LoadBalancer:
         self._cache_sample = cache_key
         self._cache_result = result
         return result
+
+    def _rotate_priority_head(self, reports: Reports, now: float) -> None:
+        """Send the longest-serving active battery to the back of the queue.
+
+        The head holds its slot for ``efficiency_rotation_interval`` scaled by
+        its efficiency window weight, so a lower-weight battery rotates out
+        sooner — weight 0 means a threshold of 0, i.e. out on the next tick.
+        """
+        if not self._priority:
+            return
+        head_weight = _report_of(reports, self._priority[0]).efficiency_window_weight
+        if now - self._last_rotation < self._cfg.efficiency_rotation_interval * (
+            head_weight
+        ):
+            return
+        self._last_rotation = now
+        self._priority.append(self._priority.pop(0))
+        self._invalidate_efficiency_cache()
+
+    def _active_slot_saturated(self, slots_estimate: int) -> bool:
+        """Whether a battery currently holding an active slot is saturated.
+
+        Only meaningful once a set has been cached: without one there is
+        nothing stale to invalidate.
+        """
+        threshold = self._cfg.efficiency_saturation_threshold
+        if threshold <= 0 or self._cache_sample is None:
+            return False
+        return any(
+            (state := self._consumers.get(cid)) is not None
+            and state.saturation_score >= threshold
+            for cid in self._priority[:slots_estimate]
+        )
+
+    def _promote_to_active(self, consumer_id: str, grace: float) -> None:
+        """Give a consumer a clean slate as it takes an active slot.
+
+        Its saturation score is a memory of the deprioritized role — a battery
+        steered toward zero cannot be judged by it — and the grace window keeps
+        the fresh score from being read before the battery has had time to move.
+        """
+        state = self._get_consumer(consumer_id)
+        self._saturation.clear(state)
+        self._saturation.set_grace(state, grace)
+
+    def _forget_saturation(self, consumer_id: str) -> None:
+        """Drop a known consumer's saturation score; unknown ids are ignored."""
+        state = self._consumers.get(consumer_id)
+        if state is not None:
+            self._saturation.clear(state)
 
     def _maybe_force_swap_saturated(
         self, priority: list[str], slots: int, now: float

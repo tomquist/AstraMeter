@@ -34,6 +34,7 @@ from astrameter.ct002.balancer import (
     BalancerConfig,
     BalancerConsumerState,
     ConsumerMode,
+    ConsumerReport,
     LoadBalancer,
     SaturationTracker,
 )
@@ -157,7 +158,9 @@ def part_b_case(pace_base, pace_max):
         **SAT_KW,
     )
     for tick in range(900):
-        reports = {b.mac: {"phase": b.phase, "power": round(b.power)} for b in bats}
+        reports = {
+            b.mac: ConsumerReport(phase=b.phase, power=round(b.power)) for b in bats
+        }
         grid = dict(base)
         for b in bats:
             grid[b.phase] -= b.power
@@ -175,7 +178,7 @@ def part_b_case(pace_base, pace_max):
             for b in bats
         }
         for b in bats:
-            b.step(tg[b.mac][PHASE_IDX[b.phase]], reports[b.mac]["power"])
+            b.step(tg[b.mac][PHASE_IDX[b.phase]], reports[b.mac].power)
         clock.advance(0.5)
     grid = dict(base)
     for b in bats:
