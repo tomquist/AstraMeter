@@ -7,7 +7,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
-from typing import Any, Literal, cast
+from typing import Any, Literal, NamedTuple, cast
 
 from astrameter.config.logger import debug_traceback, logger
 from astrameter.power_units import three_phases
@@ -300,6 +300,19 @@ class ConsumerOverride:
 # Lowercase phase label carried on reporting rows: the three physical phases,
 # ``d`` (combined / whole-home) and ``0`` (unassigned / inspection).
 ReportingPhase = Literal["a", "b", "c", "d", "0"]
+
+
+class _ServedTarget(NamedTuple):
+    """What one poll resolved to, before it goes on the wire."""
+
+    raw_values: list
+    """The meter reading as read, padded to [L1, L2, L3]."""
+
+    values: list
+    """The per-phase instruction to send — a hold of zeros on a meter failure."""
+
+    meter_failed: bool
+    """True when the reading is a hold sentinel rather than a sample."""
 
 
 @dataclasses.dataclass
@@ -1369,7 +1382,7 @@ class CT002:
 
     def _resolve_target(
         self, request: CT002Request, meter_failed: bool
-    ) -> tuple[list, list, bool]:
+    ) -> _ServedTarget:
         """The raw meter reading, the per-phase target, and the meter verdict.
 
         On a meter failure the target is a literal ``[0, 0, 0]`` *hold*, not a
@@ -1407,7 +1420,7 @@ class CT002:
         # on the literal zero adjustment.
         if self.active_control and not request.in_inspection_mode and not meter_failed:
             values = self._compute_smooth_target(values, request.consumer_id)
-        return raw_values, three_phases(values), meter_failed
+        return _ServedTarget(raw_values, three_phases(values), meter_failed)
 
     def _record_instructed_power(self, request: CT002Request, values: list) -> None:
         """Book the net power we expect this battery to reach.
