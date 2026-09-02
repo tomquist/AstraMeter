@@ -387,7 +387,10 @@ def apply_signal_wrappers(
         offsets = signal.offsets if signal.offsets is not None else [0.0]
         multipliers = signal.multipliers if signal.multipliers is not None else [1.0]
         logger.info(
-            f"Applying power transform (multiplier={multipliers}, offset={offsets}) to {name}"
+            "Applying power transform (multiplier=%s, offset=%s) to %s",
+            multipliers,
+            offsets,
+            name,
         )
         powermeter = TransformedPowermeter(powermeter, offsets, multipliers)
 

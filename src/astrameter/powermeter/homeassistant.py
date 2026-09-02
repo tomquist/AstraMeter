@@ -255,7 +255,9 @@ class HomeAssistant(WebSocketPowermeter):
             # ``unavailable`` / ``unknown`` (or any non-numeric state) —
             # the integration is telling us the value isn't usable.
             logger.warning(
-                f"Home Assistant sensor {entity_id} state '{state_val}' is not numeric"
+                "Home Assistant sensor %s state %r is not numeric",
+                entity_id,
+                state_val,
             )
             self._entity_values[entity_id] = None
         self._check_entities_ready()
@@ -292,14 +294,17 @@ class HomeAssistant(WebSocketPowermeter):
             return
         if unit in POWER_UNIT_SCALE:
             logger.info(
-                f"Home Assistant sensor {entity_id} reports {unit}; "
-                f"converting to W automatically"
+                "Home Assistant sensor %s reports %s; converting to W automatically",
+                entity_id,
+                unit,
             )
         else:
             logger.error(
-                f"Home Assistant sensor {entity_id} reports unit "
-                f"'{unit}', which is not a power unit — expected one of "
-                f"{', '.join(POWER_UNITS)}. Its values will be rejected."
+                "Home Assistant sensor %s reports unit %r, which is not a power "
+                "unit — expected one of %s. Its values will be rejected.",
+                entity_id,
+                unit,
+                ", ".join(POWER_UNITS),
             )
 
     def _check_entities_ready(self) -> None:

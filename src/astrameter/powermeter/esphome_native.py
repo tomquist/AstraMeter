@@ -44,7 +44,11 @@ class ESPHomeNative(PushPowermeter):
         # Stays set across messages; only a (re)connect clears it.
         self._any_message_event = asyncio.Event()
         logger.debug(
-            f"Initialized ESPHomeNative Api: Connection: {address}:{port} ClientInfo: {client_info} ObjectId: {self.object_id}"
+            "ESPHome native: %s:%s as %s, object id %s",
+            address,
+            port,
+            client_info,
+            self.object_id,
         )
 
     def reset_connection_state(self):
@@ -64,12 +68,17 @@ class ESPHomeNative(PushPowermeter):
     async def connect_callback(self):
         self.is_connected = True
         logger.debug(
-            f"Connected to {self.address}:{self.port}. Api version: {self.api.api_version}"
+            "ESPHome native: connected to %s:%s, API version %s",
+            self.address,
+            self.port,
+            self.api.api_version,
         )
 
         device_info = await self.api.device_info()
         logger.info(
-            f"Connected to {device_info.name} (EspHome: {device_info.esphome_version})"
+            "ESPHome native: device %s runs ESPHome %s",
+            device_info.name,
+            device_info.esphome_version,
         )
 
         entity_infos, _ = await self.api.list_entities_services()
@@ -83,12 +92,17 @@ class ESPHomeNative(PushPowermeter):
             # trigger an immediate reconnect + relist loop that never resolves the
             # misconfiguration. Stay connected instead and just log it clearly.
             logger.error(
-                f"Cannot subscribe to objectId {self.object_id}. ObjectId is not provided by the device. Available objectIds are: {[e.object_id for e in entity_infos]}"
+                "ESPHome native: the device provides no object id %r; it offers %s",
+                self.object_id,
+                [e.object_id for e in entity_infos],
             )
             return
 
         logger.info(
-            f"Subscribing to entity ObjectId: {self.entity_info.object_id} Name:{self.entity_info.name} Key:{self.entity_info.key}"
+            "ESPHome native: subscribing to %s (name %s, key %s)",
+            self.entity_info.object_id,
+            self.entity_info.name,
+            self.entity_info.key,
         )
         self.api.subscribe_states(self.change_callback)
 

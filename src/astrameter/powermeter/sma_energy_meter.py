@@ -129,7 +129,7 @@ class SmaEnergyMeter(PushPowermeter):
             raise
         self._transport = transport
         logger.info(
-            f"SMA Energy Meter: listening on {self.multicast_group}:{self.port}"
+            "SMA Energy Meter: listening on %s:%s", self.multicast_group, self.port
         )
 
     async def stop(self) -> None:
@@ -169,8 +169,9 @@ class SmaEnergyMeter(PushPowermeter):
                     return
                 self._detected_serial = serial
                 logger.info(
-                    f"SMA Energy Meter: auto-detected {device_name} "
-                    f"with serial {serial}"
+                    "SMA Energy Meter: auto-detected %s with serial %s",
+                    device_name,
+                    serial,
                 )
             elif serial != self._detected_serial:
                 return
