@@ -5,7 +5,6 @@ import pytest
 
 from astrameter.config.config_loader import (
     ClientFilter,
-    _split_labels,
     create_amisreader_powermeter,
     create_client_filter,
     create_emlog_powermeter,
@@ -29,12 +28,19 @@ from astrameter.config.config_loader import (
     create_tibber_pulse_powermeter,
     create_tq_em_powermeter,
     create_vzlogger_powermeter,
+    one_or_blank,
     parse_float_list,
     parse_mqtt_uri,
     read_all_powermeter_configs,
     read_mqtt_insights_config,
 )
-from astrameter.powermeter import TransformedPowermeter
+from astrameter.powermeter import (
+    Shelly1PM,
+    Shelly3EMPro,
+    ShellyEM,
+    ShellyPlus1PM,
+    TransformedPowermeter,
+)
 
 
 def test_client_filter():
@@ -57,47 +63,46 @@ def test_create_client_filter():
     create_client_filter("TEST2", config)
 
 
-def test_create_shelly_powermeter():
-    """Test Shelly powermeter creation."""
+@pytest.mark.parametrize(
+    ("shelly_type", "expected"),
+    [
+        ("1PM", Shelly1PM),
+        ("PLUS1PM", ShellyPlus1PM),
+        ("EM", ShellyEM),
+        ("3EM", ShellyEM),
+        ("3EMPro", Shelly3EMPro),
+    ],
+)
+def test_create_shelly_powermeter(shelly_type, expected):
+    """Each TYPE picks its own class, and every one gets the same connection."""
     config = configparser.ConfigParser()
+    config["SHELLY"] = {
+        "TYPE": shelly_type,
+        "IP": "127.0.0.1",
+        "USER": "u",
+        "PASS": "p",
+        "METER_INDEX": "1",
+    }
+    meter = create_shelly_powermeter("SHELLY", config)
+    assert type(meter) is expected
+    assert (meter.ip, meter.user, meter.password) == ("127.0.0.1", "u", "p")
 
-    # Note: These won't connect to real devices, but test that
-    # the creation logic works
 
-    # Test all Shelly types with minimal config
-    config["SHELLY1"] = {"TYPE": "1PM", "IP": "127.0.0.1"}
-    config["SHELLY2"] = {"TYPE": "PLUS1PM", "IP": "127.0.0.1"}
-    config["SHELLY3"] = {"TYPE": "EM", "IP": "127.0.0.1"}
-    config["SHELLY4"] = {"TYPE": "3EM", "IP": "127.0.0.1"}
-    config["SHELLY5"] = {"TYPE": "3EMPro", "IP": "127.0.0.1"}
-
-    # Just verify these run without exceptions
-    try:
-        create_shelly_powermeter("SHELLY1", config)
-        create_shelly_powermeter("SHELLY2", config)
-        create_shelly_powermeter("SHELLY3", config)
-        create_shelly_powermeter("SHELLY4", config)
-        create_shelly_powermeter("SHELLY5", config)
-    except Exception as e:
-        if "Connection" not in str(e):  # Ignore expected connection errors
-            raise
-
-    # Test invalid type - should raise an exception
-    config["SHELLY_INVALID"] = {"TYPE": "INVALID", "IP": "127.0.0.1"}
-    with pytest.raises(Exception, match="unknown Shelly"):
-        create_shelly_powermeter("SHELLY_INVALID", config)
+def test_create_shelly_powermeter_rejects_an_unknown_type():
+    """The message has to name the types, or the only clue is a stack trace."""
+    config = configparser.ConfigParser()
+    config["SHELLY"] = {"TYPE": "INVALID", "IP": "127.0.0.1"}
+    with pytest.raises(ValueError, match="Unknown Shelly TYPE 'INVALID'"):
+        create_shelly_powermeter("SHELLY", config)
 
 
 def test_create_tasmota_powermeter():
-    """Test Tasmota powermeter creation."""
+    """A lone label reaches the meter as the one phase it names."""
     config = configparser.ConfigParser()
-    config["TASMOTA"] = {"IP": "127.0.0.1"}
-
-    try:
-        create_tasmota_powermeter("TASMOTA", config)
-    except Exception as e:
-        if "Connection" not in str(e):  # Ignore expected connection errors
-            raise
+    config["TASMOTA"] = {"IP": "127.0.0.1", "JSON_POWER_MQTT_LABEL": "Power"}
+    meter = create_tasmota_powermeter("TASMOTA", config)
+    assert meter.ip == "127.0.0.1"
+    assert meter.json_power_mqtt_labels == ["Power"]
 
 
 def test_create_tasmota_powermeter_three_phase():
@@ -117,21 +122,21 @@ def test_create_tasmota_powermeter_three_phase():
     assert meter.json_power_output_mqtt_labels == ["Out_L1", "Out_L2", "Out_L3"]
 
 
-def test_split_labels():
-    """Test _split_labels helper."""
-    assert _split_labels("") == ""
-    assert _split_labels("Power") == "Power"
-    assert _split_labels("Power_L1,Power_L2,Power_L3") == [
+def test_one_or_blank():
+    """Test the one_or_blank helper."""
+    assert one_or_blank("") == ""
+    assert one_or_blank("Power") == "Power"
+    assert one_or_blank("Power_L1,Power_L2,Power_L3") == [
         "Power_L1",
         "Power_L2",
         "Power_L3",
     ]
-    assert _split_labels("Power_L1 , Power_L2 , Power_L3") == [
+    assert one_or_blank("Power_L1 , Power_L2 , Power_L3") == [
         "Power_L1",
         "Power_L2",
         "Power_L3",
     ]
-    assert _split_labels(" , , ") == ""
+    assert one_or_blank(" , , ") == ""
 
 
 def test_create_shrdzm_powermeter():

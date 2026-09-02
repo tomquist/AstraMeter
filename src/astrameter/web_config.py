@@ -16,6 +16,11 @@ from collections import OrderedDict
 
 from configupdater import ConfigUpdater
 
+from astrameter.config.config_loader import (
+    new_config_parser,
+    read_all_powermeter_configs,
+)
+
 
 def _load_config_editor_html() -> str:
     """Load the config editor HTML from the bundled static file."""
@@ -204,12 +209,7 @@ def validate_config(config_path: str) -> None:
     key, invalid value, etc.) so the caller can roll back before the
     service tries to restart with a broken config.
     """
-    import configparser as _cp
-    from collections import OrderedDict
-
-    from astrameter.config.config_loader import read_all_powermeter_configs
-
-    cfg = _cp.ConfigParser(dict_type=OrderedDict, interpolation=None)
+    cfg = new_config_parser()
     if not cfg.read(config_path):
         raise ValueError(f"Cannot read config file: {config_path}")
     read_all_powermeter_configs(cfg)

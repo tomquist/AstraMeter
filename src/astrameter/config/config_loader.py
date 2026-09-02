@@ -34,6 +34,7 @@ from astrameter.powermeter import (
     Powermeter,
     Refoss,
     Script,
+    Shelly,
     Shelly1PM,
     Shelly3EMPro,
     ShellyEM,
@@ -487,20 +488,25 @@ def create_shelly_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
     shelly_type = config.get(section, "TYPE", fallback="")
-    shelly_ip = config.get(section, "IP", fallback="")
-    shelly_user = config.get(section, "USER", fallback="")
-    shelly_pass = config.get(section, "PASS", fallback="")
-    meter_index = config.get(section, "METER_INDEX", fallback="")
-    if shelly_type == "1PM":
-        return Shelly1PM(shelly_ip, shelly_user, shelly_pass, meter_index)
-    elif shelly_type == "PLUS1PM":
-        return ShellyPlus1PM(shelly_ip, shelly_user, shelly_pass, meter_index)
-    elif shelly_type == "EM" or shelly_type == "3EM":
-        return ShellyEM(shelly_ip, shelly_user, shelly_pass, meter_index)
-    elif shelly_type == "3EMPro":
-        return Shelly3EMPro(shelly_ip, shelly_user, shelly_pass, meter_index)
-    else:
-        raise Exception(f"Error: unknown Shelly type '{shelly_type}'")
+    models: dict[str, type[Shelly]] = {
+        "1PM": Shelly1PM,
+        "PLUS1PM": ShellyPlus1PM,
+        "EM": ShellyEM,
+        "3EM": ShellyEM,
+        "3EMPro": Shelly3EMPro,
+    }
+    model = models.get(shelly_type)
+    if model is None:
+        raise ValueError(
+            f"Unknown Shelly TYPE {shelly_type!r} in section [{section}]; "
+            f"expected one of {', '.join(models)}"
+        )
+    return model(
+        config.get(section, "IP", fallback=""),
+        config.get(section, "USER", fallback=""),
+        config.get(section, "PASS", fallback=""),
+        config.get(section, "METER_INDEX", fallback=""),
+    )
 
 
 def create_amisreader_powermeter(
@@ -536,19 +542,16 @@ def create_sml_powermeter(
 def create_mqtt_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
-    # Multi-topic: TOPICS takes precedence over TOPIC
-    topics_raw = config.get(section, "TOPICS", fallback=None)
-    if topics_raw:
-        topic: str | list[str] = split_csv(topics_raw)
-    else:
-        topic = config.get(section, "TOPIC", fallback="")
-
-    # Multi-path: JSON_PATHS takes precedence over JSON_PATH
-    json_paths_raw = config.get(section, "JSON_PATHS", fallback=None)
-    if json_paths_raw:
-        json_path: str | list[str] | None = split_csv(json_paths_raw)
-    else:
-        json_path = config.get(section, "JSON_PATH", fallback=None)
+    # The plural key wins where both are set: a list of one is still a list,
+    # which is one value per phase rather than the single value TOPIC means.
+    topics = config.get(section, "TOPICS", fallback="")
+    single_topic: str = config.get(section, "TOPIC", fallback="")
+    topic: str | list[str] = split_csv(topics) if topics else single_topic
+    json_paths = config.get(section, "JSON_PATHS", fallback="")
+    single_path: str | None = config.get(section, "JSON_PATH", fallback=None)
+    json_path: str | list[str] | None = (
+        split_csv(json_paths) if json_paths else single_path
+    )
 
     broker = read_mqtt_connection(section, config)
     return MqttPowermeter(
@@ -637,31 +640,13 @@ def create_vzlogger_powermeter(
     return VZLogger(
         config.get(section, "IP", fallback=""),
         config.get(section, "PORT", fallback=""),
-        _split_labels(config.get(section, "UUID", fallback="")),
+        one_or_blank(config.get(section, "UUID", fallback="")),
     )
 
 
 def create_homeassistant_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
-    # Split entity strings on commas and strip whitespace
-    def parse_entities(value: str) -> str | list[str]:
-        if not value:
-            return ""
-        entities = [entity.strip() for entity in value.split(",")]
-        # Return single string if only one entity, otherwise return list
-        return entities[0] if len(entities) == 1 else entities
-
-    current_power_entity = parse_entities(
-        config.get(section, "CURRENT_POWER_ENTITY", fallback="")
-    )
-    power_input_alias = parse_entities(
-        config.get(section, "POWER_INPUT_ALIAS", fallback="")
-    )
-    power_output_alias = parse_entities(
-        config.get(section, "POWER_OUTPUT_ALIAS", fallback="")
-    )
-
     ip = config.get(section, "IP", fallback="")
     if ip == "supervisor":
 
@@ -679,10 +664,10 @@ def create_homeassistant_powermeter(
         config.get(section, "PORT", fallback=""),
         config.getboolean(section, "HTTPS", fallback=False),
         token_getter,
-        current_power_entity,
+        one_or_blank(config.get(section, "CURRENT_POWER_ENTITY", fallback="")),
         config.getboolean(section, "POWER_CALCULATE", fallback=False),
-        power_input_alias,
-        power_output_alias,
+        one_or_blank(config.get(section, "POWER_INPUT_ALIAS", fallback="")),
+        one_or_blank(config.get(section, "POWER_OUTPUT_ALIAS", fallback="")),
         config.get(section, "API_PATH_PREFIX", fallback=None),
     )
 
@@ -720,8 +705,8 @@ def create_shrdzm_powermeter(
     )
 
 
-def _split_labels(raw: str) -> str | list[str]:
-    """Like :func:`one_or_many`, but no label at all is "" rather than []."""
+def one_or_blank(raw: str) -> str | list[str]:
+    """Like :func:`one_or_many`, but an unset key is "" rather than []."""
     return one_or_many(raw) or ""
 
 
@@ -734,9 +719,9 @@ def create_tasmota_powermeter(
         config.get(section, "PASS", fallback=""),
         config.get(section, "JSON_STATUS", fallback=""),
         config.get(section, "JSON_PAYLOAD_MQTT_PREFIX", fallback=""),
-        _split_labels(config.get(section, "JSON_POWER_MQTT_LABEL", fallback="")),
-        _split_labels(config.get(section, "JSON_POWER_INPUT_MQTT_LABEL", fallback="")),
-        _split_labels(config.get(section, "JSON_POWER_OUTPUT_MQTT_LABEL", fallback="")),
+        one_or_blank(config.get(section, "JSON_POWER_MQTT_LABEL", fallback="")),
+        one_or_blank(config.get(section, "JSON_POWER_INPUT_MQTT_LABEL", fallback="")),
+        one_or_blank(config.get(section, "JSON_POWER_OUTPUT_MQTT_LABEL", fallback="")),
         config.getboolean(section, "JSON_POWER_CALCULATE", fallback=False),
     )
 

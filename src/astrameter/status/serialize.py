@@ -18,8 +18,19 @@ Two rules the dashboard depends on:
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from astrameter.ct002.balancer import (
+        BalancerConsumerSnapshot,
+        BalancerSnapshot,
+        ControlQualitySnapshot,
+    )
+    from astrameter.ct002.ct002 import ConsumerSnapshot, CT002Snapshot
+    from astrameter.powermeter.wrappers.health import PowermeterHealth
+    from astrameter.shelly.shelly import ShellySnapshot
 
 
 def compact(mapping: dict[str, Any]) -> dict[str, Any]:
@@ -45,7 +56,9 @@ def round_or_none(value: float | None, digits: int = 1) -> float | None:
     return round(float(value), digits)
 
 
-def _phase_triple(values, suffix: str = "_w") -> dict[str, Any] | None:
+def _phase_triple(
+    values: Sequence[float] | None, suffix: str = "_w"
+) -> dict[str, Any] | None:
     """Three per-phase numbers as ``l1``/``l2``/``l3``.
 
     The wire keeps ``l1/l2/l3`` because that is exactly what the existing
@@ -57,7 +70,7 @@ def _phase_triple(values, suffix: str = "_w") -> dict[str, Any] | None:
     return {f"l{i + 1}{suffix}": round_or_none(float(v)) for i, v in enumerate(padded)}
 
 
-def powermeter_to_wire(health) -> dict[str, Any]:
+def powermeter_to_wire(health: PowermeterHealth) -> dict[str, Any]:
     """A :class:`PowermeterHealth` as its wire object."""
     return compact(
         {
@@ -77,7 +90,9 @@ def powermeter_to_wire(health) -> dict[str, Any]:
     )
 
 
-def _balancer_consumer_to_wire(state) -> dict[str, Any] | None:
+def _balancer_consumer_to_wire(
+    state: BalancerConsumerSnapshot | None,
+) -> dict[str, Any] | None:
     if state is None:
         return None
     return compact(
@@ -109,7 +124,7 @@ def _balancer_consumer_to_wire(state) -> dict[str, Any] | None:
     )
 
 
-def consumer_to_wire(consumer) -> dict[str, Any]:
+def consumer_to_wire(consumer: ConsumerSnapshot) -> dict[str, Any]:
     """A :class:`ConsumerSnapshot` as its wire object."""
     return compact(
         {
@@ -164,7 +179,7 @@ def consumer_to_wire(consumer) -> dict[str, Any]:
     )
 
 
-def _control_quality_to_wire(quality) -> dict[str, Any]:
+def _control_quality_to_wire(quality: ControlQualitySnapshot) -> dict[str, Any]:
     """A :class:`ControlQualitySnapshot` as its wire object.
 
     The three measurements are omitted until the window holds a sample: the
@@ -198,7 +213,7 @@ def _control_quality_to_wire(quality) -> dict[str, Any]:
     )
 
 
-def _balancer_to_wire(balancer) -> dict[str, Any]:
+def _balancer_to_wire(balancer: BalancerSnapshot) -> dict[str, Any]:
     probe = balancer.probe
     return compact(
         {
@@ -278,7 +293,7 @@ _UNIT_SUFFIX = {
 }
 
 
-def ct002_to_wire(device) -> dict[str, Any]:
+def ct002_to_wire(device: CT002Snapshot) -> dict[str, Any]:
     """A :class:`CT002Snapshot` as its wire object."""
     grid = _phase_triple(device.grid)
     if grid is not None:
@@ -347,7 +362,7 @@ def ct002_to_wire(device) -> dict[str, Any]:
     )
 
 
-def shelly_to_wire(device) -> dict[str, Any]:
+def shelly_to_wire(device: ShellySnapshot) -> dict[str, Any]:
     """A :class:`ShellySnapshot` as its wire object.
 
     A Shelly emulator has no balancer and no per-battery targets — batteries

@@ -38,10 +38,10 @@ def _compressed_initial_payload(states: list[dict]) -> dict:
 
 async def _simulate_auth_and_states(pm, states):
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     sid = pm._subscribe_entities_id
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -60,17 +60,17 @@ async def _simulate_auth_and_states(pm, states):
 async def test_auth_required_sends_token():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
     ws.send_json.assert_called_once_with({"type": "auth", "access_token": "token"})
 
 
 async def test_auth_ok_subscribes_entities():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
     ws.send_json.reset_mock()
 
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     if pm._fetch_states_task:
         pm._fetch_states_task.cancel()
 
@@ -85,7 +85,7 @@ async def test_auth_ok_subscribes_entities():
 async def test_auth_invalid_does_not_crash():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps({"type": "auth_invalid", "message": "bad token"}),
     )
@@ -106,8 +106,8 @@ async def test_initial_snapshot_populates_value():
 async def test_no_initial_event_leaves_values_missing():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
 
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
@@ -136,7 +136,7 @@ async def test_trigger_event_updates_value():
     assert await pm.get_powermeter_watts() == [100.0]
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -162,7 +162,7 @@ async def test_trigger_event_ignores_untracked_entity():
     )
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -287,7 +287,7 @@ async def test_kw_unit_survives_state_only_diffs():
         ],
     )
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -318,7 +318,7 @@ async def test_unit_change_via_attribute_diff():
         ],
     )
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -339,7 +339,7 @@ async def test_unit_change_via_attribute_diff():
     assert await pm.get_powermeter_watts() == [500.0]
 
     # An attribute diff that doesn't touch the unit leaves kW in effect.
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -360,7 +360,7 @@ async def test_unit_change_via_attribute_diff():
 async def test_reconnect_snapshot_without_unit_resets_to_watts():
     """A unit learned before a reconnect must not survive a fresh snapshot
     that no longer declares one (e.g. the entity was reconfigured):
-    ``_reset_for_reconnect`` keeps ``_entity_units``, so the complete
+    ``_on_disconnect`` keeps ``_entity_units``, so the complete
     post-reconnect snapshot must replace — here clear — the stale kW scale.
     """
     pm = _create_powermeter()
@@ -376,7 +376,7 @@ async def test_reconnect_snapshot_without_unit_resets_to_watts():
     )
     assert await pm.get_powermeter_watts() == [500.0]
 
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
     await _simulate_auth_and_states(
         pm,
         [
@@ -410,7 +410,7 @@ async def test_full_snapshot_without_unit_clears_cached_unit():
 
     # Same connection: a fresh full snapshot (event.a) without the unit key.
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -515,7 +515,7 @@ async def test_sensor_state_not_numeric():
 async def test_malformed_json_message():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, "not valid json")
+    await pm._on_text(ws, "not valid json")
     # Should not raise; value stays absent
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
@@ -684,9 +684,9 @@ async def test_subscribe_entities_contains_all_entities_calculate_mode():
         power_output_alias="sensor.power_output",
     )
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
     ws.send_json.reset_mock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
 
     subscribe_msg = ws.send_json.call_args_list[0][0][0]
     entity_ids = subscribe_msg["entity_ids"]
@@ -862,8 +862,8 @@ async def test_auth_ok_schedules_rest_bootstrap():
         }
     )
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     assert pm._fetch_states_task is not None
     await pm._fetch_states_task
     assert await pm.get_powermeter_watts() == [7.0]
@@ -871,7 +871,7 @@ async def test_auth_ok_schedules_rest_bootstrap():
 
 async def test_reconnect_cancels_in_flight_fetch():
     """An in-flight REST bootstrap from the previous connection must be
-    cancelled by ``_reset_for_reconnect``; otherwise it could resurrect
+    cancelled by ``_on_disconnect``; otherwise it could resurrect
     a stale value after the reset.
     """
     pm = _create_powermeter()
@@ -884,14 +884,14 @@ async def test_reconnect_cancels_in_flight_fetch():
 
     pm._fetch_states_task = asyncio.create_task(_hang())
     await started.wait()
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
     with pytest.raises(asyncio.CancelledError):
         await pm._fetch_states_task
 
 
 async def test_reconnect_prevents_stale_bootstrap_reseed():
     """End-to-end guard on the real ``_fetch_initial_states``: when the
-    REST response only resolves *after* ``_reset_for_reconnect`` has
+    REST response only resolves *after* ``_on_disconnect`` has
     cancelled the task, the post-await write must never land — the stale
     value cannot reseed the cache that the reset just cleared.
     """
@@ -918,7 +918,7 @@ async def test_reconnect_prevents_stale_bootstrap_reseed():
     pm._fetch_states_task = asyncio.create_task(pm._fetch_initial_states())
     await asyncio.sleep(0)  # let the task reach `await resp.json()`
 
-    pm._reset_for_reconnect()  # cancels the in-flight task and clears cache
+    pm._on_disconnect()  # cancels the in-flight task and clears cache
     gate.set()  # the json await would resume here — but cancellation wins
 
     with pytest.raises(asyncio.CancelledError):
@@ -988,7 +988,7 @@ async def test_entities_ready_cleared_when_value_becomes_none():
     assert pm._entities_ready.is_set()
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1027,7 +1027,7 @@ async def test_state_reported_event_wakes_wait_for_next_message(ts_key: str):
     await asyncio.sleep(0)
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1050,10 +1050,10 @@ async def test_state_reported_before_initial_value_is_ignored():
     """
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     pm._message_event.clear()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1073,7 +1073,7 @@ async def test_reconnect_invalidates_cached_values():
     """A websocket disconnect must invalidate cached values, clear the
     ready flag, and reset the protocol counter so the reconnected
     ``subscribe_entities`` snapshot is what callers see — not stale
-    cache. Drives the real ``_reset_for_reconnect`` method that
+    cache. Drives the real ``_on_disconnect`` method that
     ``_ws_loop`` invokes after a disconnect, so a regression in any of
     its four resets is caught here.
     """
@@ -1085,7 +1085,7 @@ async def test_reconnect_invalidates_cached_values():
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [100.0]
 
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
 
     assert pm._msg_id == 0
     assert pm._subscribe_entities_id is None
@@ -1114,7 +1114,7 @@ async def test_unavailable_blocks_wait_for_message():
     await pm.wait_for_message(timeout=1)  # returns immediately when ready
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1192,5 +1192,5 @@ async def test_stream_online_false_after_reconnect_reset():
         pm, [{"entity_id": "sensor.current_power", "state": "123.0"}]
     )
     assert pm.stream_online() is True
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
     assert pm.stream_online() is False

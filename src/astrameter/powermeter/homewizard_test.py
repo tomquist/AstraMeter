@@ -72,7 +72,7 @@ def test_measurement_sets_event():
 async def test_authorization_requested_sends_token():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {"type": "authorization_requested", "data": {"api_version": "2.0.0"}}
@@ -84,14 +84,14 @@ async def test_authorization_requested_sends_token():
 async def test_authorized_subscribes_to_measurements():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "authorized"}))
+    await pm._on_text(ws, json.dumps({"type": "authorized"}))
     ws.send_json.assert_called_once_with({"type": "subscribe", "data": "measurement"})
 
 
 async def test_error_message_does_not_crash():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps({"type": "error", "data": {"message": "user:not-authorized"}}),
     )
@@ -101,39 +101,37 @@ async def test_error_message_does_not_crash():
 async def test_malformed_json_does_not_crash():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, "not valid json")
+    await pm._on_text(ws, "not valid json")
     assert pm.values is None
 
 
 async def test_unknown_message_type_does_not_crash():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "unknown_type"}))
+    await pm._on_text(ws, json.dumps({"type": "unknown_type"}))
     assert pm.values is None
 
 
 async def test_non_dict_json_does_not_crash():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps([1, 2, 3]))
+    await pm._on_text(ws, json.dumps([1, 2, 3]))
     assert pm.values is None
-    await pm._handle_message(ws, json.dumps("just a string"))
+    await pm._on_text(ws, json.dumps("just a string"))
     assert pm.values is None
 
 
 async def test_measurement_non_dict_data_ignored():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(
-        ws, json.dumps({"type": "measurement", "data": "not a dict"})
-    )
+    await pm._on_text(ws, json.dumps({"type": "measurement", "data": "not a dict"}))
     assert pm.values is None
 
 
 async def test_measurement_message_stores_values():
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps({"type": "measurement", "data": {"power_w": 500}}),
     )
@@ -465,7 +463,7 @@ async def test_full_auth_subscribe_measurement_flow():
 
     async for msg in ws:
         if msg.type == aiohttp.WSMsgType.TEXT:
-            await pm._handle_message(ws, msg.data)
+            await pm._on_text(ws, msg.data)
 
     ws.send_json.assert_any_call({"type": "authorization", "data": "ABCD1234"})
     ws.send_json.assert_any_call({"type": "subscribe", "data": "measurement"})
@@ -473,29 +471,18 @@ async def test_full_auth_subscribe_measurement_flow():
 
 
 async def test_close_message_exits_iteration():
+    """A CLOSE frame ends the read, so nothing after it is acted on."""
     pm = _create_powermeter()
+    ws = _FakeWs(
+        [
+            _ws_text({"type": "authorized"}),
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, None, None),
+            _ws_text({"type": "measurement", "data": {"power_w": 500}}),
+        ]
+    )
 
-    messages = [
-        _ws_text({"type": "authorized"}),
-        aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, None, None),
-        _ws_text({"type": "measurement", "data": {"power_w": 500}}),
-    ]
-    ws = _FakeWs(messages)
+    await pm._read(ws)
 
-    processed = []
-    async for msg in ws:
-        if msg.type == aiohttp.WSMsgType.TEXT:
-            await pm._handle_message(ws, msg.data)
-            processed.append(msg)
-        elif msg.type in (
-            aiohttp.WSMsgType.CLOSE,
-            aiohttp.WSMsgType.CLOSING,
-            aiohttp.WSMsgType.CLOSED,
-            aiohttp.WSMsgType.ERROR,
-        ):
-            break
-
-    assert len(processed) == 1
     assert pm.values is None
 
 

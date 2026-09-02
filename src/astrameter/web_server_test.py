@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from astrameter import web_server
 from astrameter.ct002 import CT002
 from astrameter.status import StatusRegistry
 from astrameter.status.secrets import SENTINEL
@@ -106,10 +107,8 @@ async def _addon_options(monkeypatch, tmp_path, info, supervisor=None):
     One stand-in for every call, so a test can assert on what the route asked
     it to do.
     """
-    import astrameter.addon_client as addon_client
-
     fake = supervisor if supervisor is not None else _FakeSupervisor(info)
-    monkeypatch.setattr(addon_client, "SupervisorClient", lambda *a, **k: fake)
+    monkeypatch.setattr(web_server, "SupervisorClient", lambda *a, **k: fake)
     registry = _registry(
         tmp_path, allow_write=True, direct_access=True, config_mode="ha_simple"
     )
@@ -172,7 +171,6 @@ async def test_the_restart_waits_for_the_answer_to_go_out(monkeypatch, tmp_path)
     it in the handler killed us mid-response: the browser saw a 502 from the
     ingress proxy for a switch that had in fact worked, and the page showed an
     error for it."""
-    import astrameter.web_server as web_server
 
     monkeypatch.setattr(web_server, "RESTART_GRACE_S", 0.01)
     fake = _FakeSupervisor({"options": {}, "schema": SUPERVISOR_SCHEMA})
@@ -197,7 +195,6 @@ async def test_a_failed_deferred_restart_is_logged_not_lost(
 ):
     """Nothing is left to answer to by then, so the log is the only place it
     can surface."""
-    import astrameter.web_server as web_server
 
     monkeypatch.setattr(web_server, "RESTART_GRACE_S", 0.01)
     fake = _FakeSupervisor({"options": {}, "schema": SUPERVISOR_SCHEMA})
@@ -585,12 +582,11 @@ async def test_the_health_check_answers_under_any_name(tmp_path):
 async def test_ingress_is_not_subject_to_the_host_guard(tmp_path, monkeypatch):
     """Home Assistant is reached under a name we cannot know and has already
     authenticated the user; the peer address is what proves the hop."""
-    import astrameter.web_server as web_server_module
 
     client = await _client(
         _registry(tmp_path, direct_access=False, config_mode="ha_advanced")
     )
-    monkeypatch.setattr(web_server_module, "INGRESS_PEER", "127.0.0.1")
+    monkeypatch.setattr(web_server, "INGRESS_PEER", "127.0.0.1")
     response = await client.get(
         "/api/status", headers={"Host": "homeassistant.example.com:8123"}
     )
