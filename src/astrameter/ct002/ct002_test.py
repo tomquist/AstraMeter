@@ -230,7 +230,7 @@ async def _gated_before_send(ct: CT002, gate: asyncio.Event) -> list[int]:
     returns a fixed grid reading.  Returns a one-element call counter list."""
     calls = [0]
 
-    async def before_send(_addr, _fields=None, _consumer_id=None):
+    async def before_send(_addr, _request=None, _consumer_id=None):
         calls[0] += 1
         await gate.wait()
         return [150.0, 0.0, 0.0]
@@ -334,7 +334,7 @@ async def test_non_finite_reading_holds_and_control_recovers(bad: float) -> None
     ct = CT002(ct_mac="", active_control=True, clock=clock)
     grid = [300.0]
 
-    async def before_send(_addr, _fields=None, _consumer_id=None):
+    async def before_send(_addr, _request=None, _consumer_id=None):
         return [grid[0], 0.0, 0.0]
 
     ct.before_send = before_send

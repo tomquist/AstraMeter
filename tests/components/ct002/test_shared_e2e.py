@@ -113,7 +113,7 @@ class PythonBackend:
             consumer_ttl=100000,  # fixed, matching test.e2e.host.yaml
         )
 
-        async def _before_send(_addr, _fields=None, _consumer_id=None):
+        async def _before_send(_addr, _request=None, _consumer_id=None):
             if self._meter_unavailable:
                 # Mirror a powermeter that detects its own staleness and
                 # raises (HomeAssistant / HomeWizard). This is the #403 trigger.

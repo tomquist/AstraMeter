@@ -150,7 +150,7 @@ async def run_scenario(
     meter_read_at = [-math.inf]
     grid_history: list[tuple[float, dict[str, float]]] = []
 
-    async def before_send(_addr, _fields=None, _consumer_id=None):
+    async def before_send(_addr, _request=None, _consumer_id=None):
         now = clock() - _EPOCH
         # Draw the house load once; derive both the true grid and the raw
         # consumption from that same sample (get_grid_contribution re-draws

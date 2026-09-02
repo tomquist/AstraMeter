@@ -28,6 +28,12 @@ POWER_UNIT_SCALE = {
 POWER_UNITS = tuple(POWER_UNIT_SCALE)
 
 
+def three_phases(values) -> list:
+    """Pad or trim a reading to the three phase values the CT protocol carries."""
+    phases = list(values)[:3]
+    return phases + [0.0] * (3 - len(phases))
+
+
 def is_power_unit(unit: str | None) -> bool:
     """Whether a ``unit_of_measurement`` is one AstraMeter reads as power.
 

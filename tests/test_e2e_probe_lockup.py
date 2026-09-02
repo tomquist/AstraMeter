@@ -193,7 +193,7 @@ class _Harness:
                 consumer_ttl=100000,  # avoid eviction during long mock-time sims
             )
 
-            async def update_readings(_addr, _fields=None, _consumer_id=None):
+            async def update_readings(_addr, _request=None, _consumer_id=None):
                 if self.powermeter_raises_stale:
                     raise ValueError("HomeWizard measurement is stale (test)")
                 if self.frozen_grid is not None:

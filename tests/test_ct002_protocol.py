@@ -1,7 +1,7 @@
 import logging
 from unittest.mock import MagicMock
 
-from astrameter.ct002 import CT002, ReportingConsumerRow
+from astrameter.ct002 import CT002, CT002Request, ReportingConsumerRow
 from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.protocol import (
     ETX,
@@ -66,10 +66,12 @@ def test_checksum_matches_helper():
 
 def test_ct002_response_field_count_stable():
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
+    )
 
     response_fields = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[500, 0, 0],
     )
 
@@ -128,14 +130,16 @@ def _set_instruction(
 
 def test_ct002_relays_sum_of_charge_instructions_by_phase():
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "-100"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "-100"]
+    )
 
     # We *instructed* consumer-a to charge on A and consumer-b to charge on B.
     _set_instruction(device, "consumer-a", phase="A", instructed=-180)
     _set_instruction(device, "consumer-b", phase="B", instructed=-240)
 
     response_for_a = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 20, 30],
     )
 
@@ -147,7 +151,7 @@ def test_ct002_relays_sum_of_charge_instructions_by_phase():
     assert response_for_a[9] == "1"  # B_chrg_nb
 
     response_for_b = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 20, 30],
     )
 
@@ -163,7 +167,9 @@ def test_ct002_relay_reports_battery_count_per_phase():
     phase, not a flat 1.
     """
     device = CT002(active_control=False)
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    )
 
     # Two batteries on phase A, one on B, none on C.
     _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
@@ -171,7 +177,7 @@ def test_ct002_relay_reports_battery_count_per_phase():
     _set_instruction(device, "consumer-b", phase="B", instructed=-240)
 
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 20, 30],
     )
 
@@ -183,14 +189,16 @@ def test_ct002_relay_reports_battery_count_per_phase():
 def test_ct002_active_control_reports_count_one_per_phase():
     """Active control distributes a per-consumer target, so *_chrg_nb stays 1."""
     device = CT002(active_control=True)
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    )
 
     _set_instruction(device, "consumer-a1", phase="A", instructed=-180)
     _set_instruction(device, "consumer-a2", phase="A", instructed=-120)
 
     # Only phase A carries power, so B/C stay inactive.
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 0, 0],
     )
 
@@ -201,7 +209,9 @@ def test_ct002_active_control_reports_count_one_per_phase():
 def test_ct002_excludes_non_participating_from_aggregation():
     """A consumer that sent participate=0 is left out of the relay aggregates."""
     device = CT002(active_control=False)
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "-100"]
+    )
 
     # Relay buckets aggregate the *reported* power (issue #457).
     device._update_consumer_report("consumer-a1", phase="A", power=-180)
@@ -210,7 +220,7 @@ def test_ct002_excludes_non_participating_from_aggregation():
     device._consumers["consumer-a2"].participates = False
 
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 0, 0],
     )
 
@@ -223,7 +233,7 @@ async def test_ct002_handle_request_respects_participate_field():
     """The optional 7th request field marks a consumer non-participating."""
     transport = MagicMock()
 
-    async def before_send(_addr, _fields, _consumer_id):
+    async def before_send(_addr, _request, _consumer_id):
         return [0, 0, 0]
 
     # 7th field == "0" → opted out → treated as inactive by active control.
@@ -249,13 +259,15 @@ async def test_ct002_handle_request_respects_participate_field():
 
 def test_ct002_splits_positive_instructions_into_dchrg_fields():
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "100"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "100"]
+    )
 
     _set_instruction(device, "consumer-a", phase="A", instructed=500)
     _set_instruction(device, "consumer-b", phase="B", instructed=800)
 
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 20, 30],
     )
 
@@ -270,14 +282,16 @@ def test_ct002_splits_positive_instructions_into_dchrg_fields():
 
 def test_ct002_splits_mixed_sign_instructions_per_storage_before_aggregation():
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
+    )
 
     # Same phase, opposite instructions to different storages.
     _set_instruction(device, "consumer-a", phase="A", instructed=-300)
     _set_instruction(device, "consumer-b", phase="A", instructed=120)
 
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[10, 20, 30],
     )
 
@@ -291,7 +305,9 @@ def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
     """Regression for #376: positive *report* but negative *net instruction*
     must not populate *_dchrg_power (otherwise other batteries idle)."""
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "C", "-100"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "C", "-100"]
+    )
 
     # Venus D reports +500 (PV passthrough) but its net instructed target is
     # -500 (we expect it to charge, even though firmware will keep
@@ -300,7 +316,7 @@ def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
     device._consumers["venus-d"].last_instructed_power = -500.0
 
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[0, 0, -500],
     )
 
@@ -313,7 +329,9 @@ def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal():
     corrected down by 100 must still register as discharging (+400 W),
     not flip into the charge bucket on the strength of the delta alone."""
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "0"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "0"]
+    )
 
     # Venus on phase A is discharging at 500 W; we just sent it a -100 W
     # correction (charge a little) → net target 400 W (still discharging).
@@ -321,7 +339,7 @@ def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal():
     device._consumers["venus-a"].last_instructed_power = 400.0
 
     response = device._build_response_fields(
-        request_fields=request_fields,
+        request=request,
         values=[0, 0, 0],
     )
 
@@ -342,7 +360,7 @@ async def _drive_request(
     ``last_instructed_power``."""
     transport = MagicMock()
 
-    async def before_send(_addr, _fields, _consumer_id):
+    async def before_send(_addr, _request, _consumer_id):
         return list(delta_values)
 
     device.before_send = before_send
@@ -446,7 +464,10 @@ async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid():
     assert by_phase["A"]["chrg_power"] == -100
     assert by_phase["A"]["dchrg_power"] == 0
     response = device._build_response_fields(
-        ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "B", "0"], [0, 0, 0]
+        CT002Request.from_fields(
+            ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "B", "0"]
+        ),
+        [0, 0, 0],
     )
     assert response[15] == "-100"  # A_chrg_power
 
@@ -506,13 +527,13 @@ async def _drive_and_capture(
 async def _seed_good_reading(device: CT002, battery_mac: str) -> None:
     """Establish a non-zero cached grid reading via a successful poll."""
 
-    async def good(_addr, _fields, _consumer_id):
+    async def good(_addr, _request, _consumer_id):
         return [500, 0, 0]
 
     await _drive_and_capture(device, battery_mac, "A", 0, before_send=good)
 
 
-async def _raise_stale(_addr, _fields, _consumer_id):
+async def _raise_stale(_addr, _request, _consumer_id):
     raise ValueError("powermeter unavailable (test)")
 
 
@@ -561,7 +582,7 @@ async def test_handle_request_uses_cache_when_before_send_returns_none():
     device = CT002(ct_mac="112233445566", active_control=True)
     await _seed_good_reading(device, "AABBCCDDEEFF")
 
-    async def returns_none(_addr, _fields, _consumer_id):
+    async def returns_none(_addr, _request, _consumer_id):
         return None
 
     # Inspection mode skips the balancer, so the served value is the cached
@@ -575,17 +596,19 @@ async def test_handle_request_uses_cache_when_before_send_returns_none():
 
 def test_ct002_info_idx_increments_and_wraps():
     device = CT002()
-    request_fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
+    request = CT002Request.from_fields(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
+    )
 
-    first = device._build_response_fields(request_fields, [1, 2, 3])
-    second = device._build_response_fields(request_fields, [1, 2, 3])
+    first = device._build_response_fields(request, [1, 2, 3])
+    second = device._build_response_fields(request, [1, 2, 3])
 
     assert first[13] == "0"
     assert second[13] == "1"
 
     device._info_idx_counter = 255
-    wrap = device._build_response_fields(request_fields, [1, 2, 3])
-    after_wrap = device._build_response_fields(request_fields, [1, 2, 3])
+    wrap = device._build_response_fields(request, [1, 2, 3])
+    after_wrap = device._build_response_fields(request, [1, 2, 3])
 
     assert wrap[13] == "255"
     assert after_wrap[13] == "0"
@@ -626,7 +649,10 @@ async def test_inspection_reporter_counts_in_x_bucket_not_a():
     assert by_phase["A"]["chrg_power"] == 0
 
     response = device._build_response_fields(
-        ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "A", "0"], [0, 0, 0]
+        CT002Request.from_fields(
+            ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "A", "0"]
+        ),
+        [0, 0, 0],
     )
     assert response[14] == "-200"  # x_chrg_power
     assert response[19] == "0"  # x_dchrg_power
@@ -651,7 +677,10 @@ async def test_combined_phase_d_reporter_lands_in_abc_bucket():
     assert by_phase["A"]["count"] == 0
 
     response = device._build_response_fields(
-        ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "A", "0"], [0, 0, 0]
+        CT002Request.from_fields(
+            ["HMG-50", "FFEEDDCCBBAA", "HME-4", "112233445566", "A", "0"]
+        ),
+        [0, 0, 0],
     )
     assert response[11] == "1"  # ABC_chrg_nb
     assert response[23] == "300"  # ABC_dchrg_power
@@ -690,7 +719,10 @@ def test_active_control_combined_mode_response_reports_count_one():
     device._update_consumer_report("venus-d", phase="D", power=0)
     device._consumers["venus-d"].last_instructed_power = -400.0
     response = device._build_response_fields(
-        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "D", "0"], [-400, 0, 0]
+        CT002Request.from_fields(
+            ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "D", "0"]
+        ),
+        [-400, 0, 0],
     )
     assert response[11] == "1"  # ABC_chrg_nb = 1 (not the real battery count)
     assert response[18] == "-400"  # ABC_chrg_power = instructed net
@@ -703,7 +735,10 @@ def test_relay_mode_combined_count_is_real_battery_count():
     device._update_consumer_report("venus-d1", phase="D", power=100)
     device._update_consumer_report("venus-d2", phase="D", power=100)
     response = device._build_response_fields(
-        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "D", "0"], [0, 0, 0]
+        CT002Request.from_fields(
+            ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "D", "0"]
+        ),
+        [0, 0, 0],
     )
     assert response[11] == "2"  # ABC count = real battery count in relay mode
 

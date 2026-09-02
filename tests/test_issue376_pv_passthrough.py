@@ -119,7 +119,7 @@ class _Issue376Harness:
                 consumer_ttl=100000,
             )
 
-            async def update_readings(_addr, _fields=None, _consumer_id=None):
+            async def update_readings(_addr, _request=None, _consumer_id=None):
                 grid = self.powermeter.compute_grid()
                 return [grid["phase_a"], grid["phase_b"], grid["phase_c"]]
 
