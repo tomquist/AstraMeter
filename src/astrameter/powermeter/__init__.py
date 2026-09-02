@@ -14,7 +14,7 @@ from .modbus import ModbusPowermeter
 from .mqtt import MqttPowermeter
 from .refoss import Refoss
 from .script import Script
-from .shelly import Shelly, Shelly1PM, Shelly3EM, Shelly3EMPro, ShellyEM, ShellyPlus1PM
+from .shelly import Shelly, Shelly1PM, Shelly3EMPro, ShellyEM, ShellyPlus1PM
 from .shrdzm import Shrdzm
 from .sma_energy_meter import SmaEnergyMeter
 from .sml import Sml, parse_sml_obis_config
@@ -55,7 +55,6 @@ __all__ = [
     "Script",
     "Shelly",
     "Shelly1PM",
-    "Shelly3EM",
     "Shelly3EMPro",
     "ShellyEM",
     "ShellyPlus1PM",

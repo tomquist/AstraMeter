@@ -25,13 +25,11 @@ class HampelPowermeter(PowermeterWrapper):
     **The window always holds the raw totals**, including rejected ones. That
     is what the canonical Hampel identifier does, and it is what lets the
     filter follow a real change: writing the median back over a rejected
-    sample instead — as this once did — makes the window converge to a
-    constant, which drives MAD to zero, which pins the threshold at
-    ``min_threshold``, after which *every* sample more than that from the old
-    median is rejected. A sustained change (solar arriving, an oven switching
-    on) then froze the reading at its pre-change value indefinitely rather
-    than for a few samples. A spike does sit in the window for ``window``
-    samples now, but that is precisely what a median is robust to.
+    sample instead makes the window converge to a constant, drives MAD to
+    zero and pins the threshold at ``min_threshold``, after which a sustained
+    change (solar arriving, an oven switching on) is rejected indefinitely
+    rather than for a few samples. A spike sits in the window for ``window``
+    samples, which is precisely what a median is robust to.
 
     Operates on the sum of phases, mirroring :class:`SmoothedPowermeter`.
     A phase-cancelling outlier (e.g. +1000 W on L1 and -1000 W on L2) is

@@ -117,10 +117,6 @@ class Sml(Powermeter):
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
 
-    @property
-    def current(self) -> EnergyStats:
-        return self._current
-
     async def start(self) -> None:
         if self._reader is not None:
             return

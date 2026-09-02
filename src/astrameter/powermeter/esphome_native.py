@@ -6,13 +6,16 @@ from aioesphomeapi.reconnect_logic import ReconnectLogic
 
 from astrameter.config.logger import logger
 
-from .base import Powermeter
+from .base import PushPowermeter
 
 
-class ESPHomeNative(Powermeter):
+class ESPHomeNative(PushPowermeter):
+    _TIMEOUT_MESSAGE = "Timeout waiting for ESPHome message"
+
     def __init__(
         self, address: str, port: str, api_key: str, object_id: str, client_info: str
     ):
+        super().__init__()
         self.object_id = object_id
         self.address = address
         self.port = int(port)
@@ -36,16 +39,16 @@ class ESPHomeNative(Powermeter):
         self.last_value: float = 0
         self.entity_info: EntityInfo | None = None
         self.is_connected: bool = False
-        self.event_any_message_received: asyncio.Event = asyncio.Event()
-        self.event_next_message: asyncio.Event = asyncio.Event()
+        # Stays set across messages; only a (re)connect clears it.
+        self._any_message_event = asyncio.Event()
         logger.debug(
             f"Initialized ESPHomeNative Api: Connection: {address}:{port} ClientInfo: {client_info} ObjectId: {self.object_id}"
         )
 
     def reset_connection_state(self):
         self.is_connected = False
-        self.event_any_message_received.clear()
-        self.event_next_message.clear()
+        self._any_message_event.clear()
+        self._message_event.clear()
         self.entity_info = None
 
     async def start(self) -> None:
@@ -119,30 +122,17 @@ class ESPHomeNative(Powermeter):
             return
 
         self.last_value = state.state
-        self.event_next_message.set()
-        self.event_any_message_received.set()
+        self._message_event.set()
+        self._any_message_event.set()
         logger.debug(f"Got new sensor state: {state.state}")
 
     async def get_powermeter_watts(self) -> list[float]:
-        if self.event_any_message_received.is_set():
+        if self._any_message_event.is_set():
             return [self.last_value]
         return []
 
     def stream_online(self) -> bool | None:
         return self.is_connected
 
-    async def wait_for_message(self, timeout=5):
-        # Normalize to the builtin TimeoutError so callers get the same exception
-        # on every Python version (asyncio.TimeoutError is only an alias for it
-        # from 3.11 on).
-        try:
-            await asyncio.wait_for(self.event_any_message_received.wait(), timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for ESPHome message") from None
-
-    async def wait_for_next_message(self, timeout=5):
-        self.event_next_message.clear()
-        try:
-            await asyncio.wait_for(self.event_next_message.wait(), timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for ESPHome message") from None
+    async def wait_for_message(self, timeout: float = 5) -> None:
+        await self._wait(self._any_message_event, timeout)

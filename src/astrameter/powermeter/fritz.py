@@ -2,11 +2,11 @@ import asyncio
 import hashlib
 import re
 import xml.etree.ElementTree as ET
+from typing import Any
 
-import aiohttp
 from aiohttp import ClientTimeout
 
-from .base import Powermeter
+from .http_client import HttpPowermeter, SessionExpired, retry_after_relogin
 
 # AVM AHA-HTTP-Interface endpoints.
 # Docs: https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf
@@ -46,11 +46,7 @@ def compute_login_response(challenge: str, password: str) -> str:
     return f"{challenge}-{digest}"
 
 
-class _SessionExpired(RuntimeError):
-    """Internal marker: the SID is no longer valid, triggers a transparent re-login."""
-
-
-class FritzSmartEnergy(Powermeter):
+class FritzSmartEnergy(HttpPowermeter):
     """Powermeter for the AVM FRITZ!Smart Energy 250 smart-meter read head.
 
     The read head pairs with a FRITZ!Box over DECT; AstraMeter reads its current
@@ -100,37 +96,21 @@ class FritzSmartEnergy(Powermeter):
         # also honors VERIFY_SSL.
         effective_tls = self._base_url.startswith("https://")
         self._ssl: bool | None = False if (effective_tls and not verify_ssl) else None
-        self._session: aiohttp.ClientSession | None = None
         self._sid: str | None = None
         self._auth_lock = asyncio.Lock()
 
-    async def start(self) -> None:
-        if self._session:
-            return
-        self._sid = None
-        self._session = aiohttp.ClientSession(
-            timeout=ClientTimeout(total=self._timeout)
-        )
+    def _session_options(self) -> dict[str, Any]:
+        return {"timeout": ClientTimeout(total=self._timeout)}
 
     async def stop(self) -> None:
-        if self._session:
-            await self._session.close()
-            self._session = None
+        await super().stop()
         self._sid = None
 
     async def get_powermeter_watts(self) -> list[float]:
-        if self._session is None:
-            raise RuntimeError("Session not started; call start() first")
-
         async with self._auth_lock:
             if self._sid is None:
                 await self._login()
-            try:
-                xml = await self._fetch_device_list()
-            except _SessionExpired:
-                await self._login()
-                xml = await self._fetch_device_list()
-
+            xml = await retry_after_relogin(self._fetch_device_list, self._login)
         return [self._extract_power_mw(xml) / 1000.0]
 
     async def _login(self) -> None:
@@ -156,8 +136,7 @@ class FritzSmartEnergy(Powermeter):
         self._sid = sid
 
     async def _get_session_info(self, params: dict[str, str]) -> ET.Element:
-        assert self._session is not None
-        async with self._session.get(
+        async with self._require_session().get(
             self._base_url + LOGIN_PATH, params=params, ssl=self._ssl
         ) as resp:
             resp.raise_for_status()
@@ -165,14 +144,13 @@ class FritzSmartEnergy(Powermeter):
         return ET.fromstring(text)
 
     async def _fetch_device_list(self) -> str:
-        assert self._session is not None
         params = {"switchcmd": "getdevicelistinfos", "sid": self._sid or INVALID_SID}
-        async with self._session.get(
+        async with self._require_session().get(
             self._base_url + HOMEAUTO_PATH, params=params, ssl=self._ssl
         ) as resp:
             if resp.status == 403:
                 # FRITZ!Box rejects an expired/invalid SID with 403.
-                raise _SessionExpired
+                raise SessionExpired
             resp.raise_for_status()
             return await resp.text()
 

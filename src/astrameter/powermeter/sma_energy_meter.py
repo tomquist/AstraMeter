@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from astrameter.config.logger import logger
 
-from .base import Powermeter, stream_fresh
+from .base import PushPowermeter, stream_fresh
 
 # SMA Speedwire multicast defaults
 DEFAULT_MULTICAST_GROUP = "239.12.255.254"
@@ -45,23 +45,15 @@ CHANNEL_END = 0x00000000
 CHANNEL_SOFTWARE_VERSION = 0x90000000
 
 
-def _get_channel_data_length(identifier):
-    """Determine data length for an OBIS channel identifier.
+def _get_channel_data_length(identifier: int) -> int:
+    """Payload bytes following an OBIS channel identifier.
 
-    The second byte of the identifier encodes the measurement type:
-    - 0x04: instantaneous value (4 bytes)
-    - 0x08: counter/meter value (8 bytes)
+    The second byte encodes the measurement type: 0x08 counters carry 8 bytes,
+    everything else (0x04 instantaneous values, the software version) 4.
     """
     if identifier == CHANNEL_END:
         return 0
-    type_byte = (identifier >> 8) & 0xFF
-    if type_byte == 0x04:
-        return 4
-    elif type_byte == 0x08:
-        return 8
-    elif identifier == CHANNEL_SOFTWARE_VERSION:
-        return 4
-    return 4
+    return 8 if (identifier >> 8) & 0xFF == 0x08 else 4
 
 
 class _SmaProtocol(asyncio.DatagramProtocol):
@@ -82,7 +74,9 @@ class _SmaProtocol(asyncio.DatagramProtocol):
             logger.warning(f"SMA Energy Meter: connection lost: {exc}")
 
 
-class SmaEnergyMeter(Powermeter):
+class SmaEnergyMeter(PushPowermeter):
+    _TIMEOUT_MESSAGE = "Timeout waiting for SMA Energy Meter data"
+
     def __init__(
         self,
         multicast_group=DEFAULT_MULTICAST_GROUP,
@@ -93,6 +87,7 @@ class SmaEnergyMeter(Powermeter):
         max_telegram_age_seconds: float = DEFAULT_MAX_TELEGRAM_AGE_SECONDS,
         clock: Callable[[], float] | None = None,
     ) -> None:
+        super().__init__()
         self.multicast_group = multicast_group
         self.port = port
         self.serial_number = serial_number
@@ -101,12 +96,11 @@ class SmaEnergyMeter(Powermeter):
         self._max_telegram_age_seconds = max(0.0, max_telegram_age_seconds)
         self._clock = clock or time.monotonic
         self._last_telegram_monotonic: float | None = None
-        self._async_message_event: asyncio.Event | None = None
         self._detected_serial: int | None = None
         self._transport: asyncio.DatagramTransport | None = None
 
-    async def start(self):
-        self._async_message_event = asyncio.Event()
+    async def start(self) -> None:
+        self._message_event.clear()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -136,7 +130,7 @@ class SmaEnergyMeter(Powermeter):
             f"SMA Energy Meter: listening on {self.multicast_group}:{self.port}"
         )
 
-    async def stop(self):
+    async def stop(self) -> None:
         if self._transport:
             self._transport.close()
             self._transport = None
@@ -237,8 +231,7 @@ class SmaEnergyMeter(Powermeter):
 
         self.values = values
         self._last_telegram_monotonic = self._clock()
-        if self._async_message_event is not None:
-            self._async_message_event.set()
+        self._message_event.set()
 
     def stream_online(self) -> bool | None:
         # No connection/availability concept (UDP multicast listen), so the
@@ -251,20 +244,3 @@ class SmaEnergyMeter(Powermeter):
         if self.values is not None:
             return list(self.values)
         raise ValueError("No value received from SMA Energy Meter")
-
-    async def wait_for_message(self, timeout=5):
-        if self._async_message_event is None:
-            raise RuntimeError("start() must be called before wait_for_message()")
-        try:
-            await asyncio.wait_for(self._async_message_event.wait(), timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for SMA Energy Meter data") from None
-
-    async def wait_for_next_message(self, timeout=5):
-        if self._async_message_event is None:
-            raise RuntimeError("start() must be called before wait_for_next_message()")
-        self._async_message_event.clear()
-        try:
-            await asyncio.wait_for(self._async_message_event.wait(), timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timeout waiting for SMA Energy Meter data") from None
