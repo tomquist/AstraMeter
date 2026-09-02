@@ -12,6 +12,7 @@ from typing import Any, Literal, cast
 from astrameter.config.logger import debug_traceback, logger
 from astrameter.power_units import three_phases
 from astrameter.request_dedupe import RequestDeduplicator
+from astrameter.udp_server import UdpServer
 
 from .balancer import (
     SATURATION_GRACE_SECONDS,
@@ -377,22 +378,6 @@ class CT002Snapshot:
     balancer: BalancerSnapshot
 
 
-class _CT002Protocol(asyncio.DatagramProtocol):
-    def __init__(self, ct002: CT002):
-        self.ct002 = ct002
-        self._tasks: set[asyncio.Task] = set()
-
-    def connection_made(self, transport):
-        self.transport = transport
-
-    def datagram_received(self, data, addr):
-        task = asyncio.create_task(
-            self.ct002._safe_handle_request(data, addr, self.transport)
-        )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-
 class CT002:
     def __init__(
         self,
@@ -453,8 +438,7 @@ class CT002:
         self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
             dedupe_time_window, clock=clock or time.time
         )
-        self._transport = None
-        self._protocol: _CT002Protocol | None = None
+        self._server: UdpServer | None = None
         self._cleanup_task = None
         self._stopped = asyncio.Event()
         # Clock used for rate-limiting ``before_send`` warning logs.
@@ -1507,13 +1491,7 @@ class CT002:
             pass
 
     async def start(self):
-        loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: _CT002Protocol(self),
-            local_addr=("0.0.0.0", self.udp_port),
-        )
-        self._transport = transport
-        self._protocol = protocol
+        self._server = await UdpServer.serve(self.udp_port, self._safe_handle_request)
         self._stopped.clear()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._started_at = self._clock()
@@ -1530,14 +1508,9 @@ class CT002:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
             self._cleanup_task = None
-        if self._transport:
-            self._transport.close()
-            self._transport = None
-        if self._protocol:
-            for task in list(self._protocol._tasks):
-                task.cancel()
-            await asyncio.gather(*self._protocol._tasks, return_exceptions=True)
-        self._protocol = None
+        if self._server:
+            await self._server.close()
+            self._server = None
         self._running = False
         self._rev += 1
         self._stopped.set()
