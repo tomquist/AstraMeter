@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from ipaddress import IPv4Network
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -26,7 +26,9 @@ from urllib.parse import urlparse
 import requests
 
 from astrameter.config.config_loader import (
+    DEFAULT_MQTT_PORT,
     ClientFilter,
+    MqttUriParts,
     apply_signal_wrappers,
     parse_float_list,
     parse_mqtt_uri,
@@ -74,68 +76,74 @@ it is not a config section.
 
 Options = dict[str, Any]
 
-# Add-on option -> the settings field it configures. Options the user left
-# untouched are skipped, so the settings defaults apply.
-_GENERAL_FIELDS: dict[str, str] = {
-    "dedupe_time_window": "dedupe_time_window",
-    "dashboard_allow_write": "dashboard_allow_write",
-    "dashboard_direct_access": "dashboard_direct_access",
-    "dashboard_allowed_hosts": "dashboard_allowed_hosts",
-}
-
-_GLOBAL_SIGNAL_FIELDS: dict[str, str] = {
-    "throttle_interval": "throttle_interval",
-}
-
-_SOURCE_SIGNAL_FIELDS: dict[str, str] = {
-    "wait_for_next_message": "wait_for_next_message",
+# An add-on option is named after the settings field it configures, except
+# these three.
+_OPTION_NAMES = {
     "smooth_alpha": "smooth_target_alpha",
-    "max_smooth_step": "max_smooth_step",
-    "deadband": "deadband",
-    "hampel_window": "hampel_window",
-    "hampel_n_sigma": "hampel_n_sigma",
-    "hampel_min_threshold": "hampel_min_threshold",
-    "pid_kp": "pid_kp",
-    "pid_ki": "pid_ki",
-    "pid_kd": "pid_kd",
-    "pid_output_max": "pid_output_max",
-    "pid_mode": "pid_mode",
-}
-
-_CT_FIELDS: dict[str, str] = {
-    "ct_mac": "ct_mac",
-    "active_control": "active_control",
-    "min_efficient_power": "min_efficient_power",
-    "efficiency_rotation_interval": "efficiency_rotation_interval",
-    "min_dc_output": "min_dc_output",
-    "grid_predict_trust": "grid_predict_trust",
-    # Balancer / active-control tuning.
-    "fair_distribution": "fair_distribution",
-    "balance_gain": "balance_gain",
-    "balance_deadband": "balance_deadband",
-    "max_correction_per_step": "max_correction_per_step",
-    "error_boost_threshold": "error_boost_threshold",
-    "error_boost_max": "error_boost_max",
-    "error_reduce_threshold": "error_reduce_threshold",
-    "max_target_step": "max_target_step",
-    "pace_base_step": "pace_base_step",
-    "pace_max_step": "pace_max_step",
-    "osc_damp_max": "osc_damp_max",
-    "osc_damp_alpha": "osc_damp_alpha",
-    "osc_damp_decay": "osc_damp_decay",
-    "osc_damp_threshold": "osc_damp_threshold",
-    "concentrate_deadband": "concentrate_deadband",
-    "import_trim_w": "import_trim_w",
-    # Opt-in HTTP cloud reporting (hamedata.com).
-    "cloud_reporting": "cloud_reporting",
-    "cloud_reporting_host": "cloud_reporting_host",
-    "cloud_reporting_interval": "cloud_reporting_interval",
-}
-
-_MARSTEK_FIELDS: dict[str, str] = {
     "mailbox": "marstek_mailbox",
     "password": "marstek_password",
 }
+
+
+def option_name(field: str) -> str:
+    return _OPTION_NAMES.get(field, field)
+
+
+# The fields each settings type takes from the options. An option the user
+# left untouched is skipped, so the settings default applies.
+_GENERAL_FIELDS = (
+    "dedupe_time_window",
+    "dashboard_allow_write",
+    "dashboard_direct_access",
+    "dashboard_allowed_hosts",
+)
+
+_GLOBAL_SIGNAL_FIELDS = ("throttle_interval",)
+
+_SOURCE_SIGNAL_FIELDS = (
+    "wait_for_next_message",
+    "smooth_alpha",
+    "max_smooth_step",
+    "deadband",
+    "hampel_window",
+    "hampel_n_sigma",
+    "hampel_min_threshold",
+    "pid_kp",
+    "pid_ki",
+    "pid_kd",
+    "pid_output_max",
+    "pid_mode",
+)
+
+_CT_FIELDS = (
+    "ct_mac",
+    "active_control",
+    "min_efficient_power",
+    "efficiency_rotation_interval",
+    "min_dc_output",
+    "grid_predict_trust",
+    "fair_distribution",
+    "balance_gain",
+    "balance_deadband",
+    "max_correction_per_step",
+    "error_boost_threshold",
+    "error_boost_max",
+    "error_reduce_threshold",
+    "max_target_step",
+    "pace_base_step",
+    "pace_max_step",
+    "osc_damp_max",
+    "osc_damp_alpha",
+    "osc_damp_decay",
+    "osc_damp_threshold",
+    "concentrate_deadband",
+    "import_trim_w",
+    "cloud_reporting",
+    "cloud_reporting_host",
+    "cloud_reporting_interval",
+)
+
+_MARSTEK_FIELDS = ("mailbox", "password")
 
 # Options a custom config file takes over.
 _IGNORED_WITH_CUSTOM_CONFIG: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -152,23 +160,9 @@ _IGNORED_WITH_CUSTOM_CONFIG: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 
-def _serve_the_panel(general: GeneralSettings) -> GeneralSettings:
-    """Force the two settings the add-on's manifest already commits to.
-
-    ``ha_addon/config.yaml`` declares ingress on the web port and points the
-    Supervisor watchdog at ``/health`` there. Neither is conditional on the
-    configuration, so a source that turned either off would leave the sidebar
-    panel opening onto a 404 and the watchdog restarting the add-on for being
-    unreachable. Under the add-on this is a property of the deployment rather
-    than a choice, so it is applied to *every* configuration source.
-
-    Serving the dashboard costs nothing here: Home Assistant authenticates
-    every ingress request, and the plain port stays refused unless
-    ``dashboard_direct_access`` opts into it. That is what makes it safe to
-    override the user, and why the equivalent setting is still off by default
-    for a bare Docker run, where the port is the only way in and is
-    unauthenticated.
-    """
+def _force_dashboard_on(general: GeneralSettings) -> GeneralSettings:
+    """``ha_addon/config.yaml`` puts ingress and the watchdog on the web port,
+    so under the add-on neither the server nor the dashboard can be off."""
     return replace(general, enable_web_server=True, dashboard=True)
 
 
@@ -229,12 +223,12 @@ def _coerce(value: Any, default: Any) -> Any:
 
 
 def _apply_options(
-    settings: SettingsT, options: Options, fields: dict[str, str]
+    settings: SettingsT, options: Options, fields: Iterable[str]
 ) -> SettingsT:
     """Overlay the options the user set onto *settings*."""
     values: dict[str, Any] = {}
-    for name, option_key in fields.items():
-        value = get_option(options, option_key)
+    for name in fields:
+        value = get_option(options, option_name(name))
         if value is not None:
             values[name] = _coerce(value, getattr(settings, name))
     if not values:
@@ -387,7 +381,7 @@ class AddonAppConfig(AppConfig):
             for device_type in str(self._option("device_types", "")).split(",")
             if device_type.strip()
         ]
-        general = _serve_the_panel(
+        general = _force_dashboard_on(
             replace(
                 defaults,
                 device_types=device_types or defaults.device_types,
@@ -428,9 +422,7 @@ class AddonAppConfig(AppConfig):
         uri = self._option("mqtt_uri")
         if uri is not None:
             logger.info("Using custom MQTT broker URL from configuration")
-            parts = parse_mqtt_uri(str(uri))
-            broker, port = parts.host, parts.port
-            username, password, tls = parts.username, parts.password, parts.tls
+            broker = parse_mqtt_uri(str(uri))
         else:
             service = self._mqtt_service()
             if service is None:
@@ -440,18 +432,20 @@ class AddonAppConfig(AppConfig):
                 )
                 return None
             logger.info("Using Home Assistant's internal MQTT broker")
-            broker = str(service.get("host", ""))
-            port = int(service.get("port") or 1883)
-            username = str(service.get("username") or "") or None
-            password = str(service.get("password") or "") or None
-            tls = bool(service.get("ssl", False))
+            broker = MqttUriParts(
+                host=str(service.get("host", "")),
+                port=int(service.get("port") or DEFAULT_MQTT_PORT),
+                username=str(service.get("username") or "") or None,
+                password=str(service.get("password") or "") or None,
+                tls=bool(service.get("ssl", False)),
+            )
 
         return MqttInsightsConfig(
-            broker=broker,
-            port=port,
-            username=username,
-            password=password,
-            tls=tls,
+            broker=broker.host,
+            port=broker.port,
+            username=broker.username,
+            password=broker.password,
+            tls=broker.tls,
             ha_discovery=True,
             addon_slug=self._addon_slug() or None,
         )
@@ -586,7 +580,7 @@ class AddonIniAppConfig(IniAppConfig):
     """A user's own ``config.ini``, read with the add-on's web settings.
 
     The file decides everything except whether the web server and dashboard
-    run — see :func:`_serve_the_panel`. Without this a file that turns either
+    run — see :func:`_force_dashboard_on`. Without this a file that turns either
     off would leave the add-on user with a sidebar panel serving
     ``{"error": "Not Found"}``.
     """
@@ -596,7 +590,7 @@ class AddonIniAppConfig(IniAppConfig):
         self._warned = False
 
     def general(self) -> GeneralSettings:
-        general = _serve_the_panel(super().general())
+        general = _force_dashboard_on(super().general())
         overridden = self.declared_general_keys("enable_web_server", "dashboard")
         if overridden and not self._warned:
             self._warned = True

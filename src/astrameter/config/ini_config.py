@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import configparser
 import dataclasses
-from typing import TYPE_CHECKING
+import typing
+from typing import TYPE_CHECKING, Any
 
 from astrameter.config.config_loader import (
     new_config_parser,
     read_all_powermeter_configs,
     read_mqtt_insights_config,
+    read_option,
     read_signal_settings,
 )
 from astrameter.config.settings import (
@@ -31,6 +33,69 @@ if TYPE_CHECKING:
 
 GENERAL_SECTION = "GENERAL"
 MARSTEK_SECTION = "MARSTEK"
+
+# A field's INI key is its name uppercased, except for these. The reader and
+# the renderer below share the maps, and `ini_config_test.py` round-trips every
+# field, so a key read one way and written another fails there.
+_GENERAL_KEY_OVERRIDES = {
+    "device_types": "DEVICE_TYPE",
+    "dashboard": "DASHBOARD_ENABLED",
+}
+
+_SIGNAL_KEY_OVERRIDES = {
+    "smooth_alpha": "SMOOTH_TARGET_ALPHA",
+    "offsets": "POWER_OFFSET",
+    "multipliers": "POWER_MULTIPLIER",
+}
+
+
+def _ini_key(field: str, overrides: dict[str, str]) -> str:
+    return overrides.get(field, field.upper())
+
+
+def general_key(field: str) -> str:
+    """The ``[GENERAL]`` key backing *field* of :class:`GeneralSettings`.
+
+    Lets another backend name a key in a message without hardcoding it, so a
+    rename here cannot leave that message pointing at a key nobody reads.
+    """
+    return _ini_key(field, _GENERAL_KEY_OVERRIDES)
+
+
+def _field_kinds(settings_type: type) -> dict[str, type]:
+    """Each field's scalar type — ``int`` for both ``int`` and ``int | None``."""
+    kinds = {}
+    for name, hint in typing.get_type_hints(settings_type).items():
+        members = [t for t in typing.get_args(hint) or (hint,) if t is not type(None)]
+        kinds[name] = members[0]
+    return kinds
+
+
+def _read_fields(
+    config: configparser.ConfigParser,
+    section: str,
+    settings_type: type[Any],
+    key_overrides: dict[str, str] | None = None,
+    *,
+    skip: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Every field of *settings_type* but *skip*, parsed by the getter its type asks for.
+
+    An absent key yields the dataclass default, so a field typed ``X | None``
+    stays ``None`` — unset ``web_config_enabled`` is not "off", and unset
+    ``consumer_ttl`` is adaptive rather than a number.
+    """
+    defaults = settings_type()
+    kinds = _field_kinds(settings_type)
+    values = {}
+    for f in dataclasses.fields(settings_type):
+        if f.name in skip:
+            continue
+        key = _ini_key(f.name, key_overrides or {})
+        values[f.name] = read_option(
+            config, section, key, kinds[f.name], getattr(defaults, f.name)
+        )
+    return values
 
 
 class IniAppConfig(AppConfig):
@@ -62,55 +127,20 @@ class IniAppConfig(AppConfig):
         config = self._config
         defaults = GeneralSettings()
         return GeneralSettings(
-            device_types=_split(config.get(GENERAL_SECTION, "DEVICE_TYPE", fallback=""))
+            device_types=_split(
+                config.get(GENERAL_SECTION, general_key("device_types"), fallback="")
+            )
             or defaults.device_types,
             device_ids=_split(config.get(GENERAL_SECTION, "DEVICE_IDS", fallback="")),
-            skip_powermeter_test=config.getboolean(
-                GENERAL_SECTION,
-                "SKIP_POWERMETER_TEST",
-                fallback=defaults.skip_powermeter_test,
-            ),
-            dedupe_time_window=config.getfloat(
-                GENERAL_SECTION,
-                "DEDUPE_TIME_WINDOW",
-                fallback=defaults.dedupe_time_window,
-            ),
-            enable_web_server=config.getboolean(
-                GENERAL_SECTION,
-                "ENABLE_WEB_SERVER",
-                fallback=defaults.enable_web_server,
-            ),
-            # Tri-state: absent stays absent rather than collapsing to False,
-            # so "never mentioned it" and "turned it off" reach the web server
-            # as different answers.
-            web_config_enabled=(
-                config.getboolean(GENERAL_SECTION, "WEB_CONFIG_ENABLED")
-                if config.has_option(GENERAL_SECTION, "WEB_CONFIG_ENABLED")
-                else defaults.web_config_enabled
-            ),
-            web_server_port=config.getint(
-                GENERAL_SECTION, "WEB_SERVER_PORT", fallback=defaults.web_server_port
-            ),
-            dashboard=config.getboolean(
-                GENERAL_SECTION, "DASHBOARD_ENABLED", fallback=defaults.dashboard
-            ),
-            dashboard_allow_write=config.getboolean(
-                GENERAL_SECTION,
-                "DASHBOARD_ALLOW_WRITE",
-                fallback=defaults.dashboard_allow_write,
-            ),
-            dashboard_direct_access=config.getboolean(
-                GENERAL_SECTION,
-                "DASHBOARD_DIRECT_ACCESS",
-                fallback=defaults.dashboard_direct_access,
-            ),
-            dashboard_allowed_hosts=config.get(
-                GENERAL_SECTION,
-                "DASHBOARD_ALLOWED_HOSTS",
-                fallback=defaults.dashboard_allowed_hosts,
-            ),
             signal=read_signal_settings(
                 GENERAL_SECTION, config, SignalSettings(), with_transform=False
+            ),
+            **_read_fields(
+                config,
+                GENERAL_SECTION,
+                GeneralSettings,
+                _GENERAL_KEY_OVERRIDES,
+                skip=("device_types", "device_ids", "signal"),
             ),
         )
 
@@ -118,148 +148,22 @@ class IniAppConfig(AppConfig):
         config = self._config
         defaults = CtSettings()
         section = self.ct_section(device_type)
+        # An emulator without a window of its own inherits [GENERAL]'s.
         global_dedupe = config.getfloat(
             GENERAL_SECTION, "DEDUPE_TIME_WINDOW", fallback=defaults.dedupe_time_window
         )
+        # A blank host means the default, not "no host".
+        host = config.get(section, "CLOUD_REPORTING_HOST", fallback="").strip()
         return CtSettings(
-            ct_mac=config.get(section, "CT_MAC", fallback=defaults.ct_mac),
-            udp_port=config.getint(section, "UDP_PORT", fallback=defaults.udp_port),
-            wifi_rssi=config.getint(section, "WIFI_RSSI", fallback=defaults.wifi_rssi),
             dedupe_time_window=config.getfloat(
                 section, "DEDUPE_TIME_WINDOW", fallback=global_dedupe
             ),
-            consumer_ttl=config.getint(
-                section, "CONSUMER_TTL", fallback=defaults.consumer_ttl
-            ),
-            debug_status=config.getboolean(
-                section, "DEBUG_STATUS", fallback=defaults.debug_status
-            ),
-            cloud_reporting=config.getboolean(
-                section, "CLOUD_REPORTING", fallback=defaults.cloud_reporting
-            ),
-            cloud_reporting_host=config.get(
-                section, "CLOUD_REPORTING_HOST", fallback=""
-            ).strip()
-            or defaults.cloud_reporting_host,
-            cloud_reporting_interval=config.getfloat(
+            cloud_reporting_host=host or defaults.cloud_reporting_host,
+            **_read_fields(
+                config,
                 section,
-                "CLOUD_REPORTING_INTERVAL",
-                fallback=defaults.cloud_reporting_interval,
-            ),
-            active_control=config.getboolean(
-                section, "ACTIVE_CONTROL", fallback=defaults.active_control
-            ),
-            fair_distribution=config.getboolean(
-                section, "FAIR_DISTRIBUTION", fallback=defaults.fair_distribution
-            ),
-            balance_gain=config.getfloat(
-                section, "BALANCE_GAIN", fallback=defaults.balance_gain
-            ),
-            balance_deadband=config.getint(
-                section, "BALANCE_DEADBAND", fallback=defaults.balance_deadband
-            ),
-            max_correction_per_step=config.getint(
-                section,
-                "MAX_CORRECTION_PER_STEP",
-                fallback=defaults.max_correction_per_step,
-            ),
-            error_boost_threshold=config.getint(
-                section,
-                "ERROR_BOOST_THRESHOLD",
-                fallback=defaults.error_boost_threshold,
-            ),
-            error_boost_max=config.getfloat(
-                section, "ERROR_BOOST_MAX", fallback=defaults.error_boost_max
-            ),
-            error_reduce_threshold=config.getint(
-                section,
-                "ERROR_REDUCE_THRESHOLD",
-                fallback=defaults.error_reduce_threshold,
-            ),
-            max_target_step=config.getint(
-                section, "MAX_TARGET_STEP", fallback=defaults.max_target_step
-            ),
-            pace_base_step=config.getint(
-                section, "PACE_BASE_STEP", fallback=defaults.pace_base_step
-            ),
-            pace_max_step=config.getint(
-                section, "PACE_MAX_STEP", fallback=defaults.pace_max_step
-            ),
-            osc_damp_max=config.getfloat(
-                section, "OSC_DAMP_MAX", fallback=defaults.osc_damp_max
-            ),
-            osc_damp_alpha=config.getfloat(
-                section, "OSC_DAMP_ALPHA", fallback=defaults.osc_damp_alpha
-            ),
-            osc_damp_decay=config.getfloat(
-                section, "OSC_DAMP_DECAY", fallback=defaults.osc_damp_decay
-            ),
-            osc_damp_threshold=config.getfloat(
-                section, "OSC_DAMP_THRESHOLD", fallback=defaults.osc_damp_threshold
-            ),
-            grid_predict_trust=config.getfloat(
-                section, "GRID_PREDICT_TRUST", fallback=defaults.grid_predict_trust
-            ),
-            concentrate_deadband=config.getfloat(
-                section, "CONCENTRATE_DEADBAND", fallback=defaults.concentrate_deadband
-            ),
-            import_trim_w=config.getfloat(
-                section, "IMPORT_TRIM_W", fallback=defaults.import_trim_w
-            ),
-            saturation_detection=config.getboolean(
-                section, "SATURATION_DETECTION", fallback=defaults.saturation_detection
-            ),
-            saturation_alpha=config.getfloat(
-                section, "SATURATION_ALPHA", fallback=defaults.saturation_alpha
-            ),
-            min_target_for_saturation=config.getint(
-                section,
-                "MIN_TARGET_FOR_SATURATION",
-                fallback=defaults.min_target_for_saturation,
-            ),
-            saturation_grace_seconds=config.getfloat(
-                section,
-                "SATURATION_GRACE_SECONDS",
-                fallback=defaults.saturation_grace_seconds,
-            ),
-            saturation_stall_timeout_seconds=config.getfloat(
-                section,
-                "SATURATION_STALL_TIMEOUT_SECONDS",
-                fallback=defaults.saturation_stall_timeout_seconds,
-            ),
-            saturation_decay_factor=config.getfloat(
-                section,
-                "SATURATION_DECAY_FACTOR",
-                fallback=defaults.saturation_decay_factor,
-            ),
-            min_efficient_power=config.getint(
-                section, "MIN_EFFICIENT_POWER", fallback=defaults.min_efficient_power
-            ),
-            probe_min_power=config.getint(
-                section, "PROBE_MIN_POWER", fallback=defaults.probe_min_power
-            ),
-            efficiency_rotation_interval=config.getint(
-                section,
-                "EFFICIENCY_ROTATION_INTERVAL",
-                fallback=defaults.efficiency_rotation_interval,
-            ),
-            efficiency_fade_alpha=config.getfloat(
-                section,
-                "EFFICIENCY_FADE_ALPHA",
-                fallback=defaults.efficiency_fade_alpha,
-            ),
-            efficiency_saturation_threshold=config.getfloat(
-                section,
-                "EFFICIENCY_SATURATION_THRESHOLD",
-                fallback=defaults.efficiency_saturation_threshold,
-            ),
-            efficiency_demand_alpha=config.getfloat(
-                section,
-                "EFFICIENCY_DEMAND_ALPHA",
-                fallback=defaults.efficiency_demand_alpha,
-            ),
-            min_dc_output=config.getfloat(
-                section, "MIN_DC_OUTPUT", fallback=defaults.min_dc_output
+                CtSettings,
+                skip=("dedupe_time_window", "cloud_reporting_host"),
             ),
         )
 
@@ -270,22 +174,8 @@ class IniAppConfig(AppConfig):
         return "CT002"
 
     def marstek(self) -> MarstekSettings:
-        config = self._config
-        defaults = MarstekSettings()
         return MarstekSettings(
-            enable=config.getboolean(
-                MARSTEK_SECTION, "ENABLE", fallback=defaults.enable
-            ),
-            mailbox=config.get(MARSTEK_SECTION, "MAILBOX", fallback=defaults.mailbox),
-            password=config.get(
-                MARSTEK_SECTION, "PASSWORD", fallback=defaults.password
-            ),
-            base_url=config.get(
-                MARSTEK_SECTION, "BASE_URL", fallback=defaults.base_url
-            ),
-            timezone=config.get(
-                MARSTEK_SECTION, "TIMEZONE", fallback=defaults.timezone
-            ),
+            **_read_fields(self._config, MARSTEK_SECTION, MarstekSettings)
         )
 
     def mqtt_insights(self) -> MqttInsightsConfig | None:
@@ -299,39 +189,9 @@ def _split(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-# -- rendering: the dual of the readers above -------------------------------
-#
-# Turning settings back into a ``config.ini`` is what lets the dashboard hand
-# a guided-setup user a file to take over from. It is the inverse of the
-# reading above and lives beside it deliberately: `ini_config_test.py` asserts
-# the round trip, so a key that is read one way and written another fails
-# there rather than handing someone a config that quietly loses a setting.
-#
-# Every key below is its field name uppercased; the exceptions are the two
-# maps. If that ever stops being true for a new field, the round-trip test is
-# what tells you.
-
-#: Fields whose INI key is not simply the uppercased field name.
-_GENERAL_KEY_OVERRIDES = {
-    "device_types": "DEVICE_TYPE",
-    "dashboard": "DASHBOARD_ENABLED",
-}
-
-
-def general_key(field: str) -> str:
-    """The ``[GENERAL]`` key backing *field* of :class:`GeneralSettings`.
-
-    Lets another backend name a key in a message without hardcoding it, so a
-    rename here cannot leave that message pointing at a key nobody reads.
-    """
-    return _GENERAL_KEY_OVERRIDES.get(field, field.upper())
-
-
-_SIGNAL_KEY_OVERRIDES = {
-    "smooth_alpha": "SMOOTH_TARGET_ALPHA",
-    "offsets": "POWER_OFFSET",
-    "multipliers": "POWER_MULTIPLIER",
-}
+# Rendering settings back into a ``config.ini`` is what lets the dashboard hand
+# a guided-setup user a file to take over from. It is the readers' inverse and
+# lives beside them so the round-trip test keeps the two in step.
 
 
 def _render_value(value: object) -> str:
@@ -358,7 +218,7 @@ def _changed(
         value = getattr(settings, f.name)
         if value is None or value == getattr(defaults, f.name):
             continue
-        out.append((overrides.get(f.name, f.name.upper()), _render_value(value)))
+        out.append((_ini_key(f.name, overrides), _render_value(value)))
     return out
 
 
