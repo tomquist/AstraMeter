@@ -4,6 +4,7 @@ import datetime
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 import serial_asyncio_fast
 import smllib.errors
@@ -71,7 +72,7 @@ def _optional_w(by_obis: dict, obis_key: str, label: str) -> float | None:
     return _apply_scaler(ov)
 
 
-def _apply_scaler(ov) -> float:
+def _apply_scaler(ov: Any) -> float:
     """Scale an SML value by its ``10**scaler`` exponent.
 
     smllib exposes the meter's raw integer in ``ov.value`` and the decimal
@@ -88,7 +89,7 @@ def _apply_scaler(ov) -> float:
     return round(value * 10**scaler, abs(scaler) + 3)
 
 
-def _expect_unit(ov, expected: str, label: str) -> None:
+def _expect_unit(ov: Any, expected: str, label: str) -> None:
     actual = UNITS.get(ov.unit)
     if actual != expected:
         raise ValueError(
@@ -106,7 +107,7 @@ class Sml(Powermeter):
         obis_power_l1: str = _OBIS_POWER_L1,
         obis_power_l2: str = _OBIS_POWER_L2,
         obis_power_l3: str = _OBIS_POWER_L3,
-    ):
+    ) -> None:
         if not serial_device.strip():
             raise ValueError("serial_device must be non-empty (config: SERIAL)")
         self._serial_device = serial_device.strip()

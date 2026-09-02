@@ -2,7 +2,7 @@ from .http_client import HttpPowermeter
 
 
 class Shrdzm(HttpPowermeter):
-    def __init__(self, ip: str, user: str, password: str):
+    def __init__(self, ip: str, user: str, password: str) -> None:
         self.ip = ip
         self.user = user
         self.password = password

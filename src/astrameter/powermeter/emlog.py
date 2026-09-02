@@ -2,7 +2,7 @@ from .http_client import HttpPowermeter
 
 
 class Emlog(HttpPowermeter):
-    def __init__(self, ip: str, meterindex: str, json_power_calculate: bool):
+    def __init__(self, ip: str, meterindex: str, json_power_calculate: bool) -> None:
         self.ip = ip
         self.meterindex = meterindex
         self.json_power_calculate = json_power_calculate

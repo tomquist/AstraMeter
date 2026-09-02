@@ -49,7 +49,7 @@ class Refoss(HttpPowermeter):
     trusted local network; do not expose the meter API beyond that LAN.
     """
 
-    def __init__(self, ip: str, channels: list[int]):
+    def __init__(self, ip: str, channels: list[int]) -> None:
         """Create a meter for ``ip`` reading the given CT ``channels`` (1-based)."""
         ip = ip.strip()
         if not ip:

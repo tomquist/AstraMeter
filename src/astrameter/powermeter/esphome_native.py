@@ -16,7 +16,7 @@ class ESPHomeNative(PushPowermeter):
 
     def __init__(
         self, address: str, port: str, api_key: str, object_id: str, client_info: str
-    ):
+    ) -> None:
         super().__init__()
         self.object_id = object_id
         self.address = address
@@ -51,7 +51,7 @@ class ESPHomeNative(PushPowermeter):
             self.object_id,
         )
 
-    def reset_connection_state(self):
+    def reset_connection_state(self) -> None:
         self.is_connected = False
         self._any_message_event.clear()
         self._message_event.clear()
@@ -65,7 +65,7 @@ class ESPHomeNative(PushPowermeter):
         await self.api.disconnect()
         self.reset_connection_state()
 
-    async def connect_callback(self):
+    async def connect_callback(self) -> None:
         self.is_connected = True
         logger.debug(
             "ESPHome native: connected to %s:%s, API version %s",
@@ -106,11 +106,11 @@ class ESPHomeNative(PushPowermeter):
         )
         self.api.subscribe_states(self.change_callback)
 
-    async def connect_error_callback(self, err: Exception):
+    async def connect_error_callback(self, err: Exception) -> None:
         self.reset_connection_state()
         logger.error("ESPHome native: connection failed: %s", err)
 
-    async def disconnect_callback(self, expected_disconnect: bool):
+    async def disconnect_callback(self, expected_disconnect: bool) -> None:
         self.reset_connection_state()
 
         if expected_disconnect:
@@ -118,7 +118,7 @@ class ESPHomeNative(PushPowermeter):
         else:
             logger.warning("Unexpected disconnect. Trying to reconnect")
 
-    def change_callback(self, state: EntityState):
+    def change_callback(self, state: EntityState) -> None:
         if self.entity_info is None:
             return
 

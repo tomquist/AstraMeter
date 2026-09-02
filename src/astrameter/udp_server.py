@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 
 class DatagramSink(Protocol):
@@ -31,8 +31,11 @@ class _HandlerProtocol(asyncio.DatagramProtocol):
         # nobody holds can be collected mid-poll; the set is that reference.
         self._tasks: set[asyncio.Task] = set()
 
-    def connection_made(self, transport) -> None:
-        self._transport = transport
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        # Widened by the base class, and narrowed rather than checked: the
+        # concrete datagram transports do not inherit `DatagramTransport`, so
+        # an isinstance test here refuses the very object asyncio hands over.
+        self._transport = cast("asyncio.DatagramTransport", transport)
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:
         assert self._transport is not None

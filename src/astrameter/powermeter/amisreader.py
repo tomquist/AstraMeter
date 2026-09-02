@@ -2,7 +2,7 @@ from .http_client import HttpPowermeter
 
 
 class AmisReader(HttpPowermeter):
-    def __init__(self, ip: str):
+    def __init__(self, ip: str) -> None:
         self.ip = ip
 
     async def get_powermeter_watts(self) -> list[float]:

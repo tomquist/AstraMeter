@@ -28,6 +28,7 @@ from astrameter.config.settings import (
 )
 from astrameter.ct002 import CT002
 from astrameter.ct002.balancer import BalancerConfig
+from astrameter.ct002.ct002 import CT002Request
 from astrameter.marstek_api import (
     MarstekApiError,
     MarstekConfig,
@@ -119,7 +120,7 @@ def _build_ct002(
     ct_type: str,
     device_id: str,
     debug_status: bool,
-    reset_fn,
+    reset_fn: Callable[[], None],
 ) -> CT002:
     """Create the emulator a :class:`CtSettings` describes."""
     return CT002(
@@ -175,7 +176,9 @@ def _log_ct_settings(ct: CtSettings, device_type: str, device_id: str) -> None:
     logger.info("Active control enabled: %s", " + ".join(["load split", *extras]))
 
 
-def _forward_events(insights: MqttInsightsService, device: CT002 | Shelly):
+def _forward_events(
+    insights: MqttInsightsService, device: CT002 | Shelly
+) -> Callable[[str, str, dict[str, Any]], None]:
     """Route a device's per-battery events to MQTT Insights.  A battery that
     the device evicted arrives as ``{"_removed": True}``."""
     on_update: Callable[[str, str, dict[str, Any]], None]
@@ -217,7 +220,11 @@ def _build_device(
             lambda: _reset_all_powermeters(powermeters),
         )
 
-        async def update_readings(addr, _request=None, _consumer_id=None):
+        async def update_readings(
+            addr: tuple[str, int],
+            _request: CT002Request | None = None,
+            _consumer_id: str | None = None,
+        ) -> list[float] | None:
             return await read_ct_powermeter(addr, powermeters)
 
         device.before_send = update_readings
@@ -361,7 +368,7 @@ async def run_device(
     marstek_mac: str = "",
     marstek_ver_v: int | None = None,
     registry: StatusRegistry | None = None,
-):
+) -> None:
     """Run one emulated device until it stops, wiring it to the optional
     integrations (MQTT Insights, the Marstek responder, cloud reporting)."""
     logger.debug("Starting device: %s", device_type)
@@ -438,7 +445,7 @@ async def async_main(
     skip_test: bool,
     managed_marstek: dict[str, tuple[str, int]] | None = None,
     registry: StatusRegistry | None = None,
-):
+) -> None:
     managed_marstek = managed_marstek or {}
 
     powermeters: list[ConfiguredPowermeter] = []
@@ -734,7 +741,7 @@ def _adopt_config(
     registry.config_mode = detect_config_mode(addon=args.addon, config_path=config.path)
 
 
-def main():
+def main() -> None:
     args = _build_arg_parser().parse_args()
 
     # In add-on mode the log level is an add-on option, so the options have to

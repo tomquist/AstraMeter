@@ -28,7 +28,7 @@ class JsonHttpPowermeter(HttpPowermeter):
         username: str | None = None,
         password: str | None = None,
         headers: dict[str, str] | None = None,
-    ):
+    ) -> None:
         self.url = url
         self.json_paths = as_list(json_path)
         self.auth = (

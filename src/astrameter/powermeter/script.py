@@ -4,7 +4,7 @@ from .base import Powermeter
 
 
 class Script(Powermeter):
-    def __init__(self, command: str):
+    def __init__(self, command: str) -> None:
         self.script = command
 
     async def get_powermeter_watts(self) -> list[float]:

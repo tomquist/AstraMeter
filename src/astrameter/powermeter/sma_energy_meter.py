@@ -59,7 +59,7 @@ def _get_channel_data_length(identifier: int) -> int:
 
 
 class _SmaProtocol(asyncio.DatagramProtocol):
-    def __init__(self, meter: "SmaEnergyMeter"):
+    def __init__(self, meter: "SmaEnergyMeter") -> None:
         self.meter = meter
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -81,10 +81,10 @@ class SmaEnergyMeter(PushPowermeter):
 
     def __init__(
         self,
-        multicast_group=DEFAULT_MULTICAST_GROUP,
-        port=DEFAULT_PORT,
-        serial_number=0,
-        interface="",
+        multicast_group: str = DEFAULT_MULTICAST_GROUP,
+        port: int = DEFAULT_PORT,
+        serial_number: int = 0,
+        interface: str = "",
         *,
         max_telegram_age_seconds: float = DEFAULT_MAX_TELEGRAM_AGE_SECONDS,
         clock: Callable[[], float] | None = None,
@@ -137,7 +137,7 @@ class SmaEnergyMeter(PushPowermeter):
             self._transport.close()
             self._transport = None
 
-    def _handle_packet(self, data):
+    def _handle_packet(self, data: bytes) -> None:
         if len(data) < 28:
             return
 
@@ -178,7 +178,7 @@ class SmaEnergyMeter(PushPowermeter):
 
         self._parse_channels(data)
 
-    def _parse_channels(self, data):
+    def _parse_channels(self, data: bytes) -> None:
         raw = {}
         pos = 28
         data_len = len(data)

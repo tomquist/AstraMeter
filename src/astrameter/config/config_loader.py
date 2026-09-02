@@ -225,10 +225,10 @@ def new_config_parser() -> configparser.ConfigParser:
 
 
 class ClientFilter:
-    def __init__(self, netmasks: list[IPv4Network]):
+    def __init__(self, netmasks: list[IPv4Network]) -> None:
         self.netmasks = netmasks
 
-    def matches(self, client_ip) -> bool:
+    def matches(self, client_ip: str) -> bool:
         try:
             client_ip_addr = IPv4Address(client_ip)
             for netmask in self.netmasks:

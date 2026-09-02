@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .runner import SimulationRunner
+    from .runner import SimulationConfig, SimulationRunner
     from .tui import SimulatorApp
 
 PID_FILE = Path.home() / ".astra-sim.pid"
@@ -55,7 +55,9 @@ def _http_post(port: int, path: str, body: dict | None = None) -> dict:
 # -- subcommands -----------------------------------------------------------
 
 
-def _apply_power_update_delay_override(cfg, ticks: int | None) -> None:
+def _apply_power_update_delay_override(
+    cfg: SimulationConfig, ticks: int | None
+) -> None:
     """If *ticks* is set, apply the same delay to every battery."""
     if ticks is None:
         return

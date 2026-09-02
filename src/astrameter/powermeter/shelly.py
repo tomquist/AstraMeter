@@ -10,7 +10,7 @@ class Shelly(HttpPowermeter):
     # each subclass only ever talks to one of the two.
     _rpc = False
 
-    def __init__(self, ip: str, user: str, password: str, emeterindex: str):
+    def __init__(self, ip: str, user: str, password: str, emeterindex: str) -> None:
         self.ip = ip
         self.user = user
         self.password = password

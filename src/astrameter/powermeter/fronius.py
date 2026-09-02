@@ -16,7 +16,7 @@ class Fronius(HttpPowermeter):
     enabling it; otherwise stick with the always-signed sum (the default).
     """
 
-    def __init__(self, ip: str, device_id: str = "0", per_phase: bool = False):
+    def __init__(self, ip: str, device_id: str = "0", per_phase: bool = False) -> None:
         self.ip = ip
         self.device_id = device_id
         self.per_phase = per_phase

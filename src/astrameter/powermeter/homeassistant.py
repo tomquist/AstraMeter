@@ -40,7 +40,7 @@ class HomeAssistant(WebSocketPowermeter):
         power_input_alias: str | list[str],
         power_output_alias: str | list[str],
         path_prefix: str | None,
-    ):
+    ) -> None:
         super().__init__()
         self.ip = ip
         self.port = port

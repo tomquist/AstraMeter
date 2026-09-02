@@ -27,7 +27,7 @@ class MqttPowermeter(PushPowermeter):
         username: str | None = None,
         password: str | None = None,
         tls: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         self.broker = broker
         self.port = port

@@ -145,7 +145,7 @@ class WebServer:
         enable_web_config: bool | None = None,
         status: StatusRegistry | None = None,
         allowed_hosts: str | Iterable[str] | None = None,
-    ):
+    ) -> None:
         """Initialise the service; call ``start()`` to bind the port."""
         self.port = port
         self.bind_address = bind_address

@@ -2,7 +2,7 @@ from .http_client import HttpPowermeter
 
 
 class ESPHome(HttpPowermeter):
-    def __init__(self, ip: str, port: str, domain: str, id: str):
+    def __init__(self, ip: str, port: str, domain: str, id: str) -> None:
         self.ip = ip
         self.port = port
         self.domain = domain
