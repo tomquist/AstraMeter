@@ -411,10 +411,6 @@ std::unordered_set<std::string> LoadBalancer::probe_participants_() const {
   return out;
 }
 
-float LoadBalancer::effective_probe_min_power_() const {
-  return std::max(this->probe_success_threshold_, this->cfg_.probe_min_power);
-}
-
 float LoadBalancer::next_probe_requested_abs_(float current_requested_abs,
                                               float ceiling) const {
   ceiling = std::max(0.0f, ceiling);
@@ -1249,15 +1245,11 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   } else {
     residual = fair_share;
   }
-  // Clamp only the grid-tracking half (fair_share) against the grid direction,
-  // not the balance-correction redistribution. fair_share always carries the
-  // grid's sign by construction, so this guard never fires on it; the balance
-  // term is ~zero-sum across the same-phase pool, so letting it through is
-  // grid-neutral (the over-served battery backs off exactly as the under-served
-  // one takes on). Zeroing the whole residual on a sign disagreement made
-  // equalization one-sided near steady state, pushing the pool's net output
-  // around and disturbing the grid (issue #523 balance fix regressions).
-  // Mirrors balancer.py _compute_auto_target.
+  // Clamp only the grid-tracking half (fair_share, which carries the grid's
+  // sign by construction) against the grid direction — never the
+  // balance-correction term, which is zero-sum across the same-phase pool and
+  // so grid-neutral; zeroing it too would make equalization one-sided near
+  // steady state (issue #523).
   float tracking = fair_share;
   if ((control_grid < 0.0f && tracking > 0.0f) ||
       (control_grid > 0.0f && tracking < 0.0f)) {
@@ -1479,16 +1471,10 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
     if (moved >= PACE_TRACKING_DELTA_W * dt_ratio) {
       cap = std::min(cap * std::pow(PACE_GROWTH_FACTOR, dt_ratio), this->cfg_.pace_max_step);
       state.pace_stall_polls = 0;
-      // It moved, so last poll's command was one this device can execute.
-      // Remember it: clamping back under that level would switch a hysteresis
-      // regulator straight off again.
-      // Keep the *lowest* command seen to work, not the latest: the floor's job
-      // is "the least this device needs", so during a successful ramp — where
-      // the commands grow — overwriting would ratchet it up to the largest and
-      // hold every later same-direction correction there. It does not move the
-      // measured overshoot (the first command a stalled device responds to is
-      // already the escalated one); it matters when a smaller command later
-      // succeeds (mirrors balancer.py).
+      // It moved, so last poll's command is one this device can execute;
+      // clamping back under it would switch a hysteresis regulator straight
+      // off again. Keep the *lowest* such command, since during a ramp the
+      // latest would ratchet the floor up to the largest.
       if (state.pace_last_sent > 0.0f &&
           (state.pace_responded_at <= 0.0f || state.pace_last_sent < state.pace_responded_at))
         state.pace_responded_at = state.pace_last_sent;
