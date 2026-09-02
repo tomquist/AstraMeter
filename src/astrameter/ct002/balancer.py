@@ -50,9 +50,9 @@ def phase_index(phase: str) -> int:
 class ConsumerReport:
     """One consumer's latest poll, as the balancer sees it.
 
-    Every field is normalized on construction, so the control path reads
-    plain numbers and never re-parses or re-defaults: ``None`` means
-    "neutral" for the two weights and "no override" for ``min_dc_output``.
+    Every field is normalized on construction, so the control path reads plain
+    numbers and never re-parses or re-defaults. Only ``min_dc_output`` is
+    nullable, where ``None`` means "no override".
     """
 
     power: int = 0
@@ -74,16 +74,15 @@ class ConsumerReport:
     """Per-device MIN_DC_OUTPUT override in watts; ``None`` uses the global rule."""
 
     def __post_init__(self) -> None:
-        eww = self.efficiency_window_weight
         floor = self.min_dc_output
         for field, value in (
             ("power", parse_int(self.power)),
             ("phase", (self.phase or "A").upper()),
             ("device_type", self.device_type or ""),
-            ("weight", 1.0 if self.weight is None else float(self.weight)),
+            ("weight", float(self.weight)),
             (
                 "efficiency_window_weight",
-                1.0 if eww is None else max(0.0, min(1.0, float(eww))),
+                max(0.0, min(1.0, float(self.efficiency_window_weight))),
             ),
             ("min_dc_output", None if floor is None else max(0.0, float(floor))),
         ):

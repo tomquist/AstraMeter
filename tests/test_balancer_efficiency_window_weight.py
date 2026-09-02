@@ -52,7 +52,7 @@ def _make_balancer(clock, *, rotation_interval: float = 900.0) -> LoadBalancer:
     )
 
 
-def _report(power: float, eff_weight: float = 1.0) -> dict:
+def _report(power: float, eff_weight: float = 1.0) -> ConsumerReport:
     return ConsumerReport(
         phase="A",
         power=power,

@@ -34,7 +34,7 @@ def _make_balancer(*, fair_distribution: bool = True) -> LoadBalancer:
     )
 
 
-def _report(power: float, weight: float = 1.0, phase: str = "A") -> dict:
+def _report(power: float, weight: float = 1.0, phase: str = "A") -> ConsumerReport:
     return ConsumerReport(phase=phase, power=power, device_type="HMA-2", weight=weight)
 
 

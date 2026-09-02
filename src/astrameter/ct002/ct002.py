@@ -1518,6 +1518,9 @@ class CT002:
 
     async def start(self):
         self._server = await UdpServer.serve(self.udp_port, self._safe_handle_request)
+        # Read the bound port back: a configured 0 asks the OS to pick one, and
+        # the log line and status document below would otherwise both say "0".
+        self.udp_port = self._server.port or self.udp_port
         self._stopped.clear()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._started_at = self._clock()

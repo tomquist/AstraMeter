@@ -372,3 +372,19 @@ def test_values_finite_helper() -> None:
     assert _values_finite(["abc"]) is False
     assert _values_finite([None]) is False
     assert _values_finite([10**400]) is False  # float() raises OverflowError
+
+
+async def test_start_reports_the_port_the_os_assigned() -> None:
+    """``udp_port=0`` asks the OS for a free port; the CT must report the real one.
+
+    The log line and the status document both read ``self.udp_port``, so leaving
+    it at the configured 0 would tell an operator the emulator is listening on
+    port 0.
+    """
+    ct = CT002(udp_port=0)
+    await ct.start()
+    try:
+        assert ct.udp_port != 0
+        assert ct.status_snapshot().udp_port == ct.udp_port
+    finally:
+        await ct.stop()
