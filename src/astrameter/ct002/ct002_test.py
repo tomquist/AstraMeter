@@ -345,7 +345,7 @@ async def test_non_finite_reading_holds_and_control_recovers(bad: float) -> None
         clock.now += 15.0
         await ct._handle_request(_poll("02b250b26777", power=0), addr, transport)
         fields, err = parse_request(transport.sent[-1])
-        assert err is None
+        assert fields is not None, err
         return fields
 
     # Warm poll: import drives a positive (discharge) target.

@@ -66,14 +66,14 @@ class _SmaProtocol(asyncio.DatagramProtocol):
         try:
             self.meter._handle_packet(data)
         except Exception as e:
-            logger.debug(f"SMA Energy Meter: dropping invalid packet: {e}")
+            logger.debug("SMA Energy Meter: dropping invalid packet: %s", e)
 
     def error_received(self, exc: Exception) -> None:
-        logger.debug(f"SMA Energy Meter: OS error: {exc}")
+        logger.debug("SMA Energy Meter: OS error: %s", exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         if exc:
-            logger.warning(f"SMA Energy Meter: connection lost: {exc}")
+            logger.warning("SMA Energy Meter: connection lost: %s", exc)
 
 
 class SmaEnergyMeter(PushPowermeter):

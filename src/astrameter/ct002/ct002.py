@@ -1246,7 +1246,7 @@ class CT002:
         """Decode one datagram, or ``None`` when it is not ours to answer."""
         logger.debug("CT002 request from %s: %s", addr, data.hex())
         fields, error = parse_request(data)
-        if error:
+        if fields is None:
             logger.debug("Invalid CT002 request from %s: %s", addr, error)
             return None
         if len(fields) < 4:

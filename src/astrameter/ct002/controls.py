@@ -86,7 +86,9 @@ class ConsumerControl:
             raise ValueError(f"{self.field} must be a number") from exc
         return self.coerce(number)
 
-    def apply(self, device: ControllableDevice, consumer_id: str, value: object):
+    def apply(
+        self, device: ControllableDevice, consumer_id: str, value: object
+    ) -> None:
         getattr(device, self.setter)(consumer_id, value)
 
 
@@ -127,7 +129,7 @@ def coerce_consumer_control(field: str, value: object) -> bool | float:
     return CONSUMER_CONTROLS_BY_FIELD[field].coerce(value)
 
 
-def apply_device_control(device: ControllableDevice, field: str, value: object):
+def apply_device_control(device: ControllableDevice, field: str, value: object) -> None:
     """Apply a device-wide control.  ``force_rotation`` is a button and
     carries no value; ``active_control`` is a switch."""
     if field == "force_rotation":

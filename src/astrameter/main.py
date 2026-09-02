@@ -5,7 +5,7 @@ import os
 import signal
 from collections.abc import Callable, Sequence
 from dataclasses import fields, replace
-from typing import Any, cast
+from typing import Any
 
 from astrameter.cloud_reporting import (
     CloudReporter,
@@ -33,6 +33,7 @@ from astrameter.marstek_api import (
     MarstekConfig,
     ensure_managed_fake_device,
 )
+from astrameter.meter_pool import powermeter_for, powermeter_name, read_fresh
 from astrameter.mqtt_insights import (
     MarstekMqttBinding,
     MqttInsightsService,
@@ -42,7 +43,6 @@ from astrameter.mqtt_insights import (
 )
 from astrameter.power_units import three_phases
 from astrameter.powermeter import Powermeter
-from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.shelly import Shelly
 from astrameter.status import StatusRegistry, detect_config_mode
 from astrameter.version_info import get_git_commit_sha, get_version
@@ -52,47 +52,16 @@ from astrameter.web_server import WebServer, parse_allowed_hosts
 FRESH_READING_TIMEOUT_S = 2.0
 
 
-def _powermeter_log_name(powermeter: Powermeter) -> str:
-    """The meter class behind the health wrapper every configured meter gets."""
-    inner = (
-        powermeter.wrapped_powermeter
-        if isinstance(powermeter, HealthTrackingPowermeter)
-        else powermeter
-    )
-    return type(inner).__name__
-
-
 async def read_ct_powermeter(
     addr: tuple[str, int],
     powermeters: list[ConfiguredPowermeter],
 ) -> list[float] | None:
-    """Pick the powermeter matching *addr* and return up to three phase values.
-
-    Optionally awaits a fresh push (with a 2 s cap) when the matched
-    powermeter has ``WAIT_FOR_NEXT_MESSAGE`` enabled. A timeout there is
-    swallowed so the cached value is still served — `update_readings`
-    callers should never see a stale-meter `TimeoutError`.
-    """
-    powermeter = None
-    wait_for_next = False
-    for configured in powermeters:
-        if configured.client_filter.matches(addr[0]):
-            powermeter = configured.powermeter
-            wait_for_next = configured.wait_for_next_message
-            break
-    if powermeter is None:
-        logger.debug(f"No powermeter found for client {addr[0]}")
+    """Pick the powermeter matching *addr* and return up to three phase values."""
+    configured = powermeter_for(powermeters, addr[0])
+    if configured is None:
+        logger.debug("No powermeter found for client %s", addr[0])
         return None
-    if wait_for_next:
-        try:
-            await powermeter.wait_for_next_message(timeout=2)
-        except TimeoutError:
-            logger.debug(
-                "Powermeter %s produced no fresh message within 2s; "
-                "serving last known value",
-                _powermeter_log_name(powermeter),
-            )
-    return three_phases(await powermeter.get_powermeter_watts())
+    return three_phases(await read_fresh(configured))
 
 
 async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
@@ -113,7 +82,7 @@ async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[flo
     return [float(v) for v in three_phases(await chosen.get_powermeter_watts_raw())]
 
 
-async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
+async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter) -> None:
     """Prove the meter delivers a reading before any battery is served."""
     attempts = 4
     retry_delay_s = 5
@@ -133,7 +102,7 @@ async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter):
             continue
         logger.info(
             "Successfully fetched %s powermeter value (filter %s): %s",
-            _powermeter_log_name(powermeter),
+            powermeter_name(powermeter),
             ", ".join(str(n) for n in client_filter.netmasks),
             " | ".join(f"{v}W" for v in values),
         )
@@ -259,12 +228,7 @@ def _build_device(
     if udp_port is not None:
         logger.debug("Shelly settings: device id %s, type %s", device_id, device_type)
         return Shelly(
-            # `Shelly` still declares the positional triple this named tuple
-            # replaced; the cast goes away once it takes a
-            # `Sequence[ConfiguredPowermeter]` too.
-            powermeters=cast(
-                "list[tuple[Powermeter, ClientFilter, bool]]", powermeters
-            ),
+            powermeters=powermeters,
             device_id=device_id,
             device_type=device_type,
             udp_port=udp_port,
@@ -673,8 +637,8 @@ def _resolve_device_config(
             "Set UDP_PORT in [CT002]/[CT003] to avoid conflicts."
         )
 
-    logger.info(f"Device Types: {device_types}")
-    logger.info(f"Device IDs: {device_ids}")
+    logger.info("Device Types: %s", device_types)
+    logger.info("Device IDs: %s", device_ids)
     logger.info(f"Skip Test: {skip_test}")
 
     return device_types, device_ids, skip_test

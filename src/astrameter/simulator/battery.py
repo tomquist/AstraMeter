@@ -353,7 +353,7 @@ class BatterySimulator:
                 transport.close()
 
         response_fields, err = protocol.parse_request(data)
-        if err:
+        if response_fields is None:
             logger.debug("Battery %s: bad response: %s", self.mac, err)
             return None
 

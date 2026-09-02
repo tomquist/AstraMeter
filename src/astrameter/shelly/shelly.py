@@ -9,14 +9,45 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from astrameter.config import ClientFilter
 from astrameter.config.logger import debug_traceback, logger
-from astrameter.powermeter import Powermeter
+from astrameter.config.settings import ConfiguredPowermeter
+from astrameter.meter_pool import powermeter_for, powermeter_name, read_fresh
 from astrameter.request_dedupe import RequestDeduplicator
 from astrameter.udp_server import UdpServer
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_EMA_ALPHA = 0.3
+
+
+def _decode_request(data: bytes, addr: tuple[str, int]) -> dict[str, Any] | None:
+    """The Shelly RPC call in *data*, or ``None`` when it is not one.
+
+    A poll carries a channel index at ``params.id``; a datagram without it is
+    something else on the port and gets no reply.
+    """
+    try:
+        request = json.loads(data.decode())
+    except UnicodeDecodeError:
+        logger.debug("Ignoring non-UTF-8 datagram from %s:%s", addr[0], addr[1])
+        return None
+    except json.JSONDecodeError:
+        logger.debug("Ignoring non-JSON datagram from %s:%s", addr[0], addr[1])
+        return None
+    if not isinstance(request, dict) or not isinstance(
+        request.get("params", {}).get("id"), int
+    ):
+        return None
+    logger.debug("Parsed request from %s: %s", addr[0], request)
+    return request
+
+
+def _three_phases(powers: list[float]) -> tuple[float, float, float]:
+    """*powers* as three floats: a single reading is phase A, anything else zero."""
+    if len(powers) == 1:
+        return float(powers[0]), 0.0, 0.0
+    if len(powers) >= 3:
+        return float(powers[0]), float(powers[1]), float(powers[2])
+    return 0.0, 0.0, 0.0
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -52,12 +83,12 @@ class ShellySnapshot:
 class Shelly:
     def __init__(
         self,
-        powermeters: list[tuple[Powermeter, ClientFilter, bool]],
+        powermeters: list[ConfiguredPowermeter],
         udp_port: int,
-        device_id,
+        device_id: str,
         dedupe_time_window: float = 0.0,
         device_type: str = "",
-    ):
+    ) -> None:
         self._udp_port = udp_port
         self._device_id = device_id
         self._device_type = device_type
@@ -79,7 +110,7 @@ class Shelly:
         # in-flight handler per battery answers per reading; duplicates drop.
         self._inflight_batteries: set[str] = set()
         self._stopped = asyncio.Event()
-        self._inactive_check_task = None
+        self._inactive_check_task: asyncio.Task[None] | None = None
         self._dedupe_time_window = max(0.0, dedupe_time_window)
         self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
             self._dedupe_time_window
@@ -89,7 +120,7 @@ class Shelly:
         self._started_at: float = 0.0
         self._running: bool = False
 
-    def _calculate_derived_values(self, power):
+    def _calculate_derived_values(self, power: float) -> float:
         decimal_point_enforcer = 0.001
         if abs(power) < 0.1:
             return decimal_point_enforcer
@@ -100,7 +131,9 @@ class Shelly:
             1,
         )
 
-    def _create_em_response(self, request_id, powers):
+    def _create_em_response(
+        self, request_id: Any, powers: list[float]
+    ) -> dict[str, Any]:
         if len(powers) == 1:
             powers = [powers[0], 0, 0]
         elif len(powers) != 3:
@@ -129,7 +162,9 @@ class Shelly:
             },
         }
 
-    def _create_em1_response(self, request_id, powers):
+    def _create_em1_response(
+        self, request_id: Any, powers: list[float]
+    ) -> dict[str, Any]:
         total_power = round(sum(powers), 3)
         total_power = total_power + (
             0.001 if total_power == round(total_power) or total_power == 0 else 0
@@ -144,7 +179,7 @@ class Shelly:
             },
         }
 
-    def _track_battery_seen(self, addr) -> float | None:
+    def _track_battery_seen(self, addr: tuple[str, int]) -> float | None:
         battery_ip = addr[0]
         now = time.time()
 
@@ -185,7 +220,7 @@ class Shelly:
 
         return poll_interval
 
-    def _log_inactive_batteries(self):
+    def _log_inactive_batteries(self) -> None:
         now = time.time()
         newly_inactive_batteries = []
 
@@ -216,133 +251,107 @@ class Shelly:
                 "event_listener failed for %s: %s", battery_ip, exc, exc_info=True
             )
 
-    async def _safe_handle_request(self, data, addr, transport):
+    async def _safe_handle_request(
+        self, data: bytes, addr: tuple[str, int], transport: asyncio.DatagramTransport
+    ) -> None:
         try:
-            await self._handle_request(transport, data, addr)
+            await self._handle_request(data, addr, transport)
         except Exception:
             logger.exception("Error handling Shelly request from %s", addr)
 
-    async def _handle_request(self, transport, data, addr):
+    async def _handle_request(
+        self, data: bytes, addr: tuple[str, int], transport: asyncio.DatagramTransport
+    ) -> None:
+        battery_ip = addr[0]
         poll_interval = self._track_battery_seen(addr)
 
-        if not self._dedup.should_process(addr[0]):
+        if not self._dedup.should_process(battery_ip):
             logger.debug("Ignoring request from %s due to dedupe window", addr)
             return
 
-        try:
-            request_str = data.decode()
-        except UnicodeDecodeError:
-            logger.debug("Ignoring non-UTF-8 datagram from %s:%s", addr[0], addr[1])
+        request = _decode_request(data, addr)
+        if request is None:
             return
 
-        logger.debug(f"Received UDP message: {request_str}")
-        logger.debug(f"From: {addr[0]}:{addr[1]}")
+        configured = powermeter_for(self._powermeters, battery_ip)
+        if configured is None:
+            logger.warning("No powermeter found for client %s", battery_ip)
+            return
 
+        # Coalesce concurrent polls from the same battery.  If a handler for
+        # this battery is already parked awaiting the next meter reading, the
+        # reading has not been answered yet — letting this duplicate poll wait
+        # and respond too would feed the battery's zero-export loop the same
+        # stale error several times the moment the meter updates and wakes
+        # every parked handler, overshooting target.  Drop it;
+        # _track_battery_seen above already refreshed the liveness and
+        # poll-interval state, and the in-flight handler sends the one response
+        # for the next reading.
+        if battery_ip in self._inflight_batteries:
+            logger.debug(
+                "Coalescing Shelly poll from %s: a handler is already awaiting "
+                "the next meter reading; dropping this duplicate to avoid a "
+                "burst of readings",
+                addr,
+            )
+            return
+
+        self._inflight_batteries.add(battery_ip)
         try:
-            request = json.loads(request_str)
-            logger.debug(f"Parsed request: {json.dumps(request, indent=2)}")
-            if isinstance(request.get("params", {}).get("id"), int):
-                powermeter = None
-                wait_for_next_message = False
-                for pm, client_filter, wait_flag in self._powermeters:
-                    if client_filter.matches(addr[0]):
-                        powermeter = pm
-                        wait_for_next_message = wait_flag
-                        break
-                if powermeter is None:
-                    logger.warning(f"No powermeter found for client {addr[0]}")
-                    return
+            try:
+                powers = await read_fresh(configured)
+            except Exception as exc:
+                # Reading the meter can fail transiently (e.g. an HTTP source
+                # timing out). Log a one-liner at the normal level and reserve
+                # the full traceback for DEBUG so an outage doesn't flood the
+                # log with stack traces on every poll.
+                logger.warning(
+                    "Could not read meter values from %s (%s): %s",
+                    powermeter_name(configured.powermeter),
+                    battery_ip,
+                    exc,
+                    exc_info=debug_traceback(),
+                )
+                return
 
-                # Coalesce concurrent polls from the same battery.  If a handler
-                # for this battery is already parked awaiting the next meter
-                # reading, the reading has not been answered yet — letting this
-                # duplicate poll wait and respond too would feed the battery's
-                # zero-export loop the same stale error several times the moment
-                # the meter updates and wakes every parked handler, overshooting
-                # target.  Drop it; _track_battery_seen above already refreshed
-                # the liveness/poll-interval state, and the in-flight handler
-                # sends the one response for the next reading.
-                if addr[0] in self._inflight_batteries:
-                    logger.debug(
-                        "Coalescing Shelly poll from %s: a handler is already "
-                        "awaiting the next meter reading; dropping this "
-                        "duplicate to avoid a burst of readings",
-                        addr,
-                    )
-                    return
-                self._inflight_batteries.add(addr[0])
-                try:
-                    if wait_for_next_message:
-                        try:
-                            await powermeter.wait_for_next_message(timeout=2)
-                        except TimeoutError:
-                            logger.debug(
-                                "Powermeter %s produced no fresh message within "
-                                "2s; serving last known value",
-                                type(powermeter).__name__,
-                            )
-                    try:
-                        powers = await powermeter.get_powermeter_watts()
-                    except Exception as exc:
-                        # Reading the meter can fail transiently (e.g. an HTTP
-                        # source timing out). Log a one-liner at the normal level
-                        # and reserve the full traceback for DEBUG so an outage
-                        # doesn't flood the log with stack traces on every poll.
-                        logger.warning(
-                            "Could not read meter values from %s (%s): %s",
-                            type(powermeter).__name__,
-                            addr[0],
-                            exc,
-                            exc_info=debug_traceback(),
-                        )
-                        return
+            response = self._response_for(request, powers)
+            if response is None:
+                return
+            response_json = json.dumps(response, separators=(",", ":"))
+            logger.debug("Sending response: %s", response_json)
+            transport.sendto(response_json.encode(), addr)
 
-                    if request.get("method") == "EM.GetStatus":
-                        response = self._create_em_response(request["id"], powers)
-                    elif request.get("method") == "EM1.GetStatus":
-                        response = self._create_em1_response(request["id"], powers)
-                    else:
-                        return
+            l1, l2, l3 = _three_phases(powers)
+            self._call_event_listener(
+                battery_ip,
+                {
+                    "grid_power": {
+                        "l1": l1,
+                        "l2": l2,
+                        "l3": l3,
+                        "total": l1 + l2 + l3,
+                    },
+                    "active": battery_ip not in self._inactive_batteries,
+                    "poll_interval": poll_interval,
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                    "battery_count": len(self._battery_last_seen),
+                },
+            )
+        finally:
+            self._inflight_batteries.discard(battery_ip)
 
-                    response_json = json.dumps(response, separators=(",", ":"))
-                    logger.debug(f"Sending response: {response_json}")
-                    response_data = response_json.encode()
-                    transport.sendto(response_data, addr)
+    def _response_for(
+        self, request: dict[str, Any], powers: list[float]
+    ) -> dict[str, Any] | None:
+        """The reply *request* asks for, or ``None`` for a method we do not serve."""
+        method = request.get("method")
+        if method == "EM.GetStatus":
+            return self._create_em_response(request["id"], powers)
+        if method == "EM1.GetStatus":
+            return self._create_em1_response(request["id"], powers)
+        return None
 
-                    battery_ip = addr[0]
-                    if len(powers) == 1:
-                        grid_l1, grid_l2, grid_l3 = powers[0], 0.0, 0.0
-                    elif len(powers) >= 3:
-                        grid_l1, grid_l2, grid_l3 = (
-                            float(powers[0]),
-                            float(powers[1]),
-                            float(powers[2]),
-                        )
-                    else:
-                        grid_l1, grid_l2, grid_l3 = 0.0, 0.0, 0.0
-                    self._call_event_listener(
-                        battery_ip,
-                        {
-                            "grid_power": {
-                                "l1": grid_l1,
-                                "l2": grid_l2,
-                                "l3": grid_l3,
-                                "total": grid_l1 + grid_l2 + grid_l3,
-                            },
-                            "active": battery_ip not in self._inactive_batteries,
-                            "poll_interval": poll_interval,
-                            "last_seen": datetime.now(timezone.utc).isoformat(),
-                            "battery_count": len(self._battery_last_seen),
-                        },
-                    )
-                finally:
-                    self._inflight_batteries.discard(addr[0])
-        except json.JSONDecodeError:
-            logger.error("Error: Invalid JSON")
-        except Exception:
-            logger.exception("Error processing message")
-
-    async def _inactive_check_loop(self):
+    async def _inactive_check_loop(self) -> None:
         try:
             while True:
                 await asyncio.sleep(1.0)
@@ -356,14 +365,14 @@ class Shelly:
         except asyncio.CancelledError:
             pass
 
-    async def start(self):
+    async def start(self) -> None:
         self._server = await UdpServer.serve(self._udp_port, self._safe_handle_request)
         self._stopped.clear()
         self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
         self._udp_port = self._server.port or self._udp_port
         self._started_at = time.time()
         self._running = True
-        logger.info(f"Shelly emulator listening on UDP port {self._udp_port}...")
+        logger.info("Shelly emulator listening on UDP port %s", self._udp_port)
 
     @property
     def udp_port(self) -> int:
@@ -399,10 +408,10 @@ class Shelly:
             ),
         )
 
-    async def wait(self):
+    async def wait(self) -> None:
         await self._stopped.wait()
 
-    async def stop(self):
+    async def stop(self) -> None:
         if self._inactive_check_task:
             self._inactive_check_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

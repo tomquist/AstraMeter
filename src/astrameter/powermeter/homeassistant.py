@@ -244,7 +244,7 @@ class HomeAssistant(WebSocketPowermeter):
                 self._update_entity_value(eid, data.get("state"))
 
     def _update_entity_value(self, entity_id: str, state_val: object) -> None:
-        logger.debug(f"Home Assistant: update_entity_value: {entity_id}, {state_val}")
+        logger.debug("Home Assistant: %s = %s", entity_id, state_val)
         if state_val is None:
             self._entity_values[entity_id] = None
             self._check_entities_ready()

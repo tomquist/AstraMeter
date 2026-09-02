@@ -94,7 +94,7 @@ class ESPHomeNative(PushPowermeter):
 
     async def connect_error_callback(self, err: Exception):
         self.reset_connection_state()
-        logger.error(f"Connection failed: {err}")
+        logger.error("ESPHome native: connection failed: %s", err)
 
     async def disconnect_callback(self, expected_disconnect: bool):
         self.reset_connection_state()
@@ -112,7 +112,7 @@ class ESPHomeNative(PushPowermeter):
             return
 
         if not isinstance(state, SensorState):
-            logger.error(f"Subscribed EntityState {state} is not a SensorState")
+            logger.error("ESPHome native: subscribed entity %s is not a sensor", state)
             return
 
         # When the upstream sensor goes unavailable, aioesphomeapi delivers a
@@ -126,7 +126,7 @@ class ESPHomeNative(PushPowermeter):
         self.last_value = state.state
         self._message_event.set()
         self._any_message_event.set()
-        logger.debug(f"Got new sensor state: {state.state}")
+        logger.debug("ESPHome native: new sensor state %s", state.state)
 
     async def get_powermeter_watts(self) -> list[float]:
         if self._any_message_event.is_set():

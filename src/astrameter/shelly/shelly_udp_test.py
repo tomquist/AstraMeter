@@ -5,6 +5,7 @@ import socket
 from ipaddress import IPv4Network
 
 from astrameter.config import ClientFilter
+from astrameter.config.settings import ConfiguredPowermeter
 from astrameter.powermeter import Powermeter, ThrottledPowermeter
 from astrameter.request_dedupe import RequestDeduplicator
 from astrameter.shelly.shelly import Shelly
@@ -66,7 +67,7 @@ async def test_dedupe_window_drops_rapid_duplicates():
     dummy = DummyPowermeter()
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
     shelly = Shelly(
-        [(dummy, cf, False)],
+        [ConfiguredPowermeter(dummy, cf, False)],
         udp_port=0,
         device_id="test",
         dedupe_time_window=10.0,
@@ -81,20 +82,20 @@ async def test_dedupe_window_drops_rapid_duplicates():
     addr = ("127.0.0.1", 54321)
 
     # First request: accepted and a response is sent.
-    await shelly._handle_request(transport, req, addr)
+    await shelly._handle_request(req, addr, transport)
     assert len(transport.sent) == 1
     assert dummy.call_count == 1
 
     # Second request within the window: dropped. Same source IP, different
     # port (mirroring real Shelly batteries which use ephemeral ports).
     clock.now = 1.0
-    await shelly._handle_request(transport, req, ("127.0.0.1", 54322))
+    await shelly._handle_request(req, ("127.0.0.1", 54322), transport)
     assert len(transport.sent) == 1
     assert dummy.call_count == 1
 
     # After the window elapses, requests are answered again.
     clock.now = 11.5
-    await shelly._handle_request(transport, req, ("127.0.0.1", 54323))
+    await shelly._handle_request(req, ("127.0.0.1", 54323), transport)
     assert len(transport.sent) == 2
     assert dummy.call_count == 2
 
@@ -108,7 +109,7 @@ async def test_concurrent_polls_from_one_battery_coalesce_over_udp():
     pm = ThrottledPowermeter(dummy, throttle_interval=0.3)
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
 
-    shelly = Shelly([(pm, cf, True)], udp_port=0, device_id="test")
+    shelly = Shelly([ConfiguredPowermeter(pm, cf, True)], udp_port=0, device_id="test")
     await shelly.start()
     port = shelly.udp_port
     assert port != 0, "Shelly should have bound to an actual port"
@@ -147,7 +148,7 @@ async def test_concurrent_polls_coalesce_to_a_single_response():
     goes out when the reading lands — not a four-deep burst."""
     pm = GatedPowermeter()
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-    shelly = Shelly([(pm, cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly([ConfiguredPowermeter(pm, cf, False)], udp_port=0, device_id="test")
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
@@ -155,7 +156,7 @@ async def test_concurrent_polls_coalesce_to_a_single_response():
     addr = ("127.0.0.1", 54321)
 
     handlers = [
-        asyncio.create_task(shelly._handle_request(transport, req, addr))
+        asyncio.create_task(shelly._handle_request(req, addr, transport))
         for _ in range(4)
     ]
     await asyncio.sleep(0.05)
@@ -174,7 +175,7 @@ async def test_coalescing_is_per_battery():
     get their own response; one does not suppress the other."""
     pm = GatedPowermeter()
     cf = ClientFilter([IPv4Network("127.0.0.0/8")])
-    shelly = Shelly([(pm, cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly([ConfiguredPowermeter(pm, cf, False)], udp_port=0, device_id="test")
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
@@ -184,7 +185,7 @@ async def test_coalescing_is_per_battery():
     for ip in ("127.0.0.1", "127.0.0.2"):
         for _ in range(2):  # two concurrent polls per battery
             handlers.append(
-                asyncio.create_task(shelly._handle_request(transport, req, (ip, 5000)))
+                asyncio.create_task(shelly._handle_request(req, (ip, 5000), transport))
             )
 
     await asyncio.sleep(0.05)
@@ -201,18 +202,18 @@ async def test_poll_answered_again_after_burst_coalesced():
     pm = GatedPowermeter()
     pm.gate.set()  # reads resolve immediately
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-    shelly = Shelly([(pm, cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly([ConfiguredPowermeter(pm, cf, False)], udp_port=0, device_id="test")
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
     ).encode()
     addr = ("127.0.0.1", 54321)
 
-    await shelly._handle_request(transport, req, addr)
+    await shelly._handle_request(req, addr, transport)
     assert len(transport.sent) == 1
     assert shelly._inflight_batteries == set()
 
-    await shelly._handle_request(transport, req, addr)
+    await shelly._handle_request(req, addr, transport)
     assert len(transport.sent) == 2
 
 
@@ -220,14 +221,18 @@ async def test_inflight_flag_cleared_when_meter_read_fails():
     """A failing meter read must still clear the in-flight flag, or the battery
     would be locked out of every future response."""
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-    shelly = Shelly([(FailingPowermeter(), cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly(
+        [ConfiguredPowermeter(FailingPowermeter(), cf, False)],
+        udp_port=0,
+        device_id="test",
+    )
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
     ).encode()
     addr = ("127.0.0.1", 54321)
 
-    await shelly._handle_request(transport, req, addr)
+    await shelly._handle_request(req, addr, transport)
     assert transport.sent == []  # read failed, no response
     assert shelly._inflight_batteries == set()  # but the flag is cleared
 
@@ -236,14 +241,18 @@ async def _drive_failing_read(caplog, level):
     """Send one request to a Shelly backed by a failing meter and return the
     single captured log record (and the fake transport, to assert no reply)."""
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-    shelly = Shelly([(FailingPowermeter(), cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly(
+        [ConfiguredPowermeter(FailingPowermeter(), cf, False)],
+        udp_port=0,
+        device_id="test",
+    )
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
     ).encode()
 
     with caplog.at_level(level, logger="astrameter"):
-        await shelly._handle_request(transport, req, ("127.0.0.1", 54321))
+        await shelly._handle_request(req, ("127.0.0.1", 54321), transport)
 
     records = [
         r for r in caplog.records if "Could not read meter values" in r.getMessage()

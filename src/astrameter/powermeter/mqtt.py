@@ -100,7 +100,9 @@ class MqttPowermeter(PushPowermeter):
                     tls_context=tls_context,
                     keepalive=60,
                 ) as client:
-                    logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")
+                    logger.info(
+                        "Connected to MQTT broker %s:%s", self.broker, self.port
+                    )
                     for topic_name in unique_topics:
                         await client.subscribe(topic_name)
                     self._connected_event.set()

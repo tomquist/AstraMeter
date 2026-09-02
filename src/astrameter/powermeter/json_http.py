@@ -47,9 +47,9 @@ class JsonHttpPowermeter(HttpPowermeter):
         try:
             data = await self.get_json(self.url)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode JSON: {e}")
+            logger.error("JSON HTTP: failed to decode response: %s", e)
             raise ValueError(f"Invalid JSON response: {e}") from e
         except aiohttp.ClientError as e:
-            logger.error(f"HTTP request error: {e}")
+            logger.error("JSON HTTP: request failed: %s", e)
             raise ValueError(f"HTTP request error: {e}") from e
         return [extract_json_value(data, path) for path in self.json_paths]
