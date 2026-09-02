@@ -8,6 +8,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections.abc import Callable, Iterator, Sequence
+from typing import NamedTuple
 
 from .eval_spec import Scenario, _Sample
 
@@ -132,20 +133,28 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
     return _grid_cost_ct(import_wh, export_wh)
 
 
-def _compute_metrics(
-    scenario: Scenario,
-    seed: int,
-    samples: list[_Sample],
-    marks: list[tuple[float, str]],
-) -> dict:
-    duration_h = scenario.duration_s / 3600.0
-    specs = scenario.batteries
+class _EventResponse(NamedTuple):
+    """How the loop answered the labeled disturbances in a run."""
 
-    # Per-event settling & overshoot.
+    settle_times: list[float]
+    overshoots: list[float]
+    unsettled: int
+    measured: int
+
+
+def _event_response(
+    scenario: Scenario, samples: list[_Sample], marks: list[tuple[float, str]]
+) -> _EventResponse:
+    """Settling time and overshoot per labeled event.
+
+    Each event owns the window up to ``EVENT_WINDOW_S`` later, truncated by the
+    next event.  An event whose initial error is already inside the settling
+    band is skipped: there is no disturbance to measure a response against.
+    """
     settle_times: list[float] = []
     overshoots: list[float] = []
     unsettled = 0
-    events_measured = 0
+    measured = 0
     for idx, (t0, _label) in enumerate(marks):
         t_end = min(
             scenario.duration_s,
@@ -157,8 +166,8 @@ def _compute_metrics(
             continue
         e0 = window[0].grid
         if abs(e0) < SETTLE_BAND_W:
-            continue  # disturbance too small to measure against the band
-        events_measured += 1
+            continue
+        measured += 1
         sign = 1.0 if e0 > 0 else -1.0
         settle = _settle_time(samples, t0, t_end)
         if settle is None:
@@ -167,8 +176,15 @@ def _compute_metrics(
         else:
             settle_times.append(settle)
         overshoots.append(max(0.0, max(-sign * s.grid for s in window)))
+    return _EventResponse(settle_times, overshoots, unsettled, measured)
 
-    # Oscillation: hysteresis band crossings.
+
+def _band_crossings(samples: list[_Sample]) -> int:
+    """Times the grid swung clean through the deadband from one side to the other.
+
+    The band is the hysteresis: brushing it does not count, only reaching the
+    far side after having reached the near one.
+    """
     crossings = 0
     state = 0
     for s in samples:
@@ -180,35 +196,51 @@ def _compute_metrics(
             if state == 1:
                 crossings += 1
             state = -1
+    return crossings
 
-    # Steady-state RMS, outside post-event transients.
-    def in_transient(t: float) -> bool:
-        return any(t0 <= t < t0 + STEADY_EXCLUDE_S for t0, _ in marks)
 
-    steady = [s.grid for s in samples if not in_transient(s.t)]
-    steady_rms = math.sqrt(sum(g * g for g in steady) / len(steady)) if steady else 0.0
+def _steady_rms(samples: list[_Sample], marks: list[tuple[float, str]]) -> float:
+    """RMS grid error outside the post-event transients — hunting, not reaction."""
+    steady = [
+        s.grid
+        for s in samples
+        if not any(t0 <= s.t < t0 + STEADY_EXCLUDE_S for t0, _ in marks)
+    ]
+    return math.sqrt(sum(g * g for g in steady) / len(steady)) if steady else 0.0
 
-    # Sustained oscillation amplitude: the robust peak-to-peak swing (p95 - p5)
-    # over the whole run. Non-zero for any continuous hunting, which the
-    # step-response metrics (only fired by labeled steps) read as 0; percentiles
-    # keep a single brief transient from dominating.
-    all_grid = [s.grid for s in samples]
-    grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
 
-    # Time-weighted integrals (true time averages, not sample averages skewed by
-    # staggered polls): grid_rms is the whole-run L2 tracking error, transients
-    # included, whose effort partner is battery_travel; share_imbalance is the
-    # watts misallocated within each phase group of >=2 batteries (sum of
-    # |power_i - fair share|), 0 by construction with one battery per phase.
+class _Integrals(NamedTuple):
+    """True time averages, not sample averages skewed by staggered polls."""
+
+    grid_rms: float
+    mean_abs_grid: float
+    share_imbalance: float
+    battery_travel_w: float
+    import_wh: float
+    export_wh: float
+    avoidable_import_wh: float
+    avoidable_export_wh: float
+
+
+def _time_weighted(scenario: Scenario, samples: list[_Sample]) -> _Integrals:
+    """Integrate tracking error, share imbalance, effort and grid energy over time.
+
+    ``grid_rms`` is the whole-run L2 tracking error, transients included, whose
+    effort partner is ``battery_travel_w``.  ``share_imbalance`` is the watts
+    misallocated within each phase group of >=2 batteries (the sum of
+    ``|power_i - fair share|``), 0 by construction with one battery per phase.
+    Grid energy is split into what was exchanged and the part of it the pack
+    still had the headroom and the charge (or the room) to have covered.
+    """
+    specs = scenario.batteries
     phase_groups: dict[str, list[int]] = {}
-    for i, sp in enumerate(specs):
-        phase_groups.setdefault((sp.phase or "A").upper(), []).append(i)
+    for i, spec in enumerate(specs):
+        phase_groups.setdefault((spec.phase or "A").upper(), []).append(i)
     balance_groups = [grp for grp in phase_groups.values() if len(grp) >= 2]
 
     import_wh = export_wh = avoid_import_wh = avoid_export_wh = 0.0
     travel_w = 0.0
-    grid_sq_dt = abs_grid_dt = total_dt = 0.0
-    imbalance_dt = 0.0
+    grid_sq_dt = abs_grid_dt = total_dt = imbalance_dt = 0.0
     for prev, cur, dt in _intervals(samples):
         grid_sq_dt += prev.grid * prev.grid * dt
         abs_grid_dt += abs(prev.grid) * dt
@@ -240,54 +272,82 @@ def _compute_metrics(
                 avoid_export_wh += -wh
         travel_w += sum(abs(cur.powers[i] - prev.powers[i]) for i in range(len(specs)))
 
-    grid_rms = math.sqrt(grid_sq_dt / total_dt) if total_dt > 0 else 0.0
-    mean_abs = abs_grid_dt / total_dt if total_dt > 0 else 0.0
-    share_imbalance = imbalance_dt / total_dt if total_dt > 0 else 0.0
+    def per_second(total: float) -> float:
+        return total / total_dt if total_dt > 0 else 0.0
+
+    return _Integrals(
+        grid_rms=math.sqrt(per_second(grid_sq_dt)),
+        mean_abs_grid=per_second(abs_grid_dt),
+        share_imbalance=per_second(imbalance_dt),
+        battery_travel_w=travel_w,
+        import_wh=import_wh,
+        export_wh=export_wh,
+        avoidable_import_wh=avoid_import_wh,
+        avoidable_export_wh=avoid_export_wh,
+    )
+
+
+def _mean(values: Sequence[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _compute_metrics(
+    scenario: Scenario,
+    seed: int,
+    samples: list[_Sample],
+    marks: list[tuple[float, str]],
+) -> dict:
+    duration_h = scenario.duration_s / 3600.0
+    events = _event_response(scenario, samples, marks)
+    integrals = _time_weighted(scenario, samples)
+
+    # Sustained oscillation amplitude: the robust peak-to-peak swing (p95 - p5)
+    # over the whole run. Non-zero for any continuous hunting, which the
+    # step-response metrics (only fired by labeled steps) read as 0; percentiles
+    # keep a single brief transient from dominating.
+    all_grid = [s.grid for s in samples]
+    grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
 
     # Money: the bill for the residual grid minus the perfect-foresight bill.
     # The oracle is a true lower bound, so the clamp only absorbs the
     # per-phase-routing slack of the three-phase scenario.
-    grid_cost = _grid_cost_ct(import_wh, export_wh)
+    grid_cost = _grid_cost_ct(integrals.import_wh, integrals.export_wh)
     oracle_cost = _oracle_cost_ct(scenario, samples)
     cost_regret = max(0.0, grid_cost - oracle_cost)
 
     # SoC extremes let a scenario verify it drove the pack into saturation
     # (not in the metric tables; for tests and context).
     all_socs = [soc for s in samples for soc in s.socs]
-    soc_min = round(min(all_socs), 3) if all_socs else 0.0
-    soc_max = round(max(all_socs), 3) if all_socs else 0.0
 
     return {
         "scenario": scenario.name,
         "seed": seed,
         "duration_h": round(duration_h, 3),
         "samples": len(samples),
-        "soc_min": soc_min,
-        "soc_max": soc_max,
-        "events_measured": events_measured,
-        "unsettled_events": unsettled,
-        "settle_mean_s": round(sum(settle_times) / len(settle_times), 1)
-        if settle_times
+        "soc_min": round(min(all_socs), 3) if all_socs else 0.0,
+        "soc_max": round(max(all_socs), 3) if all_socs else 0.0,
+        "events_measured": events.measured,
+        "unsettled_events": events.unsettled,
+        "settle_mean_s": round(_mean(events.settle_times), 1),
+        "settle_p95_s": round(_percentile(events.settle_times, 0.95), 1),
+        "overshoot_mean_w": round(_mean(events.overshoots), 1),
+        "overshoot_max_w": round(max(events.overshoots), 1)
+        if events.overshoots
         else 0.0,
-        "settle_p95_s": round(_percentile(settle_times, 0.95), 1),
-        "overshoot_mean_w": round(sum(overshoots) / len(overshoots), 1)
-        if overshoots
-        else 0.0,
-        "overshoot_max_w": round(max(overshoots), 1) if overshoots else 0.0,
-        "band_crossings_per_h": round(crossings / duration_h, 2),
+        "band_crossings_per_h": round(_band_crossings(samples) / duration_h, 2),
         "grid_p2p_w": round(grid_p2p, 1),
-        "grid_rms_w": round(grid_rms, 1),
-        "steady_rms_w": round(steady_rms, 1),
-        "mean_abs_grid_w": round(mean_abs, 1),
-        "share_imbalance_w": round(share_imbalance, 1),
-        "import_wh": round(import_wh, 1),
-        "export_wh": round(export_wh, 1),
-        "avoidable_import_wh": round(avoid_import_wh, 1),
-        "avoidable_export_wh": round(avoid_export_wh, 1),
+        "grid_rms_w": round(integrals.grid_rms, 1),
+        "steady_rms_w": round(_steady_rms(samples, marks), 1),
+        "mean_abs_grid_w": round(integrals.mean_abs_grid, 1),
+        "share_imbalance_w": round(integrals.share_imbalance, 1),
+        "import_wh": round(integrals.import_wh, 1),
+        "export_wh": round(integrals.export_wh, 1),
+        "avoidable_import_wh": round(integrals.avoidable_import_wh, 1),
+        "avoidable_export_wh": round(integrals.avoidable_export_wh, 1),
         "grid_cost_ct": round(grid_cost, 2),
         "oracle_cost_ct": round(oracle_cost, 2),
         "cost_regret_ct": round(cost_regret, 2),
-        "battery_travel_w_per_h": round(travel_w / duration_h, 0),
+        "battery_travel_w_per_h": round(integrals.battery_travel_w / duration_h, 0),
     }
 
 
