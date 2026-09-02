@@ -39,3 +39,14 @@ def test_foreign_topics_are_not_commands():
         "hame_energy/HME-4/App/aabbcc/ctrl",
     ):
         assert parse_command_topic("am", topic) is None, topic
+
+
+def test_ids_spanning_several_topic_levels_are_not_commands():
+    # The subscription filters bind each id to a single "+" level, so these
+    # never arrive from a broker -- but the grammar has to agree with them.
+    for topic in (
+        "am/ct002/dev1/other/set",
+        "am/ct002/dev1/other/consumer/aabbcc/manual_target/set",
+        "am/ct002/dev1/consumer/aabbcc/extra/manual_target/set",
+    ):
+        assert parse_command_topic("am", topic) is None, topic

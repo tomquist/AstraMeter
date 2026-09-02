@@ -147,6 +147,9 @@ class Sml(Powermeter):
         data = await self._read_chunk()
         if data is None:
             return
+        if not data:
+            logger.error("serial connection closed")
+            return
         stream.add(data)
         for i in range(10):
             sml_frame = await self._try_read_frame(stream)

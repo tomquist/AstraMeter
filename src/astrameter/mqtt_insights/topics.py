@@ -109,11 +109,17 @@ def parse_command_topic(base_topic: str, topic: str) -> ParsedCommandTopic | Non
         return None
     middle = topic[len(prefix) : -len(_COMMAND_SUFFIX)]
     device_id, sep, rest = middle.partition("/consumer/")
+    # Every id is one topic level, matching the "+" in the subscription
+    # filters above -- so a segment holding a "/" is not a topic we publish.
+    if "/" in device_id:
+        return None
     if not sep:
-        return DeviceCommandTopic(device_id=middle)
+        return DeviceCommandTopic(device_id=device_id)
     consumer_id, sep, field = rest.rpartition("/")
     if not sep:
         return MalformedCommandTopic()
+    if "/" in consumer_id:
+        return None
     return ConsumerCommandTopic(
         device_id=device_id, consumer_id=consumer_id, field=field
     )
