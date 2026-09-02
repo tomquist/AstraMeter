@@ -752,6 +752,8 @@ async def test_control_write_applies_through_the_validated_setter(tmp_path):
         ("efficiency_window_weight", 101),
         ("min_dc_output", 5000),
         ("active", "yes"),
+        # bool is an int subclass: without a guard this would set 1.0 W.
+        ("manual_target", True),
     ],
 )
 async def test_out_of_range_control_writes_are_rejected(tmp_path, field, value):
@@ -771,6 +773,28 @@ async def test_out_of_range_control_writes_are_rejected(tmp_path, field, value):
         },
     )
     assert response.status == 400
+    await client.close()
+
+
+async def test_consumer_write_to_a_device_without_that_control_is_404(tmp_path):
+    """A Shelly emulation is registered too and has no per-battery setters;
+    a write aimed at one must not surface as a 500."""
+    from astrameter.shelly import Shelly
+
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    shelly = Shelly(powermeters=[], udp_port=2222, device_id="shelly-1")
+    registry.register_device("shelly-1", "shellyemg3", shelly)
+    client = await _client(registry)
+    response = await client.post(
+        "/api/control/consumer",
+        json={
+            "device_id": "shelly-1",
+            "consumer_id": "02b250000001",
+            "field": "manual_target",
+            "value": 100,
+        },
+    )
+    assert response.status == 404
     await client.close()
 
 

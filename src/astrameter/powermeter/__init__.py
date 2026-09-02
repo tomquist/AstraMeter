@@ -32,6 +32,9 @@ from .wrappers import (
     TransformedPowermeter,
 )
 
+#: ``TYPE = 3EM`` builds a :class:`ShellyEM`; the old name stays importable.
+Shelly3EM = ShellyEM
+
 __all__ = [
     "AmisReader",
     "DeadbandPowermeter",
@@ -55,6 +58,7 @@ __all__ = [
     "Script",
     "Shelly",
     "Shelly1PM",
+    "Shelly3EM",
     "Shelly3EMPro",
     "ShellyEM",
     "ShellyPlus1PM",

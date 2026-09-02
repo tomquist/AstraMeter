@@ -659,6 +659,10 @@ class WebServer:
             return _json({"error": "Unknown device or field"}, status=404)
         try:
             control.apply(device, consumer_id, control.coerce(value))
+        except AttributeError:
+            # A device without this setter — a Shelly emulation, say — is
+            # registered too, and has no per-battery controls.
+            return _json({"error": "Unknown device or field"}, status=404)
         except ValueError as exc:
             return _json({"error": str(exc)}, status=400)
 

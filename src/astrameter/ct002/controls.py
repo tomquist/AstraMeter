@@ -59,6 +59,10 @@ class ConsumerControl:
                 raise ValueError(f"{self.field} must be true or false")
             return value
         assert self.low is not None and self.high is not None
+        # bool is an int subclass, so float(True) would quietly become 1.0.
+        # The firmware refuses a JSON boolean here; both stacks must agree.
+        if isinstance(value, bool):
+            raise ValueError(f"{self.field} must be a number")
         try:
             number = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:

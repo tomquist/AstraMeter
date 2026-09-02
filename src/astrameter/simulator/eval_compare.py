@@ -408,7 +408,10 @@ def _headline(base: dict | None, head: dict) -> str:
     """``settle 10→12s, overshoot …W, RMS …W`` for a scenario's header."""
     parts = []
     for key, label, unit in _HEADLINE_METRICS:
-        value = f"{head[key]}" if base is None else f"{base[key]}→{head[key]}"
+        if base is None or key not in base:
+            value = f"{head[key]}"
+        else:
+            value = f"{base[key]}→{head[key]}"
         parts.append(f"{label} {value}{unit}")
     return ", ".join(parts)
 
