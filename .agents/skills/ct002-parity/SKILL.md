@@ -1,6 +1,6 @@
 ---
 name: ct002-parity
-description: What the ESPHome C++ component mirrors from the Python CT002 stack, what is deliberately waived, what the firmware constrains, and how to run the parity suite. Use when changing src/astrameter/ct002/, src/astrameter/status/, or esphome/components/ct002/.
+description: Behavior shared by the Python CT002 stack and its C++ mirror must change on both sides in the same commit, or the two silently diverge and a value one accepts gets reverted by the other. Read before editing src/astrameter/ct002/, src/astrameter/status/ or esphome/components/ct002/: it says what is mirrored, which three divergences are deliberate, what the ESP32 constrains, and which tests actually prove parity.
 ---
 
 # CT002 parity
@@ -41,7 +41,7 @@ stack. Shared behavior lands on **both** sides in the same change;
 
 ## What the firmware constrains
 
-The dashboard is one page served by both stacks (see the `dashboard` skill), and
+The dashboard is one page served by both stacks (see the `web-ui` skill), and
 the ESP32 half sets its limits:
 
 - It lives in flash, inside the gzipped budget `npm run check:dashboard`

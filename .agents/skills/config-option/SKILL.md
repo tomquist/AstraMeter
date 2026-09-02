@@ -1,6 +1,6 @@
 ---
 name: config-option
-description: The seven surfaces a user-facing config option must reach — settings, config.ini.example, web editor, web generator, Home Assistant add-on, dashboard guided form, docs — and how to test the add-on container image. Use when adding or renaming a [SECTION] key, or when changing anything under ha_addon/.
+description: A config option wired into the loader alone is a bug: it also has to reach the INI example, the web editor, the config generator, the Home Assistant add-on, the dashboard's guided form and the docs, and three tests fail until it does. Read before adding or renaming a [SECTION] key, or when changing anything under ha_addon/ (it covers testing the add-on container image too).
 ---
 
 # Config options reach every surface

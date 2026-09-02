@@ -7,7 +7,7 @@ doesn't load skills (`.claude/skills` symlinks there for the ones that do):
 | Working on | Read |
 | --- | --- |
 | `src/astrameter/ct002/`, `src/astrameter/status/`, `esphome/components/ct002/` | `.agents/skills/ct002-parity/SKILL.md` |
-| anything under `web/`, or the docs screenshots | `.agents/skills/dashboard/SKILL.md` |
+| anything under `web/`, or the docs screenshots | `.agents/skills/web-ui/SKILL.md` |
 | balancer or simulator behavior | `.agents/skills/steering-eval/SKILL.md` |
 | a `[SECTION]` config key, or `ha_addon/` | `.agents/skills/config-option/SKILL.md` |
 | a powermeter backend | `.agents/skills/powermeter/SKILL.md` |

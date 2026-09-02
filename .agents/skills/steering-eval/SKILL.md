@@ -1,6 +1,6 @@
 ---
 name: steering-eval
-description: Running and reading the steering-quality evaluation that scores balancer changes against a simulated household. Use when changing src/astrameter/ct002/ (especially balancer.py) or src/astrameter/simulator/.
+description: A change to the active-control loop needs a before/after simulation to show it did not make steering worse — CI runs one on every such PR and posts the comparison, so a regression surfaces publicly either way. Read before changing balancer behavior in src/astrameter/ct002/ or src/astrameter/simulator/: how to capture a baseline, and how to read cost_regret_ct and the guardrail flags.
 ---
 
 # Steering-quality evaluation

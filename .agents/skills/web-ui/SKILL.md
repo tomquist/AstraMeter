@@ -1,6 +1,6 @@
 ---
-name: dashboard
-description: The dashboard page served by both stacks — its committed build outputs, browser tests, and the docs screenshots. Use when changing anything under web/ or refreshing docs/images/dashboard-*.png.
+name: web-ui
+description: The dashboard page compiles into two artifacts committed to the repo, and CI fails when either is stale — so a change under web/ is only half-done until it is rebuilt in the same commit. Read before editing web/: the rebuild step, why git diff won't show you those files, which changes need a browser test, and how to refresh the documentation screenshots.
 ---
 
 # Dashboard and screenshots
