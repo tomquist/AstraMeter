@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import statistics
 from collections import deque
 
-from astrameter.config.logger import logger
 from astrameter.powermeter.base import Powermeter
 
 from .base import PowermeterWrapper
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 
 class HampelPowermeter(PowermeterWrapper):

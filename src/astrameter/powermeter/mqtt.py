@@ -1,14 +1,16 @@
 import asyncio
 import contextlib
 import json
+import logging
 import ssl
 
 import aiomqtt
 
-from astrameter.config.logger import logger
-
 from .base import PushPowermeter
 from .json_http import extract_json_value
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 RECONNECT_DELAY = 5
 

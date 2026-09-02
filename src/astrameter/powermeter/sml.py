@@ -1,6 +1,7 @@
 import asyncio
 import configparser
 import datetime
+import logging
 import re
 from dataclasses import dataclass, field
 
@@ -9,9 +10,10 @@ import smllib.errors
 from smllib import SmlFrame, SmlStreamReader
 from smllib.const import UNITS
 
-from astrameter.config.logger import logger
-
 from .base import Powermeter
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 # Default OBIS hex (smllib const / German eHZ-style meters)
 # Aggregate instantaneous active power (1-0:16.7.0)

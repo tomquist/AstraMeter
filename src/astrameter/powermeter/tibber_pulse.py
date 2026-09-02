@@ -1,10 +1,9 @@
+import logging
 import time
 from collections.abc import Callable
 from typing import Any
 
 from aiohttp import BasicAuth, ClientTimeout
-
-from astrameter.config.logger import logger
 
 from .http_client import HttpPowermeter
 from .sml import (
@@ -14,6 +13,9 @@ from .sml import (
     _OBIS_POWER_L3,
     parse_sml_powers,
 )
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 # The Pulse Bridge mirrors a push source (the meter emits ~1/s, with jitter):
 # polling it occasionally returns an incomplete or CRC-bad telegram that can't

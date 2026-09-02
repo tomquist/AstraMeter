@@ -1,13 +1,15 @@
 import asyncio
 import contextlib
+import logging
 import socket
 import struct
 import time
 from collections.abc import Callable
 
-from astrameter.config.logger import logger
-
 from .base import PushPowermeter, stream_fresh
+
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
+logger = logging.getLogger("astrameter")
 
 # SMA Speedwire multicast defaults
 DEFAULT_MULTICAST_GROUP = "239.12.255.254"

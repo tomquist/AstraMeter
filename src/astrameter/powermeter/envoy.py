@@ -10,6 +10,7 @@ from aiohttp import ClientResponseError, ClientTimeout, TCPConnector
 
 from .base import Powermeter
 
+# Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
 
 ENLIGHTEN_LOGIN_URL = "https://enlighten.enphaseenergy.com/login/login.json"
