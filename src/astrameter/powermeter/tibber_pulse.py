@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from aiohttp import BasicAuth, ClientTimeout
+from aiohttp import BasicAuth
 
 from .http_client import HttpPowermeter
 from .sml import (
@@ -57,11 +57,11 @@ class TibberPulse(HttpPowermeter):
         timeout: float = DEFAULT_TIMEOUT_S,
         clock: Callable[[], float] | None = None,
     ):
+        super().__init__(timeout=timeout)
         self.ip = ip
         self.password = password
         self.node_id = node_id
         self.user = user
-        self.timeout = timeout
         self._obis_current = obis_power_current
         self._obis_l1 = obis_power_l1
         self._obis_l2 = obis_power_l2
@@ -73,18 +73,15 @@ class TibberPulse(HttpPowermeter):
         self._last_good: float | None = None
 
     def _session_options(self) -> dict[str, Any]:
-        # No separate connect timeout: the bridge's accept alone can exceed
-        # 1 s (#551), and a bounded total already caps a stuck request.
         return {
+            **super()._session_options(),
             "auth": BasicAuth(self.user, self.password),
-            "timeout": ClientTimeout(total=self.timeout),
         }
 
     async def get_powermeter_watts(self) -> list[float]:
-        url = f"http://{self.ip}/data.json?node_id={self.node_id}"
-        async with self._require_session().get(url) as resp:
-            resp.raise_for_status()
-            data = await resp.read()
+        data = await self.get_bytes(
+            f"http://{self.ip}/data.json?node_id={self.node_id}"
+        )
         powers = parse_sml_powers(
             data,
             self._obis_current,

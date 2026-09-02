@@ -2,11 +2,8 @@ import asyncio
 import hashlib
 import re
 import xml.etree.ElementTree as ET
-from typing import Any
 
-from aiohttp import ClientTimeout
-
-from .http_client import HttpPowermeter, SessionExpired, retry_after_relogin
+from .http_client import HttpPowermeter, retry_after_relogin
 
 # AVM AHA-HTTP-Interface endpoints.
 # Docs: https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf
@@ -16,6 +13,9 @@ INVALID_SID = "0000000000000000"
 
 # Identifiers that already end in a unit suffix like "-1"/"-2".
 _AIN_SUFFIX_RE = re.compile(r"-\d+$")
+
+# The FRITZ!Box rejects an expired/invalid SID with 403.
+_SID_EXPIRED = frozenset({403})
 
 
 def _normalize_ain(ain: str) -> str:
@@ -70,6 +70,7 @@ class FritzSmartEnergy(HttpPowermeter):
         verify_ssl: bool = True,
         timeout: float = 10.0,
     ) -> None:
+        super().__init__(timeout=timeout)
         host = host.strip().rstrip("/")
         if host.startswith(("http://", "https://")):
             self._base_url = host
@@ -89,7 +90,6 @@ class FritzSmartEnergy(HttpPowermeter):
             ain += "-1"
         self._ain = ain
 
-        self._timeout = timeout
         # Only force-disable verification when actually using TLS without it;
         # otherwise let aiohttp use its defaults (and ignore for plain http).
         # Derive TLS from the resolved scheme so an explicit ``https://`` HOST
@@ -98,9 +98,6 @@ class FritzSmartEnergy(HttpPowermeter):
         self._ssl: bool | None = False if (effective_tls and not verify_ssl) else None
         self._sid: str | None = None
         self._auth_lock = asyncio.Lock()
-
-    def _session_options(self) -> dict[str, Any]:
-        return {"timeout": ClientTimeout(total=self._timeout)}
 
     async def stop(self) -> None:
         await super().stop()
@@ -136,23 +133,19 @@ class FritzSmartEnergy(HttpPowermeter):
         self._sid = sid
 
     async def _get_session_info(self, params: dict[str, str]) -> ET.Element:
-        async with self._require_session().get(
+        text = await self.get_text(
             self._base_url + LOGIN_PATH, params=params, ssl=self._ssl
-        ) as resp:
-            resp.raise_for_status()
-            text = await resp.text()
+        )
         return ET.fromstring(text)
 
     async def _fetch_device_list(self) -> str:
         params = {"switchcmd": "getdevicelistinfos", "sid": self._sid or INVALID_SID}
-        async with self._require_session().get(
-            self._base_url + HOMEAUTO_PATH, params=params, ssl=self._ssl
-        ) as resp:
-            if resp.status == 403:
-                # FRITZ!Box rejects an expired/invalid SID with 403.
-                raise SessionExpired
-            resp.raise_for_status()
-            return await resp.text()
+        return await self.get_text(
+            self._base_url + HOMEAUTO_PATH,
+            params=params,
+            ssl=self._ssl,
+            expired_statuses=_SID_EXPIRED,
+        )
 
     def _extract_power_mw(self, xml: str) -> float:
         root = ET.fromstring(xml)

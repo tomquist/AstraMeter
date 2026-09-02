@@ -25,12 +25,7 @@ def parse_channels(raw: str) -> list[int]:
     for part in parts:
         if not part.isascii() or not part.isdecimal():
             raise ValueError(f"Invalid CHANNELS entry {part!r}: expected an integer")
-        try:
-            channel = int(part)
-        except ValueError as exc:
-            raise ValueError(
-                f"Invalid CHANNELS entry {part!r}: expected an integer"
-            ) from exc
+        channel = int(part)
         if channel < 1:
             raise ValueError(
                 f"Invalid CHANNELS entry {channel}: channel ids start at 1"
@@ -64,11 +59,10 @@ class Refoss(HttpPowermeter):
         self.ip = ip
         self.channels = list(channels)
 
-    async def get_json(self, url: str) -> Any:
-        async with self._require_session().get(url, allow_redirects=False) as resp:
+    async def get_json(self, url: str, **kwargs: Any) -> Any:
+        async with self._get(url, allow_redirects=False, **kwargs) as resp:
             if 300 <= resp.status < 400:
                 raise ValueError("Refoss API must not redirect")
-            resp.raise_for_status()
             return await resp.json(content_type=None)
 
     async def get_powermeter_watts(self) -> list[float]:

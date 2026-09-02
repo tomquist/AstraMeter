@@ -1,10 +1,10 @@
 import asyncio
 import time
-from typing import Any
-
-from aiohttp import ClientTimeout
 
 from .http_client import HttpPowermeter, SessionExpired, retry_after_relogin
+
+# The Energy Manager answers a lapsed login with either status.
+_LOGIN_EXPIRED = frozenset({401, 403})
 
 
 class TQEnergyManager(HttpPowermeter):
@@ -21,15 +21,12 @@ class TQEnergyManager(HttpPowermeter):
     _MAX_IDLE = 60 * 30  # log in again after 30 min without a read
 
     def __init__(self, host: str, password: str = "", *, timeout: float = 5.0) -> None:
+        super().__init__(timeout=timeout)
         self._host = host.rstrip("/")
         self._password = password
-        self._timeout = timeout
         self._serial: str | None = None
         self._last_use = 0.0
         self._auth_lock = asyncio.Lock()
-
-    def _session_options(self) -> dict[str, Any]:
-        return {"timeout": ClientTimeout(total=self._timeout)}
 
     async def get_powermeter_watts(self) -> list[float]:
         async with self._auth_lock:
@@ -78,14 +75,10 @@ class TQEnergyManager(HttpPowermeter):
                 raise RuntimeError("Authentication failed")
 
     async def _read_live_json(self) -> dict:
-        async with self._require_session().get(
-            f"http://{self._host}/mum-webservice/data.php"
-        ) as resp:
-            if resp.status in (401, 403):
-                raise SessionExpired
-
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
-            if data.get("status", 0) >= 900:
-                raise SessionExpired
-            return data
+        data = await self.get_json(
+            f"http://{self._host}/mum-webservice/data.php",
+            expired_statuses=_LOGIN_EXPIRED,
+        )
+        if data.get("status", 0) >= 900:
+            raise SessionExpired
+        return data

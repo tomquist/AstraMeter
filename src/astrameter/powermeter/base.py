@@ -6,6 +6,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 
+def as_list(value: str | list[str]) -> list[str]:
+    """Normalise a config value that may be a single entry or a list of them."""
+    return [value] if isinstance(value, str) else list(value)
+
+
 def stream_fresh(
     last_monotonic: float | None,
     max_age: float,

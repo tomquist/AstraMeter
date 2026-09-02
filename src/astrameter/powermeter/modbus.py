@@ -93,7 +93,7 @@ class ModbusPowermeter(Powermeter):
         read = getattr(self.client, self._read_method)
         result = await read(self.address, self.count, slave=self.unit_id)
         if result.isError():
-            raise Exception("Error reading Modbus data")
+            raise ValueError("Error reading Modbus data")
         decoder = BinaryPayloadDecoder.fromRegisters(
             result.registers,
             byteorder=self._byte_order,

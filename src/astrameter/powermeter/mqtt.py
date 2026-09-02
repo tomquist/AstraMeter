@@ -6,7 +6,7 @@ import ssl
 
 import aiomqtt
 
-from .base import PushPowermeter
+from .base import PushPowermeter, as_list
 from .json_http import extract_json_value
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
@@ -36,7 +36,7 @@ class MqttPowermeter(PushPowermeter):
         self.tls = tls
 
         # Normalize topic(s) and json_path(s) into subscription list
-        topics = [topic] if isinstance(topic, str) else list(topic)
+        topics = as_list(topic)
         if json_path is None:
             paths: list[str | None] = [None] * len(topics)
         elif isinstance(json_path, str):

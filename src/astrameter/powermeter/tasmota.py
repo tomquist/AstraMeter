@@ -1,5 +1,6 @@
 from urllib.parse import urlencode
 
+from .base import as_list
 from .http_client import HttpPowermeter
 
 
@@ -21,21 +22,9 @@ class Tasmota(HttpPowermeter):
         self.password = password
         self.json_status = json_status
         self.json_payload_mqtt_prefix = json_payload_mqtt_prefix
-        self.json_power_mqtt_labels = (
-            [json_power_mqtt_label]
-            if isinstance(json_power_mqtt_label, str)
-            else list(json_power_mqtt_label)
-        )
-        self.json_power_input_mqtt_labels = (
-            [json_power_input_mqtt_label]
-            if isinstance(json_power_input_mqtt_label, str)
-            else list(json_power_input_mqtt_label)
-        )
-        self.json_power_output_mqtt_labels = (
-            [json_power_output_mqtt_label]
-            if isinstance(json_power_output_mqtt_label, str)
-            else list(json_power_output_mqtt_label)
-        )
+        self.json_power_mqtt_labels = as_list(json_power_mqtt_label)
+        self.json_power_input_mqtt_labels = as_list(json_power_input_mqtt_label)
+        self.json_power_output_mqtt_labels = as_list(json_power_output_mqtt_label)
         self.json_power_calculate = json_power_calculate
         if json_power_calculate:
             if len(self.json_power_input_mqtt_labels) != len(
