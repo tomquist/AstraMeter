@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** a Home Assistant power source refusing to start, or reading as permanently unavailable, when its entity list had a stray or trailing comma (`POWER_INPUT_ALIAS = sensor.import,`). Blank entries are now ignored.
+- **Fixed** a Home Assistant power source refusing to start, or reading as permanently unavailable, when its entity list had a stray or trailing comma (`POWER_INPUT_ALIAS = sensor.import,`). Blank entries are now ignored ([#640](https://github.com/tomquist/astrameter/pull/640)).
 
 - **Fixed** a B2500 written off as unable to deliver after being handed a share too small to switch it on, which made every later share smaller still — leaving it at 0 W indefinitely while the house imported ([#624](https://github.com/tomquist/astrameter/issues/624), [#629](https://github.com/tomquist/astrameter/pull/629)).
 
