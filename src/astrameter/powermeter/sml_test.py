@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,12 +31,12 @@ def _obis_value(
     return SimpleNamespace(obis=obis, value=value, unit=unit, scaler=scaler)
 
 
-def _defaults():
+def _defaults() -> tuple[str, str, str, str]:
     return (_OBIS_POWER_CURRENT, _OBIS_POWER_L1, _OBIS_POWER_L2, _OBIS_POWER_L3)
 
 
 class TestEnergyStatsFromSmlFrame(unittest.TestCase):
-    def test_aggregate_only(self):
+    def test_aggregate_only(self) -> None:
         frame = MagicMock()
         frame.get_obis.return_value = [
             _obis_value(_OBIS_POWER_CURRENT, 1500, 27),
@@ -43,7 +44,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [1500])
 
-    def test_multiphase_when_all_phases_present(self):
+    def test_multiphase_when_all_phases_present(self) -> None:
         frame = MagicMock()
         frame.get_obis.return_value = [
             _obis_value(_OBIS_POWER_L1, 100, 27),
@@ -53,7 +54,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [100, 200, 300])
 
-    def test_prefers_multiphase_when_aggregate_also_present(self):
+    def test_prefers_multiphase_when_aggregate_also_present(self) -> None:
         frame = MagicMock()
         frame.get_obis.return_value = [
             _obis_value(_OBIS_POWER_CURRENT, 9999, 27),
@@ -64,7 +65,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [100, 200, 300])
 
-    def test_falls_back_to_aggregate_if_incomplete_phases(self):
+    def test_falls_back_to_aggregate_if_incomplete_phases(self) -> None:
         frame = MagicMock()
         frame.get_obis.return_value = [
             _obis_value(_OBIS_POWER_CURRENT, 1500, 27),
@@ -74,7 +75,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [1500])
 
-    def test_applies_negative_scaler_aggregate(self):
+    def test_applies_negative_scaler_aggregate(self) -> None:
         # Meters like the Apator Picus eHZ send watts with scaler -3, so the
         # raw integer is 1000x too large; the scaler must be applied (#519).
         frame = MagicMock()
@@ -84,7 +85,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [170.0])
 
-    def test_applies_scaler_per_phase(self):
+    def test_applies_scaler_per_phase(self) -> None:
         frame = MagicMock()
         frame.get_obis.return_value = [
             _obis_value(_OBIS_POWER_L1, 100000, 27, scaler=-3),
@@ -94,7 +95,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [100.0, 200.0, -50.0])
 
-    def test_scaler_zero_or_absent_unchanged(self):
+    def test_scaler_zero_or_absent_unchanged(self) -> None:
         # scaler 0 and a missing scaler both mean "already in watts".
         frame = MagicMock()
         frame.get_obis.return_value = [
@@ -103,7 +104,7 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
         stats = EnergyStats.from_sml_frame(frame, *_defaults())
         self.assertEqual(stats.powers, [1500])
 
-    def test_wrong_unit_raises(self):
+    def test_wrong_unit_raises(self) -> None:
         frame = MagicMock()
         frame.get_obis.return_value = [_obis_value(_OBIS_POWER_CURRENT, 1500, 30)]
         with self.assertRaises(ValueError) as ctx:
@@ -113,20 +114,20 @@ class TestEnergyStatsFromSmlFrame(unittest.TestCase):
 
 
 class TestParseSmlObisConfig(unittest.TestCase):
-    def test_defaults_when_empty(self):
+    def test_defaults_when_empty(self) -> None:
         config = configparser.ConfigParser()
         config.read_string("[SML]\n")
         t = parse_sml_obis_config("SML", config)
         self.assertEqual(t, _defaults())
 
-    def test_override_normalized(self):
+    def test_override_normalized(self) -> None:
         config = configparser.ConfigParser()
         config.read_string("[SML]\nOBIS_POWER_CURRENT = 0100100700FF\n")
         oc, o1, _o2, _o3 = parse_sml_obis_config("SML", config)
         self.assertEqual(oc, "0100100700ff")
         self.assertEqual(o1, _OBIS_POWER_L1)
 
-    def test_invalid_length_raises(self):
+    def test_invalid_length_raises(self) -> None:
         config = configparser.ConfigParser()
         config.read_string("[SML]\nOBIS_POWER_CURRENT = deadbeef\n")
         with self.assertRaises(ValueError):
@@ -134,20 +135,21 @@ class TestParseSmlObisConfig(unittest.TestCase):
 
 
 class TestCreateSmlPowermeter(unittest.TestCase):
-    def test_missing_serial_raises(self):
+    def test_missing_serial_raises(self) -> None:
         config = configparser.ConfigParser()
         config.read_string("[SML]\n")
         with self.assertRaises(ValueError) as ctx:
             create_sml_powermeter("SML", config)
         self.assertIn("SERIAL", str(ctx.exception))
 
-    def test_serial_trimmed(self):
+    def test_serial_trimmed(self) -> None:
         config = configparser.ConfigParser()
         config.read_string("[SML]\nSERIAL = /dev/ttyAMA0\n")
         pm = create_sml_powermeter("SML", config)
+        assert isinstance(pm, Sml)
         self.assertEqual(pm._serial_device, "/dev/ttyAMA0")
 
-    def test_custom_obis_passed_to_sml(self):
+    def test_custom_obis_passed_to_sml(self) -> None:
         config = configparser.ConfigParser()
         config.read_string(
             "[SML]\n"
@@ -158,6 +160,7 @@ class TestCreateSmlPowermeter(unittest.TestCase):
             "OBIS_POWER_L3 = 01004c0700ff\n"
         )
         pm = create_sml_powermeter("SML", config)
+        assert isinstance(pm, Sml)
         self.assertEqual(pm._obis_current, "0100100700ff")
         self.assertEqual(pm._obis_l1, "0100240700ff")
 
@@ -165,10 +168,10 @@ class TestCreateSmlPowermeter(unittest.TestCase):
 # --- Async tests for the migrated Sml class ---
 
 
-async def test_async_read_returns_updated_powers():
+async def test_async_read_returns_updated_powers() -> None:
     sml = Sml("/dev/ttyUSB0")
 
-    async def fake_read():
+    async def fake_read() -> None:
         sml._current = EnergyStats(powers=[500])
 
     with patch.object(sml, "_read_serial", side_effect=fake_read):
@@ -176,13 +179,13 @@ async def test_async_read_returns_updated_powers():
     assert result == [500.0]
 
 
-async def test_async_skip_if_busy_returns_cached():
+async def test_async_skip_if_busy_returns_cached() -> None:
     sml = Sml("/dev/ttyUSB0")
     sml._current = EnergyStats(powers=[999])
 
     read_called = False
 
-    async def fake_read():
+    async def fake_read() -> None:
         nonlocal read_called
         read_called = True
 
@@ -198,14 +201,14 @@ async def test_async_skip_if_busy_returns_cached():
     assert not read_called
 
 
-async def test_async_lock_released_on_exception():
+async def test_async_lock_released_on_exception() -> None:
     sml = Sml("/dev/ttyUSB0")
     original_powers = sml._current.powers[:]
 
-    async def failing_read():
+    async def failing_read() -> None:
         raise OSError("serial port error")
 
-    async def successful_read():
+    async def successful_read() -> None:
         sml._current = EnergyStats(powers=[42])
 
     with (
@@ -224,7 +227,7 @@ async def test_async_lock_released_on_exception():
     assert result == [42.0]
 
 
-async def test_async_cold_start_skip_returns_zero():
+async def test_async_cold_start_skip_returns_zero() -> None:
     sml = Sml("/dev/ttyUSB0")
     await sml._lock.acquire()
     try:
@@ -234,13 +237,13 @@ async def test_async_cold_start_skip_returns_zero():
     assert result == [0.0]
 
 
-async def test_async_concurrent_callers():
+async def test_async_concurrent_callers() -> None:
     sml = Sml("/dev/ttyUSB0")
     sml._current = EnergyStats(powers=[100])
     read_count = 0
     read_started = asyncio.Event()
 
-    async def slow_read():
+    async def slow_read() -> None:
         nonlocal read_count
         read_count += 1
         read_started.set()
@@ -249,7 +252,7 @@ async def test_async_concurrent_callers():
 
     with patch.object(sml, "_read_serial", side_effect=slow_read):
         # Launch 3 concurrent callers
-        async def caller():
+        async def caller() -> list[float]:
             return await sml.get_powermeter_watts()
 
         task1 = asyncio.create_task(caller())
@@ -266,7 +269,7 @@ async def test_async_concurrent_callers():
     assert r3 == [100.0]  # Cached value (before read completed)
 
 
-async def test_read_serial_retries_on_crc_error():
+async def test_read_serial_retries_on_crc_error() -> None:
     sml = Sml("/dev/ttyUSB0")
 
     mock_reader = AsyncMock()
@@ -281,7 +284,7 @@ async def test_read_serial_retries_on_crc_error():
 
     import smllib.errors
 
-    def patched_get_frame(stream_self):
+    def patched_get_frame(stream_self: Any) -> Any:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -295,7 +298,7 @@ async def test_read_serial_retries_on_crc_error():
     assert call_count == 2
 
 
-async def test_read_serial_timeout():
+async def test_read_serial_timeout() -> None:
     sml = Sml("/dev/ttyUSB0")
 
     mock_reader = AsyncMock()
@@ -365,14 +368,14 @@ def _build_sml_frame(
     return frame_no_crc + struct.pack(">H", crc)
 
 
-def test_parse_sml_powers_decodes_full_telegram():
+def test_parse_sml_powers_decodes_full_telegram() -> None:
     """parse_sml_powers decodes a complete SML telegram (bytes) into watts."""
     frame = _build_sml_frame(power_agg=1234, power_l1=400, power_l2=500, power_l3=334)
     # All three phases present → per-phase preferred over the aggregate.
     assert parse_sml_powers(frame) == [400, 500, 334]
 
 
-def test_parse_sml_powers_applies_scaler():
+def test_parse_sml_powers_applies_scaler() -> None:
     """A meter sending watts with scaler -3 is decoded to true watts (#519)."""
     frame = _build_sml_frame(
         power_agg=170000, power_l1=170000, power_l2=0, power_l3=0, scaler=-3
@@ -381,12 +384,12 @@ def test_parse_sml_powers_applies_scaler():
     assert parse_sml_powers(frame) == [170.0, 0.0, 0.0]
 
 
-def test_parse_sml_powers_returns_none_on_garbage():
+def test_parse_sml_powers_returns_none_on_garbage() -> None:
     """parse_sml_powers returns None when no valid frame can be parsed."""
     assert parse_sml_powers(b"not an sml telegram") is None
 
 
-async def test_e2e_pty_serial_read():
+async def test_e2e_pty_serial_read() -> None:
     """Full E2E test: PTY pair → async serial read → SML parse → power values."""
     master_fd, slave_fd = os.openpty()
     slave_name = os.ttyname(slave_fd)
@@ -395,7 +398,7 @@ async def test_e2e_pty_serial_read():
         power_agg=1234, power_l1=400, power_l2=500, power_l3=334
     )
 
-    def writer():
+    def writer() -> None:
         time.sleep(0.2)
         os.write(master_fd, frame_data)
 
@@ -415,13 +418,16 @@ async def test_e2e_pty_serial_read():
 
 
 @pytest.mark.asyncio
-async def test_empty_first_read_reports_a_closed_connection(caplog):
+async def test_empty_first_read_reports_a_closed_connection(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """EOF on the first read is end-of-stream, not an unparseable frame."""
     sml = Sml("/dev/null")
-    sml._reader = SimpleNamespace(read=AsyncMock(return_value=b""))
+    reader = AsyncMock(return_value=b"")
+    sml._reader = cast("asyncio.StreamReader", SimpleNamespace(read=reader))
     with caplog.at_level(logging.ERROR):
         await sml._read_serial()
     assert "serial connection closed" in caplog.text
     assert "failed to read SML frame" not in caplog.text
     # One read, then stop -- no futile frame attempts against an empty stream.
-    assert sml._reader.read.await_count == 1
+    assert reader.await_count == 1

@@ -13,6 +13,7 @@ add-on log, so the two agree on what counts as a secret.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 # Eight bullets.  Deliberately not a plausible password, and identical in
 # every field so its length leaks nothing about the real value.
@@ -35,7 +36,7 @@ def is_secret_key(key: str) -> bool:
     return bool(_SECRET_KEY.search(key))
 
 
-def redact_value(key: str, value):
+def redact_value(key: str, value: Any) -> Any:
     """Replace a secret value, or the userinfo inside a URI, with the sentinel."""
     if not isinstance(value, str):
         return value
@@ -52,7 +53,7 @@ def redact_sections(sections: dict) -> dict:
     }
 
 
-def _restore_value(key: str, value: str, stored):
+def _restore_value(key: str, value: str, stored: Any) -> Any:
     """Put the stored secret back into an echoed value.
 
     For a plain secret the whole value is the secret, so the stored one

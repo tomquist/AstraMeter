@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 SOH = 0x01
 STX = 0x02
 ETX = 0x03
@@ -35,21 +37,26 @@ RESPONSE_LABELS = [
 ]
 
 
-def calculate_checksum(data_bytes):
+def calculate_checksum(data_bytes: bytes | bytearray) -> int:
     xor = 0
     for b in data_bytes:
         xor ^= b
     return xor
 
 
-def parse_int(value, default=0):
+def parse_int(value: object, default: int = 0) -> int:
+    """The integer *value* denotes, or *default* when it denotes none.
+
+    Takes ``object`` because it reads both wire strings and already-parsed
+    numbers; the ``TypeError`` below is what covers everything else.
+    """
     try:
-        return int(value)
+        return int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return default
 
 
-def compute_length(payload_without_length):
+def compute_length(payload_without_length: bytes) -> int:
     base_size = 1 + 1 + len(payload_without_length) + 1 + 2
     for length_digits in range(1, 5):
         total_length = base_size + length_digits
@@ -58,7 +65,7 @@ def compute_length(payload_without_length):
     raise ValueError("Payload length too large")
 
 
-def build_payload(fields):
+def build_payload(fields: Sequence[str]) -> bytearray:
     message_str = SEPARATOR + SEPARATOR.join(fields)
     message_bytes = message_str.encode("ascii")
     total_length = compute_length(message_bytes)
@@ -72,7 +79,13 @@ def build_payload(fields):
     return payload
 
 
-def parse_request(data):
+def parse_request(data: bytes) -> tuple[list[str], None] | tuple[None, str]:
+    """The request's fields, or ``None`` and why the datagram was not one.
+
+    Mirrors ``protocol.cpp``'s ``std::optional<std::vector<std::string>>``:
+    the absent fields are the signal, and the string beside them is for the
+    log.
+    """
     if len(data) < 10:
         return None, "Too short"
     if data[0] != SOH or data[1] != STX:
@@ -104,7 +117,8 @@ def parse_request(data):
         else:
             return (
                 None,
-                f"Checksum mismatch (expected {expected_checksum}, got {actual_checksum})",
+                "Checksum mismatch (expected "
+                f"{expected_checksum.decode()}, got {actual_checksum.decode(errors='replace')})",
             )
     try:
         message = data[sep_index:-3].decode("ascii")

@@ -15,11 +15,15 @@ from __future__ import annotations
 import html
 import ipaddress
 import json
-from collections.abc import Collection, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable
+from typing import Any
 
 from aiohttp import web
 
 from astrameter.config.logger import logger
+
+#: An aiohttp route handler, as the wrappers below take and return one.
+Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 #: How many distinct refused host names to remember for log deduplication.
 #: The name comes from the request, so this is a bound on what a caller can
@@ -27,7 +31,9 @@ from astrameter.config.logger import logger
 _REFUSED_HOST_LOG_CAP = 64
 
 
-def _json(payload, status=200, cache="no-store", **headers):
+def json_response(
+    payload: Any, status: int = 200, cache: str = "no-store", **headers: str
+) -> web.Response:
     """JSON response, ``Cache-Control: no-store`` unless *cache* says otherwise."""
     headers.setdefault("Cache-Control", cache)
     return web.Response(
@@ -38,13 +44,41 @@ def _json(payload, status=200, cache="no-store", **headers):
     )
 
 
-def _error(message, status):
+def error_response(message: str, status: int) -> web.Response:
     """The ``{"error": ...}`` shape every failing route answers with."""
-    return _json({"error": message}, status=status)
+    return json_response({"error": message}, status=status)
 
 
-def _forbidden():
-    return _error("Forbidden", status=403)
+def forbidden() -> web.Response:
+    return error_response("Forbidden", status=403)
+
+
+class ApiError(Exception):
+    """A refusal a route states in passing, instead of unwinding to a 500.
+
+    Raised wherever the reason is known — a malformed body, a Supervisor that
+    answered with an error — and turned into the response by
+    :func:`answers_api_errors`, which every API route is wrapped in. Handlers
+    are then free of the ``return error(...)`` plumbing between the check and
+    the work.
+    """
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+def answers_api_errors(handler: Handler) -> Handler:
+    """Wrap *handler* so an :class:`ApiError` it raises becomes its response."""
+
+    async def guarded(request: web.Request) -> web.StreamResponse:
+        try:
+            return await handler(request)
+        except ApiError as exc:
+            return error_response(exc.message, status=exc.status)
+
+    return guarded
 
 
 def _refusal_page(title: str, heading: str, body: str) -> str:
@@ -122,12 +156,14 @@ Home Assistant add-on) if it is yours.</p>"""
 JSON_CONTENT_TYPE = "application/json"
 
 
-def requires_json_content_type(handler):
+def requires_json_content_type(handler: Handler) -> Handler:
     """Wrap *handler* so a request not declared as JSON is refused."""
 
-    async def guarded(request):
+    async def guarded(request: web.Request) -> web.StreamResponse:
         if request.content_type.casefold() != JSON_CONTENT_TYPE:
-            return _error(f"Content-Type must be {JSON_CONTENT_TYPE}", status=415)
+            return error_response(
+                f"Content-Type must be {JSON_CONTENT_TYPE}", status=415
+            )
         return await handler(request)
 
     return guarded
@@ -268,7 +304,7 @@ class RefusedHostLog:
             )
 
 
-def foreign_host_response(request, shown: str):
+def foreign_host_response(request: web.Request, shown: str) -> web.StreamResponse:
     """The 403 for a request whose ``Host`` the guard does not recognise.
 
     Prose for a page a person navigated to, JSON for the API the page polls.
@@ -278,7 +314,7 @@ def foreign_host_response(request, shown: str):
         "IP address, or add the name to DASHBOARD_ALLOWED_HOSTS."
     )
     if request.path.startswith("/api/"):
-        return _error(message, status=403)
+        return error_response(message, status=403)
     return web.Response(
         status=403,
         text=_refusal_page(

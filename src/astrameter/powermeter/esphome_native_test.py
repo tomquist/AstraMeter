@@ -41,12 +41,12 @@ def _state(value: float, missing_state: bool = False) -> SensorState:
     )
 
 
-async def test_no_value_before_message():
+async def test_no_value_before_message() -> None:
     pm = _subscribed_pm()
     assert await pm.get_powermeter_watts() == []
 
 
-async def test_get_powermeter_watts_returns_latest():
+async def test_get_powermeter_watts_returns_latest() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(123.0))
     assert await pm.get_powermeter_watts() == [123.0]
@@ -54,19 +54,19 @@ async def test_get_powermeter_watts_returns_latest():
     assert await pm.get_powermeter_watts() == [456.0]
 
 
-async def test_change_callback_ignores_other_entities():
+async def test_change_callback_ignores_other_entities() -> None:
     pm = _subscribed_pm()
     pm.change_callback(SensorState(key=ENTITY_KEY + 1, state=999.0))  # type: ignore[call-arg]
     assert await pm.get_powermeter_watts() == []
 
 
-async def test_change_callback_ignores_before_subscribe():
+async def test_change_callback_ignores_before_subscribe() -> None:
     pm = _make_pm()  # entity_info is None until connect_callback runs
     pm.change_callback(_state(123.0))
     assert await pm.get_powermeter_watts() == []
 
 
-async def test_change_callback_drops_missing_state():
+async def test_change_callback_drops_missing_state() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(100.0))
     pm.change_callback(_state(math.nan, missing_state=True))
@@ -74,26 +74,26 @@ async def test_change_callback_drops_missing_state():
     assert await pm.get_powermeter_watts() == [100.0]
 
 
-async def test_change_callback_drops_nan_without_missing_flag():
+async def test_change_callback_drops_nan_without_missing_flag() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(100.0))
     pm.change_callback(_state(math.nan))
     assert await pm.get_powermeter_watts() == [100.0]
 
 
-async def test_wait_for_message_returns_after_message():
+async def test_wait_for_message_returns_after_message() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(10.0))
     await pm.wait_for_message(timeout=0.1)
 
 
-async def test_wait_for_message_times_out_without_message():
+async def test_wait_for_message_times_out_without_message() -> None:
     pm = _subscribed_pm()
     with pytest.raises(TimeoutError):
         await pm.wait_for_message(timeout=0.05)
 
 
-async def test_wait_for_next_message_blocks_until_new():
+async def test_wait_for_next_message_blocks_until_new() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(10.0))
     # wait_for_next_message must wait for the *next* update, not return on the
@@ -102,7 +102,7 @@ async def test_wait_for_next_message_blocks_until_new():
         await pm.wait_for_next_message(timeout=0.05)
 
 
-async def test_disconnect_clears_value():
+async def test_disconnect_clears_value() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(50.0))
     assert await pm.get_powermeter_watts() == [50.0]
@@ -115,14 +115,14 @@ async def test_disconnect_clears_value():
     assert pm.entity_info is None
 
 
-async def test_stream_online_reflects_connection():
+async def test_stream_online_reflects_connection() -> None:
     pm = _make_pm()
     assert pm.stream_online() is False
     pm.is_connected = True
     assert pm.stream_online() is True
 
 
-async def test_connect_error_resets_state():
+async def test_connect_error_resets_state() -> None:
     pm = _subscribed_pm()
     pm.change_callback(_state(50.0))
     await pm.connect_error_callback(RuntimeError("boom"))

@@ -30,7 +30,7 @@ class PidPowermeter(PowermeterWrapper):
         kd: float = 0.0,
         output_max: float = 800.0,
         mode: str = "bias",
-    ):
+    ) -> None:
         if output_max <= 0:
             raise ValueError(f"PID output_max must be positive, got {output_max}")
         mode = mode.lower()

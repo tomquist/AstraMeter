@@ -21,7 +21,9 @@ class ThrottledPowermeter(PowermeterWrapper):
     a controlled rate.
     """
 
-    def __init__(self, wrapped_powermeter: Powermeter, throttle_interval: float = 0.0):
+    def __init__(
+        self, wrapped_powermeter: Powermeter, throttle_interval: float = 0.0
+    ) -> None:
         super().__init__(wrapped_powermeter)
         self.throttle_interval = throttle_interval
 

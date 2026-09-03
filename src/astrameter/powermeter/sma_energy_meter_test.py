@@ -1,6 +1,7 @@
 import asyncio
 import struct
 import unittest
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,9 @@ CHANNEL_TOTAL_ENERGY_PLUS = 0x00010800
 CHANNEL_L1_ENERGY_PLUS = 0x00150800
 
 
-def _build_header(susy_id=349, serial=3000012345, protocol_id=0x6069):
+def _build_header(
+    susy_id: int = 349, serial: int = 3000012345, protocol_id: int = 0x6069
+) -> bytes:
     """Build a valid SMA Speedwire header (28 bytes)."""
     header = bytearray(28)
     # Magic "SMA\0"
@@ -49,7 +52,7 @@ def _build_header(susy_id=349, serial=3000012345, protocol_id=0x6069):
     return bytes(header)
 
 
-def _build_channel(identifier, value, length=4):
+def _build_channel(identifier: int, value: int, length: int = 4) -> bytes:
     """Build an OBIS channel entry (4-byte identifier + value)."""
     data = struct.pack(">I", identifier)
     if length == 4:
@@ -59,11 +62,16 @@ def _build_channel(identifier, value, length=4):
     return data
 
 
-def _build_end_marker():
+def _build_end_marker() -> bytes:
     return struct.pack(">I", CHANNEL_END)
 
 
-def _build_packet(channels, susy_id=349, serial=3000012345, protocol_id=0x6069):
+def _build_packet(
+    channels: list[bytes],
+    susy_id: int = 349,
+    serial: int = 3000012345,
+    protocol_id: int = 0x6069,
+) -> bytes:
     """Build a complete SMA Speedwire packet."""
     header = _build_header(susy_id=susy_id, serial=serial, protocol_id=protocol_id)
     body = b""
@@ -73,27 +81,27 @@ def _build_packet(channels, susy_id=349, serial=3000012345, protocol_id=0x6069):
     return header + body
 
 
-def _create_meter(**kwargs):
+def _create_meter(**kwargs: Any) -> SmaEnergyMeter:
     """Create an SmaEnergyMeter without starting the listener."""
     return SmaEnergyMeter(**kwargs)
 
 
 class TestGetChannelDataLength(unittest.TestCase):
-    def test_type_04_returns_4(self):
+    def test_type_04_returns_4(self) -> None:
         self.assertEqual(_get_channel_data_length(0x00010400), 4)
 
-    def test_type_08_returns_8(self):
+    def test_type_08_returns_8(self) -> None:
         self.assertEqual(_get_channel_data_length(0x00010800), 8)
 
-    def test_end_marker_returns_0(self):
+    def test_end_marker_returns_0(self) -> None:
         self.assertEqual(_get_channel_data_length(CHANNEL_END), 0)
 
-    def test_software_version_returns_4(self):
+    def test_software_version_returns_4(self) -> None:
         self.assertEqual(_get_channel_data_length(CHANNEL_SOFTWARE_VERSION), 4)
 
 
 class TestHandlePacket(unittest.TestCase):
-    def test_three_phase_consumption(self):
+    def test_three_phase_consumption(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -108,7 +116,7 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(packet)
         self.assertEqual(meter.values, [100.0, 200.0, 300.0])
 
-    def test_three_phase_net_power(self):
+    def test_three_phase_net_power(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -126,7 +134,7 @@ class TestHandlePacket(unittest.TestCase):
         self.assertAlmostEqual(meter.values[1], -200.0)
         self.assertAlmostEqual(meter.values[2], 0.0)
 
-    def test_total_only_fallback(self):
+    def test_total_only_fallback(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -137,7 +145,7 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(packet)
         self.assertEqual(meter.values, [500.0])
 
-    def test_total_net_production(self):
+    def test_total_net_production(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -149,13 +157,13 @@ class TestHandlePacket(unittest.TestCase):
         assert meter.values is not None
         self.assertAlmostEqual(meter.values[0], -290.0)
 
-    def test_invalid_magic_ignored(self):
+    def test_invalid_magic_ignored(self) -> None:
         meter = _create_meter()
         packet = b"XYZ\x00" + b"\x00" * 24
         meter._handle_packet(packet)
         self.assertIsNone(meter.values)
 
-    def test_invalid_tag42_ignored(self):
+    def test_invalid_tag42_ignored(self) -> None:
         meter = _create_meter()
         packet = bytearray(_build_header())
         packet[5] = 0x00
@@ -164,7 +172,7 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(bytes(packet))
         self.assertIsNone(meter.values)
 
-    def test_wrong_protocol_id_ignored(self):
+    def test_wrong_protocol_id_ignored(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [_build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000)],
@@ -173,12 +181,12 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(packet)
         self.assertIsNone(meter.values)
 
-    def test_too_short_packet_ignored(self):
+    def test_too_short_packet_ignored(self) -> None:
         meter = _create_meter()
         meter._handle_packet(b"SMA\x00" + b"\x00" * 10)
         self.assertIsNone(meter.values)
 
-    def test_serial_filter_match(self):
+    def test_serial_filter_match(self) -> None:
         meter = _create_meter(serial_number=12345)
         packet = _build_packet(
             [_build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000)],
@@ -187,7 +195,7 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(packet)
         self.assertEqual(meter.values, [100.0])
 
-    def test_serial_filter_mismatch(self):
+    def test_serial_filter_mismatch(self) -> None:
         meter = _create_meter(serial_number=12345)
         packet = _build_packet(
             [_build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000)],
@@ -196,7 +204,7 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(packet)
         self.assertIsNone(meter.values)
 
-    def test_auto_detect_locks_serial(self):
+    def test_auto_detect_locks_serial(self) -> None:
         meter = _create_meter()
         # First packet from meter with serial 11111
         packet1 = _build_packet(
@@ -218,7 +226,7 @@ class TestHandlePacket(unittest.TestCase):
         # Should still have old value
         self.assertEqual(meter.values, [100.0])
 
-    def test_auto_detect_rejects_unknown_susy_id(self):
+    def test_auto_detect_rejects_unknown_susy_id(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [_build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000)],
@@ -229,7 +237,7 @@ class TestHandlePacket(unittest.TestCase):
         self.assertIsNone(meter._detected_serial)
         self.assertIsNone(meter.values)
 
-    def test_energy_channels_skipped_correctly(self):
+    def test_energy_channels_skipped_correctly(self) -> None:
         """8-byte energy channels should be skipped without breaking power parsing."""
         meter = _create_meter()
         packet = _build_packet(
@@ -248,7 +256,7 @@ class TestHandlePacket(unittest.TestCase):
         meter._handle_packet(packet)
         self.assertEqual(meter.values, [100.0, 200.0, 300.0])
 
-    def test_phase_data_preferred_over_total(self):
+    def test_phase_data_preferred_over_total(self) -> None:
         """When both phase and total data present, phase data is used."""
         meter = _create_meter()
         packet = _build_packet(
@@ -268,7 +276,7 @@ class TestHandlePacket(unittest.TestCase):
         self.assertEqual(len(meter.values), 3)
         self.assertEqual(meter.values, [100.0, 200.0, 300.0])
 
-    def test_software_version_channel_skipped(self):
+    def test_software_version_channel_skipped(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -282,12 +290,12 @@ class TestHandlePacket(unittest.TestCase):
 
 
 class TestGetPowermeterWattsAsync:
-    async def test_no_data_raises(self):
+    async def test_no_data_raises(self) -> None:
         meter = _create_meter()
         with pytest.raises(ValueError):
             await meter.get_powermeter_watts()
 
-    async def test_returns_copy(self):
+    async def test_returns_copy(self) -> None:
         meter = _create_meter()
         meter.values = [100.0, 200.0, 300.0]
         result = await meter.get_powermeter_watts()
@@ -296,12 +304,12 @@ class TestGetPowermeterWattsAsync:
 
 
 class TestWaitForMessageAsync:
-    async def test_timeout_raises(self):
+    async def test_timeout_raises(self) -> None:
         meter = _create_meter()
         with pytest.raises(TimeoutError):
             await meter.wait_for_message(timeout=0)
 
-    async def test_returns_when_data_available(self):
+    async def test_returns_when_data_available(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -316,7 +324,7 @@ class TestWaitForMessageAsync:
 
 
 class TestWaitForNextMessage:
-    async def test_blocks_until_new(self):
+    async def test_blocks_until_new(self) -> None:
         meter = _create_meter()
         packet = _build_packet(
             [
@@ -326,7 +334,7 @@ class TestWaitForNextMessage:
         )
         meter._handle_packet(packet)
 
-        async def _push_later():
+        async def _push_later() -> None:
             await asyncio.sleep(0.05)
             new_packet = _build_packet(
                 [
@@ -341,7 +349,7 @@ class TestWaitForNextMessage:
         await task
         assert await meter.get_powermeter_watts() == [200.0]
 
-    async def test_timeout(self):
+    async def test_timeout(self) -> None:
         meter = _create_meter()
         meter._message_event.set()
         with pytest.raises(TimeoutError):
@@ -349,15 +357,15 @@ class TestWaitForNextMessage:
 
 
 class TestLifecycle:
-    async def test_stop_closes_transport(self):
+    async def test_stop_closes_transport(self) -> None:
         meter = _create_meter()
         # Simulate a started meter with a mock transport
 
         class FakeTransport:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.closed = False
 
-            def close(self):
+            def close(self) -> None:
                 self.closed = True
 
         transport = FakeTransport()
@@ -366,7 +374,7 @@ class TestLifecycle:
         assert transport.closed
         assert meter._transport is None
 
-    async def test_stop_when_not_started(self):
+    async def test_stop_when_not_started(self) -> None:
         meter = _create_meter()
         await meter.stop()  # should not raise
 
@@ -383,7 +391,7 @@ class _FakeClock:
 
 
 class TestStreamOnline(unittest.TestCase):
-    def _total_packet(self):
+    def _total_packet(self) -> bytes:
         return _build_packet(
             [
                 _build_channel(CHANNEL_TOTAL_POWER_PLUS, 1000),
@@ -391,11 +399,11 @@ class TestStreamOnline(unittest.TestCase):
             ]
         )
 
-    def test_false_before_any_telegram(self):
+    def test_false_before_any_telegram(self) -> None:
         meter = _create_meter()
         self.assertIs(meter.stream_online(), False)
 
-    def test_true_when_fresh(self):
+    def test_true_when_fresh(self) -> None:
         clock = _FakeClock()
         meter = _create_meter(max_telegram_age_seconds=30.0, clock=clock)
         meter._handle_packet(self._total_packet())
@@ -403,14 +411,14 @@ class TestStreamOnline(unittest.TestCase):
         clock.advance(29.0)
         self.assertIs(meter.stream_online(), True)
 
-    def test_false_when_stale(self):
+    def test_false_when_stale(self) -> None:
         clock = _FakeClock()
         meter = _create_meter(max_telegram_age_seconds=30.0, clock=clock)
         meter._handle_packet(self._total_packet())
         clock.advance(31.0)
         self.assertIs(meter.stream_online(), False)
 
-    def test_disabled_when_max_age_zero(self):
+    def test_disabled_when_max_age_zero(self) -> None:
         clock = _FakeClock()
         meter = _create_meter(max_telegram_age_seconds=0.0, clock=clock)
         meter._handle_packet(self._total_packet())
@@ -419,13 +427,13 @@ class TestStreamOnline(unittest.TestCase):
 
 
 class TestDeviceNames(unittest.TestCase):
-    def test_known_susy_ids(self):
+    def test_known_susy_ids(self) -> None:
         self.assertEqual(SMA_SUSY_IDS[270], "SMA Energy Meter 1.0")
         self.assertEqual(SMA_SUSY_IDS[349], "SMA Energy Meter 2.0")
         self.assertEqual(SMA_SUSY_IDS[372], "Sunny Home Manager 2.0")
         self.assertEqual(SMA_SUSY_IDS[501], "Sunny Home Manager 2.0")
 
-    def test_unknown_susy_id(self):
+    def test_unknown_susy_id(self) -> None:
         self.assertNotIn(999, SMA_SUSY_IDS)
 
 

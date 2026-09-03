@@ -93,7 +93,7 @@ levels = {
 }
 
 
-def setLogLevel(inLevel: str):
+def setLogLevel(inLevel: str) -> None:
     level = levels.get(inLevel.lower())
     if level is None:
         level = logging.WARNING

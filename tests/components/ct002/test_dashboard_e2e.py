@@ -14,8 +14,10 @@ here, and the wire format itself by ``host_status_json_test.cpp``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
-from test_shared_e2e import _running_esphome_backend
+from test_shared_e2e import Backend, _running_esphome_backend
 
 from astrameter.ct002.controls import coerce_consumer_control
 
@@ -26,7 +28,7 @@ CONSUMER_ID = MAC.lower()
 
 
 @pytest.fixture
-def esphome():
+def esphome() -> Iterator[Backend]:
     """The host binary, with one battery reporting on phase A into a 300 W import."""
     with _running_esphome_backend() as backend:
         backend.set_clock(1000)
@@ -35,15 +37,15 @@ def esphome():
         yield backend
 
 
-def _device(backend) -> dict:
+def _device(backend: Backend) -> dict:
     return backend.status()["devices"][0]
 
 
-def _consumer(backend) -> dict:
+def _consumer(backend: Backend) -> dict:
     return _device(backend)["consumers"][0]
 
 
-def test_document_carries_the_live_battery(esphome) -> None:
+def test_document_carries_the_live_battery(esphome: Backend) -> None:
     device = _device(esphome)
     assert device["kind"] == "ct002"
     consumer = device["consumers"][0]
@@ -57,7 +59,7 @@ def test_document_carries_the_live_battery(esphome) -> None:
     assert consumer["balancer"]["last_target_w"] > 0
 
 
-def test_document_carries_the_grid_and_its_buckets(esphome) -> None:
+def test_document_carries_the_grid_and_its_buckets(esphome: Backend) -> None:
     device = _device(esphome)
     assert device["grid"]["l1_w"] == 300
     assert device["grid"]["grid_total_w"] == 300
@@ -70,7 +72,7 @@ def test_document_carries_the_grid_and_its_buckets(esphome) -> None:
     assert set(device["buckets"]) == {"x", "A", "B", "C", "ABC"}
 
 
-def test_document_carries_the_power_source(esphome) -> None:
+def test_document_carries_the_power_source(esphome: Backend) -> None:
     meter = esphome.status()["powermeters"][0]
     assert meter["kind"] == "SensorBackedPowermeter"
     assert meter["online"] is True
@@ -81,7 +83,7 @@ def test_document_carries_the_power_source(esphome) -> None:
     assert "pipeline" not in meter
 
 
-def test_document_carries_the_balancer_internals(esphome) -> None:
+def test_document_carries_the_balancer_internals(esphome: Backend) -> None:
     balancer = _device(esphome)["balancer"]
     assert balancer["predictor"]["grid_estimate_w"] == 300
     assert "trust" in balancer["predictor"]
@@ -90,7 +92,7 @@ def test_document_carries_the_balancer_internals(esphome) -> None:
     assert "probe" not in balancer
 
 
-def test_document_carries_the_control_quality_verdict(esphome) -> None:
+def test_document_carries_the_control_quality_verdict(esphome: Backend) -> None:
     quality = _device(esphome)["balancer"]["control_quality"]
     # One poll in: the loop is being judged but has nothing to say yet.
     assert quality["verdict"] in {"idle", "warmup", "stable", "off_target", "limited"}
@@ -104,7 +106,7 @@ def test_document_carries_the_control_quality_verdict(esphome) -> None:
         assert "crossings_per_min" not in quality
 
 
-def test_document_omits_what_the_firmware_cannot_produce(esphome) -> None:
+def test_document_omits_what_the_firmware_cannot_produce(esphome: Backend) -> None:
     document = esphome.status()
     # No SNTP on this binary: ages are reported, dates are not invented.
     assert "generated_at" not in document
@@ -119,7 +121,7 @@ def test_document_omits_what_the_firmware_cannot_produce(esphome) -> None:
     assert document["service"]["runtime"] == "esphome"
 
 
-def test_a_manual_target_write_lands_in_the_document(esphome) -> None:
+def test_a_manual_target_write_lands_in_the_document(esphome: Backend) -> None:
     assert esphome.control("manual_target", -250, CONSUMER_ID).startswith("ok")
     consumer = _consumer(esphome)
     assert consumer["manual_target_w"] == -250
@@ -130,7 +132,7 @@ def test_a_manual_target_write_lands_in_the_document(esphome) -> None:
     assert consumer["manual_enabled"] is False
 
 
-def test_auto_target_off_is_what_enters_manual_mode(esphome) -> None:
+def test_auto_target_off_is_what_enters_manual_mode(esphome: Backend) -> None:
     assert esphome.control("manual_target", -250, CONSUMER_ID).startswith("ok")
     assert esphome.control("auto_target", "false", CONSUMER_ID).startswith("ok")
     consumer = _consumer(esphome)
@@ -141,21 +143,21 @@ def test_auto_target_off_is_what_enters_manual_mode(esphome) -> None:
     assert _consumer(esphome)["mode"] == "auto"
 
 
-def test_deactivating_a_battery_shows_up_as_inactive(esphome) -> None:
+def test_deactivating_a_battery_shows_up_as_inactive(esphome: Backend) -> None:
     assert esphome.control("active", "false", CONSUMER_ID).startswith("ok")
     consumer = _consumer(esphome)
     assert consumer["active"] is False
     assert consumer["mode"] == "inactive"
 
 
-def test_efficiency_window_weight_round_trips_as_a_percentage(esphome) -> None:
+def test_efficiency_window_weight_round_trips_as_a_percentage(esphome: Backend) -> None:
     # The wire unit is a percentage (matching the MQTT entity of that name)
     # and the setter's is a fraction; the scale has to cancel out exactly.
     assert esphome.control("efficiency_window_weight", 50, CONSUMER_ID).startswith("ok")
     assert _consumer(esphome)["efficiency_window_weight_pct"] == 50
 
 
-def test_a_device_wide_write_lands_too(esphome) -> None:
+def test_a_device_wide_write_lands_too(esphome: Backend) -> None:
     assert esphome.control("active_control", "false").startswith("ok")
     assert _device(esphome)["control"]["active_control"] is False
 
@@ -170,7 +172,7 @@ def test_a_device_wide_write_lands_too(esphome) -> None:
     ],
 )
 def test_out_of_range_is_refused_with_python_s_own_message(
-    esphome, field, value
+    esphome: Backend, field, value
 ) -> None:
     """The firmware must refuse exactly what the Python dashboard refuses.
 
@@ -186,16 +188,16 @@ def test_out_of_range_is_refused_with_python_s_own_message(
     assert str(exc_info.value) in reply
 
 
-def test_a_boolean_field_refuses_a_number(esphome) -> None:
+def test_a_boolean_field_refuses_a_number(esphome: Backend) -> None:
     reply = esphome.control("active", 3, CONSUMER_ID)
     assert "must be true or false" in reply
 
 
-def test_an_unknown_field_is_refused(esphome) -> None:
+def test_an_unknown_field_is_refused(esphome: Backend) -> None:
     assert "Unknown" in esphome.control("nonsense", 1, CONSUMER_ID)
 
 
-def test_a_write_to_an_unknown_battery_is_refused(esphome) -> None:
+def test_a_write_to_an_unknown_battery_is_refused(esphome: Backend) -> None:
     """A stale page — or anyone poking the endpoint — must not mint batteries.
 
     Every consumer setter creates the entry when it is missing, which is what
@@ -209,7 +211,7 @@ def test_a_write_to_an_unknown_battery_is_refused(esphome) -> None:
     assert len(_device(esphome)["consumers"]) == before
 
 
-def test_a_saved_setting_for_an_absent_battery_stays_writable(esphome) -> None:
+def test_a_saved_setting_for_an_absent_battery_stays_writable(esphome: Backend) -> None:
     """...but a battery the document DOES show must stay settable.
 
     A consumer that has been evicted still has its saved override, and the

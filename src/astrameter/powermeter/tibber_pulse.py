@@ -56,7 +56,7 @@ class TibberPulse(HttpPowermeter):
         obis_power_l3: str = _OBIS_POWER_L3,
         timeout: float = DEFAULT_TIMEOUT_S,
         clock: Callable[[], float] | None = None,
-    ):
+    ) -> None:
         super().__init__(timeout=timeout)
         self.ip = ip
         self.password = password

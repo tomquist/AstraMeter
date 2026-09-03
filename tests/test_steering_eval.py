@@ -69,14 +69,14 @@ def _one_battery_scenario(spec: BatterySpec, duration_s: float) -> Scenario:
     )
 
 
-def test_grid_cost_asymmetric_tariff():
+def test_grid_cost_asymmetric_tariff() -> None:
     # 1 kWh imported costs the retail tariff; 1 kWh exported earns the (lower)
     # feed-in tariff as a credit (negative cost).
     assert _grid_cost_ct(1000.0, 0.0) == pytest.approx(RETAIL_CT_PER_KWH)
     assert _grid_cost_ct(0.0, 1000.0) == pytest.approx(-FEEDIN_CT_PER_KWH)
 
 
-def test_oracle_zero_cost_when_battery_covers_load():
+def test_oracle_zero_cost_when_battery_covers_load() -> None:
     # A steady 500 W deficit for an hour against a battery with ample energy and
     # power: the perfect-foresight battery supplies all of it, so the optimal
     # grid exchange — and its cost — is zero.
@@ -87,7 +87,7 @@ def test_oracle_zero_cost_when_battery_covers_load():
     assert cost == pytest.approx(0.0, abs=1e-6)
 
 
-def test_oracle_floor_when_battery_too_small():
+def test_oracle_floor_when_battery_too_small() -> None:
     # Only 100 Wh of stored energy but the load asks 500 W for an hour (500 Wh).
     # The oracle supplies its 100 Wh and the remaining ~400 Wh must import — a
     # physically irreducible floor no controller can beat.
@@ -100,7 +100,7 @@ def test_oracle_floor_when_battery_too_small():
     assert cost == pytest.approx(RETAIL_CT_PER_KWH * 400.0 / 1000.0, rel=0.02)
 
 
-def test_oracle_credits_dc_input_solar():
+def test_oracle_credits_dc_input_solar() -> None:
     # 500 W deficit for an hour, the battery starts EMPTY but receives 500 W of
     # solar straight into its DC side (B2500-style). A DC-blind oracle would
     # import the whole 500 Wh; the DC-aware oracle passes the solar through to
@@ -150,7 +150,7 @@ def _tiny_scenario() -> Scenario:
     )
 
 
-def test_run_scenario_produces_metrics():
+def test_run_scenario_produces_metrics() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     assert res["scenario"] == "tiny"
     assert res["samples"] > 200
@@ -180,13 +180,13 @@ def test_run_scenario_produces_metrics():
     assert res["settle_mean_s"] < res["duration_h"] * 3600
 
 
-def test_run_scenario_is_deterministic():
+def test_run_scenario_is_deterministic() -> None:
     a = asyncio.run(run_scenario(_tiny_scenario(), seed=7))
     b = asyncio.run(run_scenario(_tiny_scenario(), seed=7))
     assert a == b
 
 
-def test_overrides_reach_the_balancer():
+def test_overrides_reach_the_balancer() -> None:
     # An absurd deadband makes the balance-correction path inert; the run
     # must still complete and produce metrics (knob plumbed through CT002).
     res = asyncio.run(
@@ -195,7 +195,7 @@ def test_overrides_reach_the_balancer():
     assert res["samples"] > 200
 
 
-def test_scenario_registry_shape():
+def test_scenario_registry_shape() -> None:
     scenarios = build_scenarios()
     # Multi-battery scenarios exist in both balancer modes.
     assert "two_venus/fair" in scenarios
@@ -273,7 +273,7 @@ def test_scenario_registry_shape():
         assert sc.duration_s > 0 and sc.batteries
 
 
-def test_markdown_compare_renders():
+def test_markdown_compare_renders() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     base = dict(res, overshoot_max_w=res["overshoot_max_w"] + 100.0)
     md = render_markdown_compare([base], [res])
@@ -296,7 +296,7 @@ def test_markdown_compare_renders():
     assert "steering-eval-report.html" in md_with_report
 
 
-def test_compare_tolerates_base_missing_a_new_metric():
+def test_compare_tolerates_base_missing_a_new_metric() -> None:
     """A base produced before a metric existed (this PR adds grid_p2p_w) must
     not break the comparison — CI runs base (old code) vs head (new code), so
     the base rows lack newly added keys. Both renderers must degrade to '—'."""
@@ -309,7 +309,7 @@ def test_compare_tolerates_base_missing_a_new_metric():
     assert "grid_p2p_w" in h
 
 
-def test_html_report_is_self_contained_and_interactive():
+def test_html_report_is_self_contained_and_interactive() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     base = dict(res, overshoot_max_w=res["overshoot_max_w"] + 100.0)
     h = render_html_report([base], [res])
@@ -330,7 +330,7 @@ def test_html_report_is_self_contained_and_interactive():
     assert 'class="better"' in h or 'class="worse"' in h
 
 
-def test_html_report_escapes_script_breakout_in_chart_data():
+def test_html_report_escapes_script_breakout_in_chart_data() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     # A label that would close the inline <script> if embedded verbatim.
     res = dict(res, battery_labels=["</script><b>x"])
@@ -341,7 +341,7 @@ def test_html_report_escapes_script_breakout_in_chart_data():
     assert "\\u003c/script>" in h
 
 
-def test_html_report_handles_missing_baseline():
+def test_html_report_handles_missing_baseline() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     h = render_html_report(None, [res])
     # Head-only still renders the grid (head series) and per-battery charts.
@@ -349,13 +349,13 @@ def test_html_report_handles_missing_baseline():
     assert 'id="batt0"' in h
 
 
-def test_grid_trace_is_downsampled_to_fixed_length():
+def test_grid_trace_is_downsampled_to_fixed_length() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     assert len(res["grid_trace"]) == GRAPH_POINTS
     assert all(isinstance(v, float) for v in res["grid_trace"])
 
 
-def test_battery_traces_one_per_battery_fixed_length():
+def test_battery_traces_one_per_battery_fixed_length() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     # One label and one fixed-length downsampled trace per battery.
     assert res["battery_labels"] == ["B1 HMG-50"]
@@ -364,7 +364,7 @@ def test_battery_traces_one_per_battery_fixed_length():
     assert all(isinstance(v, float) for v in res["battery_traces"][0])
 
 
-def test_consumption_trace_matches_grid_plus_battery_output():
+def test_consumption_trace_matches_grid_plus_battery_output() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     cons = res["consumption_trace"]
     assert len(cons) == GRAPH_POINTS
@@ -383,7 +383,7 @@ def _two_results() -> list[dict]:
     return [a, b]
 
 
-def test_aggregate_is_per_metric_mean_across_scenarios():
+def test_aggregate_is_per_metric_mean_across_scenarios() -> None:
     results = _two_results()
     agg = _aggregate(results)
     assert agg["scenario"] == "AGGREGATE"
@@ -395,7 +395,7 @@ def test_aggregate_is_per_metric_mean_across_scenarios():
         assert agg[key] == round(expected, _metric_ndp(key)), key
 
 
-def test_cost_keys_keep_two_decimals_through_aggregation():
+def test_cost_keys_keep_two_decimals_through_aggregation() -> None:
     # Regret clusters at fractions of a cent, so the aggregate/seed-merge must
     # keep 2 dp for *_ct keys (1 dp would quantize the guardrail's 5% test into
     # noise). A sub-0.1 ct mean must survive, not round to 0.0.
@@ -415,7 +415,7 @@ def test_cost_keys_keep_two_decimals_through_aggregation():
     assert _metric_ndp("grid_rms_w") == 1 and _metric_ndp("cost_regret_ct") == 2
 
 
-def test_aggregate_omits_metrics_absent_from_every_result():
+def test_aggregate_omits_metrics_absent_from_every_result() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     old = {k: v for k, v in res.items() if k != "grid_p2p_w"}
     # A base produced before grid_p2p_w existed contributes no value for it, so
@@ -424,7 +424,7 @@ def test_aggregate_omits_metrics_absent_from_every_result():
     assert "grid_p2p_w" in _aggregate([res])
 
 
-def test_overall_summary_reports_direction():
+def test_overall_summary_reports_direction() -> None:
     base_agg = {"settle_mean_s": 10.0, "overshoot_max_w": 100.0}
     better = {"settle_mean_s": 8.0, "overshoot_max_w": 90.0}
     worse = {"settle_mean_s": 12.0, "overshoot_max_w": 110.0}
@@ -433,7 +433,7 @@ def test_overall_summary_reports_direction():
     assert "(worse)" in _overall_summary(base_agg, worse)
 
 
-def test_weighted_overall_import_outweighs_export():
+def test_weighted_overall_import_outweighs_export() -> None:
     # Same-sized relative move on import vs export: import is weighted ~4x, so
     # an import improvement must move the weighted score more than an equal
     # export improvement, and an import regression dominates an export gain.
@@ -448,13 +448,13 @@ def test_weighted_overall_import_outweighs_export():
     assert _weighted_overall(base, mixed) > 0
 
 
-def test_weighted_overall_none_when_nothing_comparable():
+def test_weighted_overall_none_when_nothing_comparable() -> None:
     assert _weighted_overall({}, {}) is None
     # A base metric of 0 has no defined relative change → excluded.
     assert _weighted_overall({"overshoot_max_w": 0.0}, {"overshoot_max_w": 5.0}) is None
 
 
-def test_guardrail_regression_is_flagged():
+def test_guardrail_regression_is_flagged() -> None:
     base = {"overshoot_max_w": 100.0, "band_crossings_per_h": 50.0, "grid_p2p_w": 40.0}
     # overshoot_max up 30% (past the 5% tolerance), the rest flat.
     head = {"overshoot_max_w": 130.0, "band_crossings_per_h": 50.0, "grid_p2p_w": 40.0}
@@ -466,7 +466,7 @@ def test_guardrail_regression_is_flagged():
     assert _guardrail_regressions(base, {**base, "overshoot_max_w": 103.0}) == []
 
 
-def test_guardrail_includes_import_not_export():
+def test_guardrail_includes_import_not_export() -> None:
     # Avoidable grid import is the retail-tariff money metric, free to fix
     # (discharge): a regression past the tolerance is a do-no-harm breach even
     # when the dynamics are flat.
@@ -485,7 +485,7 @@ def test_guardrail_includes_import_not_export():
     )
 
 
-def test_guardrail_flags_regression_from_zero_base():
+def test_guardrail_flags_regression_from_zero_base() -> None:
     # The worst do-no-harm breach: a metric going from nothing to something
     # (zero overshoot becoming a real sign flip, or a perfectly self-consuming
     # controller starting to import). A relative change against 0 is undefined,
@@ -502,14 +502,14 @@ def test_guardrail_flags_regression_from_zero_base():
     )
 
 
-def test_priority_summary_clean_when_no_guardrail_regresses():
+def test_priority_summary_clean_when_no_guardrail_regresses() -> None:
     base = {"avoidable_import_wh": 100.0, "overshoot_max_w": 100.0}
     head = {"avoidable_import_wh": 80.0, "overshoot_max_w": 80.0}
     summary = _priority_summary(base, head)
     assert "✅" in summary and "(better)" in summary
 
 
-def test_markdown_compare_leads_with_priority_verdict():
+def test_markdown_compare_leads_with_priority_verdict() -> None:
     results = _two_results()
     base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
     md = render_markdown_compare(base, results)
@@ -517,7 +517,7 @@ def test_markdown_compare_leads_with_priority_verdict():
     assert "priority-weighted" in md
 
 
-def test_overall_summary_denominator_counts_only_compared_metrics():
+def test_overall_summary_denominator_counts_only_compared_metrics() -> None:
     # Base carries only 2 of the reported metrics (e.g. an older base from
     # before others existed); the verdict's denominator must be the metrics
     # actually compared, not the full list.
@@ -526,7 +526,7 @@ def test_overall_summary_denominator_counts_only_compared_metrics():
     assert "across 2 metrics" in _overall_summary(base, head)
 
 
-def test_compare_aggregates_uses_only_shared_scenarios():
+def test_compare_aggregates_uses_only_shared_scenarios() -> None:
     def mk(name: str, settle: float) -> dict:
         return {"scenario": name, "seed": 1, "settle_mean_s": settle}
 
@@ -543,7 +543,7 @@ def test_compare_aggregates_uses_only_shared_scenarios():
     assert _compare_aggregates(None, head) == (None, _aggregate(head))
 
 
-def test_render_text_adds_aggregate_only_for_multiple_scenarios():
+def test_render_text_adds_aggregate_only_for_multiple_scenarios() -> None:
     multi = render_text(_two_results())
     assert "AGGREGATE (mean across 2 scenarios)" in multi
     # A single scenario would just echo its own numbers, so no aggregate.
@@ -551,7 +551,7 @@ def test_render_text_adds_aggregate_only_for_multiple_scenarios():
     assert "AGGREGATE" not in single
 
 
-def test_markdown_compare_leads_with_aggregate_rollup():
+def test_markdown_compare_leads_with_aggregate_rollup() -> None:
     results = _two_results()
     base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
     md = render_markdown_compare(base, results)
@@ -562,7 +562,7 @@ def test_markdown_compare_leads_with_aggregate_rollup():
     assert md.index("Aggregate — mean across") < md.index("<details>")
 
 
-def test_html_report_renders_aggregate_section():
+def test_html_report_renders_aggregate_section() -> None:
     results = _two_results()
     base = [dict(r, overshoot_max_w=r["overshoot_max_w"] + 50.0) for r in results]
     h = render_html_report(base, results)
@@ -570,7 +570,7 @@ def test_html_report_renders_aggregate_section():
     assert "improved" in h  # the one-line verdict is rendered
 
 
-def test_merge_seeds_averages_metrics_and_traces():
+def test_merge_seeds_averages_metrics_and_traces() -> None:
     r1 = {
         "scenario": "x",
         "seed": 1,
@@ -600,18 +600,18 @@ def test_merge_seeds_averages_metrics_and_traces():
     assert merged["battery_labels"] == ["B1 HMG-50"]
 
 
-def test_merge_seeds_single_seed_is_passthrough():
+def test_merge_seeds_single_seed_is_passthrough() -> None:
     r = {"scenario": "x", "seed": 1, "settle_mean_s": 10.0}
     # One seed: nothing to average, the original row (with its seed) is returned.
     assert _merge_seeds([r]) is r
 
 
-def test_seed_label_reads_single_or_averaged():
+def test_seed_label_reads_single_or_averaged() -> None:
     assert _seed_label({"seed": 3}) == "seed 3"
     assert _seed_label({"n_seeds": 4, "seeds": [1, 2, 3, 4]}) == "mean of 4 seeds"
 
 
-def test_markdown_compare_notes_seed_averaging():
+def test_markdown_compare_notes_seed_averaging() -> None:
     res = asyncio.run(run_scenario(_tiny_scenario(), seed=3))
     head = [dict(res, n_seeds=3, seeds=[1, 2, 3])]
     md = render_markdown_compare([res], head)
@@ -620,7 +620,7 @@ def test_markdown_compare_notes_seed_averaging():
     assert "mean of 3 seeds" in md
 
 
-def test_run_all_runs_seeds_in_parallel_and_merges():
+def test_run_all_runs_seeds_in_parallel_and_merges() -> None:
     # End-to-end through the process pool: one real (short) scenario over two
     # seeds collapses to a single seed-averaged row.
     results = _run_all(["single_venus_washer"], [1, 2], {})
@@ -633,7 +633,7 @@ def test_run_all_runs_seeds_in_parallel_and_merges():
         assert key in r
 
 
-def test_metric_glossary_covers_every_reported_metric():
+def test_metric_glossary_covers_every_reported_metric() -> None:
     glossary_keys = [key for key, _ in _METRIC_GLOSSARY]
     assert glossary_keys == _REPORT_METRICS
 
@@ -659,7 +659,7 @@ def test_metric_glossary_covers_every_reported_metric():
         "single_venus_pv",
     ],
 )
-def test_full_scenario_definitions_build(name):
+def test_full_scenario_definitions_build(name) -> None:
     import random
 
     sc = build_scenarios()[name]
@@ -667,7 +667,7 @@ def test_full_scenario_definitions_build(name):
     assert events and all(e.at >= 0 for e in events)
 
 
-def test_washer_scenario_reproduces_sustained_oscillation():
+def test_washer_scenario_reproduces_sustained_oscillation() -> None:
     """The washing-machine scenario (issue #473) reproduces the field signature:
     a drum-tumble rhythm over a latency-delayed meter, so the loop hunts
     continuously instead of holding zero. It is scored on the sustained-
@@ -685,7 +685,7 @@ def test_washer_scenario_reproduces_sustained_oscillation():
         assert res[key] >= 0, key
 
 
-def test_noisy_scenario_has_no_labeled_events_but_scores_aggregates():
+def test_noisy_scenario_has_no_labeled_events_but_scores_aggregates() -> None:
     """The pretty-noisy house baseline has no scripted load steps (so the
     step-response metrics read 0), and the loud baseline noise drives the loop:
     it is scored on the sustained-oscillation aggregates, all of which stay
@@ -701,7 +701,7 @@ def test_noisy_scenario_has_no_labeled_events_but_scores_aggregates():
         assert res[key] >= 0, key
 
 
-def test_trace_scenario_replays_real_load_and_scores_aggregates():
+def test_trace_scenario_replays_real_load_and_scores_aggregates() -> None:
     """The real-trace scenario drives the base load from a recorded household
     trace (no scripted load steps, so the step-response metrics read 0) and is
     scored on the sustained-oscillation/energy aggregates, all populated and
@@ -721,7 +721,7 @@ def test_trace_scenario_replays_real_load_and_scores_aggregates():
     assert res["consumption_trace"] != res2["consumption_trace"]
 
 
-def test_trace_eff_variant_concentrates_unlike_fair():
+def test_trace_eff_variant_concentrates_unlike_fair() -> None:
     """The two-Venus trace /eff variant raises min_efficient_power so efficiency
     optimization actually engages on a real load: during a calm stretch it
     concentrates onto one Venus and idles the second (which only cuts in on
@@ -750,7 +750,7 @@ def test_trace_eff_variant_concentrates_unlike_fair():
     assert min_battery_idle_fraction(eff) > 0.5
 
 
-def test_pv_net_load_scenario_charges_from_real_solar():
+def test_pv_net_load_scenario_charges_from_real_solar() -> None:
     """The real-PV net-load scenario drives PV + load together from a recorded
     Cyprus prosumer (partly-cloudy day). Net export charges the battery (SoC
     rises from its 0.4 start) and the loop tracks the real solar variability
@@ -767,7 +767,7 @@ def test_pv_net_load_scenario_charges_from_real_solar():
     assert min(res["battery_traces"][0]) < -20
 
 
-def test_phase_imbalance_nulls_each_phase_independently():
+def test_phase_imbalance_nulls_each_phase_independently() -> None:
     """With one Venus per phase and asymmetric per-phase loads, the active-
     control loop distributes a target to each unit so every phase is nulled —
     not just the aggregate. Each battery discharges to cover its own phase, and
@@ -783,7 +783,7 @@ def test_phase_imbalance_nulls_each_phase_independently():
     assert all(m > 100 for m in means)
 
 
-def test_soc_saturation_scenarios_hit_the_edges():
+def test_soc_saturation_scenarios_hit_the_edges() -> None:
     """The drain/fill scenarios actually push the pack into empty/full
     saturation, exercising the handoff to the grid. Once saturated the battery
     can't help, so the *avoidable* energy is a small fraction of the total grid
@@ -801,7 +801,7 @@ def test_soc_saturation_scenarios_hit_the_edges():
     assert fill["avoidable_export_wh"] < 0.3 * fill["export_wh"]
 
 
-def test_slow_meter_variant_tracks_worse_than_default():
+def test_slow_meter_variant_tracks_worse_than_default() -> None:
     """A slow meter (fresh reading only every ~10 s) makes the loop act on
     badly stale data, so it mistracks far more than the same scenario on the
     realistic ~1 s default meter. The slow variant exists to cover meters that
@@ -815,7 +815,7 @@ def test_slow_meter_variant_tracks_worse_than_default():
     assert slow["grid_p2p_w"] > 2 * fast["grid_p2p_w"]
 
 
-def test_meter_latency_drives_sustained_oscillation():
+def test_meter_latency_drives_sustained_oscillation() -> None:
     """Acting on a delayed meter reading turns a settling loop into one that
     hunts: the washing-machine scenario's grid swing (grid_p2p_w) is markedly
     larger with its meter latency than with the delay removed. This guards the
@@ -870,7 +870,7 @@ class TestRampPacingRegression:
             build_events=events,
         )
 
-    def test_paced_overshoot_bounded(self):
+    def test_paced_overshoot_bounded(self) -> None:
         # Isolate ramp pacing: disable the adaptive grid-state predictor (on by
         # default), which independently bounds the windup this test attributes
         # to pacing — leaving it on would make the unpaced run look bounded too.

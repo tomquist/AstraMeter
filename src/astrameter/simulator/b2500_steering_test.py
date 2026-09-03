@@ -10,6 +10,8 @@ here — see the module docstring.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from astrameter.simulator.b2500_steering import (
@@ -24,10 +26,15 @@ from astrameter.simulator.b2500_steering import (
 ENV = 2500
 
 
-def _run(ctl: B2500SteeringController, grid_of, cycles: int, dt: float = 1.0):
+def _run(
+    ctl: B2500SteeringController,
+    grid_of: Callable[[int], int],
+    cycles: int,
+    dt: float = 1.0,
+) -> list[int]:
     """Drive *ctl* closed-loop; return the output after each cycle."""
     out = 0
-    trace = []
+    trace: list[int] = []
     for _ in range(cycles):
         out = ctl.step(grid_of(out), out, dt, max_power=ENV)
         trace.append(out)

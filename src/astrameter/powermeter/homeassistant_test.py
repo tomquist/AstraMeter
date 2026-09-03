@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,8 +8,8 @@ import pytest
 from .homeassistant import HomeAssistant
 
 
-def _create_powermeter(**overrides):
-    defaults = dict(
+def _create_powermeter(**overrides: Any) -> HomeAssistant:
+    defaults: dict[str, Any] = dict(
         ip="192.168.1.8",
         port="8123",
         use_https=False,
@@ -36,12 +37,12 @@ def _compressed_initial_payload(states: list[dict]) -> dict:
     return {"a": a}
 
 
-async def _simulate_auth_and_states(pm, states):
+async def _simulate_auth_and_states(pm: HomeAssistant, states: list[dict]) -> AsyncMock:
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     sid = pm._subscribe_entities_id
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -57,20 +58,20 @@ async def _simulate_auth_and_states(pm, states):
 # Auth flow tests
 
 
-async def test_auth_required_sends_token():
+async def test_auth_required_sends_token() -> None:
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
     ws.send_json.assert_called_once_with({"type": "auth", "access_token": "token"})
 
 
-async def test_auth_ok_subscribes_entities():
+async def test_auth_ok_subscribes_entities() -> None:
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
     ws.send_json.reset_mock()
 
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     if pm._fetch_states_task:
         pm._fetch_states_task.cancel()
 
@@ -82,10 +83,10 @@ async def test_auth_ok_subscribes_entities():
     assert "sensor.current_power" in subscribe_msg["entity_ids"]
 
 
-async def test_auth_invalid_does_not_crash():
+async def test_auth_invalid_does_not_crash() -> None:
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps({"type": "auth_invalid", "message": "bad token"}),
     )
@@ -95,7 +96,7 @@ async def test_auth_invalid_does_not_crash():
 # subscribe_entities initial snapshot tests
 
 
-async def test_initial_snapshot_populates_value():
+async def test_initial_snapshot_populates_value() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "1000"}]
@@ -103,17 +104,17 @@ async def test_initial_snapshot_populates_value():
     assert await pm.get_powermeter_watts() == [1000.0]
 
 
-async def test_no_initial_event_leaves_values_missing():
+async def test_no_initial_event_leaves_values_missing() -> None:
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
 
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
 
 
-async def test_initial_snapshot_only_updates_tracked_entities():
+async def test_initial_snapshot_only_updates_tracked_entities() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm,
@@ -128,7 +129,7 @@ async def test_initial_snapshot_only_updates_tracked_entities():
 # Trigger event tests
 
 
-async def test_trigger_event_updates_value():
+async def test_trigger_event_updates_value() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
@@ -136,7 +137,7 @@ async def test_trigger_event_updates_value():
     assert await pm.get_powermeter_watts() == [100.0]
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -155,14 +156,14 @@ async def test_trigger_event_updates_value():
     assert await pm.get_powermeter_watts() == [200.0]
 
 
-async def test_trigger_event_ignores_untracked_entity():
+async def test_trigger_event_ignores_untracked_entity() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
     )
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -184,7 +185,7 @@ async def test_trigger_event_ignores_untracked_entity():
 # Unit conversion / rejection tests (issues #39 / #572)
 
 
-async def test_kw_unit_converted_to_watts():
+async def test_kw_unit_converted_to_watts() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm,
@@ -199,7 +200,7 @@ async def test_kw_unit_converted_to_watts():
     assert await pm.get_powermeter_watts() == [215.0]
 
 
-async def test_w_unit_passes_through_unscaled():
+async def test_w_unit_passes_through_unscaled() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm,
@@ -214,7 +215,7 @@ async def test_w_unit_passes_through_unscaled():
     assert await pm.get_powermeter_watts() == [1500.0]
 
 
-async def test_missing_unit_assumes_watts():
+async def test_missing_unit_assumes_watts() -> None:
     """No unit attribute → historical behavior: the value is taken as W."""
     pm = _create_powermeter()
     await _simulate_auth_and_states(
@@ -230,7 +231,7 @@ async def test_missing_unit_assumes_watts():
     assert await pm.get_powermeter_watts() == [300.0]
 
 
-async def test_non_power_unit_rejected():
+async def test_non_power_unit_rejected() -> None:
     """A sensor with a non-power unit (e.g. a temperature entity wired in by
     mistake) must fail loudly instead of feeding garbage watts downstream.
     """
@@ -254,7 +255,7 @@ async def test_non_power_unit_rejected():
     )
 
 
-async def test_energy_unit_rejected():
+async def test_energy_unit_rejected() -> None:
     """kWh is energy, not power — a classic mis-wiring that must be rejected."""
     pm = _create_powermeter()
     await _simulate_auth_and_states(
@@ -271,7 +272,7 @@ async def test_energy_unit_rejected():
         await pm.get_powermeter_watts()
 
 
-async def test_kw_unit_survives_state_only_diffs():
+async def test_kw_unit_survives_state_only_diffs() -> None:
     """State diffs usually omit attributes; the kW unit learned from the
     initial snapshot must keep applying to later state-only updates.
     """
@@ -287,7 +288,7 @@ async def test_kw_unit_survives_state_only_diffs():
         ],
     )
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -302,7 +303,7 @@ async def test_kw_unit_survives_state_only_diffs():
     assert await pm.get_powermeter_watts() == [-600.0]
 
 
-async def test_unit_change_via_attribute_diff():
+async def test_unit_change_via_attribute_diff() -> None:
     """A `+`/`a` attribute diff carrying a new unit_of_measurement must
     update the conversion; one without the key must not clobber it.
     """
@@ -318,7 +319,7 @@ async def test_unit_change_via_attribute_diff():
         ],
     )
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -339,7 +340,7 @@ async def test_unit_change_via_attribute_diff():
     assert await pm.get_powermeter_watts() == [500.0]
 
     # An attribute diff that doesn't touch the unit leaves kW in effect.
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -357,10 +358,10 @@ async def test_unit_change_via_attribute_diff():
     assert await pm.get_powermeter_watts() == [200.0]
 
 
-async def test_reconnect_snapshot_without_unit_resets_to_watts():
+async def test_reconnect_snapshot_without_unit_resets_to_watts() -> None:
     """A unit learned before a reconnect must not survive a fresh snapshot
     that no longer declares one (e.g. the entity was reconfigured):
-    ``_reset_for_reconnect`` keeps ``_entity_units``, so the complete
+    ``_on_disconnect`` keeps ``_entity_units``, so the complete
     post-reconnect snapshot must replace — here clear — the stale kW scale.
     """
     pm = _create_powermeter()
@@ -376,7 +377,7 @@ async def test_reconnect_snapshot_without_unit_resets_to_watts():
     )
     assert await pm.get_powermeter_watts() == [500.0]
 
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
     await _simulate_auth_and_states(
         pm,
         [
@@ -390,7 +391,7 @@ async def test_reconnect_snapshot_without_unit_resets_to_watts():
     assert await pm.get_powermeter_watts() == [500.0]
 
 
-async def test_full_snapshot_without_unit_clears_cached_unit():
+async def test_full_snapshot_without_unit_clears_cached_unit() -> None:
     """A complete attributes payload that omits unit_of_measurement clears
     the recorded unit (back to the watts default) — unlike a partial ``+``
     diff, which leaves it untouched.
@@ -410,7 +411,7 @@ async def test_full_snapshot_without_unit_clears_cached_unit():
 
     # Same connection: a fresh full snapshot (event.a) without the unit key.
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -429,7 +430,7 @@ async def test_full_snapshot_without_unit_clears_cached_unit():
     assert await pm.get_powermeter_watts() == [300.0]
 
 
-async def test_power_calculate_mode_converts_per_entity():
+async def test_power_calculate_mode_converts_per_entity() -> None:
     """Mixed units in calculate mode: each alias converts independently."""
     pm = _create_powermeter(
         current_power_entity="",
@@ -455,7 +456,7 @@ async def test_power_calculate_mode_converts_per_entity():
     assert await pm.get_powermeter_watts() == [800.0]
 
 
-async def test_rest_bootstrap_applies_unit():
+async def test_rest_bootstrap_applies_unit() -> None:
     pm = _create_powermeter()
     pm._session = _make_rest_session(
         {
@@ -473,7 +474,7 @@ async def test_rest_bootstrap_applies_unit():
 # Error condition tests
 
 
-async def test_sensor_has_no_state():
+async def test_sensor_has_no_state() -> None:
     pm = _create_powermeter()
     with pytest.raises(ValueError) as exc_info:
         await pm.get_powermeter_watts()
@@ -483,7 +484,7 @@ async def test_sensor_has_no_state():
     )
 
 
-async def test_sensor_state_none():
+async def test_sensor_state_none() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": None}]
@@ -497,7 +498,7 @@ async def test_sensor_state_none():
     )
 
 
-async def test_sensor_state_not_numeric():
+async def test_sensor_state_not_numeric() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm,
@@ -512,10 +513,10 @@ async def test_sensor_state_not_numeric():
     )
 
 
-async def test_malformed_json_message():
+async def test_malformed_json_message() -> None:
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, "not valid json")
+    await pm._on_text(ws, "not valid json")
     # Should not raise; value stays absent
     with pytest.raises(ValueError):
         await pm.get_powermeter_watts()
@@ -524,7 +525,7 @@ async def test_malformed_json_message():
 # Three-phase tests
 
 
-async def test_three_phase_direct():
+async def test_three_phase_direct() -> None:
     pm = _create_powermeter(
         current_power_entity=[
             "sensor.power_phase1",
@@ -546,7 +547,7 @@ async def test_three_phase_direct():
 # Power calculate tests
 
 
-async def test_power_calculate_mode():
+async def test_power_calculate_mode() -> None:
     pm = _create_powermeter(
         current_power_entity="",
         power_calculate=True,
@@ -563,7 +564,7 @@ async def test_power_calculate_mode():
     assert await pm.get_powermeter_watts() == [800.0]
 
 
-async def test_three_phase_calculated():
+async def test_three_phase_calculated() -> None:
     pm = _create_powermeter(
         current_power_entity="",
         power_calculate=True,
@@ -592,7 +593,7 @@ async def test_three_phase_calculated():
     assert await pm.get_powermeter_watts() == [800.0, 1700.0, 2600.0]
 
 
-async def test_power_alias_length_mismatch():
+async def test_power_alias_length_mismatch() -> None:
     """A static config invariant — fail fast at construction rather than
     on every ``get_powermeter_watts`` call.
     """
@@ -612,17 +613,17 @@ async def test_power_alias_length_mismatch():
 # WebSocket URL tests
 
 
-def test_ws_url_http():
+def test_ws_url_http() -> None:
     pm = _create_powermeter()
     assert pm._build_ws_url() == "ws://192.168.1.8:8123/api/websocket"
 
 
-def test_ws_url_https():
+def test_ws_url_https() -> None:
     pm = _create_powermeter(use_https=True)
     assert pm._build_ws_url() == "wss://192.168.1.8:8123/api/websocket"
 
 
-def test_ws_url_with_path_prefix():
+def test_ws_url_with_path_prefix() -> None:
     pm = _create_powermeter(path_prefix="/prefix")
     assert pm._build_ws_url() == "ws://192.168.1.8:8123/prefix/api/websocket"
 
@@ -630,7 +631,7 @@ def test_ws_url_with_path_prefix():
 # wait_for_message tests
 
 
-async def test_wait_for_message_returns_when_data_available():
+async def test_wait_for_message_returns_when_data_available() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
@@ -639,7 +640,7 @@ async def test_wait_for_message_returns_when_data_available():
     await pm.wait_for_message(timeout=1)
 
 
-async def test_wait_for_message_timeout():
+async def test_wait_for_message_timeout() -> None:
     pm = _create_powermeter()
     with pytest.raises(TimeoutError):
         await pm.wait_for_message(timeout=0)
@@ -648,13 +649,13 @@ async def test_wait_for_message_timeout():
 # wait_for_next_message tests
 
 
-async def test_wait_for_next_message_blocks_until_new():
+async def test_wait_for_next_message_blocks_until_new() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
     )
 
-    async def _push_later():
+    async def _push_later() -> None:
         await asyncio.sleep(0.05)
         pm._update_entity_value("sensor.current_power", "200")
 
@@ -664,7 +665,7 @@ async def test_wait_for_next_message_blocks_until_new():
     assert await pm.get_powermeter_watts() == [200.0]
 
 
-async def test_wait_for_next_message_timeout():
+async def test_wait_for_next_message_timeout() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
@@ -676,7 +677,7 @@ async def test_wait_for_next_message_timeout():
 # subscribe_entities entity list test
 
 
-async def test_subscribe_entities_contains_all_entities_calculate_mode():
+async def test_subscribe_entities_contains_all_entities_calculate_mode() -> None:
     pm = _create_powermeter(
         current_power_entity="",
         power_calculate=True,
@@ -684,9 +685,9 @@ async def test_subscribe_entities_contains_all_entities_calculate_mode():
         power_output_alias="sensor.power_output",
     )
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
     ws.send_json.reset_mock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
 
     subscribe_msg = ws.send_json.call_args_list[0][0][0]
     entity_ids = subscribe_msg["entity_ids"]
@@ -697,14 +698,14 @@ async def test_subscribe_entities_contains_all_entities_calculate_mode():
 # REST bootstrap tests
 
 
-def _make_rest_session(responses: dict[str, dict | None]):
+def _make_rest_session(responses: dict[str, dict | None]) -> MagicMock:
     """Build a ``ClientSession`` mock where ``session.get(url)`` returns
     the configured JSON (or 404 when the mapped value is ``None``).
     ``responses`` is keyed by full URL.
     """
     captured_headers: dict[str, str] = {}
 
-    def _get(url, headers=None):
+    def _get(url: str, headers: dict[str, str] | None = None) -> Any:
         captured_headers.clear()
         if headers:
             captured_headers.update(headers)
@@ -727,7 +728,7 @@ def _make_rest_session(responses: dict[str, dict | None]):
     return session
 
 
-async def test_fetch_initial_states_seeds_value():
+async def test_fetch_initial_states_seeds_value() -> None:
     """When ``subscribe_entities`` never pushes an initial snapshot
     (entity not yet loaded, integration warming up), the REST bootstrap
     must still populate the cache so ``wait_for_message`` can return.
@@ -746,7 +747,7 @@ async def test_fetch_initial_states_seeds_value():
     assert await pm.get_powermeter_watts() == [123.0]
 
 
-async def test_fetch_initial_states_sends_bearer_token():
+async def test_fetch_initial_states_sends_bearer_token() -> None:
     pm = _create_powermeter()
     session = _make_rest_session(
         {
@@ -761,7 +762,7 @@ async def test_fetch_initial_states_sends_bearer_token():
     assert session._captured_headers.get("Authorization") == "Bearer token"
 
 
-async def test_fetch_initial_states_uses_https_and_path_prefix():
+async def test_fetch_initial_states_uses_https_and_path_prefix() -> None:
     pm = _create_powermeter(use_https=True, path_prefix="/core")
     session = _make_rest_session(
         {
@@ -776,7 +777,7 @@ async def test_fetch_initial_states_uses_https_and_path_prefix():
     assert await pm.get_powermeter_watts() == [42.0]
 
 
-async def test_fetch_initial_states_fetches_each_tracked_entity():
+async def test_fetch_initial_states_fetches_each_tracked_entity() -> None:
     pm = _create_powermeter(
         current_power_entity=[
             "sensor.power_phase1",
@@ -807,7 +808,7 @@ async def test_fetch_initial_states_fetches_each_tracked_entity():
     assert session.get.call_count == 3
 
 
-async def test_fetch_initial_states_skips_already_populated_entity():
+async def test_fetch_initial_states_skips_already_populated_entity() -> None:
     """If the ``subscribe_entities`` snapshot arrived first and already
     seeded a value, the REST fetch shouldn't waste a request — and must
     not clobber the (potentially newer) cached value.
@@ -828,7 +829,7 @@ async def test_fetch_initial_states_skips_already_populated_entity():
     assert await pm.get_powermeter_watts() == [999.0]
 
 
-async def test_fetch_initial_states_handles_404():
+async def test_fetch_initial_states_handles_404() -> None:
     pm = _create_powermeter()
     # 404: entity doesn't exist (or normalized differently); we mustn't
     # raise — the WS stream may still deliver a value later.
@@ -841,7 +842,7 @@ async def test_fetch_initial_states_handles_404():
         await pm.get_powermeter_watts()
 
 
-async def test_fetch_initial_states_swallows_request_exceptions():
+async def test_fetch_initial_states_swallows_request_exceptions() -> None:
     pm = _create_powermeter()
     session = MagicMock()
     session.get = MagicMock(side_effect=RuntimeError("boom"))
@@ -851,7 +852,7 @@ async def test_fetch_initial_states_swallows_request_exceptions():
     assert not pm._entities_ready.is_set()
 
 
-async def test_auth_ok_schedules_rest_bootstrap():
+async def test_auth_ok_schedules_rest_bootstrap() -> None:
     pm = _create_powermeter()
     pm._session = _make_rest_session(
         {
@@ -862,47 +863,47 @@ async def test_auth_ok_schedules_rest_bootstrap():
         }
     )
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     assert pm._fetch_states_task is not None
     await pm._fetch_states_task
     assert await pm.get_powermeter_watts() == [7.0]
 
 
-async def test_reconnect_cancels_in_flight_fetch():
+async def test_reconnect_cancels_in_flight_fetch() -> None:
     """An in-flight REST bootstrap from the previous connection must be
-    cancelled by ``_reset_for_reconnect``; otherwise it could resurrect
+    cancelled by ``_on_disconnect``; otherwise it could resurrect
     a stale value after the reset.
     """
     pm = _create_powermeter()
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _hang():
+    async def _hang() -> None:
         started.set()
         await release.wait()
 
     pm._fetch_states_task = asyncio.create_task(_hang())
     await started.wait()
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
     with pytest.raises(asyncio.CancelledError):
         await pm._fetch_states_task
 
 
-async def test_reconnect_prevents_stale_bootstrap_reseed():
+async def test_reconnect_prevents_stale_bootstrap_reseed() -> None:
     """End-to-end guard on the real ``_fetch_initial_states``: when the
-    REST response only resolves *after* ``_reset_for_reconnect`` has
+    REST response only resolves *after* ``_on_disconnect`` has
     cancelled the task, the post-await write must never land — the stale
     value cannot reseed the cache that the reset just cleared.
     """
     pm = _create_powermeter()
     gate = asyncio.Event()
 
-    def _get(url, headers=None):
+    def _get(url: str, headers: dict[str, str] | None = None) -> Any:
         resp = MagicMock()
         resp.status = 200
 
-        async def _json():
+        async def _json() -> Any:
             await gate.wait()  # don't resolve until the test releases it
             return {"entity_id": "sensor.current_power", "state": "123"}
 
@@ -918,7 +919,7 @@ async def test_reconnect_prevents_stale_bootstrap_reseed():
     pm._fetch_states_task = asyncio.create_task(pm._fetch_initial_states())
     await asyncio.sleep(0)  # let the task reach `await resp.json()`
 
-    pm._reset_for_reconnect()  # cancels the in-flight task and clears cache
+    pm._on_disconnect()  # cancels the in-flight task and clears cache
     gate.set()  # the json await would resume here — but cancellation wins
 
     with pytest.raises(asyncio.CancelledError):
@@ -931,7 +932,7 @@ async def test_reconnect_prevents_stale_bootstrap_reseed():
 # Lifecycle tests
 
 
-async def test_start_creates_session_and_task():
+async def test_start_creates_session_and_task() -> None:
     pm = _create_powermeter()
     with patch.object(pm, "_ws_loop", new_callable=AsyncMock) as mock_loop:
         mock_loop.return_value = None
@@ -941,7 +942,7 @@ async def test_start_creates_session_and_task():
         await pm.stop()
 
 
-async def test_start_is_idempotent():
+async def test_start_is_idempotent() -> None:
     pm = _create_powermeter()
     with patch.object(pm, "_ws_loop", new_callable=AsyncMock) as mock_loop:
         mock_loop.return_value = None
@@ -952,7 +953,7 @@ async def test_start_is_idempotent():
         await pm.stop()
 
 
-async def test_stop_closes_session():
+async def test_stop_closes_session() -> None:
     pm = _create_powermeter()
     with patch.object(pm, "_ws_loop", new_callable=AsyncMock) as mock_loop:
         mock_loop.return_value = None
@@ -962,7 +963,7 @@ async def test_stop_closes_session():
         assert pm._ws_task is None
 
 
-async def test_stop_without_start():
+async def test_stop_without_start() -> None:
     pm = _create_powermeter()
     # Should not raise
     await pm.stop()
@@ -971,7 +972,7 @@ async def test_stop_without_start():
 # entities_ready event tests
 
 
-async def test_entities_ready_set_when_all_present():
+async def test_entities_ready_set_when_all_present() -> None:
     pm = _create_powermeter()
     assert not pm._entities_ready.is_set()
     await _simulate_auth_and_states(
@@ -980,7 +981,7 @@ async def test_entities_ready_set_when_all_present():
     assert pm._entities_ready.is_set()
 
 
-async def test_entities_ready_cleared_when_value_becomes_none():
+async def test_entities_ready_cleared_when_value_becomes_none() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "100"}]
@@ -988,7 +989,7 @@ async def test_entities_ready_cleared_when_value_becomes_none():
     assert pm._entities_ready.is_set()
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1010,7 +1011,7 @@ async def test_entities_ready_cleared_when_value_becomes_none():
 
 
 @pytest.mark.parametrize("ts_key", ["lu", "lc"])
-async def test_state_reported_event_wakes_wait_for_next_message(ts_key: str):
+async def test_state_reported_event_wakes_wait_for_next_message(ts_key: str) -> None:
     """HA's ``subscribe_entities`` omits ``s`` from the diff when a sensor
     is reported with an unchanged value (only ``lu``/``lc`` updates).
     ``wait_for_next_message`` must still wake on those so callers like the
@@ -1027,7 +1028,7 @@ async def test_state_reported_event_wakes_wait_for_next_message(ts_key: str):
     await asyncio.sleep(0)
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1043,17 +1044,17 @@ async def test_state_reported_event_wakes_wait_for_next_message(ts_key: str):
     assert pm._entity_values["sensor.current_power"] == 42.0
 
 
-async def test_state_reported_before_initial_value_is_ignored():
+async def test_state_reported_before_initial_value_is_ignored() -> None:
     """A bare ``lu``/``lc`` keepalive that arrives before any state value
     must not wake ``wait_for_next_message`` — there is no usable value
     yet, so claiming the sensor is alive would be misleading.
     """
     pm = _create_powermeter()
     ws = AsyncMock()
-    await pm._handle_message(ws, json.dumps({"type": "auth_required"}))
-    await pm._handle_message(ws, json.dumps({"type": "auth_ok"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_required"}))
+    await pm._on_text(ws, json.dumps({"type": "auth_ok"}))
     pm._message_event.clear()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1069,11 +1070,11 @@ async def test_state_reported_before_initial_value_is_ignored():
     assert not pm._message_event.is_set()
 
 
-async def test_reconnect_invalidates_cached_values():
+async def test_reconnect_invalidates_cached_values() -> None:
     """A websocket disconnect must invalidate cached values, clear the
     ready flag, and reset the protocol counter so the reconnected
     ``subscribe_entities`` snapshot is what callers see — not stale
-    cache. Drives the real ``_reset_for_reconnect`` method that
+    cache. Drives the real ``_on_disconnect`` method that
     ``_ws_loop`` invokes after a disconnect, so a regression in any of
     its four resets is caught here.
     """
@@ -1085,7 +1086,7 @@ async def test_reconnect_invalidates_cached_values():
     assert pm._entities_ready.is_set()
     assert await pm.get_powermeter_watts() == [100.0]
 
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
 
     assert pm._msg_id == 0
     assert pm._subscribe_entities_id is None
@@ -1101,7 +1102,7 @@ async def test_reconnect_invalidates_cached_values():
     assert await pm.get_powermeter_watts() == [250.0]
 
 
-async def test_unavailable_blocks_wait_for_message():
+async def test_unavailable_blocks_wait_for_message() -> None:
     """When a sensor transitions to ``unavailable`` mid-stream, the ready
     flag must clear so ``wait_for_message`` blocks again — callers
     waiting for a usable reading shouldn't see the immediate return
@@ -1114,7 +1115,7 @@ async def test_unavailable_blocks_wait_for_message():
     await pm.wait_for_message(timeout=1)  # returns immediately when ready
 
     ws = AsyncMock()
-    await pm._handle_message(
+    await pm._on_text(
         ws,
         json.dumps(
             {
@@ -1134,12 +1135,12 @@ async def test_unavailable_blocks_wait_for_message():
 # --- stream_online health hook ---
 
 
-async def test_stream_online_false_before_auth():
+async def test_stream_online_false_before_auth() -> None:
     pm = _create_powermeter()
     assert pm.stream_online() is False
 
 
-async def test_stream_online_true_when_connected_and_entities_ready():
+async def test_stream_online_true_when_connected_and_entities_ready() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "123.0"}]
@@ -1147,7 +1148,7 @@ async def test_stream_online_true_when_connected_and_entities_ready():
     assert pm.stream_online() is True
 
 
-async def test_stream_online_multi_phase_quiet_phase_stays_online():
+async def test_stream_online_multi_phase_quiet_phase_stays_online() -> None:
     """A phase that stops changing (e.g. an idle oven phase reporting 0 W)
     keeps its value and must NOT mark the powermeter offline."""
     pm = _create_powermeter(
@@ -1168,7 +1169,7 @@ async def test_stream_online_multi_phase_quiet_phase_stays_online():
     assert pm.stream_online() is True
 
 
-async def test_stream_online_false_when_a_phase_goes_unavailable():
+async def test_stream_online_false_when_a_phase_goes_unavailable() -> None:
     pm = _create_powermeter(
         current_power_entity=["sensor.l1", "sensor.l2", "sensor.l3"]
     )
@@ -1186,11 +1187,11 @@ async def test_stream_online_false_when_a_phase_goes_unavailable():
     assert pm.stream_online() is False
 
 
-async def test_stream_online_false_after_reconnect_reset():
+async def test_stream_online_false_after_reconnect_reset() -> None:
     pm = _create_powermeter()
     await _simulate_auth_and_states(
         pm, [{"entity_id": "sensor.current_power", "state": "123.0"}]
     )
     assert pm.stream_online() is True
-    pm._reset_for_reconnect()
+    pm._on_disconnect()
     assert pm.stream_online() is False

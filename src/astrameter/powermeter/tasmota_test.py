@@ -1,11 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from astrameter.powermeter import Tasmota
 
 
-async def test_tasmota_get_powermeter_watts(mock_aiohttp_session):
+async def test_tasmota_get_powermeter_watts(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json({"StatusSNS": {"ENERGY": {"Power": 123}}})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         tasmota = Tasmota(
@@ -27,7 +27,7 @@ async def test_tasmota_get_powermeter_watts(mock_aiohttp_session):
         await tasmota.stop()
 
 
-async def test_tasmota_unauthenticated(mock_aiohttp_session):
+async def test_tasmota_unauthenticated(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json({"StatusSNS": {"ENERGY": {"Power": 123}}})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         tasmota = Tasmota(
@@ -49,7 +49,7 @@ async def test_tasmota_unauthenticated(mock_aiohttp_session):
         await tasmota.stop()
 
 
-async def test_tasmota_three_phase(mock_aiohttp_session):
+async def test_tasmota_three_phase(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json(
         {"StatusSNS": {"eBZ": {"Power_L1": 100, "Power_L2": 200, "Power_L3": 300}}}
     )
@@ -70,7 +70,7 @@ async def test_tasmota_three_phase(mock_aiohttp_session):
         await tasmota.stop()
 
 
-async def test_tasmota_three_phase_calculate(mock_aiohttp_session):
+async def test_tasmota_three_phase_calculate(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json(
         {
             "StatusSNS": {
@@ -102,7 +102,7 @@ async def test_tasmota_three_phase_calculate(mock_aiohttp_session):
         await tasmota.stop()
 
 
-def test_tasmota_mismatched_calculate_labels():
+def test_tasmota_mismatched_calculate_labels() -> None:
     with pytest.raises(ValueError, match="same number of entries"):
         Tasmota(
             "192.168.1.1",
@@ -117,7 +117,7 @@ def test_tasmota_mismatched_calculate_labels():
         )
 
 
-def test_tasmota_empty_calculate_labels():
+def test_tasmota_empty_calculate_labels() -> None:
     with pytest.raises(ValueError, match="cannot be empty"):
         Tasmota(
             "192.168.1.1",

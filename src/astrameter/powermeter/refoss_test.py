@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -6,7 +7,7 @@ from astrameter.powermeter import Refoss
 from astrameter.powermeter.refoss import parse_channels
 
 
-def _status_response(channels: dict[int, float]):
+def _status_response(channels: dict[int, float]) -> dict[str, Any]:
     """Build an Em.Status.Get-shaped payload for the given channel powers."""
     return {
         "status": [
@@ -22,7 +23,7 @@ def _status_response(channels: dict[int, float]):
     }
 
 
-def test_parse_channels():
+def test_parse_channels() -> None:
     """Accept positive ids and reject empty, non-integer, and zero values."""
     assert parse_channels("1") == [1]
     assert parse_channels("1,2,3") == [1, 2, 3]
@@ -48,7 +49,9 @@ def test_parse_channels():
 
 
 @pytest.mark.asyncio
-async def test_get_powermeter_watts_single_channel(mock_aiohttp_session):
+async def test_get_powermeter_watts_single_channel(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     """Return only the configured channel's signed power."""
     mock_aiohttp_session.set_json(_status_response({1: 421.5, 2: 10.0}))
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
@@ -59,7 +62,9 @@ async def test_get_powermeter_watts_single_channel(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-async def test_get_powermeter_watts_three_phase(mock_aiohttp_session):
+async def test_get_powermeter_watts_three_phase(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     """Return watts in CHANNELS order even when the API lists channels out of order."""
     # Deliberately out of channel-id order so we catch implementations that
     # return response order instead of configured CHANNELS order.
@@ -74,7 +79,9 @@ async def test_get_powermeter_watts_three_phase(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-async def test_get_powermeter_watts_missing_channel(mock_aiohttp_session):
+async def test_get_powermeter_watts_missing_channel(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     """Raise when a configured channel id is absent from the device response."""
     mock_aiohttp_session.set_json(_status_response({1: 10.0}))
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
@@ -86,7 +93,9 @@ async def test_get_powermeter_watts_missing_channel(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-async def test_get_powermeter_watts_missing_power_field(mock_aiohttp_session):
+async def test_get_powermeter_watts_missing_power_field(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     """Raise when a status entry has an id but no power field."""
     mock_aiohttp_session.set_json(
         {"status": [{"id": 1, "current": 0.0, "voltage": 230.0}]}
@@ -100,7 +109,9 @@ async def test_get_powermeter_watts_missing_power_field(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-async def test_get_powermeter_watts_rejects_non_object_json(mock_aiohttp_session):
+async def test_get_powermeter_watts_rejects_non_object_json(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     """Raise when the JSON root is not an object."""
     mock_aiohttp_session.set_json([{"id": 1, "power": 10.0}])
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
@@ -112,7 +123,7 @@ async def test_get_powermeter_watts_rejects_non_object_json(mock_aiohttp_session
 
 
 @pytest.mark.asyncio
-async def test_get_json_rejects_redirect(mock_aiohttp_session):
+async def test_get_json_rejects_redirect(mock_aiohttp_session: MagicMock) -> None:
     """Do not follow or accept HTTP redirects when polling the meter."""
     mock_resp = mock_aiohttp_session.get.return_value
     # __aenter__ returns the response mock used inside the async with block.
@@ -130,7 +141,9 @@ async def test_get_json_rejects_redirect(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-async def test_get_powermeter_watts_rejects_non_finite_power(mock_aiohttp_session):
+async def test_get_powermeter_watts_rejects_non_finite_power(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     """Raise when power is NaN or ±infinity."""
     for bad in ("NaN", "inf", "-inf"):
         mock_aiohttp_session.set_json({"status": [{"id": 1, "power": bad}]})
@@ -142,7 +155,7 @@ async def test_get_powermeter_watts_rejects_non_finite_power(mock_aiohttp_sessio
             await meter.stop()
 
 
-def test_requires_ip():
+def test_requires_ip() -> None:
     """Reject blank IP values before opening a session."""
     with pytest.raises(ValueError, match="IP"):
         Refoss("", [1])
@@ -150,6 +163,6 @@ def test_requires_ip():
         Refoss("   ", [1])
 
 
-def test_strips_ip():
+def test_strips_ip() -> None:
     """Strip surrounding whitespace from the configured IP."""
     assert Refoss("  192.168.1.150  ", [1]).ip == "192.168.1.150"

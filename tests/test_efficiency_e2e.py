@@ -13,6 +13,9 @@ probe deadlines) is fully reproducible.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
 import _ct002_e2e_backend as be
 import pytest
 from _ct002_e2e_backend import (
@@ -35,7 +38,7 @@ pytestmark = pytest.mark.esphome_e2e
 # Every test runs once per emulator backend. The python backend always runs;
 # esphome skips without the CLI. See tests/_ct002_e2e_backend.py.
 @pytest.fixture(params=["python", "esphome"], autouse=True)
-def _emulator_backend(request):
+def _emulator_backend(request: pytest.FixtureRequest) -> Iterator[None]:
     if request.param == "esphome" and not be.have_esphome():
         pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
     be.ACTIVE_BACKEND = request.param
@@ -70,8 +73,8 @@ class _SimHarness:
         startup_delays: list[float] | None = None,
         min_power_threshold: float = 5.0,
         min_power_thresholds: list[float] | None = None,
-        **ct_kwargs,
-    ):
+        **ct_kwargs: Any,
+    ) -> None:
         self.backend = be.ACTIVE_BACKEND
         self._esphome = EsphomeSim() if self.backend == "esphome" else None
         free_udp, http_port = find_free_ports(2)
@@ -176,7 +179,7 @@ class _SimHarness:
 
         self._scheduler = PollScheduler(self.batteries, self.clock, self._step_battery)
 
-    async def start(self):
+    async def start(self) -> None:
         await self.powermeter.start()
         if self.backend == "python":
             await self.ct002.start()
@@ -187,7 +190,7 @@ class _SimHarness:
                 self._esphome.set_cfg(key, val)
             self._esphome.set_clock(self.clock())
 
-    async def stop(self):
+    async def stop(self) -> None:
         if self.backend == "python":
             await self.ct002.stop()
         else:
@@ -258,7 +261,7 @@ class _SimHarness:
 class TestEfficiencyE2E:
     """End-to-end tests for efficiency optimization with simulated batteries."""
 
-    async def test_low_demand_concentrates_power(self):
+    async def test_low_demand_concentrates_power(self) -> None:
         """At 200W with 2 batteries and threshold=150, only 1 battery should be active."""
         h = _SimHarness(
             num_batteries=2,
@@ -277,7 +280,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_high_demand_uses_all_batteries(self):
+    async def test_high_demand_uses_all_batteries(self) -> None:
         """At 600W with 2 batteries and threshold=150, both should be active."""
         h = _SimHarness(
             num_batteries=2,
@@ -290,7 +293,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_demand_increase_activates_second_battery(self):
+    async def test_demand_increase_activates_second_battery(self) -> None:
         """When demand rises from low to high, second battery activates."""
         h = _SimHarness(
             num_batteries=2,
@@ -308,7 +311,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_disabled_feature_uses_all_batteries(self):
+    async def test_disabled_feature_uses_all_batteries(self) -> None:
         """With min_efficient_power=0 (default), both batteries share load equally."""
         h = _SimHarness(
             num_batteries=2,
@@ -321,7 +324,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_priority_rotation_switches_active_battery(self):
+    async def test_priority_rotation_switches_active_battery(self) -> None:
         """After rotation interval, the other battery joins via probe."""
         h = _SimHarness(
             num_batteries=2,
@@ -360,7 +363,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_probe_keeps_grid_near_zero_during_slow_rotation(self):
+    async def test_probe_keeps_grid_near_zero_during_slow_rotation(self) -> None:
         """During a slow probe, the previous battery keeps covering demand."""
         h = _SimHarness(
             num_batteries=2,
@@ -415,7 +418,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_probe_handles_mixed_poll_intervals(self):
+    async def test_probe_handles_mixed_poll_intervals(self) -> None:
         """Residual backup coverage tolerates probe lag from slower polling."""
         h = _SimHarness(
             num_batteries=2,
@@ -513,7 +516,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_probe_acceptance_avoids_large_export_spike(self):
+    async def test_probe_acceptance_avoids_large_export_spike(self) -> None:
         """Successful probe handoff should not temporarily double total output."""
         h = _SimHarness(
             num_batteries=2,
@@ -578,7 +581,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_probe_respects_80w_inverter_floor(self):
+    async def test_probe_respects_80w_inverter_floor(self) -> None:
         """Probe should use a meaningful command when batteries ignore tiny targets."""
         h = _SimHarness(
             num_batteries=2,
@@ -619,7 +622,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_probe_rejection_keeps_backup_covering_demand(self):
+    async def test_probe_rejection_keeps_backup_covering_demand(self) -> None:
         """Rejected probe should not create a noticeable demand gap."""
         h = _SimHarness(
             num_batteries=2,
@@ -665,7 +668,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_grid_converges_near_zero(self):
+    async def test_grid_converges_near_zero(self) -> None:
         """With efficiency optimization, grid import/export should converge near zero."""
         h = _SimHarness(
             num_batteries=2,
@@ -685,7 +688,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_three_batteries_partial_activation(self):
+    async def test_three_batteries_partial_activation(self) -> None:
         """With 3 batteries and 350W demand (threshold=150), 2 should be active."""
         h = _SimHarness(
             num_batteries=3,
@@ -698,7 +701,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_smooth_transition_no_overshoot(self):
+    async def test_smooth_transition_no_overshoot(self) -> None:
         """During demand increase, no single battery should overshoot excessively."""
         h = _SimHarness(
             num_batteries=2,
@@ -736,7 +739,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_saturated_battery_triggers_rotation(self):
+    async def test_saturated_battery_triggers_rotation(self) -> None:
         """When the active battery is saturated, it gets swapped out quickly."""
         h = _SimHarness(
             num_batteries=2,
@@ -765,7 +768,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_initially_empty_battery_swaps_without_timed_rotation(self):
+    async def test_initially_empty_battery_swaps_without_timed_rotation(self) -> None:
         """An empty prioritized battery should be swapped out before timed rotation."""
         h = _SimHarness(
             num_batteries=2,
@@ -793,7 +796,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_saturation_recovery_after_swap(self):
+    async def test_saturation_recovery_after_swap(self) -> None:
         """After forced swap, original battery recovers when constraint is lifted."""
         h = _SimHarness(
             num_batteries=2,
@@ -843,7 +846,7 @@ class TestEfficiencyE2E:
         finally:
             await h.stop()
 
-    async def test_load_sign_reversal_does_not_cause_false_saturation(self):
+    async def test_load_sign_reversal_does_not_cause_false_saturation(self) -> None:
         """When load flips sign (discharge->charge), active battery must not
         be falsely detected as saturated while it ramps to the new direction.
 

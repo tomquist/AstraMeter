@@ -1,9 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from astrameter.powermeter import IoBroker
 
 
-async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
+async def test_get_powermeter_watts_no_calculate(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     mock_aiohttp_session.set_json([{"id": "alias1", "val": 100}])
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         iobroker = IoBroker(
@@ -19,7 +21,9 @@ async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
         await iobroker.stop()
 
 
-async def test_get_powermeter_watts_with_calculate(mock_aiohttp_session):
+async def test_get_powermeter_watts_with_calculate(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     mock_aiohttp_session.set_json(
         [
             {"id": "input_alias", "val": 300},

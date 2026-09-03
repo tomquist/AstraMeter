@@ -22,6 +22,7 @@ import signal
 import socket
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -83,7 +84,7 @@ def host_binary() -> Path:
 
 
 @pytest.fixture
-def running_binary(host_binary: Path):
+def running_binary(host_binary: Path) -> Iterator[subprocess.Popen]:
     """Spawn the host binary; tear it down after the test."""
     # Wait for any previous test's binary to fully release the port.
     deadline = time.monotonic() + 5.0

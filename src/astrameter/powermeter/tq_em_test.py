@@ -1,9 +1,10 @@
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from astrameter.powermeter.tq_em import TQEnergyManager
 
 
-def _make_resp(data, status=200):
+def _make_resp(data: Any, status: int = 200) -> MagicMock:
     """Create a mock aiohttp response with async context manager support."""
     resp = MagicMock()
     resp.json = AsyncMock(return_value=data)
@@ -14,7 +15,9 @@ def _make_resp(data, status=200):
     return resp
 
 
-def _make_session(get_responses, post_responses=None):
+def _make_session(
+    get_responses: list[Any], post_responses: list[Any] | None = None
+) -> MagicMock:
     """Create a mock aiohttp session with sequenced GET/POST responses."""
     session = MagicMock()
     session.get = MagicMock(side_effect=[_make_resp(d) for d in get_responses])
@@ -26,7 +29,7 @@ def _make_session(get_responses, post_responses=None):
     return session
 
 
-async def test_three_phase():
+async def test_three_phase() -> None:
     session = _make_session(
         get_responses=[
             {"serial": "123", "authentication": False},
@@ -48,7 +51,7 @@ async def test_three_phase():
         await meter.stop()
 
 
-async def test_total_only():
+async def test_total_only() -> None:
     session = _make_session(
         get_responses=[
             {"serial": "321", "authentication": False},
@@ -63,7 +66,7 @@ async def test_total_only():
         await meter.stop()
 
 
-async def test_relogin_on_expired_session():
+async def test_relogin_on_expired_session() -> None:
     session = _make_session(
         get_responses=[
             {"serial": "123", "authentication": False},
@@ -83,7 +86,7 @@ async def test_relogin_on_expired_session():
         await meter.stop()
 
 
-async def test_missing_export():
+async def test_missing_export() -> None:
     session = _make_session(
         get_responses=[
             {"serial": "111", "authentication": False},
@@ -98,7 +101,7 @@ async def test_missing_export():
         await meter.stop()
 
 
-async def test_three_phase_missing_export():
+async def test_three_phase_missing_export() -> None:
     session = _make_session(
         get_responses=[
             {"serial": "777", "authentication": False},

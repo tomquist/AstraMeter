@@ -8,6 +8,8 @@ import contextlib
 import json
 import re
 import time
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 from unittest.mock import AsyncMock
 
 import aiomqtt
@@ -68,7 +70,7 @@ def _assert_discovery_structure(topic: str, payload: dict) -> None:
         _assert_valid_node_id(_sanitize_id(comp["unique_id"]))
 
 
-def test_ct002_consumer_discovery_structure():
+def test_ct002_consumer_discovery_structure() -> None:
     topic, payload = build_ct002_consumer_discovery(
         "astrameter", "dev1", "aabbccddeeff", "homeassistant", device_type="HMJ-2"
     )
@@ -193,7 +195,7 @@ def test_ct002_consumer_discovery_structure():
     assert min_dc["entity_category"] == "config"
 
 
-def test_min_dc_output_entity_only_for_external_inverter_types():
+def test_min_dc_output_entity_only_for_external_inverter_types() -> None:
     """The Min DC Output number is gated on the device-capabilities classifier."""
 
     def _components(device_type: str) -> dict:
@@ -214,7 +216,7 @@ def test_min_dc_output_entity_only_for_external_inverter_types():
         assert "min_dc_output" not in _components(dt), dt
 
 
-def test_ct002_consumer_discovery_no_device_type():
+def test_ct002_consumer_discovery_no_device_type() -> None:
     """Name omits device_type when empty."""
     _, payload = build_ct002_consumer_discovery(
         "astrameter", "dev1", "aabbccddeeff", "homeassistant"
@@ -224,7 +226,7 @@ def test_ct002_consumer_discovery_no_device_type():
     assert "model_id" not in dev
 
 
-def test_ct002_consumer_discovery_non_mac_consumer():
+def test_ct002_consumer_discovery_non_mac_consumer() -> None:
     """Non-MAC consumer_id has no connections but is still linked via via_device."""
     _, payload = build_ct002_consumer_discovery(
         "astrameter", "dev1", "192.168.1.1:12345", "homeassistant"
@@ -233,7 +235,7 @@ def test_ct002_consumer_discovery_non_mac_consumer():
     assert payload["device"]["via_device"] == "astrameter_ct002_dev1"
 
 
-def test_ct002_consumer_discovery_emits_no_connections_issue_438():
+def test_ct002_consumer_discovery_emits_no_connections_issue_438() -> None:
     """The consumer device advertises NO ``connections`` at all.
 
     Advertising the battery's own MAC (bluetooth or mac) would make HA merge
@@ -256,7 +258,7 @@ def test_ct002_consumer_discovery_emits_no_connections_issue_438():
     assert dev["via_device"] == "astrameter_ct002_dev1"
 
 
-def test_ct002_device_discovery_structure():
+def test_ct002_device_discovery_structure() -> None:
     topic, payload = build_ct002_device_discovery(
         "astrameter",
         "dev1",
@@ -328,7 +330,7 @@ def test_ct002_device_discovery_structure():
     assert btn["entity_category"] == "config"
 
 
-def test_ct002_device_discovery_omits_force_rotation_without_efficiency():
+def test_ct002_device_discovery_omits_force_rotation_without_efficiency() -> None:
     """The Force Rotation button is only surfaced when efficiency rotation is
     enabled (the default omits it — there's nothing to rotate)."""
     _, default_payload = build_ct002_device_discovery(
@@ -346,7 +348,7 @@ def test_ct002_device_discovery_omits_force_rotation_without_efficiency():
     assert "force_rotation" in enabled_payload["components"]
 
 
-def test_ct002_consumer_discovery_gates_efficiency_window_weight():
+def test_ct002_consumer_discovery_gates_efficiency_window_weight() -> None:
     """The Efficiency Window Weight number is only surfaced when efficiency
     rotation is enabled (the default omits it — every battery stays active)."""
     _, default_payload = build_ct002_consumer_discovery(
@@ -377,7 +379,7 @@ def test_ct002_consumer_discovery_gates_efficiency_window_weight():
     assert "* 100" in eww["value_template"]
 
 
-def test_shelly_battery_discovery_structure():
+def test_shelly_battery_discovery_structure() -> None:
     topic, payload = build_shelly_battery_discovery(
         "astrameter", "shelly1", "192.168.1.100", "homeassistant"
     )
@@ -416,7 +418,7 @@ def test_shelly_battery_discovery_structure():
     ],
     ids=["ct002_consumer", "shelly_battery"],
 )
-def test_retirement_payload_removes_retired_entities(build):
+def test_retirement_payload_removes_retired_entities(build: Callable[..., Any]) -> None:
     """The retirement variant deletes dropped entities, keeps the rest intact."""
     _topic, payload = build()
     retirement = build_retirement_payload(payload)
@@ -436,7 +438,7 @@ def test_retirement_payload_removes_retired_entities(build):
     assert "last_seen" not in payload["components"]
 
 
-def test_shelly_device_discovery_structure():
+def test_shelly_device_discovery_structure() -> None:
     topic, payload = build_shelly_device_discovery(
         "astrameter", "shelly1", "homeassistant", addon_slug="34dea19a_astrameter"
     )
@@ -446,7 +448,7 @@ def test_shelly_device_discovery_structure():
     assert "battery_count" in payload["components"]
 
 
-def test_powermeter_device_discovery_structure():
+def test_powermeter_device_discovery_structure() -> None:
     topic, payload = build_powermeter_device_discovery(
         "astrameter",
         "MQTT_1",
@@ -489,26 +491,26 @@ def test_powermeter_device_discovery_structure():
     assert "value_json.grid_power.total" in comps["grid_power_total"]["value_template"]
 
 
-def test_powermeter_device_discovery_capital_cases_multiword_section():
+def test_powermeter_device_discovery_capital_cases_multiword_section() -> None:
     _, payload = build_powermeter_device_discovery(
         "astrameter", "SMA_ENERGY_METER", "SMA_ENERGY_METER", "homeassistant"
     )
     assert payload["device"]["name"] == "AstraMeter Powermeter Sma Energy Meter"
 
 
-def test_powermeter_device_discovery_omits_via_device_without_addon_slug():
+def test_powermeter_device_discovery_omits_via_device_without_addon_slug() -> None:
     _, payload = build_powermeter_device_discovery(
         "astrameter", "HOMEWIZARD", "HOMEWIZARD", "homeassistant"
     )
     assert "via_device" not in payload["device"]
 
 
-def test_meter_device_discovery_omits_via_device_without_addon_slug():
+def test_meter_device_discovery_omits_via_device_without_addon_slug() -> None:
     _, ct002 = build_ct002_device_discovery("astrameter", "dev1", "homeassistant")
     assert "via_device" not in ct002["device"]
 
 
-def test_addon_device_discovery_structure():
+def test_addon_device_discovery_structure() -> None:
     topic, payload = build_addon_device_discovery(
         "astrameter", "34dea19a_astrameter", "homeassistant"
     )
@@ -550,7 +552,7 @@ def test_addon_device_discovery_structure():
         ]
 
 
-def test_addon_device_discovery_links_meter_via_device():
+def test_addon_device_discovery_links_meter_via_device() -> None:
     """The hub's identifiers must equal the slug used as meter via_device."""
     _, hub = build_addon_device_discovery(
         "astrameter", "abc123_astrameter", "homeassistant"
@@ -563,7 +565,7 @@ def test_addon_device_discovery_links_meter_via_device():
     assert "via_device" not in shelly["device"]
 
 
-def test_unique_ids_are_unique():
+def test_unique_ids_are_unique() -> None:
     """All unique_ids within a single discovery payload must be distinct."""
     _, payload = build_ct002_consumer_discovery(
         "astrameter", "dev1", "cons1", "homeassistant"
@@ -572,7 +574,7 @@ def test_unique_ids_are_unique():
     assert len(uids) == len(set(uids))
 
 
-def test_sanitize_id():
+def test_sanitize_id() -> None:
     assert _sanitize_id("192.168.1.100") == "192_168_1_100"
     assert _sanitize_id("AA:BB:CC") == "AA_BB_CC"
     assert _sanitize_id("normal-id_123") == "normal-id_123"
@@ -581,7 +583,7 @@ def test_sanitize_id():
 # ── Config tests ──────────────────────────────────────────────────────────
 
 
-def test_config_guard_mqtt_vs_mqtt_insights():
+def test_config_guard_mqtt_vs_mqtt_insights() -> None:
     """[MQTT] creates a powermeter, [MQTT_INSIGHTS] does not."""
     cfg = configparser.ConfigParser()
     cfg.read_string(
@@ -605,7 +607,7 @@ PORT = 1883
     assert pm2 is None
 
 
-def test_read_mqtt_insights_config_present():
+def test_read_mqtt_insights_config_present() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string(
         """
@@ -634,7 +636,7 @@ ADDON_SLUG = 34dea19a_astrameter
     assert result.addon_slug == "34dea19a_astrameter"
 
 
-def test_read_mqtt_insights_config_defaults():
+def test_read_mqtt_insights_config_defaults() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string(
         """
@@ -652,7 +654,7 @@ BROKER = localhost
     assert result.addon_slug is None
 
 
-def test_read_mqtt_insights_config_empty_values():
+def test_read_mqtt_insights_config_empty_values() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string(
         """
@@ -681,7 +683,7 @@ ADDON_SLUG =
     assert result.addon_slug is None
 
 
-def test_read_mqtt_insights_config_whitespace_addon_slug():
+def test_read_mqtt_insights_config_whitespace_addon_slug() -> None:
     """Whitespace-only ADDON_SLUG values must be normalised to None."""
     cfg = configparser.ConfigParser()
     cfg.add_section("MQTT_INSIGHTS")
@@ -692,13 +694,13 @@ def test_read_mqtt_insights_config_whitespace_addon_slug():
     assert result.addon_slug is None
 
 
-def test_read_mqtt_insights_config_absent():
+def test_read_mqtt_insights_config_absent() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string("[GENERAL]\nDEVICE_TYPE=ct002\n")
     assert read_mqtt_insights_config(cfg) is None
 
 
-def test_read_mqtt_insights_config_marstek_mqtt_default_true():
+def test_read_mqtt_insights_config_marstek_mqtt_default_true() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
     result = read_mqtt_insights_config(cfg)
@@ -706,7 +708,7 @@ def test_read_mqtt_insights_config_marstek_mqtt_default_true():
     assert result.marstek_mqtt_enabled is True
 
 
-def test_read_mqtt_insights_config_marstek_mqtt_opt_out():
+def test_read_mqtt_insights_config_marstek_mqtt_opt_out() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string(
         "[MQTT_INSIGHTS]\nBROKER = localhost\nMARSTEK_MQTT_ENABLED = false\n"
@@ -716,7 +718,7 @@ def test_read_mqtt_insights_config_marstek_mqtt_opt_out():
     assert result.marstek_mqtt_enabled is False
 
 
-def test_read_mqtt_insights_config_marstek_mqtt_interval_default():
+def test_read_mqtt_insights_config_marstek_mqtt_interval_default() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
     result = read_mqtt_insights_config(cfg)
@@ -724,7 +726,7 @@ def test_read_mqtt_insights_config_marstek_mqtt_interval_default():
     assert result.marstek_mqtt_interval == 300
 
 
-def test_read_mqtt_insights_config_marstek_mqtt_interval_custom():
+def test_read_mqtt_insights_config_marstek_mqtt_interval_custom() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\nMARSTEK_MQTT_INTERVAL = 60\n")
     result = read_mqtt_insights_config(cfg)
@@ -732,7 +734,7 @@ def test_read_mqtt_insights_config_marstek_mqtt_interval_custom():
     assert result.marstek_mqtt_interval == 60
 
 
-def test_read_mqtt_insights_config_marstek_mqtt_interval_zero():
+def test_read_mqtt_insights_config_marstek_mqtt_interval_zero() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\nMARSTEK_MQTT_INTERVAL = 0\n")
     result = read_mqtt_insights_config(cfg)
@@ -740,7 +742,7 @@ def test_read_mqtt_insights_config_marstek_mqtt_interval_zero():
     assert result.marstek_mqtt_interval == 0
 
 
-def test_read_mqtt_insights_config_powermeter_health_interval_default():
+def test_read_mqtt_insights_config_powermeter_health_interval_default() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string("[MQTT_INSIGHTS]\nBROKER = localhost\n")
     result = read_mqtt_insights_config(cfg)
@@ -748,7 +750,7 @@ def test_read_mqtt_insights_config_powermeter_health_interval_default():
     assert result.powermeter_health_interval == 30.0
 
 
-def test_read_mqtt_insights_config_powermeter_health_interval_custom():
+def test_read_mqtt_insights_config_powermeter_health_interval_custom() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string(
         "[MQTT_INSIGHTS]\nBROKER = localhost\nPOWERMETER_HEALTH_INTERVAL = 15\n"
@@ -758,7 +760,7 @@ def test_read_mqtt_insights_config_powermeter_health_interval_custom():
     assert result.powermeter_health_interval == 15.0
 
 
-def test_read_mqtt_insights_config_powermeter_health_interval_zero():
+def test_read_mqtt_insights_config_powermeter_health_interval_zero() -> None:
     cfg = configparser.ConfigParser()
     cfg.read_string(
         "[MQTT_INSIGHTS]\nBROKER = localhost\nPOWERMETER_HEALTH_INTERVAL = 0\n"
@@ -771,7 +773,7 @@ def test_read_mqtt_insights_config_powermeter_health_interval_zero():
 # ── Service unit tests (no broker) ───────────────────────────────────────
 
 
-def test_queue_overflow_does_not_raise():
+def test_queue_overflow_does_not_raise() -> None:
     """Overflowing the queue should not raise."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
     for i in range(200):
@@ -779,7 +781,7 @@ def test_queue_overflow_does_not_raise():
     # No exception raised
 
 
-def test_queue_dropped_counter():
+def test_queue_dropped_counter() -> None:
     """Every drop-oldest overflow is counted, so the dashboard can show that
     events were lost rather than silently under-reporting."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
@@ -828,7 +830,7 @@ def _health_service() -> MqttInsightsService:
     return MqttInsightsService(MqttInsightsConfig(broker="localhost"))
 
 
-async def test_powermeter_status_push_reports_stream_state_and_readings():
+async def test_powermeter_status_push_reports_stream_state_and_readings() -> None:
     service = _health_service()
     online, values = await service._powermeter_status(_PushMeter(True, [1.0, 2.0, 3.0]))
     assert online is True
@@ -837,7 +839,7 @@ async def test_powermeter_status_push_reports_stream_state_and_readings():
     assert online is False
 
 
-async def test_powermeter_status_push_exception_reports_offline():
+async def test_powermeter_status_push_exception_reports_offline() -> None:
     """A meter whose stream_online() raises must report offline, not crash the
     health loop (which would tear down the gather and force a reconnect)."""
 
@@ -854,7 +856,7 @@ async def test_powermeter_status_push_exception_reports_offline():
     assert values is None
 
 
-async def test_powermeter_status_pull_reuses_recent_control_read():
+async def test_powermeter_status_pull_reuses_recent_control_read() -> None:
     """A pull meter read by the control loop within the idle window is reused
     without issuing a probe."""
     inner = _PullMeter([42.0])
@@ -869,7 +871,7 @@ async def test_powermeter_status_pull_reuses_recent_control_read():
     assert inner.probes == 1  # reused, no extra probe
 
 
-async def test_powermeter_status_pull_reuses_recent_failure():
+async def test_powermeter_status_pull_reuses_recent_failure() -> None:
     inner = _PullMeter(raises=True)
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     with contextlib.suppress(ValueError):
@@ -883,7 +885,7 @@ async def test_powermeter_status_pull_reuses_recent_failure():
     assert inner.probes == probes_after_control  # reused failure, no probe
 
 
-async def test_powermeter_status_idle_pull_is_probed_once():
+async def test_powermeter_status_idle_pull_is_probed_once() -> None:
     inner = _PullMeter([7.0])
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     # No control-loop read recorded -> idle -> probe.
@@ -894,7 +896,7 @@ async def test_powermeter_status_idle_pull_is_probed_once():
     assert inner.probes == 1
 
 
-async def test_powermeter_status_idle_pull_probe_failure_is_offline():
+async def test_powermeter_status_idle_pull_probe_failure_is_offline() -> None:
     inner = _PullMeter(raises=True)
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     service = _health_service()
@@ -904,7 +906,7 @@ async def test_powermeter_status_idle_pull_probe_failure_is_offline():
     assert inner.probes == 1
 
 
-async def test_powermeter_status_stale_control_read_falls_back_to_probe():
+async def test_powermeter_status_stale_control_read_falls_back_to_probe() -> None:
     inner = _PullMeter([5.0])
     pm = HealthTrackingPowermeter(inner, name="SCRIPT_1")
     await pm.get_powermeter_watts()
@@ -918,7 +920,7 @@ async def test_powermeter_status_stale_control_read_falls_back_to_probe():
     assert inner.probes == 2  # one control read + one fallback probe
 
 
-def test_grid_power_payload_phase_counts():
+def test_grid_power_payload_phase_counts() -> None:
     assert MqttInsightsService._grid_power_payload([1.0, 2.0, 3.0]) == {
         "l1": 1.0,
         "l2": 2.0,
@@ -939,7 +941,7 @@ def test_grid_power_payload_phase_counts():
     }
 
 
-async def test_publish_powermeter_health_state_and_discovery_once():
+async def test_publish_powermeter_health_state_and_discovery_once() -> None:
     service = MqttInsightsService(
         MqttInsightsConfig(
             broker="localhost", base_topic="am", ha_discovery_prefix="ha"
@@ -971,7 +973,7 @@ async def test_publish_powermeter_health_state_and_discovery_once():
     assert topics2 == ["am/powermeter/MQTT_1"]
 
 
-def test_hub_identifier_uses_addon_slug_when_set():
+def test_hub_identifier_uses_addon_slug_when_set() -> None:
     svc = MqttInsightsService(
         MqttInsightsConfig(
             broker="localhost", base_topic="am", addon_slug="34dea19a_astrameter"
@@ -980,14 +982,14 @@ def test_hub_identifier_uses_addon_slug_when_set():
     assert svc._hub_identifier() == "34dea19a_astrameter"
 
 
-def test_hub_identifier_falls_back_to_base_topic_without_addon_slug():
+def test_hub_identifier_falls_back_to_base_topic_without_addon_slug() -> None:
     svc = MqttInsightsService(
         MqttInsightsConfig(broker="localhost", base_topic="astra")
     )
     assert svc._hub_identifier() == "astrameter_astra"
 
 
-async def test_publish_powermeter_health_links_hub_via_fallback():
+async def test_publish_powermeter_health_links_hub_via_fallback() -> None:
     """Without ADDON_SLUG the powermeter device still links to the AstraMeter
     hub via the base-topic fallback identifier (standalone/Docker)."""
     service = MqttInsightsService(
@@ -1009,7 +1011,13 @@ async def test_publish_powermeter_health_links_hub_via_fallback():
 # ── E2E helpers ──────────────────────────────────────────────────────────
 
 
-async def _collect_messages(sub, target, *, timeout=5, stop=None):
+async def _collect_messages(
+    sub: Any,
+    target: list[Any],
+    *,
+    timeout: float = 5,
+    stop: Callable[[Any], bool] | None = None,
+) -> None:
     """Collect messages from *sub* into *target* list.
 
     *stop* is an optional callable(msg) → bool that ends collection early.
@@ -1017,7 +1025,7 @@ async def _collect_messages(sub, target, *, timeout=5, stop=None):
     Compatible with Python 3.10 (no asyncio.timeout).
     """
 
-    async def _inner():
+    async def _inner() -> None:
         async for msg in sub.messages:
             target.append(msg)
             if stop is not None:
@@ -1030,10 +1038,12 @@ async def _collect_messages(sub, target, *, timeout=5, stop=None):
         await asyncio.wait_for(_inner(), timeout=timeout)
 
 
-async def _poll(predicate, *, timeout=5, interval=0.05):
+async def _poll(
+    predicate: Callable[[], bool], *, timeout: float = 5, interval: float = 0.05
+) -> None:
     """Poll *predicate* until it returns True, or raise on timeout."""
 
-    async def _inner():
+    async def _inner() -> None:
         while not predicate():
             await asyncio.sleep(interval)
 
@@ -1108,7 +1118,7 @@ SAMPLE_SHELLY_DATA = {
 
 
 @needs_mosquitto
-async def test_publishes_state_on_ct002_event(mqtt_broker):
+async def test_publishes_state_on_ct002_event(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1117,7 +1127,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
     try:
         await service.wait_connected()
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/ct002/+/consumer/+")
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
@@ -1141,7 +1151,7 @@ async def test_publishes_state_on_ct002_event(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_publishes_device_status(mqtt_broker):
+async def test_publishes_device_status(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1150,7 +1160,7 @@ async def test_publishes_device_status(mqtt_broker):
     try:
         await service.wait_connected()
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/ct002/+/status")
             service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
@@ -1172,7 +1182,9 @@ async def test_publishes_device_status(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_device_status_defaults_control_quality_when_absent(mqtt_broker):
+async def test_device_status_defaults_control_quality_when_absent(
+    mqtt_broker: int,
+) -> None:
     """An event from an older/reduced producer must not break the entity.
 
     HA's enum sensor rejects a state outside its ``options``, so the fallback
@@ -1186,7 +1198,7 @@ async def test_device_status_defaults_control_quality_when_absent(mqtt_broker):
     try:
         await service.wait_connected()
 
-        received = []
+        received: list[Any] = []
         data = {
             k: v
             for k, v in SAMPLE_CT002_DATA.items()
@@ -1213,7 +1225,7 @@ async def test_device_status_defaults_control_quality_when_absent(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
+async def test_publishes_ha_discovery_on_first_event(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     ha_prefix = service._config.ha_discovery_prefix
@@ -1222,7 +1234,7 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
     try:
         await service.wait_connected()
 
-        discovery_msgs = []
+        discovery_msgs: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{ha_prefix}/device/#")
             # First event for consumer1
@@ -1274,7 +1286,7 @@ async def test_publishes_ha_discovery_on_first_event(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_publishes_addon_hub_device_and_bridge(mqtt_broker):
+async def test_publishes_addon_hub_device_and_bridge(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port, addon_slug="abc123_astrameter")
     cfg = service._config
@@ -1370,7 +1382,7 @@ class _FakeDevice:
 
 
 @needs_mosquitto
-async def test_active_toggle_via_mqtt(mqtt_broker):
+async def test_active_toggle_via_mqtt(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1402,7 +1414,7 @@ async def test_active_toggle_via_mqtt(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_consumer_removal_publishes_offline(mqtt_broker):
+async def test_consumer_removal_publishes_offline(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1415,7 +1427,7 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
         service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
         await _poll(lambda: (CT002_CONSUMER, "dev1/consumer1") in service._discovered)
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/ct002/dev1/consumer/consumer1/availability")
             service.on_ct002_consumer_removed("dev1", "consumer1")
@@ -1432,7 +1444,7 @@ async def test_consumer_removal_publishes_offline(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_lwt_online_offline(mqtt_broker):
+async def test_lwt_online_offline(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1442,7 +1454,7 @@ async def test_lwt_online_offline(mqtt_broker):
         await service.wait_connected()
 
         # Check online status
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/status")
             # The retained "online" message should arrive
@@ -1455,7 +1467,7 @@ async def test_lwt_online_offline(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_shelly_event_flow(mqtt_broker):
+async def test_shelly_event_flow(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1464,7 +1476,7 @@ async def test_shelly_event_flow(mqtt_broker):
     try:
         await service.wait_connected()
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(f"{base}/shelly/+/battery/+")
             service.on_shelly_response("shelly1", "192.168.1.100", SAMPLE_SHELLY_DATA)
@@ -1481,7 +1493,7 @@ async def test_shelly_event_flow(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_manual_target_command_via_mqtt(mqtt_broker) -> None:
+async def test_manual_target_command_via_mqtt(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1506,7 +1518,7 @@ async def test_manual_target_command_via_mqtt(mqtt_broker) -> None:
 
 
 @needs_mosquitto
-async def test_auto_target_command_via_mqtt(mqtt_broker) -> None:
+async def test_auto_target_command_via_mqtt(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1531,7 +1543,7 @@ async def test_auto_target_command_via_mqtt(mqtt_broker) -> None:
 
 
 @needs_mosquitto
-async def test_distribution_weight_command_via_mqtt(mqtt_broker) -> None:
+async def test_distribution_weight_command_via_mqtt(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1696,7 +1708,7 @@ def test_invalid_or_unknown_retained_command_not_buffered() -> None:
 
 
 @needs_mosquitto
-async def test_retained_command_redelivered_on_restart(mqtt_broker) -> None:
+async def test_retained_command_redelivered_on_restart(mqtt_broker: int) -> None:
     """End-to-end: a retained command sitting on the broker is applied on the
     next connect even though the handler registers *after* start()/subscribe —
     the ordering that occurs on an app restart."""
@@ -1728,7 +1740,7 @@ async def test_retained_command_redelivered_on_restart(mqtt_broker) -> None:
 
 
 @needs_mosquitto
-async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
+async def test_force_rotation_command_via_mqtt(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1752,7 +1764,7 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker) -> None:
         await service.stop()
 
 
-def test_active_control_device_command_dispatch():
+def test_active_control_device_command_dispatch() -> None:
     """The device-level active_control field routes booleans to the handler
     and rejects non-boolean payloads."""
     service = _make_service(1883)
@@ -1775,7 +1787,7 @@ def test_active_control_device_command_dispatch():
 
 
 @needs_mosquitto
-async def test_active_control_toggle_via_mqtt(mqtt_broker) -> None:
+async def test_active_control_toggle_via_mqtt(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1800,7 +1812,7 @@ async def test_active_control_toggle_via_mqtt(mqtt_broker) -> None:
 
 
 @needs_mosquitto
-async def test_shelly_battery_removal_publishes_offline(mqtt_broker):
+async def test_shelly_battery_removal_publishes_offline(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     base = service._config.base_topic
@@ -1815,7 +1827,7 @@ async def test_shelly_battery_removal_publishes_offline(mqtt_broker):
             lambda: (SHELLY_BATTERY, "shelly1/192_168_1_100") in service._discovered
         )
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
             await sub.subscribe(
                 f"{base}/shelly/shelly1/battery/192_168_1_100/availability"
@@ -1833,7 +1845,7 @@ async def test_shelly_battery_removal_publishes_offline(mqtt_broker):
         await service.stop()
 
 
-def test_consumer_state_includes_manual_target_fields():
+def test_consumer_state_includes_manual_target_fields() -> None:
     """Consumer state published to MQTT includes manual_target and auto_target."""
     data = dict(SAMPLE_CT002_DATA)
     consumer_state = {
@@ -1894,7 +1906,7 @@ def _make_binding(
     )
 
 
-def test_register_marstek_while_disconnected_stores_binding():
+def test_register_marstek_while_disconnected_stores_binding() -> None:
     """register_marstek before start() only populates the dict."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
     binding, _ = _make_binding()
@@ -1906,7 +1918,7 @@ def test_register_marstek_while_disconnected_stores_binding():
     assert service._marstek_bindings["ct002-dev1"] is binding
 
 
-def test_register_marstek_no_op_when_disabled():
+def test_register_marstek_no_op_when_disabled() -> None:
     service = MqttInsightsService(
         MqttInsightsConfig(broker="localhost", marstek_mqtt_enabled=False)
     )
@@ -1920,7 +1932,7 @@ def test_register_marstek_no_op_when_disabled():
 
 
 @needs_mosquitto
-async def test_marstek_poll_responds_on_both_topics(mqtt_broker):
+async def test_marstek_poll_responds_on_both_topics(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     binding, calls = _make_binding(values=[100.0, 200.0, 300.0])
@@ -1931,7 +1943,7 @@ async def test_marstek_poll_responds_on_both_topics(mqtt_broker):
         await service.wait_connected()
         await _poll(lambda: service._client is not None)
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
             await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
             await client.subscribe(f"marstek_energy/HME-4/device/{binding.mac}/ctrl")
@@ -1958,7 +1970,7 @@ async def test_marstek_poll_responds_on_both_topics(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_poll_cd4_responds_with_slave_list(mqtt_broker):
+async def test_marstek_poll_cd4_responds_with_slave_list(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     inner = (
@@ -1976,7 +1988,7 @@ async def test_marstek_poll_cd4_responds_with_slave_list(mqtt_broker):
         await service.wait_connected()
         await _poll(lambda: service._client is not None)
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
             await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
             await client.subscribe(f"marstek_energy/HME-4/device/{binding.mac}/ctrl")
@@ -1998,7 +2010,7 @@ async def test_marstek_poll_cd4_responds_with_slave_list(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_ignores_non_poll_payload(mqtt_broker):
+async def test_marstek_ignores_non_poll_payload(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     binding, calls = _make_binding()
@@ -2009,7 +2021,7 @@ async def test_marstek_ignores_non_poll_payload(mqtt_broker):
         await service.wait_connected()
         await _poll(lambda: service._client is not None)
 
-        received = []
+        received: list[Any] = []
         async with aiomqtt.Client(hostname="127.0.0.1", port=port) as client:
             await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
             await client.publish(
@@ -2024,7 +2036,7 @@ async def test_marstek_ignores_non_poll_payload(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_unregister_stops_replies(mqtt_broker):
+async def test_marstek_unregister_stops_replies(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     binding, _ = _make_binding()
@@ -2039,7 +2051,7 @@ async def test_marstek_unregister_stops_replies(mqtt_broker):
             await client.subscribe(f"hame_energy/HME-4/device/{binding.mac}/ctrl")
 
             # Initial poll — expect one reply
-            first = []
+            first: list[Any] = []
             await client.publish(
                 f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
             )
@@ -2050,7 +2062,7 @@ async def test_marstek_unregister_stops_replies(mqtt_broker):
 
             # Unregister and poll again — expect no reply
             await service.unregister_marstek(binding.device_id)
-            second = []
+            second: list[Any] = []
             await client.publish(
                 f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
             )
@@ -2061,7 +2073,7 @@ async def test_marstek_unregister_stops_replies(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_opt_out_disables_subscription(mqtt_broker):
+async def test_marstek_opt_out_disables_subscription(mqtt_broker: int) -> None:
     port = mqtt_broker
     global _test_counter
     _test_counter += 1
@@ -2087,7 +2099,7 @@ async def test_marstek_opt_out_disables_subscription(mqtt_broker):
             await client.publish(
                 f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
             )
-            received = []
+            received: list[Any] = []
             await _collect_messages(client, received, timeout=1)
             assert received == []
             assert calls == []
@@ -2096,7 +2108,7 @@ async def test_marstek_opt_out_disables_subscription(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_get_values_failure_suppressed(mqtt_broker):
+async def test_marstek_get_values_failure_suppressed(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)
     binding, calls = _make_binding(raises=RuntimeError("powermeter offline"))
@@ -2112,7 +2124,7 @@ async def test_marstek_get_values_failure_suppressed(mqtt_broker):
             await client.publish(
                 f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
             )
-            received = []
+            received: list[Any] = []
             await _collect_messages(client, received, timeout=1)
             assert received == []
         # get_values was called but no reply was published
@@ -2123,7 +2135,9 @@ async def test_marstek_get_values_failure_suppressed(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
+async def test_marstek_register_before_start_subscribes_on_connect(
+    mqtt_broker: int,
+) -> None:
     """A binding registered before start() must get its App topics
     subscribed on the first connect."""
     port = mqtt_broker
@@ -2142,7 +2156,7 @@ async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
             await client.publish(
                 f"hame_energy/HME-4/App/{binding.mac}/ctrl", payload=b"cd=1"
             )
-            received = []
+            received: list[Any] = []
             await _collect_messages(
                 client, received, timeout=5, stop=lambda _: len(received) >= 1
             )
@@ -2155,7 +2169,7 @@ async def test_marstek_register_before_start_subscribes_on_connect(mqtt_broker):
 
 
 @needs_mosquitto
-async def test_marstek_periodic_broadcast(mqtt_broker) -> None:
+async def test_marstek_periodic_broadcast(mqtt_broker: int) -> None:
     """When marstek_mqtt_interval > 0, responses are published periodically
     without requiring a poll request from the app."""
     port = mqtt_broker
@@ -2198,7 +2212,7 @@ async def test_marstek_periodic_broadcast(mqtt_broker) -> None:
 
 
 @needs_mosquitto
-async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker) -> None:
+async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker: int) -> None:
     """marstek_mqtt_interval=0 disables the periodic broadcast loop; only
     explicit poll requests trigger a response."""
     port = mqtt_broker
@@ -2234,7 +2248,7 @@ async def test_marstek_broadcast_disabled_when_interval_zero(mqtt_broker) -> Non
 
 
 @needs_mosquitto
-async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker):
+async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker: int) -> None:
     """A slow get_values for one binding must not block polls for another.
 
     With the offload-to-task design, the listener stays responsive even
@@ -2281,7 +2295,7 @@ async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker):
             await client.publish(
                 f"hame_energy/HME-4/App/{fast.mac}/ctrl", payload=b"cd=1"
             )
-            received = []
+            received: list[Any] = []
             await _collect_messages(
                 client, received, timeout=5, stop=lambda _: len(received) >= 1
             )
@@ -2298,8 +2312,8 @@ async def test_marstek_slow_handler_does_not_stall_listener(mqtt_broker):
 # ── Status snapshot & dashboard writes (no broker) ───────────────────────
 
 
-def _async_iter(messages):
-    async def _gen():
+def _async_iter(messages: list[Any]) -> AsyncIterator[Any]:
+    async def _gen() -> AsyncIterator[Any]:
         for message in messages:
             yield message
 
@@ -2312,7 +2326,7 @@ class _FakeMessage:
         self.payload = payload
 
 
-def test_status_snapshot_shape():
+def test_status_snapshot_shape() -> None:
     service = MqttInsightsService(
         MqttInsightsConfig(
             broker="broker.local",
@@ -2361,7 +2375,7 @@ def test_status_snapshot_shape():
     assert snapshot.marstek_bindings == ()
 
 
-def test_status_snapshot_connected_tracks_the_connected_flag():
+def test_status_snapshot_connected_tracks_the_connected_flag() -> None:
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
     assert service.connected is False
     service._connected.set()
@@ -2369,7 +2383,7 @@ def test_status_snapshot_connected_tracks_the_connected_flag():
     assert service.status_snapshot().connected is True
 
 
-def test_status_snapshot_carries_no_credentials():
+def test_status_snapshot_carries_no_credentials() -> None:
     service = MqttInsightsService(
         MqttInsightsConfig(
             broker="broker.local", username="grid-user", password="s3cret"
@@ -2385,7 +2399,7 @@ def test_status_snapshot_carries_no_credentials():
     assert "s3cret" not in rendered
 
 
-async def test_status_snapshot_reports_marstek_bindings():
+async def test_status_snapshot_reports_marstek_bindings() -> None:
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
     binding, _ = _make_binding()
     await service.register_marstek(binding)
@@ -2401,7 +2415,7 @@ async def test_status_snapshot_reports_marstek_bindings():
     assert row.value_fetch_failing is True
 
 
-async def test_status_snapshot_no_lock():
+async def test_status_snapshot_no_lock() -> None:
     """The snapshot must read the bindings without ``_marstek_lock`` — taking
     it would need an await, and an await tears the surrounding snapshot."""
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
@@ -2414,7 +2428,7 @@ async def test_status_snapshot_no_lock():
     assert [row.device_id for row in snapshot.marstek_bindings] == ["ct002-dev1"]
 
 
-async def test_publish_consumer_command_lands_where_the_replay_path_reads():
+async def test_publish_consumer_command_lands_where_the_replay_path_reads() -> None:
     """A dashboard write must target the same retained topic the broker
     redelivers on reconnect, or the next reconnect reverts it."""
     service = MqttInsightsService(
@@ -2442,7 +2456,9 @@ async def test_publish_consumer_command_lands_where_the_replay_path_reads():
     assert calls == [("c1", 150.0)]
 
 
-async def test_publish_consumer_command_accepts_the_native_scalars_it_is_given():
+async def test_publish_consumer_command_accepts_the_native_scalars_it_is_given() -> (
+    None
+):
     """The dashboard hands this the JSON value it received — a float or a
     bool, not a string. Requiring a string made every mirrored write raise
     inside the caller's ``except Exception``, so nothing was ever published
@@ -2461,7 +2477,7 @@ async def test_publish_consumer_command_accepts_the_native_scalars_it_is_given()
     assert parse_bool(payload.decode()) is False
 
 
-async def test_publish_device_command_lands_where_the_listener_reads():
+async def test_publish_device_command_lands_where_the_listener_reads() -> None:
     service = MqttInsightsService(
         MqttInsightsConfig(broker="localhost", base_topic="am")
     )
@@ -2485,7 +2501,7 @@ async def test_publish_device_command_lands_where_the_listener_reads():
     assert seen == [False]
 
 
-async def test_publish_command_without_a_connection_raises():
+async def test_publish_command_without_a_connection_raises() -> None:
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
     with pytest.raises(RuntimeError):
         await service.publish_device_command("dev1", {"force_rotation": True})

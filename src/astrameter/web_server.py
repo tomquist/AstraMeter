@@ -6,30 +6,52 @@ Home Assistant addon watchdog) and, when enabled, the live status
 dashboard plus a browser-based configuration editor.
 """
 
+from __future__ import annotations
+
 import asyncio
 import errno
 import json
 import os
+import shutil
+import signal
+import tempfile
 import threading
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from astrameter.addon_client import SupervisorClient
 from astrameter.config.logger import logger
 from astrameter.ct002.controls import CONSUMER_CONTROLS_BY_FIELD, apply_device_control
+from astrameter.status.assets import dashboard_html
+from astrameter.status.config_mode import materialize_config
 from astrameter.status.secrets import redact_sections, restore_sections
 from astrameter.version_info import get_git_commit_sha
+from astrameter.web_config import (
+    CONFIG_EDITOR_HTML,
+    SECTION_KEY_TYPES,
+    read_config_as_dict,
+    validate_config,
+    write_config_from_dict,
+)
 from astrameter.web_guard import (
     REFUSED_HTML,
+    ApiError,
+    Handler,
     RefusedHostLog,
-    _error,
-    _forbidden,
-    _json,
+    answers_api_errors,
+    error_response,
+    forbidden,
     foreign_host_response,
     is_allowed_host,
+    json_response,
     parse_allowed_hosts,
     requires_json_content_type,
 )
+
+if TYPE_CHECKING:
+    from astrameter.status.registry import StatusRegistry
 
 # Supervisor proxies every ingress request from this fixed address on the
 # hassio bridge.  It is the *peer* address, so unlike X-Ingress-Path or
@@ -37,8 +59,8 @@ from astrameter.web_guard import (
 # host-networked port directly.
 INGRESS_PEER = "172.30.32.2"
 
-#: How long a deferred Supervisor restart waits before firing, so the response
-#: that asked for it is on the wire before the container goes down.
+#: How long a deferred restart waits before firing, so the response that asked
+#: for it is on the wire before the container goes down.
 RESTART_GRACE_S = 0.5
 
 #: The health check, which is exempt from the host guard below: Docker's
@@ -46,8 +68,11 @@ RESTART_GRACE_S = 0.5
 #: operator's monitoring uses, and it neither reads state nor writes anything.
 HEALTH_PATHS = ("/health", "/health/", "/api", "/api/")
 
+#: What a malformed request body is answered with, whichever route read it.
+_BAD_BODY = (KeyError, TypeError, ValueError, json.JSONDecodeError)
 
-def addon_option_names(schema) -> set[str]:
+
+def addon_option_names(schema: Any) -> set[str]:
     """Every option name in an add-on schema, whichever shape it arrived in.
 
     Supervisor renders the add-on's declared schema before serving it: what
@@ -90,18 +115,37 @@ def _unrenderable_descriptors(schema: list) -> dict[str, str]:
     return odd
 
 
+async def _body(request: web.Request) -> dict[str, Any]:
+    """The request's JSON object, or an :class:`ApiError` naming what was wrong."""
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("JSON body must be an object")
+    except _BAD_BODY as exc:
+        raise ApiError(f"Invalid request: {exc}", status=400) from exc
+    return body
+
+
+def _required(body: dict[str, Any], *keys: str) -> list[Any]:
+    """The values of *keys*, refusing the request when one is missing."""
+    try:
+        return [body[key] for key in keys]
+    except KeyError as exc:
+        raise ApiError(f"Invalid request: {exc}", status=400) from exc
+
+
 class WebServer:
     """Async HTTP server exposing health, dashboard, config and API routes."""
 
     def __init__(
         self,
-        port=52500,
-        bind_address="0.0.0.0",
+        port: int = 52500,
+        bind_address: str = "0.0.0.0",
         config_path: str | None = None,
         enable_web_config: bool | None = None,
-        status=None,
+        status: StatusRegistry | None = None,
         allowed_hosts: str | Iterable[str] | None = None,
-    ):
+    ) -> None:
         """Initialise the service; call ``start()`` to bind the port."""
         self.port = port
         self.bind_address = bind_address
@@ -115,12 +159,12 @@ class WebServer:
         # a link to routes this server does not serve.
         if status is not None and not self.serve_config_editor:
             status.config_editor = False
-        self._runner = None
+        self._runner: web.AppRunner | None = None
         self._refused_hosts = RefusedHostLog()
         #: Whether an unrenderable add-on schema has already been reported.
         self._logged_schema_shape = False
         #: Deferred restarts, held so the loop cannot collect them mid-flight.
-        self._pending_restarts: set = set()
+        self._pending_restarts: set[asyncio.Task[None]] = set()
 
     # -- gating --------------------------------------------------------
 
@@ -148,7 +192,7 @@ class WebServer:
             return self.enable_dashboard
         return self.enable_web_config
 
-    def _is_ingress(self, request) -> bool:
+    def _is_ingress(self, request: web.Request) -> bool:
         """True when the request arrived through Home Assistant ingress.
 
         Ingress requests are already authenticated by Home Assistant, which
@@ -157,7 +201,7 @@ class WebServer:
         """
         return request.remote == INGRESS_PEER
 
-    def _refuse_foreign_host(self, request):
+    def _refuse_foreign_host(self, request: web.Request) -> web.StreamResponse | None:
         """Refuse a request whose ``Host`` is a name that could be rebound.
 
         Returns the refusal, or ``None`` to let the request through. See
@@ -177,7 +221,7 @@ class WebServer:
         self._refused_hosts.log(shown, request.path)
         return foreign_host_response(request, shown)
 
-    def _trusted(self, request) -> bool:
+    def _trusted(self, request: web.Request) -> bool:
         """True when this request may see or change anything sensitive.
 
         Fail-closed under the add-on: with ``host_network: true`` the port is
@@ -189,12 +233,20 @@ class WebServer:
             return False
         return self._is_ingress(request) or self.status.serves_direct()
 
-    def _may_write(self, request) -> bool:
+    def _may_read(self, request: web.Request) -> bool:
+        """Like :meth:`_trusted`, but a server with no registry serves anyway.
+
+        The config editor can run standalone, with nothing to be trusted
+        *about*; its own ``serve_config_editor`` gate decided that already.
+        """
+        return self.status is None or self._trusted(request)
+
+    def _may_write(self, request: web.Request) -> bool:
         return self.status is not None and self.status.may_write(
             ingress=self._is_ingress(request)
         )
 
-    def _actor(self, request) -> str:
+    def _actor(self, request: web.Request) -> str:
         """Who made a mutating request, for the audit log."""
         # Home Assistant sets these on an ingress request. Reached directly the
         # port is on the LAN, where any client can send the same headers, so
@@ -208,7 +260,9 @@ class WebServer:
             return f"{name or 'unknown'} ({uid or 'no id'})"
         return f"direct {request.remote}"
 
-    def build_app(self):
+    # -- wiring --------------------------------------------------------
+
+    def build_app(self) -> web.Application:
         """Assemble the aiohttp application.
 
         Split out from ``start()`` so tests exercise the real route table
@@ -220,7 +274,9 @@ class WebServer:
         # directly below (``/`` and ``/config``), and a document served under a
         # rebound name is the request that goes on to drive the API.
         @web.middleware
-        async def host_guard(request, handler):
+        async def host_guard(
+            request: web.Request, handler: Handler
+        ) -> web.StreamResponse:
             refusal = self._refuse_foreign_host(request)
             if refusal is not None:
                 return refusal
@@ -263,46 +319,50 @@ class WebServer:
         app.router.add_route("*", "/{path:.*}", self._handle_not_found)
         return app
 
-    async def start(self):
+    @staticmethod
+    def _add(method: str, app: web.Application, path: str, handler: Handler) -> None:
+        """Register *path* both with and without a trailing slash.
+
+        A redirect would send a `Location` header, which both ingress hops
+        copy verbatim — navigating the user out of the ingress prefix.
+
+        Every API route is wrapped here rather than at each handler, so a route
+        added later cannot forget either wrapper: an :class:`ApiError` becomes
+        the response it names, and every ``POST`` passes the JSON content-type
+        guard — see :data:`astrameter.web_guard.JSON_CONTENT_TYPE` for what
+        that one defends against.
+        """
+        handler = answers_api_errors(handler)
+        if method == "POST":
+            handler = requires_json_content_type(handler)
+        app.router.add_route(method, path, handler)
+        app.router.add_route(method, path + "/", handler)
+
+    async def start(self) -> bool:
         """Bind the TCP port and start serving. Returns True on success, False on failure."""
         self._runner = web.AppRunner(self.build_app(), access_log=None)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.bind_address, self.port)
         try:
             await site.start()
-        except OSError as e:
-            if e.errno == errno.EADDRINUSE:
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
                 logger.error(
-                    f"Port {self.port} is already in use. Web server not started."
+                    "Port %s is already in use. Web server not started.", self.port
                 )
             else:
-                logger.error(f"Failed to bind to {self.bind_address}:{self.port}: {e}")
+                logger.error(
+                    "Failed to bind to %s:%s: %s", self.bind_address, self.port, exc
+                )
             await self._runner.cleanup()
             self._runner = None
             return False
 
-        logger.info(f"Web server started on {self.bind_address}:{self.port}")
+        logger.info("Web server started on %s:%s", self.bind_address, self.port)
         self._log_access_posture()
         return True
 
-    @staticmethod
-    def _add(method, app, path, handler):
-        """Register *path* both with and without a trailing slash.
-
-        A redirect would send a `Location` header, which both ingress hops
-        copy verbatim — navigating the user out of the ingress prefix.
-
-        Every ``POST`` is wrapped in the JSON content-type guard here rather
-        than at each handler, so a route added later cannot forget it — see
-        :data:`astrameter.web_guard.JSON_CONTENT_TYPE` for what it defends
-        against.
-        """
-        if method == "POST":
-            handler = requires_json_content_type(handler)
-        app.router.add_route(method, path, handler)
-        app.router.add_route(method, path + "/", handler)
-
-    def _log_access_posture(self):
+    def _log_access_posture(self) -> None:
         if not self.enable_dashboard:
             if self.serve_config_editor and self.config_path:
                 logger.warning(
@@ -331,43 +391,38 @@ class WebServer:
                 self.port,
             )
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Tear down the aiohttp runner and release the port."""
         if self._runner:
             await self._runner.cleanup()
             self._runner = None
             logger.info("Web server stopped")
 
-    def is_running(self):
+    def is_running(self) -> bool:
         """Return True if the HTTP server is currently running."""
         return self._runner is not None
 
-    async def _handle_health(self, request):
+    async def _handle_health(self, request: web.Request) -> web.StreamResponse:
         """Respond to GET /health and /api with a JSON healthy status."""
-        logger.debug(
-            "Health check request received from %s",
-            request.remote,
-        )
+        logger.debug("Health check request received from %s", request.remote)
         payload = {"status": "healthy", "service": "astrameter"}
         sha = get_git_commit_sha()
         if sha:
             payload["git_commit"] = sha
-        return _json(payload, cache="no-cache")
+        return json_response(payload, cache="no-cache")
 
     # -- dashboard -----------------------------------------------------
 
-    async def _handle_dashboard(self, request):
+    async def _handle_dashboard(self, request: web.Request) -> web.StreamResponse:
         """Serve the single-page dashboard."""
         if not self._trusted(request):
             # A person typed this into a browser, so answer in prose. The
             # frontend carries the same explanation for a refused poll, but it
             # never loads when the page itself is the thing being refused.
             return web.Response(status=403, text=REFUSED_HTML, content_type="text/html")
-        from astrameter.status.assets import dashboard_html
-
         html = dashboard_html()
         if html is None:
-            return _error("Dashboard asset missing from this build", status=503)
+            return error_response("Dashboard asset missing from this build", status=503)
         return web.Response(
             body=html,
             content_type="text/html",
@@ -375,70 +430,70 @@ class WebServer:
             headers={"Cache-Control": "no-cache, must-revalidate"},
         )
 
-    async def _handle_api_status(self, request):
+    async def _handle_api_status(self, request: web.Request) -> web.StreamResponse:
         """Live status snapshot, with a weak ETag for cheap polling."""
         if not self._trusted(request) or self.status is None:
-            return _forbidden()
+            return forbidden()
         etag = self.status.etag()
         if request.headers.get("If-None-Match") == etag:
             return web.Response(
                 status=304, headers={"ETag": etag, "Cache-Control": "no-store"}
             )
         snapshot = self.status.snapshot(ingress=self._is_ingress(request))
-        return _json(snapshot, ETag=etag)
+        return json_response(snapshot, ETag=etag)
 
     # -- live control --------------------------------------------------
 
-    def _device(self, device_id):
+    def _device(self, device_id: str) -> Any:
         if self.status is None:
             return None
         entry = self.status.devices.get(device_id)
         return entry.device if entry else None
 
-    async def _mirror_to_mqtt(self, method_name, kind, *args) -> None:
+    async def _mirror_to_mqtt(self, kind: str, publish: Awaitable[None]) -> None:
         """Mirror a control write to the retained MQTT command topic.
 
         Without it the broker's redelivery on the next reconnect reverts what
         the user just set.
         """
-        publish = getattr(getattr(self.status, "insights", None), method_name, None)
-        if publish is None:
-            return
         try:
-            await publish(*args)
+            await publish
         except Exception:
             logger.exception("Failed to mirror %s write to MQTT", kind)
 
-    def _applied(self):
-        """Acknowledge a control write with the revision it produced."""
-        self.status.bump()
-        return _json({"applied": True, "rev": self.status.revision()})
+    def _insights(self) -> Any:
+        """The MQTT Insights service, when one is running."""
+        return self.status.insights if self.status is not None else None
 
-    async def _handle_control_consumer(self, request):
+    def _applied(self) -> web.StreamResponse:
+        """Acknowledge a control write with the revision it produced."""
+        assert self.status is not None  # _may_write() already refused otherwise
+        self.status.bump()
+        return json_response({"applied": True, "rev": self.status.revision()})
+
+    async def _handle_control_consumer(
+        self, request: web.Request
+    ) -> web.StreamResponse:
         """Apply a per-battery control change."""
         if not self._may_write(request):
-            return _forbidden()
-        try:
-            body = await request.json()
-            device_id = body["device_id"]
-            consumer_id = body["consumer_id"]
-            field = body["field"]
-            value = body["value"]
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            return _error(f"Invalid request: {exc}", status=400)
+            return forbidden()
+        body = await _body(request)
+        device_id, consumer_id, field, value = _required(
+            body, "device_id", "consumer_id", "field", "value"
+        )
 
         device = self._device(device_id)
         control = CONSUMER_CONTROLS_BY_FIELD.get(field)
         if device is None or control is None:
-            return _error("Unknown device or field", status=404)
+            return error_response("Unknown device or field", status=404)
         try:
             control.apply(device, consumer_id, control.coerce(value))
         except AttributeError:
             # A device without this setter — a Shelly emulation, say — is
             # registered too, and has no per-battery controls.
-            return _error("Unknown device or field", status=404)
+            return error_response("Unknown device or field", status=404)
         except ValueError as exc:
-            return _error(str(exc), status=400)
+            return error_response(str(exc), status=400)
 
         logger.info(
             "Dashboard control: %s %s.%s = %r by %s",
@@ -448,36 +503,35 @@ class WebServer:
             value,
             self._actor(request),
         )
-        # The command topic carries the *entity* unit, the same one this
-        # request arrived in — mirror the wire value, not the scaled setter
-        # argument, or the replay on the next reconnect reapplies a percentage
-        # as a fraction.
-        await self._mirror_to_mqtt(
-            "publish_consumer_command", "control", device_id, consumer_id, field, value
-        )
+        insights = self._insights()
+        if insights is not None:
+            # The command topic carries the *entity* unit, the same one this
+            # request arrived in — mirror the wire value, not the scaled setter
+            # argument, or the replay on the next reconnect reapplies a
+            # percentage as a fraction.
+            await self._mirror_to_mqtt(
+                "control",
+                insights.publish_consumer_command(device_id, consumer_id, field, value),
+            )
         return self._applied()
 
-    async def _handle_control_device(self, request):
+    async def _handle_control_device(self, request: web.Request) -> web.StreamResponse:
         """Apply a device-wide control change."""
         if not self._may_write(request):
-            return _forbidden()
-        try:
-            body = await request.json()
-            device_id = body["device_id"]
-            field = body["field"]
-            value = body.get("value", True)
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            return _error(f"Invalid request: {exc}", status=400)
+            return forbidden()
+        body = await _body(request)
+        (device_id, field) = _required(body, "device_id", "field")
+        value = body.get("value", True)
 
         device = self._device(device_id)
         if device is None:
-            return _error("Unknown device", status=404)
+            return error_response("Unknown device", status=404)
         try:
             apply_device_control(device, field, bool(value))
         except KeyError:
-            return _error("Unknown field", status=404)
+            return error_response("Unknown field", status=404)
         except (AttributeError, ValueError) as exc:
-            return _error(str(exc), status=400)
+            return error_response(str(exc), status=400)
 
         logger.info(
             "Dashboard control: %s.%s = %r by %s",
@@ -486,40 +540,44 @@ class WebServer:
             value,
             self._actor(request),
         )
-        await self._mirror_to_mqtt(
-            "publish_device_command", "device", device_id, {field: value}
-        )
+        insights = self._insights()
+        if insights is not None:
+            await self._mirror_to_mqtt(
+                "device", insights.publish_device_command(device_id, {field: value})
+            )
         return self._applied()
 
     # -- Home Assistant add-on options ---------------------------------
 
-    def _supervisor(self, request):
-        """A Supervisor client, or an error response explaining why not."""
-        from astrameter.addon_client import SupervisorClient
-
+    def _supervisor(self, request: web.Request) -> SupervisorClient:
+        """A Supervisor client for a request allowed to write through it."""
         if not self._may_write(request):
-            return None, _forbidden()
+            raise ApiError("Forbidden", status=403)
         client = SupervisorClient()
         if not client.available():
-            return None, _error("Not running as a Home Assistant add-on", status=409)
-        return client, None
+            raise ApiError("Not running as a Home Assistant add-on", status=409)
+        return client
 
-    async def _handle_addon_options_get(self, request):
-        """Current add-on options plus their schema, secrets redacted."""
-        client, error = self._supervisor(request)
-        if error:
-            return error
+    @staticmethod
+    async def _addon_info(client: SupervisorClient) -> dict[str, Any]:
+        """The add-on's current options and schema, as Supervisor reports them."""
         try:
-            info = await client.get_info()
+            return await client.get_info()
         except Exception as exc:
-            return _error(str(exc), status=502)
+            raise ApiError(str(exc), status=502) from exc
+
+    async def _handle_addon_options_get(
+        self, request: web.Request
+    ) -> web.StreamResponse:
+        """Current add-on options plus their schema, secrets redacted."""
+        info = await self._addon_info(self._supervisor(request))
         options = dict(info.get("options") or {})
         # Not `or {}`: that flattens exactly the malformed shapes worth
         # reporting — `[]` would arrive here as an object and the diagnostic
         # would say nothing. `None` is Supervisor's documented "no schema".
         schema = info.get("schema")
         self._log_unrenderable_schema(schema)
-        return _json(
+        return json_response(
             {
                 "options": redact_sections({"o": options})["o"],
                 "schema": {} if schema is None else schema,
@@ -528,7 +586,7 @@ class WebServer:
             }
         )
 
-    def _log_unrenderable_schema(self, schema) -> None:
+    def _log_unrenderable_schema(self, schema: Any) -> None:
         """Name any schema entry the guided form cannot turn into a control.
 
         A repeated or nested option renders read-only, and without this the
@@ -564,69 +622,67 @@ class WebServer:
                 ", ".join(f"{k} ({t})" for k, t in sorted(odd.items())),
             )
 
-    async def _handle_addon_options_post(self, request):
+    async def _handle_addon_options_post(
+        self, request: web.Request
+    ) -> web.StreamResponse:
         """Write add-on options through Supervisor.
 
         Supervisor replaces the whole persisted overlay and silently drops
         keys absent from the schema, so a typo would lose a value with no
         error — every key is validated against the live schema first.
         """
-        client, error = self._supervisor(request)
-        if error:
-            return error
-        try:
-            body = await request.json()
-            options = body["options"]
-            if not isinstance(options, dict):
-                raise ValueError("'options' must be an object")
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            return _error(f"Invalid request: {exc}", status=400)
+        client = self._supervisor(request)
+        body = await _body(request)
+        (options,) = _required(body, "options")
+        if not isinstance(options, dict):
+            raise ApiError("Invalid request: 'options' must be an object", status=400)
 
-        try:
-            info = await client.get_info()
-        except Exception as exc:
-            return _error(str(exc), status=502)
+        info = await self._addon_info(client)
         unknown = sorted(set(options) - addon_option_names(info.get("schema")))
         if unknown:
-            return _error(f"Unknown add-on option(s): {', '.join(unknown)}", status=400)
+            return error_response(
+                f"Unknown add-on option(s): {', '.join(unknown)}", status=400
+            )
         merged = restore_sections(
             {"o": options}, {"o": dict(info.get("options") or {})}
         )["o"]
+        await self._set_options(client, merged)
 
-        try:
-            await client.set_options(merged)
-        except Exception as exc:
-            return _error(str(exc), status=400)
         logger.info("Add-on options updated by %s", self._actor(request))
         if body.get("restart"):
             self._restart_after_response(client)
-            return _json({"saved": True, "restart": "supervisor"})
-        return _json({"saved": True, "restart": "none"})
+            return json_response({"saved": True, "restart": "supervisor"})
+        return json_response({"saved": True, "restart": "none"})
 
-    async def _handle_ha_entities(self, request):
+    @staticmethod
+    async def _set_options(client: SupervisorClient, options: dict[str, Any]) -> None:
+        try:
+            await client.set_options(options)
+        except Exception as exc:
+            raise ApiError(str(exc), status=400) from exc
+
+    async def _handle_ha_entities(self, request: web.Request) -> web.StreamResponse:
         """Home Assistant sensors that could be a grid-power source.
 
         Powers the entity picker in the guided form: typing a raw entity id
         from memory is the single easiest way to misconfigure AstraMeter, and
         a wrong id fails at start-up rather than here.
         """
-        from astrameter.addon_client import SupervisorClient
-
         if not self._trusted(request):
-            return _forbidden()
+            return forbidden()
         client = SupervisorClient()
         if not client.available():
-            return _error("Not running as a Home Assistant add-on", status=409)
+            return error_response("Not running as a Home Assistant add-on", status=409)
         try:
             entities = await client.list_power_entities()
         except Exception as exc:
             # A failed lookup must not block the form — the field stays a
             # plain text input and the user can still type an id.
             logger.warning("Could not list Home Assistant entities: %s", exc)
-            return _json({"entities": [], "error": str(exc)})
-        return _json({"entities": entities}, cache="max-age=30")
+            return json_response({"entities": [], "error": str(exc)})
+        return json_response({"entities": entities}, cache="max-age=30")
 
-    def _restart_after_response(self, client) -> None:
+    def _restart_after_response(self, client: SupervisorClient) -> None:
         """Ask Supervisor to restart us, once this response is on the wire.
 
         The restart tears down the container serving the request, so awaiting
@@ -650,82 +706,74 @@ class WebServer:
         self._pending_restarts.add(task)
         task.add_done_callback(self._pending_restarts.discard)
 
-    async def _handle_addon_restart(self, request):
-        client, error = self._supervisor(request)
-        if error:
-            return error
+    async def _handle_addon_restart(self, request: web.Request) -> web.StreamResponse:
+        client = self._supervisor(request)
         logger.info("Add-on restart requested by %s", self._actor(request))
         self._restart_after_response(client)
-        return _json({"restarting": True}, status=202)
+        return json_response({"restarting": True}, status=202)
 
-    async def _handle_config_mode_post(self, request):
+    async def _handle_config_mode_post(
+        self, request: web.Request
+    ) -> web.StreamResponse:
         """Switch between add-on options and a custom ``config.ini``.
 
         Simple → file materialises the config the add-on just generated into
         the shared config dir, so the user starts from what is actually
         running rather than a blank file.
         """
-        client, error = self._supervisor(request)
-        if error:
-            return error
-        try:
-            body = await request.json()
-            target = body["mode"]
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            return _error(f"Invalid request: {exc}", status=400)
-
-        from astrameter.status.config_mode import materialize_config
+        client = self._supervisor(request)
+        body = await _body(request)
+        (target,) = _required(body, "mode")
 
         if target == "file":
             filename = (body.get("filename") or "astrameter.ini").strip()
-            try:
-                materialize_config(self.status.app_config, filename)
-            except ValueError as exc:
-                # A filename the user chose that target_path refuses.
-                return _error(str(exc), status=400)
-            except OSError as exc:
-                return _error(f"Cannot write config file: {exc}", status=500)
-            options = {"custom_config": filename}
+            options = {"custom_config": self._materialize(filename)}
         elif target == "options":
             options = {"custom_config": ""}
         else:
-            return _error("mode must be 'file' or 'options'", status=400)
+            return error_response("mode must be 'file' or 'options'", status=400)
 
-        try:
-            info = await client.get_info()
-            merged = {**(info.get("options") or {}), **options}
-            await client.set_options(merged)
-        except Exception as exc:
-            return _error(str(exc), status=400)
+        info = await self._addon_info(client)
+        await self._set_options(client, {**(info.get("options") or {}), **options})
         logger.info(
             "Configuration mode switched to %r by %s", target, self._actor(request)
         )
         self._restart_after_response(client)
-        return _json({"switched": True, "mode": target, "restart": "supervisor"})
+        return json_response(
+            {"switched": True, "mode": target, "restart": "supervisor"}
+        )
+
+    def _materialize(self, filename: str) -> str:
+        """Write the running config to *filename*, and return the name stored."""
+        assert self.status is not None  # _supervisor() already refused otherwise
+        try:
+            materialize_config(self.status.app_config, filename)
+        except ValueError as exc:
+            # A filename the user chose that target_path refuses.
+            raise ApiError(str(exc), status=400) from exc
+        except OSError as exc:
+            raise ApiError(f"Cannot write config file: {exc}", status=500) from exc
+        return filename
 
     # -- config.ini editor ---------------------------------------------
 
-    async def _handle_config_ui(self, request):
+    async def _handle_config_ui(self, request: web.Request) -> web.StreamResponse:
         """Serve the HTML configuration editor at GET /config."""
-        if not self._trusted(request) and self.status is not None:
-            return _forbidden()
-        from astrameter.web_config import CONFIG_EDITOR_HTML
-
+        if not self._may_read(request):
+            return forbidden()
         return web.Response(
             body=CONFIG_EDITOR_HTML.encode("utf-8"),
             content_type="text/html",
             charset="utf-8",
         )
 
-    async def _handle_api_key_types(self, request):
+    async def _handle_api_key_types(self, request: web.Request) -> web.StreamResponse:
         """Return the section key-type metadata as JSON at GET /api/key-types."""
-        if not self._trusted(request) and self.status is not None:
-            return _forbidden()
-        from astrameter.web_config import SECTION_KEY_TYPES
+        if not self._may_read(request):
+            return forbidden()
+        return json_response(SECTION_KEY_TYPES, cache="max-age=3600")
 
-        return _json(SECTION_KEY_TYPES, cache="max-age=3600")
-
-    def _config_write_blocked(self, request):
+    def _config_write_blocked(self, request: web.Request) -> str | None:
         """Why a config.ini write is refused, or None when it is allowed.
 
         The rule itself is ``StatusRegistry.config_writable``, so what the
@@ -743,91 +791,90 @@ class WebServer:
             )
         return None
 
-    async def _handle_api_config_get(self, request):
-        """Return the current config.ini contents as JSON at GET /api/config."""
-        if not self._trusted(request) and self.status is not None:
-            return _forbidden()
-        from astrameter.web_config import read_config_as_dict
-
+    def _require_config_path(self) -> str:
         if not self.config_path:
-            return _error("Config path not set", status=500)
+            raise ApiError("Config path not set", status=500)
+        return self.config_path
+
+    async def _handle_api_config_get(self, request: web.Request) -> web.StreamResponse:
+        """Return the current config.ini contents as JSON at GET /api/config."""
+        if not self._may_read(request):
+            return forbidden()
+        path = self._require_config_path()
         try:
-            sections, order = read_config_as_dict(self.config_path)
-            return _json({"sections": redact_sections(sections), "order": order})
+            sections, order = read_config_as_dict(path)
+            return json_response(
+                {"sections": redact_sections(sections), "order": order}
+            )
         except Exception:
             logger.exception("Error reading config")
-            return _error("Internal server error", status=500)
+            return error_response("Internal server error", status=500)
 
-    async def _handle_api_config_post(self, request):
+    async def _handle_api_config_post(self, request: web.Request) -> web.StreamResponse:
         """Write updated config sections from the JSON body at POST /api/config."""
-        import shutil
-        import tempfile
-
-        from astrameter.web_config import (
-            read_config_as_dict,
-            validate_config,
-            write_config_from_dict,
-        )
-
         blocked = self._config_write_blocked(request)
         if blocked:
-            return _error(blocked, status=403)
-        if not self.config_path:
-            return _error("Config path not set", status=500)
+            return error_response(blocked, status=403)
+        path = self._require_config_path()
+        body = await _body(request)
+
         try:
-            data = await request.json()
-            if not isinstance(data, dict):
-                raise ValueError("JSON body must be an object")
-            sections = data.get("sections", {})
+            sections = body.get("sections", {})
             if not isinstance(sections, dict):
                 raise ValueError("'sections' must be an object")
-            order = data.get("order", list(sections.keys()))
+            order = body.get("order", list(sections.keys()))
             if not isinstance(order, list):
                 raise ValueError("'order' must be a list")
             # A value still equal to the sentinel means "keep what is
             # stored", so a redacted secret is never written back as bullets.
-            current, _ = read_config_as_dict(self.config_path)
+            current, _ = read_config_as_dict(path)
             sections = restore_sections(sections, current)
-            # Write to a temp copy and validate before touching the live file.
-            dir_name = os.path.dirname(self.config_path) or "."
-            with tempfile.NamedTemporaryFile(
-                "w", dir=dir_name, suffix=".tmp", delete=False
-            ) as tmp:
-                tmp_path = tmp.name
-            try:
-                if os.path.exists(self.config_path):
-                    shutil.copyfile(self.config_path, tmp_path)
-                write_config_from_dict(tmp_path, sections, order)
-                validate_config(tmp_path)
-            except Exception:
-                os.unlink(tmp_path)
-                raise
-            os.unlink(tmp_path)
-            write_config_from_dict(self.config_path, sections, order)
-            logger.info("Configuration updated by %s", self._actor(request))
-            return _json({"success": True})
-        except (ValueError, json.JSONDecodeError) as e:
-            logger.error("Invalid config request: %s", e)
-            return _error(str(e), status=400)
+            _validate_config_write(path, sections, order)
+            write_config_from_dict(path, sections, order)
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.error("Invalid config request: %s", exc)
+            return error_response(str(exc), status=400)
         except Exception:
             logger.exception("Error saving config")
-            return _error("Internal server error", status=500)
+            return error_response("Internal server error", status=500)
 
-    async def _handle_api_restart(self, request):
+        logger.info("Configuration updated by %s", self._actor(request))
+        return json_response({"success": True})
+
+    async def _handle_api_restart(self, request: web.Request) -> web.StreamResponse:
         """Acknowledge POST /api/restart and schedule an in-process restart via SIGUSR1."""
-        import signal
-
         if self.status is not None and not self._may_write(request):
-            return _forbidden()
+            return forbidden()
         logger.info("Restart requested by %s", self._actor(request))
         if self.status is not None:
             self.status.restart_pending = True
             self.status.bump()
         # SIGUSR1 so the handler in main.py restarts the device cycle instead
         # of exiting.  The web server itself survives it.
-        threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGUSR1)).start()
-        return _json({"restarting": True}, status=202)
+        threading.Timer(
+            RESTART_GRACE_S, lambda: os.kill(os.getpid(), signal.SIGUSR1)
+        ).start()
+        return json_response({"restarting": True}, status=202)
 
-    async def _handle_not_found(self, request):
+    async def _handle_not_found(self, request: web.Request) -> web.StreamResponse:
         """Return a 404 JSON response for any unmatched route."""
-        return _error("Not Found", status=404)
+        return error_response("Not Found", status=404)
+
+
+def _validate_config_write(path: str, sections: dict, order: list) -> None:
+    """Trial-write *sections* beside *path* and load it, before touching the live file.
+
+    A config that fails to parse would otherwise take the service down on its
+    next start, with the editor reporting success.
+    """
+    with tempfile.NamedTemporaryFile(
+        "w", dir=os.path.dirname(path) or ".", suffix=".tmp", delete=False
+    ) as tmp:
+        trial = tmp.name
+    try:
+        if os.path.exists(path):
+            shutil.copyfile(path, trial)
+        write_config_from_dict(trial, sections, order)
+        validate_config(trial)
+    finally:
+        os.unlink(trial)

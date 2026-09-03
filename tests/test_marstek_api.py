@@ -11,12 +11,12 @@ from astrameter.marstek_api import (
 )
 
 
-def test_desired_type_mapping():
+def test_desired_type_mapping() -> None:
     assert _desired_type("ct002") == "HME-4"
     assert _desired_type("ct003") == "HME-3"
 
 
-def test_find_existing_managed_device_matches_prefix_and_type():
+def test_find_existing_managed_device_matches_prefix_and_type() -> None:
     devices = [
         {"devid": "02b250aaaaaa", "mac": "02b250aaaaaa", "type": "HME-4"},
         {"devid": "ffffffffffff", "mac": "ffffffffffff", "type": "HME-3"},
@@ -27,7 +27,7 @@ def test_find_existing_managed_device_matches_prefix_and_type():
     assert found["devid"] == "02b250aaaaaa"
 
 
-def test_find_existing_managed_device_ignores_wrong_type():
+def test_find_existing_managed_device_ignores_wrong_type() -> None:
     devices = [
         {"devid": "02b250aaaaaa", "mac": "02b250aaaaaa", "type": "HME-3"},
     ]
@@ -36,7 +36,7 @@ def test_find_existing_managed_device_ignores_wrong_type():
     assert found is None
 
 
-def test_generate_new_id_uses_prefix_and_avoids_collisions():
+def test_generate_new_id_uses_prefix_and_avoids_collisions() -> None:
     devices = [
         {"devid": "02b250aaaaaa", "mac": "02b250aaaaaa"},
         {"devid": "02b250bbbbbb", "mac": "02b250bbbbbb"},
@@ -48,9 +48,9 @@ def test_generate_new_id_uses_prefix_and_avoids_collisions():
     assert new_id not in {"02b250aaaaaa", "02b250bbbbbb"}
 
 
-def test_translate_marstek_message_password_error_chinese():
+def test_translate_marstek_message_password_error_chinese() -> None:
     assert _translate_marstek_message("4", "密码错误") == "password incorrect"
 
 
-def test_translate_marstek_message_passthrough_unknown():
+def test_translate_marstek_message_passthrough_unknown() -> None:
     assert _translate_marstek_message("999", "some backend text") == "some backend text"

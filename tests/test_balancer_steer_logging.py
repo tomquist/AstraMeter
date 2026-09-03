@@ -12,6 +12,7 @@ cases apart.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pytest
 
@@ -34,7 +35,7 @@ def _reports() -> dict:
     }
 
 
-def _steer(caplog: pytest.LogCaptureFixture, **cfg) -> dict[str, str]:
+def _steer(caplog: pytest.LogCaptureFixture, **cfg: Any) -> dict[str, str]:
     """Drive one poll of each mode; return the steer line per consumer."""
     clock = [1000.0]
     lb = LoadBalancer(

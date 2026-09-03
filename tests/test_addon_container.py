@@ -224,7 +224,7 @@ class RunningAddon:
 
 
 @pytest.fixture
-def addon(tmp_path) -> Iterator[RunningAddon]:
+def addon(tmp_path: Path) -> Iterator[RunningAddon]:
     """The add-on running from its image, configured only by add-on options."""
     instance = RunningAddon(
         {
@@ -247,12 +247,12 @@ def addon(tmp_path) -> Iterator[RunningAddon]:
         instance.stop()
 
 
-def test_the_image_starts_and_reports_healthy(addon):
+def test_the_image_starts_and_reports_healthy(addon) -> None:
     health = addon.wait_for_health()
     assert health.get("status") in ("healthy", "ok", "starting"), health
 
 
-def test_the_container_serves_the_home_assistant_reading(addon):
+def test_the_container_serves_the_home_assistant_reading(addon) -> None:
     addon.wait_for_health()
     reply = addon.poll_until(lambda r: r["A_phase_power"] != "0")
 
@@ -261,7 +261,7 @@ def test_the_container_serves_the_home_assistant_reading(addon):
     assert reply["meter_mac_code"].lower() == CT_MAC.lower()
 
 
-def test_the_add_on_reads_its_options_and_the_supervisor(addon):
+def test_the_add_on_reads_its_options_and_the_supervisor(addon) -> None:
     addon.wait_for_health()
     logs = addon.logs()
 
@@ -275,7 +275,7 @@ def test_the_add_on_reads_its_options_and_the_supervisor(addon):
     assert "config.ini" not in logs
 
 
-def test_the_container_keeps_running(addon):
+def test_the_container_keeps_running(addon) -> None:
     addon.wait_for_health()
     time.sleep(10)
     assert addon.running(), f"add-on container stopped:\n{addon.logs()}"
@@ -283,7 +283,7 @@ def test_the_container_keeps_running(addon):
     assert addon.logs().count("started astrameter application") == 1
 
 
-def test_credentials_never_reach_the_log(tmp_path):
+def test_credentials_never_reach_the_log(tmp_path: Path) -> None:
     """The add-on logs its own configuration; secrets must not come with it."""
     instance = RunningAddon(
         {

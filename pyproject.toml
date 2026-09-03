@@ -74,7 +74,7 @@ ignore_missing_imports = true
 explicit_package_bases = true
 namespace_packages = true
 mypy_path = ["src"]
-# Typed surfaces only; full strictness would require annotating the whole codebase
-check_untyped_defs = false
-disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
 disable_error_code = ["import-untyped"]

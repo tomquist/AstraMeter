@@ -4,6 +4,8 @@ from io import StringIO
 from astrameter.config.config_loader import new_config_parser
 from astrameter.config.ini_config import IniAppConfig, render_ini
 from astrameter.config.settings import CtSettings, GeneralSettings
+from astrameter.powermeter import ThrottledPowermeter
+from astrameter.powermeter.wrappers.base import PowermeterWrapper
 
 
 def config(text: str) -> IniAppConfig:
@@ -12,14 +14,14 @@ def config(text: str) -> IniAppConfig:
     return IniAppConfig(parser)
 
 
-def test_empty_config_yields_the_defaults():
+def test_empty_config_yields_the_defaults() -> None:
     cfg = config("")
     assert cfg.general() == GeneralSettings()
     assert cfg.ct("ct002") == CtSettings()
     assert cfg.marstek().enable is False
 
 
-def test_the_dashboard_is_served_and_writable_unless_the_file_says_otherwise():
+def test_the_dashboard_is_served_and_writable_unless_the_file_says_otherwise() -> None:
     """Both on by default; each takes its own key to switch off."""
     assert config("").general().dashboard is True
     assert config("").general().dashboard_allow_write is True
@@ -32,7 +34,7 @@ def test_the_dashboard_is_served_and_writable_unless_the_file_says_otherwise():
     )
 
 
-def test_general_section_is_read_into_settings():
+def test_general_section_is_read_into_settings() -> None:
     general = config(
         """
 [GENERAL]
@@ -57,7 +59,7 @@ THROTTLE_INTERVAL = 2
     assert general.signal.throttle_interval == 2.0
 
 
-def test_the_config_editor_flag_keeps_unset_apart_from_off():
+def test_the_config_editor_flag_keeps_unset_apart_from_off() -> None:
     """Absent has to stay absent rather than collapsing to False: the web
     server reads "off" as an opt-out that overrides the dashboard, and a file
     that never mentioned the key never asked for that."""
@@ -72,7 +74,7 @@ def test_the_config_editor_flag_keeps_unset_apart_from_off():
     assert _round_trip(off).general().web_config_enabled is False
 
 
-def test_ct_section_is_read_into_settings():
+def test_ct_section_is_read_into_settings() -> None:
     ct = config(
         """
 [CT002]
@@ -97,7 +99,7 @@ CLOUD_REPORTING = true
     assert ct.fair_distribution is CtSettings().fair_distribution
 
 
-def test_ct003_reads_its_own_section_only_when_it_exists():
+def test_ct003_reads_its_own_section_only_when_it_exists() -> None:
     both = config("[CT002]\nCT_MAC = aa\n\n[CT003]\nCT_MAC = bb\n")
     assert both.ct("ct002").ct_mac == "aa"
     assert both.ct("ct003").ct_mac == "bb"
@@ -106,7 +108,7 @@ def test_ct003_reads_its_own_section_only_when_it_exists():
     assert shared.ct("ct003").ct_mac == "aa"
 
 
-def test_ct_dedupe_window_falls_back_to_the_global_one():
+def test_ct_dedupe_window_falls_back_to_the_global_one() -> None:
     inherited = config("[GENERAL]\nDEDUPE_TIME_WINDOW = 2\n\n[CT002]\n")
     assert inherited.ct("ct002").dedupe_time_window == 2.0
 
@@ -116,7 +118,7 @@ def test_ct_dedupe_window_falls_back_to_the_global_one():
     assert overridden.ct("ct002").dedupe_time_window == 0.5
 
 
-def test_marstek_section_is_read_into_settings():
+def test_marstek_section_is_read_into_settings() -> None:
     marstek = config(
         """
 [MARSTEK]
@@ -134,7 +136,7 @@ TIMEZONE = Europe/Madrid
     assert marstek.timezone == "Europe/Madrid"
 
 
-def test_powermeters_inherit_the_global_conditioning():
+def test_powermeters_inherit_the_global_conditioning() -> None:
     cfg = config(
         """
 [GENERAL]
@@ -146,7 +148,8 @@ IP = 192.168.1.10
 """
     )
     meter, _, _ = cfg.powermeters(cfg.general())[0]
-    assert type(meter.wrapped_powermeter).__name__ == "ThrottledPowermeter"
+    assert isinstance(meter, PowermeterWrapper)
+    assert isinstance(meter.wrapped_powermeter, ThrottledPowermeter)
 
 
 # -- rendering ---------------------------------------------------------------
@@ -156,7 +159,9 @@ IP = 192.168.1.10
 # file" from handing someone a file that silently drops a setting.
 
 
-def _round_trip(cfg: IniAppConfig, device_types: list[str] | None = None):
+def _round_trip(
+    cfg: IniAppConfig, device_types: list[str] | None = None
+) -> IniAppConfig:
     return config(render_ini(cfg, device_types))
 
 
@@ -172,14 +177,14 @@ def _sample(field: dataclasses.Field) -> str:
     return f"{default}-changed" if default else "changed"
 
 
-def test_rendering_the_defaults_writes_nothing_to_carry():
+def test_rendering_the_defaults_writes_nothing_to_carry() -> None:
     """Only what the user changed is worth putting in their file."""
     cfg = config("")
     assert render_ini(cfg).strip() == ""
     assert _round_trip(cfg).general() == GeneralSettings()
 
 
-def test_general_settings_survive_the_round_trip():
+def test_general_settings_survive_the_round_trip() -> None:
     cfg = config(
         """
 [GENERAL]
@@ -211,7 +216,7 @@ PID_MODE = replace
     assert _round_trip(cfg).general() == cfg.general()
 
 
-def test_ct_settings_survive_the_round_trip():
+def test_ct_settings_survive_the_round_trip() -> None:
     """Every CT field, so a key written under the wrong name is caught."""
     body = "\n".join(
         f"{f.name.upper()} = {_sample(f)}"
@@ -222,7 +227,7 @@ def test_ct_settings_survive_the_round_trip():
     assert _round_trip(cfg).ct("ct002") == cfg.ct("ct002")
 
 
-def test_both_ct_sections_are_rendered():
+def test_both_ct_sections_are_rendered() -> None:
     cfg = config(
         """
 [GENERAL]
@@ -240,7 +245,7 @@ BALANCE_GAIN = 0.6
     assert written.ct("ct003").balance_gain == 0.6
 
 
-def test_marstek_credentials_survive_the_round_trip():
+def test_marstek_credentials_survive_the_round_trip() -> None:
     cfg = config(
         """
 [MARSTEK]
@@ -254,19 +259,19 @@ TIMEZONE = Europe/Madrid
     assert _round_trip(cfg).marstek() == cfg.marstek()
 
 
-def test_a_disabled_marstek_section_is_not_written():
+def test_a_disabled_marstek_section_is_not_written() -> None:
     """Credentials that are not in use do not get copied into a new file."""
     cfg = config("[MARSTEK]\nENABLE = false\nPASSWORD = secret\n")
     assert "secret" not in render_ini(cfg)
 
 
-def test_the_device_types_to_render_can_be_given():
+def test_the_device_types_to_render_can_be_given() -> None:
     """The add-on backend answers ct() for a type its own list may not name."""
     cfg = config("")
     assert "[CT003]" in render_ini(cfg, ["ct003"])
 
 
-def test_an_all_default_ct003_does_not_inherit_ct002s_settings():
+def test_an_all_default_ct003_does_not_inherit_ct002s_settings() -> None:
     """`ct_section` falls back to [CT002], so [CT003] has to be written."""
     cfg = config(
         """
@@ -283,7 +288,7 @@ BALANCE_GAIN = 0.44
     assert _round_trip(cfg).ct("ct003") == CtSettings()
 
 
-def test_declared_general_keys_reports_only_what_the_file_sets():
+def test_declared_general_keys_reports_only_what_the_file_sets() -> None:
     """`dashboard` is not `DASHBOARD`, so the lookup goes through the map."""
     cfg = config("[GENERAL]\nDASHBOARD_ENABLED = False\n")
 

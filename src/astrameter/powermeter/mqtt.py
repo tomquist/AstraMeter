@@ -27,7 +27,7 @@ class MqttPowermeter(PushPowermeter):
         username: str | None = None,
         password: str | None = None,
         tls: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         self.broker = broker
         self.port = port
@@ -88,57 +88,65 @@ class MqttPowermeter(PushPowermeter):
         self._run_task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
-        unique_topics = list(self._topic_indices.keys())
         tls_context = ssl.create_default_context() if self.tls else None
         while True:
             try:
-                async with aiomqtt.Client(
-                    hostname=self.broker,
-                    port=self.port,
-                    username=self.username,
-                    password=self.password,
-                    tls_context=tls_context,
-                    keepalive=60,
-                ) as client:
-                    logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")
-                    for topic_name in unique_topics:
-                        await client.subscribe(topic_name)
-                    self._connected_event.set()
-                    async for message in client.messages:
-                        raw = message.payload
-                        payload = raw.decode() if isinstance(raw, bytes) else str(raw)
-                        topic_str = str(message.topic)
-                        indices = self._topic_indices.get(topic_str, [])
-                        if not indices:
-                            continue
-                        # Parse JSON once if any subscription for this topic needs it
-                        parsed_json = None
-                        for index in indices:
-                            _, json_path = self._subscriptions[index]
-                            try:
-                                if json_path:
-                                    if parsed_json is None:
-                                        parsed_json = json.loads(payload)
-                                    self.values[index] = extract_json_value(
-                                        parsed_json, json_path
-                                    )
-                                else:
-                                    self.values[index] = float(payload)
-                                self._message_event.set()
-                            except (json.JSONDecodeError, ValueError) as e:
-                                logger.error(
-                                    f"Failed to parse MQTT payload for index {index}: {e}"
-                                )
-            except aiomqtt.MqttError as e:
+                await self._serve_connection(tls_context)
+            except aiomqtt.MqttError as exc:
                 self._connected_event.clear()
                 # Reconnect loop — traceback would be noisy, keep it terse.
                 logger.warning(
                     "MQTT connection error: %s. Reconnecting in %ss...",
-                    e,
+                    exc,
                     RECONNECT_DELAY,
                     exc_info=False,
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
+
+    async def _serve_connection(self, tls_context: ssl.SSLContext | None) -> None:
+        """Subscribe and store every message, until the connection drops."""
+        async with aiomqtt.Client(
+            hostname=self.broker,
+            port=self.port,
+            username=self.username,
+            password=self.password,
+            tls_context=tls_context,
+            keepalive=60,
+        ) as client:
+            logger.info("Connected to MQTT broker %s:%s", self.broker, self.port)
+            for topic_name in self._topic_indices:
+                await client.subscribe(topic_name)
+            self._connected_event.set()
+            async for message in client.messages:
+                raw = message.payload
+                payload = raw.decode() if isinstance(raw, bytes) else str(raw)
+                self._store(str(message.topic), payload)
+
+    def _store(self, topic: str, payload: str) -> None:
+        """Fill every subscription slot *topic* feeds from one payload.
+
+        Several subscriptions can read different JSON paths out of the same
+        topic, so the document is parsed once for all of them.
+        """
+        document: object = None
+        for index in self._topic_indices.get(topic, ()):
+            _, json_path = self._subscriptions[index]
+            try:
+                if json_path:
+                    if document is None:
+                        document = json.loads(payload)
+                    self.values[index] = extract_json_value(document, json_path)
+                else:
+                    self.values[index] = float(payload)
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.error(
+                    "Failed to parse MQTT payload on %s for index %d: %s",
+                    topic,
+                    index,
+                    exc,
+                )
+                continue
+            self._message_event.set()
 
     async def stop(self) -> None:
         if self._run_task:

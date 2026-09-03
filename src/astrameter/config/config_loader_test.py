@@ -5,7 +5,6 @@ import pytest
 
 from astrameter.config.config_loader import (
     ClientFilter,
-    _split_labels,
     create_amisreader_powermeter,
     create_client_filter,
     create_emlog_powermeter,
@@ -29,15 +28,34 @@ from astrameter.config.config_loader import (
     create_tibber_pulse_powermeter,
     create_tq_em_powermeter,
     create_vzlogger_powermeter,
+    one_or_blank,
     parse_float_list,
     parse_mqtt_uri,
     read_all_powermeter_configs,
     read_mqtt_insights_config,
 )
-from astrameter.powermeter import TransformedPowermeter
+from astrameter.powermeter import (
+    ESPHomeNative,
+    FritzSmartEnergy,
+    Fronius,
+    HomeAssistant,
+    MqttPowermeter,
+    Powermeter,
+    Refoss,
+    Shelly,
+    Shelly1PM,
+    Shelly3EMPro,
+    ShellyEM,
+    ShellyPlus1PM,
+    Sml,
+    Tasmota,
+    TibberPulse,
+    TransformedPowermeter,
+)
+from astrameter.powermeter.wrappers.base import PowermeterWrapper
 
 
-def test_client_filter():
+def test_client_filter() -> None:
     """Basic test for ClientFilter."""
     filter = ClientFilter([IPv4Network("192.168.1.0/24")])
     # Just verify it runs without raising exceptions
@@ -46,7 +64,7 @@ def test_client_filter():
     filter.matches("invalid_ip")  # Should handle invalid
 
 
-def test_create_client_filter():
+def test_create_client_filter() -> None:
     """Test create_client_filter with various inputs."""
     config = configparser.ConfigParser()
     config["TEST1"] = {"NETMASK": "192.168.1.0/24,10.0.0.0/8"}
@@ -57,50 +75,51 @@ def test_create_client_filter():
     create_client_filter("TEST2", config)
 
 
-def test_create_shelly_powermeter():
-    """Test Shelly powermeter creation."""
+@pytest.mark.parametrize(
+    ("shelly_type", "expected"),
+    [
+        ("1PM", Shelly1PM),
+        ("PLUS1PM", ShellyPlus1PM),
+        ("EM", ShellyEM),
+        ("3EM", ShellyEM),
+        ("3EMPro", Shelly3EMPro),
+    ],
+)
+def test_create_shelly_powermeter(shelly_type: str, expected: type[Powermeter]) -> None:
+    """Each TYPE picks its own class, and every one gets the same connection."""
     config = configparser.ConfigParser()
-
-    # Note: These won't connect to real devices, but test that
-    # the creation logic works
-
-    # Test all Shelly types with minimal config
-    config["SHELLY1"] = {"TYPE": "1PM", "IP": "127.0.0.1"}
-    config["SHELLY2"] = {"TYPE": "PLUS1PM", "IP": "127.0.0.1"}
-    config["SHELLY3"] = {"TYPE": "EM", "IP": "127.0.0.1"}
-    config["SHELLY4"] = {"TYPE": "3EM", "IP": "127.0.0.1"}
-    config["SHELLY5"] = {"TYPE": "3EMPro", "IP": "127.0.0.1"}
-
-    # Just verify these run without exceptions
-    try:
-        create_shelly_powermeter("SHELLY1", config)
-        create_shelly_powermeter("SHELLY2", config)
-        create_shelly_powermeter("SHELLY3", config)
-        create_shelly_powermeter("SHELLY4", config)
-        create_shelly_powermeter("SHELLY5", config)
-    except Exception as e:
-        if "Connection" not in str(e):  # Ignore expected connection errors
-            raise
-
-    # Test invalid type - should raise an exception
-    config["SHELLY_INVALID"] = {"TYPE": "INVALID", "IP": "127.0.0.1"}
-    with pytest.raises(Exception, match="unknown Shelly"):
-        create_shelly_powermeter("SHELLY_INVALID", config)
+    config["SHELLY"] = {
+        "TYPE": shelly_type,
+        "IP": "127.0.0.1",
+        "USER": "u",
+        "PASS": "p",
+        "METER_INDEX": "1",
+    }
+    meter = create_shelly_powermeter("SHELLY", config)
+    assert type(meter) is expected
+    assert isinstance(meter, Shelly)
+    assert (meter.ip, meter.user, meter.password) == ("127.0.0.1", "u", "p")
 
 
-def test_create_tasmota_powermeter():
-    """Test Tasmota powermeter creation."""
+def test_create_shelly_powermeter_rejects_an_unknown_type() -> None:
+    """The message has to name the types, or the only clue is a stack trace."""
     config = configparser.ConfigParser()
-    config["TASMOTA"] = {"IP": "127.0.0.1"}
-
-    try:
-        create_tasmota_powermeter("TASMOTA", config)
-    except Exception as e:
-        if "Connection" not in str(e):  # Ignore expected connection errors
-            raise
+    config["SHELLY"] = {"TYPE": "INVALID", "IP": "127.0.0.1"}
+    with pytest.raises(ValueError, match="Unknown Shelly TYPE 'INVALID'"):
+        create_shelly_powermeter("SHELLY", config)
 
 
-def test_create_tasmota_powermeter_three_phase():
+def test_create_tasmota_powermeter() -> None:
+    """A lone label reaches the meter as the one phase it names."""
+    config = configparser.ConfigParser()
+    config["TASMOTA"] = {"IP": "127.0.0.1", "JSON_POWER_MQTT_LABEL": "Power"}
+    meter = create_tasmota_powermeter("TASMOTA", config)
+    assert isinstance(meter, Tasmota)
+    assert meter.ip == "127.0.0.1"
+    assert meter.json_power_mqtt_labels == ["Power"]
+
+
+def test_create_tasmota_powermeter_three_phase() -> None:
     """Test Tasmota powermeter creation with comma-separated labels."""
     config = configparser.ConfigParser()
     config["TASMOTA"] = {
@@ -112,29 +131,30 @@ def test_create_tasmota_powermeter_three_phase():
         "JSON_POWER_OUTPUT_MQTT_LABEL": "Out_L1, Out_L2, Out_L3",
     }
     meter = create_tasmota_powermeter("TASMOTA", config)
+    assert isinstance(meter, Tasmota)
     assert meter.json_power_mqtt_labels == ["Power_L1", "Power_L2", "Power_L3"]
     assert meter.json_power_input_mqtt_labels == ["In_L1", "In_L2", "In_L3"]
     assert meter.json_power_output_mqtt_labels == ["Out_L1", "Out_L2", "Out_L3"]
 
 
-def test_split_labels():
-    """Test _split_labels helper."""
-    assert _split_labels("") == ""
-    assert _split_labels("Power") == "Power"
-    assert _split_labels("Power_L1,Power_L2,Power_L3") == [
+def test_one_or_blank() -> None:
+    """Test the one_or_blank helper."""
+    assert one_or_blank("") == ""
+    assert one_or_blank("Power") == "Power"
+    assert one_or_blank("Power_L1,Power_L2,Power_L3") == [
         "Power_L1",
         "Power_L2",
         "Power_L3",
     ]
-    assert _split_labels("Power_L1 , Power_L2 , Power_L3") == [
+    assert one_or_blank("Power_L1 , Power_L2 , Power_L3") == [
         "Power_L1",
         "Power_L2",
         "Power_L3",
     ]
-    assert _split_labels(" , , ") == ""
+    assert one_or_blank(" , , ") == ""
 
 
-def test_create_shrdzm_powermeter():
+def test_create_shrdzm_powermeter() -> None:
     """Test Shrdzm powermeter creation."""
     config = configparser.ConfigParser()
     config["SHRDZM"] = {"IP": "127.0.0.1"}
@@ -146,7 +166,7 @@ def test_create_shrdzm_powermeter():
             raise
 
 
-def test_create_emlog_powermeter():
+def test_create_emlog_powermeter() -> None:
     """Test Emlog powermeter creation."""
     config = configparser.ConfigParser()
     config["EMLOG"] = {"IP": "127.0.0.1"}
@@ -158,7 +178,7 @@ def test_create_emlog_powermeter():
             raise
 
 
-def test_create_iobroker_powermeter():
+def test_create_iobroker_powermeter() -> None:
     """Test IoBroker powermeter creation."""
     config = configparser.ConfigParser()
     config["IOBROKER"] = {"IP": "127.0.0.1"}
@@ -170,7 +190,7 @@ def test_create_iobroker_powermeter():
             raise
 
 
-def test_create_homeassistant_powermeter():
+def test_create_homeassistant_powermeter() -> None:
     """Test HomeAssistant powermeter creation."""
     config = configparser.ConfigParser()
 
@@ -193,7 +213,9 @@ def test_create_homeassistant_powermeter():
             raise
 
 
-def test_create_homeassistant_powermeter_supervisor_token(monkeypatch):
+def test_create_homeassistant_powermeter_supervisor_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """IP=supervisor reads SUPERVISOR_TOKEN from env at call time, not from config."""
     import configparser as _cp
 
@@ -206,13 +228,14 @@ def test_create_homeassistant_powermeter_supervisor_token(monkeypatch):
         "ACCESSTOKEN": "stale-token",
     }
     pm = create_homeassistant_powermeter("HA", config)
+    assert isinstance(pm, HomeAssistant)
     assert pm._token() == "initial-token"
 
     monkeypatch.setenv("SUPERVISOR_TOKEN", "rotated-token")
     assert pm._token() == "rotated-token"
 
 
-def test_create_vzlogger_powermeter():
+def test_create_vzlogger_powermeter() -> None:
     """Test VZLogger powermeter creation."""
     config = configparser.ConfigParser()
     config["VZLOGGER"] = {"IP": "127.0.0.1"}
@@ -224,7 +247,7 @@ def test_create_vzlogger_powermeter():
             raise
 
 
-def test_create_script_powermeter():
+def test_create_script_powermeter() -> None:
     """Test Script powermeter creation."""
     config = configparser.ConfigParser()
     config["SCRIPT"] = {"COMMAND": 'echo "test"'}
@@ -236,7 +259,7 @@ def test_create_script_powermeter():
             raise
 
 
-def test_create_esphome_powermeter():
+def test_create_esphome_powermeter() -> None:
     """Test ESPHome powermeter creation."""
     config = configparser.ConfigParser()
     config["ESPHOME"] = {"IP": "127.0.0.1"}
@@ -248,7 +271,7 @@ def test_create_esphome_powermeter():
             raise
 
 
-async def test_create_esphomenative_powermeter():
+async def test_create_esphomenative_powermeter() -> None:
     """Test ESPHome native API powermeter creation (reads all keys)."""
     config = configparser.ConfigParser()
     config["ESPHOMENATIVE"] = {
@@ -259,12 +282,13 @@ async def test_create_esphomenative_powermeter():
         "CLIENT_INFO": "MyClient",
     }
     pm = create_esphomenative_powermeter("ESPHOMENATIVE", config)
+    assert isinstance(pm, ESPHomeNative)
     assert pm.address == "device.local"
     assert pm.port == 6054
     assert pm.object_id == "grid_power"
 
 
-async def test_create_esphomenative_powermeter_defaults():
+async def test_create_esphomenative_powermeter_defaults() -> None:
     """PORT defaults to 6053 and CLIENT_INFO to AstraMeter."""
     config = configparser.ConfigParser()
     config["ESPHOMENATIVE"] = {
@@ -273,11 +297,12 @@ async def test_create_esphomenative_powermeter_defaults():
         "OBJECT_ID": "grid_power",
     }
     pm = create_esphomenative_powermeter("ESPHOMENATIVE", config)
+    assert isinstance(pm, ESPHomeNative)
     assert pm.port == 6053
     assert pm.object_id == "grid_power"
 
 
-def test_create_amisreader_powermeter():
+def test_create_amisreader_powermeter() -> None:
     """Test AMIS Reader powermeter creation."""
     config = configparser.ConfigParser()
     config["AMIS_READER"] = {"IP": "127.0.0.1"}
@@ -289,7 +314,7 @@ def test_create_amisreader_powermeter():
             raise
 
 
-def test_create_modbus_powermeter():
+def test_create_modbus_powermeter() -> None:
     """Test Modbus powermeter creation."""
     config = configparser.ConfigParser()
     config["MODBUS"] = {"HOST": "127.0.0.1"}
@@ -301,7 +326,7 @@ def test_create_modbus_powermeter():
             raise
 
 
-def test_create_mqtt_powermeter():
+def test_create_mqtt_powermeter() -> None:
     """Test MQTT powermeter creation."""
     config = configparser.ConfigParser()
     config["MQTT"] = {"BROKER": "127.0.0.1"}
@@ -314,7 +339,7 @@ def test_create_mqtt_powermeter():
             raise
 
 
-def test_create_mqtt_powermeter_with_topics():
+def test_create_mqtt_powermeter_with_topics() -> None:
     """Test MQTT powermeter creation with multi-phase TOPICS."""
     config = configparser.ConfigParser()
     config["MQTT"] = {
@@ -322,6 +347,7 @@ def test_create_mqtt_powermeter_with_topics():
         "TOPICS": "home/l1, home/l2, home/l3",
     }
     pm = create_mqtt_powermeter("MQTT", config)
+    assert isinstance(pm, MqttPowermeter)
     assert len(pm._subscriptions) == 3
     assert pm._subscriptions == [
         ("home/l1", None),
@@ -330,7 +356,7 @@ def test_create_mqtt_powermeter_with_topics():
     ]
 
 
-def test_create_mqtt_powermeter_with_json_paths():
+def test_create_mqtt_powermeter_with_json_paths() -> None:
     """Test MQTT powermeter creation with single TOPIC and multiple JSON_PATHS."""
     config = configparser.ConfigParser()
     config["MQTT"] = {
@@ -339,13 +365,14 @@ def test_create_mqtt_powermeter_with_json_paths():
         "JSON_PATHS": "$.l1.power, $.l2.power, $.l3.power",
     }
     pm = create_mqtt_powermeter("MQTT", config)
+    assert isinstance(pm, MqttPowermeter)
     assert len(pm._subscriptions) == 3
     assert pm._subscriptions[0] == ("home/power", "$.l1.power")
     assert pm._subscriptions[1] == ("home/power", "$.l2.power")
     assert pm._subscriptions[2] == ("home/power", "$.l3.power")
 
 
-def test_parse_mqtt_uri_full():
+def test_parse_mqtt_uri_full() -> None:
     parts = parse_mqtt_uri("mqtt://alice:s%40cret@broker.example.com:1884")
     assert parts.host == "broker.example.com"
     assert parts.port == 1884
@@ -354,7 +381,7 @@ def test_parse_mqtt_uri_full():
     assert parts.tls is False
 
 
-def test_parse_mqtt_uri_mqtts_default_port():
+def test_parse_mqtt_uri_mqtts_default_port() -> None:
     parts = parse_mqtt_uri("mqtts://broker.example.com")
     assert parts.host == "broker.example.com"
     assert parts.port == 8883
@@ -363,55 +390,56 @@ def test_parse_mqtt_uri_mqtts_default_port():
     assert parts.tls is True
 
 
-def test_parse_mqtt_uri_mqtt_default_port():
+def test_parse_mqtt_uri_mqtt_default_port() -> None:
     parts = parse_mqtt_uri("mqtt://broker.example.com")
     assert parts.port == 1883
     assert parts.tls is False
 
 
-def test_parse_mqtt_uri_invalid_scheme():
+def test_parse_mqtt_uri_invalid_scheme() -> None:
     with pytest.raises(ValueError):
         parse_mqtt_uri("http://broker.example.com")
 
 
-def test_parse_mqtt_uri_missing_host():
+def test_parse_mqtt_uri_missing_host() -> None:
     with pytest.raises(ValueError):
         parse_mqtt_uri("mqtt://")
 
 
-def test_parse_mqtt_uri_empty():
+def test_parse_mqtt_uri_empty() -> None:
     with pytest.raises(ValueError):
         parse_mqtt_uri("")
 
 
-def test_parse_mqtt_uri_rejects_path():
+def test_parse_mqtt_uri_rejects_path() -> None:
     with pytest.raises(ValueError, match="path"):
         parse_mqtt_uri("mqtt://broker.example.com/some/path")
 
 
-def test_parse_mqtt_uri_allows_trailing_slash():
+def test_parse_mqtt_uri_allows_trailing_slash() -> None:
     parts = parse_mqtt_uri("mqtt://broker.example.com:1883/")
     assert parts.host == "broker.example.com"
     assert parts.port == 1883
 
 
-def test_parse_mqtt_uri_rejects_query():
+def test_parse_mqtt_uri_rejects_query() -> None:
     with pytest.raises(ValueError, match="query"):
         parse_mqtt_uri("mqtt://broker.example.com?clientId=foo")
 
 
-def test_parse_mqtt_uri_rejects_fragment():
+def test_parse_mqtt_uri_rejects_fragment() -> None:
     with pytest.raises(ValueError, match="fragment"):
         parse_mqtt_uri("mqtt://broker.example.com#frag")
 
 
-def test_create_mqtt_powermeter_with_uri():
+def test_create_mqtt_powermeter_with_uri() -> None:
     config = configparser.ConfigParser()
     config["MQTT"] = {
         "URI": "mqtts://alice:secret@broker.example.com:8884",
         "TOPIC": "home/power",
     }
     pm = create_mqtt_powermeter("MQTT", config)
+    assert isinstance(pm, MqttPowermeter)
     assert pm.broker == "broker.example.com"
     assert pm.port == 8884
     assert pm.username == "alice"
@@ -419,7 +447,7 @@ def test_create_mqtt_powermeter_with_uri():
     assert pm.tls is True
 
 
-def test_read_mqtt_insights_config_with_uri():
+def test_read_mqtt_insights_config_with_uri() -> None:
     config = configparser.ConfigParser()
     config["MQTT_INSIGHTS"] = {
         "URI": "mqtt://bob:pw@192.168.1.50:1885",
@@ -433,7 +461,7 @@ def test_read_mqtt_insights_config_with_uri():
     assert cfg.tls is False
 
 
-def test_read_mqtt_insights_config_with_mqtts_uri():
+def test_read_mqtt_insights_config_with_mqtts_uri() -> None:
     config = configparser.ConfigParser()
     config["MQTT_INSIGHTS"] = {
         "URI": "mqtts://broker.example.com",
@@ -446,7 +474,7 @@ def test_read_mqtt_insights_config_with_mqtts_uri():
     assert cfg.password is None
 
 
-def test_read_mqtt_insights_config_without_uri():
+def test_read_mqtt_insights_config_without_uri() -> None:
     """Plain BROKER/PORT/USERNAME/PASSWORD/TLS still works."""
     config = configparser.ConfigParser()
     config["MQTT_INSIGHTS"] = {
@@ -465,7 +493,7 @@ def test_read_mqtt_insights_config_without_uri():
     assert cfg.tls is True
 
 
-def test_create_mqtt_powermeter_topics_takes_precedence_over_topic():
+def test_create_mqtt_powermeter_topics_takes_precedence_over_topic() -> None:
     """Test that TOPICS takes precedence over TOPIC when both are set."""
     config = configparser.ConfigParser()
     config["MQTT"] = {
@@ -474,12 +502,13 @@ def test_create_mqtt_powermeter_topics_takes_precedence_over_topic():
         "TOPICS": "home/l1, home/l2",
     }
     pm = create_mqtt_powermeter("MQTT", config)
+    assert isinstance(pm, MqttPowermeter)
     assert len(pm._subscriptions) == 2
     assert pm._subscriptions[0][0] == "home/l1"
     assert pm._subscriptions[1][0] == "home/l2"
 
 
-def test_create_json_http_powermeter():
+def test_create_json_http_powermeter() -> None:
     """Test JSON HTTP powermeter creation."""
     config = configparser.ConfigParser()
     config["JSON_HTTP"] = {"URL": "http://localhost", "JSON_PATHS": "$.power"}
@@ -491,7 +520,7 @@ def test_create_json_http_powermeter():
             raise
 
 
-def test_create_tq_em_powermeter():
+def test_create_tq_em_powermeter() -> None:
     """Test TQ Energy Manager powermeter creation."""
     config = configparser.ConfigParser()
     config["TQ_EM"] = {"IP": "127.0.0.1"}
@@ -503,7 +532,7 @@ def test_create_tq_em_powermeter():
             raise
 
 
-def test_create_homewizard_powermeter():
+def test_create_homewizard_powermeter() -> None:
     """Test HomeWizard powermeter creation."""
     config = configparser.ConfigParser()
     config["HOMEWIZARD"] = {
@@ -519,7 +548,7 @@ def test_create_homewizard_powermeter():
             raise
 
 
-def test_create_fritz_powermeter():
+def test_create_fritz_powermeter() -> None:
     """Test FRITZ!Smart Energy powermeter creation and AIN suffix defaulting."""
     config = configparser.ConfigParser()
     config["FRITZ"] = {
@@ -529,43 +558,49 @@ def test_create_fritz_powermeter():
         "AIN": "12345 0123456",
     }
     pm = create_fritz_powermeter("FRITZ", config)
+    assert isinstance(pm, FritzSmartEnergy)
     assert pm._base_url == "http://fritz.box"
     assert pm._ain == "123450123456-1"
 
 
-def test_create_fronius_powermeter():
+def test_create_fronius_powermeter() -> None:
     """Test Fronius powermeter creation and DeviceId defaulting."""
     config = configparser.ConfigParser()
     config["FRONIUS"] = {"IP": "127.0.0.1"}
     pm = create_fronius_powermeter("FRONIUS", config)
+    assert isinstance(pm, Fronius)
     assert pm.ip == "127.0.0.1"
     assert pm.device_id == "0"
     assert pm.per_phase is False
 
     config["FRONIUS_2"] = {"IP": "127.0.0.1", "DEVICE_ID": "1", "PER_PHASE": "True"}
     pm = create_fronius_powermeter("FRONIUS_2", config)
+    assert isinstance(pm, Fronius)
     assert pm.device_id == "1"
     assert pm.per_phase is True
 
 
-def test_create_refoss_powermeter():
+def test_create_refoss_powermeter() -> None:
     """Test Refoss/Meross powermeter creation and CHANNELS parsing."""
     config = configparser.ConfigParser()
     config["REFOSS"] = {"IP": "192.168.1.150"}
     pm = create_refoss_powermeter("REFOSS", config)
+    assert isinstance(pm, Refoss)
     assert pm.ip == "192.168.1.150"
     assert pm.channels == [1]
 
     config["MEROSS"] = {"IP": "192.168.1.150", "CHANNELS": "1,2,3"}
     pm = create_refoss_powermeter("MEROSS", config)
+    assert isinstance(pm, Refoss)
     assert pm.channels == [1, 2, 3]
 
 
-def test_create_tibber_pulse_powermeter():
+def test_create_tibber_pulse_powermeter() -> None:
     """Test Tibber Pulse powermeter creation, defaults, and OBIS overrides."""
     config = configparser.ConfigParser()
     config["TIBBER_PULSE"] = {"IP": "127.0.0.1", "PASSWORD": "AD56-54BA"}
     pm = create_tibber_pulse_powermeter("TIBBER_PULSE", config)
+    assert isinstance(pm, TibberPulse)
     assert pm.ip == "127.0.0.1"
     assert pm.password == "AD56-54BA"
     assert pm.node_id == "1"
@@ -581,17 +616,19 @@ def test_create_tibber_pulse_powermeter():
         "OBIS_POWER_CURRENT": "0100100700ff",
     }
     pm = create_tibber_pulse_powermeter("TIBBER_PULSE_2", config)
+    assert isinstance(pm, TibberPulse)
     assert pm.node_id == "2"
     assert pm.user == "root"
     assert pm.timeout == 10.0
     assert pm._obis_current == "0100100700ff"
 
 
-def test_create_sml_powermeter():
+def test_create_sml_powermeter() -> None:
     """Test SML powermeter creation: SERIAL required, OBIS overrides applied."""
     config = configparser.ConfigParser()
     config["SML"] = {"SERIAL": "/dev/ttyUSB0"}
     pm = create_sml_powermeter("SML", config)
+    assert isinstance(pm, Sml)
     assert pm._serial_device == "/dev/ttyUSB0"
 
     config = configparser.ConfigParser()
@@ -600,10 +637,11 @@ def test_create_sml_powermeter():
         "OBIS_POWER_CURRENT": "0100100700ff",
     }
     pm = create_sml_powermeter("SML", config)
+    assert isinstance(pm, Sml)
     assert pm._obis_current == "0100100700ff"
 
 
-def test_create_sml_powermeter_requires_serial():
+def test_create_sml_powermeter_requires_serial() -> None:
     """Section [SML] must define non-empty SERIAL."""
     config = configparser.ConfigParser()
     config["SML"] = {}
@@ -616,7 +654,7 @@ def test_create_sml_powermeter_requires_serial():
         create_sml_powermeter("SML", config)
 
 
-def test_create_powermeter():
+def test_create_powermeter() -> None:
     """Test the main create_powermeter function."""
     config = configparser.ConfigParser()
 
@@ -668,7 +706,7 @@ def test_create_powermeter():
                 raise
 
 
-def test_read_all_powermeter_configs():
+def test_read_all_powermeter_configs() -> None:
     """Test reading all powermeter configs."""
     config = configparser.ConfigParser()
     config["SHELLY_1"] = {"TYPE": "1PM", "IP": "127.0.0.1"}
@@ -688,7 +726,7 @@ def test_read_all_powermeter_configs():
             raise
 
 
-def test_parse_float_list():
+def test_parse_float_list() -> None:
     """Test parsing comma-separated float lists."""
     assert parse_float_list("10", "KEY", "SECTION") == [10.0]
     assert parse_float_list("1.5, 2.5, 3.5", "KEY", "SECTION") == [1.5, 2.5, 3.5]
@@ -697,13 +735,13 @@ def test_parse_float_list():
     assert parse_float_list("", "KEY", "SECTION") == [0.0]
 
 
-def test_parse_float_list_invalid():
+def test_parse_float_list_invalid() -> None:
     """Test that invalid float values raise ValueError with clear message."""
     with pytest.raises(ValueError, match="Invalid POWER_OFFSET value 'abc'"):
         parse_float_list("abc", "POWER_OFFSET", "SHELLY_1")
 
 
-def test_read_all_configs_with_power_transform():
+def test_read_all_configs_with_power_transform() -> None:
     """Test that POWER_OFFSET and POWER_MULTIPLIER wrap the powermeter."""
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {
@@ -715,13 +753,14 @@ def test_read_all_configs_with_power_transform():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    assert isinstance(pm, PowermeterWrapper)
     pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [-50.0]
     assert pm.multipliers == [1.05]
 
 
-def test_read_all_configs_with_per_phase_transform():
+def test_read_all_configs_with_per_phase_transform() -> None:
     """Test per-phase offset and multiplier values."""
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {
@@ -733,13 +772,14 @@ def test_read_all_configs_with_per_phase_transform():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    assert isinstance(pm, PowermeterWrapper)
     pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [-10.0, -20.0, -30.0]
     assert pm.multipliers == [1.05, 1.02, 1.03]
 
 
-def test_read_all_configs_offset_only():
+def test_read_all_configs_offset_only() -> None:
     """Test that setting only POWER_OFFSET wraps with default multiplier."""
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {
@@ -750,13 +790,14 @@ def test_read_all_configs_offset_only():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    assert isinstance(pm, PowermeterWrapper)
     pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.offsets == [10.0]
     assert pm.multipliers == [1.0]
 
 
-def test_read_all_configs_zero_multiplier_accepted():
+def test_read_all_configs_zero_multiplier_accepted() -> None:
     """Test that a multiplier of 0 is accepted (e.g. to null a phase)."""
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {
@@ -767,15 +808,15 @@ def test_read_all_configs_zero_multiplier_accepted():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    assert isinstance(pm, PowermeterWrapper)
     pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert isinstance(pm, TransformedPowermeter)
     assert pm.multipliers == [0.0]
 
 
-def test_read_all_configs_wraps_with_health_tracking_named_by_section():
+def test_read_all_configs_wraps_with_health_tracking_named_by_section() -> None:
     """Every powermeter is wrapped outermost in HealthTrackingPowermeter and
     labelled with its config section for the MQTT Insights Online sensor."""
-    from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {"COMMAND": 'echo "100"'}
@@ -783,11 +824,11 @@ def test_read_all_configs_wraps_with_health_tracking_named_by_section():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
-    assert isinstance(pm, HealthTrackingPowermeter)
+    assert isinstance(pm, PowermeterWrapper)
     assert pm.name == "SCRIPT_1"
 
 
-def test_read_all_configs_no_transform_when_not_configured():
+def test_read_all_configs_no_transform_when_not_configured() -> None:
     """Test that no transform wrapper is applied when keys are absent."""
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {
@@ -797,11 +838,12 @@ def test_read_all_configs_no_transform_when_not_configured():
     powermeters = read_all_powermeter_configs(config)
     assert len(powermeters) == 1
     pm, _, _ = powermeters[0]
+    assert isinstance(pm, PowermeterWrapper)
     pm = pm.wrapped_powermeter  # unwrap outermost HealthTrackingPowermeter
     assert not isinstance(pm, TransformedPowermeter)
 
 
-def test_read_all_configs_wait_for_next_message_default_true():
+def test_read_all_configs_wait_for_next_message_default_true() -> None:
     """No config means waiting is enabled (preserves PR #322 behaviour)."""
     config = configparser.ConfigParser()
     config["SCRIPT_1"] = {"COMMAND": 'echo "100"'}
@@ -811,7 +853,7 @@ def test_read_all_configs_wait_for_next_message_default_true():
     assert wait_for_next is True
 
 
-def test_read_all_configs_wait_for_next_message_global_off():
+def test_read_all_configs_wait_for_next_message_global_off() -> None:
     """[GENERAL] WAIT_FOR_NEXT_MESSAGE=false applies to every section."""
     config = configparser.ConfigParser()
     config["GENERAL"] = {"WAIT_FOR_NEXT_MESSAGE": "false"}
@@ -822,7 +864,7 @@ def test_read_all_configs_wait_for_next_message_global_off():
     assert all(wait is False for _, _, wait in powermeters)
 
 
-def test_read_all_configs_wait_for_next_message_section_override():
+def test_read_all_configs_wait_for_next_message_section_override() -> None:
     """Per-section WAIT_FOR_NEXT_MESSAGE overrides the global default."""
     config = configparser.ConfigParser()
     config["GENERAL"] = {"WAIT_FOR_NEXT_MESSAGE": "true"}

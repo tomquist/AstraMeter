@@ -4,11 +4,13 @@ the control-write validation."""
 import asyncio
 import dataclasses
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from astrameter import web_server
 from astrameter.ct002 import CT002
 from astrameter.status import StatusRegistry
 from astrameter.status.secrets import SENTINEL
@@ -22,7 +24,7 @@ class _InsightsSnapshot:
     connected: bool = True
 
 
-def _registry(tmp_path, **kwargs) -> StatusRegistry:
+def _registry(tmp_path: Path, **kwargs: Any) -> StatusRegistry:
     kwargs.setdefault("config_path", str(tmp_path / "config.ini"))
     kwargs.setdefault("log_level", "info")
     kwargs.setdefault("version", "9.9.9")
@@ -42,13 +44,14 @@ def _device() -> CT002:
     return device
 
 
-async def _client(registry, **kwargs) -> TestClient:
+async def _client(registry: StatusRegistry | None, **kwargs: Any) -> TestClient:
     """A test client. Requests appear to come from 127.0.0.1, i.e. NOT ingress.
 
     Uses the production ``build_app()`` so the routes under test are exactly
     the routes that ship.
     """
-    server = WebServer(config_path=registry.config_path, status=registry, **kwargs)
+    config_path = registry.config_path if registry is not None else None
+    server = WebServer(config_path=config_path, status=registry, **kwargs)
     client = TestClient(TestServer(server.build_app()))
     await client.start_server()
     return client
@@ -57,7 +60,7 @@ async def _client(registry, **kwargs) -> TestClient:
 # -- the access gate --------------------------------------------------
 
 
-async def test_health_is_always_reachable(tmp_path):
+async def test_health_is_always_reachable(tmp_path: Path) -> None:
     """The Docker HEALTHCHECK and the add-on watchdog both probe /health, so
     it must answer even when everything else is gated off."""
     client = await _client(_registry(tmp_path, direct_access=False))
@@ -66,7 +69,9 @@ async def test_health_is_always_reachable(tmp_path):
 
 
 @pytest.mark.parametrize("path", ["/", "/api/status", "/api/config"])
-async def test_direct_access_is_refused_by_default_under_the_addon(tmp_path, path):
+async def test_direct_access_is_refused_by_default_under_the_addon(
+    tmp_path: Path, path: str
+) -> None:
     """Under host networking the port is on the LAN with no authentication,
     so anything sensitive must fail closed."""
     client = await _client(
@@ -79,37 +84,40 @@ async def test_direct_access_is_refused_by_default_under_the_addon(tmp_path, pat
 class _FakeSupervisor:
     """Stands in for SupervisorClient, answering one canned /addons/self/info."""
 
-    def __init__(self, info):
+    def __init__(self, info: Any) -> None:
         self._info = info
-        self.written = None
+        self.written: dict[str, Any] | None = None
         self.restarts = 0
         self.restart_error: Exception | None = None
 
-    def available(self):
+    def available(self) -> bool:
         return True
 
-    async def get_info(self):
+    async def get_info(self) -> Any:
         return self._info
 
-    async def set_options(self, options):
+    async def set_options(self, options: dict[str, Any]) -> None:
         self.written = options
 
-    async def restart(self):
+    async def restart(self) -> None:
         self.restarts += 1
         if self.restart_error is not None:
             raise self.restart_error
 
 
-async def _addon_options(monkeypatch, tmp_path, info, supervisor=None):
+async def _addon_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    info: Any,
+    supervisor: _FakeSupervisor | None = None,
+) -> TestClient:
     """Drive the real route with a canned Supervisor response.
 
     One stand-in for every call, so a test can assert on what the route asked
     it to do.
     """
-    import astrameter.addon_client as addon_client
-
     fake = supervisor if supervisor is not None else _FakeSupervisor(info)
-    monkeypatch.setattr(addon_client, "SupervisorClient", lambda *a, **k: fake)
+    monkeypatch.setattr(web_server, "SupervisorClient", lambda *a, **k: fake)
     registry = _registry(
         tmp_path, allow_write=True, direct_access=True, config_mode="ha_simple"
     )
@@ -131,8 +139,8 @@ SUPERVISOR_SCHEMA = [
 
 
 async def test_supervisors_own_schema_shape_is_served_and_not_flagged(
-    monkeypatch, tmp_path, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A list of field descriptors is what a real Home Assistant sends, so it
     is the normal case — warning about it would cry wolf on every install."""
     client = await _addon_options(
@@ -148,7 +156,9 @@ async def test_supervisors_own_schema_shape_is_served_and_not_flagged(
     await client.close()
 
 
-async def test_saving_validates_against_supervisors_schema_shape(monkeypatch, tmp_path):
+async def test_saving_validates_against_supervisors_schema_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The unknown-key check used to feed the schema straight to `set()`,
     which a list of descriptors cannot go through — so every save against a
     real Supervisor died with a 500 before it reached the write."""
@@ -167,12 +177,13 @@ async def test_saving_validates_against_supervisors_schema_shape(monkeypatch, tm
     await client.close()
 
 
-async def test_the_restart_waits_for_the_answer_to_go_out(monkeypatch, tmp_path):
+async def test_the_restart_waits_for_the_answer_to_go_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Supervisor tears down the container as part of the restart, so awaiting
     it in the handler killed us mid-response: the browser saw a 502 from the
     ingress proxy for a switch that had in fact worked, and the page showed an
     error for it."""
-    import astrameter.web_server as web_server
 
     monkeypatch.setattr(web_server, "RESTART_GRACE_S", 0.01)
     fake = _FakeSupervisor({"options": {}, "schema": SUPERVISOR_SCHEMA})
@@ -193,11 +204,10 @@ async def test_the_restart_waits_for_the_answer_to_go_out(monkeypatch, tmp_path)
 
 
 async def test_a_failed_deferred_restart_is_logged_not_lost(
-    monkeypatch, tmp_path, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Nothing is left to answer to by then, so the log is the only place it
     can surface."""
-    import astrameter.web_server as web_server
 
     monkeypatch.setattr(web_server, "RESTART_GRACE_S", 0.01)
     fake = _FakeSupervisor({"options": {}, "schema": SUPERVISOR_SCHEMA})
@@ -215,8 +225,8 @@ async def test_a_failed_deferred_restart_is_logged_not_lost(
 
 
 async def test_an_unrenderable_option_is_named_in_the_log(
-    monkeypatch, tmp_path, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """The guided form shows such an option read-only, which on its own is a
     greyed-out box with no explanation anywhere an operator looks."""
     repeated = {"name": "extra_hosts", "multiple": True, "type": "string"}
@@ -245,8 +255,8 @@ async def test_an_unrenderable_option_is_named_in_the_log(
 
 
 async def test_the_add_ons_own_declared_schema_is_still_understood(
-    monkeypatch, tmp_path, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """config.yaml's mapping form, in case a Supervisor ever serves it raw."""
     client = await _addon_options(
         monkeypatch,
@@ -262,8 +272,8 @@ async def test_the_add_ons_own_declared_schema_is_still_understood(
 
 
 async def test_a_schema_that_is_neither_shape_survives_to_be_diagnosed(
-    monkeypatch, tmp_path, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """`or {}` would turn this into an empty object before anything looked at
     it — flattening precisely the malformed shape worth reporting, and hiding
     from the browser what Supervisor actually sent."""
@@ -278,8 +288,8 @@ async def test_a_schema_that_is_neither_shape_survives_to_be_diagnosed(
 
 
 async def test_a_null_schema_is_not_reported_as_malformed(
-    monkeypatch, tmp_path, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Supervisor documents `schema: null` for an add-on that declares none.
     The form says so on its own; a warning would be crying wolf."""
     client = await _addon_options(
@@ -292,7 +302,7 @@ async def test_a_null_schema_is_not_reported_as_malformed(
     await client.close()
 
 
-async def test_a_refused_page_explains_itself_in_prose(tmp_path):
+async def test_a_refused_page_explains_itself_in_prose(tmp_path: Path) -> None:
     """Someone typed the address into a browser. A raw JSON error tells them
     nothing about the sidebar or the option that would let this port work."""
     client = await _client(
@@ -308,7 +318,9 @@ async def test_a_refused_page_explains_itself_in_prose(tmp_path):
 
 
 @pytest.mark.parametrize("path", ["/", "/api/status"])
-async def test_standalone_serves_without_a_second_opt_in(tmp_path, path):
+async def test_standalone_serves_without_a_second_opt_in(
+    tmp_path: Path, path: str
+) -> None:
     """Outside the add-on there is no ingress peer, so the plain port is the
     only way in. Gating it behind a further flag would make DASHBOARD_ENABLED
     on its own do nothing at all — which is what a standalone user sets."""
@@ -319,7 +331,7 @@ async def test_standalone_serves_without_a_second_opt_in(tmp_path, path):
     await client.close()
 
 
-async def test_forged_ingress_headers_do_not_grant_access(tmp_path):
+async def test_forged_ingress_headers_do_not_grant_access(tmp_path: Path) -> None:
     """The gate is the peer address precisely because a LAN client can set
     any header it likes."""
     client = await _client(
@@ -336,13 +348,13 @@ async def test_forged_ingress_headers_do_not_grant_access(tmp_path):
     await client.close()
 
 
-async def test_direct_access_opt_in_allows_reads(tmp_path):
+async def test_direct_access_opt_in_allows_reads(tmp_path: Path) -> None:
     client = await _client(_registry(tmp_path, direct_access=True))
     assert (await client.get("/api/status")).status == 200
     await client.close()
 
 
-async def test_writes_need_both_trust_and_the_write_flag(tmp_path):
+async def test_writes_need_both_trust_and_the_write_flag(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=False)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -400,8 +412,8 @@ _WRITE_ROUTES: tuple[tuple[str, dict[str, Any]], ...] = (
 @pytest.mark.parametrize("path,body", _WRITE_ROUTES)
 @pytest.mark.parametrize("content_type", _SIMPLE_CONTENT_TYPES)
 async def test_writes_refuse_a_browser_simple_content_type(
-    tmp_path, path, body, content_type
-):
+    tmp_path: Path, path: str, body: dict, content_type: str
+) -> None:
     """A page the operator happens to visit must not be able to drive this.
 
     The trust gate cannot help: a request that website makes through their
@@ -421,7 +433,7 @@ async def test_writes_refuse_a_browser_simple_content_type(
     await client.close()
 
 
-async def test_a_declared_json_write_still_goes_through(tmp_path):
+async def test_a_declared_json_write_still_goes_through(tmp_path: Path) -> None:
     """The guard must refuse the browser's unasked-for encodings and nothing
     else, or it would take the dashboard's own controls down with them."""
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
@@ -445,7 +457,7 @@ async def test_a_declared_json_write_still_goes_through(tmp_path):
     await client.close()
 
 
-async def test_the_guard_covers_every_post_route(tmp_path):
+async def test_the_guard_covers_every_post_route(tmp_path: Path) -> None:
     """A route added later must not be able to forget the guard.
 
     Driven off the shipped route table rather than the list above, so a new
@@ -505,7 +517,7 @@ _REBOUND_HOSTS = (
 
 
 @pytest.mark.parametrize("host", _REBOUND_HOSTS)
-async def test_a_rebound_name_cannot_read(tmp_path, host):
+async def test_a_rebound_name_cannot_read(tmp_path: Path, host: str) -> None:
     """The page has no login, so a name the attacker controls must not reach
     it — the reply to a same-origin read is theirs to keep."""
     client = await _client(_registry(tmp_path, direct_access=True))
@@ -515,7 +527,9 @@ async def test_a_rebound_name_cannot_read(tmp_path, host):
 
 
 @pytest.mark.parametrize("path,body", _WRITE_ROUTES)
-async def test_a_rebound_name_cannot_write(tmp_path, path, body):
+async def test_a_rebound_name_cannot_write(
+    tmp_path: Path, path: str, body: dict
+) -> None:
     """Rebinding defeats the content-type guard — the request is same-origin,
     so `application/json` needs no preflight. This is what stops the write."""
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
@@ -548,7 +562,7 @@ async def test_a_rebound_name_cannot_write(tmp_path, path, body):
         "Homeassistant.LOCAL",
     ],
 )
-async def test_an_unrebindable_address_is_served(tmp_path, host):
+async def test_an_unrebindable_address_is_served(tmp_path: Path, host: str) -> None:
     """An IP literal needs no lookup, and localhost/.local/.home.arpa do not
     reach a nameserver an outsider can answer for. None can be aimed here."""
     client = await _client(_registry(tmp_path, direct_access=True))
@@ -557,7 +571,7 @@ async def test_an_unrebindable_address_is_served(tmp_path, host):
     await client.close()
 
 
-async def test_a_named_host_is_served_once_configured(tmp_path):
+async def test_a_named_host_is_served_once_configured(tmp_path: Path) -> None:
     """A reverse proxy or a private DNS entry is a real setup; the operator
     says so and it works, without opening the port to every other name."""
     client = await _client(
@@ -572,7 +586,7 @@ async def test_a_named_host_is_served_once_configured(tmp_path):
     await client.close()
 
 
-async def test_the_health_check_answers_under_any_name(tmp_path):
+async def test_the_health_check_answers_under_any_name(tmp_path: Path) -> None:
     """Docker's HEALTHCHECK and the watchdog reach it under whatever name the
     operator's monitoring uses, and it exposes nothing worth rebinding for."""
     client = await _client(_registry(tmp_path, direct_access=True))
@@ -582,15 +596,16 @@ async def test_the_health_check_answers_under_any_name(tmp_path):
     await client.close()
 
 
-async def test_ingress_is_not_subject_to_the_host_guard(tmp_path, monkeypatch):
+async def test_ingress_is_not_subject_to_the_host_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Home Assistant is reached under a name we cannot know and has already
     authenticated the user; the peer address is what proves the hop."""
-    import astrameter.web_server as web_server_module
 
     client = await _client(
         _registry(tmp_path, direct_access=False, config_mode="ha_advanced")
     )
-    monkeypatch.setattr(web_server_module, "INGRESS_PEER", "127.0.0.1")
+    monkeypatch.setattr(web_server, "INGRESS_PEER", "127.0.0.1")
     response = await client.get(
         "/api/status", headers={"Host": "homeassistant.example.com:8123"}
     )
@@ -598,7 +613,7 @@ async def test_ingress_is_not_subject_to_the_host_guard(tmp_path, monkeypatch):
     await client.close()
 
 
-async def test_a_refused_host_explains_itself_in_prose(tmp_path):
+async def test_a_refused_host_explains_itself_in_prose(tmp_path: Path) -> None:
     """Most refusals are the operator's own hostname, not an attack, so the
     page has to say which option fixes it."""
     client = await _client(_registry(tmp_path, direct_access=True))
@@ -611,7 +626,9 @@ async def test_a_refused_host_explains_itself_in_prose(tmp_path):
     await client.close()
 
 
-def test_a_refused_host_is_logged_once_and_the_log_is_capped(caplog):
+def test_a_refused_host_is_logged_once_and_the_log_is_capped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The name is the caller's to choose, so the set that dedupes the log is
     a set an attacker could otherwise grow without bound."""
     from astrameter.web_guard import _REFUSED_HOST_LOG_CAP, RefusedHostLog
@@ -630,7 +647,7 @@ def test_a_refused_host_is_logged_once_and_the_log_is_capped(caplog):
         assert caplog.text.count("not logging") == 1
 
 
-def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it():
+def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it() -> None:
     """Unit-level edges the route tests would need a server to reach."""
     from astrameter.web_server import is_allowed_host, parse_allowed_hosts
 
@@ -685,21 +702,21 @@ _ADDRESSES = (
 
 
 @pytest.mark.parametrize("host", _NOT_ADDRESSES)
-def test_a_colon_does_not_make_something_an_address(host):
+def test_a_colon_does_not_make_something_an_address(host: str) -> None:
     from astrameter.web_server import is_allowed_host
 
     assert not is_allowed_host(host)
 
 
 @pytest.mark.parametrize("host", _ADDRESSES)
-def test_the_real_ipv6_forms_are_addresses(host):
+def test_the_real_ipv6_forms_are_addresses(host: str) -> None:
     from astrameter.web_server import is_allowed_host
 
     assert is_allowed_host(host)
     assert is_allowed_host(f"[{host}]:52500")
 
 
-async def test_dashboard_off_serves_no_routes(tmp_path):
+async def test_dashboard_off_serves_no_routes(tmp_path: Path) -> None:
     client = await _client(_registry(tmp_path, dashboard_enabled=False))
     assert (await client.get("/api/status")).status == 404
     assert (await client.get("/health")).status == 200
@@ -709,7 +726,7 @@ async def test_dashboard_off_serves_no_routes(tmp_path):
 # -- status -----------------------------------------------------------
 
 
-async def test_status_returns_a_snapshot_and_revalidates(tmp_path):
+async def test_status_returns_a_snapshot_and_revalidates(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -727,7 +744,7 @@ async def test_status_returns_a_snapshot_and_revalidates(tmp_path):
     await client.close()
 
 
-async def test_no_handler_emits_a_location_header(tmp_path):
+async def test_no_handler_emits_a_location_header(tmp_path: Path) -> None:
     """Both ingress hops copy Location verbatim, so a redirect would navigate
     the user straight out of the panel."""
     registry = _registry(tmp_path, direct_access=True)
@@ -739,7 +756,7 @@ async def test_no_handler_emits_a_location_header(tmp_path):
     await client.close()
 
 
-async def test_trailing_slash_variants_are_registered(tmp_path):
+async def test_trailing_slash_variants_are_registered(tmp_path: Path) -> None:
     client = await _client(_registry(tmp_path, direct_access=True))
     assert (await client.get("/api/status/")).status == 200
     await client.close()
@@ -748,7 +765,9 @@ async def test_trailing_slash_variants_are_registered(tmp_path):
 # -- control writes ---------------------------------------------------
 
 
-async def test_control_write_applies_through_the_validated_setter(tmp_path):
+async def test_control_write_applies_through_the_validated_setter(
+    tmp_path: Path,
+) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     device = _device()
     registry.register_device("ct-1", "ct002", device)
@@ -783,7 +802,9 @@ async def test_control_write_applies_through_the_validated_setter(tmp_path):
         ("manual_target", True),
     ],
 )
-async def test_out_of_range_control_writes_are_rejected(tmp_path, field, value):
+async def test_out_of_range_control_writes_are_rejected(
+    tmp_path: Path, field: str, value: object
+) -> None:
     """The CT002 setters do not bound their inputs — the ranges live in the
     MQTT handlers. A value MQTT would reject must be rejected here too, or the
     broker's retained state would silently revert it on the next reconnect."""
@@ -803,7 +824,9 @@ async def test_out_of_range_control_writes_are_rejected(tmp_path, field, value):
     await client.close()
 
 
-async def test_consumer_write_to_a_device_without_that_control_is_404(tmp_path):
+async def test_consumer_write_to_a_device_without_that_control_is_404(
+    tmp_path: Path,
+) -> None:
     """A Shelly emulation is registered too and has no per-battery setters;
     a write aimed at one must not surface as a 500."""
     from astrameter.shelly import Shelly
@@ -825,7 +848,7 @@ async def test_consumer_write_to_a_device_without_that_control_is_404(tmp_path):
     await client.close()
 
 
-async def test_unknown_device_or_field_is_a_404(tmp_path):
+async def test_unknown_device_or_field_is_a_404(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -840,7 +863,7 @@ async def test_unknown_device_or_field_is_a_404(tmp_path):
 # -- config -----------------------------------------------------------
 
 
-async def test_config_get_redacts_and_post_restores_secrets(tmp_path):
+async def test_config_get_redacts_and_post_restores_secrets(tmp_path: Path) -> None:
     config = tmp_path / "config.ini"
     config.write_text(
         "[GENERAL]\nDEVICE_TYPE = ct002\n\n[MQTT_INSIGHTS]\nBROKER = 10.0.0.2\nPASSWORD = hunter2\n"
@@ -862,7 +885,7 @@ async def test_config_get_redacts_and_post_restores_secrets(tmp_path):
     await client.close()
 
 
-async def test_simple_mode_refuses_config_writes(tmp_path):
+async def test_simple_mode_refuses_config_writes(tmp_path: Path) -> None:
     """The add-on regenerates config.ini on every start, so a write here
     would vanish at the next restart."""
     config = tmp_path / "config.ini"
@@ -886,7 +909,9 @@ async def test_simple_mode_refuses_config_writes(tmp_path):
 _EDITOR_ROUTES = ("/config", "/api/config", "/api/key-types")
 
 
-async def test_web_config_off_closes_the_editor_the_dashboard_would_open(tmp_path):
+async def test_web_config_off_closes_the_editor_the_dashboard_would_open(
+    tmp_path: Path,
+) -> None:
     """`WEB_CONFIG_ENABLED = False` is someone's explicit answer, given when
     the editor was the only thing on this port. The dashboard now defaults on
     and writable, so ignoring it would reopen, on upgrade, exactly what they
@@ -911,7 +936,9 @@ async def test_web_config_off_closes_the_editor_the_dashboard_would_open(tmp_pat
     await client.close()
 
 
-async def test_no_config_surface_is_announced_when_the_editor_is_off(tmp_path):
+async def test_no_config_surface_is_announced_when_the_editor_is_off(
+    tmp_path: Path,
+) -> None:
     """The page hides its Configuration tab when the backend names no
     config_mode — the same signal an ESPHome device sends. Without it the tab
     would stay, linking to routes that are no longer there."""
@@ -929,7 +956,9 @@ async def test_no_config_surface_is_announced_when_the_editor_is_off(tmp_path):
 
 
 @pytest.mark.parametrize("path", _EDITOR_ROUTES)
-async def test_the_editor_follows_the_dashboard_when_unset(tmp_path, path):
+async def test_the_editor_follows_the_dashboard_when_unset(
+    tmp_path: Path, path: str
+) -> None:
     """Unset is the default, and a new user should not have to find a flag to
     get the Configuration tab the page advertises."""
     (tmp_path / "config.ini").write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
@@ -938,7 +967,9 @@ async def test_the_editor_follows_the_dashboard_when_unset(tmp_path, path):
     await client.close()
 
 
-async def test_web_config_on_still_serves_the_editor_without_a_dashboard(tmp_path):
+async def test_web_config_on_still_serves_the_editor_without_a_dashboard(
+    tmp_path: Path,
+) -> None:
     """What the flag meant before there was a dashboard, unchanged."""
     (tmp_path / "config.ini").write_text("[GENERAL]\nDEVICE_TYPE = ct002\n")
     registry = _registry(tmp_path, dashboard_enabled=False)
@@ -951,7 +982,7 @@ async def test_web_config_on_still_serves_the_editor_without_a_dashboard(tmp_pat
 # -- device-wide controls (the MQTT switch + button) ------------------
 
 
-async def test_active_control_can_be_toggled(tmp_path):
+async def test_active_control_can_be_toggled(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     device = _device()
     registry.register_device("ct-1", "ct002", device)
@@ -965,7 +996,7 @@ async def test_active_control_can_be_toggled(tmp_path):
     await client.close()
 
 
-async def test_force_rotation_is_accepted(tmp_path):
+async def test_force_rotation_is_accepted(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -978,7 +1009,7 @@ async def test_force_rotation_is_accepted(tmp_path):
     await client.close()
 
 
-async def test_unknown_device_field_is_404(tmp_path):
+async def test_unknown_device_field_is_404(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -991,7 +1022,7 @@ async def test_unknown_device_field_is_404(tmp_path):
     await client.close()
 
 
-async def test_device_control_needs_the_write_flag(tmp_path):
+async def test_device_control_needs_the_write_flag(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=False)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -1007,7 +1038,9 @@ async def test_device_control_needs_the_write_flag(tmp_path):
 # -- units match the MQTT entity, not the setter ----------------------
 
 
-async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
+async def test_efficiency_window_weight_is_a_percentage_on_the_wire(
+    tmp_path: Path,
+) -> None:
     """The MQTT entity is a 0-100 percentage while the setter takes a 0-1
     fraction, and the two must not disagree: 50 over HTTP has to mean the
     same thing as 50 over MQTT."""
@@ -1021,10 +1054,12 @@ async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
         # The registry serialises whatever `status_snapshot` returns into the
         # `integrations` block, so a fake standing in for the service has to
         # answer it too.
-        def status_snapshot(self):
+        def status_snapshot(self) -> _InsightsSnapshot:
             return _InsightsSnapshot()
 
-        async def publish_consumer_command(self, device_id, consumer_id, field, value):
+        async def publish_consumer_command(
+            self, device_id: str, consumer_id: str, field: str, value: object
+        ) -> None:
             mirrored.append((device_id, consumer_id, field, value))
 
     registry.insights = _Insights()
@@ -1056,7 +1091,7 @@ async def test_efficiency_window_weight_is_a_percentage_on_the_wire(tmp_path):
     await client.close()
 
 
-async def test_full_efficiency_window_is_accepted(tmp_path):
+async def test_full_efficiency_window_is_accepted(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     device = _device()
     registry.register_device("ct-1", "ct002", device)

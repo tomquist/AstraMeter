@@ -59,21 +59,21 @@ def _get_channel_data_length(identifier: int) -> int:
 
 
 class _SmaProtocol(asyncio.DatagramProtocol):
-    def __init__(self, meter: "SmaEnergyMeter"):
+    def __init__(self, meter: "SmaEnergyMeter") -> None:
         self.meter = meter
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         try:
             self.meter._handle_packet(data)
         except Exception as e:
-            logger.debug(f"SMA Energy Meter: dropping invalid packet: {e}")
+            logger.debug("SMA Energy Meter: dropping invalid packet: %s", e)
 
     def error_received(self, exc: Exception) -> None:
-        logger.debug(f"SMA Energy Meter: OS error: {exc}")
+        logger.debug("SMA Energy Meter: OS error: %s", exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         if exc:
-            logger.warning(f"SMA Energy Meter: connection lost: {exc}")
+            logger.warning("SMA Energy Meter: connection lost: %s", exc)
 
 
 class SmaEnergyMeter(PushPowermeter):
@@ -81,10 +81,10 @@ class SmaEnergyMeter(PushPowermeter):
 
     def __init__(
         self,
-        multicast_group=DEFAULT_MULTICAST_GROUP,
-        port=DEFAULT_PORT,
-        serial_number=0,
-        interface="",
+        multicast_group: str = DEFAULT_MULTICAST_GROUP,
+        port: int = DEFAULT_PORT,
+        serial_number: int = 0,
+        interface: str = "",
         *,
         max_telegram_age_seconds: float = DEFAULT_MAX_TELEGRAM_AGE_SECONDS,
         clock: Callable[[], float] | None = None,
@@ -129,7 +129,7 @@ class SmaEnergyMeter(PushPowermeter):
             raise
         self._transport = transport
         logger.info(
-            f"SMA Energy Meter: listening on {self.multicast_group}:{self.port}"
+            "SMA Energy Meter: listening on %s:%s", self.multicast_group, self.port
         )
 
     async def stop(self) -> None:
@@ -137,7 +137,7 @@ class SmaEnergyMeter(PushPowermeter):
             self._transport.close()
             self._transport = None
 
-    def _handle_packet(self, data):
+    def _handle_packet(self, data: bytes) -> None:
         if len(data) < 28:
             return
 
@@ -169,15 +169,16 @@ class SmaEnergyMeter(PushPowermeter):
                     return
                 self._detected_serial = serial
                 logger.info(
-                    f"SMA Energy Meter: auto-detected {device_name} "
-                    f"with serial {serial}"
+                    "SMA Energy Meter: auto-detected %s with serial %s",
+                    device_name,
+                    serial,
                 )
             elif serial != self._detected_serial:
                 return
 
         self._parse_channels(data)
 
-    def _parse_channels(self, data):
+    def _parse_channels(self, data: bytes) -> None:
         raw = {}
         pos = 28
         data_len = len(data)

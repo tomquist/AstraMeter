@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -8,10 +9,11 @@ import pytest
 from astrameter.config import addon
 from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.settings import CtSettings, GeneralSettings
-from astrameter.powermeter import HomeAssistant
+from astrameter.powermeter import HomeAssistant, ThrottledPowermeter
+from astrameter.powermeter.wrappers.base import PowermeterWrapper
 
 
-class FakeSupervisor:
+class FakeSupervisor(addon.SupervisorClient):
     """Stand-in for :class:`addon.SupervisorClient`."""
 
     base_url = addon.SUPERVISOR_BASE_URL
@@ -53,7 +55,7 @@ def config(options: dict[str, Any], supervisor: Any = None) -> addon.AddonAppCon
     return addon.AddonAppConfig(options, client)
 
 
-def test_get_option_treats_missing_null_and_empty_as_unset():
+def test_get_option_treats_missing_null_and_empty_as_unset() -> None:
     options = {"set": "value", "null": None, "empty": "", "blank": "  ", "zero": 0}
     assert addon.get_option(options, "set") == "value"
     assert addon.get_option(options, "missing") is None
@@ -64,7 +66,7 @@ def test_get_option_treats_missing_null_and_empty_as_unset():
     assert addon.get_option(options, "zero", "fallback") == 0
 
 
-def test_general_settings_come_from_the_options():
+def test_general_settings_come_from_the_options() -> None:
     general = config(
         {**BASE_OPTIONS, "device_types": "ct002,ct003", "throttle_interval": 2}
     ).general()
@@ -79,14 +81,14 @@ def test_general_settings_come_from_the_options():
     assert general.web_config_enabled is None
 
 
-def test_untouched_options_keep_the_settings_defaults():
+def test_untouched_options_keep_the_settings_defaults() -> None:
     general = config(BASE_OPTIONS).general()
     ct = config(BASE_OPTIONS).ct("ct002")
     assert general.dedupe_time_window == GeneralSettings().dedupe_time_window
     assert ct == CtSettings()
 
 
-def test_ct_settings_are_typed_values_not_strings():
+def test_ct_settings_are_typed_values_not_strings() -> None:
     ct = config(
         {
             **BASE_OPTIONS,
@@ -114,20 +116,20 @@ def test_ct_settings_are_typed_values_not_strings():
     assert ct.cloud_reporting_interval == 30.0
 
 
-def test_both_ct_emulators_share_the_add_on_settings():
+def test_both_ct_emulators_share_the_add_on_settings() -> None:
     """The add-on has one set of CT options, whichever emulators run."""
     cfg = config({**BASE_OPTIONS, "device_types": "ct002,ct003", "ct_mac": "AA:BB"})
     assert cfg.ct("ct002") == cfg.ct("ct003")
     assert cfg.ct("ct003").ct_mac == "AA:BB"
 
 
-def test_global_dedupe_window_reaches_the_ct_emulator():
+def test_global_dedupe_window_reaches_the_ct_emulator() -> None:
     cfg = config({**BASE_OPTIONS, "dedupe_time_window": 1.5})
     assert cfg.general().dedupe_time_window == 1.5
     assert cfg.ct("ct002").dedupe_time_window == 1.5
 
 
-def test_marstek_needs_the_opt_in_and_credentials():
+def test_marstek_needs_the_opt_in_and_credentials() -> None:
     assert (
         not config(
             {
@@ -160,9 +162,10 @@ def test_marstek_needs_the_opt_in_and_credentials():
     assert marstek.timezone == "Europe/Berlin"
 
 
-def test_single_power_entity_is_read_directly():
+def test_single_power_entity_is_read_directly() -> None:
     cfg = config(BASE_OPTIONS)
     meter = cfg.powermeters(cfg.general())[0][0]
+    assert isinstance(meter, PowermeterWrapper)
     source = meter.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     assert source.power_calculate is False
@@ -171,13 +174,22 @@ def test_single_power_entity_is_read_directly():
     assert (source.ip, source.port, source.path_prefix) == ("supervisor", "80", "/core")
 
 
-def test_three_phase_entities_are_split_per_phase():
+def _inner_source(cfg: addon.AddonAppConfig) -> HomeAssistant:
+    """The Home Assistant source under the health wrapper the loader adds."""
+    meter = cfg.powermeters(cfg.general())[0][0]
+    assert isinstance(meter, PowermeterWrapper)
+    source = meter.wrapped_powermeter
+    assert isinstance(source, HomeAssistant)
+    return source
+
+
+def test_three_phase_entities_are_split_per_phase() -> None:
     cfg = config({**BASE_OPTIONS, "power_input_alias": "sensor.a, sensor.b ,sensor.c"})
-    source = cfg.powermeters(cfg.general())[0][0].wrapped_powermeter
+    source = _inner_source(cfg)
     assert source.current_power_entity == ["sensor.a", "sensor.b", "sensor.c"]
 
 
-def test_input_and_output_entities_switch_to_calculated_power():
+def test_input_and_output_entities_switch_to_calculated_power() -> None:
     cfg = config(
         {
             **BASE_OPTIONS,
@@ -185,13 +197,13 @@ def test_input_and_output_entities_switch_to_calculated_power():
             "power_output_alias": "sensor.export",
         }
     )
-    source = cfg.powermeters(cfg.general())[0][0].wrapped_powermeter
+    source = _inner_source(cfg)
     assert source.power_calculate is True
     assert source.power_input_alias == ["sensor.import"]
     assert source.power_output_alias == ["sensor.export"]
 
 
-def test_power_source_is_conditioned_by_the_options():
+def test_power_source_is_conditioned_by_the_options() -> None:
     cfg = config(
         {
             **BASE_OPTIONS,
@@ -212,7 +224,7 @@ def test_power_source_is_conditioned_by_the_options():
     # Unwrap the conditioning stack down to the source.
     stack = []
     current = meter
-    while hasattr(current, "wrapped_powermeter"):
+    while isinstance(current, PowermeterWrapper):
         stack.append(type(current).__name__)
         current = current.wrapped_powermeter
     assert isinstance(current, HomeAssistant)
@@ -227,19 +239,20 @@ def test_power_source_is_conditioned_by_the_options():
     ]
 
 
-def test_command_line_throttle_override_reaches_the_power_source():
+def test_command_line_throttle_override_reaches_the_power_source() -> None:
     from dataclasses import replace
 
     cfg = config({**BASE_OPTIONS, "throttle_interval": 1})
     general = cfg.general()
     general = replace(general, signal=replace(general.signal, throttle_interval=9))
     meter = cfg.powermeters(general)[0][0]
+    assert isinstance(meter, PowermeterWrapper)
     throttled = meter.wrapped_powermeter
-    assert type(throttled).__name__ == "ThrottledPowermeter"
+    assert isinstance(throttled, ThrottledPowermeter)
     assert throttled.throttle_interval == 9
 
 
-def test_mqtt_uses_home_assistant_broker_when_offered():
+def test_mqtt_uses_home_assistant_broker_when_offered() -> None:
     supervisor = FakeSupervisor(
         mqtt={
             "host": "core-mosquitto",
@@ -260,7 +273,7 @@ def test_mqtt_uses_home_assistant_broker_when_offered():
     assert insights.addon_slug == "a0ef98c5_b2500_meter"
 
 
-def test_custom_mqtt_uri_wins_over_the_home_assistant_broker():
+def test_custom_mqtt_uri_wins_over_the_home_assistant_broker() -> None:
     supervisor = FakeSupervisor(mqtt={"host": "core-mosquitto", "port": 1883})
     insights = config(
         {**BASE_OPTIONS, "mqtt_uri": "mqtts://user:pw@broker:8883"}, supervisor
@@ -271,18 +284,18 @@ def test_custom_mqtt_uri_wins_over_the_home_assistant_broker():
     assert insights.password == "pw"
 
 
-def test_no_mqtt_without_a_broker():
+def test_no_mqtt_without_a_broker() -> None:
     assert config(BASE_OPTIONS, FakeSupervisor(mqtt=None)).mqtt_insights() is None
 
 
-def test_missing_addon_slug_is_simply_omitted():
+def test_missing_addon_slug_is_simply_omitted() -> None:
     supervisor = FakeSupervisor(mqtt={"host": "core-mosquitto"}, slug="")
     insights = config(BASE_OPTIONS, supervisor).mqtt_insights()
     assert insights is not None
     assert insights.addon_slug is None
 
 
-def test_options_are_read_on_every_call():
+def test_options_are_read_on_every_call() -> None:
     """No snapshot is taken: the options stay the single source of truth."""
     options = dict(BASE_OPTIONS)
     cfg = config(options)
@@ -292,24 +305,24 @@ def test_options_are_read_on_every_call():
     assert cfg.ct("ct002").active_control is False
 
 
-def test_load_options_reads_the_supervisor_file(tmp_path):
+def test_load_options_reads_the_supervisor_file(tmp_path: Path) -> None:
     path = tmp_path / "options.json"
     path.write_text(json.dumps({"device_types": "ct002"}), encoding="utf-8")
     assert addon.load_options(str(path)) == {"device_types": "ct002"}
 
 
 @pytest.mark.parametrize("content", ["not json", '["a", "b"]'])
-def test_load_options_survives_a_broken_file(tmp_path, content):
+def test_load_options_survives_a_broken_file(tmp_path: Path, content: str) -> None:
     path = tmp_path / "options.json"
     path.write_text(content, encoding="utf-8")
     assert addon.load_options(str(path)) == {}
 
 
-def test_load_options_survives_a_missing_file(tmp_path):
+def test_load_options_survives_a_missing_file(tmp_path: Path) -> None:
     assert addon.load_options(str(tmp_path / "nope.json")) == {}
 
 
-def test_custom_config_file_replaces_the_add_on_options(tmp_path):
+def test_custom_config_file_replaces_the_add_on_options(tmp_path: Path) -> None:
     (tmp_path / "my.ini").write_text(
         "[GENERAL]\nDEVICE_TYPE = ct003\n", encoding="utf-8"
     )
@@ -323,7 +336,9 @@ def test_custom_config_file_replaces_the_add_on_options(tmp_path):
     assert cfg.general().device_types == ["ct003"]
 
 
-def test_unknown_custom_config_falls_back_to_the_options(tmp_path, caplog):
+def test_unknown_custom_config_falls_back_to_the_options(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     with caplog.at_level("WARNING"):
         cfg = addon.load_config(
             {**BASE_OPTIONS, "custom_config": "missing.ini"},
@@ -340,7 +355,9 @@ def test_unknown_custom_config_falls_back_to_the_options(tmp_path, caplog):
     "name",
     ["/etc/passwd", "../outside.ini", "nested/../../outside.ini"],
 )
-def test_custom_config_cannot_escape_the_addon_config_mount(tmp_path, caplog, name):
+def test_custom_config_cannot_escape_the_addon_config_mount(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str
+) -> None:
     """The option names a file in the add-on's config mount, nothing else."""
     (tmp_path.parent / "outside.ini").write_text("[GENERAL]\n", encoding="utf-8")
     config_dir = tmp_path / "config"
@@ -359,7 +376,9 @@ def test_custom_config_cannot_escape_the_addon_config_mount(tmp_path, caplog, na
     assert "outside" in caplog.text or "not found" in caplog.text
 
 
-def test_custom_config_warns_about_ignored_ui_options(tmp_path, caplog):
+def test_custom_config_warns_about_ignored_ui_options(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     (tmp_path / "my.ini").write_text("[GENERAL]\n", encoding="utf-8")
     with caplog.at_level("WARNING"):
         addon.load_config(
@@ -376,7 +395,12 @@ def test_custom_config_warns_about_ignored_ui_options(tmp_path, caplog):
     assert "mqtt_uri is ignored" in caplog.text
 
 
-def _custom(tmp_path, caplog, body, level="WARNING"):
+def _custom(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    body: str,
+    level: str = "WARNING",
+) -> GeneralSettings:
     """Load *body* as the add-on's custom config file and return its general()."""
     (tmp_path / "my.ini").write_text(body, encoding="utf-8")
     with caplog.at_level(level):
@@ -388,7 +412,9 @@ def _custom(tmp_path, caplog, body, level="WARNING"):
         return cfg.general()
 
 
-def test_custom_config_still_serves_the_dashboard(tmp_path, caplog):
+def test_custom_config_still_serves_the_dashboard(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A file that says nothing about the dashboard still gets the panel.
 
     Under the add-on the sidebar panel and the Supervisor watchdog both depend
@@ -403,7 +429,9 @@ def test_custom_config_still_serves_the_dashboard(tmp_path, caplog):
     assert "Ignoring" not in caplog.text
 
 
-def test_custom_config_cannot_turn_the_dashboard_or_web_server_off(tmp_path, caplog):
+def test_custom_config_cannot_turn_the_dashboard_or_web_server_off(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     general = _custom(
         tmp_path,
         caplog,
@@ -417,7 +445,9 @@ def test_custom_config_cannot_turn_the_dashboard_or_web_server_off(tmp_path, cap
     assert "DASHBOARD_ALLOW_WRITE" in caplog.text
 
 
-def test_custom_config_keeps_the_rest_of_its_dashboard_settings(tmp_path, caplog):
+def test_custom_config_keeps_the_rest_of_its_dashboard_settings(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Only *whether* it runs is forced — what it may do stays the file's."""
     general = _custom(
         tmp_path,
@@ -429,7 +459,7 @@ def test_custom_config_keeps_the_rest_of_its_dashboard_settings(tmp_path, caplog
     assert general.dashboard_direct_access is True
 
 
-def test_wait_for_home_assistant_returns_once_the_api_answers():
+def test_wait_for_home_assistant_returns_once_the_api_answers() -> None:
     class LateSupervisor(FakeSupervisor):
         def home_assistant_ready(self) -> bool:
             self.ready_calls += 1
@@ -444,7 +474,9 @@ def test_wait_for_home_assistant_returns_once_the_api_answers():
     assert slept == [5.0, 5.0]
 
 
-def test_wait_for_home_assistant_gives_up_but_lets_the_app_start(caplog):
+def test_wait_for_home_assistant_gives_up_but_lets_the_app_start(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     supervisor = FakeSupervisor(ready=False)
     with caplog.at_level("WARNING"):
         assert not addon.wait_for_home_assistant(
@@ -465,10 +497,14 @@ class FakeResponse:
         return self._payload
 
 
-def patch_requests(monkeypatch, responses: dict[str, Any]):
+def patch_requests(
+    monkeypatch: pytest.MonkeyPatch, responses: dict[str, Any]
+) -> list[tuple[str, dict[str, str]]]:
     calls: list[tuple[str, dict[str, str]]] = []
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(
+        url: str, headers: dict[str, str] | None = None, timeout: float | None = None
+    ) -> Any:
         calls.append((url, headers or {}))
         response = responses.get(url)
         if isinstance(response, Exception):
@@ -480,7 +516,9 @@ def patch_requests(monkeypatch, responses: dict[str, Any]):
     return calls
 
 
-def test_supervisor_client_reads_the_mqtt_service(monkeypatch):
+def test_supervisor_client_reads_the_mqtt_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = {"host": "core-mosquitto", "port": 1883, "ssl": False}
     calls = patch_requests(
         monkeypatch,
@@ -495,7 +533,9 @@ def test_supervisor_client_reads_the_mqtt_service(monkeypatch):
     assert calls[0][1]["Authorization"] == "Bearer tok"
 
 
-def test_supervisor_client_reports_no_mqtt_service_when_unavailable(monkeypatch):
+def test_supervisor_client_reports_no_mqtt_service_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     patch_requests(
         monkeypatch,
         {"http://supervisor/services/mqtt": FakeResponse(400, {"result": "error"})},
@@ -503,7 +543,9 @@ def test_supervisor_client_reports_no_mqtt_service_when_unavailable(monkeypatch)
     assert addon.SupervisorClient(token="tok").mqtt_service() is None
 
 
-def test_supervisor_client_survives_a_network_error(monkeypatch):
+def test_supervisor_client_survives_a_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     patch_requests(
         monkeypatch,
         {"http://supervisor/addons/self/info": addon.requests.ConnectionError("boom")},
@@ -511,7 +553,9 @@ def test_supervisor_client_survives_a_network_error(monkeypatch):
     assert addon.SupervisorClient(token="tok").addon_slug() == ""
 
 
-def test_supervisor_client_reads_the_addon_slug(monkeypatch):
+def test_supervisor_client_reads_the_addon_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     patch_requests(
         monkeypatch,
         {
@@ -523,7 +567,9 @@ def test_supervisor_client_reads_the_addon_slug(monkeypatch):
     assert addon.SupervisorClient(token="tok").addon_slug() == "a0ef98c5_b2500_meter"
 
 
-def test_home_assistant_ready_checks_the_core_api(monkeypatch):
+def test_home_assistant_ready_checks_the_core_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     patch_requests(
         monkeypatch,
         {"http://supervisor/core/api/": FakeResponse(200, {"message": "ok"})},
@@ -531,6 +577,8 @@ def test_home_assistant_ready_checks_the_core_api(monkeypatch):
     assert addon.SupervisorClient(token="tok").home_assistant_ready() is True
 
 
-def test_supervisor_token_defaults_to_the_environment(monkeypatch):
+def test_supervisor_token_defaults_to_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("SUPERVISOR_TOKEN", "from-env")
     assert addon.SupervisorClient().token == "from-env"

@@ -30,6 +30,7 @@ import signal
 import socket
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -360,8 +361,13 @@ def _running_esphome_backend():
             proc.wait()
 
 
+#: The control interface both stacks implement; the `backend` fixture
+#: yields each in turn so every shared scenario runs against both.
+Backend = PythonBackend | EsphomeBackend
+
+
 @pytest.fixture(params=["python", "esphome"])
-def backend(request):
+def backend(request: pytest.FixtureRequest) -> Iterator[Backend]:
     """Yield each CT002 backend implementing the shared control interface.
 
     The ``python`` backend always runs; ``esphome`` skips without the CLI.
@@ -380,7 +386,7 @@ def backend(request):
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_grid_injection_sign(backend) -> None:
+def test_grid_injection_sign(backend: Backend) -> None:
     """Injected grid power steers the battery in the correct direction on
     both stacks: import (+) -> discharge (+), export (-) -> charge (-)."""
     backend.set_clock(1000)
@@ -399,7 +405,7 @@ def test_grid_injection_sign(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_convergence(backend) -> None:
+def test_convergence(backend: Backend) -> None:
     """Closing the loop drives the target toward zero on both stacks.
 
     Each poll the battery reports the output it has integrated so far and the
@@ -439,7 +445,7 @@ def test_convergence(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_nan_meter_reading_holds_then_control_recovers(backend) -> None:
+def test_nan_meter_reading_holds_then_control_recovers(backend: Backend) -> None:
     """A NaN grid reading is answered with a zero-delta hold and leaves no
     trace in the controller: the next finite reading steers normally.
 
@@ -480,7 +486,7 @@ def test_nan_meter_reading_holds_then_control_recovers(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_clock_gated_dedup(backend) -> None:
+def test_clock_gated_dedup(backend: Backend) -> None:
     """The dedup window is driven by the (mock) clock on both stacks: a repeat
     poll inside the window is dropped; advancing the clock past it un-gates
     the poll."""
@@ -503,7 +509,7 @@ def test_clock_gated_dedup(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_deduped_poll_still_counts_as_alive(backend) -> None:
+def test_deduped_poll_still_counts_as_alive(backend: Backend) -> None:
     """A poll the dedup window suppressed still proves the battery is there.
 
     The window suppresses the *reply*, not the battery: booking the report
@@ -535,7 +541,7 @@ def test_deduped_poll_still_counts_as_alive(backend) -> None:
 
 @pytest.mark.timeout(30, func_only=True)
 @pytest.mark.parametrize("phase,idx", [("A", 4), ("B", 5), ("C", 6)])
-def test_phase_routing(backend, phase, idx) -> None:
+def test_phase_routing(backend: Backend, phase, idx) -> None:
     """A single battery's target lands only on the phase it reports.
 
     ``split_by_phase`` places the whole target on the reporting consumer's
@@ -565,7 +571,7 @@ _A_CHRG, _A_DCHRG = 15, 20
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_crosstalk_discharge_signals_other_battery(backend) -> None:
+def test_crosstalk_discharge_signals_other_battery(backend: Backend) -> None:
     """A discharging battery shows up as *discharge* in another's cross-talk.
 
     When battery X on phase A is instructed to discharge (grid import), a poll
@@ -595,7 +601,7 @@ def test_crosstalk_discharge_signals_other_battery(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_crosstalk_charge_signals_other_battery(backend) -> None:
+def test_crosstalk_charge_signals_other_battery(backend: Backend) -> None:
     """A charging battery shows up as *charge* (negative) in cross-talk.
 
     Mirror of the discharge case under grid export: X on phase A is instructed
@@ -627,7 +633,7 @@ _ABC_NB, _ABC_CHRG, _ABC_DCHRG = 11, 18, 23
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_relay_buckets_carry_reported_power(backend) -> None:
+def test_relay_buckets_carry_reported_power(backend: Backend) -> None:
     """Relay mode forwards each battery's *reported* power in the cross-talk
     buckets — not reported+grid — matching the real CT (issue #457)."""
     backend.set_clock(15000)
@@ -648,7 +654,7 @@ def test_relay_buckets_carry_reported_power(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_inspection_reporter_lands_in_x_bucket(backend) -> None:
+def test_inspection_reporter_lands_in_x_bucket(backend: Backend) -> None:
     """An inspection ('0') reporter populates the x bucket and is excluded
     from phase A's count/aggregate (issue #460)."""
     backend.set_clock(16000)
@@ -674,7 +680,7 @@ def test_inspection_reporter_lands_in_x_bucket(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_combined_phase_d_lands_in_abc_bucket(backend) -> None:
+def test_combined_phase_d_lands_in_abc_bucket(backend: Backend) -> None:
     """A combined-mode (phase 'D') reporter populates the ABC bucket and
     ABC_chrg_nb instead of phase A (issue #460)."""
     backend.set_clock(17000)
@@ -699,7 +705,9 @@ def test_combined_phase_d_lands_in_abc_bucket(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_adaptive_eviction_drops_silent_battery_from_relay_count(backend) -> None:
+def test_adaptive_eviction_drops_silent_battery_from_relay_count(
+    backend: Backend,
+) -> None:
     """With the default adaptive TTL, a battery that misses ~2 of its own
     poll cycles drops out of the relay count/aggregate (issue #462)."""
     backend.set_clock(18000)
@@ -727,7 +735,7 @@ def test_adaptive_eviction_drops_silent_battery_from_relay_count(backend) -> Non
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_manual_override_survives_eviction(backend) -> None:
+def test_manual_override_survives_eviction(backend: Backend) -> None:
     """A user-set manual target/mode is re-seeded onto the fresh consumer when a
     silent battery is evicted and later returns — on both stacks (issue #520)."""
     backend.set_clock(1000)
@@ -763,7 +771,7 @@ def test_manual_override_survives_eviction(backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_manual_target_does_not_auto_enter_manual_mode(backend) -> None:
+def test_manual_target_does_not_auto_enter_manual_mode(backend: Backend) -> None:
     """Setting the Manual Target alone must not flip the battery into manual
     mode — Manual Target and Auto Target are independent controls on both
     stacks (the number sets the value; the switch chooses the mode)."""

@@ -16,7 +16,7 @@ class ESPHomeNative(PushPowermeter):
 
     def __init__(
         self, address: str, port: str, api_key: str, object_id: str, client_info: str
-    ):
+    ) -> None:
         super().__init__()
         self.object_id = object_id
         self.address = address
@@ -44,10 +44,14 @@ class ESPHomeNative(PushPowermeter):
         # Stays set across messages; only a (re)connect clears it.
         self._any_message_event = asyncio.Event()
         logger.debug(
-            f"Initialized ESPHomeNative Api: Connection: {address}:{port} ClientInfo: {client_info} ObjectId: {self.object_id}"
+            "ESPHome native: %s:%s as %s, object id %s",
+            address,
+            port,
+            client_info,
+            self.object_id,
         )
 
-    def reset_connection_state(self):
+    def reset_connection_state(self) -> None:
         self.is_connected = False
         self._any_message_event.clear()
         self._message_event.clear()
@@ -61,15 +65,20 @@ class ESPHomeNative(PushPowermeter):
         await self.api.disconnect()
         self.reset_connection_state()
 
-    async def connect_callback(self):
+    async def connect_callback(self) -> None:
         self.is_connected = True
         logger.debug(
-            f"Connected to {self.address}:{self.port}. Api version: {self.api.api_version}"
+            "ESPHome native: connected to %s:%s, API version %s",
+            self.address,
+            self.port,
+            self.api.api_version,
         )
 
         device_info = await self.api.device_info()
         logger.info(
-            f"Connected to {device_info.name} (EspHome: {device_info.esphome_version})"
+            "ESPHome native: device %s runs ESPHome %s",
+            device_info.name,
+            device_info.esphome_version,
         )
 
         entity_infos, _ = await self.api.list_entities_services()
@@ -83,20 +92,25 @@ class ESPHomeNative(PushPowermeter):
             # trigger an immediate reconnect + relist loop that never resolves the
             # misconfiguration. Stay connected instead and just log it clearly.
             logger.error(
-                f"Cannot subscribe to objectId {self.object_id}. ObjectId is not provided by the device. Available objectIds are: {[e.object_id for e in entity_infos]}"
+                "ESPHome native: the device provides no object id %r; it offers %s",
+                self.object_id,
+                [e.object_id for e in entity_infos],
             )
             return
 
         logger.info(
-            f"Subscribing to entity ObjectId: {self.entity_info.object_id} Name:{self.entity_info.name} Key:{self.entity_info.key}"
+            "ESPHome native: subscribing to %s (name %s, key %s)",
+            self.entity_info.object_id,
+            self.entity_info.name,
+            self.entity_info.key,
         )
         self.api.subscribe_states(self.change_callback)
 
-    async def connect_error_callback(self, err: Exception):
+    async def connect_error_callback(self, err: Exception) -> None:
         self.reset_connection_state()
-        logger.error(f"Connection failed: {err}")
+        logger.error("ESPHome native: connection failed: %s", err)
 
-    async def disconnect_callback(self, expected_disconnect: bool):
+    async def disconnect_callback(self, expected_disconnect: bool) -> None:
         self.reset_connection_state()
 
         if expected_disconnect:
@@ -104,7 +118,7 @@ class ESPHomeNative(PushPowermeter):
         else:
             logger.warning("Unexpected disconnect. Trying to reconnect")
 
-    def change_callback(self, state: EntityState):
+    def change_callback(self, state: EntityState) -> None:
         if self.entity_info is None:
             return
 
@@ -112,7 +126,7 @@ class ESPHomeNative(PushPowermeter):
             return
 
         if not isinstance(state, SensorState):
-            logger.error(f"Subscribed EntityState {state} is not a SensorState")
+            logger.error("ESPHome native: subscribed entity %s is not a sensor", state)
             return
 
         # When the upstream sensor goes unavailable, aioesphomeapi delivers a
@@ -126,7 +140,7 @@ class ESPHomeNative(PushPowermeter):
         self.last_value = state.state
         self._message_event.set()
         self._any_message_event.set()
-        logger.debug(f"Got new sensor state: {state.state}")
+        logger.debug("ESPHome native: new sensor state %s", state.state)
 
     async def get_powermeter_watts(self) -> list[float]:
         if self._any_message_event.is_set():

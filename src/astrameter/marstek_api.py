@@ -39,7 +39,7 @@ def _translate_marstek_message(code: Any, msg: Any) -> str:
 
 def _http_get_json(
     url: str, params: dict[str, Any], headers: dict[str, str] | None = None
-):
+) -> Any:
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
     req = urllib.request.Request(full_url, headers=headers or {}, method="GET")
@@ -189,7 +189,7 @@ def _add_device(
     token: str,
     device_type: str,
     devid_mac: str,
-):
+) -> Any:
     add_url = f"{cfg.base_url.rstrip('/')}/app/Solar/v2_add_device.php"
     type_value = _desired_type(device_type)
     suffix = devid_mac[-4:]

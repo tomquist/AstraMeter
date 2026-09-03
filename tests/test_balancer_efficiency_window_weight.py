@@ -61,7 +61,7 @@ def _report(power: float, eff_weight: float = 1.0) -> ConsumerReport:
     )
 
 
-def test_zero_weight_battery_stays_deprioritized_while_limiting():
+def test_zero_weight_battery_stays_deprioritized_while_limiting() -> None:
     """A 0-weight battery is parked while limiting (enough non-zero peers)."""
     clock = _FakeClock()
     lb = _make_balancer(clock)
@@ -77,7 +77,7 @@ def test_zero_weight_battery_stays_deprioritized_while_limiting():
     assert lb._priority[-1] == "b"
 
 
-def test_zero_weight_battery_runs_when_all_needed():
+def test_zero_weight_battery_runs_when_all_needed() -> None:
     """When demand needs every battery (slots == n), the 0-weight one runs too."""
     clock = _FakeClock()
     lb = _make_balancer(clock)
@@ -89,7 +89,7 @@ def test_zero_weight_battery_runs_when_all_needed():
     assert lb._deprioritized == set()
 
 
-def test_low_weight_battery_sinks_below_alphabetical_order():
+def test_low_weight_battery_sinks_below_alphabetical_order() -> None:
     """The weight sort overrides the alphabetical fill order."""
     clock = _FakeClock()
     lb = _make_balancer(clock)
@@ -103,7 +103,7 @@ def test_low_weight_battery_sinks_below_alphabetical_order():
     assert lb._deprioritized == {"a"}
 
 
-def test_full_weight_head_rotates_after_full_interval():
+def test_full_weight_head_rotates_after_full_interval() -> None:
     """A weight-1.0 head holds its slot for the whole rotation interval."""
     clock = _FakeClock()
     lb = _make_balancer(clock, rotation_interval=900.0)
@@ -123,7 +123,7 @@ def test_full_weight_head_rotates_after_full_interval():
     assert lb._last_rotation > rot0
 
 
-def test_half_weight_head_rotates_after_half_interval():
+def test_half_weight_head_rotates_after_half_interval() -> None:
     """A weight-0.5 head gives up its slot after ~half the interval."""
     clock = _FakeClock()
     lb = _make_balancer(clock, rotation_interval=900.0)

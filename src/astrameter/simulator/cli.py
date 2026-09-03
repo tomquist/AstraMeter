@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .runner import SimulationRunner
+    from .runner import SimulationConfig, SimulationRunner
+    from .tui import SimulatorApp
 
 PID_FILE = Path.home() / ".astra-sim.pid"
 LOG_FILE = Path.home() / ".astra-sim.log"
@@ -54,7 +55,9 @@ def _http_post(port: int, path: str, body: dict | None = None) -> dict:
 # -- subcommands -----------------------------------------------------------
 
 
-def _apply_power_update_delay_override(cfg, ticks: int | None) -> None:
+def _apply_power_update_delay_override(
+    cfg: SimulationConfig, ticks: int | None
+) -> None:
     """If *ticks* is set, apply the same delay to every battery."""
     if ticks is None:
         return
@@ -261,8 +264,8 @@ JSON_PATHS = {json_paths}""")
 # -- TUI -------------------------------------------------------------------
 
 
-def _run_with_tui(runner: SimulationRunner) -> None:
-    """Start daemon in-process, then attach TUI in the same event loop."""
+def _simulator_app() -> type[SimulatorApp] | None:
+    """The TUI app class, or ``None`` when the optional extra is not installed."""
     try:
         from .tui import SimulatorApp
     except ImportError:
@@ -271,27 +274,25 @@ def _run_with_tui(runner: SimulationRunner) -> None:
             "Install with: pip install 'astrameter[sim]'",
             file=sys.stderr,
         )
+        return None
+    return SimulatorApp
+
+
+def _run_with_tui(runner: SimulationRunner) -> None:
+    """Start daemon in-process, then attach TUI in the same event loop."""
+    app = _simulator_app()
+    if app is None:
         print("Falling back to headless mode.")
         asyncio.run(runner.run_headless())
         return
-
-    app = SimulatorApp(runner)
-    app.run()
+    app(runner).run()
 
 
 def _attach_tui(port: int) -> None:
-    try:
-        from .tui import SimulatorApp
-    except ImportError:
-        print(
-            "Textual is required for TUI mode. "
-            "Install with: pip install 'astrameter[sim]'",
-            file=sys.stderr,
-        )
+    app = _simulator_app()
+    if app is None:
         sys.exit(1)
-
-    app = SimulatorApp.attach_to_daemon(port)
-    app.run()
+    app.attach_to_daemon(port).run()
 
 
 # -- logging ---------------------------------------------------------------

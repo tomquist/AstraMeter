@@ -1,4 +1,5 @@
 import ssl
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -23,7 +24,9 @@ SAMPLE_LINES_RESPONSE = {
 }
 
 
-def _mock_response(json_data: dict | None = None, *, raise_status: int | None = None):
+def _mock_response(
+    json_data: dict | None = None, *, raise_status: int | None = None
+) -> AsyncMock:
     response = AsyncMock()
     response.json = AsyncMock(return_value=json_data or {})
     if raise_status is not None:
@@ -40,7 +43,7 @@ def _mock_response(json_data: dict | None = None, *, raise_status: int | None = 
     return response
 
 
-def _ctx(response) -> MagicMock:
+def _ctx(response: Any) -> MagicMock:
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=response)
     ctx.__aexit__ = AsyncMock(return_value=False)
@@ -128,7 +131,7 @@ async def test_static_token_header() -> None:
 
 
 # 7. Auto-obtain when no static token: monkeypatch _obtain_token.
-async def test_auto_obtain_when_no_token(monkeypatch) -> None:
+async def test_auto_obtain_when_no_token(monkeypatch: pytest.MonkeyPatch) -> None:
     obtain = AsyncMock(return_value="fresh-jwt")
     monkeypatch.setattr(envoy_module, "_obtain_token", obtain)
     envoy = _make_envoy(token="", username="u@example.com", password="pw", serial="123")
@@ -142,7 +145,7 @@ async def test_auto_obtain_when_no_token(monkeypatch) -> None:
 
 
 # 8. 401 refresh: first .get() yields 401, second yields data; obtain awaited once.
-async def test_refreshes_on_401(monkeypatch) -> None:
+async def test_refreshes_on_401(monkeypatch: pytest.MonkeyPatch) -> None:
     obtain = AsyncMock(return_value="new-jwt")
     monkeypatch.setattr(envoy_module, "_obtain_token", obtain)
     envoy = _make_envoy(
@@ -165,7 +168,9 @@ async def test_refreshes_on_401(monkeypatch) -> None:
 
 
 # 9. 401 with no credentials configured (static token only) -> propagates.
-async def test_401_without_credentials_propagates(monkeypatch) -> None:
+async def test_401_without_credentials_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     obtain = AsyncMock()
     monkeypatch.setattr(envoy_module, "_obtain_token", obtain)
     envoy = _make_envoy(token="static-only")
@@ -188,11 +193,13 @@ def test_init_without_host_raises() -> None:
 
 # 11. Cloud session ignores VERIFY_SSL: spy on TCPConnector to confirm only the
 # local session gets the no-verify SSLContext; the cloud session uses defaults.
-async def test_cloud_session_ignores_verify_ssl(monkeypatch) -> None:
+async def test_cloud_session_ignores_verify_ssl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: list[dict] = []
     real_connector = aiohttp.TCPConnector
 
-    def spy(**kwargs):
+    def spy(**kwargs: Any) -> Any:
         captured.append(kwargs)
         return real_connector(**kwargs)
 
@@ -270,7 +277,9 @@ async def test_get_without_start_raises_runtime_error() -> None:
 
 # Thundering-herd guard: if another coroutine already refreshed the token while
 # we were awaiting the 401 response, skip our own refresh and just retry.
-async def test_401_skips_refresh_if_token_changed(monkeypatch) -> None:
+async def test_401_skips_refresh_if_token_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     obtain = AsyncMock(return_value="should-not-be-used")
     monkeypatch.setattr(envoy_module, "_obtain_token", obtain)
     envoy = _make_envoy(
@@ -284,7 +293,7 @@ async def test_401_skips_refresh_if_token_changed(monkeypatch) -> None:
         ]
     )
 
-    def fake_get(*_args, **_kwargs):
+    def fake_get(*_args: Any, **_kwargs: Any) -> Any:
         resp = next(calls)
         if resp.raise_for_status.side_effect is not None:
             # Simulate another coroutine having refreshed between the 401

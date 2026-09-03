@@ -6,12 +6,13 @@ from ipaddress import IPv4Network
 import pytest
 
 from astrameter.config import ClientFilter
+from astrameter.config.settings import ConfiguredPowermeter
 from astrameter.powermeter import Powermeter
 from astrameter.shelly.shelly import BATTERY_INACTIVE_TIMEOUT_SECONDS, Shelly
 
 
 class DummyPowermeter(Powermeter):
-    async def get_powermeter_watts(self):
+    async def get_powermeter_watts(self) -> list[float]:
         return [1.0]
 
 
@@ -31,23 +32,23 @@ REQUEST = json.dumps(
 def _shelly() -> Shelly:
     cf = ClientFilter([IPv4Network("127.0.0.0/8")])
     return Shelly(
-        [(DummyPowermeter(), cf, False)],
+        [ConfiguredPowermeter(DummyPowermeter(), cf, False)],
         udp_port=1010,
         device_id="test",
         device_type="shellypro3em_old",
     )
 
 
-def test_status_snapshot_is_not_a_coroutine_function():
+def test_status_snapshot_is_not_a_coroutine_function() -> None:
     """The builder shares the loop with the UDP handlers; an ``await`` in it
     would tear the snapshot across two polls."""
     assert not inspect.iscoroutinefunction(Shelly.status_snapshot)
 
 
-async def test_status_snapshot_reports_registered_battery():
+async def test_status_snapshot_reports_registered_battery() -> None:
     shelly = _shelly()
     transport = _FakeTransport()
-    await shelly._handle_request(transport, REQUEST, ("127.0.0.1", 54321))
+    await shelly._handle_request(REQUEST, ("127.0.0.1", 54321), transport)
 
     snap = shelly.status_snapshot()
     assert snap.device_id == "test"
@@ -65,18 +66,18 @@ async def test_status_snapshot_reports_registered_battery():
     assert battery.in_flight is False
 
     # A second poll establishes the cadence and the parked-handler flag shows.
-    await shelly._handle_request(transport, REQUEST, ("127.0.0.1", 54322))
+    await shelly._handle_request(REQUEST, ("127.0.0.1", 54322), transport)
     shelly._inflight_batteries.add("127.0.0.1")
     (battery,) = shelly.status_snapshot().batteries
     assert battery.poll_interval is not None
     assert battery.in_flight is True
 
 
-async def test_status_snapshot_batteries_sorted_and_marked_inactive():
+async def test_status_snapshot_batteries_sorted_and_marked_inactive() -> None:
     shelly = _shelly()
     transport = _FakeTransport()
     for ip in ("127.0.0.2", "127.0.0.1"):
-        await shelly._handle_request(transport, REQUEST, (ip, 54321))
+        await shelly._handle_request(REQUEST, (ip, 54321), transport)
 
     shelly._battery_last_seen["127.0.0.2"] -= BATTERY_INACTIVE_TIMEOUT_SECONDS + 1
     shelly._log_inactive_batteries()
@@ -87,10 +88,10 @@ async def test_status_snapshot_batteries_sorted_and_marked_inactive():
     assert snap.batteries[1].last_seen_age > BATTERY_INACTIVE_TIMEOUT_SECONDS
 
 
-async def test_status_snapshot_is_detached_from_the_device():
+async def test_status_snapshot_is_detached_from_the_device() -> None:
     shelly = _shelly()
     transport = _FakeTransport()
-    await shelly._handle_request(transport, REQUEST, ("127.0.0.1", 54321))
+    await shelly._handle_request(REQUEST, ("127.0.0.1", 54321), transport)
     snap = shelly.status_snapshot()
 
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -100,13 +101,13 @@ async def test_status_snapshot_is_detached_from_the_device():
 
     # The containers are copies: later device state cannot leak into a
     # snapshot already handed to a request handler, and vice versa.
-    await shelly._handle_request(transport, REQUEST, ("127.0.0.2", 54321))
+    await shelly._handle_request(REQUEST, ("127.0.0.2", 54321), transport)
     shelly._inactive_batteries.add("127.0.0.1")
     assert [b.ip for b in snap.batteries] == ["127.0.0.1"]
     assert snap.batteries[0].active is True
 
 
-async def test_running_tracks_start_and_stop():
+async def test_running_tracks_start_and_stop() -> None:
     shelly = Shelly([], udp_port=0, device_id="test")
     assert shelly.status_snapshot().started_at is None
 

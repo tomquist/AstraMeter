@@ -12,8 +12,10 @@ import contextlib
 import json
 import logging
 from collections import deque
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, ClassVar
 
+import aiohttp
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -30,6 +32,25 @@ _COL = 12
 
 # Number of data points kept for the sparkline graph
 _GRAPH_HISTORY = 120
+
+
+_SSE_DATA_PREFIX = "data: "
+
+
+async def _sse_payloads(chunks: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    """The ``data:`` payload of every complete event in an SSE byte stream.
+
+    Events are delimited by a blank line, so a chunk can hold several of them
+    or half of one; the tail stays buffered until its delimiter arrives.
+    """
+    buffered = ""
+    async for chunk in chunks:
+        buffered += chunk.decode("utf-8", errors="replace")
+        while "\n\n" in buffered:
+            event, buffered = buffered.split("\n\n", 1)
+            for line in event.split("\n"):
+                if line.startswith(_SSE_DATA_PREFIX):
+                    yield line[len(_SSE_DATA_PREFIX) :]
 
 
 class SimulatorApp(App):
@@ -148,8 +169,6 @@ class SimulatorApp(App):
 
     async def _sse_listener(self) -> None:
         """Connect to daemon SSE endpoint and update status."""
-        import aiohttp
-
         url = f"http://localhost:{self._daemon_port}/events"
         try:
             async with (
@@ -158,15 +177,9 @@ class SimulatorApp(App):
                     url, timeout=aiohttp.ClientTimeout(total=None, sock_read=60)
                 ) as resp,
             ):
-                buffer = ""
-                async for chunk_bytes in resp.content.iter_any():
-                    buffer += chunk_bytes.decode("utf-8", errors="replace")
-                    while "\n\n" in buffer:
-                        event, buffer = buffer.split("\n\n", 1)
-                        for line in event.split("\n"):
-                            if line.startswith("data: "):
-                                with contextlib.suppress(json.JSONDecodeError):
-                                    self._status = json.loads(line[6:])
+                async for payload in _sse_payloads(resp.content.iter_any()):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        self._status = json.loads(payload)
         except Exception as exc:
             logger.error("SSE connection lost: %s", exc)
 

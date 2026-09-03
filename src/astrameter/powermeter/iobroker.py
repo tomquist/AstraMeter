@@ -1,3 +1,5 @@
+from typing import Any
+
 from .http_client import HttpPowermeter
 
 
@@ -10,7 +12,7 @@ class IoBroker(HttpPowermeter):
         power_calculate: bool,
         power_input_alias: str,
         power_output_alias: str,
-    ):
+    ) -> None:
         self.ip = ip
         self.port = port
         self.current_power_alias = current_power_alias
@@ -18,7 +20,7 @@ class IoBroker(HttpPowermeter):
         self.power_input_alias = power_input_alias
         self.power_output_alias = power_output_alias
 
-    async def _get_bulk(self, aliases: str):
+    async def _get_bulk(self, aliases: str) -> Any:
         return await self.get_json(f"http://{self.ip}:{self.port}/getBulk/{aliases}")
 
     async def get_powermeter_watts(self) -> list[float]:

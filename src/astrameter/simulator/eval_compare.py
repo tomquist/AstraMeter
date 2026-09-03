@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from .eval_metrics import (
     EVENT_WINDOW_S,
@@ -180,7 +181,7 @@ def _metric_ndp(key: str) -> int:
     return 2 if key.endswith("_ct") else 1
 
 
-def _mean_value(values: list, ndp: int = 1):
+def _mean_value(values: list, ndp: int = 1) -> Any:
     """Average a homogeneous list of result values across seeds.
 
     Recurses into nested lists (a battery's trace, the list of per-battery

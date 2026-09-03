@@ -5,7 +5,7 @@ from .http_client import HttpPowermeter
 
 
 class VZLogger(HttpPowermeter):
-    def __init__(self, ip: str, port: str, uuid: str | list[str]):
+    def __init__(self, ip: str, port: str, uuid: str | list[str]) -> None:
         self.ip = ip
         self.port = port
         self.uuids = as_list(uuid)

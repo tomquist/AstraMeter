@@ -16,7 +16,7 @@ class Tasmota(HttpPowermeter):
         json_power_input_mqtt_label: str | list[str],
         json_power_output_mqtt_label: str | list[str],
         json_power_calculate: bool,
-    ):
+    ) -> None:
         self.ip = ip
         self.user = user
         self.password = password

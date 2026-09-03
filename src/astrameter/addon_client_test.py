@@ -140,16 +140,16 @@ async def test_restart_accepts_a_reply_that_does_arrive(stub: _StubSupervisor) -
 class _StatesClient(SupervisorClient):
     """A client whose Core-proxy call returns a canned /states payload."""
 
-    def __init__(self, states):
+    def __init__(self, states: Any) -> None:
         super().__init__(base_url="http://supervisor", token="t")
         self._states = states
 
-    async def _request_raw(self, method, path):
+    async def _request_raw(self, method: str, path: str) -> Any:
         assert path == "/core/api/states"
         return self._states
 
 
-async def test_power_entities_keep_unclassed_watt_sensors():
+async def test_power_entities_keep_unclassed_watt_sensors() -> None:
     """Plenty of real installs expose grid power as a plain sensor in W or kW
     with no device_class; excluding those would make the picker useless for
     exactly the people who need it."""
@@ -222,7 +222,7 @@ async def test_power_entities_keep_unclassed_watt_sensors():
     assert entities[3]["name"] == "sensor.p1"
 
 
-async def test_power_entities_offer_every_unit_the_meter_converts():
+async def test_power_entities_offer_every_unit_the_meter_converts() -> None:
     """The picker's list has to be the powermeter's list.
 
     When MW and mW were added to the converter the picker still said "W or
@@ -251,7 +251,7 @@ async def test_power_entities_offer_every_unit_the_meter_converts():
     assert all(e["readable"] for e in entities)
 
 
-async def test_a_mislabelled_power_sensor_is_offered_but_marked():
+async def test_a_mislabelled_power_sensor_is_offered_but_marked() -> None:
     """`device_class: power` with a unit the meter refuses is a common
     mistake in a template sensor. Hiding it makes the entity the user is
     hunting for vanish; offering it silently makes every read fail."""
@@ -278,7 +278,7 @@ async def test_a_mislabelled_power_sensor_is_offered_but_marked():
     assert by_id["sensor.grid_power"]["readable"] is True
 
 
-async def test_a_unit_free_entity_is_readable_when_it_claims_to_be_power():
+async def test_a_unit_free_entity_is_readable_when_it_claims_to_be_power() -> None:
     """No unit attribute means "assume watts" to the powermeter, so a
     device_class that says power must not be marked unreadable."""
     client = _StatesClient(
@@ -293,11 +293,11 @@ async def test_a_unit_free_entity_is_readable_when_it_claims_to_be_power():
     assert (await client.list_power_entities())[0]["readable"] is True
 
 
-async def test_power_entities_tolerate_a_junk_payload():
+async def test_power_entities_tolerate_a_junk_payload() -> None:
     client = _StatesClient(["not a dict", {"no_entity_id": True}, None])
     assert await client.list_power_entities() == []
 
 
-async def test_power_entities_empty_when_core_returns_an_object():
+async def test_power_entities_empty_when_core_returns_an_object() -> None:
     client = _StatesClient({"message": "unauthorized"})
     assert await client.list_power_entities() == []

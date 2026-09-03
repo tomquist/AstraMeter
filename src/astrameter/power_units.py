@@ -13,6 +13,8 @@ through the config loader.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 #: Multiplier from a declared unit to watts. Case matters: "mW" is
 #: milliwatts, "MW" megawatts. Any *other* declared unit (°C, %, kWh, ...) is
 #: not a power reading — see issues #39 / #572, where kW values were silently
@@ -28,7 +30,7 @@ POWER_UNIT_SCALE = {
 POWER_UNITS = tuple(POWER_UNIT_SCALE)
 
 
-def three_phases(values) -> list:
+def three_phases(values: Iterable[float]) -> list[float]:
     """Pad or trim a reading to the three phase values the CT protocol carries."""
     phases = list(values)[:3]
     return phases + [0.0] * (3 - len(phases))

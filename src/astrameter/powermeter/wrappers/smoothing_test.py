@@ -2,39 +2,8 @@
 
 import pytest
 
+from .conftest import FakePowermeter
 from .smoothing import DeadbandPowermeter, SmoothedPowermeter
-
-
-class FakePowermeter:
-    """Minimal powermeter stub for testing wrappers."""
-
-    def __init__(self, values: list[float] | None = None):
-        self._values: list[float] = values or [0.0]
-        self.started = False
-        self.stopped = False
-        self.reset_count = 0
-
-    def set(self, values: list[float]) -> None:
-        self._values = values
-
-    async def get_powermeter_watts(self) -> list[float]:
-        return list(self._values)
-
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        return list(self._values)
-
-    async def wait_for_message(self, timeout=5):
-        pass
-
-    async def start(self):
-        self.started = True
-
-    async def stop(self):
-        self.stopped = True
-
-    def reset(self):
-        self.reset_count += 1
-
 
 # ---------------------------------------------------------------------------
 # SmoothedPowermeter
@@ -43,7 +12,7 @@ class FakePowermeter:
 
 class TestSmoothedPowermeter:
     @pytest.mark.asyncio
-    async def test_first_call_seeds_value(self):
+    async def test_first_call_seeds_value(self) -> None:
         fake = FakePowermeter([100.0, 50.0, -30.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
         result = await sm.get_powermeter_watts()
@@ -51,7 +20,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == 120.0
 
     @pytest.mark.asyncio
-    async def test_ema_converges_toward_raw(self):
+    async def test_ema_converges_toward_raw(self) -> None:
         fake = FakePowermeter([100.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
 
@@ -72,7 +41,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == 175.0
 
     @pytest.mark.asyncio
-    async def test_sign_change_catchup(self):
+    async def test_sign_change_catchup(self) -> None:
         fake = FakePowermeter([100.0])
         sm = SmoothedPowermeter(fake, alpha=0.1)
 
@@ -87,7 +56,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == pytest.approx(20.0)
 
     @pytest.mark.asyncio
-    async def test_sign_change_does_not_slow_high_alpha(self):
+    async def test_sign_change_does_not_slow_high_alpha(self) -> None:
         fake = FakePowermeter([1.0])
         sm = SmoothedPowermeter(fake, alpha=1.0)
 
@@ -104,7 +73,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == pytest.approx(-99.0)
 
     @pytest.mark.asyncio
-    async def test_max_step_limits_delta(self):
+    async def test_max_step_limits_delta(self) -> None:
         fake = FakePowermeter([100.0])
         sm = SmoothedPowermeter(fake, alpha=0.9, max_step=10)
 
@@ -117,7 +86,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == 110.0
 
     @pytest.mark.asyncio
-    async def test_dedup_identical_values(self):
+    async def test_dedup_identical_values(self) -> None:
         fake = FakePowermeter([100.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
 
@@ -130,7 +99,7 @@ class TestSmoothedPowermeter:
         assert result == [100.0]
 
     @pytest.mark.asyncio
-    async def test_dedup_same_sample_different_total_advances_ema(self):
+    async def test_dedup_same_sample_different_total_advances_ema(self) -> None:
         """When sample_id matches but raw_total differs, EMA should advance."""
         fake = FakePowermeter([100.0, 50.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
@@ -145,7 +114,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == 165.0
 
     @pytest.mark.asyncio
-    async def test_reset_clears_state(self):
+    async def test_reset_clears_state(self) -> None:
         fake = FakePowermeter([100.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
 
@@ -161,7 +130,7 @@ class TestSmoothedPowermeter:
         assert sm.smoothed_value == 200.0
 
     @pytest.mark.asyncio
-    async def test_proportional_phase_distribution(self):
+    async def test_proportional_phase_distribution(self) -> None:
         fake = FakePowermeter([60.0, 30.0, 10.0])  # total=100
         sm = SmoothedPowermeter(fake, alpha=0.5)
 
@@ -176,7 +145,7 @@ class TestSmoothedPowermeter:
         assert result == pytest.approx([60.0, 30.0, 60.0])
 
     @pytest.mark.asyncio
-    async def test_all_zero_returns_raw(self):
+    async def test_all_zero_returns_raw(self) -> None:
         fake = FakePowermeter([0.0, 0.0, 0.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
 
@@ -184,7 +153,7 @@ class TestSmoothedPowermeter:
         assert result == [0.0, 0.0, 0.0]
 
     @pytest.mark.asyncio
-    async def test_lifecycle_delegation(self):
+    async def test_lifecycle_delegation(self) -> None:
         fake = FakePowermeter([100.0])
         sm = SmoothedPowermeter(fake, alpha=0.5)
 
@@ -207,7 +176,7 @@ class TestSmoothedPowermeter:
 
 class TestDeadbandPowermeter:
     @pytest.mark.asyncio
-    async def test_values_within_deadband_return_zeros(self):
+    async def test_values_within_deadband_return_zeros(self) -> None:
         fake = FakePowermeter([5.0, -3.0, 2.0])  # total=4
         db = DeadbandPowermeter(fake, deadband=20.0)
 
@@ -215,7 +184,7 @@ class TestDeadbandPowermeter:
         assert result == [0.0, 0.0, 0.0]
 
     @pytest.mark.asyncio
-    async def test_values_outside_deadband_pass_through(self):
+    async def test_values_outside_deadband_pass_through(self) -> None:
         fake = FakePowermeter([50.0, 30.0, -10.0])  # total=70
         db = DeadbandPowermeter(fake, deadband=20.0)
 
@@ -223,7 +192,7 @@ class TestDeadbandPowermeter:
         assert result == [50.0, 30.0, -10.0]
 
     @pytest.mark.asyncio
-    async def test_zero_deadband_disables_gating(self):
+    async def test_zero_deadband_disables_gating(self) -> None:
         fake = FakePowermeter([1.0, -1.0, 0.5])  # total=0.5
         db = DeadbandPowermeter(fake, deadband=0.0)
 
@@ -231,7 +200,7 @@ class TestDeadbandPowermeter:
         assert result == [1.0, -1.0, 0.5]
 
     @pytest.mark.asyncio
-    async def test_negative_total_within_deadband(self):
+    async def test_negative_total_within_deadband(self) -> None:
         fake = FakePowermeter([-5.0, -3.0, 2.0])  # total=-6
         db = DeadbandPowermeter(fake, deadband=20.0)
 
@@ -239,7 +208,7 @@ class TestDeadbandPowermeter:
         assert result == [0.0, 0.0, 0.0]
 
     @pytest.mark.asyncio
-    async def test_exactly_at_threshold_returns_zeros(self):
+    async def test_exactly_at_threshold_returns_zeros(self) -> None:
         fake = FakePowermeter([19.9])
         db = DeadbandPowermeter(fake, deadband=20.0)
 
@@ -247,7 +216,7 @@ class TestDeadbandPowermeter:
         assert result == [0.0]
 
     @pytest.mark.asyncio
-    async def test_lifecycle_delegation(self):
+    async def test_lifecycle_delegation(self) -> None:
         fake = FakePowermeter([100.0])
         db = DeadbandPowermeter(fake, deadband=20.0)
 

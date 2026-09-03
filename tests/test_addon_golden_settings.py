@@ -63,7 +63,7 @@ def config() -> AddonAppConfig:
 ALTERNATIVES = {"custom_config", "mqtt_uri"}
 
 
-def test_the_fixture_covers_every_add_on_option():
+def test_the_fixture_covers_every_add_on_option() -> None:
     """A fixture that skips options would pin nothing about them."""
     from astrameter.config.addon_schema_test import schema_options
 
@@ -71,25 +71,25 @@ def test_the_fixture_covers_every_add_on_option():
     assert not missing, f"options missing from the golden fixture: {sorted(missing)}"
 
 
-def test_general_settings_match_the_add_on_2x_behaviour(config):
+def test_general_settings_match_the_add_on_2x_behaviour(config) -> None:
     assert asdict(config.general()) == GOLDEN["general"]
 
 
-def test_ct_settings_match_the_add_on_2x_behaviour(config):
+def test_ct_settings_match_the_add_on_2x_behaviour(config) -> None:
     assert asdict(config.ct("ct002")) == GOLDEN["ct002"]
 
 
-def test_marstek_settings_match_the_add_on_2x_behaviour(config):
+def test_marstek_settings_match_the_add_on_2x_behaviour(config) -> None:
     assert asdict(config.marstek()) == GOLDEN["marstek"]
 
 
-def test_mqtt_settings_match_the_add_on_2x_behaviour(config):
+def test_mqtt_settings_match_the_add_on_2x_behaviour(config) -> None:
     insights = config.mqtt_insights()
     assert insights is not None
     assert asdict(insights) == GOLDEN["mqtt"]
 
 
-def test_power_source_conditioning_matches_the_add_on_2x_behaviour(config):
+def test_power_source_conditioning_matches_the_add_on_2x_behaviour(config) -> None:
     """The signal options land on the power source, not in the global defaults.
 
     Offsets, smoothing, the Hampel filter and the PID are applied where the
