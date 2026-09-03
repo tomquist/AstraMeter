@@ -818,6 +818,32 @@ void LoadBalancer::log_steer_(const std::optional<std::string> &consumer_id,
   this->steer_log_sink_(format_steer_log(entry));
 }
 
+// Score how well this consumer is following the commands it is sent. The
+// detector keys off the *unpaced* command (last_intent_reading), not the paced
+// last_target: pacing pins a stuck battery at the base step, which would look
+// "idle" when pace_base_step < min_target (issue #522). The floor is compared
+// against the unpaced intent for the same reason — a battery the pacing clamp
+// is holding below its floor must still register as pushed, or a full/empty one
+// would never be detected while clamped; #614's stall escape bounds that window.
+// Skipped for manual and probing consumers, and for a deprioritized one, whose
+// fade path still carries a transient non-zero command that would score as
+// "cannot follow" and lock maybe_force_swap_saturated_ out of promoting it back.
+// Mirrors balancer.py _track_saturation.
+void LoadBalancer::track_saturation_(const std::string &consumer_id,
+                                     BalancerConsumerState &state, ConsumerMode mode,
+                                     ReportMap &reports) {
+  if (reports.find(consumer_id) == reports.end() || mode.kind == ConsumerModeKind::MANUAL)
+    return;
+  const auto probe_set = this->probe_participants_();
+  if (probe_set.find(consumer_id) != probe_set.end() ||
+      this->deprioritized_.find(consumer_id) != this->deprioritized_.end())
+    return;
+  const ConsumerReport &report = reports[consumer_id];
+  this->saturation_.update(
+      state, state.last_intent_reading, report.power,
+      saturation_floor(state, report, this->effective_min_dc_output_(consumer_id, reports)));
+}
+
 std::array<float, 3> LoadBalancer::compute_target(
     const std::optional<std::string> &consumer_id, ConsumerMode mode,
     const ReportMap &all_reports, float grid_total,
@@ -840,26 +866,9 @@ std::array<float, 3> LoadBalancer::compute_target(
   }
 
   BalancerConsumerState *state = nullptr;
-  if (consumer_id) state = &this->get_consumer_(*consumer_id);
-  // Saturation keys off the *unpaced* command (last_intent_reading), not the
-  // paced last_target: pacing pins a stuck battery at the base step, which would
-  // look "idle" when pace_base_step < min_target (issue #522).
-  std::optional<float> last_intent_reading = state ? state->last_intent_reading : std::optional<float>{};
-
-  if (consumer_id && state && active_reports.find(*consumer_id) != active_reports.end() &&
-      mode.kind != ConsumerModeKind::MANUAL) {
-    const auto probe_set = this->probe_participants_();
-    if (probe_set.find(*consumer_id) == probe_set.end() &&
-        this->deprioritized_.find(*consumer_id) == this->deprioritized_.end()) {
-      const ConsumerReport &report = active_reports[*consumer_id];
-      // The floor is compared against the *unpaced* intent, like the rest of
-      // this call (issue #522): a battery the pacing clamp is holding below its
-      // floor must still register as pushed, or a full/empty one would never be
-      // detected while clamped. #614's stall escape bounds that window.
-      this->saturation_.update(
-          *state, last_intent_reading, report.power,
-          saturation_floor(*state, report, this->effective_min_dc_output_(*consumer_id, active_reports)));
-    }
+  if (consumer_id) {
+    state = &this->get_consumer_(*consumer_id);
+    this->track_saturation_(*consumer_id, *state, mode, active_reports);
   }
 
   if (mode.kind == ConsumerModeKind::MANUAL && consumer_id && state) {
@@ -1031,6 +1040,58 @@ BalancerSnapshot LoadBalancer::status_snapshot() const {
 // Auto-target pipeline
 // -------------------------------------------------------------------------
 
+// Per-consumer share weight for the phase split and the fair share. A
+// saturated battery — one that stopped following its commands — earns a smaller
+// slice, floored just above zero so it is never written out of the pool
+// entirely and can recover. A charge-blind battery earns nothing, since it
+// cannot absorb the surplus being shared out. Mirrors balancer.py
+// _efficiency_weights.
+std::unordered_map<std::string, float> LoadBalancer::efficiency_weights_(
+    const ReportMap &reports, const std::unordered_set<std::string> &charge_blind) const {
+  std::unordered_map<std::string, float> saturation;
+  for (const auto &c : this->consumers_)
+    saturation[c.first] = static_cast<float>(c.second.saturation_score);
+  std::unordered_map<std::string, float> weights;
+  for (const auto &r : reports) {
+    const float s = saturation.count(r.first) ? saturation[r.first] : 0.0f;
+    weights[r.first] = std::max(0.01f, 1.0f - s);
+  }
+  for (const auto &cid : charge_blind) weights[cid] = 0.0f;
+  return weights;
+}
+
+// This consumer's slice of the grid imbalance, in W. Two terms, kept apart
+// deliberately. The *tracking* term is its share of the grid error and carries
+// the grid's sign by construction; the *balancing* term equalizes output across
+// the same-phase pool and is zero-sum, so it is grid-neutral. Only the tracking
+// term is clamped against the predicted grid direction — zeroing the balancing
+// term too would make equalization one-sided near steady state (issue #523).
+// The caller folds the result into what the consumer reports now to get an
+// absolute net-output target. Mirrors balancer.py _residual_share.
+float LoadBalancer::residual_share_(const std::optional<std::string> &consumer_id,
+                                    const ReportMap &reports, float control_grid,
+                                    const std::unordered_map<std::string, float> &eff_part,
+                                    const std::unordered_set<std::string> &charge_blind) {
+  float fair_share = fair_share_(consumer_id, reports, control_grid, eff_part);
+  const auto concentrated =
+      this->concentrated_share_(consumer_id, reports, control_grid, eff_part, charge_blind);
+  if (concentrated) fair_share = *concentrated;
+  this->diag_fair_share_ = fair_share;
+
+  float residual = fair_share;
+  if (this->cfg_.fair_distribution && !concentrated.has_value() && consumer_id &&
+      reports.find(*consumer_id) != reports.end() && eff_part.count(*consumer_id)) {
+    residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
+  }
+
+  float tracking = fair_share;
+  if ((control_grid < 0.0f && tracking > 0.0f) ||
+      (control_grid > 0.0f && tracking < 0.0f)) {
+    tracking = 0.0f;
+  }
+  return tracking + (residual - fair_share);
+}
+
 std::array<float, 3> LoadBalancer::compute_auto_target_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
     float grid_total, const std::vector<float> &sample_id) {
@@ -1057,19 +1118,10 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
       this->predict_control_grid_(reports, grid_total, sample_id), trim_fresh);
   this->diag_control_grid_ = control_grid;
 
-  std::unordered_map<std::string, float> saturation;
-  for (const auto &c : this->consumers_)
-    saturation[c.first] = static_cast<float>(c.second.saturation_score);
-  std::unordered_map<std::string, float> eff_part;
-  for (const auto &r : reports) {
-    const float s = saturation.count(r.first) ? saturation[r.first] : 0.0f;
-    eff_part[r.first] = std::max(0.01f, 1.0f - s);
-  }
-
   const auto blind = charge_blind_(reports, grid_total);
   const std::unordered_set<std::string> &charge_blind = blind.first;
   const bool any_ac_chargeable = blind.second;
-  for (const auto &cid : charge_blind) eff_part[cid] = 0.0f;
+  auto eff_part = this->efficiency_weights_(reports, charge_blind);
 
   auto efficiency_adjustments =
       this->compute_efficiency_deprioritized_(reports, sample_id, grid_total);
@@ -1106,36 +1158,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     }
   }
 
-  float fair_share = fair_share_(consumer_id, reports, control_grid, eff_part);
-  const auto concentrated =
-      this->concentrated_share_(consumer_id, reports, control_grid, eff_part, charge_blind);
-  if (concentrated) fair_share = *concentrated;
-  this->diag_fair_share_ = fair_share;
-
-  // fair_share / balance_correction_ produce the residual: this consumer's
-  // slice of the grid imbalance to fold into its current output. The absolute
-  // net-output target is "what I report now plus my residual" (NetOutputW wrap
-  // below).
-  float residual;
-  if (!this->cfg_.fair_distribution || !consumer_id ||
-      reports.find(*consumer_id) == reports.end() || concentrated.has_value()) {
-    residual = fair_share;
-  } else if (eff_part.count(*consumer_id)) {
-    residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
-  } else {
-    residual = fair_share;
-  }
-  // Clamp only the grid-tracking half (fair_share, which carries the grid's
-  // sign by construction) against the grid direction — never the
-  // balance-correction term, which is zero-sum across the same-phase pool and
-  // so grid-neutral; zeroing it too would make equalization one-sided near
-  // steady state (issue #523).
-  float tracking = fair_share;
-  if ((control_grid < 0.0f && tracking > 0.0f) ||
-      (control_grid > 0.0f && tracking < 0.0f)) {
-    tracking = 0.0f;
-  }
-  residual = tracking + (residual - fair_share);
+  float residual =
+      this->residual_share_(consumer_id, reports, control_grid, eff_part, charge_blind);
   if (consumer_id) {
     residual = this->damp_oscillation_(*consumer_id, residual);
   }
@@ -1440,39 +1464,22 @@ bool LoadBalancer::cannot_absorb_(const ReportMap &reports) const {
 // manual / inactive steer-to-zero bypass it (see balancer.py for the
 // rationale). Caps are W per PACE_REFERENCE_DT; the per-poll clamp scales
 // with the consumer's observed inter-poll time, clamped at 1.0.
-float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading, float reported,
-                                  const ReportMap &reports) {
+// The learning half of pace_reading_: the cap tracks what the battery has
+// *demonstrated* it can slew. It resets to the base step on a direction
+// reversal, doubles per reference second while the battery visibly follows, and
+// grows against a persistent stall so a device held under its minimum actionable
+// command is not clamped there forever. Records what the device responded to
+// (pace_responded_at) and how long it has been unresponsive (pace_stall_polls);
+// the caller owns pace_cap itself. Mirrors balancer.py _pace_cap.
+float LoadBalancer::pace_cap_(BalancerConsumerState &state, float reading, float reported,
+                              int sign, float dt_ratio, bool can_stall, bool *stalled) {
   const float base = this->cfg_.pace_base_step;
-  if (base <= 0.0f) return reading;
-  auto &state = this->get_consumer_(consumer_id);
-  const double now = this->clock_();
-  double dt = (state.pace_last_at > 0.0) ? now - state.pace_last_at : 0.0;
-  if (dt <= 0.0) {
-    // First paced poll, a non-advancing clock, or a backwards jump: assume
-    // one reference period rather than starving the clamp.
-    dt = PACE_REFERENCE_DT;
-  }
-  state.pace_last_at = now;
-  const float dt_ratio = static_cast<float>(std::min(1.0, dt / PACE_REFERENCE_DT));
-  // Reversals are paced too (bounds overshoot at zero crossings); consumers
-  // needing the unpaced control intent (issue #376 cross-talk attribution)
-  // read last_intent instead.
-  const int sign = (reading > 0.0f) ? 1 : (reading < 0.0f ? -1 : 0);
   float cap = (state.pace_cap > 0.0f) ? state.pace_cap : base;
   // Floored at the base step: hysteresis-regulator devices (B2500) need a
   // minimum reading to clear their input hold window at all; the cadence
   // scale still bounds the grown cap (mirrors balancer.py).
-  float limit = std::max(base, cap * dt_ratio);
-  // The stall escape and the response floor below only apply to devices that
-  // actually have a minimum actionable command — the DC-output family, whose
-  // channels are a hard on/off below their minimum. Every other battery can
-  // execute an arbitrarily small command, so it can never be deadlocked by the
-  // clamp; leaving it on the unmodified path keeps its behaviour bit-for-bit
-  // and confines the overshoot cost to the devices that need it.
-  const auto report_it = reports.find(consumer_id);
-  const bool can_stall =
-      report_it != reports.end() && needs_dc_output_floor(report_it->second.device_type);
-  bool stalled = false;
+  const float limit = std::max(base, cap * dt_ratio);
+  *stalled = false;
   if (sign == 0 || sign != state.pace_sign) {
     cap = base;
     state.pace_stall_polls = 0;
@@ -1499,7 +1506,7 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
     } else {
       // Held below what the device can act on: grow anyway once the stall has
       // persisted, or the clamp is self-sustaining (see PACE_STALL_ESCAPE_POLLS).
-      stalled = can_stall;
+      *stalled = can_stall;
       state.pace_stall_polls++;
       if (can_stall && state.pace_stall_polls >= PACE_STALL_ESCAPE_POLLS) {
         cap = std::min(cap * std::pow(PACE_GROWTH_FACTOR, dt_ratio), this->cfg_.pace_max_step);
@@ -1514,7 +1521,40 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // else branch back-computes cap as fabs(reading) / dt_ratio, which a fast poll
   // (small dt_ratio) can inflate past the max — and a later normal-cadence poll
   // would then slew beyond pace_max_step.
-  cap = std::min(cap, this->cfg_.pace_max_step);
+  return std::min(cap, this->cfg_.pace_max_step);
+}
+
+float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading, float reported,
+                                  const ReportMap &reports) {
+  const float base = this->cfg_.pace_base_step;
+  if (base <= 0.0f) return reading;
+  auto &state = this->get_consumer_(consumer_id);
+  const double now = this->clock_();
+  double dt = (state.pace_last_at > 0.0) ? now - state.pace_last_at : 0.0;
+  if (dt <= 0.0) {
+    // First paced poll, a non-advancing clock, or a backwards jump: assume
+    // one reference period rather than starving the clamp.
+    dt = PACE_REFERENCE_DT;
+  }
+  state.pace_last_at = now;
+  const float dt_ratio = static_cast<float>(std::min(1.0, dt / PACE_REFERENCE_DT));
+  // Reversals are paced too (bounds overshoot at zero crossings); consumers
+  // needing the unpaced control intent (issue #376 cross-talk attribution)
+  // read last_intent instead.
+  const int sign = (reading > 0.0f) ? 1 : (reading < 0.0f ? -1 : 0);
+  // The stall escape and the response floor below only apply to devices that
+  // actually have a minimum actionable command — the DC-output family, whose
+  // channels are a hard on/off below their minimum. Every other battery can
+  // execute an arbitrarily small command, so it can never be deadlocked by the
+  // clamp; leaving it on the unmodified path keeps its behaviour bit-for-bit
+  // and confines the overshoot cost to the devices that need it.
+  const auto report_it = reports.find(consumer_id);
+  const bool can_stall =
+      report_it != reports.end() && needs_dc_output_floor(report_it->second.device_type);
+
+  bool stalled = false;
+  const float cap = this->pace_cap_(state, reading, reported, sign, dt_ratio, can_stall,
+                                    &stalled);
   state.pace_cap = cap;
   state.pace_sign = sign;
   state.pace_prev_reported = reported;
@@ -1524,7 +1564,7 @@ float LoadBalancer::pace_reading_(const std::string &consumer_id, float reading,
   // back down to base is precisely what keeps it stalled (max(base, cap *
   // dt_ratio) stays at base until cap reaches base / dt_ratio, so growing the
   // cap alone never frees a 0.3 s poller).
-  limit = std::max(base, stalled ? cap : cap * dt_ratio);
+  float limit = std::max(base, stalled ? cap : cap * dt_ratio);
   // Never clamp under a level this device has demonstrably responded to: for a
   // hysteresis regulator a smaller command is not a gentler one but an *off*
   // one, so the unit would switch off, stop moving, and need lifting again
@@ -1639,6 +1679,35 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
 // Efficiency deprioritization
 // -------------------------------------------------------------------------
 
+// Probe a swap the efficiency pass just made, before trusting it. Promoting a
+// battery is a bet that it delivers more than the one it displaced; when this
+// tick both promotes and demotes, the bet is tested against the battery it
+// displaced rather than assumed (see begin_probe_). Nothing to test on the
+// first pass, when there is no previous active set to compare against.
+// Mirrors balancer.py _probe_active_set_change.
+void LoadBalancer::probe_active_set_change_(const std::vector<std::string> &previous_active,
+                                            size_t slots, double now) {
+  if (previous_active.empty()) return;
+  std::vector<std::string> final_active(this->priority_.begin(),
+                                        this->priority_.begin() +
+                                            std::min(slots, this->priority_.size()));
+  std::vector<std::string> promoted;
+  for (const auto &cid : final_active) {
+    if (std::find(previous_active.begin(), previous_active.end(), cid) ==
+        previous_active.end()) {
+      promoted.push_back(cid);
+    }
+  }
+  std::vector<std::string> backups;
+  for (const auto &cid : previous_active) {
+    if (std::find(final_active.begin(), final_active.end(), cid) == final_active.end())
+      backups.push_back(cid);
+  }
+  if (!promoted.empty() && !backups.empty()) {
+    this->begin_probe_(promoted[0], final_active, backups, previous_active, now);
+  }
+}
+
 std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_deprioritized_(
     const ReportMap &reports, const std::vector<float> &sample_id, float grid_total) {
   const auto &cfg = this->cfg_;
@@ -1739,26 +1808,8 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
     }
   }
 
-  std::vector<std::string> final_active(this->priority_.begin(),
-                                        this->priority_.begin() +
-                                            std::min(slots, this->priority_.size()));
-  if (!probe_active && !probe_resolved && !previous_active.empty()) {
-    std::vector<std::string> promoted;
-    for (const auto &cid : final_active) {
-      if (std::find(previous_active.begin(), previous_active.end(), cid) ==
-          previous_active.end()) {
-        promoted.push_back(cid);
-      }
-    }
-    std::vector<std::string> backups;
-    for (const auto &cid : previous_active) {
-      if (std::find(final_active.begin(), final_active.end(), cid) == final_active.end())
-        backups.push_back(cid);
-    }
-    if (!promoted.empty() && !backups.empty()) {
-      this->begin_probe_(promoted[0], final_active, backups, previous_active, now);
-    }
-  }
+  if (!probe_active && !probe_resolved)
+    this->probe_active_set_change_(previous_active, slots, now);
 
   for (const auto &cid : deprioritized) {
     if (this->deprioritized_.find(cid) == this->deprioritized_.end()) {
