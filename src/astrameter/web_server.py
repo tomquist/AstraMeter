@@ -16,7 +16,7 @@ import shutil
 import signal
 import tempfile
 import threading
-from collections.abc import Awaitable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -126,10 +126,10 @@ async def _body(request: web.Request) -> dict[str, Any]:
     return body
 
 
-def _required(body: dict[str, Any], *keys: str) -> list[Any]:
-    """The values of *keys*, refusing the request when one is missing."""
+def _required(body: dict[str, Any], key: str) -> Any:
+    """The value of *key*, refusing the request when it is missing."""
     try:
-        return [body[key] for key in keys]
+        return body[key]
     except KeyError as exc:
         raise ApiError(f"Invalid request: {exc}", status=400) from exc
 
@@ -450,14 +450,22 @@ class WebServer:
         entry = self.status.devices.get(device_id)
         return entry.device if entry else None
 
-    async def _mirror_to_mqtt(self, kind: str, publish: Awaitable[None]) -> None:
+    async def _mirror_to_mqtt(
+        self, kind: str, publish: Callable[[], Awaitable[None]]
+    ) -> None:
         """Mirror a control write to the retained MQTT command topic.
 
         Without it the broker's redelivery on the next reconnect reverts what
         the user just set.
+
+        Takes a factory rather than a coroutine so the call is *built* inside
+        the guard too. The write itself has already landed by the time we get
+        here, so nothing about mirroring it — including an insights object that
+        turns out not to offer the method — may turn a successful write into a
+        failed request.
         """
         try:
-            await publish
+            await publish()
         except Exception:
             logger.exception("Failed to mirror %s write to MQTT", kind)
 
@@ -478,9 +486,10 @@ class WebServer:
         if not self._may_write(request):
             return forbidden()
         body = await _body(request)
-        device_id, consumer_id, field, value = _required(
-            body, "device_id", "consumer_id", "field", "value"
-        )
+        device_id = _required(body, "device_id")
+        consumer_id = _required(body, "consumer_id")
+        field = _required(body, "field")
+        value = _required(body, "value")
 
         device = self._device(device_id)
         control = CONSUMER_CONTROLS_BY_FIELD.get(field)
@@ -511,7 +520,9 @@ class WebServer:
             # percentage as a fraction.
             await self._mirror_to_mqtt(
                 "control",
-                insights.publish_consumer_command(device_id, consumer_id, field, value),
+                lambda: insights.publish_consumer_command(
+                    device_id, consumer_id, field, value
+                ),
             )
         return self._applied()
 
@@ -520,7 +531,8 @@ class WebServer:
         if not self._may_write(request):
             return forbidden()
         body = await _body(request)
-        (device_id, field) = _required(body, "device_id", "field")
+        device_id = _required(body, "device_id")
+        field = _required(body, "field")
         value = body.get("value", True)
 
         device = self._device(device_id)
@@ -543,7 +555,8 @@ class WebServer:
         insights = self._insights()
         if insights is not None:
             await self._mirror_to_mqtt(
-                "device", insights.publish_device_command(device_id, {field: value})
+                "device",
+                lambda: insights.publish_device_command(device_id, {field: value}),
             )
         return self._applied()
 
@@ -633,7 +646,7 @@ class WebServer:
         """
         client = self._supervisor(request)
         body = await _body(request)
-        (options,) = _required(body, "options")
+        options = _required(body, "options")
         if not isinstance(options, dict):
             raise ApiError("Invalid request: 'options' must be an object", status=400)
 
@@ -723,7 +736,7 @@ class WebServer:
         """
         client = self._supervisor(request)
         body = await _body(request)
-        (target,) = _required(body, "mode")
+        target = _required(body, "mode")
 
         if target == "file":
             filename = (body.get("filename") or "astrameter.ini").strip()

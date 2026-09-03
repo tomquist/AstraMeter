@@ -44,14 +44,14 @@ def calculate_checksum(data_bytes: bytes | bytearray) -> int:
     return xor
 
 
-def parse_int(value: object, default: int = 0) -> int:
+def parse_int(value: str | float, default: int = 0) -> int:
     """The integer *value* denotes, or *default* when it denotes none.
 
-    Takes ``object`` because it reads both wire strings and already-parsed
-    numbers; the ``TypeError`` below is what covers everything else.
+    Reads both the wire's strings and already-parsed numbers, which is the
+    whole domain its callers have.
     """
     try:
-        return int(value)  # type: ignore[call-overload]
+        return int(value)
     except (TypeError, ValueError):
         return default
 

@@ -18,7 +18,7 @@ import contextlib
 import json
 import socket
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -180,15 +180,19 @@ async def running_addon(options: dict, supervisor: FakeSupervisor, udp_port: int
             await task
 
 
-@pytest.fixture
-def addon_options(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Callable[..., dict]:
-    """A realistic /data/options.json, read the way the add-on reads it."""
-    monkeypatch.setenv("SUPERVISOR_TOKEN", SUPERVISOR_TOKEN)
-    udp_port = find_free_ports(1)[0]
+class AddonOptions:
+    """Writes a /data/options.json, and carries the UDP port it reserved.
 
-    def write(**overrides: Any) -> dict:
+    An object rather than a function with an attribute bolted on: the port is
+    as much a part of what the fixture hands out as the writer is, and the
+    tests read both.
+    """
+
+    def __init__(self, tmp_path: Path, udp_port: int) -> None:
+        self._tmp_path = tmp_path
+        self.udp_port = udp_port
+
+    def __call__(self, **overrides: Any) -> dict:
         options = {
             "power_input_alias": GRID_SENSOR,
             "power_output_alias": "",
@@ -200,12 +204,16 @@ def addon_options(
             "log_level": "info",
             **overrides,
         }
-        path = tmp_path / "options.json"
+        path = self._tmp_path / "options.json"
         path.write_text(json.dumps(options), encoding="utf-8")
         return load_options(str(path))
 
-    write.udp_port = udp_port  # type: ignore[attr-defined]
-    return write
+
+@pytest.fixture
+def addon_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AddonOptions:
+    """A realistic /data/options.json, read the way the add-on reads it."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", SUPERVISOR_TOKEN)
+    return AddonOptions(tmp_path, find_free_ports(1)[0])
 
 
 @pytest.fixture
@@ -220,7 +228,7 @@ def supervisor() -> Iterator[FakeSupervisor]:
 
 @pytest.mark.timeout(60)
 async def test_addon_serves_the_home_assistant_reading_over_udp(
-    addon_options: Callable[..., dict], supervisor: FakeSupervisor
+    addon_options: AddonOptions, supervisor: FakeSupervisor
 ) -> None:
     options = addon_options()
 
@@ -238,7 +246,7 @@ async def test_addon_serves_the_home_assistant_reading_over_udp(
 
 @pytest.mark.timeout(60)
 async def test_add_on_options_reach_the_running_emulator(
-    addon_options: Callable[..., dict], supervisor: FakeSupervisor
+    addon_options: AddonOptions, supervisor: FakeSupervisor
 ) -> None:
     """A tuning option set in the add-on UI changes what the battery is told."""
     options = addon_options(power_offset="100", ct_mac="AABBCCDDEE01")

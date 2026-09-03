@@ -56,6 +56,7 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         self.token = token
         self.serial = serial
         self._verify_ssl = verify_ssl
+        self._ssl_context: ssl.SSLContext | None = None
         self._max_measurement_age_seconds = max(0.0, max_measurement_age_seconds)
         self._clock = clock or time.monotonic
         self.values: list[float] | None = None
@@ -98,9 +99,13 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         await super().start()
 
     def _connect(self, session: aiohttp.ClientSession) -> WebSocketConnect:
+        if self._ssl_context is None:
+            # Built once and kept: _connect runs on every reconnect, and
+            # building the context reads the bundled CA off disk.
+            self._ssl_context = self._build_ssl_context()
         return session.ws_connect(
             f"wss://{self.ip}/api/ws",
-            ssl=self._build_ssl_context(),
+            ssl=self._ssl_context,
             server_hostname=f"appliance/p1dongle/{self.serial}",
             heartbeat=WS_HEARTBEAT_SECONDS,
         )

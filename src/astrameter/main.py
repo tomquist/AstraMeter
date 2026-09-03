@@ -120,7 +120,7 @@ def _build_ct002(
     ct_type: str,
     device_id: str,
     debug_status: bool,
-    reset_fn: Callable[[], None],
+    reset_fn: Callable[[], None] | None,
 ) -> CT002:
     """Create the emulator a :class:`CtSettings` describes."""
     return CT002(

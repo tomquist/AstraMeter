@@ -698,7 +698,7 @@ class CT002:
         self,
         consumer_id: str,
         phase: str,
-        power: object,
+        power: int,
         device_type: str = "",
         *,
         source_ip: str | None = None,

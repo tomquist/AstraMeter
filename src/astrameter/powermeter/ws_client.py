@@ -47,6 +47,8 @@ class WebSocket(Protocol):
     a test can drive the same handlers with a few canned frames.
     """
 
+    # Not AsyncIterator[WSMessage]: aiohttp's own __aiter__ returns the
+    # response object, which does not satisfy that.
     def __aiter__(self) -> AsyncIterator[Any]: ...
 
     async def send_json(self, data: Any) -> None: ...
@@ -57,7 +59,11 @@ class WebSocket(Protocol):
 #: What ``session.ws_connect(...)`` hands back, unawaited. A concrete aiohttp
 #: type rather than the protocol above: only the handlers need to accept a
 #: stand-in, and the connection itself is always the real thing.
-WebSocketConnect = AbstractAsyncContextManager[aiohttp.ClientWebSocketResponse[bool]]
+#:
+#: The aiohttp half is a forward reference so it is never evaluated at import
+#: time — only ``AbstractAsyncContextManager`` is subscripted here, and every
+#: power source reaches this module.
+WebSocketConnect = AbstractAsyncContextManager["aiohttp.ClientWebSocketResponse[bool]"]
 
 
 async def cancel(task: asyncio.Task | None) -> None:
