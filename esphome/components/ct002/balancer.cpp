@@ -575,22 +575,39 @@ bool LoadBalancer::resolve_probe_state_(const ReportMap &reports, double now,
   return false;
 }
 
+// Element-to-key adapters so weighted_share can walk a ReportMap, a vector of
+// ids, or a vector of id pointers without three copies of the loop.
+static inline const std::string &key_of(const std::string &s) { return s; }
+static inline const std::string &key_of(const std::string *s) { return *s; }
+static inline const std::string &key_of(const std::pair<const std::string, ConsumerReport> &p) {
+  return p.first;
+}
+
+// *total* split across *ids* in proportion to *weights*, falling back to an even
+// split when the weights sum to zero, so a pool whose every member is saturated
+// still shares rather than stalling. Mirrors balancer.py weighted_share.
+template<typename Ids>
+static float weighted_share(float total, const std::unordered_map<std::string, float> &weights,
+                            const Ids &ids, size_t count, const std::string *consumer_id) {
+  float total_weight = 0.0f;
+  for (const auto &cid : ids) {
+    auto it = weights.find(key_of(cid));
+    if (it != weights.end()) total_weight += it->second;
+  }
+  if (total_weight <= 0.0f) return total / static_cast<float>(std::max<size_t>(1, count));
+  float mine = 0.0f;
+  if (consumer_id != nullptr) {
+    auto it = weights.find(*consumer_id);
+    if (it != weights.end()) mine = it->second;
+  }
+  return total * mine / total_weight;
+}
+
 float LoadBalancer::compute_desired_contribution_(
     const std::string &consumer_id, const ReportMap &reports,
     const std::unordered_map<std::string, float> &weights, float desired_total) {
-  float total_weight = 0.0f;
-  for (const auto &r : reports) {
-    auto it = weights.find(r.first);
-    if (it != weights.end()) total_weight += it->second;
-  }
-  float fair_share;
-  if (total_weight > 0.0f) {
-    auto it = weights.find(consumer_id);
-    const float w = (it != weights.end()) ? it->second : 0.0f;
-    fair_share = desired_total * w / total_weight;
-  } else {
-    fair_share = desired_total / std::max<size_t>(1, reports.size());
-  }
+  const float fair_share =
+      weighted_share(desired_total, weights, reports, reports.size(), &consumer_id);
   const bool not_in_reports = reports.find(consumer_id) == reports.end();
   if (!this->cfg_.fair_distribution || not_in_reports ||
       (this->cfg_.balance_deadband > 0.0f &&
@@ -1040,26 +1057,6 @@ BalancerSnapshot LoadBalancer::status_snapshot() const {
 // Auto-target pipeline
 // -------------------------------------------------------------------------
 
-// Per-consumer share weight for the phase split and the fair share. A
-// saturated battery — one that stopped following its commands — earns a smaller
-// slice, floored just above zero so it is never written out of the pool
-// entirely and can recover. A charge-blind battery earns nothing, since it
-// cannot absorb the surplus being shared out. Mirrors balancer.py
-// _efficiency_weights.
-std::unordered_map<std::string, float> LoadBalancer::efficiency_weights_(
-    const ReportMap &reports, const std::unordered_set<std::string> &charge_blind) const {
-  std::unordered_map<std::string, float> saturation;
-  for (const auto &c : this->consumers_)
-    saturation[c.first] = static_cast<float>(c.second.saturation_score);
-  std::unordered_map<std::string, float> weights;
-  for (const auto &r : reports) {
-    const float s = saturation.count(r.first) ? saturation[r.first] : 0.0f;
-    weights[r.first] = std::max(0.01f, 1.0f - s);
-  }
-  for (const auto &cid : charge_blind) weights[cid] = 0.0f;
-  return weights;
-}
-
 // This consumer's slice of the grid imbalance, in W. Two terms, kept apart
 // deliberately. The *tracking* term is its share of the grid error and carries
 // the grid's sign by construction; the *balancing* term equalizes output across
@@ -1121,7 +1118,18 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   const auto blind = charge_blind_(reports, grid_total);
   const std::unordered_set<std::string> &charge_blind = blind.first;
   const bool any_ac_chargeable = blind.second;
-  auto eff_part = this->efficiency_weights_(reports, charge_blind);
+  // Share weight per consumer: a saturated battery (one that stopped following
+  // its commands) earns a smaller slice, floored just above zero so it can
+  // recover; a charge-blind one earns nothing.
+  std::unordered_map<std::string, float> saturation;
+  for (const auto &c : this->consumers_)
+    saturation[c.first] = static_cast<float>(c.second.saturation_score);
+  std::unordered_map<std::string, float> eff_part;
+  for (const auto &r : reports) {
+    const float sat = saturation.count(r.first) ? saturation[r.first] : 0.0f;
+    eff_part[r.first] = std::max(0.01f, 1.0f - sat);
+  }
+  for (const auto &cid : charge_blind) eff_part[cid] = 0.0f;
 
   auto efficiency_adjustments =
       this->compute_efficiency_deprioritized_(reports, sample_id, grid_total);
@@ -1151,11 +1159,10 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   for (const auto &kv : faded_adjustments) {
     if (eff_part.count(kv.first) && kv.second == 0.0f) eff_part[kv.first] = 0.0f;
   }
-  if (!faded_adjustments.empty() && consumer_id) {
+  if (consumer_id) {
     auto it = faded_adjustments.find(*consumer_id);
-    if (it != faded_adjustments.end() && it->second == 0.0f) {
+    if (it != faded_adjustments.end() && it->second == 0.0f)
       return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
-    }
   }
 
   float residual =
@@ -1595,18 +1602,16 @@ bool LoadBalancer::concentration_pool_balanced_(const ReportMap &reports,
     return false;
   }
   float actual_total = 0.0f;
-  float total_weight = 0.0f;
+  std::unordered_map<std::string, float> weights;
   for (const auto *cid : conc_ids) {
     const auto &rep = reports.at(*cid);
     actual_total += rep.power;
-    total_weight += rep.weight;
+    weights[*cid] = rep.weight;
   }
   for (const auto *cid : conc_ids) {
-    const auto &rep = reports.at(*cid);
-    const float target_share = (total_weight > 0.0f)
-                                   ? actual_total * rep.weight / total_weight
-                                   : actual_total / static_cast<float>(conc_ids.size());
-    if (std::fabs(target_share - rep.power) >= deadband) return false;
+    const float target_share =
+        weighted_share(actual_total, weights, conc_ids, conc_ids.size(), cid);
+    if (std::fabs(target_share - reports.at(*cid).power) >= deadband) return false;
   }
   return true;
 }
@@ -1634,22 +1639,13 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
   // output rather than the plain average, so the configured ratio is the steady
   // state. Participation is decided by eff_part above, so a healthy battery with
   // a small weight is not dropped. Neutral weights reduce to the plain average.
-  float total_weight = 0.0f;
   std::unordered_map<std::string, float> weights;
   for (const auto &cid : participating) {
-    float w = 1.0f;
     auto it = reports.find(cid);
-    if (it != reports.end()) w = it->second.weight;
-    weights[cid] = w;
-    total_weight += w;
+    weights[cid] = (it != reports.end()) ? it->second.weight : 1.0f;
   }
-  float target_share;
-  if (total_weight > 0.0f) {
-    const float wself = weights.count(consumer_id) ? weights[consumer_id] : 0.0f;
-    target_share = actual_total * wself / total_weight;
-  } else {
-    target_share = actual_total / participating.size();
-  }
+  const float target_share =
+      weighted_share(actual_total, weights, participating, participating.size(), &consumer_id);
   const float error = target_share - actual_self;
   const float err_abs = std::fabs(error);
   if (cfg.balance_deadband > 0.0f && err_abs < cfg.balance_deadband) return fair_share;

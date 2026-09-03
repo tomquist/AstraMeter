@@ -618,11 +618,6 @@ class LoadBalancer {
   std::array<float, 3> fading_target_(const std::string &consumer_id,
                                       const ReportMap &reports, float grid_total,
                                       const std::unordered_map<std::string, float> &eff_part);
-  // Per-consumer share weight for the phase split and the fair share. Mirrors
-  // balancer.py _efficiency_weights.
-  std::unordered_map<std::string, float> efficiency_weights_(
-      const ReportMap &reports,
-      const std::unordered_set<std::string> &charge_blind) const;
   // This consumer's slice of the grid imbalance: a grid-tracking term clamped
   // against the grid direction, plus a grid-neutral balancing term that is not.
   // Mirrors balancer.py _residual_share.

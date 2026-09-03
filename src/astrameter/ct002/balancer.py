@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any, Literal, NamedTuple, NewType, get_args
 
 from astrameter.config.logger import logger
@@ -94,6 +94,24 @@ Reports = Mapping[str, ConsumerReport]
 
 NO_REPORT = ConsumerReport()
 """Stand-in for a consumer that did not report this tick (unknown or just removed)."""
+
+
+def weighted_share(
+    total: float,
+    weights: Mapping[str, float],
+    ids: Collection[str],
+    consumer_id: str | None,
+) -> float:
+    """*total* split across *ids* in proportion to *weights*.
+
+    Falls back to an even split when the weights sum to zero, so a pool whose
+    every member is saturated still shares rather than stalling.
+    """
+    total_weight = sum(weights.get(cid, 0.0) for cid in ids)
+    if total_weight <= 0:
+        return total / max(1, len(ids))
+    mine = 0.0 if consumer_id is None else weights.get(consumer_id, 0.0)
+    return total * mine / total_weight
 
 
 def _report_of(reports: Reports, consumer_id: str | None) -> ConsumerReport:
@@ -1226,11 +1244,7 @@ class LoadBalancer:
         weights: dict[str, float],
         desired_total: float,
     ) -> float:
-        total_weight = sum(weights.get(cid, 0.0) for cid in reports)
-        if total_weight > 0:
-            fair_share = desired_total * weights.get(consumer_id, 0.0) / total_weight
-        else:
-            fair_share = desired_total / max(1, len(reports))
+        fair_share = weighted_share(desired_total, weights, reports, consumer_id)
         if (
             not self._cfg.fair_distribution
             or consumer_id not in reports
@@ -1874,7 +1888,13 @@ class LoadBalancer:
         self._diag_control_grid = control_grid
 
         charge_blind, any_ac_chargeable = self._charge_blind(reports, grid_total)
-        eff_part = self._efficiency_weights(reports, charge_blind)
+        # Share weight per consumer: a saturated battery (one that stopped
+        # following its commands) earns a smaller slice, floored just above
+        # zero so it can recover; a charge-blind one earns nothing.
+        saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
+        eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
+        for cid in charge_blind:
+            eff_part[cid] = 0.0
 
         efficiency_adjustments = self._compute_efficiency_deprioritized(
             reports, sample_id, grid_total
@@ -1904,11 +1924,7 @@ class LoadBalancer:
         for cid, fade_w in faded_adjustments.items():
             if cid in eff_part and fade_w == 0.0:
                 eff_part[cid] = 0.0
-        if (
-            faded_adjustments
-            and consumer_id
-            and faded_adjustments.get(consumer_id) == 0.0
-        ):
+        if consumer_id and faded_adjustments.get(consumer_id) == 0.0:
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
         residual = self._residual_share(
@@ -1928,23 +1944,6 @@ class LoadBalancer:
             pace=True,
         )
 
-    def _efficiency_weights(
-        self, reports: Reports, charge_blind: set[str]
-    ) -> dict[str, float]:
-        """Per-consumer share weight for the phase split and the fair share.
-
-        A saturated battery — one that stopped following its commands — earns a
-        smaller slice, floored just above zero so it is never written out of
-        the pool entirely and can recover.  A charge-blind battery
-        (:meth:`_charge_blind`) earns nothing, since it cannot absorb the
-        surplus being shared out.
-        """
-        saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
-        weights = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
-        for cid in charge_blind:
-            weights[cid] = 0.0
-        return weights
-
     def _residual_share(
         self,
         consumer_id: str | None,
@@ -1961,9 +1960,6 @@ class LoadBalancer:
         zero-sum, so it is grid-neutral.  Only the tracking term is clamped
         against the predicted grid direction — zeroing the balancing term too
         would make equalization one-sided near steady state (issue #523).
-
-        The caller folds the result into what the consumer reports now to get
-        an absolute net-output target.
         """
         fair_share = self._fair_share(consumer_id, reports, control_grid, eff_part)
         concentrated = self._concentrated_share(
@@ -2395,13 +2391,9 @@ class LoadBalancer:
             return False
         actual_total = sum(_report_of(reports, cid).power for cid in conc_ids)
         weights = {cid: _report_of(reports, cid).weight for cid in conc_ids}
-        total_weight = sum(weights.values())
         for cid in conc_ids:
             actual_self = _report_of(reports, cid).power
-            if total_weight > 0:
-                target_share = actual_total * weights[cid] / total_weight
-            else:
-                target_share = actual_total / len(conc_ids)
+            target_share = weighted_share(actual_total, weights, conc_ids, cid)
             if abs(target_share - actual_self) >= deadband:
                 return False
         return True
@@ -2427,11 +2419,7 @@ class LoadBalancer:
         # decided by ``eff_part`` above, so a small weight never drops a
         # healthy battery from the pool.
         weights = {cid: _report_of(reports, cid).weight for cid in participating}
-        total_weight = sum(weights.values())
-        if total_weight > 0:
-            target_share = actual_total * weights.get(consumer_id, 0.0) / total_weight
-        else:
-            target_share = actual_total / len(participating)
+        target_share = weighted_share(actual_total, weights, participating, consumer_id)
         error = target_share - actual_self
         err_abs = abs(error)
         if cfg.balance_deadband > 0 and err_abs < cfg.balance_deadband:
