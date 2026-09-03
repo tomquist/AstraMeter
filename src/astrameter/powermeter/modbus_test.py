@@ -261,7 +261,7 @@ async def modbus_udp_server() -> AsyncIterator[int]:
     server = ModbusUdpServer(context, address=("127.0.0.1", 0))
     await server.listen()
     # UDP uses a datagram transport (no listening socket list like TCP).
-    port = server.transport.get_extra_info("sockname")[1]  # type: ignore[union-attr]
+    port = server.transport.get_extra_info("sockname")[1]
     yield port
     await server.shutdown()
 

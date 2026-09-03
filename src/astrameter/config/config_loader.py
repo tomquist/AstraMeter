@@ -659,7 +659,7 @@ def create_homeassistant_powermeter(
     else:
         _static_token = config.get(section, "ACCESSTOKEN", fallback="")
 
-        def token_getter() -> str:  # type: ignore[no-redef]
+        def token_getter() -> str:
             return _static_token
 
     return HomeAssistant(

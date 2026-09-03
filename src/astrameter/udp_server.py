@@ -20,13 +20,13 @@ class DatagramSink(Protocol):
     def sendto(self, data: bytes, addr: tuple) -> None: ...
 
 
-Handler = Callable[[bytes, tuple, asyncio.DatagramTransport], Coroutine[Any, Any, None]]
+Handler = Callable[[bytes, tuple, DatagramSink], Coroutine[Any, Any, None]]
 
 
 class _HandlerProtocol(asyncio.DatagramProtocol):
     def __init__(self, handler: Handler) -> None:
         self._handler = handler
-        self._transport: asyncio.DatagramTransport | None = None
+        self._transport: DatagramSink | None = None
         # asyncio keeps only a weak reference to a running task, so a handler
         # nobody holds can be collected mid-poll; the set is that reference.
         self._tasks: set[asyncio.Task] = set()
@@ -35,7 +35,8 @@ class _HandlerProtocol(asyncio.DatagramProtocol):
         # Widened by the base class, and narrowed rather than checked: the
         # concrete datagram transports do not inherit `DatagramTransport`, so
         # an isinstance test here refuses the very object asyncio hands over.
-        self._transport = cast("asyncio.DatagramTransport", transport)
+        # Narrowed to what a handler uses, which it genuinely does have.
+        self._transport = cast("DatagramSink", transport)
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:
         assert self._transport is not None

@@ -126,10 +126,10 @@ async def _body(request: web.Request) -> dict[str, Any]:
     return body
 
 
-def _required(body: dict[str, Any], *keys: str) -> list[Any]:
-    """The values of *keys*, refusing the request when one is missing."""
+def _required(body: dict[str, Any], key: str) -> Any:
+    """The value of *key*, refusing the request when it is missing."""
     try:
-        return [body[key] for key in keys]
+        return body[key]
     except KeyError as exc:
         raise ApiError(f"Invalid request: {exc}", status=400) from exc
 
@@ -486,9 +486,10 @@ class WebServer:
         if not self._may_write(request):
             return forbidden()
         body = await _body(request)
-        device_id, consumer_id, field, value = _required(
-            body, "device_id", "consumer_id", "field", "value"
-        )
+        device_id = _required(body, "device_id")
+        consumer_id = _required(body, "consumer_id")
+        field = _required(body, "field")
+        value = _required(body, "value")
 
         device = self._device(device_id)
         control = CONSUMER_CONTROLS_BY_FIELD.get(field)
@@ -530,7 +531,8 @@ class WebServer:
         if not self._may_write(request):
             return forbidden()
         body = await _body(request)
-        (device_id, field) = _required(body, "device_id", "field")
+        device_id = _required(body, "device_id")
+        field = _required(body, "field")
         value = body.get("value", True)
 
         device = self._device(device_id)
@@ -644,7 +646,7 @@ class WebServer:
         """
         client = self._supervisor(request)
         body = await _body(request)
-        (options,) = _required(body, "options")
+        options = _required(body, "options")
         if not isinstance(options, dict):
             raise ApiError("Invalid request: 'options' must be an object", status=400)
 
@@ -734,7 +736,7 @@ class WebServer:
         """
         client = self._supervisor(request)
         body = await _body(request)
-        (target,) = _required(body, "mode")
+        target = _required(body, "mode")
 
         if target == "file":
             filename = (body.get("filename") or "astrameter.ini").strip()

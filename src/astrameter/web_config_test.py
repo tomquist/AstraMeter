@@ -63,7 +63,7 @@ def test_validate_section_name_with_bracket() -> None:
 
 def test_validate_section_not_dict() -> None:
     with pytest.raises(ValueError, match="must map to an object"):
-        _validate_config_payload({"S": "bad"}, ["S"])  # type: ignore[dict-item]
+        _validate_config_payload({"S": "bad"}, ["S"])
 
 
 def test_validate_empty_key() -> None:
