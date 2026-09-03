@@ -547,6 +547,10 @@ class LoadBalancer {
 
  protected:
   BalancerConsumerState &get_consumer_(const std::string &consumer_id);
+  // Score how well a consumer is following its commands. Mirrors balancer.py
+  // _track_saturation.
+  void track_saturation_(const std::string &consumer_id, BalancerConsumerState &state,
+                         ConsumerMode mode, ReportMap &reports);
   void invalidate_efficiency_cache_();
   std::unordered_set<std::string> probe_participants_() const;
   float next_probe_requested_abs_(float current_requested_abs, float ceiling) const;
@@ -614,6 +618,13 @@ class LoadBalancer {
   std::array<float, 3> fading_target_(const std::string &consumer_id,
                                       const ReportMap &reports, float grid_total,
                                       const std::unordered_map<std::string, float> &eff_part);
+  // This consumer's slice of the grid imbalance: a grid-tracking term clamped
+  // against the grid direction, plus a grid-neutral balancing term that is not.
+  // Mirrors balancer.py _residual_share.
+  float residual_share_(const std::optional<std::string> &consumer_id,
+                        const ReportMap &reports, float control_grid,
+                        const std::unordered_map<std::string, float> &eff_part,
+                        const std::unordered_set<std::string> &charge_blind);
   // This consumer's weight-proportional slice of the grid error. Mirrors
   // balancer.py _fair_share.
   static float fair_share_(const std::optional<std::string> &consumer_id,
@@ -630,6 +641,8 @@ class LoadBalancer {
                             float fair_share);
   bool concentration_pool_balanced_(const ReportMap &reports,
                                     const std::vector<const std::string *> &conc_ids);
+  float pace_cap_(BalancerConsumerState &state, float reading, float reported, int sign,
+                  float dt_ratio, bool can_stall, bool *stalled);
   float pace_reading_(const std::string &consumer_id, float reading, float reported,
                       const ReportMap &reports);
   float damp_oscillation_(const std::string &consumer_id, float residual);
@@ -646,6 +659,10 @@ class LoadBalancer {
 
   std::unordered_map<std::string, float> compute_efficiency_deprioritized_(
       const ReportMap &reports, const std::vector<float> &sample_id, float grid_total);
+  // Probe a swap the efficiency pass just made, before trusting it. Mirrors
+  // balancer.py _probe_active_set_change.
+  void probe_active_set_change_(const std::vector<std::string> &previous_active,
+                                size_t slots, double now);
   // Reconcile the rotation order with the reporting pool. Mirrors balancer.py
   // _sync_pool.
   void sync_pool_(const ReportMap &reports, double grace);

@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any, Literal, NamedTuple, NewType, get_args
 
 from astrameter.config.logger import logger
@@ -94,6 +94,24 @@ Reports = Mapping[str, ConsumerReport]
 
 NO_REPORT = ConsumerReport()
 """Stand-in for a consumer that did not report this tick (unknown or just removed)."""
+
+
+def weighted_share(
+    total: float,
+    weights: Mapping[str, float],
+    ids: Collection[str],
+    consumer_id: str | None,
+) -> float:
+    """*total* split across *ids* in proportion to *weights*.
+
+    Falls back to an even split when the weights sum to zero, so a pool whose
+    every member is saturated still shares rather than stalling.
+    """
+    total_weight = sum(weights.get(cid, 0.0) for cid in ids)
+    if total_weight <= 0:
+        return total / max(1, len(ids))
+    mine = 0.0 if consumer_id is None else weights.get(consumer_id, 0.0)
+    return total * mine / total_weight
 
 
 def _report_of(reports: Reports, consumer_id: str | None) -> ConsumerReport:
@@ -1226,11 +1244,7 @@ class LoadBalancer:
         weights: dict[str, float],
         desired_total: float,
     ) -> float:
-        total_weight = sum(weights.get(cid, 0.0) for cid in reports)
-        if total_weight > 0:
-            fair_share = desired_total * weights.get(consumer_id, 0.0) / total_weight
-        else:
-            fair_share = desired_total / max(1, len(reports))
+        fair_share = weighted_share(desired_total, weights, reports, consumer_id)
         if (
             not self._cfg.fair_distribution
             or consumer_id not in reports
@@ -1367,6 +1381,45 @@ class LoadBalancer:
             state.saturation_score if state else 0.0,
         )
 
+    def _track_saturation(
+        self,
+        consumer_id: str,
+        state: BalancerConsumerState,
+        consumer_mode: ConsumerMode,
+        reports: Reports,
+    ) -> None:
+        """Score how well this consumer is following the commands it is sent.
+
+        The detector keys off ``last_intent_reading`` — the *unpaced* command —
+        because pacing pins a battery that can't follow at the base step, and
+        the paced reading would make a full/empty battery look idle (issue
+        #522).  The floor is compared against the unpaced intent for the same
+        reason: a battery the clamp holds below its floor must still register
+        as pushed; the stall escape bounds how long that lasts.
+
+        Skipped for manual and probing consumers, and for a deprioritized one —
+        its fade path still carries a transient non-zero command that would
+        score as "cannot follow" and lock ``_maybe_force_swap_saturated`` out of
+        promoting it back.  Its score stays at the zero the symmetric clear in
+        ``_compute_efficiency_deprioritized`` set.
+        """
+        if (
+            consumer_id not in reports
+            or consumer_mode.mode == "manual"
+            or consumer_id in self._probe_participants()
+            or consumer_id in self._deprioritized
+        ):
+            return
+        report = _report_of(reports, consumer_id)
+        self._saturation.update(
+            state,
+            state.last_intent_reading,
+            report.power,
+            saturation_floor(
+                state, report, self._effective_min_dc_output(consumer_id, reports)
+            ),
+        )
+
     def compute_target(
         self,
         consumer_id: str | None,
@@ -1399,38 +1452,10 @@ class LoadBalancer:
             cid: r for cid, r in all_reports.items() if cid not in inactive
         }
 
-        # Update saturation (skip manual, probe, and deprioritized consumers).
-        # The detector keys off ``last_intent_reading`` — the *unpaced* command
-        # — because pacing pins a battery that can't follow at the base step,
-        # and the paced reading would make a full/empty battery look idle
-        # (issue #522).  A deprioritized consumer is skipped because its fade
-        # path still carries a transient non-zero command that would score as
-        # "cannot follow" and lock ``_maybe_force_swap_saturated`` out of
-        # promoting it back; its score stays at the zero the symmetric clear in
-        # ``_compute_efficiency_deprioritized`` set.
-        state = self._get_consumer(consumer_id) if consumer_id else None
-        if (
-            state is not None
-            and consumer_id in active_reports
-            and consumer_mode.mode != "manual"
-            and consumer_id not in self._probe_participants()
-            and consumer_id not in self._deprioritized
-        ):
-            report = _report_of(active_reports, consumer_id)
-            actual = report.power
-            # The floor is compared against the unpaced intent too: a battery
-            # the clamp holds below its floor must still register as pushed
-            # (issue #522); the stall escape bounds how long that lasts.
-            self._saturation.update(
-                state,
-                state.last_intent_reading,
-                actual,
-                saturation_floor(
-                    state,
-                    report,
-                    self._effective_min_dc_output(consumer_id, active_reports),
-                ),
-            )
+        state = None
+        if consumer_id:
+            state = self._get_consumer(consumer_id)
+            self._track_saturation(consumer_id, state, consumer_mode, active_reports)
 
         if consumer_mode.mode == "manual" and state is not None:
             reported = _report_of(active_reports, consumer_id).power
@@ -1862,10 +1887,12 @@ class LoadBalancer:
         control_grid = self._apply_import_trim(control_grid, trim_fresh)
         self._diag_control_grid = control_grid
 
+        charge_blind, any_ac_chargeable = self._charge_blind(reports, grid_total)
+        # Share weight per consumer: a saturated battery (one that stopped
+        # following its commands) earns a smaller slice, floored just above
+        # zero so it can recover; a charge-blind one earns nothing.
         saturation = {cid: s.saturation_score for cid, s in self._consumers.items()}
         eff_part = {cid: max(0.01, 1.0 - saturation.get(cid, 0.0)) for cid in reports}
-
-        charge_blind, any_ac_chargeable = self._charge_blind(reports, grid_total)
         for cid in charge_blind:
             eff_part[cid] = 0.0
 
@@ -1897,50 +1924,12 @@ class LoadBalancer:
         for cid, fade_w in faded_adjustments.items():
             if cid in eff_part and fade_w == 0.0:
                 eff_part[cid] = 0.0
-        if (
-            faded_adjustments
-            and consumer_id
-            and faded_adjustments.get(consumer_id) == 0.0
-        ):
+        if consumer_id and faded_adjustments.get(consumer_id) == 0.0:
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
-        fair_share = self._fair_share(consumer_id, reports, control_grid, eff_part)
-        concentrated = self._concentrated_share(
+        residual = self._residual_share(
             consumer_id, reports, control_grid, eff_part, charge_blind
         )
-        if concentrated is not None:
-            fair_share = concentrated
-        self._diag_fair_share = fair_share
-
-        cfg = self._cfg
-
-        # ``fair_share`` / ``_balance_correction`` produce the residual: this
-        # consumer's slice of the grid imbalance to fold into its current
-        # output.  The absolute net-output target is therefore "what I report
-        # now plus my residual share" — see the NetOutputW wrap below.
-        if (
-            not cfg.fair_distribution
-            or consumer_id is None
-            or consumer_id not in reports
-            or concentrated is not None
-        ):
-            residual = fair_share
-        elif consumer_id in eff_part:
-            residual = self._balance_correction(
-                consumer_id, reports, eff_part, fair_share
-            )
-        else:
-            residual = fair_share
-
-        # Clamp only the grid-tracking half (``fair_share``, which carries the
-        # grid's sign by construction) against the predicted grid direction —
-        # never the balance-correction term, which is zero-sum across the
-        # same-phase pool and so grid-neutral; zeroing it too would make
-        # equalization one-sided near steady state (issue #523).
-        tracking = fair_share
-        if (control_grid < 0 and tracking > 0) or (control_grid > 0 and tracking < 0):
-            tracking = 0.0
-        residual = tracking + (residual - fair_share)
 
         if consumer_id:
             residual = self._damp_oscillation(consumer_id, residual)
@@ -1954,6 +1943,48 @@ class LoadBalancer:
             eff_part,
             pace=True,
         )
+
+    def _residual_share(
+        self,
+        consumer_id: str | None,
+        reports: Reports,
+        control_grid: float,
+        eff_part: dict[str, float],
+        charge_blind: set[str],
+    ) -> float:
+        """This consumer's slice of the grid imbalance, in W.
+
+        Two terms, kept apart deliberately.  The *tracking* term is its share
+        of the grid error, and carries the grid's sign by construction; the
+        *balancing* term equalizes output across the same-phase pool and is
+        zero-sum, so it is grid-neutral.  Only the tracking term is clamped
+        against the predicted grid direction — zeroing the balancing term too
+        would make equalization one-sided near steady state (issue #523).
+        """
+        fair_share = self._fair_share(consumer_id, reports, control_grid, eff_part)
+        concentrated = self._concentrated_share(
+            consumer_id, reports, control_grid, eff_part, charge_blind
+        )
+        if concentrated is not None:
+            fair_share = concentrated
+        self._diag_fair_share = fair_share
+
+        residual = fair_share
+        if (
+            self._cfg.fair_distribution
+            and concentrated is None
+            and consumer_id is not None
+            and consumer_id in reports
+            and consumer_id in eff_part
+        ):
+            residual = self._balance_correction(
+                consumer_id, reports, eff_part, fair_share
+            )
+
+        tracking = fair_share
+        if (control_grid < 0 and tracking > 0) or (control_grid > 0 and tracking < 0):
+            tracking = 0.0
+        return tracking + (residual - fair_share)
 
     @staticmethod
     def _charge_blind(reports: Reports, grid_total: float) -> tuple[set[str], bool]:
@@ -2203,50 +2234,32 @@ class LoadBalancer:
             state.osc_last_sign = sign
         return residual * (1.0 - cfg.osc_damp_max * state.osc_score)
 
-    def _pace_reading(
-        self, consumer_id: str, reading: float, reported: float, reports: Reports
-    ) -> float:
-        """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
+    def _pace_cap(
+        self,
+        state: BalancerConsumerState,
+        reading: float,
+        reported: float,
+        sign: int,
+        dt_ratio: float,
+        can_stall: bool,
+    ) -> tuple[float, bool]:
+        """Return this consumer's ramp cap in W, and whether it is stalled.
 
-        The battery integrates the reading with its own accelerating ramp, so
-        the reading we send is the only bound on its per-poll movement.  The
-        cap starts at ``pace_base_step``, doubles per reference second toward
-        ``pace_max_step`` only while the battery demonstrably tracks the
-        command, follows the error back down, and resets to the base step on
-        direction reversal — bounding stale-feedback overshoot to the battery's
-        *demonstrated* slew.  Caps are W per :data:`PACE_REFERENCE_DT`, scaled
-        by the observed inter-poll time (clamped at 1.0).
-
-        Paced: the regulation loop, the fade transition and the deprioritized /
-        charge-blind wind-down (the firmware applies a charge-direction reading
-        in full in one cycle, so an unpaced wind-down is a one-poll step
-        disturbance on the rest of the pool).  Not paced: probe targets, the
-        MIN_DC_OUTPUT floor, manual targets and the inactive steer-to-zero.
-        Callers needing the unpaced intent (issue #376) read ``last_intent``.
+        The learning half of :meth:`_pace_reading`: the cap tracks what the
+        battery has *demonstrated* it can slew.  It resets to the base step on
+        a direction reversal, doubles per reference second while the battery
+        visibly follows, and grows against a persistent stall so a device held
+        under its minimum actionable command is not clamped there forever.
+        Records what the device responded to (``pace_responded_at``) and how
+        long it has been unresponsive (``pace_stall_polls``); the caller owns
+        ``pace_cap`` itself.
         """
         base = self._cfg.pace_base_step
-        if base <= 0:
-            return reading
-        state = self._get_consumer(consumer_id)
-        now = self._clock()
-        dt = now - state.pace_last_at if state.pace_last_at > 0.0 else 0.0
-        if dt <= 0.0:
-            # First paced poll, a non-advancing clock, or a backwards jump:
-            # assume one reference period rather than starving the clamp.
-            dt = PACE_REFERENCE_DT
-        state.pace_last_at = now
-        dt_ratio = min(1.0, dt / PACE_REFERENCE_DT)
-        sign = 1 if reading > 0 else -1 if reading < 0 else 0
         cap = state.pace_cap if state.pace_cap > 0 else base
         # Never below the base step: hysteresis-style regulators (B2500) need a
         # minimum reading to clear their input hold window at all.  The cadence
         # scale still bounds the grown cap.
         limit = max(base, cap * dt_ratio)
-        # The stall escape and the response floor below apply only to devices
-        # with a minimum actionable command (the DC-output family); any other
-        # battery can execute an arbitrarily small command and can never be
-        # deadlocked by the clamp, so it stays on the unmodified path.
-        can_stall = _needs_dc_output_floor(_report_of(reports, consumer_id).device_type)
         stalled = False
         if sign == 0 or sign != state.pace_sign:
             cap = base
@@ -2295,7 +2308,49 @@ class LoadBalancer:
         # but the else branch back-computes cap as abs(reading) / dt_ratio,
         # which a fast poll (small dt_ratio) can inflate past the max — and a
         # later normal-cadence poll would then slew beyond pace_max_step.
-        cap = min(cap, self._cfg.pace_max_step)
+        return min(cap, self._cfg.pace_max_step), stalled
+
+    def _pace_reading(
+        self, consumer_id: str, reading: float, reported: float, reports: Reports
+    ) -> float:
+        """Clamp the auto-path *reading* to the consumer's ramp-pacing cap.
+
+        The battery integrates the reading with its own accelerating ramp, so
+        the reading we send is the only bound on its per-poll movement.
+        :meth:`_pace_cap` decides how much movement this battery has earned;
+        this method measures the poll interval, applies that cap, and records
+        what was sent.  Caps are W per :data:`PACE_REFERENCE_DT`, scaled by the
+        observed inter-poll time (clamped at 1.0).
+
+        Paced: the regulation loop, the fade transition and the deprioritized /
+        charge-blind wind-down (the firmware applies a charge-direction reading
+        in full in one cycle, so an unpaced wind-down is a one-poll step
+        disturbance on the rest of the pool).  Not paced: probe targets, the
+        MIN_DC_OUTPUT floor, manual targets and the inactive steer-to-zero.
+        Callers needing the unpaced intent (issue #376) read ``last_intent``.
+        """
+        base = self._cfg.pace_base_step
+        if base <= 0:
+            return reading
+        state = self._get_consumer(consumer_id)
+        now = self._clock()
+        dt = now - state.pace_last_at if state.pace_last_at > 0.0 else 0.0
+        if dt <= 0.0:
+            # First paced poll, a non-advancing clock, or a backwards jump:
+            # assume one reference period rather than starving the clamp.
+            dt = PACE_REFERENCE_DT
+        state.pace_last_at = now
+        dt_ratio = min(1.0, dt / PACE_REFERENCE_DT)
+        sign = 1 if reading > 0 else -1 if reading < 0 else 0
+        # The stall escape and the response floor below apply only to devices
+        # with a minimum actionable command (the DC-output family); any other
+        # battery can execute an arbitrarily small command and can never be
+        # deadlocked by the clamp, so it stays on the unmodified path.
+        can_stall = _needs_dc_output_floor(_report_of(reports, consumer_id).device_type)
+
+        cap, stalled = self._pace_cap(
+            state, reading, reported, sign, dt_ratio, can_stall
+        )
         state.pace_cap = cap
         state.pace_sign = sign
         state.pace_prev_reported = reported
@@ -2336,13 +2391,9 @@ class LoadBalancer:
             return False
         actual_total = sum(_report_of(reports, cid).power for cid in conc_ids)
         weights = {cid: _report_of(reports, cid).weight for cid in conc_ids}
-        total_weight = sum(weights.values())
         for cid in conc_ids:
             actual_self = _report_of(reports, cid).power
-            if total_weight > 0:
-                target_share = actual_total * weights[cid] / total_weight
-            else:
-                target_share = actual_total / len(conc_ids)
+            target_share = weighted_share(actual_total, weights, conc_ids, cid)
             if abs(target_share - actual_self) >= deadband:
                 return False
         return True
@@ -2368,11 +2419,7 @@ class LoadBalancer:
         # decided by ``eff_part`` above, so a small weight never drops a
         # healthy battery from the pool.
         weights = {cid: _report_of(reports, cid).weight for cid in participating}
-        total_weight = sum(weights.values())
-        if total_weight > 0:
-            target_share = actual_total * weights.get(consumer_id, 0.0) / total_weight
-        else:
-            target_share = actual_total / len(participating)
+        target_share = weighted_share(actual_total, weights, participating, consumer_id)
         error = target_share - actual_self
         err_abs = abs(error)
         if cfg.balance_deadband > 0 and err_abs < cfg.balance_deadband:
@@ -2524,14 +2571,8 @@ class LoadBalancer:
         deprioritized = set(self._priority[slots:])
         result: dict[str, float] = {cid: 0.0 for cid in deprioritized}
 
-        final_active = tuple(self._priority[:slots])
-        if not probing and previous_active:
-            promoted = [cid for cid in final_active if cid not in previous_active]
-            backups = [cid for cid in previous_active if cid not in final_active]
-            if promoted and backups:
-                self._begin_probe(
-                    promoted[0], final_active, tuple(backups), previous_active, now
-                )
+        if not probing:
+            self._probe_active_set_change(previous_active, slots, now)
 
         for cid in deprioritized - self._deprioritized:
             # Symmetric with the promotion clear above: the score is a memory
@@ -2540,6 +2581,38 @@ class LoadBalancer:
             # the fading window would bar ``_maybe_force_swap_saturated`` from
             # ever promoting it back.
             self._forget_saturation(cid)
+        self._log_role_changes(deprioritized, abs_target, slots)
+
+        self._deprioritized = deprioritized
+        self._cache_sample = cache_key
+        self._cache_result = result
+        return result
+
+    def _probe_active_set_change(
+        self, previous_active: tuple[str, ...], slots: int, now: float
+    ) -> None:
+        """Probe a swap the efficiency pass just made, before trusting it.
+
+        Promoting a battery is a bet that it delivers more than the one it
+        displaced.  When this tick both promotes and demotes, the bet is tested
+        against the battery it displaced rather than assumed: see
+        :meth:`_begin_probe`.  Nothing to test on the first pass, when there is
+        no previous active set to compare against.
+        """
+        if not previous_active:
+            return
+        final_active = tuple(self._priority[:slots])
+        promoted = [cid for cid in final_active if cid not in previous_active]
+        backups = [cid for cid in previous_active if cid not in final_active]
+        if promoted and backups:
+            self._begin_probe(
+                promoted[0], final_active, tuple(backups), previous_active, now
+            )
+
+    def _log_role_changes(
+        self, deprioritized: set[str], abs_target: float, slots: int
+    ) -> None:
+        """Record consumers entering or leaving the deprioritized set."""
         for cid, verb in (
             *((cid, "deprioritizing") for cid in deprioritized - self._deprioritized),
             *((cid, "activating") for cid in self._deprioritized - deprioritized),
@@ -2551,11 +2624,6 @@ class LoadBalancer:
                 abs_target,
                 slots,
             )
-
-        self._deprioritized = deprioritized
-        self._cache_sample = cache_key
-        self._cache_result = result
-        return result
 
     def _rotate_priority_head(self, reports: Reports, now: float) -> None:
         """Send the longest-serving active battery to the back of the queue.
