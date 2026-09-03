@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -18,11 +19,11 @@ class _FakeClock:
         self.now += seconds
 
 
-def _make(wrapped: Powermeter, **kwargs) -> HealthTrackingPowermeter:
+def _make(wrapped: Powermeter, **kwargs: Any) -> HealthTrackingPowermeter:
     return HealthTrackingPowermeter(wrapped, **kwargs)
 
 
-async def test_passes_values_through_and_records_success():
+async def test_passes_values_through_and_records_success() -> None:
     clock = _FakeClock()
     inner = Mock(spec=Powermeter)
     inner.get_powermeter_watts = AsyncMock(return_value=[100.0, 200.0])
@@ -41,7 +42,7 @@ async def test_passes_values_through_and_records_success():
     assert pm.name == "MQTT_1"
 
 
-async def test_last_values_none_until_first_success():
+async def test_last_values_none_until_first_success() -> None:
     inner = Mock(spec=Powermeter)
     inner.get_powermeter_watts = AsyncMock(side_effect=ValueError("stale"))
     pm = _make(inner)
@@ -53,7 +54,7 @@ async def test_last_values_none_until_first_success():
     assert pm.last_values is None
 
 
-async def test_records_failure_and_reraises():
+async def test_records_failure_and_reraises() -> None:
     inner = Mock(spec=Powermeter)
     inner.get_powermeter_watts = AsyncMock(side_effect=ValueError("stale"))
     pm = _make(inner)
@@ -65,7 +66,7 @@ async def test_records_failure_and_reraises():
     assert pm.last_outcome_ok is False
 
 
-async def test_empty_result_counts_as_not_ok():
+async def test_empty_result_counts_as_not_ok() -> None:
     inner = Mock(spec=Powermeter)
     inner.get_powermeter_watts = AsyncMock(return_value=[])
     pm = _make(inner)
@@ -74,7 +75,7 @@ async def test_empty_result_counts_as_not_ok():
     assert pm.last_outcome_ok is False
 
 
-async def test_raw_read_also_tracked():
+async def test_raw_read_also_tracked() -> None:
     inner = Mock(spec=Powermeter)
     inner.get_powermeter_watts_raw = AsyncMock(return_value=[7.0])
     pm = _make(inner)
@@ -83,7 +84,7 @@ async def test_raw_read_also_tracked():
     assert pm.last_outcome_ok is True
 
 
-def test_stream_online_is_passed_through():
+def test_stream_online_is_passed_through() -> None:
     inner = Mock(spec=Powermeter)
     inner.stream_online = Mock(return_value=True)
     pm = _make(inner)
@@ -93,7 +94,7 @@ def test_stream_online_is_passed_through():
     assert pm.stream_online() is None
 
 
-async def test_lifecycle_delegates_to_inner():
+async def test_lifecycle_delegates_to_inner() -> None:
     inner = Mock(spec=Powermeter)
     inner.start = AsyncMock()
     inner.stop = AsyncMock()

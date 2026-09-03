@@ -2,7 +2,9 @@
 
 import dataclasses
 import inspect
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,7 +19,7 @@ from astrameter.status.secrets import SENTINEL, redact_sections, restore_section
 from astrameter.status.serialize import compact, iso, round_or_none
 
 
-def _registry(**kwargs) -> StatusRegistry:
+def _registry(**kwargs: Any) -> StatusRegistry:
     kwargs.setdefault("config_path", "config.ini")
     kwargs.setdefault("log_level", "info")
     kwargs.setdefault("version", "9.9.9")
@@ -48,7 +50,9 @@ def _ct(device_id: str = "ct-1") -> CT002:
         StatusRegistry.snapshot,
     ],
 )
-def test_snapshot_methods_are_synchronous_and_await_free(func):
+def test_snapshot_methods_are_synchronous_and_await_free(
+    func: Callable[..., Any],
+) -> None:
     """A snapshot must be atomic against every in-flight UDP handler.
 
     They all share one asyncio loop, so an await-free builder cannot be
@@ -60,7 +64,7 @@ def test_snapshot_methods_are_synchronous_and_await_free(func):
     assert "await " not in source, f"{func.__qualname__} contains an await"
 
 
-def test_snapshot_hands_out_copies_not_live_containers():
+def test_snapshot_hands_out_copies_not_live_containers() -> None:
     registry = _registry()
     device = _ct()
     registry.register_device("ct-1", "ct002", device)
@@ -77,7 +81,7 @@ def test_snapshot_hands_out_copies_not_live_containers():
     assert len(registry.snapshot(ingress=False)["devices"][0]["consumers"]) == 2
 
 
-def test_relay_mode_reports_the_grid_it_served_not_zero():
+def test_relay_mode_reports_the_grid_it_served_not_zero() -> None:
     """`_last_smooth_target` is only written by the active-control path, so
     deriving the headline figure from it alone showed every relay-mode user a
     grid total of 0 W beside three non-zero phases."""
@@ -94,7 +98,7 @@ def test_relay_mode_reports_the_grid_it_served_not_zero():
     assert device.status_snapshot().grid_total == pytest.approx(-11.0)
 
 
-def test_control_quality_reaches_the_wire_with_its_evidence():
+def test_control_quality_reaches_the_wire_with_its_evidence() -> None:
     """The verdict is the one balancer figure aimed at a user, so it has to
     survive the wire layer intact — with the numbers behind it, since "this
     loop is off target" is worth little without how far off and how often."""
@@ -135,7 +139,7 @@ def test_control_quality_reaches_the_wire_with_its_evidence():
     assert quality["in_band_fraction"] == 0.0
 
 
-def test_a_consumer_created_by_a_retained_command_is_marked_as_such():
+def test_a_consumer_created_by_a_retained_command_is_marked_as_such() -> None:
     """Every consumer setter materializes the consumer, because a retained MQTT
     command has to hold its setting until the battery turns up.  That
     placeholder carries Consumer's defaults — phase "A", 0 W, no timestamp —
@@ -163,7 +167,7 @@ def test_a_consumer_created_by_a_retained_command_is_marked_as_such():
     assert placeholder["expired"] is False
 
 
-def test_a_shelly_device_reaches_the_wire_with_its_batteries():
+def test_a_shelly_device_reaches_the_wire_with_its_batteries() -> None:
     """The Shelly emulator is the default device type, so the document has to
     carry it as a first-class device — not as an unrecognised shape the UI
     quietly drops."""
@@ -196,19 +200,20 @@ def test_a_shelly_device_reaches_the_wire_with_its_batteries():
 # -- absence is not zero ----------------------------------------------
 
 
-def test_compact_drops_none_but_keeps_zero():
+def test_compact_drops_none_but_keeps_zero() -> None:
     assert compact({"a": None, "b": 0, "c": False}) == {"b": 0, "c": False}
 
 
-def test_round_and_iso_preserve_absence():
+def test_round_and_iso_preserve_absence() -> None:
     assert round_or_none(None) is None
     assert round_or_none(1.23456) == 1.2
     assert iso(None) is None
     assert iso(0) is None
-    assert iso(1_770_000_000.0).startswith("2026-")
+    stamp = iso(1_770_000_000.0)
+    assert stamp is not None and stamp.startswith("2026-")
 
 
-def test_absent_fields_are_omitted_not_zeroed():
+def test_absent_fields_are_omitted_not_zeroed() -> None:
     """A field the backend cannot produce must be missing, so the UI can omit
     the card instead of rendering a convincing zero."""
     snapshot = _registry(git_commit="").snapshot(ingress=False)
@@ -221,7 +226,7 @@ def test_absent_fields_are_omitted_not_zeroed():
     assert snapshot["capabilities"]
 
 
-def test_snapshot_carries_no_credentials():
+def test_snapshot_carries_no_credentials() -> None:
     registry = _registry()
     registry.register_device("ct-1", "ct002", _ct())
     text = repr(registry.snapshot(ingress=False)).lower()
@@ -232,7 +237,7 @@ def test_snapshot_carries_no_credentials():
 # -- capabilities gate the UI -----------------------------------------
 
 
-def test_capabilities_are_fail_closed_without_ingress():
+def test_capabilities_are_fail_closed_without_ingress() -> None:
     registry = _registry(
         allow_write=True, direct_access=False, config_mode="ha_advanced"
     )
@@ -240,7 +245,7 @@ def test_capabilities_are_fail_closed_without_ingress():
     assert registry.capabilities(ingress=True)["controls"] is True
 
 
-def test_standalone_needs_no_direct_access_opt_in():
+def test_standalone_needs_no_direct_access_opt_in() -> None:
     """There is no ingress outside the add-on, so the flag would be one the
     user could never usefully leave off."""
     registry = _registry(
@@ -249,7 +254,7 @@ def test_standalone_needs_no_direct_access_opt_in():
     assert registry.capabilities(ingress=False)["controls"] is True
 
 
-def test_simple_mode_is_never_config_writable():
+def test_simple_mode_is_never_config_writable() -> None:
     """The add-on regenerates config.ini on every start, so offering to edit
     it there would silently lose the user's work."""
     registry = _registry(config_mode="ha_simple", allow_write=True)
@@ -258,7 +263,7 @@ def test_simple_mode_is_never_config_writable():
     assert caps["ha_options"] is True
 
 
-def test_etag_changes_with_state_and_over_time(monkeypatch):
+def test_etag_changes_with_state_and_over_time(monkeypatch: pytest.MonkeyPatch) -> None:
     # The ETag mixes in a coarse time bucket, so two real calls either side of
     # a bucket boundary differ for a reason this test is not about. Freeze the
     # clock and the assertion is purely about state.
@@ -270,7 +275,7 @@ def test_etag_changes_with_state_and_over_time(monkeypatch):
     assert registry.etag() != first
 
 
-def test_revision_folds_in_device_local_mutations():
+def test_revision_folds_in_device_local_mutations() -> None:
     """Serving a battery bumps only the device's own ``_rev`` (ct002.py), not
     any registry field — so the registry has to fold each device's revision
     into its own, or a polling client would sit on a 304 through every
@@ -284,7 +289,7 @@ def test_revision_folds_in_device_local_mutations():
     assert registry.etag() != f'W/"{before}-0"'
 
 
-def test_register_and_unregister_device():
+def test_register_and_unregister_device() -> None:
     registry = _registry()
     registry.register_device("ct-1", "ct002", _ct())
     assert "ct-1" in registry.devices
@@ -292,7 +297,7 @@ def test_register_and_unregister_device():
     assert registry.devices == {}
 
 
-def test_reset_cycle_clears_per_run_state():
+def test_reset_cycle_clears_per_run_state() -> None:
     registry = _registry()
     registry.register_device("ct-1", "ct002", _ct())
     registry.powermeters = [object()]
@@ -306,7 +311,7 @@ def test_reset_cycle_clears_per_run_state():
 # -- config mode ------------------------------------------------------
 
 
-def test_mode_comes_from_the_loaded_backend_never_from_the_filesystem():
+def test_mode_comes_from_the_loaded_backend_never_from_the_filesystem() -> None:
     # Outside the add-on it makes no difference whether a file backs the
     # config — a Docker install is standalone either way.
     assert detect_config_mode(addon=False, config_path=None) == "standalone"
@@ -316,7 +321,7 @@ def test_mode_comes_from_the_loaded_backend_never_from_the_filesystem():
     assert detect_config_mode(addon=True, config_path="/config/x.ini") == "ha_advanced"
 
 
-def test_target_path_rejects_traversal(tmp_path):
+def test_target_path_rejects_traversal(tmp_path: Path) -> None:
     assert target_path("astrameter.ini", str(tmp_path)).endswith("/astrameter.ini")
     assert target_path("../../etc/passwd", str(tmp_path)) == str(tmp_path / "passwd")
     with pytest.raises(ValueError):
@@ -325,7 +330,7 @@ def test_target_path_rejects_traversal(tmp_path):
         target_path(".hidden", str(tmp_path))
 
 
-def test_materialize_copies_a_config_that_already_has_a_file(tmp_path):
+def test_materialize_copies_a_config_that_already_has_a_file(tmp_path: Path) -> None:
     """Verbatim, comments and all — there is nothing to gain by re-rendering."""
     source = tmp_path / "running.ini"
     source.write_text("[GENERAL]\n# keep me\nDEVICE_TYPE = ct002\n")
@@ -340,7 +345,7 @@ def test_materialize_copies_a_config_that_already_has_a_file(tmp_path):
     assert "Written by AstraMeter" in body
 
 
-def test_materialize_renders_a_config_that_has_no_file(tmp_path):
+def test_materialize_renders_a_config_that_has_no_file(tmp_path: Path) -> None:
     """The add-on options case: the settings are the only source there is."""
     parser = new_config_parser()
     parser.read_string(
@@ -356,7 +361,7 @@ def test_materialize_renders_a_config_that_has_no_file(tmp_path):
     assert IniAppConfig(restored).ct("ct002").balance_gain == 0.4
 
 
-def test_materialize_never_clobbers_an_existing_file(tmp_path):
+def test_materialize_never_clobbers_an_existing_file(tmp_path: Path) -> None:
     target_dir = tmp_path / "config"
     target_dir.mkdir()
     existing = target_dir / "astrameter.ini"
@@ -374,7 +379,7 @@ def test_materialize_never_clobbers_an_existing_file(tmp_path):
 # -- the secret sentinel ----------------------------------------------
 
 
-def test_secrets_are_redacted_on_the_way_out():
+def test_secrets_are_redacted_on_the_way_out() -> None:
     sections = {
         "MQTT": {"PASSWORD": "hunter2", "BROKER": "10.0.0.2", "USERNAME": "bob"},
         "MARSTEK": {"MAILBOX": "a@b.c", "TIMEZONE": "Europe/Berlin"},
@@ -387,13 +392,13 @@ def test_secrets_are_redacted_on_the_way_out():
     assert "hunter2" not in repr(out)
 
 
-def test_uri_userinfo_is_redacted():
+def test_uri_userinfo_is_redacted() -> None:
     out = redact_sections({"MQTT_INSIGHTS": {"URI": "mqtt://bob:hunter2@broker:1883"}})
     assert "hunter2" not in out["MQTT_INSIGHTS"]["URI"]
     assert "broker:1883" in out["MQTT_INSIGHTS"]["URI"]
 
 
-def test_editing_a_uri_around_its_redacted_credential_keeps_both():
+def test_editing_a_uri_around_its_redacted_credential_keeps_both() -> None:
     """The bullets stand in for the userinfo only; the host and port are the
     user's to change in the same round trip."""
     current = {"MQTT_INSIGHTS": {"URI": "mqtt://bob:hunter2@old-host:1883"}}
@@ -403,7 +408,7 @@ def test_editing_a_uri_around_its_redacted_credential_keeps_both():
     assert restored["MQTT_INSIGHTS"]["URI"] == "mqtt://bob:hunter2@new-host:8883"
 
 
-def test_sentinel_round_trip_keeps_the_stored_secret():
+def test_sentinel_round_trip_keeps_the_stored_secret() -> None:
     """A client that never saw the real password cannot send it back, so an
     unrelated edit must not blank it."""
     current = {"MQTT": {"PASSWORD": "hunter2", "BROKER": "10.0.0.2"}}
@@ -413,13 +418,13 @@ def test_sentinel_round_trip_keeps_the_stored_secret():
     assert restored["MQTT"]["BROKER"] == "10.0.0.9"
 
 
-def test_a_real_new_secret_is_written_through():
+def test_a_real_new_secret_is_written_through() -> None:
     current = {"MQTT": {"PASSWORD": "old"}}
     restored = restore_sections({"MQTT": {"PASSWORD": "brand-new"}}, current)
     assert restored["MQTT"]["PASSWORD"] == "brand-new"
 
 
-def test_empty_secret_is_not_replaced_by_a_sentinel():
+def test_empty_secret_is_not_replaced_by_a_sentinel() -> None:
     """An unset password must render as empty, not as eight bullets the user
     would then have to clear."""
     out = redact_sections({"MQTT": {"PASSWORD": ""}})
@@ -429,7 +434,7 @@ def test_empty_secret_is_not_replaced_by_a_sentinel():
 # -- serializer helpers -----------------------------------------------
 
 
-def test_as_wire_dict_expands_nested_dataclasses_and_drops_none():
+def test_as_wire_dict_expands_nested_dataclasses_and_drops_none() -> None:
     @dataclasses.dataclass
     class Inner:
         a: int = 1

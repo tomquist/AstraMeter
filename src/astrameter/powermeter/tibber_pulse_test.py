@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -6,7 +6,9 @@ from astrameter.powermeter import TibberPulse
 from astrameter.powermeter.sml_test import _build_sml_frame
 
 
-async def test_get_powermeter_watts_decodes_multiphase(mock_aiohttp_session):
+async def test_get_powermeter_watts_decodes_multiphase(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     frame = _build_sml_frame(power_agg=1234, power_l1=400, power_l2=500, power_l3=334)
     mock_aiohttp_session.set_read(frame)
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
@@ -17,7 +19,9 @@ async def test_get_powermeter_watts_decodes_multiphase(mock_aiohttp_session):
         await pm.stop()
 
 
-async def test_get_powermeter_watts_builds_authenticated_url(mock_aiohttp_session):
+async def test_get_powermeter_watts_builds_authenticated_url(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     frame = _build_sml_frame(power_l1=100, power_l2=200, power_l3=300)
     mock_aiohttp_session.set_read(frame)
     with patch(
@@ -42,7 +46,7 @@ async def test_get_powermeter_watts_builds_authenticated_url(mock_aiohttp_sessio
     assert url == "http://10.0.0.5/data.json?node_id=2"
 
 
-async def test_timeout_is_configurable(mock_aiohttp_session):
+async def test_timeout_is_configurable(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_read(_build_sml_frame(power_agg=100))
     with patch(
         "aiohttp.ClientSession", return_value=mock_aiohttp_session
@@ -55,8 +59,8 @@ async def test_timeout_is_configurable(mock_aiohttp_session):
 
 
 async def test_get_powermeter_watts_raises_on_undecodable_telegram(
-    mock_aiohttp_session,
-):
+    mock_aiohttp_session: MagicMock,
+) -> None:
     mock_aiohttp_session.set_read(b"not a valid sml frame")
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         pm = TibberPulse("127.0.0.1", "pw")
@@ -66,7 +70,9 @@ async def test_get_powermeter_watts_raises_on_undecodable_telegram(
         await pm.stop()
 
 
-async def test_transient_undecodable_reuses_last_good(mock_aiohttp_session):
+async def test_transient_undecodable_reuses_last_good(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     # A bridge serving a push source occasionally returns an undecodable
     # telegram; within the staleness window the last good reading is reused
     # instead of raising (#518).
@@ -85,7 +91,9 @@ async def test_transient_undecodable_reuses_last_good(mock_aiohttp_session):
         await pm.stop()
 
 
-async def test_stale_undecodable_raises_after_window(mock_aiohttp_session):
+async def test_stale_undecodable_raises_after_window(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     now = [1000.0]
     frame = _build_sml_frame(power_l1=100, power_l2=200, power_l3=300)
     mock_aiohttp_session.set_read(frame)
@@ -103,8 +111,8 @@ async def test_stale_undecodable_raises_after_window(mock_aiohttp_session):
 
 
 async def test_get_powermeter_watts_raises_when_decoder_returns_no_powers(
-    mock_aiohttp_session,
-):
+    mock_aiohttp_session: MagicMock,
+) -> None:
     # Defensive: an empty decode result is treated as a failed read, not 0 W.
     mock_aiohttp_session.set_read(b"frame-bytes-ignored-by-mock")
     with (

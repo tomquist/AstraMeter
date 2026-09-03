@@ -12,7 +12,7 @@ class _RecordingTransport:
     def __init__(self) -> None:
         self.sent: list[bytes] = []
 
-    def sendto(self, data: bytes, addr) -> None:
+    def sendto(self, data: bytes, addr: tuple) -> None:
         self.sent.append(data)
 
 
@@ -230,7 +230,9 @@ async def _gated_before_send(ct: CT002, gate: asyncio.Event) -> list[int]:
     returns a fixed grid reading.  Returns a one-element call counter list."""
     calls = [0]
 
-    async def before_send(_addr, _request=None, _consumer_id=None):
+    async def before_send(
+        _addr: tuple, _request: object = None, _consumer_id: str | None = None
+    ) -> list[float]:
         calls[0] += 1
         await gate.wait()
         return [150.0, 0.0, 0.0]
@@ -334,7 +336,9 @@ async def test_non_finite_reading_holds_and_control_recovers(bad: float) -> None
     ct = CT002(ct_mac="", active_control=True, clock=clock)
     grid = [300.0]
 
-    async def before_send(_addr, _request=None, _consumer_id=None):
+    async def before_send(
+        _addr: tuple, _request: object = None, _consumer_id: str | None = None
+    ) -> list[float]:
         return [grid[0], 0.0, 0.0]
 
     ct.before_send = before_send

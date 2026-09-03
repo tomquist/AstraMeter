@@ -6,7 +6,7 @@ import pytest
 from .throttling import ThrottledPowermeter
 
 
-async def test_no_throttling_always_fetches_fresh_values():
+async def test_no_throttling_always_fetches_fresh_values() -> None:
     """Test that when throttling is disabled, fresh values are always fetched."""
     mock_pm = Mock()
     mock_pm.get_powermeter_watts = AsyncMock(return_value=[100.0, 200.0, 300.0])
@@ -21,7 +21,7 @@ async def test_no_throttling_always_fetches_fresh_values():
     assert mock_pm.get_powermeter_watts.call_count == 2
 
 
-async def test_throttling_waits_for_interval():
+async def test_throttling_waits_for_interval() -> None:
     """Test that throttling waits for remaining time before fetching new values."""
     mock_pm = Mock()
     mock_pm.get_powermeter_watts = AsyncMock(return_value=[100.0, 200.0, 300.0])
@@ -44,7 +44,7 @@ async def test_throttling_waits_for_interval():
     assert elapsed >= 0.2
 
 
-async def test_throttling_fetches_fresh_after_interval():
+async def test_throttling_fetches_fresh_after_interval() -> None:
     """Test that fresh values are fetched after throttling interval passes."""
     mock_pm = Mock()
     mock_pm.get_powermeter_watts = AsyncMock(return_value=[100.0, 200.0, 300.0])
@@ -64,7 +64,7 @@ async def test_throttling_fetches_fresh_after_interval():
     assert mock_pm.get_powermeter_watts.call_count == 2
 
 
-async def test_wait_for_message_passthrough():
+async def test_wait_for_message_passthrough() -> None:
     """Test that wait_for_message is passed through to wrapped powermeter."""
     mock_pm = Mock()
     mock_pm.wait_for_message = AsyncMock()
@@ -74,7 +74,7 @@ async def test_wait_for_message_passthrough():
     mock_pm.wait_for_message.assert_called_once_with(30)
 
 
-async def test_wait_for_next_message_passthrough():
+async def test_wait_for_next_message_passthrough() -> None:
     mock_pm = Mock()
     mock_pm.wait_for_next_message = AsyncMock()
     throttled = ThrottledPowermeter(mock_pm, throttle_interval=1.0)
@@ -83,7 +83,7 @@ async def test_wait_for_next_message_passthrough():
     mock_pm.wait_for_next_message.assert_called_once_with(15)
 
 
-async def test_exception_handling_with_cache():
+async def test_exception_handling_with_cache() -> None:
     """Test that cached values are returned on error after a successful fetch."""
     mock_pm = Mock()
     mock_pm.start = AsyncMock()
@@ -102,7 +102,7 @@ async def test_exception_handling_with_cache():
     assert result2 == [100.0, 200.0]
 
 
-async def test_exception_raises_without_cache():
+async def test_exception_raises_without_cache() -> None:
     """Test that exceptions propagate if no cached values exist."""
     mock_pm = Mock()
     mock_pm.start = AsyncMock()
@@ -116,7 +116,7 @@ async def test_exception_raises_without_cache():
         await throttled.get_powermeter_watts()
 
 
-async def test_throttled_raw_bypasses_get_and_throttle_coalescing():
+async def test_throttled_raw_bypasses_get_and_throttle_coalescing() -> None:
     mock_pm = Mock()
     get_m = AsyncMock(return_value=[1.0])
     raw_m = AsyncMock(return_value=[2.0, 3.0, 4.0])

@@ -1,4 +1,5 @@
 import struct
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,7 +17,7 @@ from astrameter.powermeter import ModbusPowermeter
 # ---------------------------------------------------------------------------
 
 
-async def test_get_powermeter_watts():
+async def test_get_powermeter_watts() -> None:
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.connect = AsyncMock(return_value=True)
@@ -35,7 +36,7 @@ async def test_get_powermeter_watts():
         await pm.stop()
 
 
-async def test_float32():
+async def test_float32() -> None:
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.connect = AsyncMock(return_value=True)
@@ -62,7 +63,7 @@ async def test_float32():
         await pm.stop()
 
 
-async def test_input_registers():
+async def test_input_registers() -> None:
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.connect = AsyncMock(return_value=True)
@@ -80,7 +81,7 @@ async def test_input_registers():
         await pm.stop()
 
 
-async def test_start_creates_client_and_connects():
+async def test_start_creates_client_and_connects() -> None:
     pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1)
     assert pm.client is None
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
@@ -92,13 +93,13 @@ async def test_start_creates_client_and_connects():
         assert pm.client is mock_instance
 
 
-async def test_read_before_start_raises():
+async def test_read_before_start_raises() -> None:
     pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1)
     with pytest.raises(RuntimeError, match="Client not started"):
         await pm.get_powermeter_watts()
 
 
-async def test_udp_transport_creates_udp_client():
+async def test_udp_transport_creates_udp_client() -> None:
     pm = ModbusPowermeter("192.168.1.14", 502, 1, 0, 1, transport="UDP")
     with patch("astrameter.powermeter.modbus.AsyncModbusUdpClient") as MockClient:
         mock_instance = MockClient.return_value
@@ -108,7 +109,7 @@ async def test_udp_transport_creates_udp_client():
         assert pm.client is mock_instance
 
 
-async def test_invalid_transport_raises():
+async def test_invalid_transport_raises() -> None:
     with pytest.raises(ValueError, match="Unsupported transport"):
         ModbusPowermeter("192.168.1.14", 502, 1, 0, 1, transport="BOGUS")
 
@@ -118,7 +119,7 @@ async def test_invalid_transport_raises():
 # ---------------------------------------------------------------------------
 
 
-async def test_stop_closes_and_resets():
+async def test_stop_closes_and_resets() -> None:
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
         mock_instance = MockClient.return_value
         mock_instance.connect = AsyncMock(return_value=True)
@@ -131,7 +132,7 @@ async def test_stop_closes_and_resets():
         assert pm.client is None
 
 
-async def test_start_is_idempotent():
+async def test_start_is_idempotent() -> None:
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
         mock_instance = MockClient.return_value
         mock_instance.connect = AsyncMock(return_value=True)
@@ -143,7 +144,7 @@ async def test_start_is_idempotent():
         mock_instance.connect.assert_awaited_once()
 
 
-async def test_read_error_raises():
+async def test_read_error_raises() -> None:
     with patch("astrameter.powermeter.modbus.AsyncModbusTcpClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.connect = AsyncMock(return_value=True)
@@ -172,7 +173,7 @@ def _float32_to_registers(value: float) -> list[int]:
 
 
 @pytest.fixture
-async def modbus_server():
+async def modbus_server() -> AsyncIterator[int]:
     """Start a local Modbus TCP server on an ephemeral port."""
     # Holding registers: address 0+ with some known values
     hr_values = [0] * 100
@@ -194,12 +195,13 @@ async def modbus_server():
     context = ModbusServerContext(slaves=store, single=True)
     server = ModbusTcpServer(context, address=("127.0.0.1", 0))
     await server.listen()
-    port = server.transport.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    sockets = server.transport.sockets  # type: ignore[attr-defined]
+    port = sockets[0].getsockname()[1]
     yield port
     await server.shutdown()
 
 
-async def test_e2e_uint16_holding(modbus_server: int):
+async def test_e2e_uint16_holding(modbus_server: int) -> None:
     pm = ModbusPowermeter("127.0.0.1", modbus_server, 1, 0, 1)
     await pm.start()
     try:
@@ -209,7 +211,7 @@ async def test_e2e_uint16_holding(modbus_server: int):
         await pm.stop()
 
 
-async def test_e2e_float32(modbus_server: int):
+async def test_e2e_float32(modbus_server: int) -> None:
     pm = ModbusPowermeter(
         "127.0.0.1",
         modbus_server,
@@ -228,7 +230,7 @@ async def test_e2e_float32(modbus_server: int):
         await pm.stop()
 
 
-async def test_e2e_input_registers(modbus_server: int):
+async def test_e2e_input_registers(modbus_server: int) -> None:
     pm = ModbusPowermeter(
         "127.0.0.1",
         modbus_server,
@@ -246,7 +248,7 @@ async def test_e2e_input_registers(modbus_server: int):
 
 
 @pytest.fixture
-async def modbus_udp_server():
+async def modbus_udp_server() -> AsyncIterator[int]:
     """Start a local Modbus UDP server on an ephemeral port."""
     hr_values = [0] * 100
     hr_values[0] = 500
@@ -264,7 +266,7 @@ async def modbus_udp_server():
     await server.shutdown()
 
 
-async def test_e2e_udp_uint16_holding(modbus_udp_server: int):
+async def test_e2e_udp_uint16_holding(modbus_udp_server: int) -> None:
     pm = ModbusPowermeter("127.0.0.1", modbus_udp_server, 1, 0, 1, transport="UDP")
     await pm.start()
     try:

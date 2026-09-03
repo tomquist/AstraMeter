@@ -10,6 +10,8 @@ setpoint that droops instead of nulling the grid).
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from _ct002_e2e_backend import HarnessClock, find_free_ports
 
@@ -132,7 +134,9 @@ class _MixedHarness:
             batteries=[], load_model=self.load_model, host="127.0.0.1", port=http_port
         )
 
-        def mk(mac: str, dev: str, initial_soc: float = 0.5, **kw) -> BatterySimulator:
+        def mk(
+            mac: str, dev: str, initial_soc: float = 0.5, **kw: Any
+        ) -> BatterySimulator:
             return BatterySimulator(
                 mac=mac,
                 phase="A",

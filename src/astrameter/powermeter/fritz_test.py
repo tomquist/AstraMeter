@@ -55,7 +55,7 @@ def _session(get_responses: list[tuple[str, int]]) -> MagicMock:
     return session
 
 
-async def test_reads_import_branch_as_signed_net_power():
+async def test_reads_import_branch_as_signed_net_power() -> None:
     session = _session(
         [(CHALLENGE_XML, 200), (SID_XML, 200), (_device_list(power1="-71000"), 200)]
     )
@@ -66,7 +66,7 @@ async def test_reads_import_branch_as_signed_net_power():
         await meter.stop()
 
 
-async def test_explicit_export_branch_suffix():
+async def test_explicit_export_branch_suffix() -> None:
     session = _session(
         [(CHALLENGE_XML, 200), (SID_XML, 200), (_device_list(power2="120000"), 200)]
     )
@@ -77,7 +77,7 @@ async def test_explicit_export_branch_suffix():
         await meter.stop()
 
 
-async def test_relogin_on_expired_sid():
+async def test_relogin_on_expired_sid() -> None:
     session = _session(
         [
             (CHALLENGE_XML, 200),
@@ -95,7 +95,7 @@ async def test_relogin_on_expired_sid():
         await meter.stop()
 
 
-async def test_login_failure_raises():
+async def test_login_failure_raises() -> None:
     session = _session([(CHALLENGE_XML, 200), (LOGIN_FAILED_XML, 200)])
     with patch("aiohttp.ClientSession", return_value=session):
         meter = FritzSmartEnergy("fritz.box", "user", "wrong", "12345 0123456")
@@ -105,7 +105,7 @@ async def test_login_failure_raises():
         await meter.stop()
 
 
-async def test_unknown_ain_raises():
+async def test_unknown_ain_raises() -> None:
     session = _session([(CHALLENGE_XML, 200), (SID_XML, 200), (_device_list(), 200)])
     with patch("aiohttp.ClientSession", return_value=session):
         meter = FritzSmartEnergy("fritz.box", "user", "pass", "99999 9999999")
@@ -115,43 +115,43 @@ async def test_unknown_ain_raises():
         await meter.stop()
 
 
-async def test_get_before_start_raises():
+async def test_get_before_start_raises() -> None:
     meter = FritzSmartEnergy("fritz.box", "user", "pass", "12345 0123456")
     with pytest.raises(RuntimeError, match="not started"):
         await meter.get_powermeter_watts()
 
 
-def test_ain_suffix_appended_by_default():
+def test_ain_suffix_appended_by_default() -> None:
     meter = FritzSmartEnergy("fritz.box", "user", "pass", "12345 0123456")
     assert meter._ain == "123450123456-1"
 
 
-def test_ain_suffix_preserved():
+def test_ain_suffix_preserved() -> None:
     meter = FritzSmartEnergy("fritz.box", "user", "pass", "123450123456-2")
     assert meter._ain == "123450123456-2"
 
 
-def test_empty_ain_raises():
+def test_empty_ain_raises() -> None:
     with pytest.raises(ValueError, match="requires an AIN"):
         FritzSmartEnergy("fritz.box", "user", "pass", "")
 
 
-def test_base_url_defaults_to_http():
+def test_base_url_defaults_to_http() -> None:
     meter = FritzSmartEnergy("192.168.1.1", "u", "p", "12345 0123456")
     assert meter._base_url == "http://192.168.1.1"
 
 
-def test_base_url_https_when_tls():
+def test_base_url_https_when_tls() -> None:
     meter = FritzSmartEnergy("fritz.box", "u", "p", "12345 0123456", use_tls=True)
     assert meter._base_url == "https://fritz.box"
 
 
-def test_base_url_explicit_scheme_preserved():
+def test_base_url_explicit_scheme_preserved() -> None:
     meter = FritzSmartEnergy("https://fritz.box:443/", "u", "p", "12345 0123456")
     assert meter._base_url == "https://fritz.box:443"
 
 
-def test_https_host_honors_verify_ssl_false():
+def test_https_host_honors_verify_ssl_false() -> None:
     # An explicit https:// HOST (without use_tls) must still disable verification.
     meter = FritzSmartEnergy(
         "https://fritz.box", "u", "p", "12345 0123456", verify_ssl=False
@@ -159,13 +159,13 @@ def test_https_host_honors_verify_ssl_false():
     assert meter._ssl is False
 
 
-def test_http_host_ignores_verify_ssl():
+def test_http_host_ignores_verify_ssl() -> None:
     # Plain http: verification flag is irrelevant, leave aiohttp defaults.
     meter = FritzSmartEnergy("fritz.box", "u", "p", "12345 0123456", verify_ssl=False)
     assert meter._ssl is None
 
 
-def test_compute_login_response_pbkdf2():
+def test_compute_login_response_pbkdf2() -> None:
     challenge = "2$10000$5A1711$2000$5A1722"
     password = "1example!"
     hash1 = hashlib.pbkdf2_hmac(
@@ -175,7 +175,7 @@ def test_compute_login_response_pbkdf2():
     assert compute_login_response(challenge, password) == f"5A1722${hash2.hex()}"
 
 
-def test_compute_login_response_md5_legacy():
+def test_compute_login_response_md5_legacy() -> None:
     # AVM-documented legacy challenge/response example.
     assert (
         compute_login_response("1234567z", "äbc")

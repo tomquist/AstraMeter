@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from astrameter.web_config import (
@@ -8,20 +10,20 @@ from astrameter.web_config import (
 
 
 @pytest.fixture()
-def ini_path(tmp_path):
+def ini_path(tmp_path: Path) -> str:
     return str(tmp_path / "test.ini")
 
 
 # ---------- read_config_as_dict ----------
 
 
-def test_read_nonexistent_file(ini_path):
+def test_read_nonexistent_file(ini_path: str) -> None:
     sections, order = read_config_as_dict(ini_path)
     assert sections == {}
     assert order == []
 
 
-def test_read_simple(ini_path):
+def test_read_simple(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[SEC1]\nKEY = val\n\n[SEC2]\nA = 1\n")
     sections, order = read_config_as_dict(ini_path)
@@ -29,7 +31,7 @@ def test_read_simple(ini_path):
     assert sections == {"SEC1": {"KEY": "val"}, "SEC2": {"A": "1"}}
 
 
-def test_read_preserves_key_case(ini_path):
+def test_read_preserves_key_case(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[S]\nMyKey = v\nANOTHER_KEY = w\n")
     sections, _ = read_config_as_dict(ini_path)
@@ -40,46 +42,46 @@ def test_read_preserves_key_case(ini_path):
 # ---------- _validate_config_payload ----------
 
 
-def test_validate_good_payload():
+def test_validate_good_payload() -> None:
     _validate_config_payload({"SEC": {"K": "V"}}, ["SEC"])
 
 
-def test_validate_order_not_list():
+def test_validate_order_not_list() -> None:
     with pytest.raises(ValueError, match="order"):
         _validate_config_payload({"S": {}}, "S")  # type: ignore[arg-type]
 
 
-def test_validate_empty_section_name():
+def test_validate_empty_section_name() -> None:
     with pytest.raises(ValueError, match="Invalid section name"):
         _validate_config_payload({"": {"K": "V"}}, [""])
 
 
-def test_validate_section_name_with_bracket():
+def test_validate_section_name_with_bracket() -> None:
     with pytest.raises(ValueError, match="Invalid section name"):
         _validate_config_payload({"a]b": {}}, ["a]b"])
 
 
-def test_validate_section_not_dict():
+def test_validate_section_not_dict() -> None:
     with pytest.raises(ValueError, match="must map to an object"):
         _validate_config_payload({"S": "bad"}, ["S"])  # type: ignore[dict-item]
 
 
-def test_validate_empty_key():
+def test_validate_empty_key() -> None:
     with pytest.raises(ValueError, match="Invalid key"):
         _validate_config_payload({"S": {"": "v"}}, ["S"])
 
 
-def test_validate_key_with_newline():
+def test_validate_key_with_newline() -> None:
     with pytest.raises(ValueError, match="Invalid key"):
         _validate_config_payload({"S": {"a\nb": "v"}}, ["S"])
 
 
-def test_validate_value_with_newline():
+def test_validate_value_with_newline() -> None:
     with pytest.raises(ValueError, match="Invalid value"):
         _validate_config_payload({"S": {"k": "a\nb"}}, ["S"])
 
 
-def test_validate_duplicate_order():
+def test_validate_duplicate_order() -> None:
     with pytest.raises(ValueError, match="duplicate section names"):
         _validate_config_payload({"S": {"k": "v"}}, ["S", "S"])
 
@@ -87,7 +89,7 @@ def test_validate_duplicate_order():
 # ---------- write_config_from_dict — new file ----------
 
 
-def test_write_new_file(ini_path):
+def test_write_new_file(ini_path: str) -> None:
     write_config_from_dict(
         ini_path,
         {"SEC1": {"A": "1"}, "SEC2": {"B": "2"}},
@@ -99,7 +101,7 @@ def test_write_new_file(ini_path):
     assert sections["SEC2"] == {"B": "2"}
 
 
-def test_write_new_file_respects_order(ini_path):
+def test_write_new_file_respects_order(ini_path: str) -> None:
     write_config_from_dict(
         ini_path,
         {"SEC2": {"B": "2"}, "SEC1": {"A": "1"}},
@@ -112,7 +114,7 @@ def test_write_new_file_respects_order(ini_path):
 # ---------- write_config_from_dict — update existing ----------
 
 
-def test_update_preserves_comments(ini_path):
+def test_update_preserves_comments(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("# top comment\n[SEC]\n# about KEY\nKEY = old\n")
     write_config_from_dict(ini_path, {"SEC": {"KEY": "new"}}, ["SEC"])
@@ -124,7 +126,7 @@ def test_update_preserves_comments(ini_path):
     assert "old" not in content
 
 
-def test_update_preserves_semicolon_comments(ini_path):
+def test_update_preserves_semicolon_comments(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[SEC]\n; semicolon comment\nKEY = val\n")
     write_config_from_dict(ini_path, {"SEC": {"KEY": "val"}}, ["SEC"])
@@ -133,7 +135,7 @@ def test_update_preserves_semicolon_comments(ini_path):
     assert "; semicolon comment" in content
 
 
-def test_update_adds_new_key(ini_path):
+def test_update_adds_new_key(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[SEC]\nA = 1\n")
     write_config_from_dict(ini_path, {"SEC": {"A": "1", "B": "2"}}, ["SEC"])
@@ -141,7 +143,7 @@ def test_update_adds_new_key(ini_path):
     assert sections["SEC"] == {"A": "1", "B": "2"}
 
 
-def test_update_removes_key(ini_path):
+def test_update_removes_key(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[SEC]\nA = 1\nB = 2\n")
     write_config_from_dict(ini_path, {"SEC": {"A": "1"}}, ["SEC"])
@@ -149,7 +151,7 @@ def test_update_removes_key(ini_path):
     assert sections["SEC"] == {"A": "1"}
 
 
-def test_update_removes_section(ini_path):
+def test_update_removes_section(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[KEEP]\nA = 1\n\n[DROP]\nB = 2\n")
     write_config_from_dict(ini_path, {"KEEP": {"A": "1"}}, ["KEEP"])
@@ -158,7 +160,7 @@ def test_update_removes_section(ini_path):
     assert "DROP" not in sections
 
 
-def test_update_adds_section(ini_path):
+def test_update_adds_section(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[OLD]\nA = 1\n")
     write_config_from_dict(
@@ -171,7 +173,7 @@ def test_update_adds_section(ini_path):
     assert sections["NEW"] == {"B": "2"}
 
 
-def test_update_reorders_sections(ini_path):
+def test_update_reorders_sections(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[A]\nX = 1\n\n[B]\nY = 2\n\n[C]\nZ = 3\n")
     write_config_from_dict(
@@ -183,7 +185,7 @@ def test_update_reorders_sections(ini_path):
     assert order == ["C", "A", "B"]
 
 
-def test_update_preserves_case(ini_path):
+def test_update_preserves_case(ini_path: str) -> None:
     with open(ini_path, "w") as f:
         f.write("[My_Section]\nMyKey = old\n")
     write_config_from_dict(ini_path, {"My_Section": {"MyKey": "new"}}, ["My_Section"])
@@ -195,7 +197,7 @@ def test_update_preserves_case(ini_path):
 # ---------- round-trip ----------
 
 
-def test_roundtrip_identity(ini_path):
+def test_roundtrip_identity(ini_path: str) -> None:
     """Writing back the same data that was read should not change the file."""
     original = "[SEC1]\nA = 1\nB = 2\n\n[SEC2]\nC = 3\n"
     with open(ini_path, "w") as f:
@@ -207,7 +209,7 @@ def test_roundtrip_identity(ini_path):
     assert result.strip() == original.strip()
 
 
-def test_roundtrip_with_comments(ini_path):
+def test_roundtrip_with_comments(ini_path: str) -> None:
     original = "# file header\n[SEC]\n# key comment\nKEY = val\n"
     with open(ini_path, "w") as f:
         f.write(original)
@@ -221,7 +223,7 @@ def test_roundtrip_with_comments(ini_path):
 # ---------- sections in order not in dict are skipped ----------
 
 
-def test_order_with_extra_names(ini_path):
+def test_order_with_extra_names(ini_path: str) -> None:
     """Section names in *order* that aren't in *sections* are ignored."""
     write_config_from_dict(
         ini_path,
@@ -233,7 +235,7 @@ def test_order_with_extra_names(ini_path):
     assert sections == {"A": {"X": "1"}}
 
 
-def test_sections_not_in_order_appended(ini_path):
+def test_sections_not_in_order_appended(ini_path: str) -> None:
     """Sections present in *sections* but absent from *order* are appended."""
     write_config_from_dict(
         ini_path,
@@ -249,7 +251,7 @@ def test_sections_not_in_order_appended(ini_path):
 # ---------- _atomic_write_lines fallbacks ----------
 
 
-def test_atomic_write_creates_file(ini_path):
+def test_atomic_write_creates_file(ini_path: str) -> None:
     from astrameter.web_config import _atomic_write_lines
 
     _atomic_write_lines(ini_path, ["hello\n", "world\n"])
@@ -257,7 +259,7 @@ def test_atomic_write_creates_file(ini_path):
         assert f.read() == "hello\nworld\n"
 
 
-def test_atomic_write_overwrites(ini_path):
+def test_atomic_write_overwrites(ini_path: str) -> None:
     from astrameter.web_config import _atomic_write_lines
 
     with open(ini_path, "w") as f:

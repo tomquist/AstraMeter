@@ -1,9 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from astrameter.powermeter import Emlog
 
 
-async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
+async def test_get_powermeter_watts_no_calculate(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     mock_aiohttp_session.set_json({"Leistung170": "200"})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         emlog = Emlog("127.0.0.1", "1", json_power_calculate=False)
@@ -12,7 +14,9 @@ async def test_get_powermeter_watts_no_calculate(mock_aiohttp_session):
         await emlog.stop()
 
 
-async def test_get_powermeter_watts_with_calculate(mock_aiohttp_session):
+async def test_get_powermeter_watts_with_calculate(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     mock_aiohttp_session.set_json({"Leistung170": "400", "Leistung270": "150"})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         emlog = Emlog("127.0.0.1", "1", json_power_calculate=True)

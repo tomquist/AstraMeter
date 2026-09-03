@@ -1,12 +1,13 @@
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 
 @pytest.fixture
-def mock_aiohttp_session():
+def mock_aiohttp_session() -> MagicMock:
     """Create a mock aiohttp.ClientSession that returns configurable JSON."""
-    json_data = {}
+    json_data: dict[str, Any] = {}
 
     mock_resp = MagicMock()
     mock_resp.json = AsyncMock(return_value=json_data)
@@ -16,7 +17,7 @@ def mock_aiohttp_session():
     mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
     mock_resp.__aexit__ = AsyncMock(return_value=False)
 
-    post_json_data = {}
+    post_json_data: dict[str, Any] = {}
 
     mock_post_resp = MagicMock()
     mock_post_resp.json = AsyncMock(return_value=post_json_data)
@@ -30,13 +31,13 @@ def mock_aiohttp_session():
     session.post = MagicMock(return_value=mock_post_resp)
     session.close = AsyncMock()
 
-    def set_json(data):
+    def set_json(data: Any) -> None:
         mock_resp.json.return_value = data
 
-    def set_post_json(data):
+    def set_post_json(data: Any) -> None:
         mock_post_resp.json.return_value = data
 
-    def set_read(data):
+    def set_read(data: bytes) -> None:
         mock_resp.read.return_value = data
 
     session.set_json = set_json

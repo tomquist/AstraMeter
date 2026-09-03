@@ -1,4 +1,7 @@
 import argparse
+from pathlib import Path
+
+import pytest
 
 from astrameter import main as main_module
 from astrameter.config.addon import AddonAppConfig
@@ -10,7 +13,7 @@ class NoSupervisor:
 
     base_url = "http://supervisor"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.lookups = 0
 
     def mqtt_service(self):
@@ -22,7 +25,7 @@ class NoSupervisor:
         return ""
 
 
-def test_marstek_password_with_percent_is_read_verbatim(tmp_path):
+def test_marstek_password_with_percent_is_read_verbatim(tmp_path: Path) -> None:
     """No interpolation: a literal '%' in a credential survives."""
     path = tmp_path / "config.ini"
     path.write_text(
@@ -37,7 +40,7 @@ def test_marstek_password_with_percent_is_read_verbatim(tmp_path):
     assert marstek.password == "abc%def/123"
 
 
-def test_load_config_reads_the_config_file_by_default(tmp_path):
+def test_load_config_reads_the_config_file_by_default(tmp_path: Path) -> None:
     path = tmp_path / "config.ini"
     path.write_text("[GENERAL]\nDEVICE_TYPE = ct002\n", encoding="utf-8")
 
@@ -50,7 +53,7 @@ def test_load_config_reads_the_config_file_by_default(tmp_path):
     assert config.path == str(path)
 
 
-def test_load_config_takes_the_addon_options(monkeypatch):
+def test_load_config_takes_the_addon_options(monkeypatch: pytest.MonkeyPatch) -> None:
     """--addon skips the file entirely: the add-on options are the config."""
     monkeypatch.setattr(
         main_module.addon, "SupervisorClient", lambda *a, **k: NoSupervisor()
@@ -68,7 +71,9 @@ def test_load_config_takes_the_addon_options(monkeypatch):
     assert config.path is None
 
 
-def test_load_config_rereads_the_addon_options_on_restart(monkeypatch):
+def test_load_config_rereads_the_addon_options_on_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A restart re-reads the options, picking up changes made meanwhile."""
     monkeypatch.setattr(
         main_module.addon, "SupervisorClient", lambda *a, **k: NoSupervisor()
@@ -83,7 +88,9 @@ def test_load_config_rereads_the_addon_options_on_restart(monkeypatch):
     assert config.general().device_types == ["ct003"]
 
 
-def test_load_config_resolves_the_supervisor_lookups_up_front(monkeypatch):
+def test_load_config_resolves_the_supervisor_lookups_up_front(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Both startup and the restart branch load through here, so the blocking
     Supervisor lookups can never be left to the running event loop."""
     supervisor = NoSupervisor()
@@ -101,7 +108,7 @@ def test_load_config_resolves_the_supervisor_lookups_up_front(monkeypatch):
     assert supervisor.lookups == 2
 
 
-def test_cli_throttle_override_reaches_the_power_sources(tmp_path):
+def test_cli_throttle_override_reaches_the_power_sources(tmp_path: Path) -> None:
     path = tmp_path / "config.ini"
     path.write_text("[GENERAL]\nTHROTTLE_INTERVAL = 1\n", encoding="utf-8")
     config = IniAppConfig.from_file(str(path))

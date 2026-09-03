@@ -2,48 +2,20 @@
 
 import pytest
 
+from .conftest import FakePowermeter
 from .hampel import HampelPowermeter
 
 
-class FakePowermeter:
-    """Minimal powermeter stub for testing wrappers."""
-
-    def __init__(self, values: list[float] | None = None):
-        self._values: list[float] = values if values is not None else [0.0]
-        self.started = False
-        self.stopped = False
-        self.reset_count = 0
-
-    def set(self, values: list[float]) -> None:
-        self._values = values
-
-    async def get_powermeter_watts(self) -> list[float]:
-        return list(self._values)
-
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        return list(self._values)
-
-    async def wait_for_message(self, timeout=5):
-        pass
-
-    async def start(self):
-        self.started = True
-
-    async def stop(self):
-        self.stopped = True
-
-    def reset(self):
-        self.reset_count += 1
-
-
-async def _push(hp: HampelPowermeter, fake: FakePowermeter, values: list[float]):
+async def _push(
+    hp: HampelPowermeter, fake: FakePowermeter, values: list[float]
+) -> list[float]:
     fake.set(values)
     return await hp.get_powermeter_watts()
 
 
 class TestHampelPowermeter:
     @pytest.mark.asyncio
-    async def test_warmup_passes_through(self):
+    async def test_warmup_passes_through(self) -> None:
         fake = FakePowermeter([100.0])
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0)
         for _ in range(4):
@@ -51,7 +23,7 @@ class TestHampelPowermeter:
             assert result == [100.0]
 
     @pytest.mark.asyncio
-    async def test_clean_signal_not_modified(self):
+    async def test_clean_signal_not_modified(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0)
         # Fill window with clean samples
@@ -62,7 +34,7 @@ class TestHampelPowermeter:
         assert result == [100.5]
 
     @pytest.mark.asyncio
-    async def test_single_spike_replaced_by_median(self):
+    async def test_single_spike_replaced_by_median(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0)
         for v in [100.0, 102.0, 98.0, 101.0, 99.0]:
@@ -74,7 +46,7 @@ class TestHampelPowermeter:
         assert result[0] != 10000.0
 
     @pytest.mark.asyncio
-    async def test_spike_in_window_does_not_stop_later_detection(self):
+    async def test_spike_in_window_does_not_stop_later_detection(self) -> None:
         """A rejected sample stays in the window, and that is fine: the median
         is what the filter reads, and one outlier in five cannot move it.
         """
@@ -90,7 +62,7 @@ class TestHampelPowermeter:
         assert await _push(hp, fake, [9000.0]) != [9000.0]
 
     @pytest.mark.asyncio
-    async def test_sustained_change_is_followed_not_latched(self):
+    async def test_sustained_change_is_followed_not_latched(self) -> None:
         """The regression this filter was rewritten for.
 
         Rejecting a *spike* is the job; rejecting the new normal is not. When
@@ -114,7 +86,7 @@ class TestHampelPowermeter:
         )
 
     @pytest.mark.asyncio
-    async def test_near_zero_total_does_not_amplify_phases(self):
+    async def test_near_zero_total_does_not_amplify_phases(self) -> None:
         """Scaling phases so their sum matches the median must stay bounded.
 
         With only an exact-zero guard, a dropout whose phases nearly cancel
@@ -132,7 +104,7 @@ class TestHampelPowermeter:
         assert max(abs(v) for v in result) <= 1100.0
 
     @pytest.mark.asyncio
-    async def test_constant_signal_mad_zero_no_floor(self):
+    async def test_constant_signal_mad_zero_no_floor(self) -> None:
         """MAD=0 with min_threshold=0 → threshold is 0 → documented
         limitation: spikes pass through."""
         fake = FakePowermeter()
@@ -143,7 +115,7 @@ class TestHampelPowermeter:
         assert result == [500.0]
 
     @pytest.mark.asyncio
-    async def test_min_threshold_floor_catches_spike_on_constant(self):
+    async def test_min_threshold_floor_catches_spike_on_constant(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
         for _ in range(5):
@@ -153,7 +125,7 @@ class TestHampelPowermeter:
         assert result == [0.0]
 
     @pytest.mark.asyncio
-    async def test_min_threshold_floor_lets_small_changes_pass(self):
+    async def test_min_threshold_floor_lets_small_changes_pass(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
         for _ in range(5):
@@ -163,7 +135,7 @@ class TestHampelPowermeter:
         assert result == [30.0]
 
     @pytest.mark.asyncio
-    async def test_negative_outlier_symmetric(self):
+    async def test_negative_outlier_symmetric(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0)
         for v in [100.0, 102.0, 98.0, 101.0, 99.0]:
@@ -173,7 +145,7 @@ class TestHampelPowermeter:
         assert result[0] != -10000.0
 
     @pytest.mark.asyncio
-    async def test_phase_ratio_preserved_on_replacement(self):
+    async def test_phase_ratio_preserved_on_replacement(self) -> None:
         # Constant total → MAD=0; use min_threshold to gate detection.
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
@@ -192,7 +164,7 @@ class TestHampelPowermeter:
         assert result == pytest.approx([60.0, 30.0, 10.0])
 
     @pytest.mark.asyncio
-    async def test_raw_total_near_zero_equal_split(self):
+    async def test_raw_total_near_zero_equal_split(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0, min_threshold=50.0)
         # Fill window with a nonzero stable total so median is nonzero
@@ -205,14 +177,14 @@ class TestHampelPowermeter:
         assert result == pytest.approx([100.0 / 3] * 3)
 
     @pytest.mark.asyncio
-    async def test_empty_raw_values_returns_empty(self):
+    async def test_empty_raw_values_returns_empty(self) -> None:
         fake = FakePowermeter([])
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0)
         result = await hp.get_powermeter_watts()
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_window_one_always_passthrough(self):
+    async def test_window_one_always_passthrough(self) -> None:
         """window=1 is degenerate: median == sample, MAD always 0 → passthrough
         (when min_threshold=0)."""
         fake = FakePowermeter()
@@ -222,7 +194,7 @@ class TestHampelPowermeter:
             assert result == [v]
 
     @pytest.mark.asyncio
-    async def test_even_window_works(self):
+    async def test_even_window_works(self) -> None:
         """With an even window, statistics.median returns the mean of the two
         middle values. Confirm no crash and sane behavior."""
         fake = FakePowermeter()
@@ -237,7 +209,7 @@ class TestHampelPowermeter:
         assert result[0] != 10000.0
 
     @pytest.mark.asyncio
-    async def test_n_sigma_zero_relies_on_min_threshold(self):
+    async def test_n_sigma_zero_relies_on_min_threshold(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=5, n_sigma=0.0, min_threshold=50.0)
         for v in [100.0, 100.0, 100.0, 100.0, 100.0]:
@@ -252,7 +224,7 @@ class TestHampelPowermeter:
         assert result[0] == pytest.approx(100.0, abs=1.0)
 
     @pytest.mark.asyncio
-    async def test_warmup_poisoning_recovers(self):
+    async def test_warmup_poisoning_recovers(self) -> None:
         """A spike within the warmup window passes through, but subsequent
         outliers after warmup still get detected once the window re-fills
         with clean samples. Uses min_threshold so MAD=0 doesn't block."""
@@ -268,7 +240,7 @@ class TestHampelPowermeter:
         assert result[0] != 10000.0
 
     @pytest.mark.asyncio
-    async def test_reset_clears_window(self):
+    async def test_reset_clears_window(self) -> None:
         fake = FakePowermeter()
         hp = HampelPowermeter(fake, window=3, n_sigma=3.0)
         for _ in range(3):
@@ -280,25 +252,25 @@ class TestHampelPowermeter:
         assert result == [10000.0]
 
     @pytest.mark.asyncio
-    async def test_invalid_window_rejected(self):
+    async def test_invalid_window_rejected(self) -> None:
         fake = FakePowermeter()
         with pytest.raises(ValueError):
             HampelPowermeter(fake, window=0)
 
     @pytest.mark.asyncio
-    async def test_invalid_n_sigma_rejected(self):
+    async def test_invalid_n_sigma_rejected(self) -> None:
         fake = FakePowermeter()
         with pytest.raises(ValueError):
             HampelPowermeter(fake, window=5, n_sigma=-1.0)
 
     @pytest.mark.asyncio
-    async def test_invalid_min_threshold_rejected(self):
+    async def test_invalid_min_threshold_rejected(self) -> None:
         fake = FakePowermeter()
         with pytest.raises(ValueError):
             HampelPowermeter(fake, window=5, min_threshold=-1.0)
 
     @pytest.mark.asyncio
-    async def test_lifecycle_delegation(self):
+    async def test_lifecycle_delegation(self) -> None:
         fake = FakePowermeter([100.0])
         hp = HampelPowermeter(fake, window=5, n_sigma=3.0)
         await hp.start()

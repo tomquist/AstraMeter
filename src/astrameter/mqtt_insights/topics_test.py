@@ -12,7 +12,7 @@ from .topics import (
 )
 
 
-def test_consumer_command_topic_round_trips():
+def test_consumer_command_topic_round_trips() -> None:
     topic = consumer_command_topic("am", "dev1", "aabbcc", "manual_target")
     assert topic == "am/ct002/dev1/consumer/aabbcc/manual_target/set"
     assert parse_command_topic("am", topic) == ConsumerCommandTopic(
@@ -20,18 +20,18 @@ def test_consumer_command_topic_round_trips():
     )
 
 
-def test_device_command_topic_round_trips():
+def test_device_command_topic_round_trips() -> None:
     topic = device_command_topic("am", "dev1")
     assert topic == "am/ct002/dev1/set"
     assert parse_command_topic("am", topic) == DeviceCommandTopic(device_id="dev1")
 
 
-def test_consumer_frame_without_a_field_is_malformed():
+def test_consumer_frame_without_a_field_is_malformed() -> None:
     parsed = parse_command_topic("am", "am/ct002/dev1/consumer/aabbcc/set")
     assert isinstance(parsed, MalformedCommandTopic)
 
 
-def test_foreign_topics_are_not_commands():
+def test_foreign_topics_are_not_commands() -> None:
     for topic in (
         "am/ct002/dev1/status",
         "am/shelly/dev1/status",
@@ -41,7 +41,7 @@ def test_foreign_topics_are_not_commands():
         assert parse_command_topic("am", topic) is None, topic
 
 
-def test_ids_spanning_several_topic_levels_are_not_commands():
+def test_ids_spanning_several_topic_levels_are_not_commands() -> None:
     # The subscription filters bind each id to a single "+" level, so these
     # never arrive from a broker -- but the grammar has to agree with them.
     for topic in (

@@ -36,7 +36,7 @@ def _load_vectors():
     _load_vectors(),
     ids=[v["description"][:60] for v in _load_vectors()],
 )
-def test_build_payload_matches_canonical_wire(vec):
+def test_build_payload_matches_canonical_wire(vec) -> None:
     expected = bytes.fromhex(vec["wire_hex"])
     actual = bytes(build_payload(vec["fields"]))
     assert actual == expected, (
@@ -50,14 +50,14 @@ def test_build_payload_matches_canonical_wire(vec):
     _load_vectors(),
     ids=[v["description"][:60] for v in _load_vectors()],
 )
-def test_parse_request_round_trips(vec):
+def test_parse_request_round_trips(vec) -> None:
     wire = bytes.fromhex(vec["wire_hex"])
     fields, error = parse_request(wire)
     assert error is None, f"parse_request rejected canonical bytes: {error}"
     assert fields == vec["fields"]
 
 
-def test_parse_request_tolerates_checksum_space_high_nibble():
+def test_parse_request_tolerates_checksum_space_high_nibble() -> None:
     # Find the vector that exercises this decode-only mutation.
     vectors = [v for v in _load_vectors() if "decode_only_mutations" in v]
     assert vectors, "Expected at least one vector flagged for space-tolerance"

@@ -12,7 +12,7 @@ from astrameter.shelly.shelly import BATTERY_INACTIVE_TIMEOUT_SECONDS, Shelly
 
 
 class DummyPowermeter(Powermeter):
-    async def get_powermeter_watts(self):
+    async def get_powermeter_watts(self) -> list[float]:
         return [1.0]
 
 
@@ -39,13 +39,13 @@ def _shelly() -> Shelly:
     )
 
 
-def test_status_snapshot_is_not_a_coroutine_function():
+def test_status_snapshot_is_not_a_coroutine_function() -> None:
     """The builder shares the loop with the UDP handlers; an ``await`` in it
     would tear the snapshot across two polls."""
     assert not inspect.iscoroutinefunction(Shelly.status_snapshot)
 
 
-async def test_status_snapshot_reports_registered_battery():
+async def test_status_snapshot_reports_registered_battery() -> None:
     shelly = _shelly()
     transport = _FakeTransport()
     await shelly._handle_request(REQUEST, ("127.0.0.1", 54321), transport)
@@ -73,7 +73,7 @@ async def test_status_snapshot_reports_registered_battery():
     assert battery.in_flight is True
 
 
-async def test_status_snapshot_batteries_sorted_and_marked_inactive():
+async def test_status_snapshot_batteries_sorted_and_marked_inactive() -> None:
     shelly = _shelly()
     transport = _FakeTransport()
     for ip in ("127.0.0.2", "127.0.0.1"):
@@ -88,7 +88,7 @@ async def test_status_snapshot_batteries_sorted_and_marked_inactive():
     assert snap.batteries[1].last_seen_age > BATTERY_INACTIVE_TIMEOUT_SECONDS
 
 
-async def test_status_snapshot_is_detached_from_the_device():
+async def test_status_snapshot_is_detached_from_the_device() -> None:
     shelly = _shelly()
     transport = _FakeTransport()
     await shelly._handle_request(REQUEST, ("127.0.0.1", 54321), transport)
@@ -107,7 +107,7 @@ async def test_status_snapshot_is_detached_from_the_device():
     assert snap.batteries[0].active is True
 
 
-async def test_running_tracks_start_and_stop():
+async def test_running_tracks_start_and_stop() -> None:
     shelly = Shelly([], udp_port=0, device_id="test")
     assert shelly.status_snapshot().started_at is None
 

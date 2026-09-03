@@ -1,11 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from aiohttp import BasicAuth, ClientTimeout
 
 from astrameter.powermeter import JsonHttpPowermeter
 
 
-async def test_single_phase(mock_aiohttp_session):
+async def test_single_phase(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json({"power": 100})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         meter = JsonHttpPowermeter("http://localhost", "$.power")
@@ -14,7 +14,7 @@ async def test_single_phase(mock_aiohttp_session):
         await meter.stop()
 
 
-async def test_three_phase(mock_aiohttp_session):
+async def test_three_phase(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json({"p1": 100, "p2": 200, "p3": 300})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         meter = JsonHttpPowermeter("http://localhost", ["$.p1", "$.p2", "$.p3"])
@@ -23,7 +23,9 @@ async def test_three_phase(mock_aiohttp_session):
         await meter.stop()
 
 
-async def test_strips_unit_suffix_via_jsonpath_ext(mock_aiohttp_session):
+async def test_strips_unit_suffix_via_jsonpath_ext(
+    mock_aiohttp_session: MagicMock,
+) -> None:
     mock_aiohttp_session.set_json({"state": "331.74 W"})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
         meter = JsonHttpPowermeter(
@@ -34,7 +36,7 @@ async def test_strips_unit_suffix_via_jsonpath_ext(mock_aiohttp_session):
         await meter.stop()
 
 
-async def test_headers_and_auth(mock_aiohttp_session):
+async def test_headers_and_auth(mock_aiohttp_session: MagicMock) -> None:
     mock_aiohttp_session.set_json({"power": 50})
     with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session) as mock_cls:
         meter = JsonHttpPowermeter(

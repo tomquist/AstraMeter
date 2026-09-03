@@ -38,7 +38,7 @@ def _report(power: float, weight: float = 1.0, phase: str = "A") -> ConsumerRepo
     return ConsumerReport(phase=phase, power=power, device_type="HMA-2", weight=weight)
 
 
-def test_fair_share_honours_weight():
+def test_fair_share_honours_weight() -> None:
     """With balancing off, the raw fair-share split follows the weight ratio."""
     lb = _make_balancer(fair_distribution=False)
     reports = {"a": _report(0.0, weight=1.5), "b": _report(0.0, weight=1.0)}
@@ -53,7 +53,7 @@ def test_fair_share_honours_weight():
     assert b_out[0] == 200.0
 
 
-def test_zero_weight_takes_no_share():
+def test_zero_weight_takes_no_share() -> None:
     """Weight 0.0 means the battery is parked at 0 W; the rest absorb the load."""
     lb = _make_balancer(fair_distribution=False)
     reports = {"a": _report(0.0, weight=0.0), "b": _report(0.0, weight=1.0)}
@@ -67,7 +67,7 @@ def test_zero_weight_takes_no_share():
     assert b_out[0] == 400.0
 
 
-def test_neutral_weight_matches_equal_split():
+def test_neutral_weight_matches_equal_split() -> None:
     """Default weight 1.0 (and an absent weight key) split demand evenly."""
     weighted = {"a": _report(0.0), "b": _report(0.0)}
     # An absent "weight" key must behave exactly like the neutral default.
@@ -83,7 +83,7 @@ def test_neutral_weight_matches_equal_split():
         assert out[0] == 200.0
 
 
-def test_balance_correction_targets_weighted_share():
+def test_balance_correction_targets_weighted_share() -> None:
     """Two equally-loaded batteries get nudged toward the weighted ratio.
 
     Both report 250 W; with weights 1.5/1.0 the heavier battery's target sits

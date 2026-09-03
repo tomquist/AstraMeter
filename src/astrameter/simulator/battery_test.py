@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -15,7 +16,7 @@ from astrameter.simulator.venus_integer_steering import (
 )
 
 
-def _battery(delay: int = 0, **kwargs) -> BatterySimulator:
+def _battery(delay: int = 0, **kwargs: Any) -> BatterySimulator:
     defaults: dict = {
         "mac": "02B250000001",
         "phase": "A",

@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import aiohttp
@@ -10,7 +9,13 @@ import aiohttp
 from astrameter.power_units import POWER_UNIT_SCALE, POWER_UNITS
 
 from .base import as_list
-from .ws_client import WS_HEARTBEAT_SECONDS, WebSocket, WebSocketPowermeter, cancel
+from .ws_client import (
+    WS_HEARTBEAT_SECONDS,
+    WebSocket,
+    WebSocketConnect,
+    WebSocketPowermeter,
+    cancel,
+)
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -102,9 +107,7 @@ class HomeAssistant(WebSocketPowermeter):
         self._fetch_states_task = None
         await super().stop()
 
-    def _connect(
-        self, session: aiohttp.ClientSession
-    ) -> AbstractAsyncContextManager[WebSocket]:
+    def _connect(self, session: aiohttp.ClientSession) -> WebSocketConnect:
         return session.ws_connect(self._build_ws_url(), heartbeat=WS_HEARTBEAT_SECONDS)
 
     def _on_disconnect(self) -> None:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import socket
+from collections.abc import Iterator
 
 import _ct002_e2e_backend as be
 import pytest
@@ -41,7 +42,7 @@ pytestmark = pytest.mark.esphome_e2e
 # stale-meter (``before_send``) and harness-lifecycle tests are Python-only
 # and skip on esphome (see the per-test guards).
 @pytest.fixture(params=["python", "esphome"], autouse=True)
-def _emulator_backend(request):
+def _emulator_backend(request: pytest.FixtureRequest) -> Iterator[None]:
     if request.param == "esphome" and not be.have_esphome():
         pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
     be.ACTIVE_BACKEND = request.param
@@ -464,7 +465,7 @@ class TestProbeLockup:
 
     async def test_powermeter_stale_error_is_handled_gracefully(
         self,
-        caplog,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The fixed path: when the powermeter proactively raises
         ``ValueError`` on detected staleness (as the HomeWizard /

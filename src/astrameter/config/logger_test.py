@@ -31,7 +31,7 @@ logger_module = importlib.import_module("astrameter.config.logger")
         ('{"marstek_mailbox": "me@example.com"}', '{"marstek_mailbox": "***"}'),
     ],
 )
-def test_redact_secrets_masks_credentials(raw, expected):
+def test_redact_secrets_masks_credentials(raw: str, expected: str) -> None:
     assert redact_secrets(raw) == expected
 
 
@@ -44,7 +44,7 @@ def test_redact_secrets_masks_credentials(raw, expected):
         "CT002 consumer 60323bd11234 phase detected: A",
     ],
 )
-def test_redact_secrets_leaves_benign_messages_untouched(benign):
+def test_redact_secrets_leaves_benign_messages_untouched(benign: str) -> None:
     assert redact_secrets(benign) == benign
 
 
@@ -52,7 +52,9 @@ def test_redact_secrets_leaves_benign_messages_untouched(benign):
     ("level_name", "expected_level"),
     [("info", logging.INFO), ("debug", logging.DEBUG), ("invalid", logging.WARNING)],
 )
-def test_set_log_level_configures_expected_level(level_name, expected_level):
+def test_set_log_level_configures_expected_level(
+    level_name: str, expected_level: int
+) -> None:
     with patch.object(logger_module.logging, "basicConfig") as basic_config:
         setLogLevel(level_name)
 
@@ -60,7 +62,7 @@ def test_set_log_level_configures_expected_level(level_name, expected_level):
     assert basic_config.call_args.kwargs["level"] == expected_level
 
 
-def test_set_log_level_configures_timestamped_log_output():
+def test_set_log_level_configures_timestamped_log_output() -> None:
     with patch.object(logger_module.logging, "basicConfig") as basic_config:
         setLogLevel("info")
 
@@ -91,12 +93,12 @@ def test_set_log_level_configures_timestamped_log_output():
     ("level_name", "expected"),
     [("debug", True), ("info", False), ("warning", False)],
 )
-def test_debug_traceback_reflects_log_level(level_name, expected):
+def test_debug_traceback_reflects_log_level(level_name: str, expected: bool) -> None:
     setLogLevel(level_name)
     assert logger_module.debug_traceback() is expected
 
 
-def test_warning_inside_except_block_includes_traceback():
+def test_warning_inside_except_block_includes_traceback() -> None:
     setLogLevel("warning")
     root = logging.getLogger()
     buffer = io.StringIO()
@@ -122,7 +124,7 @@ def test_warning_inside_except_block_includes_traceback():
     assert "RuntimeError: boom" in output
 
 
-def test_warning_outside_except_block_has_no_traceback():
+def test_warning_outside_except_block_has_no_traceback() -> None:
     setLogLevel("warning")
     root = logging.getLogger()
     buffer = io.StringIO()
@@ -142,7 +144,7 @@ def test_warning_outside_except_block_has_no_traceback():
     assert "Traceback" not in output
 
 
-def test_exc_info_false_opts_out_of_auto_traceback():
+def test_exc_info_false_opts_out_of_auto_traceback() -> None:
     setLogLevel("warning")
     root = logging.getLogger()
     buffer = io.StringIO()
@@ -167,7 +169,7 @@ def test_exc_info_false_opts_out_of_auto_traceback():
     assert "Traceback" not in output
 
 
-def test_set_log_level_installs_redacting_formatter_on_root_handlers():
+def test_set_log_level_installs_redacting_formatter_on_root_handlers() -> None:
     setLogLevel("debug")
     root = logging.getLogger()
     assert root.handlers
@@ -175,7 +177,9 @@ def test_set_log_level_installs_redacting_formatter_on_root_handlers():
         assert isinstance(handler.formatter, logger_module._RedactingFormatter)
 
 
-def test_root_logger_redacts_secrets_end_to_end(capsys):
+def test_root_logger_redacts_secrets_end_to_end(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     setLogLevel("info")
     logging.getLogger("astrameter.test").info(
         "broker mqtt://alice:s3cret@example.com PASSWORD=hunter2"
@@ -188,7 +192,7 @@ def test_root_logger_redacts_secrets_end_to_end(capsys):
     assert "PASSWORD=***" in combined
 
 
-def test_redaction_covers_traceback_text():
+def test_redaction_covers_traceback_text() -> None:
     setLogLevel("warning")
     root = logging.getLogger()
     buffer = io.StringIO()

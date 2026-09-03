@@ -13,7 +13,7 @@ _TRACE = Path(__file__).parent / "traces" / "rae_household.csv"
 _NET_TRACE = Path(__file__).parent / "traces" / "cyprus_netload.csv"
 
 
-def test_load_power_trace_skips_comments_and_header(tmp_path):
+def test_load_power_trace_skips_comments_and_header(tmp_path: Path) -> None:
     p = tmp_path / "t.csv"
     p.write_text(
         "# a comment\n"
@@ -27,13 +27,13 @@ def test_load_power_trace_skips_comments_and_header(tmp_path):
     assert load_power_trace(p) == [(0.0, 100.0), (60.0, 250.5), (120.0, 90.0)]
 
 
-def test_load_power_trace_sorts_by_time(tmp_path):
+def test_load_power_trace_sorts_by_time(tmp_path: Path) -> None:
     p = tmp_path / "t.csv"
     p.write_text("120,3\n0,1\n60,2\n")
     assert load_power_trace(p) == [(0.0, 1.0), (60.0, 2.0), (120.0, 3.0)]
 
 
-def test_vendored_household_trace_loads():
+def test_vendored_household_trace_loads() -> None:
     trace = load_power_trace(_TRACE)
     # The fixture is a multi-hour 1-second window: thousands of samples, evenly
     # spaced at 1 s, all non-negative watts.
@@ -56,14 +56,16 @@ def test_vendored_household_trace_loads():
         "t_s,watts\nnope,nope\nfoo,bar\n",  # header + invalid-only rows
     ],
 )
-def test_load_power_trace_raises_without_valid_rows(tmp_path, content):
+def test_load_power_trace_raises_without_valid_rows(
+    tmp_path: Path, content: str
+) -> None:
     p = tmp_path / "bad.csv"
     p.write_text(content)
     with pytest.raises(ValueError):
         load_power_trace(p)
 
 
-def test_load_net_trace_reads_three_columns(tmp_path):
+def test_load_net_trace_reads_three_columns(tmp_path: Path) -> None:
     p = tmp_path / "n.csv"
     p.write_text("# c\nt_s,load_w,pv_w\n0,300,0\n30,250.5,1200\n60,400,900\n")
     assert load_net_trace(p) == [
@@ -73,7 +75,7 @@ def test_load_net_trace_reads_three_columns(tmp_path):
     ]
 
 
-def test_vendored_net_trace_loads():
+def test_vendored_net_trace_loads() -> None:
     trace = load_net_trace(_NET_TRACE)
     assert len(trace) > 600  # multi-hour 30 s window
     assert trace[0][0] == 0.0
@@ -92,7 +94,7 @@ def test_vendored_net_trace_loads():
         "t_s,load_w,pv_w\nx,y,z\n1,2\n",  # header, invalid + too-few-column rows
     ],
 )
-def test_load_net_trace_raises_without_valid_rows(tmp_path, content):
+def test_load_net_trace_raises_without_valid_rows(tmp_path: Path, content: str) -> None:
     p = tmp_path / "bad.csv"
     p.write_text(content)
     with pytest.raises(ValueError):

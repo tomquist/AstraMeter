@@ -74,10 +74,7 @@ ignore_missing_imports = true
 explicit_package_bases = true
 namespace_packages = true
 mypy_path = ["src"]
-# Every function in the shipped modules carries annotations, so their bodies
-# are checked. The test modules alongside them are not annotated — turning
-# these on would report a thousand fixture signatures, none of them the
-# thing a test is about.
-check_untyped_defs = false
-disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
 disable_error_code = ["import-untyped"]

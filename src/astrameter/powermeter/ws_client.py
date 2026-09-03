@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
+from typing import Any, Protocol
 
 import aiohttp
 
@@ -37,7 +39,25 @@ _CLOSING = (
     aiohttp.WSMsgType.CLOSED,
 )
 
-WebSocket = aiohttp.ClientWebSocketResponse[bool]
+
+class WebSocket(Protocol):
+    """What a connection has to offer the read loop and the message handlers.
+
+    Stated structurally rather than as ``aiohttp.ClientWebSocketResponse`` so
+    a test can drive the same handlers with a few canned frames.
+    """
+
+    def __aiter__(self) -> AsyncIterator[Any]: ...
+
+    async def send_json(self, data: Any) -> None: ...
+
+    async def close(self) -> bool: ...
+
+
+#: What ``session.ws_connect(...)`` hands back, unawaited. A concrete aiohttp
+#: type rather than the protocol above: only the handlers need to accept a
+#: stand-in, and the connection itself is always the real thing.
+WebSocketConnect = AbstractAsyncContextManager[aiohttp.ClientWebSocketResponse[bool]]
 
 
 async def cancel(task: asyncio.Task | None) -> None:
@@ -73,9 +93,7 @@ class WebSocketPowermeter(PushPowermeter):
 
     # -- what a subclass fills in --------------------------------------
 
-    def _connect(
-        self, session: aiohttp.ClientSession
-    ) -> AbstractAsyncContextManager[WebSocket]:
+    def _connect(self, session: aiohttp.ClientSession) -> WebSocketConnect:
         """Open the WebSocket — ``session.ws_connect(...)``, unawaited."""
         raise NotImplementedError
 

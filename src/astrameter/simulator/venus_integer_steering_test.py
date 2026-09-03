@@ -7,13 +7,15 @@ law (:meth:`step_raw`); the gate tests drive :meth:`step`.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from .steering_common import SMALL_IMPORT_HOLD_W
 from .venus_integer_steering import DEADBAND_W, VenusIntegerSteeringController
 
 
-def _run(steps, **kwargs):
+def _run(steps: list[tuple[float, float]], **kwargs: Any) -> list[int]:
     """Feed ``(g, out)`` pairs to a fresh controller; return the setpoints."""
     c = VenusIntegerSteeringController(**kwargs)
     return [c.step(g, 2500.0, -2500.0, out=out) for g, out in steps]

@@ -1,6 +1,8 @@
 import logging
 from unittest.mock import MagicMock
 
+import pytest
+
 from astrameter.ct002 import CT002, CT002Request, ReportingConsumerRow
 from astrameter.ct002.balancer import BalancerConfig
 from astrameter.ct002.protocol import (
@@ -14,7 +16,7 @@ from astrameter.ct002.protocol import (
 )
 
 
-def test_parse_request_roundtrip():
+def test_parse_request_roundtrip() -> None:
     fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "5", "7"]
     payload = build_payload(fields)
     parsed, error = parse_request(payload)
@@ -22,7 +24,7 @@ def test_parse_request_roundtrip():
     assert parsed == fields
 
 
-def test_parse_request_checksum_error():
+def test_parse_request_checksum_error() -> None:
     fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
     payload = bytearray(build_payload(fields))
     payload[-1] = ord("0") if payload[-1] != ord("0") else ord("1")
@@ -31,7 +33,7 @@ def test_parse_request_checksum_error():
     assert "Checksum" in error
 
 
-def test_parse_request_checksum_space_tolerance():
+def test_parse_request_checksum_space_tolerance() -> None:
     fields = ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
     payload = bytearray(build_payload(fields))
     payload[-2] = ord(" ")
@@ -40,7 +42,7 @@ def test_parse_request_checksum_space_tolerance():
     assert parsed == fields
 
 
-def test_build_payload_length_and_checksum():
+def test_build_payload_length_and_checksum() -> None:
     fields = ["HMG-50", "AABBCCDDEEFF", "HME-3", "112233445566", "0", "0"]
     payload = build_payload(fields)
     assert payload[0] == SOH
@@ -56,7 +58,7 @@ def test_build_payload_length_and_checksum():
     assert payload[-2:] == expected
 
 
-def test_checksum_matches_helper():
+def test_checksum_matches_helper() -> None:
     payload = bytearray([SOH, STX, 0x30, 0x30, ETX])
     checksum = calculate_checksum(payload)
     assert isinstance(checksum, int)
@@ -64,7 +66,7 @@ def test_checksum_matches_helper():
     assert checksum == expected
 
 
-def test_ct002_response_field_count_stable():
+def test_ct002_response_field_count_stable() -> None:
     device = CT002()
     request = CT002Request.from_fields(
         ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
@@ -128,7 +130,7 @@ def _set_instruction(
     device._consumers[consumer_id].last_instructed_power = float(instructed)
 
 
-def test_ct002_relays_sum_of_charge_instructions_by_phase():
+def test_ct002_relays_sum_of_charge_instructions_by_phase() -> None:
     device = CT002()
     request = CT002Request.from_fields(
         ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "-100"]
@@ -159,7 +161,7 @@ def test_ct002_relays_sum_of_charge_instructions_by_phase():
     assert response_for_b[16] == "-240"  # B_chrg_power
 
 
-def test_ct002_relay_reports_battery_count_per_phase():
+def test_ct002_relay_reports_battery_count_per_phase() -> None:
     """Relay mode forwards the real per-phase battery count as *_chrg_nb.
 
     Each battery divides the forwarded aggregate by this count to take its
@@ -186,7 +188,7 @@ def test_ct002_relay_reports_battery_count_per_phase():
     assert response[10] == "0"  # C_chrg_nb: none
 
 
-def test_ct002_active_control_reports_count_one_per_phase():
+def test_ct002_active_control_reports_count_one_per_phase() -> None:
     """Active control distributes a per-consumer target, so *_chrg_nb stays 1."""
     device = CT002(active_control=True)
     request = CT002Request.from_fields(
@@ -206,7 +208,7 @@ def test_ct002_active_control_reports_count_one_per_phase():
     assert response[10] == "0"  # C_chrg_nb: inactive phase
 
 
-def test_ct002_excludes_non_participating_from_aggregation():
+def test_ct002_excludes_non_participating_from_aggregation() -> None:
     """A consumer that sent participate=0 is left out of the relay aggregates."""
     device = CT002(active_control=False)
     request = CT002Request.from_fields(
@@ -229,7 +231,7 @@ def test_ct002_excludes_non_participating_from_aggregation():
     assert response[15] == "-180"  # A_chrg_power excludes the opted-out -120
 
 
-async def test_ct002_handle_request_respects_participate_field():
+async def test_ct002_handle_request_respects_participate_field() -> None:
     """The optional 7th request field marks a consumer non-participating."""
     transport = MagicMock()
 
@@ -257,7 +259,7 @@ async def test_ct002_handle_request_respects_participate_field():
     assert next(iter(default._consumers.values())).participates is True
 
 
-def test_ct002_splits_positive_instructions_into_dchrg_fields():
+def test_ct002_splits_positive_instructions_into_dchrg_fields() -> None:
     device = CT002()
     request = CT002Request.from_fields(
         ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "100"]
@@ -280,7 +282,7 @@ def test_ct002_splits_positive_instructions_into_dchrg_fields():
     assert response[9] == "1"  # B_chrg_nb
 
 
-def test_ct002_splits_mixed_sign_instructions_per_storage_before_aggregation():
+def test_ct002_splits_mixed_sign_instructions_per_storage_before_aggregation() -> None:
     device = CT002()
     request = CT002Request.from_fields(
         ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
@@ -301,7 +303,7 @@ def test_ct002_splits_mixed_sign_instructions_per_storage_before_aggregation():
     assert response[8] == "1"  # A_chrg_nb active flag
 
 
-def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
+def test_ct002_pv_passthrough_does_not_appear_as_dchrg() -> None:
     """Regression for #376: positive *report* but negative *net instruction*
     must not populate *_dchrg_power (otherwise other batteries idle)."""
     device = CT002()
@@ -324,7 +326,7 @@ def test_ct002_pv_passthrough_does_not_appear_as_dchrg():
     assert response[15] == "-500"  # A_chrg_power reflects the net instruction
 
 
-def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal():
+def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal() -> None:
     """Net-power semantics: a battery discharging at +500 W that we just
     corrected down by 100 must still register as discharging (+400 W),
     not flip into the charge bucket on the strength of the delta alone."""
@@ -370,7 +372,7 @@ async def _drive_request(
     await device._handle_request(request, ("1.1.1.1", 12345), transport)
 
 
-async def test_handle_request_records_net_instructed_power_not_delta():
+async def test_handle_request_records_net_instructed_power_not_delta() -> None:
     """Regression for the delta-vs-net mistake.
 
     Venus discharging at +500 W, we correct down by 100 W.  The simulator
@@ -391,7 +393,7 @@ async def test_handle_request_records_net_instructed_power_not_delta():
     )
 
 
-async def test_combined_mode_records_net_from_summed_grid_field():
+async def test_combined_mode_records_net_from_summed_grid_field() -> None:
     """A combined-mode (phase 'D') battery reads the *summed* grid field
     (field 7), so its net instructed power is the reported output plus the
     whole target — not just the phase-A slot.  Feeding a target spread across
@@ -408,7 +410,7 @@ async def test_combined_mode_records_net_from_summed_grid_field():
     assert consumer.last_instructed_power == 800.0
 
 
-async def test_event_listener_fires_for_combined_mode_not_inspection():
+async def test_event_listener_fires_for_combined_mode_not_inspection() -> None:
     """HA discovery/state is driven by the consumer event listener, which must
     fire for a combined-mode ('D') battery — a valid, steered phase — but stay
     silent for a true inspection ('0') poll (still discovering its phase)."""
@@ -423,7 +425,7 @@ async def test_event_listener_fires_for_combined_mode_not_inspection():
     assert "bbccddeeffaa" not in fired  # inspection → suppressed
 
 
-async def test_handle_request_pv_passthrough_net_target_and_relay_buckets():
+async def test_handle_request_pv_passthrough_net_target_and_relay_buckets() -> None:
     """Venus scenario from issue #376 driven in relay mode: reports +500
     (passthrough), the relayed grid delta is -500 → the *expected* net target
     is 0 (``last_instructed_power``).  But relay buckets must forward the
@@ -445,7 +447,7 @@ async def test_handle_request_pv_passthrough_net_target_and_relay_buckets():
     assert by_phase["A"].chrg_power == 0
 
 
-async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid():
+async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid() -> None:
     """Issue #457: relay-mode buckets must equal the per-phase sum of
     *reported* battery powers, not reported+grid (the battery's *next*
     expected net), matching real CT captures."""
@@ -472,7 +474,7 @@ async def test_relay_buckets_aggregate_reported_power_not_reported_plus_grid():
     assert response[15] == "-100"  # A_chrg_power
 
 
-async def test_handle_request_skips_instruction_update_in_inspection_mode():
+async def test_handle_request_skips_instruction_update_in_inspection_mode() -> None:
     """No instruction is being given in inspection mode — we send raw
     meter readings as information so the battery can identify its phase,
     and the battery runs its phase-discovery routine rather than our
@@ -533,11 +535,11 @@ async def _seed_good_reading(device: CT002, battery_mac: str) -> None:
     await _drive_and_capture(device, battery_mac, "A", 0, before_send=good)
 
 
-async def _raise_stale(_addr, _request, _consumer_id):
+async def _raise_stale(_addr, _request, _consumer_id) -> None:
     raise ValueError("powermeter unavailable (test)")
 
 
-async def test_handle_request_holds_with_zero_delta_when_before_send_fails():
+async def test_handle_request_holds_with_zero_delta_when_before_send_fails() -> None:
     """Issue #403: when the powermeter is unavailable (before_send raises),
     the response must be a zero adjustment so the battery holds — not a delta
     re-derived from the stale cached reading (which would wind it up)."""
@@ -561,7 +563,7 @@ async def test_handle_request_holds_with_zero_delta_when_before_send_fails():
     assert device._consumers["aabbccddeeff"].last_instructed_power == 250.0
 
 
-async def test_handle_request_inspection_mode_holds_when_before_send_fails():
+async def test_handle_request_inspection_mode_holds_when_before_send_fails() -> None:
     """A phase self-diagnosis poll (inspection marker) while the meter is down
     must not be fed the frozen per-phase reading — feeding stale data is what
     corrupts the Venus phase detection in #403."""
@@ -575,7 +577,7 @@ async def test_handle_request_inspection_mode_holds_when_before_send_fails():
     assert fields[4:7] == ["0", "0", "0"], fields[4:7]
 
 
-async def test_handle_request_uses_cache_when_before_send_returns_none():
+async def test_handle_request_uses_cache_when_before_send_returns_none() -> None:
     """A before_send returning None (e.g. no powermeter matches this client)
     is NOT a failure: the cached reading is still served. Guards that the hold
     path keys on the raised exception, not on a None return."""
@@ -594,7 +596,7 @@ async def test_handle_request_uses_cache_when_before_send_returns_none():
     assert fields[4] == "500", fields[4]
 
 
-def test_ct002_info_idx_increments_and_wraps():
+def test_ct002_info_idx_increments_and_wraps() -> None:
     device = CT002()
     request = CT002Request.from_fields(
         ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "A", "0"]
@@ -614,7 +616,9 @@ def test_ct002_info_idx_increments_and_wraps():
     assert after_wrap[13] == "0"
 
 
-def test_ct002_logs_phase_detection_and_change(caplog):
+def test_ct002_logs_phase_detection_and_change(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     device = CT002()
 
     with caplog.at_level(logging.INFO):
@@ -631,7 +635,7 @@ def test_ct002_logs_phase_detection_and_change(caplog):
 # ── x / ABC bucket routing (issue #460) ─────────────────────────────────────
 
 
-async def test_inspection_reporter_counts_in_x_bucket_not_a():
+async def test_inspection_reporter_counts_in_x_bucket_not_a() -> None:
     """An inspection ('0') reporter must populate the x bucket — not inflate
     phase A's count/aggregate (which would skew the relay share split)."""
     device = CT002(ct_mac="112233445566", active_control=False)
@@ -660,7 +664,7 @@ async def test_inspection_reporter_counts_in_x_bucket_not_a():
     assert response[15] == "0"  # A_chrg_power
 
 
-async def test_combined_phase_d_reporter_lands_in_abc_bucket():
+async def test_combined_phase_d_reporter_lands_in_abc_bucket() -> None:
     """A combined-mode (phase 'D') reporter must populate the ABC bucket and
     ABC_chrg_nb instead of being folded into phase A."""
     device = CT002(ct_mac="112233445566", active_control=False)
@@ -688,7 +692,7 @@ async def test_combined_phase_d_reporter_lands_in_abc_bucket():
     assert response[8] == "0"  # A_chrg_nb
 
 
-def test_active_control_abc_bucket_uses_instructed_power():
+def test_active_control_abc_bucket_uses_instructed_power() -> None:
     """Under active control a combined-mode (phase 'D') battery is steered like
     any A/B/C battery, so its ABC bucket aggregates the *instructed* net power
     (issue #376), not the raw reported passthrough.  A true inspection ('0')
@@ -711,7 +715,7 @@ def test_active_control_abc_bucket_uses_instructed_power():
     assert by_phase["x"].chrg_power == -200  # reported (never instructed)
 
 
-def test_active_control_combined_mode_response_reports_count_one():
+def test_active_control_combined_mode_response_reports_count_one() -> None:
     """Under active control the ABC (combined 'D') count field must be 1 so a
     combined battery applies its individual target as-is instead of dividing by
     N — mirroring the per-phase active-control count (issue #459)."""
@@ -728,7 +732,7 @@ def test_active_control_combined_mode_response_reports_count_one():
     assert response[18] == "-400"  # ABC_chrg_power = instructed net
 
 
-def test_relay_mode_combined_count_is_real_battery_count():
+def test_relay_mode_combined_count_is_real_battery_count() -> None:
     """Relay mode forwards the real combined-battery count so each battery takes
     its 1/N share — the contrast with active control's count of 1."""
     device = CT002(active_control=False)
@@ -743,7 +747,9 @@ def test_relay_mode_combined_count_is_real_battery_count():
     assert response[11] == "2"  # ABC count = real battery count in relay mode
 
 
-def test_ct002_logs_phase_detection_for_combined_mode(caplog):
+def test_ct002_logs_phase_detection_for_combined_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     device = CT002()
 
     with caplog.at_level(logging.INFO):
@@ -771,7 +777,7 @@ class _StepClock:
         self.now += seconds
 
 
-def test_adaptive_ttl_evicts_after_two_missed_poll_cycles():
+def test_adaptive_ttl_evicts_after_two_missed_poll_cycles() -> None:
     """Default (consumer_ttl=None): a consumer expires after missing ~2 of
     its own poll cycles, like the real CT."""
     clock = _StepClock()
@@ -790,7 +796,7 @@ def test_adaptive_ttl_evicts_after_two_missed_poll_cycles():
     assert "a" not in device._consumers
 
 
-def test_adaptive_ttl_uses_fallback_while_cadence_unknown():
+def test_adaptive_ttl_uses_fallback_while_cadence_unknown() -> None:
     """A consumer that has polled only once has no cadence yet; it survives
     the fallback window and is evicted after it."""
     clock = _StepClock()
@@ -806,7 +812,7 @@ def test_adaptive_ttl_uses_fallback_while_cadence_unknown():
     assert "a" not in device._consumers
 
 
-def test_adaptive_ttl_floor_protects_fast_pollers():
+def test_adaptive_ttl_floor_protects_fast_pollers() -> None:
     """A battery polling every second isn't evicted by a 2-3 s hiccup: the
     adaptive TTL is floored (network-jitter tolerance)."""
     clock = _StepClock()
@@ -824,7 +830,7 @@ def test_adaptive_ttl_floor_protects_fast_pollers():
     assert "a" not in device._consumers
 
 
-def test_fixed_consumer_ttl_overrides_adaptive_eviction():
+def test_fixed_consumer_ttl_overrides_adaptive_eviction() -> None:
     """An explicit CONSUMER_TTL keeps the old fixed-window behavior."""
     clock = _StepClock()
     device = CT002(consumer_ttl=120, clock=clock)
@@ -841,7 +847,7 @@ def test_fixed_consumer_ttl_overrides_adaptive_eviction():
     assert "a" not in device._consumers
 
 
-def test_stale_consumer_drops_out_of_aggregation_before_cleanup_runs():
+def test_stale_consumer_drops_out_of_aggregation_before_cleanup_runs() -> None:
     """The real CT evicts per response cycle, so the relay count/aggregate
     must shrink as soon as a battery goes silent — without waiting for the
     periodic cleanup task to remove the entry."""

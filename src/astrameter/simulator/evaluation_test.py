@@ -19,7 +19,7 @@ class TestReserveUdpPort:
     with the change under evaluation.
     """
 
-    def test_port_is_held_against_other_binders(self):
+    def test_port_is_held_against_other_binders(self) -> None:
         reservation = _reserve_udp_port()
         port = reservation.getsockname()[1]
         try:
@@ -33,7 +33,7 @@ class TestReserveUdpPort:
         finally:
             reservation.close()
 
-    def test_port_is_bindable_once_released(self):
+    def test_port_is_bindable_once_released(self) -> None:
         reservation = _reserve_udp_port()
         port = reservation.getsockname()[1]
         reservation.close()
@@ -41,7 +41,7 @@ class TestReserveUdpPort:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
             listener.bind(("0.0.0.0", port))
 
-    def test_live_reservations_are_distinct(self):
+    def test_live_reservations_are_distinct(self) -> None:
         """Two live reservations cannot name the same port — the property the
         parallel workers actually depend on."""
         reservations = [_reserve_udp_port() for _ in range(16)]
@@ -52,7 +52,7 @@ class TestReserveUdpPort:
             for r in reservations:
                 r.close()
 
-    def test_simultaneous_reservations_are_distinct(self):
+    def test_simultaneous_reservations_are_distinct(self) -> None:
         """The same property when the calls genuinely overlap in time.
 
         The workers are separate processes rather than threads, but a barrier
@@ -62,7 +62,7 @@ class TestReserveUdpPort:
         workers = 16
         barrier = threading.Barrier(workers)
 
-        def reserve():
+        def reserve() -> socket.socket:
             barrier.wait()
             return _reserve_udp_port()
 

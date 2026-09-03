@@ -5,12 +5,17 @@ import os
 import ssl
 import time
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
 
 import aiohttp
 
 from .base import stream_fresh
-from .ws_client import WS_HEARTBEAT_SECONDS, WebSocket, WebSocketPowermeter, cancel
+from .ws_client import (
+    WS_HEARTBEAT_SECONDS,
+    WebSocket,
+    WebSocketConnect,
+    WebSocketPowermeter,
+    cancel,
+)
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -92,9 +97,7 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         self._fresh_measurement_event.clear()
         await super().start()
 
-    def _connect(
-        self, session: aiohttp.ClientSession
-    ) -> AbstractAsyncContextManager[WebSocket]:
+    def _connect(self, session: aiohttp.ClientSession) -> WebSocketConnect:
         return session.ws_connect(
             f"wss://{self.ip}/api/ws",
             ssl=self._build_ssl_context(),

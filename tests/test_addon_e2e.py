@@ -18,7 +18,10 @@ import contextlib
 import json
 import socket
 import threading
+from collections.abc import Callable, Iterator
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
 import pytest
 from _ct002_e2e_backend import find_free_ports
@@ -144,7 +147,7 @@ class PortOverrideAddonConfig(AddonAppConfig):
     comes from the add-on options.
     """
 
-    def __init__(self, options, supervisor, udp_port: int) -> None:
+    def __init__(self, options, supervisor: FakeSupervisor, udp_port: int) -> None:
         super().__init__(options, supervisor)
         self._udp_port = udp_port
 
@@ -178,12 +181,14 @@ async def running_addon(options: dict, supervisor: FakeSupervisor, udp_port: int
 
 
 @pytest.fixture
-def addon_options(tmp_path, monkeypatch):
+def addon_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., dict]:
     """A realistic /data/options.json, read the way the add-on reads it."""
     monkeypatch.setenv("SUPERVISOR_TOKEN", SUPERVISOR_TOKEN)
     udp_port = find_free_ports(1)[0]
 
-    def write(**overrides) -> dict:
+    def write(**overrides: Any) -> dict:
         options = {
             "power_input_alias": GRID_SENSOR,
             "power_output_alias": "",
@@ -204,7 +209,7 @@ def addon_options(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def supervisor():
+def supervisor() -> Iterator[FakeSupervisor]:
     server = FakeSupervisor(watts=321.0)
     server.start()
     try:
@@ -215,8 +220,8 @@ def supervisor():
 
 @pytest.mark.timeout(60)
 async def test_addon_serves_the_home_assistant_reading_over_udp(
-    addon_options, supervisor
-):
+    addon_options: Callable[..., dict], supervisor: FakeSupervisor
+) -> None:
     options = addon_options()
 
     async with running_addon(options, supervisor, addon_options.udp_port):
@@ -232,7 +237,9 @@ async def test_addon_serves_the_home_assistant_reading_over_udp(
 
 
 @pytest.mark.timeout(60)
-async def test_add_on_options_reach_the_running_emulator(addon_options, supervisor):
+async def test_add_on_options_reach_the_running_emulator(
+    addon_options: Callable[..., dict], supervisor: FakeSupervisor
+) -> None:
     """A tuning option set in the add-on UI changes what the battery is told."""
     options = addon_options(power_offset="100", ct_mac="AABBCCDDEE01")
 
@@ -248,7 +255,9 @@ async def test_add_on_options_reach_the_running_emulator(addon_options, supervis
     assert reply["meter_mac_code"].lower() == "aabbccddee01"
 
 
-async def test_supervisor_endpoints_answer_the_add_on(supervisor):
+async def test_supervisor_endpoints_answer_the_add_on(
+    supervisor: FakeSupervisor,
+) -> None:
     """The Supervisor lookups the add-on makes at startup, against a real server."""
     supervisor.mqtt = {
         "host": "core-mosquitto",
@@ -266,7 +275,9 @@ async def test_supervisor_endpoints_answer_the_add_on(supervisor):
     assert supervisor.unauthorized == 0
 
 
-async def test_a_wrong_token_is_not_silently_accepted(supervisor):
+async def test_a_wrong_token_is_not_silently_accepted(
+    supervisor: FakeSupervisor,
+) -> None:
     client = SupervisorClient(base_url=supervisor.base_url, token="wrong")
     assert await asyncio.to_thread(client.home_assistant_ready) is False
     assert supervisor.unauthorized == 1

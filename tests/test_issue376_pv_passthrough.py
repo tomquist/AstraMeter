@@ -37,7 +37,7 @@ pytestmark = pytest.mark.esphome_e2e
 
 
 @pytest.fixture(params=["python", "esphome"], autouse=True)
-def _emulator_backend(request):
+def _emulator_backend(request: pytest.FixtureRequest):
     if request.param == "esphome" and not be.have_esphome():
         pytest.skip("esphome CLI not on PATH; install with `uv tool install esphome`")
     be.ACTIVE_BACKEND = request.param

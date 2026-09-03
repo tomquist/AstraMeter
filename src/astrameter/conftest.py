@@ -6,6 +6,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ def find_free_port() -> int:
 
 
 @pytest.fixture(scope="session")
-def mqtt_broker():
+def mqtt_broker() -> Iterator[int]:
     if shutil.which("mosquitto") is None:
         pytest.skip("mosquitto not installed")
     port = find_free_port()

@@ -67,31 +67,31 @@ def mapped_options() -> set[str]:
     return {option_name(field) for fields in FIELD_LISTS for field in fields}
 
 
-def test_the_schema_block_was_parsed():
+def test_the_schema_block_was_parsed() -> None:
     options = schema_options()
     assert "power_input_alias" in options
     assert "import_trim_w" in options
     assert len(options) > 40
 
 
-def test_every_offered_option_is_consumed():
+def test_every_offered_option_is_consumed() -> None:
     """An option in the add-on UI that nothing reads would silently do nothing."""
     ignored = schema_options() - mapped_options() - HANDLED_IN_CODE
     assert not ignored, f"add-on options nothing reads: {sorted(ignored)}"
 
 
-def test_every_mapped_option_exists_in_the_schema():
+def test_every_mapped_option_exists_in_the_schema() -> None:
     """A mapping naming an option the add-on does not offer can never fire."""
     unknown = mapped_options() - schema_options()
     assert not unknown, f"options mapped but not offered: {sorted(unknown)}"
 
 
-def test_no_stale_entries_in_the_handled_in_code_list():
+def test_no_stale_entries_in_the_handled_in_code_list() -> None:
     stale = HANDLED_IN_CODE - schema_options()
     assert not stale, f"options no longer offered: {sorted(stale)}"
 
 
-def test_an_option_is_read_by_exactly_one_mapping():
+def test_an_option_is_read_by_exactly_one_mapping() -> None:
     seen: dict[str, int] = {}
     for fields in FIELD_LISTS:
         for option in map(option_name, fields):

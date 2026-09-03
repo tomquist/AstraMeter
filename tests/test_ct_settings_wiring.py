@@ -117,14 +117,14 @@ def distinct_settings() -> CtSettings:
     return replace(CtSettings(), **values)
 
 
-def test_destination_map_covers_every_ct_setting():
+def test_destination_map_covers_every_ct_setting() -> None:
     """A new CT setting must declare where it lands before this test passes."""
     covered = set(DESTINATIONS) | set(NOT_ON_THE_EMULATOR)
     declared = {field.name for field in fields(CtSettings)}
     assert covered == declared
 
 
-def test_every_ct_setting_reaches_its_destination():
+def test_every_ct_setting_reaches_its_destination() -> None:
     ct = distinct_settings()
     ct002 = _build_ct002(ct, "HME-4", "device-1", ct.debug_status, None)
 
@@ -136,20 +136,20 @@ def test_every_ct_setting_reaches_its_destination():
     assert not mismatches, f"settings that did not arrive: {mismatches}"
 
 
-def test_ct_type_and_device_id_are_passed_through():
+def test_ct_type_and_device_id_are_passed_through() -> None:
     ct002 = _build_ct002(CtSettings(), "HME-3", "device-9", False, None)
     assert ct002.ct_type == "HME-3"
     assert ct002._device_id == "device-9"
 
 
-def test_debug_status_is_passed_separately_from_the_setting():
+def test_debug_status_is_passed_separately_from_the_setting() -> None:
     """The DEBUG_STATUS env escape hatch can turn it on for either backend."""
     ct002 = _build_ct002(CtSettings(debug_status=False), "HME-4", "dev", True, None)
     assert ct002.debug_status is True
 
 
 @pytest.mark.parametrize("name", boolean_fields())
-def test_each_boolean_setting_reaches_only_its_own_destination(name):
+def test_each_boolean_setting_reaches_only_its_own_destination(name) -> None:
     """Flags cannot be told apart by value, so flip exactly one at a time.
 
     Two swapped flags with the same default would survive the sweep above;
