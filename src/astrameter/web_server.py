@@ -16,7 +16,7 @@ import shutil
 import signal
 import tempfile
 import threading
-from collections.abc import Awaitable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -450,14 +450,22 @@ class WebServer:
         entry = self.status.devices.get(device_id)
         return entry.device if entry else None
 
-    async def _mirror_to_mqtt(self, kind: str, publish: Awaitable[None]) -> None:
+    async def _mirror_to_mqtt(
+        self, kind: str, publish: Callable[[], Awaitable[None]]
+    ) -> None:
         """Mirror a control write to the retained MQTT command topic.
 
         Without it the broker's redelivery on the next reconnect reverts what
         the user just set.
+
+        Takes a factory rather than a coroutine so the call is *built* inside
+        the guard too. The write itself has already landed by the time we get
+        here, so nothing about mirroring it — including an insights object that
+        turns out not to offer the method — may turn a successful write into a
+        failed request.
         """
         try:
-            await publish
+            await publish()
         except Exception:
             logger.exception("Failed to mirror %s write to MQTT", kind)
 
@@ -511,7 +519,9 @@ class WebServer:
             # percentage as a fraction.
             await self._mirror_to_mqtt(
                 "control",
-                insights.publish_consumer_command(device_id, consumer_id, field, value),
+                lambda: insights.publish_consumer_command(
+                    device_id, consumer_id, field, value
+                ),
             )
         return self._applied()
 
@@ -543,7 +553,8 @@ class WebServer:
         insights = self._insights()
         if insights is not None:
             await self._mirror_to_mqtt(
-                "device", insights.publish_device_command(device_id, {field: value})
+                "device",
+                lambda: insights.publish_device_command(device_id, {field: value}),
             )
         return self._applied()
 

@@ -11,6 +11,7 @@ from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.settings import CtSettings, GeneralSettings
 from astrameter.powermeter import HomeAssistant, ThrottledPowermeter
 from astrameter.powermeter.wrappers.base import PowermeterWrapper
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
 
 class FakeSupervisor(addon.SupervisorClient):
@@ -165,7 +166,7 @@ def test_marstek_needs_the_opt_in_and_credentials() -> None:
 def test_single_power_entity_is_read_directly() -> None:
     cfg = config(BASE_OPTIONS)
     meter = cfg.powermeters(cfg.general())[0][0]
-    assert isinstance(meter, PowermeterWrapper)
+    assert isinstance(meter, HealthTrackingPowermeter)
     source = meter.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     assert source.power_calculate is False
@@ -177,7 +178,7 @@ def test_single_power_entity_is_read_directly() -> None:
 def _inner_source(cfg: addon.AddonAppConfig) -> HomeAssistant:
     """The Home Assistant source under the health wrapper the loader adds."""
     meter = cfg.powermeters(cfg.general())[0][0]
-    assert isinstance(meter, PowermeterWrapper)
+    assert isinstance(meter, HealthTrackingPowermeter)
     source = meter.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     return source
@@ -246,7 +247,7 @@ def test_command_line_throttle_override_reaches_the_power_source() -> None:
     general = cfg.general()
     general = replace(general, signal=replace(general.signal, throttle_interval=9))
     meter = cfg.powermeters(general)[0][0]
-    assert isinstance(meter, PowermeterWrapper)
+    assert isinstance(meter, HealthTrackingPowermeter)
     throttled = meter.wrapped_powermeter
     assert isinstance(throttled, ThrottledPowermeter)
     assert throttled.throttle_interval == 9

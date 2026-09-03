@@ -492,6 +492,12 @@ async def test_close_message_exits_iteration() -> None:
 
     await pm._read(ws)
 
+    # The frame before the CLOSE was acted on — this is the only test that
+    # drives the shared read loop, so without it a dropped TEXT dispatch in
+    # WebSocketPowermeter._read would go unnoticed.
+    ws.send_json.assert_awaited_once_with({"type": "subscribe", "data": "measurement"})
+    assert pm._connected is True
+    # ...and the one after it was not.
     assert pm.values is None
 
 

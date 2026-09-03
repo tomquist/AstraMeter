@@ -5,7 +5,7 @@ from astrameter.config.config_loader import new_config_parser
 from astrameter.config.ini_config import IniAppConfig, render_ini
 from astrameter.config.settings import CtSettings, GeneralSettings
 from astrameter.powermeter import ThrottledPowermeter
-from astrameter.powermeter.wrappers.base import PowermeterWrapper
+from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
 
 def config(text: str) -> IniAppConfig:
@@ -148,7 +148,7 @@ IP = 192.168.1.10
 """
     )
     meter, _, _ = cfg.powermeters(cfg.general())[0]
-    assert isinstance(meter, PowermeterWrapper)
+    assert isinstance(meter, HealthTrackingPowermeter)
     assert isinstance(meter.wrapped_powermeter, ThrottledPowermeter)
 
 
