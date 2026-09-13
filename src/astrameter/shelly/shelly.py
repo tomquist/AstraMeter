@@ -23,6 +23,13 @@ from astrameter.shelly.tcp_server import ShellyTcpServer
 from astrameter.udp_server import DatagramSink, UdpServer
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
+
+#: How long a battery that has gone silent stays in the battery list after it
+#: is marked inactive. Marking it keeps a battery that went away visible, which
+#: is the point; *keeping* it forever means anything that ever reached a meter
+#: endpoint is listed for the process's lifetime. On the HTTP surface that
+#: would be reachable from any host on the LAN, so the list is bounded here.
+BATTERY_EVICTION_TIMEOUT_SECONDS = 3600
 POLL_INTERVAL_EMA_ALPHA = 0.3
 
 #: How many HTTP requests from one client may queue for the next meter reading
@@ -156,6 +163,13 @@ class Shelly:
         self._battery_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._battery_waiters: Counter[str] = Counter()
         self._http_client_last_touch: dict[str, float] = {}
+        # HTTP clients that have read a meter endpoint once. A battery polls
+        # continuously, so it is in here for a fraction of a second; a browser,
+        # a port scanner or a monitoring check reads once and never returns.
+        # Requiring a second read before calling a client a battery is what
+        # keeps those off the dashboard — and, more importantly, keeps them
+        # from each publishing a Home Assistant device over MQTT.
+        self._http_meter_seen: set[str] = set()
         self._battery_poll_interval: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
         # Batteries with a request handler currently parked between the meter
@@ -314,6 +328,21 @@ class Shelly:
             )
             self._call_event_listener(battery_ip, {"_removed": True})
 
+        # Then forget the ones that have been gone long enough that showing
+        # them is no longer telling the user anything. Their removal event went
+        # out when they were marked inactive above, so this is pure cleanup.
+        evicted = [
+            battery_ip
+            for battery_ip, last_seen in self._battery_last_seen.items()
+            if now - last_seen >= BATTERY_EVICTION_TIMEOUT_SECONDS
+        ]
+        for battery_ip in evicted:
+            logger.debug("Forgetting long-gone battery %s", battery_ip)
+            del self._battery_last_seen[battery_ip]
+            self._battery_poll_interval.pop(battery_ip, None)
+            self._battery_transports.pop(battery_ip, None)
+            self._inactive_batteries.discard(battery_ip)
+
     def _prune_http_client_state(self, now: float) -> None:
         """Drop the per-client HTTP state of clients that have gone away.
 
@@ -331,11 +360,12 @@ class Shelly:
             if self._battery_waiters.get(ip) or (lock is not None and lock.locked()):
                 continue
             del self._http_client_last_touch[ip]
-            # `pop` rather than `del`: a client that raised before the cap
-            # check has a touch entry and neither of the other two, and a
+            # `pop`/`discard` rather than `del`: a client that raised before
+            # the cap check has a touch entry and none of the others, and a
             # `defaultdict` raises on a missing key where a `Counter` does not.
             self._battery_locks.pop(ip, None)
             self._battery_waiters.pop(ip, None)
+            self._http_meter_seen.discard(ip)
 
     def _emit_grid_power_event(
         self, battery_ip: str, powers: list[float], poll_interval: float | None
@@ -375,6 +405,13 @@ class Shelly:
         # Stamped first, before anything else can create per-client state, so
         # the sweep above always has a key to find the rest by.
         self._http_client_last_touch[client_ip] = time.time()
+        if counts and client_ip not in self._http_meter_seen:
+            # First meter read from this address: serve it, but do not call it
+            # a battery yet. The UDP path needs no such rule — reaching it at
+            # all takes a Marstek-shaped datagram — but any host on the LAN can
+            # fetch an HTTP endpoint once.
+            self._http_meter_seen.add(client_ip)
+            counts = False
 
         configured = powermeter_for(self._powermeters, client_ip)
         if configured is None:
@@ -659,7 +696,7 @@ class Shelly:
         )
         advertiser = MdnsAdvertiser(services)
         try:
-            started = await advertiser.start()
+            await advertiser.start()
         except (OSError, RuntimeError, ValueError) as exc:
             # Every one of these is reachable: no IPv4 interface up yet, an
             # address that belongs to no adapter, or an interface name where an
@@ -671,7 +708,7 @@ class Shelly:
                 rpc.ANNOUNCE_WATCHDOG_S,
             )
             return
-        self._advertiser = advertiser if started else None
+        self._advertiser = advertiser
 
     async def start(self) -> None:
         """Bring the device up in three independent stages.

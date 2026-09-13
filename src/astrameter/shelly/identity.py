@@ -200,6 +200,11 @@ def resolve_identity(
     interface changes.
 
     *device_id_hint* is ``None`` unless the id was configured by the user.
+
+    Two emulators on one host reach the same answer at the interface step —
+    same MAC, so the same names — and nothing here can tell that apart from one
+    emulator restarting. Setting ``MAC`` on either is the only separation;
+    ``docs/shelly-tcp.md`` says so where a user would look.
     """
     configured = normalize_mac(settings.mac)
     if configured:

@@ -21,7 +21,11 @@ from astrameter.powermeter import Powermeter
 from astrameter.shelly import rpc
 from astrameter.shelly.identity import ShellyIdentity
 from astrameter.shelly.rpc import ShellyRpcError
-from astrameter.shelly.shelly import MAX_TCP_WAITERS_PER_BATTERY, Shelly
+from astrameter.shelly.shelly import (
+    BATTERY_EVICTION_TIMEOUT_SECONDS,
+    MAX_TCP_WAITERS_PER_BATTERY,
+    Shelly,
+)
 
 IDENTITY = ShellyIdentity(
     mac="B827EB364242",
@@ -72,11 +76,37 @@ def build_emulator(
 
 
 async def test_a_meter_surface_marks_the_client_as_a_battery() -> None:
+    """A client that keeps reading the meter is a battery.
+
+    The *second* read is what registers it: see the one-shot test below for
+    why the first does not.
+    """
     emulator = build_emulator(StubMeter())
+    await emulator._read_for_http("10.0.0.5", "em.getstatus")
     await emulator._read_for_http("10.0.0.5", "em.getstatus")
     snapshot = emulator.status_snapshot()
     assert [battery.ip for battery in snapshot.batteries] == ["10.0.0.5"]
     assert snapshot.batteries[0].transport == "tcp"
+
+
+async def test_a_one_shot_meter_read_does_not_make_a_battery() -> None:
+    """A browser, a scanner or a monitoring check must not become a battery.
+
+    The HTTP surface listens on a LAN-facing port and answers any address the
+    configured `NETMASK` covers, which is everything by default. Registering
+    on first contact meant one `curl /status` per host produced a dashboard
+    row *and* a Home Assistant device published over MQTT — for something that
+    is not a battery and never comes back.
+    """
+    emulator = build_emulator(StubMeter())
+    events: list[str] = []
+    emulator.event_listener = lambda _dev, ip, _data: events.append(ip)
+
+    for host in range(20):
+        await emulator._read_for_http(f"10.0.0.{host}", "/status")
+
+    assert emulator.status_snapshot().batteries == ()
+    assert events == []
 
 
 async def test_a_composite_poll_does_not_make_a_battery() -> None:
@@ -103,6 +133,7 @@ async def test_a_meter_surface_emits_the_grid_power_event() -> None:
     events: list[tuple[str, dict[str, Any]]] = []
     emulator.event_listener = lambda _dev, ip, data: events.append((ip, data))
     await emulator._read_for_http("10.0.0.5", "em.getstatus")
+    await emulator._read_for_http("10.0.0.5", "em.getstatus")
     assert len(events) == 1
     ip, payload = events[0]
     assert ip == "10.0.0.5"
@@ -116,8 +147,39 @@ async def test_both_transports_send_the_same_event_shape() -> None:
     events: list[dict[str, Any]] = []
     emulator.event_listener = lambda _dev, _ip, data: events.append(data)
     await emulator._read_for_http("10.0.0.5", "em.getstatus")
+    await emulator._read_for_http("10.0.0.5", "em.getstatus")
     emulator._emit_grid_power_event("10.0.0.6", [300.0, 0.0, -120.0], 1.0)
     assert set(events[0]) == set(events[1])
+
+
+async def test_a_battery_is_forgotten_once_it_has_been_gone_long_enough() -> None:
+    """The battery list has to be bounded, not merely marked.
+
+    Marking a silent battery inactive keeps it visible, which is deliberate.
+    Keeping it forever means anything that ever read a meter endpoint is
+    listed for the life of the process — on a LAN-facing port, from any host.
+    """
+    emulator = build_emulator(StubMeter())
+    for _ in range(2):
+        await emulator._read_for_http("10.0.0.5", "em.getstatus")
+    assert len(emulator.status_snapshot().batteries) == 1
+
+    # Inactive, but still shown: the user wants to see a battery that stopped.
+    emulator._battery_last_seen["10.0.0.5"] = time.time() - 300
+    emulator._log_inactive_batteries()
+    snapshot = emulator.status_snapshot()
+    assert len(snapshot.batteries) == 1
+    assert snapshot.batteries[0].active is False
+
+    # Long gone: forgotten, along with every per-battery map keyed by it.
+    emulator._battery_last_seen["10.0.0.5"] = (
+        time.time() - BATTERY_EVICTION_TIMEOUT_SECONDS - 1
+    )
+    emulator._log_inactive_batteries()
+    assert emulator.status_snapshot().batteries == ()
+    assert emulator._battery_poll_interval == {}
+    assert emulator._battery_transports == {}
+    assert emulator._inactive_batteries == set()
 
 
 async def test_a_battery_on_both_transports_reports_both() -> None:
@@ -125,6 +187,18 @@ async def test_a_battery_on_both_transports_reports_both() -> None:
     emulator._track_battery_seen("10.0.0.5", "udp")
     emulator._track_battery_seen("10.0.0.5", "tcp")
     assert emulator.status_snapshot().batteries[0].transport == "udp+tcp"
+
+
+async def test_the_udp_path_still_registers_on_first_contact() -> None:
+    """The second-read rule is the HTTP surface's alone.
+
+    Reaching the UDP path at all takes a Marstek-shaped datagram on a
+    device-specific port, so there is no drive-by to guard against — and
+    delaying a real battery's first appearance there would be a regression.
+    """
+    emulator = build_emulator(StubMeter())
+    emulator._track_battery_seen("10.0.0.7", "udp")
+    assert [b.ip for b in emulator.status_snapshot().batteries] == ["10.0.0.7"]
 
 
 async def test_an_unmatched_client_is_told_no_data_is_available() -> None:

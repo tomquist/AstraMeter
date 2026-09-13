@@ -39,7 +39,10 @@ answers:
 - `POST /rpc` — a JSON-RPC frame, answered with the full envelope
 - `POST /rpc/<Method>` — the parameters as the body, answered with the bare result
 - `GET /rpc` upgraded to a **WebSocket** — the transport Home Assistant's Shelly
-  integration uses
+  integration uses. Every request is answered on it, but nothing is pushed: a
+  real Shelly also sends `NotifyStatus` frames of its own accord when a reading
+  changes, and AstraMeter does not. A consumer only sees a new reading when it
+  asks for one.
 - `GET /shelly`, `GET /settings` — device identity
 - `GET /status`, `GET /emeter/0..2` — the older single-page endpoints, which some
   batteries probe to confirm what they are talking to
@@ -107,6 +110,11 @@ where the container gets a new address on every start.
 > its existing `DEVICE_IDS` identity for those; the MAC here is used only for
 > discovery and the HTTP surface.
 
+**Two AstraMeters on one machine** land on the same MAC at step 4, so they
+announce the same name and claim the same identity, and neither one reports a
+conflict. Give at least one of them its own `MAC` — any value you like, as long
+as the two differ.
+
 ## Per-installation notes
 
 | | Discovery | Port 80 |
@@ -143,9 +151,11 @@ poll a configured address keep working.
 
 Because AstraMeter announces itself as a Shelly, Home Assistant's own Shelly
 integration will offer it as a discovered device. Adding it is harmless and
-gives you the meter's readings as sensors, but it is not how AstraMeter feeds
-Home Assistant — that is the dashboard and, if you enable it, MQTT. You can
-ignore the discovery notification.
+gives you the meter's readings as sensors, but they refresh on Home Assistant's
+own polling interval rather than the moment they change, because the emulated
+device pushes nothing (see [What it serves](#what-it-serves)). This is not how
+AstraMeter feeds Home Assistant anyway — that is the dashboard and, if you
+enable it, MQTT — so ignoring the discovery notification costs you nothing.
 
 Home Assistant polling the device does **not** make it appear as a battery on
 the dashboard: only the meter endpoints a battery actually reads count towards

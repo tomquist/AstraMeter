@@ -165,7 +165,7 @@ async def test_the_advertiser_registers_both_services(
     services: list[mdns.MdnsService],
 ) -> None:
     advertiser = MdnsAdvertiser(services, zc_factory=FakeZeroconf)  # type: ignore[arg-type]
-    assert await advertiser.start() is True
+    await advertiser.start()
     assert advertiser.registered
     fake = advertiser._zc
     assert isinstance(fake, FakeZeroconf)

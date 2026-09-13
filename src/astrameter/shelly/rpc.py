@@ -454,9 +454,16 @@ def shelly_get_device_info(
 ) -> dict[str, Any]:
     """Who this device is — the first thing most consumers ask for.
 
-    ``id`` is the lowercase MAC-derived form, matching what the mDNS TXT record
-    and the UDP surface report, so a consumer correlating the two sees one
-    device rather than two.
+    ``id`` is the lowercase MAC-derived form, matching the mDNS TXT record, so
+    a consumer that discovers the device and then asks it who it is gets one
+    answer.
+
+    It deliberately does **not** match the ``src`` the UDP surface reports:
+    that is the emulator's own ``device_id``, which keys the MQTT topics and
+    Home Assistant entities an existing install already has. Rederiving it
+    would rename all of them. A consumer that reaches this device over *both*
+    transports therefore sees two names for it; set ``DEVICE_IDS`` to the same
+    MAC-derived form to unify them.
     """
     return {
         "id": ctx.identity.shelly_id,
@@ -490,7 +497,10 @@ def sys_get_config(
             "fw_id": ctx.profile.fw_id,
             "eco_mode": False,
             "profile": "",
-            "discoverable": False,
+            # True on both this and the older settings page. They describe one
+            # device, and `false` here means "hide me from discovery" — which
+            # would contradict the whole point of announcing ourselves.
+            "discoverable": True,
         },
         "location": {"tz": None, "lat": None, "lon": None},
         "debug": {
@@ -817,9 +827,8 @@ def shelly_get_components(
     """The component inventory, with each component's status and config.
 
     ``dynamic_only`` asks for components that can appear and disappear at
-    runtime; this device has none, so the answer is an empty list. ``total``
-    counts the dynamic components rather than the returned ones, which is why
-    it stays at 2 beside three entries.
+    runtime; this device has none, so the answer is an empty list. ``total`` is
+    the number of components matching the request, as the vendor documents it.
     """
     dynamic_only = _bool_param(params, "dynamic_only")
     offset = _int_param(params, "offset", default=0)
@@ -842,7 +851,7 @@ def shelly_get_components(
         "components": components,
         "cfg_rev": 1,
         "offset": offset,
-        "total": 2,
+        "total": len(components),
     }
 
 
@@ -1011,10 +1020,17 @@ def _config_param(params: dict[str, Any]) -> dict[str, Any]:
         if not key.startswith("config."):
             continue
         path = key[len("config.") :].split(".")
-        try:
-            parsed = json.loads(value) if isinstance(value, str) else value
-        except json.JSONDecodeError:
-            raise ShellyRpcError(-103, "Invalid 'config'") from None
+        # The vendor's examples quote strings, so a value that parses as JSON
+        # is taken as JSON — `false` is a boolean, `8080` a number. A value
+        # that does not parse is a bare string, which the documentation also
+        # allows and which is the natural thing to type: `config.server=x:1`
+        # must not be an error.
+        parsed: Any = value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                parsed = value
         cursor = dotted
         for segment in path[:-1]:
             cursor = cursor.setdefault(segment, {})

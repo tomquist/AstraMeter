@@ -139,7 +139,7 @@ def test_sys_get_config_reports_no_location(ctx: rpc.RequestContext) -> None:
     assert body(ctx, "Sys.GetConfig") == (
         '{"device":{"name":"ShellyPro3EM-B827EB364242","mac":"B827EB364242",'
         '"fw_id":"20250924-062729/1.7.1-gd336f31","eco_mode":false,'
-        '"profile":"","discoverable":false},'
+        '"profile":"","discoverable":true},'
         '"location":{"tz":null,"lat":null,"lon":null},'
         '"debug":{"mqtt":{"enable":false},"websocket":{"enable":false},'
         '"udp":{"addr":null}},"ui_data":{},'
@@ -304,8 +304,9 @@ def test_shelly_get_components(ctx: rpc.RequestContext) -> None:
     ]
     assert result["cfg_rev"] == 1
     assert result["offset"] == 0
-    # Counts the dynamic components rather than the returned ones.
-    assert result["total"] == 2
+    # The vendor documents `total` as the number of components matching the
+    # request, so it agrees with the list rather than counting something else.
+    assert result["total"] == len(result["components"]) == 3
 
 
 def test_shelly_get_components_dynamic_only_is_empty(
@@ -443,6 +444,12 @@ def test_setters_accept_every_config_spelling(ctx: rpc.RequestContext) -> None:
     """
     rpc.cloud_set_config(ctx, {"config.enable": "true"}, None)
     assert rpc.cloud_get_config(ctx, {}, None)["enable"] is True
+
+    # A dotted value that is not JSON is a bare string, which is what a user
+    # types and what the documentation allows. Rejecting it left a documented
+    # request shape answering 400.
+    rpc.cloud_set_config(ctx, {"config.server": "example.com:6022/jrpc"}, None)
+    assert rpc.cloud_get_config(ctx, {}, None)["server"] == "example.com:6022/jrpc"
 
     rpc.cloud_set_config(ctx, {"config": '{"enable": false}'}, None)
     assert rpc.cloud_get_config(ctx, {}, None)["enable"] is False
