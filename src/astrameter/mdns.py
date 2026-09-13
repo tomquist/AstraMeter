@@ -175,12 +175,15 @@ class MdnsAdvertiser:
     def registered(self) -> bool:
         return bool(self._infos)
 
-    async def start(self) -> bool:
-        """Register both services. ``False`` when the responder cannot run.
+    async def start(self) -> None:
+        """Register both services, or raise.
 
-        Failing here is not fatal to the emulator: a consumer can still be
-        pointed at the device by address, so the HTTP surface stays up and the
-        emulator retries on its next tick.
+        Raising rather than reporting: the failure modes are all
+        environmental — no IPv4 interface up yet, an address that belongs to no
+        adapter, an interface name where an address was expected — and the
+        caller has to tell them apart from a clean start to decide whether to
+        retry. None of them is fatal to the emulator; the HTTP surface stays
+        up and a consumer can still be pointed at the device by address.
         """
         zc = self._zc_factory(interfaces=self._interfaces, ip_version=IPVersion.V4Only)
         infos = [_service_info(service) for service in self._services]
@@ -196,7 +199,6 @@ class MdnsAdvertiser:
             self._services[0].name if self._services else "nothing",
             self._services[0].port if self._services else 0,
         )
-        return True
 
     async def refresh(self, announced_ip: str) -> None:
         """Re-announce with a new address record."""

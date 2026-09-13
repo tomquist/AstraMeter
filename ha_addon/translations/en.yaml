@@ -163,7 +163,8 @@ configuration:
     description: "Optional. Caps the PID adjustment to plus/minus this many watts. Default 800. Only used when PID Proportional Gain is set."
   pid_mode:
     name: PID Mode
-    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."  shelly_tcp_port:
+    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."
+  shelly_tcp_port:
     name: Shelly HTTP Port
     description: "Optional. Port the emulated Shelly Pro 3EM answers HTTP on. Batteries that find the meter over mDNS talk to this port, and several models expect 80. Set -1 to serve no HTTP at all (the meter is still announced over mDNS). Default 80."
   shelly_mdns_enabled:
