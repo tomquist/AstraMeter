@@ -5,18 +5,32 @@ import contextlib
 import dataclasses
 import json
 import time
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
 from astrameter.config.logger import debug_traceback, logger
-from astrameter.config.settings import ConfiguredPowermeter
+from astrameter.config.settings import ConfiguredPowermeter, ShellySettings
+from astrameter.mdns import MdnsAdvertiser, parse_txt_overrides, shelly_services
 from astrameter.meter_pool import powermeter_for, powermeter_name, read_fresh
+from astrameter.net_info import AnnouncedAddress, announced_ipv4
 from astrameter.request_dedupe import RequestDeduplicator
+from astrameter.shelly import rpc
+from astrameter.shelly.identity import ShellyIdentity
+from astrameter.shelly.rpc import NO_POWER_DATA, ShellyRpcError
+from astrameter.shelly.tcp_server import ShellyTcpServer
 from astrameter.udp_server import DatagramSink, UdpServer
 
 BATTERY_INACTIVE_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_EMA_ALPHA = 0.3
+
+#: How many HTTP requests from one client may queue for the next meter reading
+#: before the rest are shed. A client fanning out the older per-phase pages
+#: issues four at once, and a smart-home integration pipelines its calls on one
+#: socket, so four is above every legitimate burst while still bounding the
+#: memory a single client can pin.
+MAX_TCP_WAITERS_PER_BATTERY = 4
 
 
 def _decode_request(data: bytes, addr: tuple[str, int]) -> dict[str, Any] | None:
@@ -65,6 +79,10 @@ class ShellyBatterySnapshot:
     poll_interval: float | None
     active: bool
     in_flight: bool
+    #: Which transports this battery has polled on — ``"udp"``, ``"tcp"`` or
+    #: ``"udp+tcp"``. A battery that found us over mDNS polls HTTP; one
+    #: configured by address polls UDP; some do both.
+    transport: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -78,6 +96,21 @@ class ShellySnapshot:
     started_at: float | None
     inactive_timeout: int
     batteries: tuple[ShellyBatterySnapshot, ...]
+    #: The HTTP surface. ``tcp_port`` is the bound port while listening, the
+    #: configured one before a successful bind, and ``None`` when this device
+    #: serves no HTTP at all — either because it is not the owner, or because
+    #: the port is set to ``-1``.
+    tcp_port: int | None = None
+    tcp_running: bool = False
+    #: mDNS presence, and the identity it announces. All five are ``None`` on a
+    #: device that is not the HTTP/mDNS owner, which every default install has
+    #: one of: the ``shellypro3em`` pair is two devices sharing one identity.
+    mdns_registered: bool = False
+    mac: str | None = None
+    shelly_id: str | None = None
+    mdns_hostname: str | None = None
+    mdns_instance: str | None = None
+    mdns_ip: str | None = None
 
 
 class Shelly:
@@ -88,13 +121,41 @@ class Shelly:
         device_id: str,
         dedupe_time_window: float = 0.0,
         device_type: str = "",
+        identity: ShellyIdentity | None = None,
+        settings: ShellySettings | None = None,
+        owns_tcp: bool = False,
     ) -> None:
         self._udp_port = udp_port
         self._device_id = device_id
         self._device_type = device_type
         self._powermeters = powermeters
+        # The HTTP/mDNS identity, and whether this device is the one that
+        # serves them. The `shellypro3em` pair is two devices sharing one
+        # identity, so exactly one of them owns the single listener.
+        self._identity = identity
+        self._settings = settings or ShellySettings()
+        self._owns_tcp = owns_tcp
+        self._tcp_server: ShellyTcpServer | None = None
+        self._advertiser: MdnsAdvertiser | None = None
+        self._announced: AnnouncedAddress | None = None
+        self._energy: rpc.EnergyCounters | None = None
+        self._settings_store = rpc.SettingsStore()
+        self._announce_task: asyncio.Task[None] | None = None
         self._server: UdpServer | None = None
         self._battery_last_seen: dict[str, float] = {}
+        # Which transports each battery has been seen on. Written only for the
+        # meter surfaces, so it is bounded by the battery list itself.
+        self._battery_transports: dict[str, set[str]] = {}
+        # Per-client HTTP state. The lock serialises one client's requests so a
+        # burst cannot feed the same stale reading to several of them; the
+        # counter bounds how many may queue. Both auto-vivify, so a client's
+        # first request cannot raise, and both are bounded by the touch map
+        # below — which is stamped for *every* IP served, including the ones
+        # that never count as a battery, because otherwise a smart-home
+        # integration polling us forever would grow them without limit.
+        self._battery_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._battery_waiters: Counter[str] = Counter()
+        self._http_client_last_touch: dict[str, float] = {}
         self._battery_poll_interval: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
         # Batteries with a request handler currently parked between the meter
@@ -179,9 +240,21 @@ class Shelly:
             },
         }
 
-    def _track_battery_seen(self, addr: tuple[str, int]) -> float | None:
-        battery_ip = addr[0]
+    def _transport_label(self, transport: str) -> str:
+        """How a transport reads in a log line, with its port."""
+        if transport == "tcp":
+            return f"HTTP port {self.tcp_port}"
+        return f"UDP port {self._udp_port}"
+
+    def _track_battery_seen(self, battery_ip: str, transport: str) -> float | None:
+        """Refresh liveness for *battery_ip*, seen on *transport*.
+
+        *transport* is a key — ``"udp"`` or ``"tcp"`` — not a rendered label;
+        the label is derived from it where it is logged, so the snapshot and
+        the log lines cannot describe the same request differently.
+        """
         now = time.time()
+        self._battery_transports.setdefault(battery_ip, set()).add(transport)
 
         first_seen = battery_ip not in self._battery_last_seen
         was_inactive = battery_ip in self._inactive_batteries
@@ -207,14 +280,14 @@ class Shelly:
 
         if first_seen:
             logger.info(
-                "Battery detected on Shelly UDP port %s: %s",
-                self._udp_port,
+                "Battery detected on Shelly %s: %s",
+                self._transport_label(transport),
                 battery_ip,
             )
         elif was_inactive:
             logger.info(
-                "Battery reconnected on Shelly UDP port %s after inactivity: %s",
-                self._udp_port,
+                "Battery reconnected on Shelly %s after inactivity: %s",
+                self._transport_label(transport),
                 battery_ip,
             )
 
@@ -234,12 +307,125 @@ class Shelly:
 
         for battery_ip in newly_inactive_batteries:
             logger.info(
-                "Battery inactive on Shelly UDP port %s for >= %ss: %s",
-                self._udp_port,
+                "Battery inactive on Shelly %s for >= %ss: %s",
+                "+".join(sorted(self._battery_transports.get(battery_ip, {"udp"}))),
                 BATTERY_INACTIVE_TIMEOUT_SECONDS,
                 battery_ip,
             )
             self._call_event_listener(battery_ip, {"_removed": True})
+
+    def _prune_http_client_state(self, now: float) -> None:
+        """Drop the per-client HTTP state of clients that have gone away.
+
+        Swept from the touch map rather than from the battery list, because a
+        client that only ever calls the reading-free methods — a smart-home
+        integration, a scanner — never appears in the battery list but does
+        create state here. Left alone while a request is in flight or the lock
+        is held: dropping a lock someone is parked on would let a second waiter
+        straight through.
+        """
+        for ip, touched in list(self._http_client_last_touch.items()):
+            if now - touched < BATTERY_INACTIVE_TIMEOUT_SECONDS:
+                continue
+            lock = self._battery_locks.get(ip)
+            if self._battery_waiters.get(ip) or (lock is not None and lock.locked()):
+                continue
+            del self._http_client_last_touch[ip]
+            # `pop` rather than `del`: a client that raised before the cap
+            # check has a touch entry and neither of the other two, and a
+            # `defaultdict` raises on a missing key where a `Counter` does not.
+            self._battery_locks.pop(ip, None)
+            self._battery_waiters.pop(ip, None)
+
+    def _emit_grid_power_event(
+        self, battery_ip: str, powers: list[float], poll_interval: float | None
+    ) -> None:
+        """Publish the reading a battery was just served.
+
+        Both transports call this, so the payload cannot drift between them.
+        """
+        l1, l2, l3 = _three_phases(powers)
+        self._call_event_listener(
+            battery_ip,
+            {
+                "grid_power": {
+                    "l1": l1,
+                    "l2": l2,
+                    "l3": l3,
+                    "total": l1 + l2 + l3,
+                },
+                "active": battery_ip not in self._inactive_batteries,
+                "poll_interval": poll_interval,
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+                "battery_count": len(self._battery_last_seen),
+            },
+        )
+
+    async def _read_for_http(self, client_ip: str, key: str) -> list[float] | None:
+        """The reading an HTTP request needs, or ``None`` when it may go without.
+
+        *key* is what dispatched the request — a lower-cased method name or one
+        of the non-RPC paths — and everything else is derived from it, so a
+        caller cannot ask for a reading under rules that disagree with the
+        tables. Whether a failure here is an error or a degraded answer is the
+        caller's decision, not this method's: it raises either way.
+        """
+        required = rpc.NEEDS_READING[key]
+        counts = key in rpc.COUNTS_AS_BATTERY_POLL
+        # Stamped first, before anything else can create per-client state, so
+        # the sweep above always has a key to find the rest by.
+        self._http_client_last_touch[client_ip] = time.time()
+
+        configured = powermeter_for(self._powermeters, client_ip)
+        if configured is None:
+            logger.warning("No powermeter found for client %s", client_ip)
+            raise ShellyRpcError(1, NO_POWER_DATA)
+
+        if self._battery_waiters[client_ip] >= MAX_TCP_WAITERS_PER_BATTERY:
+            if not required:
+                # No slot taken and no waiting: the composite methods answer
+                # from static state with the measurements nulled rather than
+                # queueing behind a backlog.
+                return None
+            logger.debug(
+                "Shedding a Shelly HTTP request from %s: %s already queued",
+                client_ip,
+                MAX_TCP_WAITERS_PER_BATTERY,
+            )
+            raise ShellyRpcError(1, NO_POWER_DATA, retry_after=1)
+
+        self._battery_waiters[client_ip] += 1
+        try:
+            async with self._battery_locks[client_ip]:
+                poll_interval = (
+                    self._track_battery_seen(client_ip, "tcp") if counts else None
+                )
+                try:
+                    powers = await read_fresh(configured)
+                except Exception as exc:
+                    # Any read failure is code 1, exactly as on the UDP path: a
+                    # powermeter backend is effectively third-party code, and
+                    # letting an arbitrary exception escape would turn the
+                    # composite methods into 500s and break device setup.
+                    logger.warning(
+                        "Could not read meter values from %s (%s): %s",
+                        powermeter_name(configured.powermeter),
+                        client_ip,
+                        exc,
+                        exc_info=debug_traceback(),
+                    )
+                    raise ShellyRpcError(1, NO_POWER_DATA) from exc
+                if not powers:
+                    # A meter that has not produced its first reading yet. The
+                    # UDP path drops the datagram, which a battery retries;
+                    # an HTTP client needs an answer, and zeros would read as
+                    # a real measurement of no load.
+                    raise ShellyRpcError(1, NO_POWER_DATA)
+                if counts:
+                    self._emit_grid_power_event(client_ip, powers, poll_interval)
+                return powers
+        finally:
+            self._battery_waiters[client_ip] -= 1
 
     def _call_event_listener(self, battery_ip: str, data: dict[str, Any]) -> None:
         if not self.event_listener:
@@ -263,7 +449,7 @@ class Shelly:
         self, data: bytes, addr: tuple[str, int], transport: DatagramSink
     ) -> None:
         battery_ip = addr[0]
-        poll_interval = self._track_battery_seen(addr)
+        poll_interval = self._track_battery_seen(battery_ip, "udp")
 
         if not self._dedup.should_process(battery_ip):
             logger.debug("Ignoring request from %s due to dedupe window", addr)
@@ -321,22 +507,7 @@ class Shelly:
             logger.debug("Sending response: %s", response_json)
             transport.sendto(response_json.encode(), addr)
 
-            l1, l2, l3 = _three_phases(powers)
-            self._call_event_listener(
-                battery_ip,
-                {
-                    "grid_power": {
-                        "l1": l1,
-                        "l2": l2,
-                        "l3": l3,
-                        "total": l1 + l2 + l3,
-                    },
-                    "active": battery_ip not in self._inactive_batteries,
-                    "poll_interval": poll_interval,
-                    "last_seen": datetime.now(timezone.utc).isoformat(),
-                    "battery_count": len(self._battery_last_seen),
-                },
-            )
+            self._emit_grid_power_event(battery_ip, powers, poll_interval)
         finally:
             self._inflight_batteries.discard(battery_ip)
 
@@ -362,21 +533,191 @@ class Shelly:
                 self._dedup.purge_older_than(
                     max(BATTERY_INACTIVE_TIMEOUT_SECONDS, self._dedupe_time_window)
                 )
+                self._prune_http_client_state(time.time())
         except asyncio.CancelledError:
             pass
 
-    async def start(self) -> None:
-        self._server = await UdpServer.serve(self._udp_port, self._safe_handle_request)
-        self._stopped.clear()
-        self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
+    async def _announce_watchdog_loop(self) -> None:
+        """Keep the advertised address, and the mDNS registration, current.
+
+        Runs whenever this device owns the HTTP surface, regardless of whether
+        mDNS is enabled or whether either listener came up. That is deliberate:
+        the advertised address is also what the HTTP surface reports as its own
+        address, so gating this on the advertiser would freeze that value after
+        a DHCP change in exactly the configurations that have no advertiser.
+        """
+        try:
+            while True:
+                await asyncio.sleep(rpc.ANNOUNCE_WATCHDOG_S)
+                if self._advertiser is not None:
+                    with contextlib.suppress(OSError, RuntimeError, ValueError):
+                        await self._advertiser.refresh_interfaces()
+                elif self._settings.mdns_enabled:
+                    # A failed start is retried, so a responder that could not
+                    # come up at boot — no network yet — recovers by itself.
+                    await self._start_mdns()
+                if self._announced is None:
+                    continue
+                updated = self._announced.refresh()
+                if updated is not None and self._advertiser is not None:
+                    with contextlib.suppress(OSError, RuntimeError, ValueError):
+                        await self._advertiser.refresh(updated)
+        except asyncio.CancelledError:
+            pass
+
+    async def _start_udp(self) -> None:
+        """Stage one: the battery-facing UDP responder."""
+        try:
+            self._server = await UdpServer.serve(
+                self._udp_port, self._safe_handle_request
+            )
+        except OSError as exc:
+            logger.error(
+                "Could not bind the Shelly UDP port %s (errno %s: %s). Batteries "
+                "that poll this port will not be answered; the HTTP surface and "
+                "mDNS are unaffected. Ports below 1024 need extra privileges — "
+                "see docs/faq.md.",
+                self._udp_port,
+                exc.errno,
+                exc.strerror or exc,
+            )
+            self._server = None
+            return
         self._udp_port = self._server.port or self._udp_port
-        self._started_at = time.time()
         self._running = True
         logger.info("Shelly emulator listening on UDP port %s", self._udp_port)
+
+    async def _start_tcp(self) -> None:
+        """Stage two: the HTTP surface, on the owning device only."""
+        if not self._owns_tcp or self._identity is None:
+            return
+        if self._settings.tcp_port < 0:
+            logger.info(
+                "Shelly HTTP surface disabled (TCP_PORT = -1); mDNS still "
+                "announces the configured port"
+            )
+            return
+        profile = rpc.PROFILES.get(self._device_type)
+        if profile is None:
+            return
+        self._energy = rpc.EnergyCounters(now=time.time)
+        server = ShellyTcpServer(
+            port=self._settings.tcp_port,
+            identity=self._identity,
+            profile=profile,
+            udp_port=self._udp_port,
+            read_reading=self._read_for_http,
+            energy=self._energy,
+            serve_gen1=self._settings.serve_gen1_endpoints,
+            announced_ip=self._require_announced(),
+            settings_store=self._settings_store,
+            started_at=self._started_at or time.time(),
+        )
+        try:
+            started = await server.start()
+        except OSError:
+            started = False
+        self._tcp_server = server if started else None
+
+    def _require_announced(self) -> AnnouncedAddress:
+        """The one live copy of the advertised address, created on demand."""
+        if self._announced is None:
+            host = self._settings.mdns_host
+            self._announced = AnnouncedAddress(
+                announced_ipv4(host), resolve=lambda: announced_ipv4(host)
+            )
+        return self._announced
+
+    async def _start_mdns(self) -> None:
+        """Stage three: the mDNS announcement.
+
+        Runs whether or not the two listeners came up. A device whose UDP bind
+        failed and whose HTTP port is disabled still announces itself, because
+        some consumers discover over mDNS and then poll the UDP port — and the
+        port they are told about is the configured one, not a bound one.
+        """
+        if not self._owns_tcp or self._identity is None:
+            return
+        if not self._settings.mdns_enabled:
+            return
+        profile = rpc.PROFILES.get(self._device_type)
+        if profile is None:
+            return
+        port = (
+            self._tcp_server.port
+            if self._tcp_server is not None
+            else self._settings.tcp_port
+        )
+        if port < 0:
+            port = self._udp_port
+        services = shelly_services(
+            self._identity,
+            profile,
+            port,
+            self._require_announced().value,
+            parse_txt_overrides(self._settings.mdns_txt),
+        )
+        advertiser = MdnsAdvertiser(services)
+        try:
+            started = await advertiser.start()
+        except (OSError, RuntimeError, ValueError) as exc:
+            # Every one of these is reachable: no IPv4 interface up yet, an
+            # address that belongs to no adapter, or an interface name where an
+            # address was expected. None of them is fatal.
+            logger.warning(
+                "Could not announce the emulated Shelly over mDNS: %s. The HTTP "
+                "surface is unaffected, and this is retried every %ss.",
+                exc,
+                rpc.ANNOUNCE_WATCHDOG_S,
+            )
+            return
+        self._advertiser = advertiser if started else None
+
+    async def start(self) -> None:
+        """Bring the device up in three independent stages.
+
+        No stage can abort a later one, and none raises for a bind failure: a
+        device that cannot bind its UDP port still serves HTTP, and one that
+        cannot bind HTTP still answers batteries and still announces itself.
+        The alternative — the first failure taking the whole device down — is
+        what made a privileged-port problem look like a missing device.
+        """
+        self._stopped.clear()
+        self._started_at = time.time()
+        # Both tasks start before any bind, and neither is conditional on one.
+        # The liveness sweep drives eviction for *both* transports, so a device
+        # serving only HTTP still needs it; the watchdog keeps the advertised
+        # address current even with no advertiser to announce it.
+        self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
+        if self._owns_tcp and self._identity is not None:
+            self._announce_task = asyncio.create_task(self._announce_watchdog_loop())
+        await self._start_udp()
+        await self._start_tcp()
+        await self._start_mdns()
 
     @property
     def udp_port(self) -> int:
         return self._udp_port
+
+    @property
+    def tcp_port(self) -> int | None:
+        """The HTTP port in effect, or ``None`` when this device serves none.
+
+        ``None`` covers both "not the owner" and "the port is set to ``-1``";
+        before a successful bind it reports the configured port, so a failed
+        bind is visible as a port that is set but not running.
+        """
+        if not self._owns_tcp or self._identity is None:
+            return None
+        if self._tcp_server is not None:
+            return self._tcp_server.port
+        if self._settings.tcp_port < 0:
+            return None
+        return self._settings.tcp_port
+
+    def _battery_transport(self, ip: str) -> str:
+        seen = self._battery_transports.get(ip) or {"udp"}
+        return "udp+tcp" if seen == {"udp", "tcp"} else next(iter(seen))
 
     def status_snapshot(self) -> ShellySnapshot:
         """Immutable view of the emulator for the status API.
@@ -387,6 +728,7 @@ class Shelly:
         torn snapshots that mix two polls.
         """
         now = time.time()
+        identity = self._identity if self._owns_tcp else None
         return ShellySnapshot(
             device_id=self._device_id,
             device_type=self._device_type,
@@ -402,21 +744,52 @@ class Shelly:
                     poll_interval=self._battery_poll_interval.get(ip),
                     active=ip not in self._inactive_batteries,
                     in_flight=ip in self._inflight_batteries,
+                    transport=self._battery_transport(ip),
                 )
                 # Sorted so a battery keeps its list position across polls.
                 for ip, last_seen in sorted(self._battery_last_seen.items())
             ),
+            tcp_port=self.tcp_port,
+            tcp_running=self._tcp_server is not None,
+            mdns_registered=(
+                self._advertiser is not None and self._advertiser.registered
+            ),
+            # Gated on ownership, not merely on having been handed an
+            # identity: these five describe an HTTP and mDNS presence, and a
+            # non-owner has none. Reporting them anyway would put a second
+            # device on the dashboard claiming to announce the same names.
+            mac=identity.mac if identity else None,
+            shelly_id=identity.shelly_id if identity else None,
+            mdns_hostname=identity.hostname if identity else None,
+            mdns_instance=identity.instance if identity else None,
+            mdns_ip=self._announced.value if identity and self._announced else None,
         )
 
     async def wait(self) -> None:
         await self._stopped.wait()
 
     async def stop(self) -> None:
-        if self._inactive_check_task:
-            self._inactive_check_task.cancel()
+        """Tear down, tolerating every partial state ``start()`` can leave.
+
+        The advertiser goes first so its goodbyes reach the network before the
+        socket closes; a consumer that sees them drops the device immediately
+        rather than waiting out its cache.
+        """
+        for task in (self._inactive_check_task, self._announce_task):
+            if task is None:
+                continue
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._inactive_check_task
-            self._inactive_check_task = None
+                await task
+        self._inactive_check_task = None
+        self._announce_task = None
+        if self._advertiser is not None:
+            with contextlib.suppress(OSError, RuntimeError):
+                await self._advertiser.stop()
+            self._advertiser = None
+        if self._tcp_server is not None:
+            await self._tcp_server.stop()
+            self._tcp_server = None
         if self._server:
             await self._server.close()
             self._server = None

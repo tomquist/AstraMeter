@@ -28,6 +28,7 @@ that apply to the whole app and to every powermeter. For one specific area, see:
 - [Value Transformation](#value-transformation)
 - [PID Controller](#pid-controller)
 - [Multiple Powermeters](#multiple-powermeters)
+- [Shelly discovery and HTTP](#shelly-discovery-and-http)
 
 ## General Configuration
 
@@ -224,3 +225,16 @@ ACCESSTOKEN = YOUR_ACCESS_TOKEN
 CURRENT_POWER_ENTITY = sensor.current_power
 # No NETMASK specified - will match all clients (0.0.0.0/0)
 ```
+
+## Shelly discovery and HTTP
+
+With a `shellypro3em` device type, AstraMeter also announces itself on your
+network and serves the HTTP surface a Shelly Pro 3EM serves, so batteries that
+discover meters by themselves can find it. Both are on by default.
+
+The settings live in `[EMULATOR_SHELLYPRO3EM]` — note the prefix, which keeps
+the emulator's own section apart from the `[SHELLY…]` sections that describe a
+Shelly power meter you *read from*. See
+[Shelly discovery and the HTTP surface](shelly-tcp.md) for the full reference,
+including what is announced, how the emulated identity stays stable, and what
+each installation method needs for port 80.

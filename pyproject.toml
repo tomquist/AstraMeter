@@ -20,6 +20,7 @@ dependencies = [
     "pyserial-asyncio-fast",
     "configupdater>=3.2",
     "aioesphomeapi>=36.0.1",
+    "zeroconf>=0.150,<1",
 ]
 
 [project.optional-dependencies]

@@ -79,6 +79,27 @@ def test_ct_settings_match_the_add_on_2x_behaviour(config) -> None:
     assert asdict(config.ct("ct002")) == GOLDEN["ct002"]
 
 
+def test_shelly_settings_match_the_options_that_feed_them(config) -> None:
+    """Each of the eight options reaches its own field.
+
+    Newer than the add-on 2.x, so there is no `run.sh` behaviour to record;
+    every value is pinned as something other than its default, which is what
+    makes an option wired to the wrong field fail here.
+    """
+    assert asdict(config.shelly("shellypro3em")) == GOLDEN["shellypro3em"]
+
+
+def test_shelly_settings_are_off_for_a_device_type_without_them(config) -> None:
+    """A device type with no HTTP surface must not inherit the user's port.
+
+    `shelly()` is total over every device type so its caller needs no
+    device-type knowledge, which means it has to answer for the CT types too —
+    and the answer has to be a port that starts no listener.
+    """
+    for device_type in ("ct002", "ct003", "shellyemg3", "shellyproem50"):
+        assert config.shelly(device_type).tcp_port == -1, device_type
+
+
 def test_marstek_settings_match_the_add_on_2x_behaviour(config) -> None:
     assert asdict(config.marstek()) == GOLDEN["marstek"]
 

@@ -87,16 +87,26 @@ async def test_read_ct_powermeter_swallows_timeout_and_serves_cached() -> None:
     assert result == [11.0, 22.0, 33.0]
 
 
-def _resolve(device_type: str) -> tuple[list[str], list[str]]:
+def _resolve(
+    device_type: str, device_ids: list[str] | None = None
+) -> tuple[list[str], list[str]]:
+    types, ids, _, _, _ = _resolve_full(device_type, device_ids)
+    return types, ids
+
+
+def _resolve_full(
+    device_type: str, device_ids: list[str] | None = None
+) -> tuple[list[str], list[str], bool, frozenset[int], int | None]:
     cfg = new_config_parser()
     cfg.add_section("GENERAL")
     cfg.set("GENERAL", "DEVICE_TYPE", device_type)
+    if device_ids:
+        cfg.set("GENERAL", "DEVICE_IDS", ", ".join(device_ids))
     config = IniAppConfig(cfg)
     args = argparse.Namespace(
         device_types=None, skip_powermeter_test=None, device_ids=None
     )
-    device_types, device_ids, _ = _resolve_device_config(config, config.general(), args)
-    return device_types, device_ids
+    return _resolve_device_config(config, config.general(), args)
 
 
 def test_resolve_device_config_shellypro3em_new_gets_shelly_id() -> None:
@@ -116,3 +126,49 @@ def test_resolve_device_config_shellypro3em_expands_to_old_and_new() -> None:
     device_types, device_ids = _resolve("shellypro3em")
     assert device_types == ["shellypro3em_old", "shellypro3em_new"]
     assert device_ids == ["shellypro3em-ec4609c439c1", "shellypro3em-ec4609c439c1"]
+
+
+def test_resolve_device_config_marks_the_newer_port_as_the_tcp_owner() -> None:
+    """One device owns the HTTP surface, and it is the newer-firmware port.
+
+    The pair shares an identity, so the choice is free — and the older port is
+    the one some runtimes cannot bind, so owning it there would tie the HTTP
+    surface to the bind most likely to fail.
+    """
+    types, _, _, _, owner = _resolve_full("shellypro3em")
+    assert types == ["shellypro3em_old", "shellypro3em_new"]
+    assert owner == 1
+
+
+def test_resolve_device_config_owns_tcp_for_a_single_shelly() -> None:
+    types, _, _, _, owner = _resolve_full("shellypro3em_old")
+    assert types == ["shellypro3em_old"]
+    assert owner == 0
+
+
+def test_resolve_device_config_has_no_tcp_owner_without_a_pro3em() -> None:
+    for device_type in ("ct002", "shellyemg3", "shellyproem50"):
+        _, _, _, _, owner = _resolve_full(device_type)
+        assert owner is None, device_type
+
+
+def test_resolve_device_config_reports_no_user_set_ids_by_default() -> None:
+    """The generated default must not read as a user-chosen id.
+
+    It ends in 12 hex characters exactly as a MAC-derived id does, so an
+    identity step that trusted the shape alone would adopt the shared default
+    on every install and give every user the same emulated MAC.
+    """
+    _, ids, _, user_set, _ = _resolve_full("shellypro3em")
+    assert ids == ["shellypro3em-ec4609c439c1", "shellypro3em-ec4609c439c1"]
+    assert user_set == frozenset()
+
+
+def test_resolve_device_config_marks_a_configured_id_and_its_twin() -> None:
+    _, ids, _, user_set, _ = _resolve_full(
+        "shellypro3em", ["shellypro3em-aabbccddeeff"]
+    )
+    assert ids == ["shellypro3em-aabbccddeeff", "shellypro3em-aabbccddeeff"]
+    # The expansion's appended twin inherits the flag, or the two halves would
+    # disagree about their own identity.
+    assert user_set == frozenset({0, 1})

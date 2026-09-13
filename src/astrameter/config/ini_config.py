@@ -28,6 +28,7 @@ from astrameter.config.settings import (
     CtSettings,
     GeneralSettings,
     MarstekSettings,
+    ShellySettings,
     SignalSettings,
     is_ct,
 )
@@ -38,6 +39,13 @@ if TYPE_CHECKING:
 
 GENERAL_SECTION = "GENERAL"
 MARSTEK_SECTION = "MARSTEK"
+
+#: The Shelly emulation's own section. Deliberately *not* ``[SHELLYPRO3EM]``:
+#: power-source sections are matched by prefix, so any name starting with
+#: ``SHELLY`` would be handed to the Shelly *power meter* factory and fail at
+#: config load. ``[SHELLY<suffix>]`` is also a name a user could legitimately
+#: pick for a second Shelly power meter, so it cannot be claimed here.
+SHELLY_EMULATOR_SECTION = "EMULATOR_SHELLYPRO3EM"
 
 
 class IniAppConfig(AppConfig):
@@ -119,6 +127,24 @@ class IniAppConfig(AppConfig):
             return "CT003"
         return "CT002"
 
+    def shelly(self, device_type: str) -> ShellySettings:
+        section = self.shelly_section(device_type)
+        if section is None or not self._config.has_section(section):
+            return _no_tcp_shelly_settings(device_type)
+        return ShellySettings(**read_fields(self._config, section, ShellySettings))
+
+    @staticmethod
+    def shelly_section(device_type: str) -> str | None:
+        """The section a Shelly emulation reads, or ``None`` when it has none.
+
+        All three ``shellypro3em`` spellings share one section: they are one
+        device answering two UDP ports, so splitting their HTTP and mDNS
+        settings would let the two halves disagree.
+        """
+        if device_type.startswith("shellypro3em"):
+            return SHELLY_EMULATOR_SECTION
+        return None
+
     def marstek(self) -> MarstekSettings:
         return MarstekSettings(
             **read_fields(self._config, MARSTEK_SECTION, MarstekSettings)
@@ -134,6 +160,17 @@ class IniAppConfig(AppConfig):
 # Rendering settings back into a ``config.ini`` is what lets the dashboard hand
 # a guided-setup user a file to take over from. It is the readers' inverse and
 # lives beside them so the round-trip test keeps the two in step.
+
+
+def _no_tcp_shelly_settings(device_type: str) -> ShellySettings:
+    """Defaults for a device type with no HTTP surface.
+
+    ``tcp_port = -1`` rather than the default 80, so no caller can start a
+    listener for a device type that has none by forgetting to check first.
+    """
+    if device_type.startswith("shellypro3em"):
+        return ShellySettings()
+    return ShellySettings(tcp_port=-1)
 
 
 def _render_value(value: object) -> str:
@@ -197,6 +234,19 @@ def render_ini(config: AppConfig, device_types: list[str] | None = None) -> str:
             device_type.upper(),
             _changed(config.ct(device_type), CtSettings(), {}),
             always=True,
+        )
+
+    # Emitted once, and only for a config that actually has the emulation:
+    # `shelly()` answers every other device type with `TCP_PORT = -1`, which
+    # differs from the default and would therefore render a section the user
+    # never asked for — and reading it back would take it as a deliberate
+    # disable.
+    types = list(device_types or general.device_types)
+    shelly_types = [t for t in types if t.startswith("shellypro3em")]
+    if shelly_types:
+        lines += _section(
+            SHELLY_EMULATOR_SECTION,
+            _changed(config.shelly(shelly_types[0]), ShellySettings(), {}),
         )
 
     marstek = config.marstek()
