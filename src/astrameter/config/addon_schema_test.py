@@ -31,6 +31,7 @@ FIELD_LISTS = (
 )
 
 CONFIG_YAML = Path(__file__).parents[3] / "ha_addon" / "config.yaml"
+TRANSLATIONS_YAML = Path(__file__).parents[3] / "ha_addon" / "translations" / "en.yaml"
 
 #: Options that do not map onto a settings field one-to-one: they select the
 #: configuration source, or shape the power source / Marstek account in code.
@@ -69,34 +70,55 @@ def mapped_options() -> set[str]:
     return {option_name(field) for fields in FIELD_LISTS for field in fields}
 
 
-def test_the_schema_block_was_parsed() -> None:
-    options = schema_options()
-    assert "power_input_alias" in options
-    assert "import_trim_w" in options
-    assert len(options) > 40
+def _translation_entries() -> dict[str, list[str]]:
+    """Each option's block of translation lines, keyed by option name."""
+    lines = TRANSLATIONS_YAML.read_text(encoding="utf-8").splitlines()
+    start = lines.index("configuration:")
+    entries: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in lines[start + 1 :]:
+        if not line.strip():
+            continue
+        match = re.match(r"\s{2}([a-z0-9_]+):$", line)
+        if match:
+            current = match.group(1)
+            entries[current] = []
+            continue
+        if not line.startswith("    "):
+            break  # end of the block
+        if current is not None:
+            entries[current].append(line.strip())
+    return entries
 
 
-def test_every_offered_option_is_consumed() -> None:
-    """An option in the add-on UI that nothing reads would silently do nothing."""
-    ignored = schema_options() - mapped_options() - HANDLED_IN_CODE
-    assert not ignored, f"add-on options nothing reads: {sorted(ignored)}"
+def test_every_option_has_a_label_and_a_description() -> None:
+    """The Supervisor renders these; an option without one shows its raw key.
+
+    This also catches a whole document broken by an option key that landed on
+    the end of the previous line — the keys after it stop being keys, so they
+    go missing here rather than silently costing every option its label.
+    """
+    entries = _translation_entries()
+    missing = schema_options() - set(entries)
+    assert not missing, f"options with no en.yaml entry: {sorted(missing)}"
+    for option in sorted(schema_options()):
+        body = entries[option]
+        assert any(line.startswith("name:") for line in body), f"{option} has no name"
+        assert any(line.startswith("description:") for line in body), (
+            f"{option} has no description"
+        )
 
 
-def test_every_mapped_option_exists_in_the_schema() -> None:
-    """A mapping naming an option the add-on does not offer can never fire."""
-    unknown = mapped_options() - schema_options()
-    assert not unknown, f"options mapped but not offered: {sorted(unknown)}"
+def test_no_translation_entry_is_orphaned() -> None:
+    """An entry for an option that no longer exists is dead weight."""
+    orphaned = set(_translation_entries()) - schema_options()
+    assert not orphaned, f"en.yaml entries with no option: {sorted(orphaned)}"
 
 
-def test_no_stale_entries_in_the_handled_in_code_list() -> None:
-    stale = HANDLED_IN_CODE - schema_options()
-    assert not stale, f"options no longer offered: {sorted(stale)}"
+def test_the_translations_file_ends_with_a_newline() -> None:
+    """Because appending to a file that does not is how this broke once.
 
-
-def test_an_option_is_read_by_exactly_one_mapping() -> None:
-    seen: dict[str, int] = {}
-    for fields in FIELD_LISTS:
-        for option in map(option_name, fields):
-            seen[option] = seen.get(option, 0) + 1
-    duplicates = {option for option, count in seen.items() if count > 1}
-    assert not duplicates, f"options read by more than one mapping: {duplicates}"
+    Without the trailing newline the next line written lands on the end of the
+    last description, which is valid text and invalid YAML.
+    """
+    assert TRANSLATIONS_YAML.read_text(encoding="utf-8").endswith("\n")

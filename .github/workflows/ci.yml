@@ -207,6 +207,50 @@ jobs:
       - name: Run the add-on container tests
         run: uv run pytest tests/test_addon_container.py -v
 
+  # The standalone image's privileged-port capability. The Shelly HTTP surface
+  # defaults to port 80 while the image runs as a non-root user, and the file
+  # capability that reconciles those two is invisible to every in-process test:
+  # whether it survived the `chown`, whether the interpreter copy still finds
+  # the venv, and above all whether a container that drops capabilities still
+  # starts at all. Only a real container run covers any of it.
+  docker-image:
+    needs: [ lint ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Loaded into the local daemon (single platform) so the tests can run it.
+      - name: Build the standalone image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: astrameter:test
+          cache-from: type=gha,scope=docker-image
+          cache-to: type=gha,mode=max,scope=docker-image
+
+      - name: Run the standalone image tests
+        run: uv run pytest tests/test_docker_image.py -v
+
   # The dashboard bundle is a COMMITTED generated artifact (neither the Docker
   # build nor `esphome compile` has Node), so CI has to prove it still matches
   # its source. Deliberately unfiltered and not fork-gated: `npm run check`

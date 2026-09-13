@@ -21,6 +21,7 @@ dependencies = [
     "configupdater>=3.2",
     "aioesphomeapi>=36.0.1",
     "zeroconf>=0.150,<1",
+    "ifaddr>=0.2",
 ]
 
 [project.optional-dependencies]
