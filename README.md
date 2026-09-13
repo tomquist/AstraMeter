@@ -36,7 +36,10 @@ It does this by emulating one or more of these devices:
   storage devices. It coordinates one shared target across the whole fleet.
 - **Shelly Pro 3EM** — uses port 1010 (B2500 firmware up to v224) and port 2220
   (B2500 firmware v226+). To pick one port, use `shellypro3em_old` (1010) or
-  `shellypro3em_new` (2220).
+  `shellypro3em_new` (2220). It also announces itself on your network and answers
+  the Shelly HTTP requests batteries make, so a battery that looks for its meter
+  finds it with no setup — see
+  [Shelly discovery and the HTTP surface](docs/shelly-tcp.md).
 - **Shelly EM gen3**
 - **Shelly Pro EM50**
 

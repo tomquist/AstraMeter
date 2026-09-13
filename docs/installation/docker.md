@@ -29,6 +29,13 @@ environment the same across platforms.
 > **Note:** Host network mode is required because Marstek devices use UDP
 > broadcasts to discover devices. Without host networking, the container can't
 > receive those broadcasts properly.
+>
+> It is also what lets batteries **discover** the emulated Shelly meter: an
+> mDNS query is multicast, which a NAT bridge does not carry, so on bridge
+> networking the announcement never reaches your LAN. If you must use bridge
+> networking, set `MDNS_ENABLED = False` and give the battery the host's
+> address by hand. See
+> [Shelly discovery and the HTTP surface](../shelly-tcp.md).
 
 Once the container is running, switch your Marstek battery to "Self-Adaptation"
 mode to turn on the powermeter functionality.

@@ -189,7 +189,7 @@ def test_a_shelly_device_reaches_the_wire_with_its_batteries() -> None:
         device_id="sh-1",
         device_type="shellypro3em_new",
     )
-    device._track_battery_seen(("10.0.0.31", 1010))
+    device._track_battery_seen("10.0.0.31", "udp")
     registry = _registry()
     registry.register_device("sh-1", "shellypro3em", device)
 
@@ -556,7 +556,7 @@ async def _everything() -> StatusRegistry:
     registry.register_device("ct-1", "ct002", _ct())
 
     shelly = Shelly([], udp_port=2220, device_id="sh-1", device_type="shellypro3em_new")
-    shelly._track_battery_seen(("10.0.0.31", 1010))
+    shelly._track_battery_seen("10.0.0.31", "udp")
     registry.register_device("sh-1", "shellypro3em", shelly)
 
     meter = HealthTrackingPowermeter(_StubMeter(), name="SCRIPT_1")

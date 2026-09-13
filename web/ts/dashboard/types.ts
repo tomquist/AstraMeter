@@ -157,6 +157,21 @@ export interface DeviceStatus {
   // liveness rather than power: it serves the meter reading and they poll it.
   batteries?: ShellyBatteryStatus[];
   inactive_timeout_s?: number;
+  /**
+   * The Shelly HTTP surface and mDNS presence.
+   *
+   * All of these are absent on a device that owns neither, which every
+   * default install has one of: the `shellypro3em` pair is two devices
+   * sharing one identity, and only one of them announces it.
+   */
+  tcp_port?: number;
+  tcp_running?: boolean;
+  mdns_registered?: boolean;
+  mac?: string;
+  shelly_id?: string;
+  mdns_hostname?: string;
+  mdns_instance?: string;
+  mdns_ip?: string;
 }
 
 export interface ShellyBatteryStatus {
@@ -165,6 +180,8 @@ export interface ShellyBatteryStatus {
   last_seen_age_s?: number;
   poll_interval_s?: number;
   active?: boolean;
+  /** `"udp"`, `"tcp"` or `"udp+tcp"` — how this battery reaches the meter. */
+  transport?: string;
 }
 
 export interface StatusSnapshot {

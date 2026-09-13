@@ -5,7 +5,8 @@ description: Adds or renames a user-facing config option across all seven surfac
 # Config options reach every surface
 
 An option only one entry point understands is a bug. Adding or renaming a
-`[SECTION]` key means all seven:
+`[SECTION]` key means all seven — eight when the option needs a new state
+sub-object (see step 4):
 
 1. **Settings** — field + default on the matching dataclass in
    `config/settings.py`. `ini_config.py` then reads it by itself: the INI key is
@@ -29,6 +30,22 @@ An option only one entry point understands is a bug. Adding or renaming a
    and must stay out of the `ct002:` block. Surface it in `app.ts` and assert it
    in `generate.test.ts`. Run `cd web && npm run check`. This step is **not
    optional**: an option the generator can't produce is incomplete.
+
+   **A new option *group* needs `web/ts/state.ts` too, which makes this step
+   two files.** `State` is a closed interface, so a `state.<group>` the
+   generator reads without a declaration fails `tsc` — and `migrate()` is what
+   constrains **untrusted restored input** (a share link, a project file) by
+   rebuilding each sub-section through `asObject(...)`, so a key riding
+   through the `...s` spread would bypass the one sanitiser every other
+   sub-section has. Declare the member on `State`, default it in
+   `defaultState()`, sanitise it in `migrate()`, and add the hostile-input case
+   to `state.test.ts` in the shape of the existing `ct`/`marstek` ones. An
+   option joining a group that already exists needs none of this.
+
+   One more generator detail worth knowing: `yamlScalar` emits a bare value
+   when it parses as a number, so a **string-typed** add-on option whose value
+   can look numeric — a MAC of all digits, say — has to be listed in
+   `QUOTED_OPTION_KEYS` or it is read back as a number.
 5. **Home Assistant add-on** — the option + schema in `ha_addon/config.yaml`,
    mapped onto the settings field in `config/addon.py` (usually just the field
    name appended to `_CT_FIELDS` / `_SOURCE_SIGNAL_FIELDS` / `_GENERAL_FIELDS`;
