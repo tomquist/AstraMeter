@@ -157,4 +157,27 @@ configuration:
     description: "Optional. Caps the PID adjustment to plus/minus this many watts. Default 800. Only used when PID Proportional Gain is set."
   pid_mode:
     name: PID Mode
-    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."
+    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."  shelly_tcp_port:
+    name: Shelly HTTP Port
+    description: "Optional. Port the emulated Shelly Pro 3EM answers HTTP on. Batteries that find the meter over mDNS talk to this port, and several models expect 80. Set -1 to serve no HTTP at all (the meter is still announced over mDNS). Default 80."
+  shelly_mdns_enabled:
+    name: Announce Over mDNS
+    description: "Optional. Announce the emulated meter on your network so batteries can discover it without being given an IP address. Default on. Turn off only if you configure the battery with the address by hand."
+  shelly_mdns_host:
+    name: Announced Address
+    description: "Optional. The address to announce, if it is not the one this machine routes from - for example a virtual IP. Accepts an IPv4 address or an interface name. Leave empty to detect it."
+  shelly_mdns_txt:
+    name: Extra Discovery Fields
+    description: "Optional. Comma-separated key=value pairs merged into what the meter advertises, for a battery that expects a particular value. Example: gen=3. Leave empty unless a battery refuses to pair."
+  shelly_hostname:
+    name: Announced Hostname
+    description: "Optional. Pins the hostname the meter announces, including its capitalisation. Leave empty to derive it from the MAC address."
+  shelly_mdns_instance:
+    name: Announced Service Name
+    description: "Optional. Pins the service name the meter announces, independently of the hostname. Leave empty to derive it from the MAC address."
+  shelly_mac:
+    name: Emulated MAC Address
+    description: "Optional. Pins the MAC address the emulated meter identifies itself by, which batteries use to recognise it. Leave empty to derive it from this machine - set it only if the derived value cannot be stable."
+  shelly_serve_gen1_endpoints:
+    name: Serve Older Endpoints
+    description: "Optional. Also answer the older single-page endpoints some batteries probe to confirm what they are talking to. Default on; harmless to leave on."

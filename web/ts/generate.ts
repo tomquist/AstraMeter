@@ -14,6 +14,7 @@ import {
   CT_EFFICIENCY,
   CT_SATURATION,
   CT_CLOUD,
+  SHELLY_EMULATOR,
   MARSTEK_FIELDS,
   MQTT_INSIGHTS_FIELDS,
   type Field,
@@ -177,6 +178,24 @@ function ctSection(state: State, sectionName: string): string {
   return lines.length > 1 ? lines.join("\n") : "";
 }
 
+/**
+ * The Shelly emulation's own section.
+ *
+ * Gated on a `shellypro3em*` device type being selected, exactly as the CT
+ * section is gated on a CT type: writing it for a CT-only install would leave
+ * a block the user never asked for, and reading it back would take its
+ * defaults as deliberate choices.
+ */
+function shellySection(state: State): string {
+  const f = (state.shelly && state.shelly.fields) || {};
+  const lines = ["[EMULATOR_SHELLYPRO3EM]"];
+  for (const field of SHELLY_EMULATOR) {
+    const line = iniLine(field, f[field.key]);
+    if (line) lines.push(line);
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
 function marstekSection(state: State): string {
   const m = state.marstek || {};
   if (!m.enabled) return "";
@@ -224,6 +243,11 @@ export function generateConfigIni(state: State): string {
   }
   if (types.includes("ct003")) {
     const s = ctSection(state, "CT003");
+    if (s) blocks.push(s);
+  }
+
+  if (types.some((t) => t.startsWith("shellypro3em"))) {
+    const s = shellySection(state);
     if (s) blocks.push(s);
   }
 
@@ -692,6 +716,14 @@ const QUOTED_OPTION_KEYS = new Set([
   "marstek_password",
   "mqtt_uri",
   "cloud_reporting_host",
+  // All string-typed in the add-on's schema. A MAC of all digits, or a
+  // hostname that looks like a number, would otherwise be emitted bare and
+  // read back as a number.
+  "shelly_mac",
+  "shelly_mdns_host",
+  "shelly_hostname",
+  "shelly_mdns_instance",
+  "shelly_mdns_txt",
 ]);
 
 function quoteYaml(s: string): string {
@@ -749,6 +781,22 @@ export function generateHomeAssistant(state: State): string {
   // Only meaningful alongside that port, but harmless on its own, so it is
   // emitted whenever the user named a host rather than gated on it.
   add("dashboard_allowed_hosts", g.dashboardAllowedHosts);
+
+  // The Shelly emulation's HTTP surface and mDNS presence.
+  const shf = (state.shelly && state.shelly.fields) || {};
+  add("shelly_tcp_port", shf.TCP_PORT);
+  // Tri-state selects in the editor ("" = the default, on); the add-on
+  // options are plain bools, so only an explicit On/Off is emitted.
+  if (shf.MDNS_ENABLED === "True") add("shelly_mdns_enabled", true);
+  else if (shf.MDNS_ENABLED === "False") add("shelly_mdns_enabled", false);
+  if (shf.SERVE_GEN1_ENDPOINTS === "True") add("shelly_serve_gen1_endpoints", true);
+  else if (shf.SERVE_GEN1_ENDPOINTS === "False")
+    add("shelly_serve_gen1_endpoints", false);
+  add("shelly_mac", shf.MAC);
+  add("shelly_mdns_host", shf.MDNS_HOST);
+  add("shelly_hostname", shf.HOSTNAME);
+  add("shelly_mdns_instance", shf.MDNS_INSTANCE);
+  add("shelly_mdns_txt", shf.MDNS_TXT);
 
   // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};

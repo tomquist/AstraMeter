@@ -205,6 +205,48 @@ THROTTLE_INTERVAL = 0
 ## Probe handoffs use the probe window above as the primary timer.
 # SATURATION_STALL_TIMEOUT_SECONDS = 60
 
+# [EMULATOR_SHELLYPRO3EM]
+## Optional: how batteries find and talk to the emulated Shelly Pro 3EM.
+## Only used with a shellypro3em device type. The defaults work for most
+## batteries; change these only if one refuses to pair.
+##
+## Note the section name: it is EMULATOR_SHELLYPRO3EM, not SHELLYPRO3EM.
+## Section names starting with SHELLY describe a Shelly *power meter* you read
+## from, so this one is prefixed to keep the two apart.
+##
+## Port the emulated meter answers HTTP on. Batteries that discover it over
+## mDNS talk to this port, and several models have 80 hardcoded — which is why
+## it is the default. Ports below 1024 need extra privileges; see docs/faq.md.
+## Set -1 to serve no HTTP at all: the meter is still announced over mDNS, for
+## batteries that discover it that way and then poll the UDP port.
+# TCP_PORT = 80
+## Announce the meter on your network so batteries can discover it without
+## being given an address by hand. Turn this off for Docker bridge networking,
+## where the announcement cannot reach your LAN anyway.
+# MDNS_ENABLED = True
+## Also answer the older single-page endpoints (/status, /emeter/N) that some
+## batteries probe to confirm what they are talking to. Harmless to leave on.
+# SERVE_GEN1_ENDPOINTS = True
+## The MAC the emulated meter identifies itself by, which batteries use to
+## recognise it across restarts. Left unset it is derived from this machine and
+## remembered in a file beside this config, which is stable. Set it when that
+## cannot be — most often Docker bridge networking, where the container gets a
+## new address every start.
+# MAC = B8:27:EB:36:42:42
+## The address to announce, when the one this machine routes from is not the
+## one batteries should use — a virtual IP, say. Accepts an IPv4 address or an
+## interface name. Left unset it is detected.
+# MDNS_HOST = 192.168.1.50
+## Pins the hostname the meter announces, including its capitalisation. Left
+## unset it is derived from the MAC.
+# HOSTNAME = ShellyPro3EM-B827EB364242
+## Pins the announced service name, independently of the hostname above.
+# MDNS_INSTANCE = ShellyPro3EM-B827EB364242
+## Extra key=value pairs merged into what the meter advertises, comma
+## separated, for a battery that expects a particular value. A value containing
+## a comma cannot be expressed. Leave unset unless a battery refuses to pair.
+# MDNS_TXT = gen=3
+
 # [MARSTEK]
 ## Optional: auto-register managed fake CT devices in Marstek cloud on startup.
 # ENABLE = False

@@ -541,6 +541,17 @@ function shellyCard(device: DeviceStatus, offline: boolean): VNode {
       "dl",
       { class: "kv" },
       ...row("Batteries polling", `${polling}`),
+      // Only the device that owns the HTTP surface has an identity to show,
+      // so the rows appear on one card of a pair rather than on both.
+      ...(device.shelly_id
+        ? [
+            ...row("HTTP port", device.tcp_port ? `${device.tcp_port}` : "off"),
+            ...row("Discoverable", device.mdns_registered ? "yes" : "no"),
+            ...row("Announced as", device.mdns_hostname || "—"),
+            ...row("Announced at", device.mdns_ip || "—"),
+            ...row("Identifies as", device.shelly_id),
+          ]
+        : []),
       ...row("Drops after", seconds(device.inactive_timeout_s)),
       ...row(
         offline ? "Started at" : "Up for",
@@ -571,6 +582,7 @@ function shellyBatteryCard(battery: ShellyBatteryStatus): VNode {
       { class: "kv" },
       ...row("Last seen", ago(battery.last_seen_age_s)),
       ...row("Polls every", seconds(battery.poll_interval_s)),
+      ...row("Reaches us over", battery.transport || "—"),
     ),
   );
 }

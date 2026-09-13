@@ -100,3 +100,20 @@ to try fixes early or to validate the add-on before it lands on **`main`**.
 To return to stable releases, remove this repository and add the normal URL
 without `#develop` (step 1 above), then reinstall or wait for an update to the
 **`latest`** track.
+
+## Battery discovery (Shelly Pro 3EM)
+
+With a `shellypro3em` device type the add-on announces the emulated meter on
+your network and serves its HTTP surface, so a battery that discovers meters by
+itself finds it with no setup at all — the add-on already runs on the host
+network, which is what that needs. There is nothing to install and no helper to
+configure.
+
+The relevant options are grouped under **Emulated meter** in the add-on's
+configuration; all of them are optional. See
+[Shelly discovery and the HTTP surface](../shelly-tcp.md) for what is
+announced and what to try if a battery refuses to pair.
+
+Home Assistant's own Shelly integration will also notice the announcement and
+offer it as a discovered device. Adding it is harmless but unnecessary — it is
+not how the add-on feeds Home Assistant — so you can ignore that notification.

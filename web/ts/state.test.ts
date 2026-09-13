@@ -69,6 +69,7 @@ const hostileSubs = migrate({
   ct: { fields: ["array", "not", "object"] },
   marstek: { enabled: "yes-string", fields: 42 },
   mqttInsights: { enabled: 1, fields: null },
+  shelly: "a string, not an object",
 });
 ok(!Array.isArray(hostileSubs.ct.fields) && typeof hostileSubs.ct.fields === "object", "migrate: ct.fields array coerced to {}");
 ok(hostileSubs.marstek.enabled === true, "migrate: non-boolean marstek.enabled coerced to true");
@@ -76,6 +77,15 @@ ok(!Array.isArray(hostileSubs.marstek.fields) && typeof hostileSubs.marstek.fiel
 ok(hostileSubs.mqttInsights.enabled === true, "migrate: truthy mqttInsights.enabled coerced to bool true");
 ok(typeof hostileSubs.mqttInsights.fields === "object" && hostileSubs.mqttInsights.fields !== null, "migrate: null mqttInsights.fields coerced to {}");
 ok(migrate({}).marstek.enabled === false && migrate({}).mqttInsights.enabled === false, "migrate: missing enabled defaults to false");
+
+// The Shelly group rides the same sanitiser as every other sub-section: a
+// share link or project file is untrusted input, and a key that bypassed
+// migrate() would reach the generator unchecked.
+ok(typeof hostileSubs.shelly.fields === "object" && !Array.isArray(hostileSubs.shelly.fields) && Object.keys(hostileSubs.shelly.fields).length === 0, "migrate: string shelly coerced to { fields: {} }");
+ok(Object.keys(migrate({ shelly: { fields: 7 } }).shelly.fields).length === 0, "migrate: numeric shelly.fields coerced to {}");
+ok(Object.keys(migrate({ shelly: { fields: ["a"] } }).shelly.fields).length === 0, "migrate: array shelly.fields coerced to {}");
+ok(migrate({ shelly: { fields: { TCP_PORT: "8080" } } }).shelly.fields.TCP_PORT === "8080", "migrate: valid shelly field preserved");
+ok(Object.keys(migrate({}).shelly.fields).length === 0, "migrate: missing shelly defaults to empty fields");
 
 // cleanMeter rejects array fields/tuning (typeof [] === 'object')
 const arrFields = cleanMeter({ type: "shelly", fields: ["x"], tuning: ["y"] });

@@ -391,6 +391,17 @@ def shelly_to_wire(device: ShellySnapshot) -> dict[str, Any]:
             "device_type": device.device_type or None,
             "udp_port": device.udp_port,
             "running": device.running,
+            # The HTTP surface and the mDNS presence. All of these are absent
+            # on a device that owns neither, which every default install has
+            # one of: the `shellypro3em` pair is two devices, one identity.
+            "tcp_port": device.tcp_port,
+            "tcp_running": device.tcp_running or None,
+            "mdns_registered": device.mdns_registered or None,
+            "mac": device.mac,
+            "shelly_id": device.shelly_id,
+            "mdns_hostname": device.mdns_hostname,
+            "mdns_instance": device.mdns_instance,
+            "mdns_ip": device.mdns_ip,
             "started_at": iso(device.started_at),
             "inactive_timeout_s": device.inactive_timeout,
             "batteries": [
@@ -401,6 +412,7 @@ def shelly_to_wire(device: ShellySnapshot) -> dict[str, Any]:
                         "last_seen_age_s": round_or_none(battery.last_seen_age),
                         "poll_interval_s": round_or_none(battery.poll_interval),
                         "active": battery.active,
+                        "transport": battery.transport,
                     }
                 )
                 for battery in device.batteries

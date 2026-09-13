@@ -50,6 +50,7 @@ export interface State {
   };
   meters: Meter[];
   ct: { fields: Fields };
+  shelly: { fields: Fields };
   marstek: { enabled: boolean; fields: Fields };
   mqttInsights: { enabled: boolean; fields: Fields };
   esphome: {
@@ -90,6 +91,7 @@ export function defaultState(): State {
     },
     meters: [newMeter("shelly")],
     ct: { fields: {} },
+    shelly: { fields: {} },
     // Marstek registration + MQTT Insights default on because the default device
     // type is CT002 (they're most useful for CT002/CT003). The device-type card
     // keeps these in sync when CT emulation is toggled.
@@ -195,6 +197,7 @@ export function migrate(s: any): State {
     })(),
     esphome: { ...d.esphome, ...(s.esphome || {}) },
     ct: { fields: asObject(s.ct && s.ct.fields) },
+    shelly: { fields: asObject(s.shelly && s.shelly.fields) },
     marstek: { enabled: !!(s.marstek && s.marstek.enabled), fields: asObject(s.marstek && s.marstek.fields) },
     mqttInsights: { enabled: !!(s.mqttInsights && s.mqttInsights.enabled), fields: asObject(s.mqttInsights && s.mqttInsights.fields) },
     meters,

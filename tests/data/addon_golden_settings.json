@@ -152,7 +152,15 @@
     "power_output_alias": "",
     "smooth_target_alpha": 0.35,
     "throttle_interval": 2.5,
-    "wait_for_next_message": false
+    "wait_for_next_message": false,
+    "shelly_tcp_port": 8080,
+    "shelly_mdns_enabled": false,
+    "shelly_mdns_host": "192.168.9.9",
+    "shelly_mdns_txt": "gen=3",
+    "shelly_hostname": "MyShelly-AABBCCDDEEFF",
+    "shelly_mdns_instance": "MyInstance-AABBCCDDEEFF",
+    "shelly_mac": "AA:BB:CC:DD:EE:FF",
+    "shelly_serve_gen1_endpoints": false
   },
   "power_source_signal": {
     "deadband": 6.0,
@@ -176,5 +184,15 @@
     "smooth_alpha": 0.35,
     "throttle_interval": 2.5,
     "wait_for_next_message": false
+  },
+  "shellypro3em": {
+    "tcp_port": 8080,
+    "mdns_enabled": false,
+    "mdns_host": "192.168.9.9",
+    "mdns_txt": "gen=3",
+    "hostname": "MyShelly-AABBCCDDEEFF",
+    "mdns_instance": "MyInstance-AABBCCDDEEFF",
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "serve_gen1_endpoints": false
   }
 }

@@ -9,6 +9,7 @@ import {
   DEVICE_TYPES,
   PER_METER_TUNING,
   CT_BASIC,
+  SHELLY_EMULATOR,
   CT_ACTIVE,
   CT_BALANCER,
   CT_DC_KEEPALIVE,
@@ -512,6 +513,25 @@ function ctCard(): HTMLElement | null {
   ]);
 }
 
+/**
+ * The Shelly emulation's discovery and HTTP options.
+ *
+ * Shown only for a `shellypro3em*` device type, and only for the targets that
+ * have the surface at all: the ESPHome firmware serves no Shelly HTTP.
+ */
+function shellyCard(): HTMLElement | null {
+  const isHa = state.target === "homeassistant";
+  if (state.target !== "python" && !isHa) return null;
+  if (!state.general.deviceTypes.some((t) => t.startsWith("shellypro3em"))) return null;
+  const f = state.shelly.fields;
+  return card(
+    4,
+    "Battery discovery (Shelly Pro 3EM)",
+    "How batteries find and talk to the emulated meter. The defaults work for most batteries — change these only if one refuses to pair.",
+    [el("div", { class: "field-grid" }, SHELLY_EMULATOR.map((fl) => fieldControl(fl, f, {})))],
+  );
+}
+
 function extrasCard(): HTMLElement {
   const m = state.marstek;
   const mi = state.mqttInsights;
@@ -778,6 +798,8 @@ function rerenderAll(): void {
   form.append(targetCard(), deviceCard(), meterCard());
   const ct = ctCard();
   if (ct) form.append(ct);
+  const shelly = shellyCard();
+  if (shelly) form.append(shelly);
   form.append(extrasCard());
   const steps = esphomeStepsCard();
   if (steps) form.append(steps);

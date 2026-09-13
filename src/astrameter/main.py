@@ -24,6 +24,7 @@ from astrameter.config.settings import (
     CtSettings,
     GeneralSettings,
     MarstekSettings,
+    ShellySettings,
     is_ct,
 )
 from astrameter.ct002 import CT002
@@ -45,6 +46,7 @@ from astrameter.mqtt_insights import (
 from astrameter.power_units import three_phases
 from astrameter.powermeter import Powermeter
 from astrameter.shelly import Shelly
+from astrameter.shelly.identity import ShellyIdentity, resolve_identity
 from astrameter.status import StatusRegistry, detect_config_mode
 from astrameter.version_info import get_git_commit_sha, get_version
 from astrameter.web_server import WebServer, parse_allowed_hosts
@@ -205,6 +207,9 @@ def _build_device(
     general: GeneralSettings,
     powermeters: list[ConfiguredPowermeter],
     device_id: str,
+    shelly: ShellySettings | None = None,
+    identity: ShellyIdentity | None = None,
+    owns_tcp: bool = False,
 ) -> CT002 | Shelly:
     if ct is not None:
         ct_type = DEVICE_TYPES[device_type].ct_type
@@ -240,6 +245,9 @@ def _build_device(
             device_type=device_type,
             udp_port=udp_port,
             dedupe_time_window=general.dedupe_time_window,
+            identity=identity,
+            settings=shelly,
+            owns_tcp=owns_tcp,
         )
     raise ValueError(f"Unsupported device type: {device_type}")
 
@@ -368,12 +376,31 @@ async def run_device(
     marstek_mac: str = "",
     marstek_ver_v: int | None = None,
     registry: StatusRegistry | None = None,
+    owns_tcp: bool = False,
+    device_id_is_user_set: bool = False,
 ) -> None:
     """Run one emulated device until it stops, wiring it to the optional
     integrations (MQTT Insights, the Marstek responder, cloud reporting)."""
     logger.debug("Starting device: %s", device_type)
     ct = config.ct(device_type) if is_ct(device_type) else None
-    device = _build_device(device_type, ct, general, powermeters, device_id)
+    shelly = config.shelly(device_type)
+    # Only the device that owns the HTTP surface resolves an identity, and only
+    # a device id a *human* wrote can seed it: the generated default ends in 12
+    # hex characters too, so accepting it would give every install the same
+    # identity — which is the collision this derivation exists to avoid.
+    identity = (
+        resolve_identity(
+            shelly,
+            device_id if device_id_is_user_set else None,
+            addon=registry.under_supervisor() if registry is not None else False,
+            config_path=config.path,
+        )
+        if owns_tcp
+        else None
+    )
+    device = _build_device(
+        device_type, ct, general, powermeters, device_id, shelly, identity, owns_tcp
+    )
     if insights:
         device.event_listener = _forward_events(insights, device)
 
@@ -445,6 +472,8 @@ async def async_main(
     skip_test: bool,
     managed_marstek: dict[str, tuple[str, int]] | None = None,
     registry: StatusRegistry | None = None,
+    user_set_ids: frozenset[int] = frozenset(),
+    tcp_owner_index: int | None = None,
 ) -> None:
     managed_marstek = managed_marstek or {}
 
@@ -494,9 +523,11 @@ async def async_main(
                     managed_marstek.get(device_type, ("", None))[0],
                     managed_marstek.get(device_type, ("", None))[1],
                     registry=registry,
+                    owns_tcp=(index == tcp_owner_index),
+                    device_id_is_user_set=(index in user_set_ids),
                 )
-                for device_type, device_id in zip(
-                    device_types, device_ids, strict=False
+                for index, (device_type, device_id) in enumerate(
+                    zip(device_types, device_ids, strict=False)
                 )
             )
         )
@@ -601,8 +632,14 @@ def _apply_cli_overrides(
 
 def _resolve_device_config(
     config: AppConfig, general: GeneralSettings, args: argparse.Namespace
-) -> tuple[list[str], list[str], bool]:
-    """Derive device_types, device_ids and skip_test from the config and CLI."""
+) -> tuple[list[str], list[str], bool, frozenset[int], int | None]:
+    """Derive the device list, the ids, and who owns the HTTP surface.
+
+    Also reports which ids the *user* set, which the identity derivation needs:
+    the generated default ends in 12 hex characters just as a MAC-derived id
+    does, so an identity step that could not tell them apart would adopt the
+    shared default on every install.
+    """
     device_types = (
         args.device_types
         if args.device_types is not None
@@ -617,6 +654,8 @@ def _resolve_device_config(
     device_ids: list[str] = list(args.device_ids) if args.device_ids is not None else []
     if not device_ids:
         device_ids = list(general.device_ids)
+    # Captured before the fill below invents the rest.
+    user_set_ids = set(range(len(device_ids)))
     while len(device_ids) < len(device_types):
         device_type = device_types[len(device_ids)]
         prefix = (
@@ -632,6 +671,21 @@ def _resolve_device_config(
         device_types[shellypro3em_index] = "shellypro3em_old"
         device_types.append("shellypro3em_new")
         device_ids.append(device_ids[shellypro3em_index])
+        # The appended twin shares the expanded entry's id, so it inherits
+        # whether that id came from the user.
+        if shellypro3em_index in user_set_ids:
+            user_set_ids.add(len(device_ids) - 1)
+
+    # One device owns the single HTTP listener and mDNS registration. The
+    # newer-firmware port is preferred: the two halves of the pair share one
+    # identity, so which one owns it is free, and the older port is the one
+    # that cannot be bound without extra privileges on some runtimes — owning
+    # it there would tie the HTTP surface to the bind most likely to fail.
+    tcp_owner_index: int | None = None
+    for preferred in ("shellypro3em_new", "shellypro3em_old", "shellypro3em"):
+        if preferred in device_types:
+            tcp_owner_index = device_types.index(preferred)
+            break
 
     ct_ports = [
         config.ct(device_type).udp_port
@@ -648,7 +702,13 @@ def _resolve_device_config(
     logger.info("Device IDs: %s", device_ids)
     logger.info(f"Skip Test: {skip_test}")
 
-    return device_types, device_ids, skip_test
+    return (
+        device_types,
+        device_ids,
+        skip_test,
+        frozenset(user_set_ids),
+        tcp_owner_index,
+    )
 
 
 def _load_config(
@@ -874,9 +934,13 @@ async def _supervise(
         while True:
             restart.clear()
             registry.restart_pending = False
-            device_types, device_ids, skip_test = _resolve_device_config(
-                config, general, args
-            )
+            (
+                device_types,
+                device_ids,
+                skip_test,
+                user_set_ids,
+                tcp_owner_index,
+            ) = _resolve_device_config(config, general, args)
             # Marstek registration is blocking HTTP with retries; off-loop so a
             # slow or unreachable cloud cannot stall /health for ~40 s.
             managed_marstek = await asyncio.to_thread(
@@ -894,6 +958,8 @@ async def _supervise(
                     skip_test,
                     managed_marstek,
                     registry,
+                    user_set_ids,
+                    tcp_owner_index,
                 )
             )
             waiter = asyncio.create_task(restart.wait())

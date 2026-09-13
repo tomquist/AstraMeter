@@ -397,3 +397,16 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
 }
 # Resolve aliases
 SECTION_KEY_TYPES["CT003"] = SECTION_KEY_TYPES["CT002"]
+
+# The Shelly emulation's HTTP surface and mDNS presence. A device section like
+# [CT002], not a power source, so it never reaches the powermeter factories.
+SECTION_KEY_TYPES["EMULATOR_SHELLYPRO3EM"] = {
+    "TCP_PORT": {"type": "integer", "min": -1, "max": 65535},
+    "MDNS_ENABLED": {"type": "boolean"},
+    "MDNS_HOST": {"type": "string"},
+    "MDNS_TXT": {"type": "string"},
+    "HOSTNAME": {"type": "string"},
+    "MDNS_INSTANCE": {"type": "string"},
+    "MAC": {"type": "string"},
+    "SERVE_GEN1_ENDPOINTS": {"type": "boolean"},
+}

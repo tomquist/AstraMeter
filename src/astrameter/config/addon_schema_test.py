@@ -16,6 +16,7 @@ from astrameter.config.addon import (
     _GENERAL_FIELDS,
     _GLOBAL_SIGNAL_FIELDS,
     _MARSTEK_FIELDS,
+    _SHELLY_FIELDS,
     _SOURCE_SIGNAL_FIELDS,
     option_name,
 )
@@ -26,6 +27,7 @@ FIELD_LISTS = (
     _SOURCE_SIGNAL_FIELDS,
     _CT_FIELDS,
     _MARSTEK_FIELDS,
+    _SHELLY_FIELDS,
 )
 
 CONFIG_YAML = Path(__file__).parents[3] / "ha_addon" / "config.yaml"

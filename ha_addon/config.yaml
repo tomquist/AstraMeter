@@ -29,6 +29,16 @@ ports:
   2220/udp: 2220
   2222/udp: 2222
   2223/udp: 2223
+  80/tcp: 80
+  5353/udp: 5353
+ports_description:
+  12345/udp: "Marstek CT002/CT003 emulation (host networking: edits here have no effect)"
+  1010/udp: "Shelly Pro 3EM emulation, older battery firmware (host networking: edits here have no effect)"
+  2220/udp: "Shelly Pro 3EM emulation, newer battery firmware (host networking: edits here have no effect)"
+  2222/udp: "Shelly EM Gen3 emulation (host networking: edits here have no effect)"
+  2223/udp: "Shelly Pro EM50 emulation (host networking: edits here have no effect)"
+  80/tcp: "Shelly HTTP surface, for batteries that discover over mDNS (host networking: edits here have no effect; use the shelly_tcp_port option)"
+  5353/udp: "mDNS, so batteries can discover the emulated meter (host networking: edits here have no effect)"
 map:
   - type: addon_config
     read_only: false
@@ -50,6 +60,7 @@ options:
   dashboard_allow_write: true
   dashboard_direct_access: false
   dashboard_allowed_hosts: ""
+  shelly_tcp_port: 80
   log_level: "info"
 schema:
   power_input_alias: str
@@ -105,3 +116,11 @@ schema:
   pid_mode: list(bias|replace)?
   custom_config: str?
   mqtt_uri: str?
+  shelly_tcp_port: int(-1,65535)?
+  shelly_mdns_enabled: bool?
+  shelly_mdns_host: str?
+  shelly_mdns_txt: str?
+  shelly_hostname: str?
+  shelly_mdns_instance: str?
+  shelly_mac: str?
+  shelly_serve_gen1_endpoints: bool?

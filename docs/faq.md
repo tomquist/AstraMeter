@@ -112,8 +112,16 @@ A: Use one of these device types:
 
 ### Can I use this with non-Marstek storage systems (e.g., Zendure, Hoymiles)?
 
-A: No, this project is Marstek-specific. For other brands, see
-[uni-meter](https://github.com/sdeigm/uni-meter).
+A: Possibly. The CT002/CT003 emulation is Marstek-specific, but the Shelly
+emulation is not: any storage system that reads a Shelly Pro 3EM as its meter
+can use AstraMeter. Pick a `shellypro3em` device type, and if your battery
+discovers meters by itself rather than taking an address, it should find
+AstraMeter with no extra setup — see
+[Shelly discovery and the HTTP surface](shelly-tcp.md).
+
+This is not verified against every model, so treat it as "worth trying" rather
+than supported. If it works — or doesn't — please open an issue saying which
+model and what happened.
 
 ## Troubleshooting
 
@@ -125,15 +133,32 @@ A: Ports below 1024 require root privileges on Linux. Solutions:
 - Use `setcap` to grant permissions
 - Run as root (not recommended)
 
-Note: the Docker image runs as a non-root user, so binding port 1010 (used by
-`shellypro3em_old` and the combined `shellypro3em`, which starts both listeners)
-still fails with `PermissionError: [Errno 13]` under `network_mode: host`. Port
-2220 (`shellypro3em_new`) is unaffected. Either lower the host's privileged-port
-range (`sudo sysctl -w net.ipv4.ip_unprivileged_port_start=1010`, persist via
-`/etc/sysctl.d/`) or run the container as root (`user: "0:0"` in compose).
-Publishing the port via bridge networking does **not** work, because the Marstek
-discovery packets are UDP broadcasts to the subnet address and aren't forwarded by
-Docker's port mapping.
+Note: the Docker image runs as a non-root user, but it grants its interpreter
+`CAP_NET_BIND_SERVICE`, so privileged ports — 1010 for `shellypro3em_old` and
+the combined `shellypro3em`, and 80 for the Shelly HTTP surface — bind without
+any extra setup under `network_mode: host`. Port 2220 (`shellypro3em_new`) never
+needed it.
+
+If you run the image with capabilities dropped (`cap_drop: [ALL]` in Compose,
+`drop: ["ALL"]` in Kubernetes, rootless Podman), the container still starts but
+cannot bind those ports; you will see one logged error naming the port. Add
+`cap_add: [NET_BIND_SERVICE]`, lower the host's privileged-port range
+(`sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80`, persist via
+`/etc/sysctl.d/`), or run as root (`user: "0:0"`).
+
+Publishing these ports via bridge networking does **not** work for the UDP ones,
+because the Marstek discovery packets are UDP broadcasts to the subnet address
+and aren't forwarded by Docker's port mapping. The same is true of mDNS, so
+Shelly discovery needs host networking too — see
+[Shelly discovery and the HTTP surface](shelly-tcp.md).
+
+### A battery discovers the meter but never connects.
+
+A: It has most likely found the announcement and then tried to reach the meter
+on port 80. Check `TCP_PORT` is `80` (the default) and that nothing else on the
+host already holds that port — a reverse proxy add-on, for instance.
+[Shelly discovery and the HTTP surface](shelly-tcp.md#if-a-battery-wont-pair)
+walks through the rest.
 
 ### I get parsing errors on startup or the app crashes.
 

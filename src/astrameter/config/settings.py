@@ -189,6 +189,43 @@ class CtSettings:
 
 
 @dataclass(frozen=True)
+class ShellySettings:
+    """The Shelly emulation's HTTP listener and mDNS presence.
+
+    Only the ``shellypro3em*`` types have a TCP surface, so ``AppConfig.shelly``
+    answers every other device type with these defaults and ``tcp_port`` forced
+    to ``-1``: no caller can then start a listener for a type that has none.
+    """
+
+    #: TCP port for the Shelly HTTP/RPC surface. ``-1`` serves no HTTP at all
+    #: (mDNS is still announced, for consumers that discover over mDNS and then
+    #: poll the UDP port); ``0`` takes whatever port the OS hands out, which is
+    #: what the tests use.
+    tcp_port: int = 80
+    #: Announce the emulated device over mDNS.
+    mdns_enabled: bool = True
+    #: Address to advertise, for a host whose reachable LAN address is not the
+    #: one the sockets bind. Accepts an IPv4 address or an interface name;
+    #: empty derives it from the default route.
+    mdns_host: str = ""
+    #: ``key=value`` pairs merged over the generated TXT record, comma
+    #: separated. An escape hatch for a consumer that wants a different
+    #: ``gen`` or ``app`` than the defaults.
+    mdns_txt: str = ""
+    #: Pins the SRV target and A-record host, including its capitalisation.
+    hostname: str = ""
+    #: Pins the mDNS service instance label, independently of ``hostname``.
+    mdns_instance: str = ""
+    #: Pins the MAC the identity is derived from. Set this when the derived
+    #: value cannot be stable — bridge networking, where the container's
+    #: address changes on every start.
+    mac: str = ""
+    #: Serve the older single-page endpoints alongside the RPC surface. Some
+    #: consumers probe them to confirm what they are talking to.
+    serve_gen1_endpoints: bool = True
+
+
+@dataclass(frozen=True)
 class MarstekSettings:
     """Marstek account used once to auto-register the managed fake CT device."""
 
@@ -225,6 +262,15 @@ class AppConfig(ABC):
     @abstractmethod
     def ct(self, device_type: str) -> CtSettings:
         """Settings for the ``ct002`` / ``ct003`` emulator."""
+
+    @abstractmethod
+    def shelly(self, device_type: str) -> ShellySettings:
+        """Settings for the Shelly emulation's HTTP surface and mDNS presence.
+
+        Total over every device type: a type with no TCP surface answers with
+        the defaults and ``tcp_port`` forced to ``-1``, so the caller needs no
+        device-type knowledge of its own.
+        """
 
     @abstractmethod
     def marstek(self) -> MarstekSettings:

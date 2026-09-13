@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** discovery for batteries that look for a Shelly meter on the network instead of being given its address: with a `shellypro3em` device type AstraMeter now announces itself and answers the Shelly HTTP surface, with no setup. On Docker bridge networking discovery cannot work — set `MDNS_ENABLED = False` and give the battery the host's address.
+
 - **Fixed** a battery being driven to full charge or discharge against the house for up to a minute after it ran its phase detection, on setups using the optional Hampel outlier filter ([#652](https://github.com/tomquist/astrameter/issues/652), [#653](https://github.com/tomquist/astrameter/pull/653)).
 
 - **Fixed** the dashboard staying blank and `/api/status` returning nothing once cloud reporting had sent its first push ([#654](https://github.com/tomquist/astrameter/issues/654), [#656](https://github.com/tomquist/astrameter/pull/656)).

@@ -851,6 +851,23 @@ export const CT_BASIC: Field[] = [
   { key: "DEDUPE_TIME_WINDOW", ey: "dedupe_window", label: "Dedupe window (seconds)", help: "Drop duplicate polls from the same battery within this window. 0 = off.", type: "number", placeholder: "0" },
 ];
 
+/**
+ * The Shelly emulation's HTTP surface and mDNS presence.
+ *
+ * No `ey` keys: there is no ESPHome counterpart, so these must not reach the
+ * firmware's own block.
+ */
+export const SHELLY_EMULATOR: Field[] = [
+  { key: "TCP_PORT", label: "HTTP port", help: "Port the emulated meter answers HTTP on. Batteries that find it over mDNS talk to this port, and several models expect 80. Set -1 to serve no HTTP at all (the meter is still announced). Default 80.", type: "number", placeholder: "80" },
+  { key: "MDNS_ENABLED", label: "Announce over mDNS", help: "Let batteries discover the meter instead of being given its address. Default on.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "SERVE_GEN1_ENDPOINTS", label: "Serve older endpoints", help: "Also answer the older single-page endpoints some batteries probe to confirm what they are talking to. Default on; harmless to leave on.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "MAC", label: "Emulated MAC", help: "Pins the MAC the meter identifies itself by, which batteries use to recognise it. Blank derives it from this machine — set it only if the derived value cannot be stable, such as on Docker bridge networking.", type: "text", placeholder: "(derived)" },
+  { key: "MDNS_HOST", label: "Announced address", help: "The address to announce, if it is not the one this machine routes from. Accepts an IPv4 address or an interface name. Blank detects it.", type: "text", placeholder: "(detected)" },
+  { key: "HOSTNAME", label: "Announced hostname", help: "Pins the hostname the meter announces, including its capitalisation. Blank derives it from the MAC.", type: "text", placeholder: "(derived)" },
+  { key: "MDNS_INSTANCE", label: "Announced service name", help: "Pins the service name the meter announces, independently of the hostname. Blank derives it from the MAC.", type: "text", placeholder: "(derived)" },
+  { key: "MDNS_TXT", label: "Extra discovery fields", help: "Comma-separated key=value pairs merged into what the meter advertises, for a battery that expects a particular value. Example: gen=3. Leave blank unless a battery refuses to pair.", type: "text", placeholder: "(none)" },
+];
+
 export const CT_ACTIVE: Field[] = [
   { key: "ACTIVE_CONTROL", ey: "active_control", label: "Active control", help: "On (default): the emulator smooths the reading, splits the target across batteries and balances them. Off: relay raw readings and let batteries decide.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
 ];

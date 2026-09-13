@@ -280,6 +280,71 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "answers whoever asks, which is what almost everyone wants.",
     placeholder: "answer any battery",
   },
+  shelly_tcp_port: {
+    label: "Shelly HTTP port",
+    group: DEVICE,
+    help:
+      "Port the emulated Shelly answers HTTP on. Batteries that find the " +
+      "meter by themselves talk to this port, and several models expect 80. " +
+      "Set -1 to serve no HTTP at all.",
+    placeholder: "80",
+  },
+  shelly_mdns_enabled: {
+    label: "Let batteries discover the meter",
+    group: DEVICE,
+    help:
+      "Announce the emulated meter on your network, so a battery can find it " +
+      "instead of being given its address by hand.",
+  },
+  shelly_serve_gen1_endpoints: {
+    label: "Serve older endpoints",
+    group: DEVICE,
+    help:
+      "Also answer the older single-page endpoints some batteries probe to " +
+      "confirm what they are talking to. Harmless to leave on.",
+  },
+  shelly_mac: {
+    label: "Emulated MAC address",
+    group: DEVICE,
+    help:
+      "How batteries recognise this meter. Left empty it is derived from this " +
+      "machine, which is stable across restarts — set it only if that cannot " +
+      "be, such as on Docker bridge networking.",
+    placeholder: "derived from this machine",
+  },
+  shelly_mdns_host: {
+    label: "Announced address",
+    group: DEVICE,
+    help:
+      "The address to tell batteries about, if it is not the one this machine " +
+      "routes from. Accepts an address or an interface name.",
+    placeholder: "detected",
+  },
+  shelly_hostname: {
+    label: "Announced hostname",
+    group: DEVICE,
+    help:
+      "Pins the hostname the meter announces, including its capitalisation. " +
+      "Left empty it is derived from the MAC address.",
+    placeholder: "derived from the MAC",
+  },
+  shelly_mdns_instance: {
+    label: "Announced service name",
+    group: DEVICE,
+    help:
+      "Pins the service name the meter announces, independently of the " +
+      "hostname. Left empty it is derived from the MAC address.",
+    placeholder: "derived from the MAC",
+  },
+  shelly_mdns_txt: {
+    label: "Extra discovery fields",
+    group: DEVICE,
+    help:
+      "Comma-separated key=value pairs added to what the meter advertises, " +
+      "for a battery that expects a particular value. Leave empty unless one " +
+      "refuses to pair.",
+    placeholder: "none",
+  },
 
   // ── battery control ──
   active_control: {

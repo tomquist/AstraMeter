@@ -42,6 +42,7 @@ from astrameter.config.settings import (
     CtSettings,
     GeneralSettings,
     MarstekSettings,
+    ShellySettings,
 )
 from astrameter.powermeter import HomeAssistant
 
@@ -77,12 +78,27 @@ it is not a config section.
 
 Options = dict[str, Any]
 
-# An add-on option is named after the settings field it configures, except
-# these three.
+# An add-on option is named after the settings field it configures, with two
+# exceptions: the fields of a settings type whose names are too generic to sit
+# in a flat option list get a family prefix (`marstek_*`, `shelly_*`), and
+# `smooth_alpha` is a one-off whose option name predates the field.
+#
+# This has to be a field-to-option map rather than a prefix applied inside
+# `_apply_options`: `option_name` is what the schema test builds its list of
+# consumed options from, so a prefix applied at read time would be invisible
+# there and every prefixed option would look unconsumed.
 _OPTION_NAMES = {
     "smooth_alpha": "smooth_target_alpha",
     "mailbox": "marstek_mailbox",
     "password": "marstek_password",
+    "tcp_port": "shelly_tcp_port",
+    "mdns_enabled": "shelly_mdns_enabled",
+    "mdns_host": "shelly_mdns_host",
+    "mdns_txt": "shelly_mdns_txt",
+    "hostname": "shelly_hostname",
+    "mdns_instance": "shelly_mdns_instance",
+    "mac": "shelly_mac",
+    "serve_gen1_endpoints": "shelly_serve_gen1_endpoints",
 }
 
 
@@ -145,6 +161,17 @@ _CT_FIELDS = (
 )
 
 _MARSTEK_FIELDS = ("mailbox", "password")
+
+_SHELLY_FIELDS = (
+    "tcp_port",
+    "mdns_enabled",
+    "mdns_host",
+    "mdns_txt",
+    "hostname",
+    "mdns_instance",
+    "mac",
+    "serve_gen1_endpoints",
+)
 
 # Options a custom config file takes over.
 _IGNORED_WITH_CUSTOM_CONFIG: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -404,6 +431,15 @@ class AddonAppConfig(AppConfig):
             CtSettings(), dedupe_time_window=self.general().dedupe_time_window
         )
         return _apply_options(settings, self._options, _CT_FIELDS)
+
+    def shelly(self, device_type: str) -> ShellySettings:
+        # The add-on configures one Shelly emulation; the `shellypro3em` pair
+        # shares it, because the two halves are one device. Any other device
+        # type has no HTTP surface, so it gets the defaults with the port
+        # forced off rather than the user's port.
+        if not device_type.startswith("shellypro3em"):
+            return ShellySettings(tcp_port=-1)
+        return _apply_options(ShellySettings(), self._options, _SHELLY_FIELDS)
 
     def marstek(self) -> MarstekSettings:
         # Without the auto-register opt-in the account is not used at all, so

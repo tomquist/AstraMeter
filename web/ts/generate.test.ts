@@ -757,5 +757,77 @@ const haDashReadOnly = generateHomeAssistant({
 has(haDashReadOnly, "dashboard_allow_write: false", "ha-opts: read-only dashboard is emitted");
 
 
+// ── the Shelly emulation's own section ────────────────────────────────────────
+// Gated on a shellypro3em* device type, so a CT-only install does not get a
+// block it never asked for — which reading back would take as deliberate.
+const emuMeters = [{ type: "shelly", phases: 1, fields: { TYPE: "3EMPro", IP: "192.168.1.50" }, tuning: {} }];
+
+const emuIni = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: emuMeters,
+  shelly: { fields: { TCP_PORT: "8080", MDNS_ENABLED: "False", MAC: "AABBCCDDEEFF", MDNS_TXT: "gen=3" } },
+});
+has(emuIni, "[EMULATOR_SHELLYPRO3EM]", "shelly-emu: section emitted for a pro3em type");
+has(emuIni, "TCP_PORT = 8080", "shelly-emu: port emitted");
+has(emuIni, "MDNS_ENABLED = False", "shelly-emu: discovery switch emitted");
+has(emuIni, "MAC = AABBCCDDEEFF", "shelly-emu: pinned MAC emitted");
+has(emuIni, "MDNS_TXT = gen=3", "shelly-emu: extra discovery fields emitted");
+// The section name must not begin with SHELLY: power-source sections are
+// matched by prefix, so such a name would reach the Shelly *power meter*
+// factory and fail at config load.
+lacks(emuIni, "[SHELLYPRO3EM]", "shelly-emu: section is not named [SHELLYPRO3EM]");
+
+const emuDefaults = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: emuMeters,
+  shelly: { fields: {} },
+});
+lacks(emuDefaults, "[EMULATOR_SHELLYPRO3EM]", "shelly-emu: all-default section is omitted");
+
+const emuCtOnly = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: emuMeters,
+  shelly: { fields: { TCP_PORT: "8080" } },
+});
+lacks(emuCtOnly, "EMULATOR_SHELLYPRO3EM", "shelly-emu: no section for a CT-only install");
+
+// ── the add-on's own options ─────────────────────────────────────────────────
+const emuHa = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "homeassistant", phases: 1, fields: { POWER_INPUT_ALIAS: "sensor.p" }, tuning: {} }],
+  shelly: { fields: { TCP_PORT: "8080", MDNS_ENABLED: "False", SERVE_GEN1_ENDPOINTS: "True", MAC: "AABBCCDDEEFF", MDNS_HOST: "10.0.0.9", HOSTNAME: "MyHost", MDNS_INSTANCE: "MyInstance", MDNS_TXT: "gen=3" } },
+});
+has(emuHa, "shelly_tcp_port: 8080", "ha-opts: shelly port");
+has(emuHa, "shelly_mdns_enabled: false", "ha-opts: discovery off emitted as a bool");
+has(emuHa, "shelly_serve_gen1_endpoints: true", "ha-opts: older endpoints on emitted as a bool");
+has(emuHa, 'shelly_mac: "AABBCCDDEEFF"', "ha-opts: pinned MAC");
+has(emuHa, 'shelly_mdns_host: "10.0.0.9"', "ha-opts: announced address");
+has(emuHa, 'shelly_hostname: "MyHost"', "ha-opts: announced hostname");
+has(emuHa, 'shelly_mdns_instance: "MyInstance"', "ha-opts: announced service name");
+has(emuHa, 'shelly_mdns_txt: "gen=3"', "ha-opts: extra discovery fields");
+
+const emuHaDefaults = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "homeassistant", phases: 1, fields: { POWER_INPUT_ALIAS: "sensor.p" }, tuning: {} }],
+  shelly: { fields: {} },
+});
+lacks(emuHaDefaults, "shelly_tcp_port", "ha-opts: untouched options are not emitted");
+lacks(emuHaDefaults, "shelly_mdns_enabled", "ha-opts: a default tri-state is not emitted");
+
+// The add-on schema types these as strings, so they have to be quoted: a MAC
+// of all digits would otherwise be read back as a number.
+const emuHaNumericMac = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["shellypro3em"] },
+  meters: [{ type: "homeassistant", phases: 1, fields: { POWER_INPUT_ALIAS: "sensor.p" }, tuning: {} }],
+  shelly: { fields: { MAC: "123456789012" } },
+});
+has(emuHaNumericMac, 'shelly_mac: "123456789012"', "ha-opts: an all-digit MAC stays a string");
+
 console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));
 process.exit(failures ? 1 : 0);
