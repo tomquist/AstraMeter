@@ -15,9 +15,19 @@ logger = logging.getLogger("astrameter")
 
 def extract_json_value(data: Any, path: str) -> float:
     match = parse(path).find(data)
-    if match:
-        return float(match[0].value)
-    raise ValueError("No match found for the JSON path")
+    if not match:
+        raise ValueError("No match found for the JSON path")
+    value = match[0].value
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        # A meter that publishes ``null`` (or an object) for a reading it has
+        # no answer for right now matches the path but yields nothing to
+        # convert. That is a bad reading, not a programming error, so raise
+        # what every caller already handles.
+        raise ValueError(
+            f"JSON path {path!r} matched a non-numeric value: {value!r}"
+        ) from exc
 
 
 class JsonHttpPowermeter(HttpPowermeter):

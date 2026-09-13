@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from astrameter import web_server
 from astrameter.ct002 import CT002
 from astrameter.status import StatusRegistry
+from astrameter.status import registry as status_registry
 from astrameter.status.secrets import SENTINEL
 from astrameter.web_server import WebServer
 
@@ -726,7 +728,20 @@ async def test_dashboard_off_serves_no_routes(tmp_path: Path) -> None:
 # -- status -----------------------------------------------------------
 
 
-async def test_status_returns_a_snapshot_and_revalidates(tmp_path: Path) -> None:
+async def test_status_returns_a_snapshot_and_revalidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ETag mixes a coarse monotonic bucket in with the revision, so that a
+    # client cannot hold a 304 while the age fields go stale
+    # (``_ETAG_BUCKET_SECONDS``). Two requests that straddle a bucket boundary
+    # therefore get different ETags and a correct 200 — which is a real race
+    # for a test that fires them back to back. This one is about revalidating
+    # an *unchanged* registry, so pin the clock instead of racing it. Patching
+    # the name inside the registry module leaves the stdlib clock, and the
+    # event loop that runs on it, alone.
+    monkeypatch.setattr(
+        status_registry, "time", SimpleNamespace(monotonic=lambda: 1000.0)
+    )
     registry = _registry(tmp_path, direct_access=True)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
