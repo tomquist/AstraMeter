@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** discovery for batteries that look for a Shelly meter on the network instead of being given its address: with a `shellypro3em` device type AstraMeter now announces itself and answers the Shelly HTTP surface, with no setup. On Docker bridge networking discovery cannot work — set `MDNS_ENABLED = False` and give the battery the host's address.
+- **Added** discovery and a Shelly HTTP surface for storage systems that read a Shelly Pro 3EM as their meter — Hoymiles MS-A2, Growatt NOAH/NEXA 2000, Solakon One, Zendure and Anker SOLIX among them — so a battery that looks for its meter finds AstraMeter with no setup. None of these are verified on hardware yet, so please report what your model does. On Docker bridge networking discovery cannot work — set `MDNS_ENABLED = False` and give the battery the host's address.
 
 - **Fixed** a battery being driven to full charge or discharge against the house for up to a minute after it ran its phase detection, on setups using the optional Hampel outlier filter ([#652](https://github.com/tomquist/astrameter/issues/652), [#653](https://github.com/tomquist/astrameter/pull/653)).
 
