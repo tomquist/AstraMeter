@@ -45,6 +45,19 @@ def iso(epoch: float | None) -> str | None:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
+def iso_datetime(value: datetime | None) -> str | None:
+    """A ``datetime`` as ISO-8601 UTC, or ``None``.
+
+    The companion to :func:`iso` for state that already holds a ``datetime``
+    rather than an epoch.  A naive value is read as local time — that is what
+    ``datetime.now()`` produces and what ``astimezone()`` assumes — so the
+    wire carries an unambiguous instant either way.
+    """
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def round_or_none(value: float | None, digits: int = 1) -> float | None:
     """Round a float for the wire, preserving ``None``.
 
