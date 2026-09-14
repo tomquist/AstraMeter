@@ -44,12 +44,36 @@ WATCHDOG_TIMEOUT_SECONDS = 45.0
 # so a meter without per-phase power keeps its small totals.
 MIN_TOTAL_FALLBACK_W = 5.0
 
+# Which register set a measurement was read from (see _note_source).
+PER_PHASE = "per-phase"
+TOTAL_ONLY = "total-only"
+
+# How often a switch between the two may be reported at INFO.  A meter that
+# alternates would otherwise emit a line per sample; the count carried by the
+# next line says how many switches were folded into it, which is the part worth
+# seeing.  Every sample is recorded at DEBUG regardless.
+SOURCE_LOG_INTERVAL_S = 60.0
+
+_PHASE_KEYS = ("power_l1_w", "power_l2_w", "power_l3_w")
+
 
 def _number(value: object) -> float | None:
     """The reading as a float, or ``None`` when the field is absent or not numeric."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value)
+
+
+def _raw(data: dict, key: str) -> object:
+    """The field as published, or a marker naming why it was unusable.
+
+    The selection collapses "absent" and "not a number" into one outcome, so
+    the DEBUG line has to say which it was to be worth capturing.
+    """
+    if key not in data:
+        return "-"
+    value = data[key]
+    return value if _number(value) is not None else f"!{value!r}"
 
 
 def _phase_values(data: dict) -> list[float] | None:
@@ -106,7 +130,14 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         # power, so later samples keep reading the total however small it gets.
         # See _note_total_only().
         self._phases_unusable = False
-        self._total_only_logged = False
+        # Which register set the last measurement was read from, and how many
+        # times that has changed / been reported.  Starts at PER_PHASE, the
+        # ordinary case, so a meter that opens on a total-only sample still
+        # announces itself.  See _note_source().
+        self._reading_source = PER_PHASE
+        self._source_switches = 0
+        self._logged_switches = 0
+        self._last_source_log = 0.0
 
         if not verify_ssl:
             logger.warning(
@@ -134,7 +165,10 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         self._message_event.clear()
         self._fresh_measurement_event.clear()
         self._phases_unusable = False
-        self._total_only_logged = False
+        self._reading_source = PER_PHASE
+        self._source_switches = 0
+        self._logged_switches = 0
+        self._last_source_log = 0.0
         await super().start()
 
     def _connect(self, session: aiohttp.ClientSession) -> WebSocketConnect:
@@ -218,19 +252,20 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         if phases is not None and any(phases):
             # Whatever was concluded before, this meter does publish per-phase.
             self._phases_unusable = False
-            values = phases
+            values, source = phases, PER_PHASE
         elif total is not None and (
             phases is None
             or self._phases_unusable
             or abs(total) >= MIN_TOTAL_FALLBACK_W
         ):
             if phases is not None:
-                self._note_total_only(total)
-            values = [total]
+                self._note_total_only()
+            values, source = [total], TOTAL_ONLY
         elif phases is not None:
-            values = phases
+            values, source = phases, PER_PHASE
         else:
             return
+        self._note_source(source, data, values)
 
         now = self._clock()
         max_age = self._max_measurement_age_seconds
@@ -249,28 +284,72 @@ class HomeWizardPowermeter(WebSocketPowermeter):
         self._message_event.set()
         self._fresh_measurement_event.set()
 
-    def _note_total_only(self, total: float) -> None:
-        """Record that this meter publishes no per-phase power, and say so once.
+    def _note_total_only(self) -> None:
+        """Record that this meter publishes no per-phase power.
 
         The finding latches: from here on the total is read however small it
         gets, instead of the reading dropping back to three zeroes every time
         the house passes near zero.  It is cleared again by any non-zero phase.
-
-        Not a fault to fix, so info rather than a warning: a three-phase
-        connection without neutral (3x230 V, common in Belgium) is a perfectly
-        ordinary supply whose meter publishes the total only, with the per-phase
-        registers left at 0 W.  Worth saying once because it explains why the
-        dashboard shows the whole house on phase A, the way a single-phase meter
-        does.
+        Saying so is :meth:`_note_source`'s job, which sees both directions.
         """
         self._phases_unusable = True
-        if self._total_only_logged:
+
+    def _note_source(self, source: str, data: dict, values: list[float]) -> None:
+        """Record which register set this measurement was read from.
+
+        Every sample goes to DEBUG with the registers as published beside the
+        decision taken from them.  A meter that intermittently zeroes its
+        per-phase registers reads as a house at 0 W on one sample and as the
+        whole house on the next, and downstream there is nothing left to tell
+        those apart — the wrappers, the emulator and the balancer all see one
+        number (issue #655).  This is the only place the two are still
+        distinguishable.
+
+        A switch between the two is worth an INFO line of its own, so a report
+        that arrives without a DEBUG log still shows it.  Rate-limited, because
+        a meter alternating every sample would otherwise bury the log it is
+        trying to explain; the switches folded into the wait are counted into
+        the next line, and that count is the symptom.
+
+        Not a fault to fix: a three-phase connection without neutral (3x230 V,
+        common in Belgium) is a perfectly ordinary supply whose meter publishes
+        the total only, with the per-phase registers left at 0 W.  It explains
+        why the dashboard then shows the whole house on phase A, the way a
+        single-phase meter's reading does.
+        """
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "HomeWizard measurement: l1=%s l2=%s l3=%s power_w=%s -> %s %s",
+                *(_raw(data, key) for key in _PHASE_KEYS),
+                _raw(data, "power_w"),
+                source,
+                values,
+            )
+        if source == self._reading_source:
             return
-        self._total_only_logged = True
+        self._reading_source = source
+        self._source_switches += 1
+        now = self._clock()
+        if (
+            self._source_switches > 1
+            and now - self._last_source_log < SOURCE_LOG_INTERVAL_S
+        ):
+            return
+        # Everything switched since the last line except the switch it reports.
+        folded = self._source_switches - self._logged_switches - 1
+        self._logged_switches = self._source_switches
+        self._last_source_log = now
         logger.info(
-            "HomeWizard: meter publishes no per-phase power (all phases 0 W, "
-            "total %.0f W); reading the total instead",
-            total,
+            "HomeWizard: %s (l1=%s l2=%s l3=%s power_w=%s)%s",
+            (
+                "meter publishes no per-phase power (all phases 0 W); "
+                "reading the total instead"
+                if source == TOTAL_ONLY
+                else "per-phase power is back; reading the phases again"
+            ),
+            *(_raw(data, key) for key in _PHASE_KEYS),
+            _raw(data, "power_w"),
+            f"; {folded} further switches since the last line" if folded > 0 else "",
         )
 
     def stream_online(self) -> bool | None:
