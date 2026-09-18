@@ -62,6 +62,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [MQTT](#mqtt) — 🟢 Native
 - [JSON HTTP](#json-http) — 🟢 Native (generic `http_request`)
 - [SML](#sml) — 🟢 Native
+- [DSMR / P1](#dsmr--p1) — 🟢 Native (ESPHome only — no Python counterpart)
 - [TQ Energy Manager](#tq-energy-manager) — 🟠 Alternate (Modbus/MQTT)
 - [HomeWizard](#homewizard) — 🟠 Alternate (local v1 HTTP, or native P1)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway) — 🔴 Not yet available
@@ -721,6 +722,79 @@ ct002:
 The default `obis_code` here matches the Python source's default
 `OBIS_POWER_CURRENT` (`0100100700ff` → `1-0:16.7.0`); the per-phase codes match
 its `OBIS_POWER_L1/L2/L3` defaults.
+
+## DSMR / P1
+
+**Tier: 🟢 Native.** Meters with a P1 port (DSMR in the Netherlands and Belgium,
+and the same telegram format elsewhere) are read on the ESP by ESPHome's built-in
+[`dsmr`](https://esphome.io/components/sensor/dsmr/) component. There is no
+Python `[...]` source for this — on the add-on you would read the P1 port through
+a [HomeWizard](#homewizard) dongle or similar; on the ESP the meter is wired
+straight to a UART pin, so the meter and the emulator share one board.
+
+A telegram reports import and export separately, so subtract them into a single
+net sensor. `power_delivered`/`power_returned` are in **kW**, hence the
+`* 1000.0f`:
+
+```yaml
+external_components:
+  - source: github://tomquist/astrameter@develop
+    components: [ct002]
+
+uart:
+  id: uart_p1
+  rx_pin: GPIO4
+  baud_rate: 115200
+  rx_buffer_size: 1700        # a full telegram must fit in one buffer
+
+dsmr:
+  uart_id: uart_p1
+
+sensor:
+  - platform: dsmr
+    power_delivered:
+      id: p1_delivered        # kW imported from the grid
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l1
+    power_returned:
+      id: p1_returned         # kW exported to the grid
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l1
+    # three-phase instead: power_delivered_l1 / power_returned_l1 (…_l2, …_l3)
+    #   → one template sensor per phase, then power_sensor_l2 / l3 below
+
+  - platform: template
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+    update_interval: never    # published by the triggers above, not polled
+    lambda: |-
+      const float delivered = id(p1_delivered).state;
+      const float returned = id(p1_returned).state;
+      if (std::isnan(delivered) || std::isnan(returned)) return {};
+      return (delivered - returned) * 1000.0f;
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+```
+
+Three things are meter-specific and worth checking before you flash:
+
+- **Serial settings.** DSMR 4/5 is `115200` 8N1 as above; DSMR 2/3 is `9600` 7E1
+  (`baud_rate: 9600`, `data_bits: 7`, `parity: EVEN`).
+- **Signal inversion.** The P1 data line is inverted open-collector. A ready-made
+  P1 cable handles this; a hand-wired one needs an inverting transistor (or
+  `invert: true` on an ESP32 `rx_pin`).
+- **Encrypted telegrams.** Belgian and Luxembourgish meters encrypt P1 — set the
+  `decryption_key` your grid operator gave you on the `dsmr:` block.
+
+Telegram rate sets how fast the emulator sees a change: DSMR 5 sends one per
+second, DSMR 2/3 one every 10 seconds.
 
 ## TQ Energy Manager
 

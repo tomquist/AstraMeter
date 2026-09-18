@@ -8,6 +8,8 @@
 
 - **Fixed** an MQTT power meter freezing on its last reading, while still reporting itself healthy, after the meter published a single null or non-numeric value ([#657](https://github.com/tomquist/astrameter/issues/657), [#658](https://github.com/tomquist/astrameter/pull/658)).
 
+- **Added** documentation for running a P1 smart meter and the emulator on one ESP32, reading the meter directly over DSMR instead of through a separate bridge ([#664](https://github.com/tomquist/astrameter/issues/664)).
+
 
 ## 2.3.0
 
