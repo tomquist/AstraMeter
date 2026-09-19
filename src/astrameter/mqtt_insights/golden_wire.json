@@ -1785,12 +1785,6 @@
       "retain": true
     },
     {
-      "publish": "am/ct002/dev1/consumer/c1/availability",
-      "payload": "online",
-      "qos": 0,
-      "retain": true
-    },
-    {
       "publish": "am/ct002/dev1/status",
       "payload": {
         "smooth_target": 500.0,
