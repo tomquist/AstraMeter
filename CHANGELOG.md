@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** MQTT Insights sending about a third more messages than it needed to: each battery's availability was re-sent on every poll, roughly once a second, instead of only when the battery appears or goes silent ([#663](https://github.com/tomquist/astrameter/issues/663)).
+- **Fixed** MQTT Insights sending about a third more messages than it needed to: each battery's availability was re-sent on every poll, roughly once a second, instead of only when the battery appears or goes silent ([#663](https://github.com/tomquist/astrameter/issues/663), [#668](https://github.com/tomquist/astrameter/pull/668)).
 
 - **Fixed** a battery being driven to full charge or discharge against the house for up to a minute after it ran its phase detection, on setups using the optional Hampel outlier filter ([#652](https://github.com/tomquist/astrameter/issues/652), [#653](https://github.com/tomquist/astrameter/pull/653)).
 
