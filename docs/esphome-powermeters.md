@@ -786,10 +786,15 @@ ct002:
 
 Three things are meter-specific and worth checking before you flash:
 
-- **Serial settings.** DSMR 4/5 is `115200` 8N1 as above. DSMR 3 is `9600` 7E1
-  (`baud_rate: 9600`, `data_bits: 7`, `parity: EVEN`). DSMR 2.2 is `9600` 7N1
-  (`parity: NONE`) and sends no CRC, so it also needs `crc_check: false` on the
-  `dsmr:` block.
+- **Serial settings.** DSMR 4/5 is `115200` 8N1 as above; DSMR 2.2 and 3 are
+  `9600` with 7 data bits (`baud_rate: 9600`, `data_bits: 7`). The P1 spec puts
+  even parity on both, but ESPHome's own example for 2.2 — and most working
+  community configs for these meters — use `parity: NONE`, because the parity
+  bit is then read as the stop bit. Start with `EVEN` on DSMR 3 and `NONE` on
+  2.2; if telegrams never parse, try the other.
+- **CRC.** The checksum arrived with DSMR 4.0. A 2.2 or 3 telegram carries none,
+  so both need `crc_check: false` on the `dsmr:` block — with the check left on,
+  every telegram is rejected.
 - **Signal inversion.** The P1 data line is inverted open-collector. A ready-made
   P1 cable handles this; a hand-wired one needs an inverting transistor, or the
   full pin schema on the UART:

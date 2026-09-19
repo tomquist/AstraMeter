@@ -448,7 +448,7 @@ has(eyDsmr3, "parity: EVEN", "esp/dsmr: DSMR 3 parity");
 has(eyDsmr3, "decryption_key: AAAA", "esp/dsmr: decryption key when set");
 has(eyDsmr3, "power_delivered_l3:", "esp/dsmr: per-phase keys when three-phase");
 has(eyDsmr3, "power_sensor_l3: grid_l3", "esp/dsmr: three phases wired into ct002");
-lacks(eyDsmr3, "crc_check", "esp/dsmr: DSMR 3 still carries a CRC");
+has(eyDsmr3, "crc_check: false", "esp/dsmr: DSMR 3 sends no CRC either");
 
 // DSMR 2.2 is 7N1 and sends no CRC at all — both differ from DSMR 3.
 const eyDsmr22 = generateEsphome({
@@ -460,6 +460,7 @@ const eyDsmr22 = generateEsphome({
 has(eyDsmr22, "baud_rate: 9600", "esp/dsmr: DSMR 2.2 baud rate");
 has(eyDsmr22, "parity: NONE", "esp/dsmr: DSMR 2.2 has no parity bit");
 has(eyDsmr22, "crc_check: false", "esp/dsmr: DSMR 2.2 sends no CRC");
+has(eyDsmr22, "parity: NONE", "esp/dsmr: DSMR 2.2 parity differs from DSMR 3");
 
 // ── ESPHome: unsupported meter warns ──────────────────────────────────────────
 const eyEnvoy = generateEsphome({

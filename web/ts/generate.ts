@@ -327,8 +327,8 @@ function esphomeSensor(state: State) {
     // watt value is (delivered - returned) * 1000. The dsmr sensors drive a
     // template sensor through on_value rather than polling it, and the NaN
     // guard covers the first telegram, where only one of the two has landed.
-    // DSMR 2.2 differs from 3 in more than baud rate: 7N1 rather than 7E1,
-    // and no CRC in the telegram at all, so the component's check has to go.
+    // The older versions differ from 4/5 in more than baud rate, and from each
+    // other in parity: 2.2 is 7N1 where 3 is 7E1.
     const version = String(f.DSMR_VERSION || "5");
     const legacy = version === "3" || version === "2.2";
     const rxPin = f.RX_PIN || "GPIO4";
@@ -337,7 +337,10 @@ function esphomeSensor(state: State) {
       : `${IND}baud_rate: 115200`;
     topBlocks.push(`uart:\n${IND}id: uart_p1\n${IND}rx_pin: ${rxPin}\n${serial}\n${IND}rx_buffer_size: ${TELEGRAM_BYTES}`);
     const key = isBlank(f.DECRYPTION_KEY) ? "" : `\n${IND}decryption_key: ${f.DECRYPTION_KEY}`;
-    const crc = version === "2.2" ? `\n${IND}crc_check: false` : "";
+    // The CRC16 trailer arrived with DSMR 4.0; 2.2 and 3 telegrams carry no
+    // checksum at all, so the component's check has to be off for both or it
+    // rejects every telegram.
+    const crc = legacy ? `\n${IND}crc_check: false` : "";
     // max_telegram_length defaults to 1500, below the buffer we just sized, so
     // set it too or the component still truncates what the UART accepted.
     topBlocks.push(`dsmr:\n${IND}uart_id: uart_p1\n${IND}max_telegram_length: ${TELEGRAM_BYTES}${key}${crc}`);
