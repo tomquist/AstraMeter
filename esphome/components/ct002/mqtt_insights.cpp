@@ -108,6 +108,7 @@ void MqttInsightsComponent::on_mqtt_connected_() {
   // broker dropped retained messages).
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
+  this->availability_published_.clear();
 
   if (this->ha_discovery_) {
     auto [topic, payload] = build_ct002_device_discovery(
@@ -126,6 +127,7 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   ESP_LOGD(TAG, "MQTT disconnected");
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
+  this->availability_published_.clear();
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
@@ -256,7 +258,7 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     }
   });
   this->mqtt_->publish(state_topic, state_buf, 0, true);
-  this->mqtt_->publish(state_topic + "/availability", "online", 6, 0, true);
+  this->publish_availability_(consumer_id, state_topic + "/availability", true);
 
   // Device-level status — published on every consumer update so HA sees
   // fresh smooth_target / consumer_count. Mirrors the device_status dict in
@@ -335,8 +337,34 @@ void MqttInsightsComponent::publish_consumer_removed_(const std::string &consume
   if (!this->mqtt_->is_connected()) return;
   const std::string avail_topic = this->base_topic_ + "/ct002/" + this->device_id_ +
                                   "/consumer/" + consumer_id + "/availability";
-  this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
+  this->publish_availability_(consumer_id, avail_topic, false);
   this->discovered_consumers_.erase(consumer_id);
+}
+
+void MqttInsightsComponent::publish_availability_(const std::string &consumer_id,
+                                                  const std::string &avail_topic,
+                                                  bool online) {
+  // Availability is a retained flag that only moves when a battery goes
+  // silent or comes back, but publish_consumer_event_ runs on every poll —
+  // once a second per battery. Re-asserting "online" at that rate was a
+  // third of everything this component put on the broker, and each one costs
+  // every subscriber a message to parse (issue #663). Nothing expires: no
+  // discovery payload sets expire_after, so the retained value stands until
+  // the other one is published. Mirrors service.py::_publish_availability.
+  auto it = this->availability_published_.find(consumer_id);
+  if (it != this->availability_published_.end() && it->second == online) return;
+  // Record only what actually went out: publish() returns false when the
+  // client is disconnected or the backend rejects the message twice, and
+  // nothing retries it. Caching a failed publish would suppress every later
+  // attempt, stranding the topic on its previous value — a removed battery
+  // stuck at "online" until the next reconnect clears this map. The Python
+  // side gets the same property for free: aiomqtt raises on failure, and
+  // _publish_availability assigns its cache only after the await returns.
+  const bool published = online ? this->mqtt_->publish(avail_topic, "online", 6, 0, true)
+                                : this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
+  if (published) {
+    this->availability_published_[consumer_id] = online;
+  }
 }
 
 void MqttInsightsComponent::handle_command_message_(const std::string &topic,

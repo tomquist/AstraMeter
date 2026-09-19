@@ -181,6 +181,10 @@ class MqttInsightsService:
         # so a new device family adds a kind instead of a sixth parallel set,
         # a sixth ``clear()`` and a sixth counter.
         self._discovered: set[tuple[str, str]] = set()
+        # Availability already published this session, by availability topic.
+        # Cleared alongside ``_discovered`` on every connect, so a reconnect
+        # re-asserts it even if the broker lost the retained value.
+        self._availability: dict[str, bytes] = {}
         # Devices whose controls MQTT commands may drive, by device id.
         self._devices: dict[str, ControllableDevice] = {}
         # Latest retained consumer command per (consumer_id, field), by device.
@@ -422,6 +426,7 @@ class MqttInsightsService:
         cfg = self._config
         # Clear discovery on (re)connect so we re-publish.
         self._discovered.clear()
+        self._availability.clear()
         await client.publish(
             system_status_topic(cfg.base_topic), payload=b"online", qos=1, retain=True
         )
@@ -598,6 +603,24 @@ class MqttInsightsService:
             except Exception:
                 logger.exception("Error publishing MQTT Insights event")
 
+    async def _publish_availability(
+        self, client: aiomqtt.Client, avail_topic: str, payload: bytes
+    ) -> None:
+        """Publish *payload* on *avail_topic*, unless it is already there.
+
+        Availability is a retained flag that only moves when a battery goes
+        silent or comes back, but the events that carry it arrive on every
+        poll — once a second per battery.  Re-asserting ``online`` at that rate
+        was a third of everything this service put on the broker, and each one
+        costs every subscriber a message to parse (issue #663).  Nothing here
+        expires: no discovery payload sets ``expire_after``, so the retained
+        value stands until the other one is published.
+        """
+        if self._availability.get(avail_topic) == payload:
+            return
+        await client.publish(avail_topic, payload=payload, retain=True)
+        self._availability[avail_topic] = payload
+
     @staticmethod
     async def _publish_discovery(
         client: aiomqtt.Client,
@@ -656,7 +679,7 @@ class MqttInsightsService:
         }
 
         await _publish_json(client, state_topic, consumer_state)
-        await client.publish(avail_topic, payload=b"online", retain=True)
+        await self._publish_availability(client, avail_topic, b"online")
 
         device_status = {
             "smooth_target": data.get("smooth_target", 0),
@@ -719,8 +742,8 @@ class MqttInsightsService:
     ) -> None:
         """A battery went silent: flip its availability and forget its
         discovery so a return republishes it."""
-        await client.publish(
-            availability_topic(state_topic), payload=b"offline", retain=True
+        await self._publish_availability(
+            client, availability_topic(state_topic), b"offline"
         )
         self._discovered.discard((kind, key))
         await self._publish_bridge(client, cfg)
@@ -765,7 +788,7 @@ class MqttInsightsService:
         }
 
         await _publish_json(client, state_topic, battery_state)
-        await client.publish(avail_topic, payload=b"online", retain=True)
+        await self._publish_availability(client, avail_topic, b"online")
 
         device_status = {
             "battery_count": data.get("battery_count", 0),

@@ -1444,6 +1444,98 @@ async def test_consumer_removal_publishes_offline(mqtt_broker: int) -> None:
 
 
 @needs_mosquitto
+async def test_availability_is_published_once_not_on_every_poll(
+    mqtt_broker: int,
+) -> None:
+    """A battery polling once a second must not re-assert "online" each time.
+
+    Availability only moves when a battery goes silent or comes back, but the
+    events carrying it arrive on every poll, so re-publishing it was a third of
+    this service's traffic and a message every subscriber had to parse
+    (issue #663).  What the broker sees is one ``online``, then one ``offline``
+    when the battery is dropped — never a repeat in between.
+    """
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    avail = f"{base}/ct002/dev1/consumer/consumer1/availability"
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        received: list[Any] = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(avail)
+
+            for _ in range(5):
+                service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
+            await _poll(lambda: service._queue.empty())
+            service.on_ct002_consumer_removed("dev1", "consumer1")
+
+            await _collect_messages(
+                sub, received, timeout=5, stop=lambda m: m.payload == b"offline"
+            )
+
+        assert [m.payload for m in received] == [b"online", b"offline"]
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
+async def test_availability_returns_online_after_a_battery_comes_back(
+    mqtt_broker: int,
+) -> None:
+    """Deduping availability must not swallow the battery's return."""
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    avail = f"{base}/ct002/dev1/consumer/consumer1/availability"
+    await service.start()
+
+    try:
+        await service.wait_connected()
+
+        received: list[Any] = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(avail)
+
+            service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
+            await _poll(lambda: service._queue.empty())
+            service.on_ct002_consumer_removed("dev1", "consumer1")
+            await _poll(lambda: service._queue.empty())
+            service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
+
+            await _collect_messages(
+                sub, received, timeout=5, stop=lambda _: len(received) >= 3
+            )
+
+        assert [m.payload for m in received] == [b"online", b"offline", b"online"]
+    finally:
+        await service.stop()
+
+
+async def test_availability_cache_is_cleared_on_connect() -> None:
+    """A reconnect re-asserts availability, in case the broker lost the
+    retained value — same reason ``_discovered`` is cleared there."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="broker.invalid"))
+    service._availability["stale/availability"] = b"online"
+
+    published: list[tuple[str, Any]] = []
+
+    class _Client:
+        async def publish(self, topic: str, payload: Any = None, **kw: Any) -> None:
+            published.append((topic, payload))
+
+        async def subscribe(self, *a: Any, **k: Any) -> None:
+            pass
+
+    await service._announce(_Client())  # type: ignore[arg-type]
+
+    assert service._availability == {}
+
+
+@needs_mosquitto
 async def test_lwt_online_offline(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)

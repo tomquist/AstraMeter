@@ -18,6 +18,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "esphome/core/component.h"
@@ -142,6 +143,8 @@ class MqttInsightsComponent : public Component {
   // service.py::_handle_ct002_event.
   void publish_consumer_event_(const std::string &consumer_id);
   void publish_consumer_removed_(const std::string &consumer_id);
+  void publish_availability_(const std::string &consumer_id, const std::string &avail_topic,
+                             bool online);
 
   // Discovery republish — called on every connect rising edge.
   void on_mqtt_connected_();
@@ -187,6 +190,13 @@ class MqttInsightsComponent : public Component {
   // Discovery dedupe — keys cleared on disconnect.
   bool device_discovered_{false};
   std::unordered_set<std::string> discovered_consumers_;
+
+  // Availability dedupe — what each consumer's availability topic already
+  // carries (true = "online"), so a poll that changes nothing does not
+  // re-assert it. Mirrors service.py's ``_availability``, which keys the
+  // same state by topic; one consumer family here makes the consumer id the
+  // whole key. Cleared with the discovery keys on connect.
+  std::unordered_map<std::string, bool> availability_published_;
 
   // Marstek broadcast scheduling — uses set_interval, captured here so we
   // can cancel if reconfigured at runtime. Single timer because there's
