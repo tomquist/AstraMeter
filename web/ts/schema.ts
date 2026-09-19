@@ -832,8 +832,9 @@ export const POWERMETERS: Powermeter[] = [
     section: "DSMR",
     esphomeOnly: true,
     blurb: "A meter with a P1 port, read on the ESP32 itself over its serial telegram.",
+    docPython: "docs/esphome-powermeters.md#dsmr--p1",
     fields: [
-      { key: "DSMR_VERSION", label: "DSMR version", type: "select", default: "5", options: [{ value: "5", label: "DSMR 4 / 5 (115200 8N1)" }, { value: "3", label: "DSMR 2 / 3 (9600 7E1)" }], help: "Sets the UART serial settings. DSMR 5 sends a telegram every second; DSMR 2/3 every 10 seconds." },
+      { key: "DSMR_VERSION", label: "DSMR version", type: "select", default: "5", options: [{ value: "5", label: "DSMR 4 / 5 (115200 8N1)" }, { value: "3", label: "DSMR 3 (9600 7E1)" }, { value: "2.2", label: "DSMR 2.2 (9600 7N1, no CRC)" }], help: "Sets the UART serial settings. DSMR 5 sends a telegram every second; the older versions every 10 seconds. DSMR 2.2 sends no CRC, so the check is turned off for it." },
       { key: "RX_PIN", label: "P1 RX pin", type: "text", placeholder: "GPIO4", help: "ESP32 pin wired to the P1 data line." },
       { key: "DECRYPTION_KEY", label: "Decryption key", type: "text", advanced: true, help: "Belgian and Luxembourgish meters encrypt P1. Leave blank for an unencrypted telegram." },
     ],

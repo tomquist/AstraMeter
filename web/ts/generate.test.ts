@@ -425,17 +425,41 @@ has(eyDsmr, "(delivered - returned) * 1000.0f", "esp/dsmr: net watts from kW");
 has(eyDsmr, "std::isnan(delivered)", "esp/dsmr: guards the first telegram");
 lacks(eyDsmr, "decryption_key", "esp/dsmr: no decryption key unless set");
 
+has(eyDsmr, "rx_pin: GPIO4", "esp/dsmr: default rx pin");
+has(eyDsmr, "max_telegram_length: 1700", "esp/dsmr: telegram cap raised with the buffer");
+lacks(eyDsmr, "crc_check", "esp/dsmr: CRC left on for DSMR 4/5");
+
+const eyDsmrPin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 1, fields: { RX_PIN: "GPIO17" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmrPin, "rx_pin: GPIO17", "esp/dsmr: custom rx pin");
+
 const eyDsmr3 = generateEsphome({
   target: "esphome",
   esphome: {},
   meters: [{ type: "dsmr", phases: 3, fields: { DSMR_VERSION: "3", DECRYPTION_KEY: "AAAA" }, tuning: {} }],
   ct: { fields: {} },
 });
-has(eyDsmr3, "baud_rate: 9600", "esp/dsmr: DSMR 2/3 serial settings");
-has(eyDsmr3, "parity: EVEN", "esp/dsmr: DSMR 2/3 parity");
+has(eyDsmr3, "baud_rate: 9600", "esp/dsmr: DSMR 3 serial settings");
+has(eyDsmr3, "parity: EVEN", "esp/dsmr: DSMR 3 parity");
 has(eyDsmr3, "decryption_key: AAAA", "esp/dsmr: decryption key when set");
 has(eyDsmr3, "power_delivered_l3:", "esp/dsmr: per-phase keys when three-phase");
 has(eyDsmr3, "power_sensor_l3: grid_l3", "esp/dsmr: three phases wired into ct002");
+lacks(eyDsmr3, "crc_check", "esp/dsmr: DSMR 3 still carries a CRC");
+
+// DSMR 2.2 is 7N1 and sends no CRC at all — both differ from DSMR 3.
+const eyDsmr22 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 1, fields: { DSMR_VERSION: "2.2" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmr22, "baud_rate: 9600", "esp/dsmr: DSMR 2.2 baud rate");
+has(eyDsmr22, "parity: NONE", "esp/dsmr: DSMR 2.2 has no parity bit");
+has(eyDsmr22, "crc_check: false", "esp/dsmr: DSMR 2.2 sends no CRC");
 
 // ── ESPHome: unsupported meter warns ──────────────────────────────────────────
 const eyEnvoy = generateEsphome({

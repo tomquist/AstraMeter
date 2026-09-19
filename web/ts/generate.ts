@@ -322,18 +322,25 @@ function esphomeSensor(state: State) {
   }
 
   if (esp.kind === "dsmr") {
+    const TELEGRAM_BYTES = 1700;
     // A telegram reports import and export separately, both in kW, so the net
     // watt value is (delivered - returned) * 1000. The dsmr sensors drive a
     // template sensor through on_value rather than polling it, and the NaN
     // guard covers the first telegram, where only one of the two has landed.
-    const v3 = String(f.DSMR_VERSION || "5") === "3";
+    // DSMR 2.2 differs from 3 in more than baud rate: 7N1 rather than 7E1,
+    // and no CRC in the telegram at all, so the component's check has to go.
+    const version = String(f.DSMR_VERSION || "5");
+    const legacy = version === "3" || version === "2.2";
     const rxPin = f.RX_PIN || "GPIO4";
-    const serial = v3
-      ? `${IND}baud_rate: 9600\n${IND}data_bits: 7\n${IND}parity: EVEN\n${IND}stop_bits: 1`
+    const serial = legacy
+      ? `${IND}baud_rate: 9600\n${IND}data_bits: 7\n${IND}parity: ${version === "2.2" ? "NONE" : "EVEN"}\n${IND}stop_bits: 1`
       : `${IND}baud_rate: 115200`;
-    topBlocks.push(`uart:\n${IND}id: uart_p1\n${IND}rx_pin: ${rxPin}\n${serial}\n${IND}rx_buffer_size: 1700`);
+    topBlocks.push(`uart:\n${IND}id: uart_p1\n${IND}rx_pin: ${rxPin}\n${serial}\n${IND}rx_buffer_size: ${TELEGRAM_BYTES}`);
     const key = isBlank(f.DECRYPTION_KEY) ? "" : `\n${IND}decryption_key: ${f.DECRYPTION_KEY}`;
-    topBlocks.push(`dsmr:\n${IND}uart_id: uart_p1${key}`);
+    const crc = version === "2.2" ? `\n${IND}crc_check: false` : "";
+    // max_telegram_length defaults to 1500, below the buffer we just sized, so
+    // set it too or the component still truncates what the UART accepted.
+    topBlocks.push(`dsmr:\n${IND}uart_id: uart_p1\n${IND}max_telegram_length: ${TELEGRAM_BYTES}${key}${crc}`);
 
     const suffix = phases === 3 ? ["_l1", "_l2", "_l3"] : [""];
     const dsmrKeys = ids

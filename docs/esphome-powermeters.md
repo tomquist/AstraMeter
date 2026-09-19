@@ -749,6 +749,7 @@ uart:
 
 dsmr:
   uart_id: uart_p1
+  max_telegram_length: 1700   # the component's own cap, 1500 by default
 
 sensor:
   - platform: dsmr
@@ -785,11 +786,19 @@ ct002:
 
 Three things are meter-specific and worth checking before you flash:
 
-- **Serial settings.** DSMR 4/5 is `115200` 8N1 as above; DSMR 2/3 is `9600` 7E1
-  (`baud_rate: 9600`, `data_bits: 7`, `parity: EVEN`).
+- **Serial settings.** DSMR 4/5 is `115200` 8N1 as above. DSMR 3 is `9600` 7E1
+  (`baud_rate: 9600`, `data_bits: 7`, `parity: EVEN`). DSMR 2.2 is `9600` 7N1
+  (`parity: NONE`) and sends no CRC, so it also needs `crc_check: false` on the
+  `dsmr:` block.
 - **Signal inversion.** The P1 data line is inverted open-collector. A ready-made
-  P1 cable handles this; a hand-wired one needs an inverting transistor (or
-  `invert: true` on an ESP32 `rx_pin`).
+  P1 cable handles this; a hand-wired one needs an inverting transistor, or the
+  full pin schema on the UART:
+
+  ```yaml
+  rx_pin:
+    number: GPIO4
+    inverted: true
+  ```
 - **Encrypted telegrams.** Belgian and Luxembourgish meters encrypt P1 — set the
   `decryption_key` your grid operator gave you on the `dsmr:` block.
 
