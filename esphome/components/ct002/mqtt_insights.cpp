@@ -353,12 +353,18 @@ void MqttInsightsComponent::publish_availability_(const std::string &consumer_id
   // the other one is published. Mirrors service.py::_publish_availability.
   auto it = this->availability_published_.find(consumer_id);
   if (it != this->availability_published_.end() && it->second == online) return;
-  if (online) {
-    this->mqtt_->publish(avail_topic, "online", 6, 0, true);
-  } else {
-    this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
+  // Record only what actually went out: publish() returns false when the
+  // client is disconnected or the backend rejects the message twice, and
+  // nothing retries it. Caching a failed publish would suppress every later
+  // attempt, stranding the topic on its previous value — a removed battery
+  // stuck at "online" until the next reconnect clears this map. The Python
+  // side gets the same property for free: aiomqtt raises on failure, and
+  // _publish_availability assigns its cache only after the await returns.
+  const bool published = online ? this->mqtt_->publish(avail_topic, "online", 6, 0, true)
+                                : this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
+  if (published) {
+    this->availability_published_[consumer_id] = online;
   }
-  this->availability_published_[consumer_id] = online;
 }
 
 void MqttInsightsComponent::handle_command_message_(const std::string &topic,
