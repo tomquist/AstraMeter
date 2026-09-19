@@ -235,7 +235,11 @@ function targetCard(): HTMLElement {
           // Both targets ship dashboard writes on, so the box carries over as
           // the user left it. (The ESP32's own controls are a separate flag —
           // it has no login to sit behind.)
-          state.target = value;
+          // Re-migrate rather than just assigning: a meter the new target
+          // can't run (an esphomeOnly source leaving the ESPHome target)
+          // has to be replaced here, or the generator emits a section the
+          // Python loader silently skips.
+          state = migrate({ ...state, target: value });
           if (value === "homeassistant") coerceHaMeter();
           rerenderAll();
         },
@@ -378,7 +382,9 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
         rerenderAll();
       },
     },
-    POWERMETERS.map((p) => el("option", { value: p.id, ...(p.id === meter.type ? { selected: true } : {}) }, p.label)),
+    POWERMETERS.filter((p) => !p.esphomeOnly || state.target === "esphome").map((p) =>
+      el("option", { value: p.id, ...(p.id === meter.type ? { selected: true } : {}) }, p.label),
+    ),
   );
 
   const badge =

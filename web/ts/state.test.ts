@@ -49,6 +49,14 @@ ok(migrate(null).target === "python", "migrate(null) returns a usable default-is
 ok(migrate({ target: "weird" }).target === "python", "migrate: invalid target constrained to python");
 ok(migrate({ target: "esphome" }).target === "esphome", "migrate: esphome target preserved");
 
+// An ESPHome-only source (dsmr) has no Python section, so it must not survive a
+// move to another target — otherwise the generator emits a config.ini section
+// the loader silently skips. The target picker re-migrates for this reason.
+const dsmrOnEsphome = migrate({ target: "esphome", meters: [{ type: "dsmr", phases: 1, fields: {}, tuning: {} }] });
+ok(dsmrOnEsphome.meters[0].type === "dsmr", "migrate: esphomeOnly meter kept under the esphome target");
+const dsmrOnPython = migrate({ target: "python", meters: [{ type: "dsmr", phases: 1, fields: {}, tuning: {} }] });
+ok(dsmrOnPython.meters[0].type !== "dsmr", "migrate: esphomeOnly meter replaced under the python target");
+
 const fromHostileLink = migrate(
   safeParse(
     JSON.stringify({
