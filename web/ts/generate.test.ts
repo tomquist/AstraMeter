@@ -411,6 +411,32 @@ const eySml = generateEsphome({
 has(eySml, "platform: sml", "esp/sml: sml sensor");
 has(eySml, 'obis_code: "1-0:16.7.0"', "esp/sml: default obis");
 
+// ── ESPHome: DSMR / P1 ────────────────────────────────────────────────────────
+const eyDsmr = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 1, fields: {}, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmr, "platform: dsmr", "esp/dsmr: dsmr sensor");
+has(eyDsmr, "baud_rate: 115200", "esp/dsmr: DSMR 5 serial settings by default");
+has(eyDsmr, "rx_buffer_size: 1700", "esp/dsmr: telegram-sized rx buffer");
+has(eyDsmr, "(delivered - returned) * 1000.0f", "esp/dsmr: net watts from kW");
+has(eyDsmr, "std::isnan(delivered)", "esp/dsmr: guards the first telegram");
+lacks(eyDsmr, "decryption_key", "esp/dsmr: no decryption key unless set");
+
+const eyDsmr3 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 3, fields: { DSMR_VERSION: "3", DECRYPTION_KEY: "AAAA" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmr3, "baud_rate: 9600", "esp/dsmr: DSMR 2/3 serial settings");
+has(eyDsmr3, "parity: EVEN", "esp/dsmr: DSMR 2/3 parity");
+has(eyDsmr3, "decryption_key: AAAA", "esp/dsmr: decryption key when set");
+has(eyDsmr3, "power_delivered_l3:", "esp/dsmr: per-phase keys when three-phase");
+has(eyDsmr3, "power_sensor_l3: grid_l3", "esp/dsmr: three phases wired into ct002");
+
 // ── ESPHome: unsupported meter warns ──────────────────────────────────────────
 const eyEnvoy = generateEsphome({
   target: "esphome",

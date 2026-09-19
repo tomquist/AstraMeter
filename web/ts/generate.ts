@@ -321,6 +321,48 @@ function esphomeSensor(state: State) {
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
   }
 
+  if (esp.kind === "dsmr") {
+    // A telegram reports import and export separately, both in kW, so the net
+    // watt value is (delivered - returned) * 1000. The dsmr sensors drive a
+    // template sensor through on_value rather than polling it, and the NaN
+    // guard covers the first telegram, where only one of the two has landed.
+    const v3 = String(f.DSMR_VERSION || "5") === "3";
+    const rxPin = f.RX_PIN || "GPIO4";
+    const serial = v3
+      ? `${IND}baud_rate: 9600\n${IND}data_bits: 7\n${IND}parity: EVEN\n${IND}stop_bits: 1`
+      : `${IND}baud_rate: 115200`;
+    topBlocks.push(`uart:\n${IND}id: uart_p1\n${IND}rx_pin: ${rxPin}\n${serial}\n${IND}rx_buffer_size: 1700`);
+    const key = isBlank(f.DECRYPTION_KEY) ? "" : `\n${IND}decryption_key: ${f.DECRYPTION_KEY}`;
+    topBlocks.push(`dsmr:\n${IND}uart_id: uart_p1${key}`);
+
+    const suffix = phases === 3 ? ["_l1", "_l2", "_l3"] : [""];
+    const dsmrKeys = ids
+      .map((id, i) => {
+        const upd = `${IND}${IND}${IND}on_value:\n${IND}${IND}${IND}${IND}then:\n${IND}${IND}${IND}${IND}${IND}- component.update: ${id}`;
+        return (
+          `${IND}${IND}power_delivered${suffix[i]}:\n${IND}${IND}${IND}id: p1_delivered${suffix[i]}\n${IND}${IND}${IND}internal: true\n${upd}\n` +
+          `${IND}${IND}power_returned${suffix[i]}:\n${IND}${IND}${IND}id: p1_returned${suffix[i]}\n${IND}${IND}${IND}internal: true\n${upd}`
+        );
+      })
+      .join("\n");
+    const templates = ids
+      .map((id, i) => {
+        const d = `p1_delivered${suffix[i]}`;
+        const r = `p1_returned${suffix[i]}`;
+        return (
+          `${IND}- platform: template\n${IND}${IND}id: ${id}\n${IND}${IND}unit_of_measurement: W\n${IND}${IND}device_class: power\n` +
+          `${IND}${IND}update_interval: never\n${IND}${IND}lambda: |-\n` +
+          `${IND}${IND}${IND}const float delivered = id(${d}).state;\n` +
+          `${IND}${IND}${IND}const float returned = id(${r}).state;\n` +
+          `${IND}${IND}${IND}if (std::isnan(delivered) || std::isnan(returned)) return {};\n` +
+          `${IND}${IND}${IND}return (delivered - returned) * 1000.0f;${phaseFilterBlock(i)}`
+        );
+      })
+      .join("\n");
+    const sensorBlock = `sensor:\n${IND}- platform: dsmr\n${dsmrKeys}\n${templates}`;
+    return { topBlocks, sensorBlock, phases, warnings };
+  }
+
   if (esp.kind === "modbus") {
     topBlocks.push(`uart:\n${IND}id: mod_uart\n${IND}tx_pin: GPIO17\n${IND}rx_pin: GPIO16\n${IND}baud_rate: 9600\n${IND}stop_bits: 1`);
     topBlocks.push(`modbus:\n${IND}id: modbus1\n${IND}uart_id: mod_uart`);

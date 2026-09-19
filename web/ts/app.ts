@@ -378,7 +378,9 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
         rerenderAll();
       },
     },
-    POWERMETERS.map((p) => el("option", { value: p.id, ...(p.id === meter.type ? { selected: true } : {}) }, p.label)),
+    POWERMETERS.filter((p) => !p.esphomeOnly || state.target === "esphome").map((p) =>
+      el("option", { value: p.id, ...(p.id === meter.type ? { selected: true } : {}) }, p.label),
+    ),
   );
 
   const badge =

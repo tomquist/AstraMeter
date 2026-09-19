@@ -37,7 +37,7 @@ export interface Field {
 
 /** How a source is read on an ESP32 (see docs/esphome-powermeters.md). */
 export interface EsphomeSpec {
-  kind: "homeassistant" | "mqtt" | "sml" | "modbus" | "http" | "unsupported";
+  kind: "homeassistant" | "mqtt" | "sml" | "dsmr" | "modbus" | "http" | "unsupported";
   tier: "native" | "generic" | "alternate" | "unsupported";
   note: string;
   url1?: (f: Fields) => string;
@@ -54,6 +54,12 @@ export interface Powermeter {
   id: string;
   label: string;
   section: string;
+  /**
+   * Read only by the ESP32 — there is no Python backend for this source, so
+   * the form hides it unless the ESPHome target is selected. `section` is
+   * unused for these; the Python generator never sees them.
+   */
+  esphomeOnly?: boolean;
   blurb?: string;
   docPython?: string;
   fields: Field[];
@@ -820,6 +826,23 @@ export const POWERMETERS: Powermeter[] = [
       note: "Wire a photo-transistor to a UART RX pin and use the native sml component.",
     },
   },
+  {
+    id: "dsmr",
+    label: "DSMR / P1 smart meter (ESPHome only)",
+    section: "DSMR",
+    esphomeOnly: true,
+    blurb: "A meter with a P1 port, read on the ESP32 itself over its serial telegram.",
+    fields: [
+      { key: "DSMR_VERSION", label: "DSMR version", type: "select", default: "5", options: [{ value: "5", label: "DSMR 4 / 5 (115200 8N1)" }, { value: "3", label: "DSMR 2 / 3 (9600 7E1)" }], help: "Sets the UART serial settings. DSMR 5 sends a telegram every second; DSMR 2/3 every 10 seconds." },
+      { key: "RX_PIN", label: "P1 RX pin", type: "text", placeholder: "GPIO4", help: "ESP32 pin wired to the P1 data line." },
+      { key: "DECRYPTION_KEY", label: "Decryption key", type: "text", advanced: true, help: "Belgian and Luxembourgish meters encrypt P1. Leave blank for an unencrypted telegram." },
+    ],
+    esphome: {
+      kind: "dsmr",
+      tier: "native",
+      note: "Wire the P1 port to a UART RX pin and use the native dsmr component.",
+    },
+  },
 ];
 
 export function getPowermeter(id: string): Powermeter | undefined {
@@ -835,6 +858,7 @@ export const PHASE_CAPABLE: Set<string> = new Set([
   "mqtt",
   "json_http",
   "sml",
+  "dsmr",
   "fronius",
   "refoss",
   "tibber_pulse",
