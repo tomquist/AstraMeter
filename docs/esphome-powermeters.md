@@ -1,40 +1,39 @@
 # Powermeter Configuration Reference (ESPHome external component)
 
-When you run AstraMeter as the [ESPHome external
-component](installation/esphome.md) on an ESP32,
-the `ct002:` block does **not** talk to your meter directly. Instead it consumes
-**any ESPHome `sensor`** that reports grid power in watts. So "configuring a
-powermeter" here means: *give ESPHome a sensor that reads your meter, then point
-`ct002:` at it.*
+Run AstraMeter as the [ESPHome external
+component](installation/esphome.md) on an ESP32 and the `ct002:` block does
+**not** talk to your meter. It reads **any ESPHome `sensor`** that reports grid
+power in watts. So "configuring a powermeter" here means: *give ESPHome a sensor
+that reads your meter, then point `ct002:` at it.*
 
 A sensor that declares `unit_of_measurement: kW` (or `MW`/`mW`) is converted to
-watts automatically; a declared non-power unit (`°C`, `kWh`, …) is rejected at
-config validation. A sensor with no declared unit is assumed to report W — so
-for sources that deliver kW (common for Home Assistant template sensors),
-either declare the kW unit or scale the value with a `multiply: 1000` filter.
+watts for you. A declared non-power unit (`°C`, `kWh`, …) fails config
+validation. A sensor with no declared unit is assumed to report W. So if your
+source delivers kW (common for Home Assistant template sensors), either declare
+the kW unit or scale the value with a `multiply: 1000` filter.
 
 ## How a reading reaches the emulator
 
-There is no "powermeter" object in the ESPHome component — the integration is a
-plain **id reference**. Every example below publishes a watts value into a sensor
+The ESPHome component has no "powermeter" object. You wire it up with a plain
+**id reference**. Every example below publishes a watts value into a sensor
 whose `id` is `grid_l1` (and `grid_l2` / `grid_l3` for the other phases). The
 `ct002:` block names those ids in its `power_sensor_l*` keys. That id match is
-the entire wiring; whenever the sensor publishes a new value, the emulator picks
-it up on its next Marstek CT002 poll — you never call `ct002:` directly.
+the whole wiring. When the sensor publishes a new value, the emulator picks it
+up on its next Marstek CT002 poll. You never call `ct002:` directly.
 
-**Each section below is a complete, copy-pasteable config** for one meter — from
-`external_components:` through `ct002:`. To keep them focused, every example
-**omits the `wifi:`, `api:`, `ota:`, and board (`esp32:`) blocks** — add those
+**Each section below is a complete, copy-pasteable config** for one meter, from
+`external_components:` through `ct002:`. To keep them short, every example
+**omits the `wifi:`, `api:`, `ota:`, and board (`esp32:`) blocks**. Add those
 for your hardware (see [`esphome.example.yaml`](../esphome.example.yaml) for a
-full board config). What's shown is complete for the meter → emulator wiring.
+full board config). The meter → emulator wiring itself is complete.
 
-Per-phase calibration/throttling (`offset:`, `multiply:`, `throttle:`) goes in
-`filters:` **on the sensor**, not in `ct002:` — see the
+Put per-phase calibration and throttling (`offset:`, `multiply:`, `throttle:`)
+in `filters:` **on the sensor**, not in `ct002:`. See the
 [ESPHome installation note](installation/esphome.md#one-important-divergence-from-the-python-emulator).
 Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 > The polling/lambda examples are **illustrative**. ESPHome's `http_request`,
-> `json`, and lambda APIs differ slightly between releases — check the linked
+> `json`, and lambda APIs differ slightly between releases, so check the linked
 > component docs for the exact syntax on your version.
 
 ## Support legend
@@ -43,7 +42,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 |------|---------|
 | 🟢 **Native** | A built-in ESPHome component reads this exact source. |
 | 🔵 **Generic** | No device-specific component, but ESPHome's built-in `http_request`+`json` or `mqtt_subscribe` reads it with a small lambda. |
-| 🟠 **Alternate** | The exact API the Python class uses has no ESPHome port, but the *same device* also speaks a protocol ESPHome reads natively (Modbus/MQTT/P1). |
+| 🟠 **Alternate** | No ESPHome port exists for the API the Python class uses, but the *same device* also speaks a protocol ESPHome reads natively (Modbus/MQTT/P1). |
 | 🔴 **Not yet available** | No practical way to read this on an ESP32 today. Documented so we know what to build. |
 
 ## Contents
@@ -72,26 +71,26 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [Refoss / Meross energy monitor](#refoss--meross-energy-monitor) — 🔵 Generic
 - [Tibber Pulse](#tibber-pulse) — 🟠 Alternate (native SML / community component)
 
-> **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design —
-> an ESP32 can't run a host shell command — so it is intentionally omitted here.
+> **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design:
+> an ESP32 can't run a host shell command. It is left out here on purpose.
 >
-> **The 🔵 generic HTTP sections** all share the same shape: a `template` sensor
+> **The 🔵 generic HTTP sections** all share one shape. A `template` sensor
 > named `grid_l1` holds the value, an `interval:` polls the URL, and a lambda
 > parses the JSON body with the built-in
 > [`json::parse_json`](https://esphome.io/components/json/) helper and publishes
-> into `grid_l1`. Only the URL and the lambda field differ between them. The
+> into `grid_l1`. Only the URL and the lambda field differ. The
 > [`http_request`](https://esphome.io/components/http_request/) and
-> [`json`](https://esphome.io/components/json/) components are built in — no
-> extra external component needed.
+> [`json`](https://esphome.io/components/json/) components ship with ESPHome, so
+> you need no extra external component.
 
 ## Shelly
 
 **Tier: 🔵 Generic** (poll over the network) — or **🟢 Native** if the Shelly is
 ESP32-based and you flash ESPHome onto it.
 
-Most Shelly devices are reachable over HTTP from the ct002 ESP32. Gen2/Gen3/Pro
-expose an RPC API; Gen1 a REST `/status`. Single-phase (Shelly Plus 1PM / Pro
-family, RPC `apower`):
+The ct002 ESP32 can reach most Shelly devices over HTTP. Gen2/Gen3/Pro expose
+an RPC API; Gen1 a REST `/status`. Single-phase (Shelly Plus 1PM / Pro family,
+RPC `apower`):
 
 ```yaml
 external_components:
@@ -176,17 +175,17 @@ ct002:
   power_sensor_l3: grid_l3
 ```
 
-(This splits `EM.GetStatus` into per-phase readings; the Python `[SHELLY]`
+(This splits `EM.GetStatus` into per-phase readings. The Python `[SHELLY]`
 `3EMPro` source instead reads the aggregate `total_act_power` from the same
-response. Both are valid — use whichever your setup needs.)
+response. Both work — use whichever your setup needs.)
 
 Gen1 (Shelly 1PM/EM/3EM) expose `http://<ip>/status` with a `meters[]` /
-`emeters[]` array — point the lambda at `root["emeters"][0]["power"]` etc.
+`emeters[]` array. Point the lambda at `root["emeters"][0]["power"]` and so on.
 
 **Native alternative:** Shelly hardware is ESP-based, so you can flash ESPHome
-directly onto it and read its onboard energy chip (BL0942 / ADE7953 / ADE7880)
-as a native sensor. If that Shelly is ESP32-based (e.g. Shelly Pro 3EM) it can
-even run the `ct002:` component itself. See
+onto it and read its onboard energy chip (BL0942 / ADE7953 / ADE7880) as a
+native sensor. If that Shelly is ESP32-based (e.g. Shelly Pro 3EM), it can even
+run the `ct002:` component itself. See
 [devices.esphome.io](https://devices.esphome.io/) for per-model configs.
 
 ## Tasmota
@@ -230,14 +229,14 @@ ct002:
   power_sensor_l1: grid_l1
 ```
 
-**Native alternative:** the device is ESP-based — flashing ESPHome lets you read
+**Native alternative:** the device is ESP-based. Flash ESPHome onto it and read
 the underlying energy-monitor chip (CSE7766 / HLW8012 / BL0942 / ADE7953)
 directly as a native sensor.
 
 ## Shrdzm
 
 **Tier: 🔵 Generic.** The SHRDZM module serves `GET /getLastData?user=…&password=…`
-returning OBIS keys; grid power is `1.7.0` (import) minus `2.7.0` (export):
+and returns OBIS keys. Grid power is `1.7.0` (import) minus `2.7.0` (export):
 
 ```yaml
 external_components:
@@ -356,17 +355,17 @@ ct002:
   power_sensor_l1: grid_l1
 ```
 
-**Alternative:** if you run ioBroker's MQTT adapter, publish the state to a topic
-and read it with the native [`mqtt_subscribe`](#mqtt) sensor instead (simpler and
-push-based).
+**Alternative:** if you run ioBroker's MQTT adapter, publish the state to a
+topic and read it with the native [`mqtt_subscribe`](#mqtt) sensor instead. That
+is simpler, and push-based.
 
 ## HomeAssistant
 
 **Tier: 🟢 Native.** Use the built-in
 [`homeassistant`](https://esphome.io/components/sensor/homeassistant/) sensor
-platform — the ESP subscribes to a HA entity over the native API (so the `api:`
-block, normally part of the omitted boilerplate, is shown here because it's
-required for this source):
+platform. The ESP subscribes to a HA entity over the native API. This source
+needs the `api:` block, so it is shown here even though the other examples omit
+it:
 
 ```yaml
 external_components:
@@ -432,19 +431,19 @@ ct002:
 ```
 
 **Native alternative:** vzlogger itself just reads a physical meter (usually
-SML or DLMS/D0 over an IR head). You can skip vzlogger entirely and read that
-meter directly on the ESP with the native [`sml`](#sml) component (or
-[`dsmr`](https://esphome.io/components/sensor/dsmr/) for P1/D0), removing the
+SML or DLMS/D0 over an IR head). Skip vzlogger and read that meter directly on
+the ESP with the native [`sml`](#sml) component (or
+[`dsmr`](https://esphome.io/components/sensor/dsmr/) for P1/D0). That drops the
 middleware.
 
 ## ESPHome
 
 **Tier: 🟢 Native.** The Python `[ESPHOME]` source polls another ESPHome
-device's web-server REST API. On the ESP32 there's no bridge to build — if your
-grid-power source is already an ESPHome device, either define that meter's sensor
-in the **same** YAML as `ct002:` (any native chip / Modbus / pulse-counter sensor
-with `id: grid_l1`), or import another ESPHome node's entity via Home Assistant.
-The latter, complete:
+device's web-server REST API. On the ESP32 you build no bridge at all. If your
+grid-power source is already an ESPHome device, you have two options: define
+that meter's sensor in the **same** YAML as `ct002:` (any native chip / Modbus /
+pulse-counter sensor with `id: grid_l1`), or import another ESPHome node's
+entity via Home Assistant. The second option, complete:
 
 ```yaml
 external_components:
@@ -467,12 +466,12 @@ You can also subscribe over [MQTT](#mqtt) if both nodes share a broker.
 
 ## ESPHomeNative
 
-**Tier: 🟢 Native.** The Python `[ESPHOMENATIVE]` source polls another ESPHome
-device's native API. On the ESP32 there's no bridge to build — if your
-grid-power source is already an ESPHome device, either define that meter's sensor
-in the **same** YAML as `ct002:` (any native chip / Modbus / pulse-counter sensor
-with `id: grid_l1`), or import another ESPHome node's entity via Home Assistant.
-The latter, complete:
+**Tier: 🟢 Native.** The Python `[ESPHOMENATIVE]` source polls another
+ESPHome device's native API. On the ESP32 you build no bridge at all. If your
+grid-power source is already an ESPHome device, you have two options: define
+that meter's sensor in the **same** YAML as `ct002:` (any native chip / Modbus /
+pulse-counter sensor with `id: grid_l1`), or import another ESPHome node's
+entity via Home Assistant. The second option, complete:
 
 ```yaml
 external_components:
@@ -534,7 +533,7 @@ ct002:
 
 ## Modbus
 
-**Tier: 🟢 Native** — with one important caveat (see below). Use the built-in
+**Tier: 🟢 Native**, with one important caveat (see below). Use the built-in
 [`modbus_controller`](https://esphome.io/components/sensor/modbus_controller/)
 sensor over an RS485 transceiver wired to the ESP:
 
@@ -575,9 +574,9 @@ ct002:
 ```
 
 > **Modbus-TCP caveat.** ESPHome's `modbus_controller` is a **serial (RS485)**
-> master — it does not open a raw Modbus-TCP socket the way the Python
+> master. It does not open a raw Modbus-TCP socket the way the Python
 > `[MODBUS]` source does with `TRANSPORT = TCP`. To read a network Modbus-TCP
-> meter from the ESP you need either a wired RS485 connection to the meter, or a
+> meter from the ESP, you need either a wired RS485 connection to the meter or a
 > Modbus-TCP↔RTU gateway. Map `DATA_TYPE`/`BYTE_ORDER`/`WORD_ORDER` from your
 > Python config onto `value_type` and the register's byte/word order.
 
@@ -607,8 +606,8 @@ ct002:
 ```
 
 For a **JSON** payload (the Python `JSON_PATH` case), `mqtt_subscribe` only
-handles bare floats, so extract the field with `on_json_message` into a template
-sensor:
+handles bare floats. Extract the field with `on_json_message` into a template
+sensor instead:
 
 ```yaml
 external_components:
@@ -641,9 +640,9 @@ For three-phase, subscribe to three topics (or read three fields) into
 
 ## JSON HTTP
 
-**Tier: 🟢 Native** (generic `http_request`). Point the URL at your endpoint and
-set the lambda to your JSON field. Headers and basic auth are supported on the
-`http_request.get` action:
+**Tier: 🟢 Native** (generic `http_request`). Point the URL at your endpoint
+and set the lambda to your JSON field. The `http_request.get` action supports
+headers and basic auth:
 
 ```yaml
 external_components:
@@ -720,17 +719,18 @@ ct002:
 ```
 
 The default `obis_code` here matches the Python source's default
-`OBIS_POWER_CURRENT` (`0100100700ff` → `1-0:16.7.0`); the per-phase codes match
+`OBIS_POWER_CURRENT` (`0100100700ff` → `1-0:16.7.0`). The per-phase codes match
 its `OBIS_POWER_L1/L2/L3` defaults.
 
 ## DSMR / P1
 
-**Tier: 🟢 Native.** Meters with a P1 port (DSMR in the Netherlands and Belgium,
-and the same telegram format elsewhere) are read on the ESP by ESPHome's built-in
-[`dsmr`](https://esphome.io/components/sensor/dsmr/) component. There is no
-Python `[...]` source for this — on the add-on you would read the P1 port through
-a [HomeWizard](#homewizard) dongle or similar; on the ESP the meter is wired
-straight to a UART pin, so the meter and the emulator share one board.
+**Tier: 🟢 Native.** ESPHome's built-in
+[`dsmr`](https://esphome.io/components/sensor/dsmr/) component reads meters with
+a P1 port (DSMR in the Netherlands and Belgium, and the same telegram format
+elsewhere). There is no Python `[...]` source for this. On the add-on you would
+read the P1 port through a [HomeWizard](#homewizard) dongle or similar. On the
+ESP you wire the meter straight to a UART pin, so the meter and the emulator
+share one board.
 
 A telegram reports import and export separately, so subtract them into a single
 net sensor. `power_delivered`/`power_returned` are in **kW**, hence the
@@ -786,39 +786,40 @@ ct002:
 
 Three things are meter-specific and worth checking before you flash:
 
-- **Serial settings.** DSMR 4/5 is `115200` 8N1 as above; DSMR 2.2 and 3 are
+- **Serial settings.** DSMR 4/5 is `115200` 8N1, as above. DSMR 2.2 and 3 are
   `9600` with 7 data bits (`baud_rate: 9600`, `data_bits: 7`). The P1 spec puts
-  even parity on both, but ESPHome's own example for 2.2 — and most working
-  community configs for these meters — use `parity: NONE`, because the parity
-  bit is then read as the stop bit. Start with `EVEN` on DSMR 3 and `NONE` on
-  2.2; if telegrams never parse, try the other.
+  even parity on both, but ESPHome's own example for 2.2 uses `parity: NONE`,
+  and so do most working community configs for these meters: the parity bit is
+  then read as the stop bit. Start with `EVEN` on DSMR 3 and `NONE` on 2.2. If
+  telegrams never parse, try the other.
 - **CRC.** The checksum arrived with DSMR 4.0. A 2.2 or 3 telegram carries none,
-  so both need `crc_check: false` on the `dsmr:` block — with the check left on,
+  so both need `crc_check: false` on the `dsmr:` block. Leave the check on and
   every telegram is rejected.
-- **Signal inversion.** The P1 data line is inverted open-collector. A ready-made
-  P1 cable handles this; a hand-wired one needs an inverting transistor, or the
-  full pin schema on the UART:
+- **Signal inversion.** The P1 data line is inverted open-collector. A
+  ready-made P1 cable handles this. A hand-wired one needs an inverting
+  transistor, or the full pin schema on the UART:
 
   ```yaml
   rx_pin:
     number: GPIO4
     inverted: true
   ```
-- **Encrypted telegrams.** Belgian and Luxembourgish meters encrypt P1 — set the
+- **Encrypted telegrams.** Belgian and Luxembourgish meters encrypt P1. Set the
   `decryption_key` your grid operator gave you on the `dsmr:` block.
 
-Telegram rate sets how fast the emulator sees a change: DSMR 5 sends one per
+Telegram rate sets how fast the emulator sees a change. DSMR 5 sends one per
 second, DSMR 2/3 one every 10 seconds.
 
 ## TQ Energy Manager
 
 **Tier: 🟠 Alternate.** The Python `[TQ_EM]` source talks to the device's
-proprietary session/login JSON API (`/start.php` + `/mum-webservice/data.php`),
-which has no ESPHome port. However, the TQ Energy Manager (EM420 and similar)
-also exposes **Modbus RTU/TCP and MQTT** — read it through one of those instead.
+proprietary session/login JSON API (`/start.php` + `/mum-webservice/data.php`).
+No ESPHome port exists for it. But the TQ Energy Manager (EM420 and similar)
+also exposes **Modbus RTU/TCP and MQTT**, so read it through one of those
+instead.
 
-Via Modbus (RS485 to the EM; use the active-power register from the TQ Modbus
-register map — `address` / `value_type` below are placeholders):
+Via Modbus (RS485 to the EM). Use the active-power register from the TQ Modbus
+register map; `address` and `value_type` below are placeholders:
 
 ```yaml
 external_components:
@@ -856,15 +857,15 @@ ct002:
   power_sensor_l1: grid_l1
 ```
 
-Alternatively enable the EM's MQTT export and use the [`mqtt_subscribe`](#mqtt)
-config above with the EM's power topic.
+You can also turn on the EM's MQTT export and use the
+[`mqtt_subscribe`](#mqtt) config above with the EM's power topic.
 
 ## HomeWizard
 
 **Tier: 🟠 Alternate.** The Python `[HOMEWIZARD]` source uses the v2 WebSocket
-API (TLS + token), which has no ESPHome component. Easiest ESP path: enable
+API (TLS + token), which has no ESPHome component. The easiest ESP path: turn on
 *Local API* in the HomeWizard app and poll the **v1 HTTP API** at
-`GET /api/v1/data`; grid power is `active_power_w` (and `active_power_l1_w` …
+`GET /api/v1/data`. Grid power is `active_power_w` (and `active_power_l1_w` …
 `_l3_w` for three-phase):
 
 ```yaml
@@ -902,16 +903,16 @@ ct002:
 ```
 
 **Native alternative:** the HomeWizard dongle just reads your smart meter's P1
-telegram. With your own P1-reader hardware you can skip the dongle and use
-ESPHome's native [`dsmr`](https://esphome.io/components/sensor/dsmr/) component
-(or [`sml`](#sml) for SML meters) on the ESP.
+telegram. With your own P1-reader hardware, skip the dongle and use ESPHome's
+native [`dsmr`](https://esphome.io/components/sensor/dsmr/) component (or
+[`sml`](#sml) for SML meters) on the ESP.
 
 ## Enphase Envoy (IQ Gateway)
 
 **Tier: 🔴 Not yet available.** There is currently **no ESPHome component** for
 the Enphase Envoy / IQ Gateway, so there is no config to copy yet. The Python
-`[ENVOY]` source reads the local `/production.json?details=1` endpoint, which
-requires:
+`[ENVOY]` source reads the local `/production.json?details=1` endpoint. That
+endpoint needs:
 
 - **HTTPS to a self-signed certificate** on the gateway, and
 - a **JWT bearer token** — either a long-lived static token or one fetched and
@@ -949,19 +950,20 @@ protocol as implemented by [sma2mqtt](https://github.com/vindolin/sma2mqtt) and
 ## FRITZ!Smart Energy 250
 
 **Tier: 🟠 Alternate.** The Python `[FRITZ]` source reads the read head through
-the FRITZ!Box [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf):
-it logs in with the `login_sid.lua` **challenge-response** (PBKDF2-SHA256, or the
+the FRITZ!Box [AHA-HTTP-Interface](https://fritz.com/fileadmin/user_upload/Global/Service/Schnittstellen/AHA-HTTP-Interface.pdf).
+It logs in with the `login_sid.lua` **challenge-response** (PBKDF2-SHA256, or the
 legacy MD5 challenge), then parses the **XML** `getdevicelistinfos` device list.
-Stock ESPHome `http_request` can't comfortably do the PBKDF2 session handshake or
-parse XML (the built-in parser is JSON-only), so there is no direct ESP port.
+Stock ESPHome `http_request` can't comfortably do the PBKDF2 session handshake,
+and it can't parse XML (the built-in parser is JSON-only). So there is no direct
+ESP port.
 
-The read head only speaks DECT to the FRITZ!Box, so there's no local protocol to
-read on the ESP either. The practical path is to let **Home Assistant** read it
-via the built-in [AVM FRITZ!SmartHome](https://www.home-assistant.io/integrations/fritzbox/)
-integration — which surfaces the read head's power as a sensor entity — and then
+The read head only speaks DECT to the FRITZ!Box, so there is no local protocol
+to read on the ESP either. The practical path takes two steps. First, let **Home
+Assistant** read it with the built-in [AVM FRITZ!SmartHome](https://www.home-assistant.io/integrations/fritzbox/)
+integration, which surfaces the read head's power as a sensor entity. Then
 subscribe to that entity on the ESP with the native
 [`homeassistant`](https://esphome.io/components/sensor/homeassistant/) sensor
-platform (the same bridge the [HomeAssistant](#homeassistant) source uses):
+platform — the same bridge the [HomeAssistant](#homeassistant) source uses:
 
 ```yaml
 external_components:
@@ -980,15 +982,15 @@ ct002:
   power_sensor_l1: grid_l1
 ```
 
-The FRITZ!Smart Energy 250 is single-phase, so only `grid_l1` is needed. If your
+The FRITZ!Smart Energy 250 is single-phase, so you only need `grid_l1`. If your
 Home Assistant exposes import and export as separate entities (no signed net
 sensor), use a [template sensor](https://www.home-assistant.io/integrations/template/)
-in HA to subtract them (`import − export`) and point `entity_id` at that.
+in HA to subtract them (`import − export`), then point `entity_id` at that.
 
-**Native alternative:** the read head clips onto your existing electricity meter.
-If that meter has an SML/D0 IR output or a P1 port, you can skip the FRITZ
-hardware entirely and read it directly on the ESP with the native [`sml`](#sml)
-or [`dsmr`](https://esphome.io/components/sensor/dsmr/) component.
+**Native alternative:** the read head clips onto your existing electricity
+meter. If that meter has an SML/D0 IR output or a P1 port, skip the FRITZ
+hardware and read it directly on the ESP with the native [`sml`](#sml) or
+[`dsmr`](https://esphome.io/components/sensor/dsmr/) component.
 
 *To implement (direct):* an external component that performs the `login_sid.lua`
 challenge-response (PBKDF2/MD5) against the FRITZ!Box, GETs
@@ -1039,15 +1041,16 @@ ct002:
   power_sensor_l1: grid_l1
 ```
 
-The Solar API returns a multi-KB JSON document, so the `buffer_size_rx` /
-`max_response_buffer_size` above are required — with ESPHome's small default the
-response is truncated and `json::parse_json` silently fails.
+The Solar API returns a multi-KB JSON document, so the `buffer_size_rx` and
+`max_response_buffer_size` above are required. With ESPHome's small default, the
+response is truncated and `json::parse_json` fails silently.
 
 If your readings have the wrong sign, add a `multiply: -1` filter on the sensor.
 
 For three-phase, add `grid_l2` / `grid_l3` template sensors and publish the
-per-phase fields from the same poll (only if your meter reports **signed**
-per-phase power — some firmwares report it unsigned, which breaks export):
+per-phase fields from the same poll. Do this only if your meter reports
+**signed** per-phase power; some firmwares report it unsigned, which breaks
+export:
 
 ```yaml
               - lambda: |-
@@ -1067,7 +1070,7 @@ per-phase power — some firmwares report it unsigned, which breaks export):
 **Tier: 🔵 Generic.** Poll the local Open API
 `GET /rpc/Em.Status.Get?id=65535` and read `status[N].power` for the CT channel
 on the grid main (`N` is channel id minus one: channel 1 → index 0). The device
-API is **cleartext HTTP** — use only on a trusted local network.
+API is **cleartext HTTP**, so use it only on a trusted local network.
 
 ```yaml
 external_components:
@@ -1110,7 +1113,7 @@ ct002:
 
 For three-phase, publish `status[0]` / `status[1]` / `status[2]` into
 `grid_l1` / `grid_l2` / `grid_l3` (or indices 3–5 for the EM06P second CT group)
-and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`. Prefer a numeric IP;
+and set `power_sensor_l2` / `power_sensor_l3` on `ct002:`. Prefer a numeric IP:
 mDNS `*.local` names often fail on ESPHome as well.
 
 ## Tibber Pulse
@@ -1120,10 +1123,10 @@ telegram** from the Pulse Bridge's `/data.json` over HTTP basic auth, then decod
 it. Stock ESPHome's `http_request`/`json` can't decode binary SML, so there is no
 direct port of the bridge API.
 
-The Pulse IR head just reads your meter's SML output, so the clean ESP path is to
-**read the meter directly** with the native
-[`sml`](https://esphome.io/components/sml/) component via your own IR head —
-skipping the bridge entirely (the same approach as the [SML](#sml) source):
+The Pulse IR head just reads your meter's SML output. So the clean ESP path is
+to **read the meter directly** with the native
+[`sml`](https://esphome.io/components/sml/) component via your own IR head,
+skipping the bridge. It is the same approach as the [SML](#sml) source:
 
 ```yaml
 external_components:
@@ -1157,4 +1160,4 @@ ct002:
 
 **Bridge alternative:** if you'd rather keep the Pulse Bridge, a community
 external component (e.g. `tibber_pulse_local_esphome`) can query it on the ESP
-and decode the SML; point its resulting power sensor at `grid_l1`.
+and decode the SML. Point its resulting power sensor at `grid_l1`.
