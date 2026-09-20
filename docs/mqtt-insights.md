@@ -246,7 +246,7 @@ simply stops changing — an idle circuit reporting a steady number — stays
 
 AstraMeter **subscribes** to the topics below. Publish to them from any client
 to change settings live. Publish **retained** if you can: AstraMeter re-reads
-those topics on restart, so your values survive one (this is exactly how the HA
+those topics on restart, so your values survive it (this is exactly how the HA
 entities persist). An empty payload clears a retained command.
 
 Per-consumer (one battery), one scalar value per topic:
