@@ -35,9 +35,9 @@ ETX (0x03)
 
 ### Length
 `LENGTH` is the **total byte length** of the entire packet, including the length digits and checksum bytes.
-Because the length field is part of the packet, you must compute it iteratively until the digit count matches
-(the CT does the same: it sizes the body, then adds the framing/checksum bytes and one extra byte once the
-length crosses from two to three digits).
+The length field counts itself, so compute it iteratively until the digit count matches. The CT does the
+same: it sizes the body, then adds the framing/checksum bytes, plus one extra byte once the length crosses
+from two to three digits.
 
 ### Checksum
 The checksum is a 2‑character ASCII hex string. It is the XOR of all bytes from the
@@ -68,13 +68,13 @@ Request payload fields (consumer → CT):
 | 6 | **phase_power** | 16‑bit signed | watts for the phase in field 5 (range −32768…32767) |
 | 7 | **participate** | unsigned byte | **optional**; `0` = do **not** aggregate this reporter, non‑zero = include. **Defaults to `1`** when the field is absent |
 
-Fields 1–6 appear in all observed traffic; field 7 is the newer "UDP protocol v4"
-addition and may be omitted by older senders (in which case the CT treats it as `1`).
-Whether it is sent is **model‑dependent**: the Venus class (HMG‑50, VNSE3‑0)
-builds only fields 1–6, while the B2500 class (HMJ) builds a 7th field (its
-request template carries an extra trailing integer). Power is sent as a 16‑bit
-value by the Venus class and a 32‑bit value by the B2500 class; both fit the
-same ASCII wire field.
+Fields 1–6 appear in all observed traffic. Field 7 is the newer "UDP protocol v4"
+addition, and older senders may omit it; the CT then treats it as `1`. Whether a
+sender includes it is **model‑dependent**: the Venus class (HMG‑50, VNSE3‑0)
+builds only fields 1–6, while the B2500 class (HMJ) builds a 7th field — its
+request template carries an extra trailing integer. The Venus class sends power
+as a 16‑bit value and the B2500 class as a 32‑bit value; both fit the same
+ASCII wire field.
 
 ### Phase handling and inspection mode
 
@@ -88,20 +88,20 @@ same ASCII wire field.
   - **Resets the meter's conditioning wrappers** (Hampel window, EMA, deadband) on every
     inspection poll and once more when the sweep ends — see below.
 - Inspection is **not** only a startup state: a Venus on firmware 1.50 was observed
-  re‑running it roughly every 35 minutes, and the routine is a *sweep* — the battery
-  takes itself off the CT and drives its own output to nearly full discharge and then
-  nearly full charge (~20 s) to watch the CT reading follow. Its grid swing is real and
-  is the whole point, so a rolling‑median filter must not reject it as a spike: it would
-  answer the sweep with a frozen pre‑sweep reading and then reject the true readings that
-  come back, steering the battery against an inverted grid sign once the sweep ends
-  (issue #652).
+  re‑running it roughly every 35 minutes. The routine is a *sweep* — the battery takes
+  itself off the CT and drives its own output to nearly full discharge and then nearly
+  full charge (~20 s) to watch the CT reading follow. That grid swing is real, and it is
+  the whole point, so a rolling‑median filter must not reject it as a spike. Such a
+  filter would answer the sweep with a frozen pre‑sweep reading, then reject the true
+  readings that come back, steering the battery against an inverted grid sign once the
+  sweep ends (issue #652).
 - The `participate` flag (field 7) is an additional, explicit gate: even a fully phase‑committed reporter
   is **excluded from aggregation** when it sends `0`.
 
 ### When a battery sends `participate = 0`
 
 The flag lets a battery opt out of being counted by the CT. The Venus class
-(HMG‑50, VNSE3‑0) never sends the field, so it is always treated as
+(HMG‑50, VNSE3‑0) never sends the field, so the CT always treats it as
 participating. The B2500 class (HMJ) computes it from its operating state and
 sends `1` **only while it is actively following the CT** — that is, when **all**
 of the following hold:
@@ -135,9 +135,9 @@ modes (in the other manual mode it still reports its real power but with
 Response payload fields (CT → consumer). **Identity order differs from the
 request:** the response leads with the **CT/meter** type/MAC, then the **storage**
 type/MAC (`…|HME-3|<ct_mac>|HMG-50|<battery_mac>|…`) — the reverse of the request's
-storage‑then‑CT order. This is confirmed by the captures, the CT, and the storage
-side (which reads token 0 as its `meter_dev_type` = the CT type). It matches
-AstraMeter's `RESPONSE_LABELS`.
+storage‑then‑CT order. The captures, the CT and the storage side all confirm this; the
+storage side reads token 0 as its `meter_dev_type`, which is the CT type. It
+matches AstraMeter's `RESPONSE_LABELS`.
 
 The numeric section uses **four phase buckets plus one "unassigned" bucket**:
 
@@ -185,8 +185,8 @@ models**, so each value saturates at ±32767 W.
 
 These names match `RESPONSE_LABELS` in `src/astrameter/ct002/protocol.py`. In
 ordinary single/three‑phase traffic the `x_*` and `ABC_*` buckets are usually
-`0` (nobody is mid‑inspection or in combined mode), which is why earlier capture
-analysis saw the 4th slot as "always 0".
+`0`, because nobody is mid‑inspection or in combined mode. That is why earlier
+capture analysis saw the 4th slot as "always 0".
 
 ### Phase selection and the combined (`ABC`) mode
 
@@ -203,35 +203,35 @@ configuration value:
 
 So **phase `D` on the wire is not a fourth physical phase** — it selects the
 **combined / 合相** aggregation. A consumer in `phase_t = 4` tells the CT to lump
-it into the `ABC` bucket and reads back `ABC_chrg_power` / `ABC_dchrg_power`,
-i.e. it balances against the **sum of all three phases** (whole‑home net grid
+it into the `ABC` bucket and reads back `ABC_chrg_power` / `ABC_dchrg_power`. It
+therefore balances against the **sum of all three phases** (whole‑home net grid
 power) rather than its own phase. This is the mode behind a B2500 reporting
-phase `D`: the meter is wired across a 3‑phase supply and the battery is set to
-compensate the **total** grid exchange, not a single phase. The `x` bucket is
+phase `D`: the meter is wired across a 3‑phase supply and the battery
+compensates the **total** grid exchange, not a single phase. The `x` bucket is
 the transient state while a device is still detecting its phase (`phase_t = 0`).
 
 > The AstraMeter emulator mirrors this bucketing: `'0'`/unassigned reporters
 > aggregate into the `x_*` fields, phase‑`D` reporters into the `ABC_*` fields
 > and the `ABC_chrg_nb` count, and `A`/`B`/`C` into their own buckets. A phase‑`D`
-> battery is a valid, **actively‑steered** operating mode: under active control it
+> battery is a valid, **actively‑steered** operating mode. Under active control it
 > receives a per‑consumer target in the summed grid field (field 7) with an
-> `ABC_chrg_nb` count of `1` (so it applies the target as‑is instead of dividing
-> by `N`), and its instructed net power aggregates into the `ABC_*` cross‑talk
-> fields — exactly like an `A`/`B`/`C` battery. Only `'0'`/unassigned reporters
-> (still detecting their phase) are treated as inspection and served the raw relay
-> path.
+> `ABC_chrg_nb` count of `1`, so it applies the target as‑is instead of dividing
+> by `N`. Its instructed net power aggregates into the `ABC_*` cross‑talk
+> fields — exactly like an `A`/`B`/`C` battery. The emulator treats only
+> `'0'`/unassigned reporters (still detecting their phase) as inspection and serves
+> them the raw relay path.
 
 ### CT003 energy fields (fields 25–28)
 
 CT003 (`HME-3`) — but **not** CT002 (`HME-4`) — appends **four** trailing
 unsigned‑32‑bit fields, making the CT003 response **28 fields** vs. CT002's 24.
 They are the cumulative import/export energy registers CT003 reads from a
-connected P1/SML smart meter, split by tariff, named
-`low_price_ele_in`, `normal_price_ele_in`, `low_price_ele_out`,
-`normal_price_ele_out` — i.e. off‑peak/peak import and off‑peak/peak export,
-corresponding to the standard DSMR/SML registers `1-0:1.8.x` (import) and
-`1-0:2.8.x` (export). The exact scaling (the OBIS values are carried as `kWh`
-with three decimals) is the remaining unknown. The AstraMeter emulator (a
+connected P1/SML smart meter, split by tariff. Their names are
+`low_price_ele_in`, `normal_price_ele_in`, `low_price_ele_out` and
+`normal_price_ele_out` — off‑peak/peak import and off‑peak/peak export. They
+correspond to the standard DSMR/SML registers `1-0:1.8.x` (import) and
+`1-0:2.8.x` (export). The exact scaling is the remaining unknown; the OBIS
+values are carried as `kWh` with three decimals. The AstraMeter emulator (a
 clamp‑style CT002) does not source a smart meter and does not emit these fields.
 
 ## Aggregation, eviction and response cadence
@@ -242,7 +242,7 @@ the reporter's IP, type, phase, signed power, and `participate` flag.
 
 Per response cycle the CT:
 
-1. **Evicts stale slots** — a slot not refreshed within ~1–2 cycles is cleared.
+1. **Evicts stale slots** — the CT clears any slot not refreshed within ~1–2 cycles.
    (AstraMeter mirrors this by default: a consumer that misses ~2 of its own
    poll cycles drops out of the counts/aggregates; set `CONSUMER_TTL` /
    `consumer_ttl` to use a fixed window instead.)
@@ -255,12 +255,12 @@ Per response cycle the CT:
 3. **Replies to one slave per cycle**, round‑robin across the active slots
    (each requester receives its own unicast response).
 
-**Effect of `participate = 0` on steering.** A non‑participating battery is still
-**served a normal response** every cycle — it is excluded from the aggregation in
-step 2, **not** from the round‑robin in step 3 — so it keeps receiving the grid
-reading and the aggregates, and can run its own program (e.g. a manual schedule)
-while reading the meter. But because its power and its slot are left out of the
-per‑phase `*_chrg_power` / `*_dchrg_power` buckets **and** the `*_chrg_nb` count:
+**Effect of `participate = 0` on steering.** The CT still **serves a normal
+response** to a non‑participating battery every cycle: step 2 leaves it out of the
+aggregation, but step 3 still includes it in the round‑robin. It keeps receiving
+the grid reading and the aggregates, so it can run its own program (e.g. a manual
+schedule) while reading the meter. But its power and its slot stay out of the
+per‑phase `*_chrg_power` / `*_dchrg_power` buckets **and** the `*_chrg_nb` count, so:
 
 - **for that battery:** it is effectively invisible to the shared pool — its
   activity is not reflected back to anyone;
@@ -284,8 +284,9 @@ the observed captures.
 The battery — not the CT — drives the exchange: it is the **UDP master** and
 polls the CT on a timer (open socket → send request → parse reply). The same
 poll loop also speaks the Shelly EM / Pro JSON API when the configured meter
-type (`ct_t`) is a Shelly rather than a CT002/CT003, so the CT response is one
-of several interchangeable grid‑power sources feeding the same controller.
+type (`ct_t`) is a Shelly rather than a CT002/CT003. The CT response is
+therefore one of several interchangeable grid‑power sources feeding the same
+controller.
 
 Once a response passes validation, the storage turns it into a charge/discharge
 command in three steps:
@@ -397,17 +398,17 @@ the constants below are the literal values used.
 - `hi`, `lo` — the current upper/lower **power limits** (runtime values, e.g.
   derived from the configured max charge/discharge power and SOC headroom).
 
-**Cadence.** A regulation step is gated by a timer (~**3000 ticks**); the steps
+**Cadence.** A timer gates each regulation step (~**3000 ticks**). The steps
 below run once per gate, which is why the response visibly ramps rather than
 snapping.
 
 > **AstraMeter note (issue #459).** The share-split is why AstraMeter's
-> *active control* reports `*_chrg_nb = 1` and must keep doing so: it sends
-> each battery an **individual** target in the phase-power field, so a real
-> count `N` would make every battery divide its already-individual target by
+> *active control* reports `*_chrg_nb = 1` and must keep doing so. It sends
+> each battery an **individual** target in the phase-power field. A real
+> count `N` would make every battery divide that already-individual target by
 > `N` and under-respond by that factor. Only *relay mode*
-> (`ACTIVE_CONTROL = False`), which forwards the per-phase **aggregate**,
-> reports the real count so the batteries do this `g / nb` split themselves.
+> (`ACTIVE_CONTROL = False`) forwards the per-phase **aggregate**, so only it
+> reports the real count and lets the batteries do the `g / nb` split themselves.
 
 ```text
 # 1. share split across batteries on the same phase/bucket
@@ -480,10 +481,10 @@ Notes for an implementer:
   the discharge cap that rejects values over 800 W).
 - The final `apply_to_inverter` hands the setpoint to the power‑stage controller
   across the inverter‑MCU boundary.
-- Two subtleties the step‑3 gate's one‑line summaries hide: the deadband's
-  `out < 1` is a **signed** comparison (a charging battery reads `out < 0` and is
-  also held), and the spike filter has **no** one‑shot — `prev_g`/`prev_out`
-  advance every cycle, so a sustained drift whose own output never moves is
+- Two subtleties the step‑3 gate's one‑line summaries hide. First, the deadband's
+  `out < 1` is a **signed** comparison: a charging battery reads `out < 0` and is
+  also held. Second, the spike filter has **no** one‑shot — `prev_g`/`prev_out`
+  advance every cycle. So a sustained drift whose own output never moves is
   skipped every cycle, while a one‑off blip is gone from the baseline by the next
   sample.
 
@@ -654,9 +655,9 @@ subscribe: marstek_energy/<ct_type>/App/<mac>/ctrl
 publish:   marstek_energy/<ct_type>/device/<mac>/ctrl
 ```
 
-Newer devices use the **`marstek_energy/…`** prefix; the older
-**`hame_energy/…`** prefix (after the `hamedata.com` cloud) is used by earlier
-devices. AstraMeter subscribes/answers on **both** prefixes.
+Newer devices use the **`marstek_energy/…`** prefix; earlier devices use the
+older **`hame_energy/…`** prefix (after the `hamedata.com` cloud). AstraMeter
+subscribes/answers on **both** prefixes.
 
 A poll arrives as a CSV `k=v` body. `cd=1` requests aggregate runtime info;
 `cd=4` (+`p1=<id>`) requests the slave list. (The App control channel carries a
@@ -697,7 +698,7 @@ slv_ip=<ip>,slv_t=<type>,slv_p=<phase>,slv_id=<mac>;
 > order, adds `kwh/n_kwh/used_kwh/fed_kwh` placeholders, and formats `cd=4` rows
 > as comma‑joined `slv_t,slv_id,slv_ip,slv_p` (no `;` terminator). The app's
 > parser (`replaceAll(' ','')` → split) is order‑independent and tolerant of
-> extra keys, so this works in practice; the layouts above are the reference for
+> extra keys, so this works in practice. The layouts above are the reference for
 > what a *real* CT sends, not a spec the responder must match.
 
 ## CT MAC behavior
