@@ -581,6 +581,7 @@ CONF_HA_DISCOVERY_PREFIX = "ha_discovery_prefix"
 CONF_DEVICE_ID = "device_id"
 CONF_MARSTEK_MQTT_ENABLED = "marstek_mqtt_enabled"
 CONF_MARSTEK_MQTT_INTERVAL = "marstek_mqtt_interval"
+CONF_STATE_THROTTLE_INTERVAL = "state_throttle_interval"
 
 # Fallback `device_id:` when the sub-block leaves it blank. Matches the Python
 # add-on's default (see main.py) so both stacks publish the same HA discovery
@@ -614,6 +615,11 @@ MQTT_INSIGHTS_SCHEMA = cv.All(
             cv.Optional(CONF_MARSTEK_MQTT_ENABLED, default=True): cv.boolean,
             cv.Optional(
                 CONF_MARSTEK_MQTT_INTERVAL, default="300s"
+            ): cv.positive_time_period_milliseconds,
+            # Smallest gap between two state publishes of the same topic.
+            # 0s (the default) publishes on every poll, as before.
+            cv.Optional(
+                CONF_STATE_THROTTLE_INTERVAL, default="0s"
             ): cv.positive_time_period_milliseconds,
         }
     ),
@@ -1132,6 +1138,11 @@ async def _to_code_mqtt_insights(config, ct002_var):
     cg.add(
         var.set_marstek_mqtt_interval_ms(
             int(sub[CONF_MARSTEK_MQTT_INTERVAL].total_milliseconds)
+        )
+    )
+    cg.add(
+        var.set_state_throttle_interval_ms(
+            int(sub[CONF_STATE_THROTTLE_INTERVAL].total_milliseconds)
         )
     )
     # The broker locator, for the dashboard's Diagnostics card. Taken from the

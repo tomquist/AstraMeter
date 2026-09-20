@@ -951,6 +951,7 @@ export const MQTT_INSIGHTS_FIELDS: Field[] = [
   { key: "HA_DISCOVERY_PREFIX", ey: "ha_discovery_prefix", label: "Discovery prefix", help: "HA discovery prefix. Default homeassistant.", type: "text", placeholder: "homeassistant", advanced: true },
   { key: "MARSTEK_MQTT_ENABLED", ey: "marstek_mqtt_enabled", label: "Answer Marstek app polls", help: "Reply to Marstek-app MQTT polls on this broker (needs hame-relay ≥ 1.3.5 for live readings).", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }], advanced: true },
   { key: "MARSTEK_MQTT_INTERVAL", ey: "marstek_mqtt_interval", label: "Marstek broadcast interval (s)", help: "Seconds between aggregate broadcasts when the app is quiet. 0 = polls only.", type: "number", placeholder: "300", advanced: true },
+  { key: "STATE_THROTTLE_INTERVAL", ey: "state_throttle_interval", label: "State throttle interval (s)", help: "Smallest gap between two state publishes for the same battery. 0 = every poll. Raise it for a quieter broker at the cost of resolution in Home Assistant.", type: "number", placeholder: "0", advanced: true },
 ];
 
 export const ESP_BOARDS: Option[] = [

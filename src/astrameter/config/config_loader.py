@@ -920,6 +920,7 @@ def read_mqtt_insights_config(
                     marstek_mqtt_enabled=("MARSTEK_MQTT_ENABLED", bool),
                     marstek_mqtt_interval=("MARSTEK_MQTT_INTERVAL", float),
                     powermeter_health_interval=("POWERMETER_HEALTH_INTERVAL", float),
+                    state_throttle_interval=("STATE_THROTTLE_INTERVAL", float),
                 ),
             )
     return None
