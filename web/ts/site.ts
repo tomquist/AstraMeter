@@ -38,14 +38,14 @@ if (nav) {
 
 // ── feature cards (landing only) ──
 const FEATURES: [string, string, string][] = [
-  ["⚖️", "Multi-battery load balancing", "Split the load across several Marstek batteries with fair distribution, saturation handling, and efficiency rotation."],
-  ["📊", "Real-time monitoring", "Optional MQTT Insights publishes grid power, per-battery targets and topology to Home Assistant via auto-discovery."],
-  ["🔌", "Reads 18+ meter sources", "Shelly, Home Assistant, MQTT, Modbus, SML, HomeWizard, Enphase, SMA and more — use what you already own."],
-  ["🧰", "Runs anywhere", "Home Assistant add-on, Docker, direct install, or standalone on an ESP32 via ESPHome."],
-  ["🎛️", "Advanced signal conditioning", "EMA smoothing, deadband, Hampel outlier rejection and an optional PID controller for rock-steady control."],
-  ["🔱", "Three-phase ready", "Per-phase readings and calibration (offset / multiplier) across L1 / L2 / L3."],
-  ["🆓", "Free & open source", "GPL-3.0 licensed. The config generator runs entirely in your browser — nothing is uploaded."],
-  ["🪄", "Beginner-friendly setup", "A guided config generator writes the file for you, with every option explained."],
+  ["⚖️", "Multi-battery load balancing", "Split the load across several Marstek batteries, with fair distribution, saturation handling and efficiency rotation."],
+  ["📊", "Real-time monitoring", "Switch on MQTT Insights and it publishes grid power, per-battery targets and topology to Home Assistant by auto-discovery."],
+  ["🔌", "Reads 18+ meter sources", "Shelly, Home Assistant, MQTT, Modbus, SML, HomeWizard, Enphase, SMA and more. Use what you already own."],
+  ["🧰", "Runs anywhere", "Home Assistant add-on, Docker, direct install, or on its own on an ESP32 via ESPHome."],
+  ["🎛️", "Advanced signal conditioning", "EMA smoothing, a deadband, Hampel outlier rejection and an optional PID controller keep control rock-steady."],
+  ["🔱", "Three-phase ready", "Readings and calibration (offset / multiplier) per phase, across L1 / L2 / L3."],
+  ["🆓", "Free & open source", "GPL-3.0 licensed. The config generator runs in your browser alone — nothing is uploaded."],
+  ["🪄", "Beginner-friendly setup", "A guided config generator writes the file for you and explains every option."],
 ];
 const featuresGrid = document.getElementById("features-grid");
 if (featuresGrid) {

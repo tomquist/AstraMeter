@@ -116,7 +116,7 @@ Payload similarity depends on scenario:
 - In `charge 3 batteryes.pcap`, that same section is identical across recipients in **56.7%** of cycles.
 
 Interpretation:
-- Responses are not globally broadcast-identical; they are generated per requester.
+- Responses are not globally broadcast-identical; each requester gets its own.
 - But many fields can still be very similar when system state is similar.
 
 ### Q2: What happens with request `phase_power` values?
@@ -133,7 +133,7 @@ Observed response effect:
   - non-exact cases are consistent with async timing/skew between requests and responses.
 
 Interpretation:
-- Request phase-power is not ignored; it is fed into forwarded per-phase values in responses.
+- Request phase-power is not ignored; it feeds the forwarded per-phase values in responses.
 - Best current model: forwarded values are per-phase sums across all known storages (with minor timing skew possible).
 - Sign split observed in newer traces:
   - negative sums appear in `A/B/C_chrg_power` (fields 16-18)
@@ -193,8 +193,8 @@ For emulator/protocol implementation:
 - Accept phase `A`, `B`, `C`, `D` for normal aggregation; accept `0` or empty as inspection mode
   (respond but do not aggregate).
 - The full response field layout (and per‑field types/widths) is now documented in
-  [ct002-ct003-protocol.md](ct002-ct003-protocol.md#response-fields). Controlled
-  experiments are now only needed for the CT003 energy‑register scaling.
+  [ct002-ct003-protocol.md](ct002-ct003-protocol.md#response-fields). Only the
+  CT003 energy‑register scaling still needs controlled experiments.
 
 ## 9) Suggested follow-up experiments
 

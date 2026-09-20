@@ -2,16 +2,15 @@
 
 > **New to AstraMeter?** The
 > [**config generator**](https://astrameter.com/generator.html)
-> asks a few questions about your power meter and produces a ready-to-use
-> `config.ini` or ESPHome YAML, explaining each option along the way. You can
+> asks a few questions about your power meter and writes a ready-to-use
+> `config.ini` or ESPHome YAML, explaining each option as it goes. You can
 > save, share, and reload your answers. It's the easiest way to get a working
 > configuration. (The generator is part of the
 > [AstraMeter website](../web/), hosted at [astrameter.com](https://astrameter.com),
 > and you can also run it locally from `web/`.)
 
-Configuration is managed via a `config.ini` file. This page documents the
-options that apply across the whole app and to every powermeter. For details
-specific to one area, see:
+You configure AstraMeter with a `config.ini` file. This page covers the options
+that apply to the whole app and to every powermeter. For one specific area, see:
 
 - **[Powermeter sources](powermeters.md)** — the `config.ini` section for each
   supported meter (Shelly, Tasmota, MQTT, Home Assistant, SMA, HomeWizard, …).
@@ -64,50 +63,54 @@ THROTTLE_INTERVAL = 0
 
 ### Per-powermeter options
 
-These apply in any powermeter section (e.g. `[TASMOTA]` or `[HOMEASSISTANT]`), or
-globally under `[GENERAL]` as a default for every powermeter:
+These work in any powermeter section (e.g. `[TASMOTA]` or `[HOMEASSISTANT]`).
+Put them under `[GENERAL]` instead to set a default for every powermeter:
 
 - **THROTTLE_INTERVAL** — Override global throttling for this powermeter
 - **WAIT_FOR_NEXT_MESSAGE** — Override the global wait-for-fresh-push behaviour
   for this powermeter (set to `false` to opt out of the wait entirely)
-- **SMOOTH_TARGET_ALPHA** (default 0 = disabled) — EMA factor for the powermeter
-  reading in (0, 1]. Higher values track load changes faster; lower values filter
-  noise but add lag. Values close to 1.0 work well when the powermeter updates at
-  ≥ 1 Hz; reduce toward 0.3 if it updates significantly slower than 1 Hz.
-- **MAX_SMOOTH_STEP** (default 0 = unlimited) — Maximum watts the smoothed reading
-  may change per request cycle when `SMOOTH_TARGET_ALPHA` is active. Acts as a
-  slew-rate limit.
-- **DEADBAND** (default 0 = disabled, W) — When the absolute reading is below this
-  value, the wrapper emits zeros instead of chasing noise. Keeps batteries from
-  hunting around the zero-crossing; 10–30 W is a sensible range.
-- **HAMPEL_WINDOW** (default 0 = disabled) — Rolling window size for
-  median-based outlier rejection. Typical values 5–7. Useful for MQTT/HTTP
-  sources that occasionally emit wild samples; applied after throttling and
-  before EMA smoothing.
-- **HAMPEL_N_SIGMA** (default 3.0) — Rejection threshold in MAD-derived sigmas.
-  Lower values reject more aggressively.
+- **SMOOTH_TARGET_ALPHA** (default 0 = disabled) — EMA factor (exponential
+  moving average: a running average that fades out older readings) for the
+  powermeter reading, in (0, 1]. Higher values track load changes faster; lower
+  values filter noise but add lag. Values close to 1.0 work well when the
+  powermeter updates at ≥ 1 Hz; reduce toward 0.3 if it updates significantly
+  slower than 1 Hz.
+- **MAX_SMOOTH_STEP** (default 0 = unlimited) — The most watts the smoothed
+  reading may change per request cycle while `SMOOTH_TARGET_ALPHA` is active.
+  It caps how fast the value can move (a slew-rate limit).
+- **DEADBAND** (default 0 = disabled, W) — A dead zone around zero. When the
+  absolute reading is below this value, the wrapper emits zeros instead of
+  chasing noise. This keeps batteries from hunting around the zero-crossing;
+  10–30 W is a sensible range.
+- **HAMPEL_WINDOW** (default 0 = disabled) — Rolling window size for the Hampel
+  filter, which drops outliers that sit far from the recent median. Typical
+  values 5–7. Useful for MQTT/HTTP sources that occasionally emit wild samples.
+  It runs after throttling and before EMA smoothing.
+- **HAMPEL_N_SIGMA** (default 3.0) — Rejection threshold, in sigmas derived from
+  the MAD (median absolute deviation: a spread measure that outliers barely
+  affect). Lower values reject more aggressively.
 - **HAMPEL_MIN_THRESHOLD** (default 0, W) — Minimum rejection threshold in
-  watts. Prevents spikes from passing through during long periods of constant
+  watts. It stops spikes slipping through during long periods of constant
   readings (the MAD=0 degenerate case); 50 W is a reasonable starting value.
 
 ## Value Transformation
 
-You can optionally apply a linear transformation to the power values returned by
-any powermeter. This is useful for calibrating readings (e.g., correcting a
-consistent offset) or scaling values (e.g., adjusting for a CT clamp ratio).
+You can apply a linear transformation to the power values any powermeter
+returns. Use it to calibrate readings (e.g., to correct a consistent offset) or
+to scale them (e.g., for a CT clamp ratio).
 
 The formula applied to each value is: `value * POWER_MULTIPLIER + POWER_OFFSET`
 
-For example, if your meter reads 1050W and you set `POWER_MULTIPLIER=0.95` and
+So if your meter reads 1050W and you set `POWER_MULTIPLIER=0.95` and
 `POWER_OFFSET=-50`, the result is `1050 * 0.95 + (-50) = 947.5W`.
 
-Both settings are optional and can be added to any powermeter section:
+Both settings are optional, and you can add them to any powermeter section:
 
 - `POWER_MULTIPLIER` — Scales each power value. Default: 1 (no scaling).
 - `POWER_OFFSET` — Added to each power value after the multiplier is applied.
   Default: 0 (no offset).
 
-For three-phase meters, you can specify a single value (applied to all phases) or
+For three-phase meters, give a single value (applied to all phases) or
 comma-separated values (one per phase):
 
 ```ini
@@ -140,15 +143,15 @@ POWER_MULTIPLIER = 1,0,1
 ```
 
 **Note:** Transforms are applied when readings are taken from the powermeter,
-before values are passed to the emulated device (Shelly, CT002/CT003, etc.).
+before the values reach the emulated device (Shelly, CT002/CT003, etc.).
 
 ## PID Controller
 
-You can optionally layer a PID (Proportional-Integral-Derivative) controller on
-top of any powermeter. The controller uses the grid power reading as its process
-variable and steers the reported value toward zero (net-zero grid exchange). This
-creates a second, software-level closed loop that can accelerate convergence or
-compensate for slow storage device response.
+You can layer a PID (Proportional-Integral-Derivative) controller on top of any
+powermeter. The controller takes the grid power reading as its process variable
+and steers the reported value toward zero (net-zero grid exchange). That adds a
+second, software-level closed loop, which can speed up convergence or make up
+for a storage device that responds slowly.
 
 **How it works:**
 
@@ -156,15 +159,15 @@ compensate for slow storage device response.
   storage device's own closed-loop controller still acts, so the effective gain
   is `(1 − Kp) × Kb` where `Kb` is the device's internal gain. Use
   `0 < Kp < 1`; `Kp = 0.5` is the recommended starting point.
-- `PID_MODE = replace` — uses only the PID output as the reported value,
-  bypassing the device's own loop entirely.
+- `PID_MODE = replace` — reports only the PID output, bypassing the device's own
+  loop entirely.
 
 **Anti-windup** is built in: the integral term is clamped so that the total PID
 output never exceeds `±PID_OUTPUT_MAX`, and accumulation pauses while the output
 is saturated.
 
-All parameters can be set globally in `[GENERAL]` or per powermeter section
-(per-section values override the global ones):
+Set all parameters globally in `[GENERAL]`, or per powermeter section — a
+section value overrides the global one:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -174,8 +177,8 @@ All parameters can be set globally in `[GENERAL]` or per powermeter section
 | `PID_OUTPUT_MAX` | Maximum absolute PID output in watts. | `800` |
 | `PID_MODE` | `bias` or `replace`. | `bias` |
 
-For a small import safety buffer that prevents accidental export, combine with a
-negative `POWER_OFFSET` (applied before the PID):
+For a small import safety buffer that prevents accidental export, combine the
+PID with a negative `POWER_OFFSET` (applied before the PID):
 
 ```ini
 [SHELLY]
@@ -189,12 +192,12 @@ PID_MODE = bias
 
 ## Multiple Powermeters
 
-You can configure multiple powermeters by adding additional sections with the
-same prefix (e.g. `[SHELLY<unique_suffix>]`). Each powermeter should specify
-which client IP addresses are allowed to access it using the NETMASK setting.
+You can configure several powermeters by adding more sections with the same
+prefix (e.g. `[SHELLY<unique_suffix>]`). Use the NETMASK setting in each one to
+say which client IP addresses may access it.
 
-When a storage system requests power values, the script will check the client IP
-address against the NETMASK settings of each powermeter and use the first that
+When a storage system requests power values, the script checks the client IP
+address against each powermeter's NETMASK setting and uses the first that
 matches.
 
 ```ini
