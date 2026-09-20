@@ -42,7 +42,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 |------|---------|
 | 🟢 **Native** | A built-in ESPHome component reads this exact source. |
 | 🔵 **Generic** | No device-specific component, but ESPHome's built-in `http_request`+`json` or `mqtt_subscribe` reads it with a small lambda. |
-| 🟠 **Alternate** | No ESPHome port exists for the API the Python class uses, but the *same device* also speaks a protocol ESPHome reads natively (Modbus/MQTT/P1). |
+| 🟠 **Alternate** | No ESPHome component speaks the API the Python class uses, but another route reaches the same reading — a second protocol on the same device, its HTTP API, or a Home Assistant bridge. |
 | 🔴 **Not yet available** | No practical way to read this on an ESP32 today. Documented so we know what to build. |
 
 ## Contents
@@ -727,7 +727,7 @@ its `OBIS_POWER_L1/L2/L3` defaults.
 **Tier: 🟢 Native.** ESPHome's built-in
 [`dsmr`](https://esphome.io/components/sensor/dsmr/) component reads meters with
 a P1 port (DSMR in the Netherlands and Belgium, and the same telegram format
-elsewhere). There is no Python `[...]` source for this. On the add-on you would
+elsewhere). There is no Python source for this. On the add-on you would
 read the P1 port through a [HomeWizard](#homewizard) dongle or similar. On the
 ESP you wire the meter straight to a UART pin, so the meter and the emulator
 share one board.

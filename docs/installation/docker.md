@@ -23,8 +23,8 @@ environment the same across platforms.
    docker-compose up -d
    ```
    Set the `LOG_LEVEL` environment variable to control how much the container
-   logs (for example `-e LOG_LEVEL=debug`). If you don't set it, the container
-   uses `info`.
+   logs: add `LOG_LEVEL=debug` under the service's `environment:` in
+   `docker-compose.yaml`. If you don't set it, the container uses `info`.
 
 > **Note:** Host network mode is required because Marstek devices use UDP
 > broadcasts to discover devices. Without host networking, the container can't

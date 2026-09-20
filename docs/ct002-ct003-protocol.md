@@ -214,7 +214,7 @@ the transient state while a device is still detecting its phase (`phase_t = 0`).
 > aggregate into the `x_*` fields, phase‑`D` reporters into the `ABC_*` fields
 > and the `ABC_chrg_nb` count, and `A`/`B`/`C` into their own buckets. A phase‑`D`
 > battery is a valid, **actively‑steered** operating mode. Under active control it
-> receives a per‑consumer target in the summed grid field (field 7) with an
+> receives a per‑consumer target in the summed grid field (`total_power`, field 8) with an
 > `ABC_chrg_nb` count of `1`, so it applies the target as‑is instead of dividing
 > by `N`. Its instructed net power aggregates into the `ABC_*` cross‑talk
 > fields — exactly like an `A`/`B`/`C` battery. The emulator treats only
