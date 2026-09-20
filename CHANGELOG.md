@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** `STATE_THROTTLE_INTERVAL`, which limits how often each battery's state is published to MQTT. Batteries poll about once a second, and on a small machine that stream can cost the subscriber more CPU than the broker ([#663](https://github.com/tomquist/astrameter/issues/663)). Set it to the coarsest resolution your Home Assistant graphs can live with; `0`, the default, keeps publishing on every poll.
+- **Added** `STATE_THROTTLE_INTERVAL`, which limits how often each battery's state is published to MQTT. Batteries poll about once a second, and on a small machine that stream can cost the subscriber more CPU than the broker ([#663](https://github.com/tomquist/astrameter/issues/663), [#669](https://github.com/tomquist/astrameter/pull/669)). Set it to the coarsest resolution your Home Assistant graphs can live with; `0`, the default, keeps publishing on every poll.
 
 - **Fixed** MQTT Insights sending about a third more messages than it needed to: each battery's availability was re-sent on every poll, roughly once a second, instead of only when the battery appears or goes silent ([#663](https://github.com/tomquist/astrameter/issues/663), [#668](https://github.com/tomquist/astrameter/pull/668)).
 
