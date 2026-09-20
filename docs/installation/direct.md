@@ -1,15 +1,15 @@
 # Direct Installation
 
-A manual installation on Windows, macOS, or Linux is the most flexible option,
-suited to development or custom setups. It requires a Python environment.
+A manual installation on Windows, macOS, or Linux is the most flexible option.
+It suits development or custom setups. You need a Python environment.
 
 ## Prerequisites
 
 1. **Python:** Use Python **3.10 or newer** (see [CONTRIBUTING.md](../../CONTRIBUTING.md)).
-   You can download Python from the
+   Download Python from the
    [official Python website](https://www.python.org/downloads/).
 2. **Configuration:** Create a `config.ini` file in the root directory of the
-   project and add the appropriate configuration as described in the
+   project. Fill it in as described in the
    [Configuration reference](../configuration.md).
 
 ## Installation steps
@@ -32,14 +32,14 @@ suited to development or custom setups. It requires a Python environment.
    uv sync
    uv run astrameter
    ```
-   With dev tools (tests, ruff, mypy): `uv sync --extra dev`. See
+   To add the dev tools (tests, ruff, mypy), run `uv sync --extra dev`. See
    [CONTRIBUTING.md](../../CONTRIBUTING.md) for the full workflow.
 
-All commands above work across Windows, macOS, and Linux. The only difference is
-how you open your terminal.
+All the commands above work on Windows, macOS, and Linux. Only the way you open
+your terminal differs.
 
-When the script is running, switch your Marstek battery to "Self-Adaptation"
-mode to enable the powermeter functionality.
+Once the script is running, switch your Marstek battery to "Self-Adaptation"
+mode to turn on the powermeter functionality.
 
 ## Autostart on boot (Linux)
 
