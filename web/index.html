@@ -6,10 +6,10 @@
     <title>AstraMeter — Smart power-meter emulator for Marstek batteries</title>
     <meta
       name="description"
-      content="AstraMeter emulates the power meter your Marstek battery trusts (Shelly, CT002, CT003) — enabling intelligent multi-device load balancing and real-time monitoring. Free and open source."
+      content="AstraMeter acts as the power meter your Marstek battery trusts (Shelly, CT002, CT003). Balance several batteries. Watch them live. Free and open source."
     />
     <meta property="og:title" content="AstraMeter" />
-    <meta property="og:description" content="Smart power-meter emulator for Marstek storage systems — multi-battery load balancing, 18+ power-meter sources, runs on Home Assistant, Docker, or an ESP32." />
+    <meta property="og:description" content="A software power meter for Marstek storage systems. Balance several batteries, read 18+ power-meter sources, run on Home Assistant, Docker or an ESP32." />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="https://astrameter.com/assets/astrameter-logo.png" />
     <meta name="theme-color" content="#020617" />
@@ -45,16 +45,16 @@
         <h1>The power meter your battery trusts — in software.</h1>
         <p class="lead">
           AstraMeter emulates power meters like <strong>Shelly</strong>, <strong>CT002</strong> and
-          <strong>CT003</strong> for Marstek storage systems (B2500, Venus, Jupiter and more), enabling
-          intelligent multi-device load balancing and real-time power monitoring — reading your real grid
-          power from whatever meter you already own.
+          <strong>CT003</strong> for Marstek storage systems (B2500, Venus, Jupiter and more). It reads your
+          real grid power from whatever meter you already own, then balances several batteries at once and
+          shows you the power live.
         </p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-lg" href="generator.html">Build my config →</a>
           <a class="btn btn-ghost btn-lg" href="#how">How it works</a>
           <a class="btn btn-ghost btn-lg" data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">View on GitHub</a>
         </div>
-        <p class="hero-note">No account needed. Generates a ready-to-use <code>config.ini</code> or ESPHome YAML in your browser.</p>
+        <p class="hero-note">No account needed. Your browser writes a ready-to-use <code>config.ini</code> or ESPHome YAML.</p>
       </div>
     </section>
 
@@ -64,10 +64,10 @@
         <div class="container narrow center">
           <h2>What is AstraMeter?</h2>
           <p class="muted-lg">
-            Marstek balcony batteries decide when to charge or discharge by listening to a power meter on your
-            home's grid connection. If you don't have the exact meter they expect — or you run several batteries
-            that need to share the load — that's a problem. AstraMeter solves it by <strong>impersonating</strong>
-            a meter the battery trusts, while reading your <em>real</em> grid power from a source you already have.
+            Marstek balcony batteries listen to a power meter on your home's grid connection to decide when to
+            charge or discharge. No meter of the exact kind they expect? Several batteries that have to share the
+            load? Then you're stuck. AstraMeter fixes that: it <strong>impersonates</strong> a meter the battery
+            trusts, while reading your <em>real</em> grid power from a source you already have.
           </p>
         </div>
       </section>
@@ -77,7 +77,7 @@
         <div class="container">
           <div class="section-head center">
             <h2>Why AstraMeter</h2>
-            <p class="muted-lg">Everything you need to make a third-party meter behave like a first-party one.</p>
+            <p class="muted-lg">Everything you need to make the meter you own behave like the one the battery wants.</p>
           </div>
           <div class="grid-cards" id="features-grid"></div>
         </div>
@@ -88,7 +88,7 @@
         <div class="container">
           <div class="section-head center">
             <h2>How it works</h2>
-            <p class="muted-lg">Three steps from "unsupported meter" to a balanced battery fleet.</p>
+            <p class="muted-lg">Three steps from an unsupported meter to a balanced battery fleet.</p>
           </div>
           <ol class="how-steps">
             <li>
@@ -104,7 +104,7 @@
             <li>
               <span class="how-num">3</span>
               <h3>Your battery balances itself</h3>
-              <p>AstraMeter reports the reading in the format the battery expects and steers one or many batteries toward net-zero grid.</p>
+              <p>AstraMeter reports the reading in the format the battery expects. It then steers one or many batteries toward net-zero grid.</p>
             </li>
           </ol>
         </div>
@@ -116,7 +116,7 @@
           <div class="section-head center">
             <h2>Watch it work</h2>
             <p class="muted-lg">
-              A live status page is built in — nothing extra to install. Open it from the Home
+              A live status page is built in — there is nothing extra to install. Open it from the Home
               Assistant sidebar, or on port 52500 anywhere else.
             </p>
           </div>
@@ -143,7 +143,7 @@
               decoding="async"
             />
             <figcaption>
-              Every battery's own power, target and share of the load — with a trend line drawn as the
+              Each battery's own power, target and share of the load. The trend line draws itself as the
               readings arrive.
             </figcaption>
           </figure>
@@ -158,7 +158,7 @@
         <div class="container">
           <div class="section-head center">
             <h2>Supported devices</h2>
-            <p class="muted-lg">Works with Marstek storage systems, emulating the meters their firmware expects.</p>
+            <p class="muted-lg">Works with Marstek storage systems by emulating the meters their firmware expects.</p>
           </div>
           <div class="two-col">
             <div class="panel">
@@ -196,7 +196,7 @@
         <div class="container">
           <div class="section-head center">
             <h2>Run it your way</h2>
-            <p class="muted-lg">Four ways to deploy. The config generator writes the file for whichever you choose.</p>
+            <p class="muted-lg">Four ways to run it. The config generator writes the file for whichever you pick.</p>
           </div>
           <div class="grid-cards">
             <div class="card-install">
@@ -207,7 +207,7 @@
             </div>
             <div class="card-install">
               <h3>🐳 Docker</h3>
-              <p>Run the emulator in a container on any machine with Docker. Great for a NAS or home server.</p>
+              <p>Run the emulator in a container on any machine with Docker. Great for a NAS or a home server.</p>
               <a data-gh="doc:docs/installation/docker.md" href="https://github.com/tomquist/astrameter/blob/main/docs/installation/docker.md" target="_blank" rel="noopener">Setup guide ↗</a>
             </div>
             <div class="card-install">
@@ -231,8 +231,8 @@
             <div>
               <h2>Not sure where to start? Let the generator do it.</h2>
               <p class="muted-lg">
-                Answer a few plain-language questions about your meter and get a ready-to-use configuration —
-                with every option explained, a live preview, and save / share / reload of your answers.
+                Answer a few plain questions about your meter and get a ready-to-use configuration. Every
+                option is explained, the preview is live, and you can save, share or reload your answers.
               </p>
             </div>
             <a class="btn btn-primary btn-lg" href="generator.html">Open the Config Generator →</a>
@@ -249,15 +249,15 @@
           <div class="faq">
             <details>
               <summary>Do I need to buy a specific power meter?</summary>
-              <p>No — that's the point. AstraMeter reads your real grid power from something you likely already have (a Shelly, Home Assistant, an MQTT topic, a smart-meter reader, Modbus, and more) and presents it to the battery as the meter it expects.</p>
+              <p>No — that's the point. AstraMeter reads your real grid power from something you likely already have: a Shelly, Home Assistant, an MQTT topic, a smart-meter reader, Modbus, and more. It then presents that reading to the battery as the meter it expects.</p>
             </details>
             <details>
               <summary>Should I use Shelly emulation or CT002/CT003?</summary>
-              <p>Use a Shelly type for a single battery. Choose CT002/CT003 when you run two or more batteries that should share the load — AstraMeter then balances them with fair distribution and saturation handling.</p>
+              <p>Use a Shelly type for a single battery. Pick CT002/CT003 when two or more batteries should share the load. AstraMeter then balances them with fair distribution and saturation handling.</p>
             </details>
             <details>
               <summary>What's the difference between running on Home Assistant, Docker, and ESP32?</summary>
-              <p>They all run the same emulator. Home Assistant and Docker run it as software; the ESP32 (via ESPHome) runs it on a tiny standalone chip so nothing else needs to stay on. The config generator produces the right file for each.</p>
+              <p>All three run the same emulator. Home Assistant and Docker run it as software. The ESP32 (via ESPHome) runs it on a tiny standalone chip, so nothing else has to stay on. The config generator writes the right file for each.</p>
             </details>
             <details>
               <summary>Is it really free?</summary>
