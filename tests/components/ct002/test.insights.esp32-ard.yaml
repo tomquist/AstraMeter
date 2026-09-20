@@ -51,3 +51,4 @@ ct002:
     ha_discovery: true
     marstek_mqtt_enabled: true
     marstek_mqtt_interval: 60s
+    state_throttle_interval: 2s

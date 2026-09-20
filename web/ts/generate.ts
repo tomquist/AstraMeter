@@ -695,6 +695,7 @@ export function generateEsphome(state: State): string {
     if (!isBlank(mf.HA_DISCOVERY_PREFIX)) sub.push(`${IND}${IND}ha_discovery_prefix: ${mf.HA_DISCOVERY_PREFIX}`);
     if (mf.MARSTEK_MQTT_ENABLED) sub.push(`${IND}${IND}marstek_mqtt_enabled: ${mf.MARSTEK_MQTT_ENABLED}`);
     if (!isBlank(mf.MARSTEK_MQTT_INTERVAL)) sub.push(`${IND}${IND}marstek_mqtt_interval: ${mf.MARSTEK_MQTT_INTERVAL}s`);
+    if (!isBlank(mf.STATE_THROTTLE_INTERVAL)) sub.push(`${IND}${IND}state_throttle_interval: ${mf.STATE_THROTTLE_INTERVAL}s`);
     if (sub.length > 1) ctLines.push(sub.join("\n"));
   }
 

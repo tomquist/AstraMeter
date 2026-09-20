@@ -109,6 +109,7 @@ void MqttInsightsComponent::on_mqtt_connected_() {
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
   this->availability_published_.clear();
+  this->last_state_publish_.clear();
 
   if (this->ha_discovery_) {
     auto [topic, payload] = build_ct002_device_discovery(
@@ -128,6 +129,7 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
   this->availability_published_.clear();
+  this->last_state_publish_.clear();
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
@@ -183,8 +185,25 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
   ESP_LOGI(TAG, "Marstek MQTT: subscribed App topics for %s/%s", ct.c_str(), mac.c_str());
 }
 
+bool MqttInsightsComponent::state_due_(const std::string &key) {
+  // STATE_THROTTLE_INTERVAL is a floor on the gap between two publishes of the
+  // same topic, not a schedule. A battery polls roughly once a second for as
+  // long as it is there, so a floor is enough to coalesce: whatever is current
+  // when the gap has passed is what goes out. Mirrors service.py::_state_due.
+  if (this->state_throttle_interval_ms_ == 0) return true;
+  const uint32_t now = millis();
+  auto it = this->last_state_publish_.find(key);
+  // Unsigned arithmetic, so the millis() wrap at ~49 days needs no special case.
+  if (it != this->last_state_publish_.end() &&
+      now - it->second < this->state_throttle_interval_ms_)
+    return false;
+  this->last_state_publish_[key] = now;
+  return true;
+}
+
 void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_id) {
   if (!this->mqtt_->is_connected()) return;
+  if (!this->state_due_(consumer_id)) return;
   auto snap = this->ct002_->snapshot_consumer(consumer_id);
   const std::string state_topic = this->base_topic_ + "/ct002/" + this->device_id_ +
                                   "/consumer/" + consumer_id;
@@ -301,8 +320,12 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     }
     root["control_quality_band_w"] = std::round(quality.band * 10.0f) / 10.0f;
   });
-  this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
-                       true);
+  // Device-level data, but published per consumer, so N batteries would
+  // send it N times per interval. Its own gate keeps it to once per meter.
+  if (this->state_due_("")) {
+    this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
+                         true);
+  }
 
   // Consumer-level discovery on first sight. The payload no longer depends on
   // battery_ip (no `connections` are emitted; see ha_discovery.cpp / #438), so

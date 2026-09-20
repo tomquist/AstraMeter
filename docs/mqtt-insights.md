@@ -48,6 +48,7 @@ HA_DISCOVERY_PREFIX = homeassistant
 | `MARSTEK_MQTT_ENABLED` | `true` | Optional: answer Marstek app CT002/CT003 polls on this broker (needs `[MARSTEK]`); set `false` for HA-only |
 | `MARSTEK_MQTT_INTERVAL` | `300` | Optional: seconds between background aggregate publishes for the app; `0` = polls only |
 | `POWERMETER_HEALTH_INTERVAL` | `30` | Seconds between per-powermeter health (Online + power) updates; `0` disables it |
+| `STATE_THROTTLE_INTERVAL` | `0` | Smallest gap in seconds between two state publishes for the same battery; `0` publishes on every poll |
 
 > **HA discovery is independent of the data.** Turning `HA_DISCOVERY` off only
 > stops the retained `homeassistant/.../config` discovery messages (and the
@@ -88,7 +89,9 @@ Use this as the availability/heartbeat for everything else.
 
 ### CT002 — per-battery (consumer) state
 
-`{base}/ct002/{did}/consumer/{cid}` — published on every poll from that battery.
+`{base}/ct002/{did}/consumer/{cid}` — published on every poll from that battery,
+unless `STATE_THROTTLE_INTERVAL` is set (see
+[Quietening the state topics](#quietening-the-state-topics)).
 Example payload:
 
 ```json
@@ -351,6 +354,48 @@ The CT device itself also exposes a config switch:
 
 Each of these controls publishes its set-command **retained**, so Home Assistant
 restores your values across an AstraMeter restart without any extra configuration.
+
+## Quietening the state topics
+
+A battery polls about once a second and every poll carries a fresh grid
+reading, so by default its state topic is published at that rate — and with
+several batteries the meter's `status` topic goes out once per battery on top.
+Every subscriber then pays to receive and parse all of it, which on a small
+machine can cost more than the broker itself ([#663](https://github.com/tomquist/AstraMeter/issues/663)).
+
+`STATE_THROTTLE_INTERVAL` puts a floor on the gap between two publishes of the
+same topic:
+
+```ini
+[MQTT_INSIGHTS]
+BROKER = 192.168.1.100
+STATE_THROTTLE_INTERVAL = 5
+```
+
+The value that goes out is whichever reading is current when the gap has
+passed — readings in between are superseded, not queued — so nothing is
+delayed, it is simply sampled less often. With three batteries polling once a
+second, `5` takes the state topics from about 6 messages per second to well
+under one.
+
+What it does **not** touch: availability, battery removals, discovery, commands,
+the powermeter health sensor and the Marstek app broadcast. A battery going
+silent still turns Unavailable immediately.
+
+The cost is resolution. Home Assistant's history for grid power and targets
+becomes as coarse as the interval you set, so pick the largest value your
+graphs and automations can live with. `0` (the default) keeps the old
+behaviour. The **Poll Interval** sensor is unaffected either way — it reports
+the battery's real cadence, not how often we publish it.
+
+On the ESPHome side the same setting is `state_throttle_interval` under
+`mqtt_insights:`, as a time period:
+
+```yaml
+ct002:
+  mqtt_insights:
+    state_throttle_interval: 5s
+```
 
 ## Is a battery still reporting? (Home Assistant)
 

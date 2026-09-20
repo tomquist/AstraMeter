@@ -114,6 +114,15 @@ class MqttInsightsConfig:
     # Per-powermeter "Online" diagnostic sensor publish cadence (seconds).
     # 0 disables the health loop entirely.
     powermeter_health_interval: float = 30.0
+    # Smallest gap between two state publishes for the same battery, and for
+    # the same meter's device status (seconds). A battery polls about once a
+    # second and every poll carries a fresh reading, so without this the state
+    # topics go out at the poll rate — which is what every subscriber then has
+    # to parse (issue #663). 0 (the default) publishes on every poll, as
+    # before; raising it trades resolution in Home Assistant's history for a
+    # proportionally quieter broker. Never applies to availability, removals,
+    # discovery or commands.
+    state_throttle_interval: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +194,10 @@ class MqttInsightsService:
         # Cleared alongside ``_discovered`` on every connect, so a reconnect
         # re-asserts it even if the broker lost the retained value.
         self._availability: dict[str, bytes] = {}
+        # When each throttled topic last went out, by key.  Empty means "due",
+        # so the first event for a battery always publishes and a reconnect
+        # re-publishes immediately.  See ``_state_due``.
+        self._last_state_publish: dict[tuple[str, str, str], float] = {}
         # Devices whose controls MQTT commands may drive, by device id.
         self._devices: dict[str, ControllableDevice] = {}
         # Latest retained consumer command per (consumer_id, field), by device.
@@ -427,6 +440,7 @@ class MqttInsightsService:
         # Clear discovery on (re)connect so we re-publish.
         self._discovered.clear()
         self._availability.clear()
+        self._last_state_publish.clear()
         await client.publish(
             system_status_topic(cfg.base_topic), payload=b"online", qos=1, retain=True
         )
@@ -577,6 +591,16 @@ class MqttInsightsService:
             evt = await self._queue.get()
 
             did, eid = evt.device_id, evt.entity_id
+            # Throttling drops the whole event, not just its state publish:
+            # everything else the handler does is idempotent on the next one
+            # (discovery is ``_discover_once``-guarded, availability only
+            # moves on change, the bridge count follows discovery), and the
+            # first event for a battery is always due, so discovery and the
+            # opening state still go out at once.  Removals are never dropped.
+            if evt.kind in ("ct002", "shelly") and not self._state_due(
+                evt.kind, did, eid
+            ):
+                continue
             try:
                 if evt.kind == "ct002":
                     await self._handle_ct002_event(client, base, cfg, evt)
@@ -602,6 +626,33 @@ class MqttInsightsService:
                 raise
             except Exception:
                 logger.exception("Error publishing MQTT Insights event")
+
+    def _state_due(self, kind: str, device_id: str, entity_id: str) -> bool:
+        """Whether a throttled topic may go out now, remembering that it did.
+
+        ``STATE_THROTTLE_INTERVAL`` is a floor on the gap between two publishes
+        of the same topic, not a schedule.  Events arrive continuously — a
+        battery polls about once a second for as long as it is there — so a
+        floor is all it takes to coalesce them: whatever is current when the
+        gap has passed is what goes out, and the readings in between are
+        superseded rather than queued.  That is why nothing here needs a timer
+        or a pending buffer.
+
+        A battery that falls silent is the one case the floor cannot cover: its
+        last reading may be suppressed.  Its availability flips to ``offline``
+        on eviction regardless (removals are never throttled), so a subscriber
+        already knows not to trust the retained value.
+        """
+        interval = self._config.state_throttle_interval
+        if interval <= 0:
+            return True
+        key = (kind, device_id, entity_id)
+        now = time.monotonic()
+        last = self._last_state_publish.get(key)
+        if last is not None and now - last < interval:
+            return False
+        self._last_state_publish[key] = now
+        return True
 
     async def _publish_availability(
         self, client: aiomqtt.Client, avail_topic: str, payload: bytes
@@ -699,7 +750,11 @@ class MqttInsightsService:
             ),
             "control_quality_band_w": data.get("control_quality_band_w"),
         }
-        await _publish_json(client, ct002_status_topic(base, did), device_status)
+        # Device-level data on its own topic, but published from the
+        # per-consumer handler, so N batteries would send it N times per
+        # interval.  Its own gate keeps it to once per meter.
+        if self._state_due("ct002_status", did, ""):
+            await _publish_json(client, ct002_status_topic(base, did), device_status)
 
         efficiency_rotation = bool(data.get("efficiency_rotation", False))
         await self._discover_once(
@@ -793,7 +848,8 @@ class MqttInsightsService:
         device_status = {
             "battery_count": data.get("battery_count", 0),
         }
-        await _publish_json(client, shelly_status_topic(base, did), device_status)
+        if self._state_due("shelly_status", did, ""):
+            await _publish_json(client, shelly_status_topic(base, did), device_status)
 
         await self._discover_once(
             client,

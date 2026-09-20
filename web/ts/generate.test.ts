@@ -249,12 +249,13 @@ const extras = generateConfigIni({
   general: { deviceTypes: ["ct002"] },
   meters: [{ type: "shelly", phases: 1, fields: { TYPE: "1PM", IP: "1.1.1.1" }, tuning: {} }],
   marstek: { enabled: true, fields: { MAILBOX: "a@b.c", PASSWORD: "pw" } },
-  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.9" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.9", STATE_THROTTLE_INTERVAL: "5" } },
 });
 has(extras, "[MARSTEK]\nENABLE = True", "extras: marstek enabled");
 has(extras, "MAILBOX = a@b.c", "extras: marstek mailbox");
 has(extras, "[MQTT_INSIGHTS]", "extras: insights section");
 has(extras, "BROKER = 192.168.1.9", "extras: insights broker");
+has(extras, "STATE_THROTTLE_INTERVAL = 5", "extras: insights state throttle");
 
 // ── config.ini: enabled-but-empty extras are omitted (default-on safety) ──────
 const extrasEmpty = generateConfigIni({
@@ -328,7 +329,7 @@ const eyMqtt = generateEsphome({
   esphome: { ctType: "HME-3" },
   meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "192.168.1.10", TOPIC: "home/p" }, tuning: { DEADBAND: "20" } }],
   ct: { fields: { ACTIVE_CONTROL: "False" } },
-  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.10", BASE_TOPIC: "astrameter", HA_DISCOVERY: "true" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.10", BASE_TOPIC: "astrameter", HA_DISCOVERY: "true", STATE_THROTTLE_INTERVAL: "5" } },
   marstek: { enabled: true, fields: { MAILBOX: "a@b.c", TIMEZONE: "Europe/Berlin" } },
 });
 has(eyMqtt, "platform: mqtt_subscribe", "esp/mqtt: subscribe sensor");
@@ -336,6 +337,7 @@ has(eyMqtt, "topic: home/p", "esp/mqtt: topic");
 has(eyMqtt, "active_control: false", "esp/mqtt: active control off");
 has(eyMqtt, "deadband: 20", "esp/mqtt: deadband filter");
 has(eyMqtt, "mqtt_insights:", "esp/mqtt: insights sub-block");
+has(eyMqtt, "state_throttle_interval: 5s", "esp/mqtt: insights state throttle");
 has(eyMqtt, "marstek_registration:", "esp/mqtt: marstek sub-block");
 has(eyMqtt, "device_type: ct003", "esp/mqtt: ct003 from HME-3");
 has(eyMqtt, "ct_type: HME-3", "esp/mqtt: ct_type HME-3");

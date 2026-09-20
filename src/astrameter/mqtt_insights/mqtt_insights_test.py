@@ -10,6 +10,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+from unittest import mock
 from unittest.mock import AsyncMock
 
 import aiomqtt
@@ -1511,6 +1512,101 @@ async def test_availability_returns_online_after_a_battery_comes_back(
             )
 
         assert [m.payload for m in received] == [b"online", b"offline", b"online"]
+    finally:
+        await service.stop()
+
+
+def _throttled_service(interval: float) -> MqttInsightsService:
+    return MqttInsightsService(
+        MqttInsightsConfig(broker="broker.invalid", state_throttle_interval=interval)
+    )
+
+
+def test_state_throttle_off_by_default() -> None:
+    """The default must not change what any existing install publishes."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="broker.invalid"))
+    assert service._config.state_throttle_interval == 0
+    for _ in range(5):
+        assert service._state_due("ct002", "dev1", "c1") is True
+
+
+def test_state_throttle_allows_one_publish_per_interval() -> None:
+    """The first event is always due, the rest of the window is not."""
+    service = _throttled_service(5.0)
+    now = [1000.0]
+    with mock.patch("astrameter.mqtt_insights.service.time.monotonic", lambda: now[0]):
+        assert service._state_due("ct002", "dev1", "c1") is True
+        now[0] += 1.0
+        assert service._state_due("ct002", "dev1", "c1") is False
+        now[0] += 3.9
+        assert service._state_due("ct002", "dev1", "c1") is False
+        now[0] += 0.2  # 5.1s after the publish
+        assert service._state_due("ct002", "dev1", "c1") is True
+
+
+def test_state_throttle_is_per_topic() -> None:
+    """One battery's publish must not suppress another's, and the
+    device-status topic is gated on its own key."""
+    service = _throttled_service(5.0)
+    with mock.patch("astrameter.mqtt_insights.service.time.monotonic", lambda: 1000.0):
+        assert service._state_due("ct002", "dev1", "c1") is True
+        assert service._state_due("ct002", "dev1", "c2") is True
+        assert service._state_due("ct002", "dev2", "c1") is True
+        assert service._state_due("ct002_status", "dev1", "") is True
+        # ...and each of them is now throttled independently.
+        assert service._state_due("ct002", "dev1", "c1") is False
+        assert service._state_due("ct002_status", "dev1", "") is False
+
+
+def test_state_throttle_resets_on_connect() -> None:
+    """A reconnect republishes at once rather than waiting out the window."""
+    service = _throttled_service(5.0)
+    with mock.patch("astrameter.mqtt_insights.service.time.monotonic", lambda: 1000.0):
+        assert service._state_due("ct002", "dev1", "c1") is True
+        assert service._state_due("ct002", "dev1", "c1") is False
+        service._last_state_publish.clear()
+        assert service._state_due("ct002", "dev1", "c1") is True
+
+
+@needs_mosquitto
+async def test_state_throttle_limits_state_but_not_removal(mqtt_broker: int) -> None:
+    """Under throttling a burst of polls yields one state publish, and the
+    battery's removal still goes out immediately."""
+    port = mqtt_broker
+    global _test_counter
+    _test_counter += 1
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="127.0.0.1",
+            port=port,
+            base_topic=f"test_insights_{_test_counter}",
+            ha_discovery=False,
+            marstek_mqtt_interval=0.0,
+            state_throttle_interval=30.0,
+        )
+    )
+    base = service._config.base_topic
+    state = f"{base}/ct002/dev1/consumer/consumer1"
+    await service.start()
+
+    try:
+        await service.wait_connected()
+        received: list[Any] = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(f"{base}/ct002/dev1/#")
+            for _ in range(6):
+                service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
+            await _poll(lambda: service._queue.empty())
+            service.on_ct002_consumer_removed("dev1", "consumer1")
+            await _collect_messages(
+                sub, received, timeout=5, stop=lambda m: m.payload == b"offline"
+            )
+
+        topics = [str(m.topic) for m in received]
+        assert topics.count(state) == 1, topics
+        assert topics.count(f"{base}/ct002/dev1/status") == 1, topics
+        assert f"{state}/availability" in topics
+        assert received[-1].payload == b"offline"
     finally:
         await service.stop()
 
