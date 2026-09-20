@@ -784,7 +784,7 @@ ct002:
   power_sensor_l1: grid_l1
 ```
 
-Three things are meter-specific and worth checking before you flash:
+Four things are meter-specific and worth checking before you flash:
 
 - **Serial settings.** DSMR 4/5 is `115200` 8N1, as above. DSMR 2.2 and 3 are
   `9600` with 7 data bits (`baud_rate: 9600`, `data_bits: 7`). The P1 spec puts

@@ -15,7 +15,7 @@ without editing files by hand.
 - [Changing your configuration](#changing-your-configuration)
   - [Guided setup](#guided-setup)
   - [Config file](#config-file)
-  - [Switching between them](#switching-between-them)
+  - [Migrating between them](#migrating-between-them)
 - [Security](#security)
   - [Writes are refused to other websites](#writes-are-refused-to-other-websites)
   - [Only addresses that cannot be pointed here](#only-addresses-that-cannot-be-pointed-here)
@@ -85,7 +85,7 @@ no option to turn it off. Open **AstraMeter** in the Home Assistant sidebar. The
 page is served through Home Assistant ingress, so it needs no extra port, and
 your normal Home Assistant login covers it.
 
-Two add-on options control it:
+Three add-on options control it:
 
 | Option | Default | What it does |
 |---|---|---|
