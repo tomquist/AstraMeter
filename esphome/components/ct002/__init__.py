@@ -725,6 +725,42 @@ def _validate_dashboard_path(value):
     return path.rstrip("/")
 
 
+def _validate_allowed_host(value):
+    """A bare host name, as a browser writes one in the `Host` header.
+
+    `https://astrameter.example.com:1234` is the address you type; what reaches
+    the device is `astrameter.example.com`, so a URL-shaped entry never matches
+    the name it was meant to allow. Refusing it here is the only chance to say
+    so: at runtime a listed name that cannot match looks exactly like a name
+    that was never listed, which is how it reads as "allowed_hosts is broken".
+    """
+    name = cv.string_strict(value).strip()
+    plain = name
+    scheme = plain.find("://")
+    if scheme != -1:
+        plain = plain[scheme + len("://") :]
+    for separator in ("/", "?", "#"):
+        cut = plain.find(separator)
+        if cut != -1:
+            plain = plain[:cut]
+    # An IPv6 literal is bracketed (RFC 3986), which keeps its colons apart
+    # from the port separator. One colon elsewhere separates a port.
+    if plain.startswith("["):
+        close = plain.find("]")
+        plain = plain[1:close] if close != -1 else plain[1:]
+    elif plain.count(":") == 1:
+        plain = plain.split(":", 1)[0]
+    if not plain:
+        raise cv.Invalid(f"{value!r} holds no host name")
+    if plain != name:
+        raise cv.Invalid(
+            f"{CONF_ALLOWED_HOSTS} entries are host names, not URLs: a browser "
+            f"sends no scheme, port or path in the Host header, so write "
+            f"{plain!r} rather than {value!r}"
+        )
+    return plain
+
+
 def _dashboard_toggle(value):
     """The value as a bool if it is one, else None.
 
@@ -771,7 +807,9 @@ DASHBOARD_OPTIONS_SCHEMA = cv.Schema(
         # unconditionally, so this is empty for everyone but a reverse proxy —
         # a name is refused by default because it is the one part of the
         # address another website can aim at this device (DNS rebinding).
-        cv.Optional(CONF_ALLOWED_HOSTS, default=[]): cv.ensure_list(cv.string_strict),
+        cv.Optional(CONF_ALLOWED_HOSTS, default=[]): cv.ensure_list(
+            _validate_allowed_host
+        ),
         # Only bites when `web_server:` is configured, which is the only case
         # where the dashboard is not at the root and so needs pointing at.
         cv.Optional(CONF_WEB_SERVER_LINK, default=True): cv.boolean,

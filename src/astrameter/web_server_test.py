@@ -4,6 +4,7 @@ the control-write validation."""
 import asyncio
 import dataclasses
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -672,6 +673,32 @@ def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it() -> None:
     # A list may also arrive already split.
     assert parse_allowed_hosts(["a.lan", " b.lan "]) == ("a.lan", "b.lan")
     assert parse_allowed_hosts(None) == ()
+
+
+def test_parse_allowed_hosts_refuses_the_address_bar_form(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A URL is what you type; the Host header carries the name alone.
+
+    Such an entry could never match, so it is dropped loudly rather than
+    sitting in the list looking like the name was allowed (issue #671).
+    """
+    from astrameter.web_server import is_allowed_host, parse_allowed_hosts
+
+    with caplog.at_level(logging.WARNING):
+        allowed = parse_allowed_hosts(
+            "https://astra.example.com:1234,http://proxy.lan/dash,good.lan"
+        )
+    assert allowed == ("good.lan",)
+    assert not is_allowed_host("astra.example.com:1234", allowed)
+    # Both say what to write instead.
+    assert "List 'astra.example.com' instead" in caplog.text
+    assert "List 'proxy.lan' instead" in caplog.text
+
+    # A bracketed IPv6 entry keeps its colons; only the port is a mistake.
+    assert parse_allowed_hosts(["fd00::1"]) == ("fd00::1",)
+    with caplog.at_level(logging.WARNING):
+        assert parse_allowed_hosts(["[fd00::1]:80"]) == ()
 
 
 #: Colon-bearing values that are NOT addresses, and the IPv6 forms that are.
