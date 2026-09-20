@@ -450,6 +450,11 @@ Two things to know when you use these:
   re-reports the same value. Including `now()` (as above) also refreshes the
   template at the start of every minute, which is what keeps an age calculation
   live.
+- If you have set [`STATE_THROTTLE_INTERVAL`](#quietening-the-state-topics),
+  `last_reported` follows every **publish** rather than every poll, so it can
+  sit up to that interval behind a battery that is answering perfectly. Keep
+  any "not reporting" threshold comfortably above the interval, or trigger on
+  the entity going `unavailable` as above — availability is never throttled.
 
 **For the polling rate rather than recency**, use the **Poll Interval** and
 **Answer Interval** sensors. They carry a unit, so Home Assistant treats them as

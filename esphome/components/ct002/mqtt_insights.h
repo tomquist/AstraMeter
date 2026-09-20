@@ -147,6 +147,7 @@ class MqttInsightsComponent : public Component {
   void publish_availability_(const std::string &consumer_id, const std::string &avail_topic,
                              bool online);
   bool state_due_(const std::string &key);
+  void forget_state_publish_(const std::string &key);
 
   // Discovery republish — called on every connect rising edge.
   void on_mqtt_connected_();

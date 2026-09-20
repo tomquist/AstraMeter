@@ -201,6 +201,17 @@ bool MqttInsightsComponent::state_due_(const std::string &key) {
   return true;
 }
 
+void MqttInsightsComponent::forget_state_publish_(const std::string &key) {
+  // Undoes a state_due_ record that no longer stands for anything: a publish
+  // the client rejected, so the retry is not held off for a whole interval,
+  // and an evicted consumer, so one that comes back inside the interval is
+  // published at once. Mirrors service.py::_forget_state_publish, except that
+  // Python cannot tell which publish of an event failed and so forgets the
+  // consumer and the device-status key together; here the two publishes are
+  // adjacent and each reports for itself.
+  this->last_state_publish_.erase(key);
+}
+
 void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_id) {
   if (!this->mqtt_->is_connected()) return;
   if (!this->state_due_(consumer_id)) return;
@@ -276,7 +287,8 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
       root["min_dc_output"] = nullptr;
     }
   });
-  this->mqtt_->publish(state_topic, state_buf, 0, true);
+  if (!this->mqtt_->publish(state_topic, state_buf, 0, true))
+    this->forget_state_publish_(consumer_id);
   this->publish_availability_(consumer_id, state_topic + "/availability", true);
 
   // Device-level status — published on every consumer update so HA sees
@@ -323,8 +335,9 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
   // Device-level data, but published per consumer, so N batteries would
   // send it N times per interval. Its own gate keeps it to once per meter.
   if (this->state_due_("")) {
-    this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
-                         true);
+    if (!this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status",
+                              device_buf, 0, true))
+      this->forget_state_publish_("");
   }
 
   // Consumer-level discovery on first sight. The payload no longer depends on
@@ -361,6 +374,11 @@ void MqttInsightsComponent::publish_consumer_removed_(const std::string &consume
   const std::string avail_topic = this->base_topic_ + "/ct002/" + this->device_id_ +
                                   "/consumer/" + consumer_id + "/availability";
   this->publish_availability_(consumer_id, avail_topic, false);
+  // The consumer's own key, so one that comes back inside the interval is
+  // published at once, and the device-status key, whose consumer_count has
+  // just changed. Mirrors the ct002_remove branch of service.py's publish loop.
+  this->forget_state_publish_(consumer_id);
+  this->forget_state_publish_("");
   this->discovered_consumers_.erase(consumer_id);
 }
 

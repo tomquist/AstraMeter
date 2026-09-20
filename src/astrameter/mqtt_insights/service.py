@@ -594,9 +594,12 @@ class MqttInsightsService:
             # Throttling drops the whole event, not just its state publish:
             # everything else the handler does is idempotent on the next one
             # (discovery is ``_discover_once``-guarded, availability only
-            # moves on change, the bridge count follows discovery), and the
-            # first event for a battery is always due, so discovery and the
-            # opening state still go out at once.  Removals are never dropped.
+            # moves on change, the bridge count follows discovery), and a
+            # battery's first event is always due — nothing is remembered for
+            # it until it publishes, and eviction forgets it again — so
+            # discovery and the opening state go out at once, for a battery
+            # that comes back as much as for a new one.  Removals are never
+            # dropped.
             if evt.kind in ("ct002", "shelly") and not self._state_due(
                 evt.kind, did, eid
             ):
@@ -605,6 +608,7 @@ class MqttInsightsService:
                 if evt.kind == "ct002":
                     await self._handle_ct002_event(client, base, cfg, evt)
                 elif evt.kind == "ct002_remove":
+                    self._forget_state_publish(evt.kind, did, eid)
                     await self._mark_offline(
                         client,
                         cfg,
@@ -615,6 +619,7 @@ class MqttInsightsService:
                 elif evt.kind == "shelly":
                     await self._handle_shelly_event(client, base, cfg, evt)
                 elif evt.kind == "shelly_remove":
+                    self._forget_state_publish(evt.kind, did, eid)
                     await self._mark_offline(
                         client,
                         cfg,
@@ -625,6 +630,14 @@ class MqttInsightsService:
             except aiomqtt.MqttError:
                 raise
             except Exception:
+                # The gate above already recorded this event as published, so
+                # leaving that behind would hold the retry off for a whole
+                # interval.  A broken connection never lands here (``MqttError``
+                # is re-raised and the reconnect clears the lot); what does is
+                # the handler failing mid-way, and we cannot tell which of its
+                # publishes got through, so forget both keys and let the next
+                # event redo them.
+                self._forget_state_publish(evt.kind, did, eid)
                 logger.exception("Error publishing MQTT Insights event")
 
     def _state_due(self, kind: str, device_id: str, entity_id: str) -> bool:
@@ -653,6 +666,21 @@ class MqttInsightsService:
             return False
         self._last_state_publish[key] = now
         return True
+
+    def _forget_state_publish(self, kind: str, device_id: str, entity_id: str) -> None:
+        """Drop what ``_state_due`` remembered for a battery and for its meter.
+
+        Two callers, both undoing a record that no longer stands for anything:
+        eviction, so a battery that comes back inside the interval is published
+        at once rather than up to an interval later, and a handler that raised,
+        so the retry is not held off either.  The meter's device-status key goes
+        with it — on eviction because ``consumer_count`` has just changed and is
+        worth sending, on failure because one exception covers every publish the
+        handler makes and we cannot tell which of them got through.
+        """
+        kind = kind.removesuffix("_remove")
+        self._last_state_publish.pop((kind, device_id, entity_id), None)
+        self._last_state_publish.pop((f"{kind}_status", device_id, ""), None)
 
     async def _publish_availability(
         self, client: aiomqtt.Client, avail_topic: str, payload: bytes
