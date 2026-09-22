@@ -9,7 +9,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import aiomqtt
@@ -1764,6 +1764,101 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker: int) -> None:
         await service.stop()
 
 
+def test_retained_force_rotation_is_not_replayed() -> None:
+    """A press the broker replayed at subscribe time must not fire.
+
+    A button is momentary, so a retained press is always a leftover — and one
+    would otherwise rotate the priority order on every reconnect.  Settings
+    riding the same payload are still applied, since the retained replay is
+    exactly how they are restored.
+    """
+    service = _make_service(1883)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    rotations = device.calls.setdefault("force_rotation", [])
+    active = device.calls.setdefault("active_control", [])
+
+    service._handle_device_command(
+        "dev1", {"force_rotation": True, "active_control": False}, retained=True
+    )
+    assert rotations == []
+    assert active == [False]
+
+    # A live press still rotates.
+    service._handle_device_command("dev1", {"force_rotation": True})
+    assert rotations == [True]
+
+
+async def test_retained_button_press_is_cleared_from_the_topic() -> None:
+    """The stale retained press is stripped off the topic, so it stops being
+    replayed; settings sharing the payload are written back."""
+    service = _make_service(1883)
+    published: list[tuple] = []
+
+    class _Client:
+        async def publish(
+            self, topic: str, payload: bytes, qos: int = 0, retain: bool = False
+        ) -> None:
+            published.append((topic, payload, retain))
+
+    client = cast(Any, _Client())
+    await service._drop_retained_button_press(
+        client, "t/set", {"force_rotation": True, "active_control": False}
+    )
+    assert published == [("t/set", b'{"active_control": false}', True)]
+
+    published.clear()
+    await service._drop_retained_button_press(client, "t/set", {"force_rotation": True})
+    assert published == [("t/set", b"", True)]
+
+
+@needs_mosquitto
+async def test_retained_force_rotation_is_cleared_on_connect(mqtt_broker: int) -> None:
+    """End-to-end: a press left retained on the broker (what a release that
+    mirrored dashboard button writes left behind) neither rotates on connect
+    nor survives to be replayed on the next one."""
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    topic = f"{base}/ct002/dev1/set"
+
+    async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+        await pub.publish(
+            topic, payload=json.dumps({"force_rotation": True}).encode(), retain=True
+        )
+
+    async def retained_payload() -> bytes | None:
+        """What a fresh subscriber is handed, or None when nothing is retained."""
+
+        async def _first(sub: aiomqtt.Client) -> bytes:
+            async for message in sub.messages:
+                return bytes(message.payload or b"")
+            return b""
+
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(topic)
+            with contextlib.suppress(asyncio.TimeoutError):
+                return await asyncio.wait_for(_first(sub), timeout=0.5)
+        return None
+
+    assert await retained_payload() is not None
+
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    rotations = device.calls.setdefault("force_rotation", [])
+    await service.start()
+    try:
+        await service.wait_connected()
+        await _poll(lambda: service._client is not None)
+        # Give the listener room to receive the replay and clear it.
+        await asyncio.sleep(0.5)
+
+        assert rotations == []
+        assert await retained_payload() is None
+    finally:
+        await service.stop()
+
+
 def test_active_control_device_command_dispatch() -> None:
     """The device-level active_control field routes booleans to the handler
     and rejects non-boolean payloads."""
@@ -2321,9 +2416,12 @@ def _async_iter(messages: list[Any]) -> AsyncIterator[Any]:
 
 
 class _FakeMessage:
-    def __init__(self, topic: str, payload: bytes) -> None:
+    def __init__(self, topic: str, payload: bytes, retain: bool = False) -> None:
         self.topic = topic
         self.payload = payload
+        # As the broker delivers it: set only on the retained replay a fresh
+        # subscription gets, not on a live publish forwarded to an existing one.
+        self.retain = retain
 
 
 def test_status_snapshot_shape() -> None:
