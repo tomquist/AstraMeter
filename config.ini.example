@@ -606,6 +606,11 @@ THROTTLE_INTERVAL = 0
 # MARSTEK_MQTT_ENABLED = true
 ## Seconds between optional Marstek aggregate (cd=1) broadcasts when the app is quiet; 0 = polls only.
 # MARSTEK_MQTT_INTERVAL = 300
+## Smallest gap between two state publishes for the same battery (seconds); 0 = every poll (default).
+## A battery polls about once a second, so without this its state topic goes out at that rate and
+## every subscriber pays to parse it. Raising it trades resolution in Home Assistant's history for a
+## quieter broker. Availability, removals, discovery and commands are never throttled.
+# STATE_THROTTLE_INTERVAL = 0
 ## Seconds between per-powermeter "Online" diagnostic sensor updates (default: 30); 0 disables it.
 ## Each configured powermeter section gets an "AstraMeter Powermeter <section>" device with an
 ## Online binary sensor that flips off when the source stops delivering fresh/usable readings.

@@ -1,9 +1,9 @@
 # Live status dashboard
 
-A web page that shows what AstraMeter is doing right now — grid power,
-every battery's target and reported power, the health of your power source, and
-the balancer's internal state — and lets you change your configuration without
-editing files by hand.
+A web page that shows what AstraMeter is doing right now: grid power, every
+battery's target and reported power, the health of your power source, and the
+balancer's internal state. You can also change your configuration there,
+without editing files by hand.
 
 ## Contents
 
@@ -15,7 +15,7 @@ editing files by hand.
 - [Changing your configuration](#changing-your-configuration)
   - [Guided setup](#guided-setup)
   - [Config file](#config-file)
-  - [Switching between them](#switching-between-them)
+  - [Migrating between them](#migrating-between-them)
 - [Security](#security)
   - [Writes are refused to other websites](#writes-are-refused-to-other-websites)
   - [Only addresses that cannot be pointed here](#only-addresses-that-cannot-be-pointed-here)
@@ -37,15 +37,15 @@ and the power source's health.
 
 **Batteries** — one card per battery: reported power, the target AstraMeter
 asked for, the phase it reported, how long ago it last polled, its distribution
-weight and its saturation. If changes are allowed you can disable a battery or
-return one to automatic control from here.
+weight and its saturation. If changes are allowed, you can disable a battery
+here, or put one back under automatic control.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-batteries-dark.png">
   <img alt="The Batteries tab: three battery cards side by side, each with its own trend line, phase, target and saturation" src="images/dashboard-batteries-light.png">
 </picture>
 
-**Power source** — every configured meter, what reads it, the filter chain
+**Power source** — every meter you configured, what reads it, the filter chain
 applied to it (smoothing, spike rejection, PID) and when it was last read.
 
 <picture>
@@ -56,10 +56,10 @@ applied to it (smoothing, spike rejection, PID) and when it was last read.
 **Diagnostics** — service version, the commit the build came from (for a
 released image or a firmware compiled from a checkout), uptime, config file and
 mode, plus the balancer's internals. Each balancer card leads with its **control quality**:
-whether the grid is being held at zero, with the mean error, time inside the
-band and zero-crossing rate behind it (see
-[Control quality](ct002.md#control-quality)), followed by the predicted grid
-power, prediction trust, pool output, import trim, the demand average and the
+whether the grid is being held at zero. Behind that sit the mean error, the time
+inside the band and the zero-crossing rate (see
+[Control quality](ct002.md#control-quality)). Then the predicted grid power,
+prediction trust, pool output, import trim, the demand average and the
 efficiency rotation state. MQTT Insights connection state appears here when it
 is configured.
 
@@ -69,42 +69,42 @@ is configured.
 </picture>
 
 The battery and power-source cards each carry a small **trend line** of their
-own figure, with the range it covered underneath. It is built in your browser
-from the readings the page has already polled — nothing is stored, so it starts
-empty on every load and covers only as long as the tab has been open.
+own figure, with the range it covered underneath. Your browser builds it from
+the readings the page has already polled. Nothing is stored, so it starts empty
+on every load and covers only as long as the tab has been open.
 
-Values a backend cannot supply are **omitted**, never shown as `0` or `—`, so
-an empty field always means "not reported" rather than "measured as zero".
+Values a backend cannot supply are **omitted**, never shown as `0` or `—`. An
+empty field always means "not reported", not "measured as zero".
 
 ## Enabling it
 
 ### Home Assistant add-on
 
 It is **always on** — the add-on's sidebar panel *is* the dashboard, so there is
-no option to turn it off. Open **AstraMeter** in the Home Assistant sidebar; the
-page is served through Home Assistant ingress, so it needs no extra port and is
-covered by your normal Home Assistant login.
+no option to turn it off. Open **AstraMeter** in the Home Assistant sidebar. The
+page is served through Home Assistant ingress, so it needs no extra port, and
+your normal Home Assistant login covers it.
 
-Two add-on options control it:
+Three add-on options control it:
 
 | Option | Default | What it does |
 |---|---|---|
 | `dashboard_allow_write` | `true` | Lets the dashboard change configuration and control batteries. Turn it off for a read-only dashboard. |
 | `dashboard_direct_access` | `false` | Also serves the page on `http://<host>:52500` **with no authentication**. See [Security](#security). |
-| `dashboard_allowed_hosts` | empty | Extra host names that port answers under, comma-separated. IP addresses, `localhost`, `.local` and `.home.arpa` names always work — needed for a reverse proxy, a private DNS entry, or a router-assigned name such as `astrameter.fritz.box`. See [Security](#only-addresses-that-cannot-be-pointed-here). |
+| `dashboard_allowed_hosts` | empty | Extra host names that port answers under, comma-separated. Give names only, with no scheme or port. IP addresses, `localhost`, `.local` and `.home.arpa` names always work. You need it for a reverse proxy, a private DNS entry, or a router-assigned name such as `astrameter.fritz.box`. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 
-This holds for a `custom_config` file too: `DASHBOARD_ENABLED` and
+The same holds for a `custom_config` file. `DASHBOARD_ENABLED` and
 `ENABLE_WEB_SERVER` in that file are ignored, because the sidebar panel and the
 Supervisor's health check both depend on them. The file's
 `DASHBOARD_ALLOW_WRITE` and `DASHBOARD_DIRECT_ACCESS` still apply, and both
-default the same way the add-on options do — writes on, direct access off.
+default the same way the add-on options do: writes on, direct access off.
 
 ### Docker / standalone
 
 **On by default, and able to change things** — open `http://<host>:52500/`.
-The port follows `WEB_SERVER_PORT`. Nothing else is needed: outside the add-on
-there is no Home Assistant in front of the page, so this address is the
-dashboard, unauthenticated — see [Security](#security).
+The port follows `WEB_SERVER_PORT`. Nothing else is needed. Outside the add-on
+no Home Assistant sits in front of the page, so this address is the dashboard,
+unauthenticated — see [Security](#security).
 
 Keys in `[GENERAL]` narrow it:
 
@@ -126,14 +126,15 @@ WEB_CONFIG_ENABLED = False
 DASHBOARD_ALLOWED_HOSTS = astrameter.example.lan
 ```
 
-`WEB_CONFIG_ENABLED` decides whether there is a configuration surface at all,
-not whether the page may write. It has three states: left out it follows the
-dashboard, `True` serves the editor even with `DASHBOARD_ENABLED = False`, and
-`False` refuses it even with the dashboard on. If you set it in an earlier
-release, it still means what it said — the dashboard does not override it.
+`WEB_CONFIG_ENABLED` decides whether there is a configuration surface at all.
+It does not decide whether the page may write. It has three states: left out it
+follows the dashboard, `True` serves the editor even with `DASHBOARD_ENABLED =
+False`, and `False` refuses it even with the dashboard on. If you set it in an
+earlier release, it still means what it said — the dashboard does not override
+it.
 
-That makes it the narrower of the two switches: `DASHBOARD_ALLOW_WRITE = False`
-makes the whole page read-only, batteries included, while `WEB_CONFIG_ENABLED =
+That makes it the narrower of the two switches. `DASHBOARD_ALLOW_WRITE = False`
+makes the whole page read-only, batteries included. `WEB_CONFIG_ENABLED =
 False` leaves the battery controls working and takes only the configuration
 away.
 
@@ -152,30 +153,30 @@ ct002:
 ```
 
 **Nothing else is required** — no MQTT broker, no Home Assistant, no second
-component. The board serves the page itself, and with `controls: true` below it
-is also a complete way to steer your batteries, so MQTT Insights is an option
+component. The board serves the page itself. With `controls: true` below it is
+also a complete way to steer your batteries, so MQTT Insights is an option
 rather than a prerequisite.
 
 The board serves a **reduced version** of the page. Everything it can measure
-is there — grid power, every battery with its target and saturation, the
+is there: grid power, every battery with its target and saturation, the
 balancer's internals and its [control-quality verdict](ct002.md#control-quality),
 the health of the grid-power sensor, plus MQTT Insights' connection state for
-those who run that sub-block — but:
+those who run that sub-block. But:
 
 - **There is no Configuration tab.** An ESPHome device's settings are compiled
-  into its firmware, so there would be nothing to save; change your YAML and
+  into its firmware, so there would be nothing to save. Change your YAML and
   re-flash instead.
 - **The page is read-only until you say otherwise.** Add `controls: true` to
   steer batteries from it — see below.
-- **Times are relative** ("4 s ago") rather than clock times until the device
-  has a synced clock; add ESPHome's [`time:`](https://esphome.io/components/time/)
+- **Times are relative** ("4 s ago") rather than clock times, until the device
+  has a synced clock. Add ESPHome's [`time:`](https://esphome.io/components/time/)
   component if you want absolute timestamps.
 
 | Option | Default | What it does |
 |---|---|---|
 | `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
 | `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
-| `allowed_hosts` | empty | Extra host names the device answers under. Its IP address, `localhost`, its `.local` mDNS name and any `.home.arpa` name always work — needed behind a reverse proxy or for a router-assigned name. See [Security](#only-addresses-that-cannot-be-pointed-here). |
+| `allowed_hosts` | empty | Extra host names the device answers under. Give names only, with no scheme or port. Its IP address, `localhost`, its `.local` mDNS name and any `.home.arpa` name always work. You need it behind a reverse proxy, or for a router-assigned name. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 | `web_server_link` | `true` | Adds a link to the dashboard at the top of ESPHome's own page. Only does anything when `web_server:` is configured. |
 | `id` | generated | The usual ESPHome component id. |
 
@@ -188,15 +189,15 @@ ct002:
 
 Controls are off by default because the page has **no login of its own** — see
 [Security](#security). They accept exactly the values the MQTT entities and the
-Python dashboard accept, and — when `mqtt_insights:` is configured — a change
-made here is written back to the broker's retained command topic, so it is not
-something the next reconnect quietly reverts.
+Python dashboard accept. When `mqtt_insights:` is configured, a change made
+here is written back to the broker's retained command topic, so the next
+reconnect will not quietly revert it.
 
 The dashboard shares ESPHome's HTTP server with `web_server:` and
 `captive_portal:`, so they all use one port. `web_server:` already serves
-ESPHome's own page at `/`, and only one handler can have a URL — so on a device
+ESPHome's own page at `/`, and only one handler can have a URL. So on a device
 that has one, the dashboard moves itself to `http://<device>/astrameter/`
-rather than contesting the root. The address it settled on is in the boot log:
+rather than contesting the root. The boot log gives the address it settled on:
 
 ```text
 [astrameter.dashboard]: AstraMeter dashboard:
@@ -204,104 +205,105 @@ rather than contesting the root. The address it settled on is in the boot log:
 ```
 
 Set `path:` yourself to put it somewhere else. Asking for `path: /` while
-`web_server:` is configured is refused at validation time rather than letting
+`web_server:` is configured is refused at validation time, rather than letting
 the two race.
 
-So that the moved page is not hidden behind a URL you have to already know,
-**ESPHome's own page gets a link to it** at the top — no configuration, and
-nothing to keep in step if you change `path:`. Set `web_server_link: false`
-under `dashboard:` if you would rather it stayed as ESPHome ships it. Two
-`web_server:` settings leave the link out, because neither serves a page that
-can carry it: `version: 1`, whose page never loads added scripts, and
-`local: true`, which serves a prebuilt one. Neither is an error — the compile
-log says so, and the dashboard is reachable at its own URL regardless.
+The moved page should not hide behind a URL you have to know already, so
+**ESPHome's own page gets a link to it** at the top. There is nothing to
+configure, and nothing to keep in step if you change `path:`. Set
+`web_server_link: false` under `dashboard:` if you would rather it stayed as
+ESPHome ships it. Two `web_server:` settings leave the link out, because
+neither serves a page that can carry it: `version: 1`, whose page never loads
+added scripts, and `local: true`, which serves a prebuilt one. Neither is an
+error — the compile log says so, and the dashboard stays reachable at its own
+URL.
 
 It costs about 90 KiB of flash — the compressed page plus ESPHome's HTTP
 server — and no measurable RAM while nobody is watching. An ESP32 with 4 MB is
-comfortable; ESP8266 is not supported, and neither are boards too tight for the
-extra 90 KiB, which is what `dashboard: false` is for.
+comfortable. ESP8266 is not supported, and neither are boards too tight for the
+extra 90 KiB; that is what `dashboard: false` is for.
 
 ## Changing your configuration
 
-The Configuration tab adapts to how AstraMeter is configured. It is absent
-entirely on ESPHome, where the configuration lives in the firmware.
+The Configuration tab adapts to how AstraMeter is configured. On ESPHome it is
+absent altogether, because the configuration lives in the firmware.
 
 ### Guided setup
 
 In the Home Assistant add-on with no custom config file, the tab shows a form
-built from the add-on's own options — the same settings as the add-on's
+built from the add-on's own options. They are the same settings as the add-on's
 Configuration page, with labels and help text. Saving writes them back through
 the Supervisor and restarts the add-on, which can take a minute.
 
-The form opens on the two groups a working setup needs — **Grid measurement**
-and **Emulated meter** — and folds the rest away behind named, counted
+The form opens on the two groups a working setup needs: **Grid measurement**
+and **Emulated meter**. The rest are folded away behind named, counted
 headings: battery control, meter reading, signal filters, balancer tuning,
 Marstek's cloud, and the add-on's own settings. Open one to see its fields.
-Every setting says what it does underneath, and a box left empty shows the
-value that applies instead of it, so `0.2` in a greyed-out **Balance gain**
-means that is what you get by leaving it alone.
+Every setting says what it does underneath. A box left empty shows the value
+that applies instead, so a greyed-out `0.2` in **Balance gain** is what you get
+by leaving it alone.
 
-The form is generated from the add-on's live option schema, so a new option
-appears here as soon as the add-on gains it — in a trailing **Other** group
+The form is generated from the add-on's live option schema. A new option
+appears here as soon as the add-on gains it, in a trailing **Other** group
 until it is given a description.
 
 **Grid power sensor** and **Export power sensor** are entity pickers rather
-than text boxes: they list the Home Assistant entities that could plausibly
-carry grid power — anything with `device_class: power`, plus anything reading
-in a unit AstraMeter converts (`W`, `kW`, `MW`, `mW`) — showing each one's
-friendly name and current value. The picker does not restrict the domain, so a
-`number.` entity carrying watts is offered too. Type to filter the list, then
-click or tap the one you want — the same list on a phone as on a desktop. You
-can still enter an entity id by hand, and if the configured one is not
-currently known to Home Assistant the field says so instead of letting you find
-out at the next restart.
+than text boxes. They list the Home Assistant entities that could plausibly
+carry grid power: anything with `device_class: power`, plus anything reading in
+a unit AstraMeter converts (`W`, `kW`, `MW`, `mW`). Each one shows its friendly
+name and current value. The picker does not restrict the domain, so a `number.`
+entity carrying watts is offered too. Type to filter the list, then click or
+tap the one you want — the same list on a phone as on a desktop. You can still
+enter an entity id by hand. If Home Assistant does not currently know the
+configured one, the field says so, instead of letting you find out at the next
+restart.
 
 A `kW`, `MW` or `mW` sensor is converted to watts for you, so **do not** set
-`POWER_MULTIPLIER = 1000` to compensate — if you did that before AstraMeter
-read units, remove it or the reading is scaled twice. An entity marked
+`POWER_MULTIPLIER = 1000` to compensate. If you did that before AstraMeter read
+units, remove it, or the reading is scaled twice. An entity marked
 `device_class: power` whose unit is none of those is still listed, but flagged
 **not a power unit**: AstraMeter refuses to read it, and the sensor's own unit
 is usually the thing to fix.
 
 Both take **one sensor per phase**: a single sensor for a whole-house total, or
-up to three for a three-phase meter. An empty picker for the next phase is
-offered until you have three, and each phase can be removed again. If you use
-separate import and export sensors, give both the same number of phases — they
-are paired up, and a mismatch stops AstraMeter from starting.
+up to three for a three-phase meter. You get an empty picker for the next phase
+until you have three, and you can remove each phase again. If you use separate
+import and export sensors, give both the same number of phases. They are paired
+up, and a mismatch stops AstraMeter from starting.
 
 ### Config file
 
 With a custom `config.ini` — or in Docker — the tab shows a structured editor
-for that file: one collapsible card per `[SECTION]`, and a control per setting
-chosen from its type, so a boolean is a dropdown, a number is a number field
-and a choice is a list. Settings and whole sections can be added and removed,
-and the name box suggests the settings AstraMeter knows for that section. It is
-the same editor as the standalone one at `/config`.
+for that file. Each `[SECTION]` gets a collapsible card, and each setting gets
+a control chosen from its type, so a boolean is a dropdown, a number is a
+number field and a choice is a list. You can add and remove settings and whole
+sections, and the name box suggests the settings AstraMeter knows for that
+section. It is the same editor as the standalone one at `/config`.
 
-Saving trial-loads the whole file before replacing it, so a file that cannot
-be parsed — or whose power-source sections cannot be built — is rejected and
-the running configuration is left untouched. This is a load check, not a full
+Saving trial-loads the whole file before replacing it. A file that cannot be
+parsed — or whose power-source sections cannot be built — is rejected, and the
+running configuration is left untouched. This is a load check, not a full
 schema validation: a setting that parses but is wrong for your hardware is
-still accepted here and will show up in the log at the next restart.
+still accepted here, and will show up in the log at the next restart.
 
 Passwords and tokens are shown as `••••••••`. Leave them untouched to keep the
-stored value; the real secret is never sent to your browser and never has to be
-retyped to edit an unrelated field.
+stored value. The real secret is never sent to your browser, and you never have
+to retype it to edit an unrelated field.
 
 ### Migrating between them
 
 Which one you want comes down to what your setup needs:
 
-- **Guided setup** is the easy path — labelled fields, entity pickers, values
+- **Guided setup** is the easy path: labelled fields, entity pickers, values
   checked before they save. Grid power has to come from a Home Assistant
-  sensor, and only the settings the add-on exposes can be changed.
-- **A config file** is the advanced path — everything AstraMeter can do: any
+  sensor, and you can only change the settings the add-on exposes.
+- **A config file** is the advanced path: everything AstraMeter can do — any
   power source, several meters at once, every setting there is. You maintain
   the file yourself, and nothing checks it until AstraMeter starts.
 
 In the add-on, **Migrate to a config file** / **Migrate back to guided setup**
 at the foot of the Configuration tab moves you between them. It is folded shut
-by default: this is a one-time move, not a setting.
+by default, because this is a one-time move, not a setting.
 
 - **Migrating to a config file** writes the configuration that is running right
   now to `/config/astrameter.ini`, points the add-on's `custom_config` option
@@ -310,12 +312,12 @@ by default: this is a one-time move, not a setting.
   runs *that* file instead. The add-on options stay on the add-on's
   Configuration page but stop having any effect.
 - **Migrating back to guided setup** clears `custom_config` and goes back to
-  the add-on options as they stand today — your file is *not* copied into them,
+  the add-on options as they stand today. Your file is *not* copied into them,
   so check them first if they have not been touched in a while. The file itself
   is left on disk unchanged, and migrating to it again reads it back.
 
-Either way you are asked to confirm first, and the add-on then restarts — the
-dashboard goes quiet for up to a minute and reconnects on its own.
+Either way you are asked to confirm first, and the add-on then restarts. The
+dashboard goes quiet for up to a minute, then reconnects on its own.
 
 ## Security
 
@@ -329,14 +331,14 @@ from:
 | Docker / standalone | yes, unless `DASHBOARD_ENABLED = False` | **nothing** |
 | ESPHome, `http://<device>/` | yes, unless `dashboard: false` | **nothing** |
 
-Because the add-on runs with host networking, port 52500 is on your LAN
-whether or not you use it. There, everything except `/health` is refused
-unless the request arrives through ingress or you explicitly opt in to direct
-access. The check is the connection's source address, not a header, so it
-cannot be faked by a client on your network.
+The add-on runs with host networking, so port 52500 is on your LAN whether or
+not you use it. There, everything except `/health` is refused unless the
+request arrives through ingress or you explicitly opt in to direct access. The
+check is the connection's source address, not a header, so a client on your
+network cannot fake it.
 
-Running AstraMeter yourself there is no ingress, so that port is the only way
-in and the page is served on it, **writable** — anyone who can reach it can
+When you run AstraMeter yourself there is no ingress. That port is the only way
+in, and the page is served on it, **writable**: anyone who can reach it can
 edit your `config.ini` and steer your batteries. Set
 `DASHBOARD_ALLOW_WRITE = False` on a network you do not control, or
 `DASHBOARD_ENABLED = False` to show nothing at all.
@@ -344,13 +346,13 @@ edit your `config.ini` and steer your batteries. Set
 from a config file).
 
 On ESPHome the page exposes no configuration, and no battery controls unless
-`controls: true` asks for them — but even read-only it is an unauthenticated
-view of your household's power on the LAN, and with controls on, anyone who can
-reach the device can re-target your batteries. If that matters, add ESPHome's
-[`web_server:`](https://esphome.io/components/web_server/) with its `auth:`
-block and give the dashboard a `path:` of its own: both mount on the same HTTP
-server, so that login covers the dashboard too. Otherwise leave `controls:`
-off, or set `dashboard: false`.
+`controls: true` asks for them. Even read-only, though, it is an
+unauthenticated view of your household's power on the LAN, and with controls on,
+anyone who can reach the device can re-target your batteries. If that matters,
+add ESPHome's [`web_server:`](https://esphome.io/components/web_server/) with
+its `auth:` block and give the dashboard a `path:` of its own. Both mount on
+the same HTTP server, so that login covers the dashboard too. Otherwise leave
+`controls:` off, or set `dashboard: false`.
 
 Turning off `dashboard_allow_write` keeps the dashboard readable while blocking
 every configuration change and battery command.
@@ -358,30 +360,30 @@ every configuration change and battery command.
 ### Writes are refused to other websites
 
 "Anyone who can reach it" above means a person or program on your network. It
-does **not** include a website you happen to visit while on that network,
-which would otherwise be able to reach a LAN address through your own browser
-and drive the write API without ever seeing the reply.
+does **not** include a website you happen to visit while on that network. Such
+a site could otherwise reach a LAN address through your own browser and drive
+the write API without ever seeing the reply.
 
-Every write — on all three backends — requires `Content-Type:
-application/json`. That is a header a browser will not send cross-origin
-without asking permission first, and no AstraMeter route grants it, so such a
-request never leaves the browser. Nothing you configure turns this off, and it
-applies whatever `dashboard_allow_write` is set to.
+Every write — on all three backends — requires `Content-Type: application/json`.
+A browser will not send that header cross-origin without asking permission
+first, and no AstraMeter route grants it, so such a request never leaves the
+browser. Nothing you configure turns this off, and it applies whatever
+`dashboard_allow_write` is set to.
 
 ### Only addresses that cannot be pointed here
 
 The content-type rule above stops a website driving the API *across origins*.
-One attack gets around it: the site serves its page from a name it owns, then
+One attack gets around it. The site serves its page from a name it owns, then
 answers the next lookup for that name with your AstraMeter's address. Your
 browser now treats its page as the **same origin** as AstraMeter, so it can
-send any content type it likes — and read the reply. That is your
-configuration and the state of your house on the way out, and on the way in a
-`[SCRIPT]` power source is a shell command AstraMeter runs.
+send any content type it likes — and read the reply. On the way out, that is
+your configuration and the state of your house. On the way in, a `[SCRIPT]`
+power source is a shell command AstraMeter runs.
 
 The one part of the address the site cannot choose is the name in the `Host`
-header, because the browser copies it from the URL and the URL has to carry a
-name the site's own nameserver is asked about. So AstraMeter answers only
-under addresses that could not have got there that way:
+header. The browser copies it from the URL, and the URL has to carry a name the
+site's own nameserver is asked about. So AstraMeter answers only under
+addresses that could not have got there that way:
 
 - **IP addresses** — no lookup happens, so there is no answer to poison.
 - **`localhost`** and any **`.local`** name — `.local` is mDNS, resolved on
@@ -399,19 +401,30 @@ under addresses that could not have got there that way:
   `dashboard_allowed_hosts` in the add-on, `allowed_hosts:` under the ESPHome
   `dashboard:` block.
 
+  List the **name on its own** — not the URL you type. A browser sends no
+  scheme, port or path in the `Host` header, so `https://astrameter.example.com:1234`
+  matches nothing; write `astrameter.example.com`. ESPHome refuses the URL form
+  when you compile, and the other builds log it and ignore the entry:
+
+  ```yaml
+  dashboard:
+    allowed_hosts:
+      - astrameter.example.com
+  ```
+
 Anything else gets a `403` naming the address it refused. Two things are exempt:
 the **`/health` endpoint**, which your monitoring reaches under whatever name it
-likes and which exposes nothing, and the **Home Assistant sidebar** — ingress
-arrives under whatever name you reach Home Assistant by, and it is already
+likes and which exposes nothing, and the **Home Assistant sidebar**, because
+ingress arrives under whatever name you reach Home Assistant by and is already
 authenticated.
 
-Reads are a different matter, and only on ESPHome: that HTTP server sends
-`Access-Control-Allow-Origin: *` on every response, so `/api/status` is
-readable by any website you visit while on the same network — it reports your
-device name, battery addresses, MQTT broker and live household power. Either
+Reads are a different matter, and only on ESPHome. That HTTP server sends
+`Access-Control-Allow-Origin: *` on every response, so any website you visit
+while on the same network can read `/api/status` — it reports your device name,
+battery addresses, MQTT broker and live household power. Either
 `dashboard: false` or ESPHome's `web_server:` with an `auth:` block closes
-that. The Python service sends no such header, so its status is readable only
-from your network.
+that. The Python service sends no such header, so only your network can read
+its status.
 
 ## Troubleshooting
 
@@ -419,18 +432,20 @@ from your network.
 at start-up.
 
 **"Not reachable from here."** In the add-on you opened
-`http://<host>:52500` directly rather than through the sidebar. Either use the
-sidebar or turn on `dashboard_direct_access`, understanding that it is
-unauthenticated. Running AstraMeter yourself this does not apply — if that
-address is refused, check that AstraMeter is running, that you are on the port
-`WEB_SERVER_PORT` gives it, and that nothing sets `DASHBOARD_ENABLED = False`.
+`http://<host>:52500` directly rather than through the sidebar. Use the
+sidebar, or turn on `dashboard_direct_access` — but remember it is
+unauthenticated. This does not apply when you run AstraMeter yourself. If that
+address is refused there, check that AstraMeter is running, that you are on the
+port `WEB_SERVER_PORT` gives it, and that nothing sets
+`DASHBOARD_ENABLED = False`.
 
 **"Unrecognised address."** You opened the dashboard under a host name rather
 than an IP address, and that name is not one AstraMeter answers under — see
 [Security](#only-addresses-that-cannot-be-pointed-here). Use the IP address, or
 add the name to `DASHBOARD_ALLOWED_HOSTS` (`dashboard_allowed_hosts` in the
-add-on, `allowed_hosts:` on ESPHome). A name your router hands out, such as
-`astrameter.fritz.box`, needs listing like any other.
+add-on, `allowed_hosts:` on ESPHome) — the name alone, without the `https://`
+or the port. A name your router hands out, such as `astrameter.fritz.box`,
+needs listing like any other.
 
 **The Configuration tab is gone.** `WEB_CONFIG_ENABLED = False` is set — it
 takes the tab and the `/config` editor with it, leaving the rest of the page.
@@ -438,7 +453,8 @@ Remove the line to have it follow the dashboard again.
 
 **"Lost contact with AstraMeter."** The page could not reach the service for
 two polls. It keeps retrying, dims the values and switches every relative time
-to an absolute clock time so a stale reading cannot be mistaken for a fresh one.
+to an absolute clock time, so a stale reading cannot be mistaken for a fresh
+one.
 
 **The Configuration tab is read-only.** `dashboard_allow_write` (or
 `DASHBOARD_ALLOW_WRITE`) is off.

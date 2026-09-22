@@ -32,8 +32,8 @@ function check(cond, msg) {
 // Allowed shapes — anything outside these lists is almost certainly a typo.
 const FIELD_TYPES = new Set(["text", "number", "password", "select", "checkbox"]);
 const FIELD_PROPS = new Set(["key", "label", "help", "type", "default", "placeholder", "options", "required", "phase", "advanced", "ey"]);
-const PM_PROPS = new Set(["id", "label", "section", "blurb", "docPython", "fields", "esphome", "phaseListKeys", "phaseFlagKey", "phaseChannelsValue"]);
-const ESP_KINDS = new Set(["homeassistant", "mqtt", "sml", "modbus", "http", "unsupported"]);
+const PM_PROPS = new Set(["id", "label", "section", "esphomeOnly", "blurb", "docPython", "fields", "esphome", "phaseListKeys", "phaseFlagKey", "phaseChannelsValue"]);
+const ESP_KINDS = new Set(["homeassistant", "mqtt", "sml", "dsmr", "modbus", "http", "unsupported"]);
 const ESP_TIERS = new Set(["native", "generic", "alternate", "unsupported"]);
 const ESP_PROPS = new Set(["kind", "tier", "note", "url1", "url3", "lambda1", "lambda3", "jsonRoot", "haEntity", "headersField", "warn"]);
 
