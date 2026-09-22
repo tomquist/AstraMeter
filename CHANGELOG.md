@@ -8,7 +8,7 @@
 
 - **Fixed** an MQTT power meter freezing on its last reading, while still reporting itself healthy, after the meter published a single null or non-numeric value ([#657](https://github.com/tomquist/astrameter/issues/657), [#658](https://github.com/tomquist/astrameter/pull/658)).
 
-- **Fixed** the dashboard's **Force Rotation** button rotating the battery order twice per click, and again on every MQTT reconnect afterwards ([#674](https://github.com/tomquist/astrameter/issues/674)).
+- **Fixed** the dashboard's **Force Rotation** button rotating the battery order twice per click, and again on every MQTT reconnect afterwards ([#674](https://github.com/tomquist/astrameter/issues/674), [#675](https://github.com/tomquist/astrameter/pull/675)).
 
 
 ## 2.3.0
