@@ -16,6 +16,8 @@
 
 - **Added** DSMR/P1 smart meters to the ESPHome config generator and docs, so a P1 meter and the emulator can share one ESP32 instead of needing a separate bridge ([#664](https://github.com/tomquist/astrameter/issues/664), [#665](https://github.com/tomquist/astrameter/pull/665)).
 
+- **Fixed** the dashboard's **Force Rotation** button rotating the battery order twice per click, and again on every MQTT reconnect afterwards ([#674](https://github.com/tomquist/astrameter/issues/674), [#675](https://github.com/tomquist/astrameter/pull/675)).
+
 
 ## 2.3.0
 

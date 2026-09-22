@@ -1051,6 +1051,48 @@ async def test_force_rotation_is_accepted(tmp_path: Path) -> None:
     await client.close()
 
 
+async def test_force_rotation_is_not_mirrored_to_mqtt(tmp_path: Path) -> None:
+    """A button press must not be published to the retained command topic.
+
+    We subscribe to that topic ourselves, so a retained press comes straight
+    back and fires the rotation a second time on every click, then again on
+    every reconnect.  The Active Control switch, being a setting, is still
+    mirrored.
+    """
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+
+    mirrored: list[tuple] = []
+
+    class _Insights:
+        def status_snapshot(self) -> _InsightsSnapshot:
+            return _InsightsSnapshot()
+
+        async def publish_device_command(self, device_id: str, payload: dict) -> None:
+            mirrored.append((device_id, payload))
+
+    registry.insights = _Insights()
+    client = await _client(registry)
+
+    assert (
+        await client.post(
+            "/api/control/device",
+            json={"device_id": "ct-1", "field": "force_rotation", "value": True},
+        )
+    ).status == 200
+    assert mirrored == []
+
+    assert (
+        await client.post(
+            "/api/control/device",
+            json={"device_id": "ct-1", "field": "active_control", "value": False},
+        )
+    ).status == 200
+    assert mirrored == [("ct-1", {"active_control": False})]
+    await client.close()
+
+
 async def test_unknown_device_field_is_404(tmp_path: Path) -> None:
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
     registry.register_device("ct-1", "ct002", _device())

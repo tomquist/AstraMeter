@@ -18,6 +18,7 @@ from astrameter.ct002.controls import (
     CONSUMER_CONTROLS_BY_FIELD,
     ControllableDevice,
     apply_device_control,
+    is_device_button,
 )
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.version_info import get_version
@@ -927,7 +928,11 @@ class MqttInsightsService:
                     parsed.device_id, parsed.consumer_id, parsed.field, payload_str
                 )
                 continue
-            # Device-level: JSON body.
+            # Device-level: JSON body.  An empty payload is how a retained
+            # command gets cleared — ignore it rather than reporting the empty
+            # string as malformed JSON.
+            if not payload_str.strip():
+                continue
             try:
                 cmd = json.loads(payload_str)
             except json.JSONDecodeError:
@@ -936,7 +941,10 @@ class MqttInsightsService:
             if not isinstance(cmd, dict):
                 logger.warning("Command payload is not a JSON object on %s", topic_str)
                 continue
-            self._handle_device_command(parsed.device_id, cmd)
+            retained = bool(message.retain)
+            if retained and any(is_device_button(name) for name in cmd):
+                await self._drop_retained_button_press(client, topic_str, cmd)
+            self._handle_device_command(parsed.device_id, cmd, retained=retained)
 
     def _handle_consumer_field_command(
         self, device_id: str, consumer_id: str, field: str, payload: str
@@ -1014,13 +1022,38 @@ class MqttInsightsService:
         for (consumer_id, name), payload in list((pending or {}).items()):
             self._handle_consumer_field_command(device_id, consumer_id, name, payload)
 
-    def _handle_device_command(self, device_id: str, cmd: dict) -> None:
+    async def _drop_retained_button_press(
+        self, client: aiomqtt.Client, topic: str, cmd: dict
+    ) -> None:
+        """Strip a retained button press off the device command topic.
+
+        A press is an event, so the broker should never be holding one.  One
+        left over from a release that mirrored dashboard button writes would
+        otherwise re-fire on every reconnect, so rewrite the topic with the
+        settings it also carried, or clear it when the press was all of it.
+        """
+        kept = {
+            name: value for name, value in cmd.items() if not is_device_button(name)
+        }
+        payload = json.dumps(kept).encode() if kept else b""
+        try:
+            await client.publish(topic, payload=payload, qos=1, retain=True)
+        except Exception:
+            logger.exception("Failed to clear retained button press on %s", topic)
+            return
+        logger.info("Cleared a stale retained button press on %s", topic)
+
+    def _handle_device_command(
+        self, device_id: str, cmd: dict, *, retained: bool = False
+    ) -> None:
         device = self._devices.get(device_id)
         if device is None:
             logger.debug("No device %s registered for %r", device_id, cmd)
             return
         names = []
-        if cmd.get("force_rotation") is True:
+        # A button is momentary: honour a live press, never a retained one the
+        # broker replayed at subscribe time.
+        if cmd.get("force_rotation") is True and not retained:
             names.append("force_rotation")
         if "active_control" in cmd:
             names.append("active_control")
