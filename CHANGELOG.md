@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** `LOG_FILE` (`Log File` in the Home Assistant add-on), which also writes the log to a file rotated at 20 MB, so a `debug` capture long enough to catch a steering problem can be attached to a bug report instead of the 10,000 lines the add-on's Log tab hands out ([#655](https://github.com/tomquist/astrameter/issues/655)).
+
 - **Added** `STATE_THROTTLE_INTERVAL`, which limits how often each battery's state is published to MQTT. Batteries poll about once a second, and on a small machine that stream can cost the subscriber more CPU than the broker ([#663](https://github.com/tomquist/astrameter/issues/663), [#669](https://github.com/tomquist/astrameter/pull/669)). Set it to the coarsest resolution your Home Assistant graphs can live with; `0`, the default, keeps publishing on every poll.
 
 - **Fixed** MQTT Insights sending about a third more messages than it needed to: each battery's availability was re-sent on every poll, roughly once a second, instead of only when the battery appears or goes silent ([#663](https://github.com/tomquist/astrameter/issues/663), [#668](https://github.com/tomquist/astrameter/pull/668)).

@@ -20,6 +20,9 @@ configuration:
   log_level:
     name: Log Level
     description: "Controls the verbosity of log messages. Select 'critical' for only critical errors, 'error' for error messages and above, 'warning' for warnings and above, 'info' for informational messages and above (recommended), or 'debug' for detailed debugging information. Use 'debug' for troubleshooting connection or configuration issues."
+  log_file:
+    name: Log File
+    description: "Optional. Also writes the log to this file in the add-on's configuration folder (/addon_configs/a0ef98c5_b2500_meter, e.g. 'astrameter.log'), so a long 'debug' capture can be attached to a bug report instead of the 10,000 lines the Log tab can download. The file is rotated at 20 MB with two older files kept. Leave empty to log to the Log tab only."
   custom_config:
     name: Custom Config
     description: "Optional. Name of a custom config.ini file to use instead of the UI configuration. The file must be placed in the app's configuration directory."

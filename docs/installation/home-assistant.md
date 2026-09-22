@@ -72,6 +72,23 @@ You can configure the add-on in two ways.
 - With a custom configuration file, the add-on ignores the other configuration
   options
 
+### Getting a long debug log
+
+The add-on's Log tab downloads at most 10,000 lines, about ten minutes at the
+`debug` level, which is too short for a steering problem that takes hours to
+show. To keep more, set `Log File` in the Configuration tab to a file name
+such as `astrameter.log`. The add-on then also writes its log to
+`/addon_configs/a0ef98c5_b2500_meter/<name>`, rotated at 20 MB with two older
+files kept, so it takes at most 60 MB. Set `Log Level` to `debug`, let it run
+until the problem shows, then fetch the file with the File editor or Samba
+add-on and attach it to your report. Passwords and tokens are masked in the
+file the same way they are in the Log tab. Clear the option to stop writing
+the file; nothing else is needed.
+
+The same works from a custom configuration file: `LOG_FILE = astrameter.log`
+under `[GENERAL]`. Either way the name is taken inside that folder — a path
+pointing elsewhere is refused and logged as a warning.
+
 ## 4. Start the add-on
 
 - Open the add-on's Info tab

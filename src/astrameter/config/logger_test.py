@@ -1,7 +1,10 @@
 import importlib
 import io
 import logging
+import logging.handlers
 import re
+from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -212,3 +215,104 @@ def test_redaction_covers_traceback_text() -> None:
     output = buffer.getvalue()
     assert "topsecret" not in output
     assert "mqtt://***:***@host" in output
+
+
+# ── The optional log file ────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def no_log_file() -> Iterator[None]:
+    """Leave the root logger without a file handler, whatever a test did."""
+    yield
+    logger_module.set_log_file("")
+
+
+def _log_file_handler() -> logging.handlers.RotatingFileHandler:
+    handler = logger_module.log_file_handler()
+    assert handler is not None
+    return handler
+
+
+def test_set_log_file_adds_a_rotating_file_handler(
+    tmp_path: Path, no_log_file: None
+) -> None:
+    setLogLevel("info")
+    path = tmp_path / "astrameter.log"
+
+    logger_module.set_log_file(str(path))
+
+    handler = _log_file_handler()
+    assert handler.baseFilename == str(path)
+    assert handler.maxBytes == logger_module.LOG_FILE_MAX_BYTES
+    assert handler.backupCount == logger_module.LOG_FILE_BACKUPS
+    assert handler.maxBytes > 0 and handler.backupCount > 0
+    # The console keeps logging too: the file is in addition, not instead.
+    assert any(
+        isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        for h in logging.getLogger().handlers
+    )
+
+
+def test_log_file_redacts_secrets_and_attaches_tracebacks(
+    tmp_path: Path, no_log_file: None
+) -> None:
+    """Whatever protects the console protects the file: a secret masked on
+    stdout must not land in a file that gets attached to a bug report."""
+    setLogLevel("info")
+    path = tmp_path / "astrameter.log"
+    logger_module.set_log_file(str(path))
+
+    log = logging.getLogger("astrameter.test")
+    log.info("broker mqtt://alice:s3cret@example.com PASSWORD=hunter2")
+    try:
+        raise RuntimeError("boom for mqtt://bob:topsecret@host")
+    except RuntimeError as exc:
+        log.warning("failed: %s", exc)
+
+    text = path.read_text(encoding="utf-8")
+    assert "s3cret" not in text and "hunter2" not in text
+    assert "mqtt://***:***@example.com PASSWORD=***" in text
+    assert "Traceback (most recent call last):" in text
+    assert "topsecret" not in text
+    assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO:", text, re.M)
+
+
+def test_set_log_file_is_idempotent_and_follows_the_setting(
+    tmp_path: Path, no_log_file: None
+) -> None:
+    """Run from the config-restart path, so it has to settle rather than add."""
+    setLogLevel("info")
+    first = tmp_path / "first.log"
+    second = tmp_path / "second.log"
+
+    logger_module.set_log_file(str(first))
+    opened = _log_file_handler()
+    logger_module.set_log_file(str(first))
+    assert _log_file_handler() is opened, "an unchanged path keeps the open file"
+
+    logger_module.set_log_file(str(second))
+    assert _log_file_handler().baseFilename == str(second)
+    assert (
+        sum(isinstance(h, logging.FileHandler) for h in logging.getLogger().handlers)
+        == 1
+    )
+    logging.getLogger("astrameter.test").info("after the switch")
+    assert "after the switch" in second.read_text(encoding="utf-8")
+    assert "after the switch" not in first.read_text(encoding="utf-8")
+
+    logger_module.set_log_file("")
+    assert logger_module.log_file_handler() is None
+
+
+def test_unopenable_log_file_keeps_the_console_and_says_so(
+    tmp_path: Path, no_log_file: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    setLogLevel("info")
+    missing_dir = tmp_path / "missing" / "astrameter.log"
+
+    logger_module.set_log_file(str(missing_dir))
+
+    assert logger_module.log_file_handler() is None
+    captured = capsys.readouterr()
+    assert "Cannot open log file" in captured.out + captured.err
+    assert "console only" in captured.out + captured.err

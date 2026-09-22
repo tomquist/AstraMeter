@@ -756,6 +756,33 @@ const iniNoHosts = generateConfigIni({
 });
 lacks(iniNoHosts, "DASHBOARD_ALLOWED_HOSTS", "config.ini: nothing written when no host is named");
 
+// The optional log file: written only when named, on both Python targets, and
+// never for the board, which has no disk to write it to.
+const iniLogFile = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"], logFile: " logs/astrameter.log " },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(iniLogFile, "LOG_FILE = logs/astrameter.log", "config.ini: a named log file is written, trimmed");
+lacks(iniNoHosts, "LOG_FILE", "config.ini: nothing written when no log file is named");
+const haLogFile = generateHomeAssistant({
+  target: "homeassistant",
+  general: { deviceTypes: ["ct002"], dashboardAllowWrite: true, logFile: "astrameter.log" },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(haLogFile, 'log_file: "astrameter.log"', "ha-opts: a named log file is emitted as a string");
+lacks(haDashDefault, "log_file", "ha-opts: nothing emitted when no log file is named");
+const espLogFile = generateEsphome({
+  target: "esphome",
+  general: { deviceTypes: ["ct002"], logFile: "astrameter.log" },
+  meters: [{ type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(espLogFile, "log_file", "esphome: no log file on the board");
+lacks(espLogFile, "astrameter.log", "esphome: the name does not leak into the YAML");
+
 // The board's page answers on a host name too, and its component takes the
 // same allowlist — so a name the user configures has to reach the YAML.
 const espHosts = generateEsphome({

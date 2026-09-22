@@ -342,10 +342,14 @@ class AddonAppConfig(AppConfig):
     """Settings taken from the Home Assistant add-on options."""
 
     def __init__(
-        self, options: Options, supervisor: SupervisorClient | None = None
+        self,
+        options: Options,
+        supervisor: SupervisorClient | None = None,
+        config_dir: str = ADDON_CONFIG_DIR,
     ) -> None:
         self._options = options
         self._supervisor = SupervisorClient() if supervisor is None else supervisor
+        self._config_dir = config_dir
         self._service: dict[str, Any] | None = None
         self._service_resolved = False
         self._slug: str | None = None
@@ -393,6 +397,7 @@ class AddonAppConfig(AppConfig):
                 signal=_apply_options(
                     defaults.signal, self._options, _GLOBAL_SIGNAL_FIELDS
                 ),
+                log_file=log_file_path(self._option("log_file"), self._config_dir),
             )
         )
         return _apply_options(general, self._options, _GENERAL_FIELDS)
@@ -533,6 +538,43 @@ class AddonAppConfig(AppConfig):
         return parse_float_list(str(value), key, "add-on options")
 
 
+def path_in_config_dir(name: str, config_dir: str = ADDON_CONFIG_DIR) -> str | None:
+    """*name* resolved inside the add-on's config mount, or ``None`` if it escapes.
+
+    An option that names a file is a file name inside that mount, so anything
+    resolving outside it — an absolute path, one climbing out with ``..``, a
+    symlink pointing elsewhere — is refused rather than touched somewhere
+    else on the host.
+    """
+    base = os.path.realpath(config_dir)
+    path = os.path.realpath(os.path.join(base, name.strip()))
+    if base != path and not path.startswith(base + os.sep):
+        return None
+    return path
+
+
+def log_file_path(name: object, config_dir: str = ADDON_CONFIG_DIR) -> str:
+    """Where the add-on may write its log file: *name* inside the config mount.
+
+    The same rule as ``custom_config``, in the other direction: the mount is
+    where the user can pick the file up (the File editor or Samba add-on shows
+    it under ``/addon_configs``), and it is the one place this option may
+    write to. A name resolving outside it is refused with a warning and the
+    log stays on the console; empty means no file.
+    """
+    if name is None or not str(name).strip():
+        return ""
+    path = path_in_config_dir(str(name), config_dir)
+    if path is None:
+        logger.warning(
+            "Log file '%s' resolves outside %s; not writing a log file",
+            name,
+            config_dir,
+        )
+        return ""
+    return path
+
+
 def custom_config_path(
     options: Options, config_dir: str = ADDON_CONFIG_DIR
 ) -> str | None:
@@ -545,9 +587,8 @@ def custom_config_path(
     name = get_option(options, "custom_config")
     if name is None:
         return None
-    base = os.path.realpath(config_dir)
-    path = os.path.realpath(os.path.join(base, str(name).strip()))
-    if base != path and not path.startswith(base + os.sep):
+    path = path_in_config_dir(str(name), config_dir)
+    if path is None:
         logger.warning(
             "Custom config file '%s' resolves outside %s; using the add-on "
             "configuration options instead",
@@ -578,15 +619,28 @@ class AddonIniAppConfig(IniAppConfig):
     The file decides everything except whether the web server and dashboard
     run — see :func:`_force_dashboard_on`. Without this a file that turns either
     off would leave the add-on user with a sidebar panel serving
-    ``{"error": "Not Found"}``.
+    ``{"error": "Not Found"}``. Its ``LOG_FILE`` is a name inside the config
+    mount too, like the add-on option (:func:`log_file_path`).
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._warned = False
+        self.config_dir = ADDON_CONFIG_DIR
+
+    @classmethod
+    def from_file(
+        cls, path: str, config_dir: str = ADDON_CONFIG_DIR
+    ) -> AddonIniAppConfig:
+        config = cast("AddonIniAppConfig", super().from_file(path))
+        config.config_dir = config_dir
+        return config
 
     def general(self) -> GeneralSettings:
         general = _force_dashboard_on(super().general())
+        general = replace(
+            general, log_file=log_file_path(general.log_file, self.config_dir)
+        )
         overridden = self.declared_general_keys("enable_web_server", "dashboard")
         if overridden and not self._warned:
             self._warned = True
@@ -614,8 +668,8 @@ def load_config(
     """
     path = custom_config_path(options, config_dir)
     if path is None:
-        return AddonAppConfig(options, supervisor)
+        return AddonAppConfig(options, supervisor, config_dir)
 
     logger.info("Using custom config file: %s", path)
     _warn_ignored_options(options)
-    return AddonIniAppConfig.from_file(path)
+    return AddonIniAppConfig.from_file(path, config_dir)

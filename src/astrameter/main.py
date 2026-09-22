@@ -15,7 +15,7 @@ from astrameter.cloud_reporting import (
 from astrameter.config import addon
 from astrameter.config.config_loader import ClientFilter
 from astrameter.config.ini_config import IniAppConfig
-from astrameter.config.logger import logger, setLogLevel
+from astrameter.config.logger import logger, set_log_file, setLogLevel
 from astrameter.config.settings import (
     CT_DEVICE_TYPES,
     DEVICE_TYPES,
@@ -736,6 +736,9 @@ def _adopt_config(
     # start-up, so changing it here would disagree with the route table.
     registry.allow_write = general.dashboard_allow_write
     registry.direct_access = general.dashboard_direct_access
+    # The log file is a setting too, so editing LOG_FILE in the dashboard and
+    # restarting from it starts (or stops) the file like any other change.
+    set_log_file(general.log_file)
     if web_server is not None:
         web_server.allowed_hosts = parse_allowed_hosts(general.dashboard_allowed_hosts)
     registry.config_mode = detect_config_mode(addon=args.addon, config_path=config.path)

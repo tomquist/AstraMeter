@@ -88,6 +88,9 @@ function generalSection(state: State): string {
   if (!isBlank(g.throttleInterval)) lines.push(`THROTTLE_INTERVAL = ${g.throttleInterval}`);
   if (!isBlank(g.waitForNextMessage)) lines.push(`WAIT_FOR_NEXT_MESSAGE = ${g.waitForNextMessage}`);
   if (!isBlank(g.dedupeTimeWindow)) lines.push(`DEDUPE_TIME_WINDOW = ${g.dedupeTimeWindow}`);
+  // Only when named: the console is the default, and the file is a debugging
+  // aid rather than a knob every install turns.
+  if (!isBlank(g.logFile)) lines.push(`LOG_FILE = ${String(g.logFile).trim()}`);
   return lines.join("\n");
 }
 
@@ -745,6 +748,7 @@ const QUOTED_OPTION_KEYS = new Set([
   "marstek_password",
   "mqtt_uri",
   "cloud_reporting_host",
+  "log_file",
 ]);
 
 function quoteYaml(s: string): string {
@@ -802,6 +806,9 @@ export function generateHomeAssistant(state: State): string {
   // Only meaningful alongside that port, but harmless on its own, so it is
   // emitted whenever the user named a host rather than gated on it.
   add("dashboard_allowed_hosts", g.dashboardAllowedHosts);
+  // A file name inside the add-on's /config folder; the add-on refuses
+  // anything resolving outside it, so only the name is worth emitting.
+  add("log_file", g.logFile);
 
   // CT identity / control-mode / efficiency / DC keep-alive options.
   const ctf = (state.ct && state.ct.fields) || {};

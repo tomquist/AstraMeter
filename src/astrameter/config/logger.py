@@ -1,9 +1,19 @@
 import logging
+import os
 import re
 import sys
+from logging.handlers import RotatingFileHandler
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s:%(name)s:%(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+# Size the optional log file so a DEBUG run lasts long enough to catch a
+# steering problem — issue #655's reporter got ten minutes out of the add-on
+# UI's 10,000-line download — without eating a small host's disk: at DEBUG
+# a line is ~150 bytes and there are ~15 a second, so one file holds a good
+# two hours and the set about a working day.
+LOG_FILE_MAX_BYTES = 20 * 1024 * 1024
+LOG_FILE_BACKUPS = 2
 
 # Patterns for credentials that must never reach the log, regardless of how the
 # app is launched (Home Assistant add-on, plain Docker, CLI, ...). Redaction
@@ -118,6 +128,67 @@ def _install_auto_exc_info_filter() -> None:
     for handler in logging.getLogger().handlers:
         if not any(isinstance(f, _AutoExcInfoFilter) for f in handler.filters):
             handler.addFilter(_AutoExcInfoFilter())
+
+
+class _LogFileHandler(RotatingFileHandler):
+    """The file handler :func:`set_log_file` owns, told apart from any other."""
+
+
+def log_file_handler() -> RotatingFileHandler | None:
+    """The file the root logger currently also writes to, if any."""
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, _LogFileHandler):
+            return handler
+    return None
+
+
+def set_log_file(path: str) -> None:
+    """Also write the log to *path*; an empty *path* stops doing so.
+
+    Called after :func:`setLogLevel` at start-up and again on every config
+    restart with whatever ``LOG_FILE`` now says, so it settles the root logger
+    rather than adding to it: an unchanged path keeps the open file, a new one
+    replaces it, and an empty one takes the file handler away. The file takes
+    the same redacting formatter and auto-exc-info filter as the console, so
+    nothing masked on stdout reaches the file unmasked. A file that cannot be
+    opened is reported and the log stays on the console — a bad path must not
+    take the service down.
+    """
+    root = logging.getLogger()
+    path = path.strip()
+    current = log_file_handler()
+    if current is not None:
+        if path and current.baseFilename == os.path.abspath(path):
+            return
+        root.removeHandler(current)
+        current.close()
+        logger.info("Stopped logging to %s", current.baseFilename)
+    if not path:
+        return
+    try:
+        handler = _LogFileHandler(
+            path,
+            maxBytes=LOG_FILE_MAX_BYTES,
+            backupCount=LOG_FILE_BACKUPS,
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.error(
+            "Cannot open log file %s (%s); logging to the console only",
+            path,
+            exc,
+            exc_info=False,
+        )
+        return
+    root.addHandler(handler)
+    _install_redacting_formatter()
+    _install_auto_exc_info_filter()
+    logger.info(
+        "Also logging to %s (rotated at %d MB, %d older files kept)",
+        handler.baseFilename,
+        LOG_FILE_MAX_BYTES // (1024 * 1024),
+        LOG_FILE_BACKUPS,
+    )
 
 
 logger = logging.getLogger("astrameter")

@@ -43,6 +43,9 @@ export interface State {
     /// name that resolves through a nameserver is refused unless listed here
     /// so no other site can aim a browser at this port.
     dashboardAllowedHosts: string;
+    /// Also write the log to this file, rotated at a fixed size. Empty for
+    /// the console only. No ESPHome counterpart: the board has no disk.
+    logFile: string;
     webServerPort: string;
     throttleInterval: string;
     waitForNextMessage: string;
@@ -83,6 +86,7 @@ export function defaultState(): State {
       // Unauthenticated access to the add-on's port. Off unless asked for.
       dashboardDirectAccess: false,
       dashboardAllowedHosts: "",
+      logFile: "",
       webServerPort: "",
       throttleInterval: "",
       waitForNextMessage: "",
@@ -193,6 +197,7 @@ export function migrate(s: any): State {
         dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
         dashboardDirectAccess: asBool(sg.dashboardDirectAccess, dg.dashboardDirectAccess),
         dashboardAllowedHosts: asStr(sg.dashboardAllowedHosts, dg.dashboardAllowedHosts),
+        logFile: asStr(sg.logFile, dg.logFile),
         webServerPort: asStr(sg.webServerPort, dg.webServerPort),
         throttleInterval: asStr(sg.throttleInterval, dg.throttleInterval),
         waitForNextMessage: asStr(sg.waitForNextMessage, dg.waitForNextMessage),

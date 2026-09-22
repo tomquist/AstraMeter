@@ -254,6 +254,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "DASHBOARD_ALLOW_WRITE": {"type": "boolean"},
         "DASHBOARD_DIRECT_ACCESS": {"type": "boolean"},
         "DASHBOARD_ALLOWED_HOSTS": {"type": "string"},
+        "LOG_FILE": {"type": "string"},
         "ENABLE_WEB_SERVER": {"type": "boolean"},
         "WEB_SERVER_PORT": {"type": "integer"},
         "THROTTLE_INTERVAL": {"type": "float"},

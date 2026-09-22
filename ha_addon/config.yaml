@@ -89,6 +89,7 @@ schema:
   concentrate_deadband: float(0,)?
   import_trim_w: float(0,)?
   log_level: list(critical|error|warning|info|debug)
+  log_file: str?
   power_offset: str?
   power_multiplier: str?
   dedupe_time_window: float(0,)?

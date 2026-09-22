@@ -42,6 +42,7 @@ HANDLED_IN_CODE = {
     "mqtt_uri",  # -> MqttInsightsConfig, instead of HA's own broker
     "custom_config",  # -> hands over to the config-file backend entirely
     "log_level",  # -> read in main() before the logger is configured
+    "log_file",  # -> GeneralSettings.log_file, resolved inside the config mount
 }
 
 

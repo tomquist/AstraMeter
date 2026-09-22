@@ -11,8 +11,8 @@ changes these values and fails here.
 Regenerating the fixture is only correct when an option is *meant* to change
 meaning, and that is a user-visible change.
 
-Options newer than the add-on 2.x — the ``dashboard_*`` ones — have no run.sh
-behaviour to record. They are carried here anyway, each set to something other
+Options newer than the add-on 2.x — the ``dashboard_*`` ones and ``log_file`` —
+have no run.sh behaviour to record. They are carried here anyway, each set to something other
 than its default, so the same assertion still fails if one stops reaching its
 field. ``GeneralSettings.dashboard`` is pinned too even though no option feeds
 it: in the add-on the dashboard is always on, and that is the assertion.

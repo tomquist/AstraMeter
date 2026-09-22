@@ -25,6 +25,9 @@ environment the same across platforms.
    Set the `LOG_LEVEL` environment variable to control how much the container
    logs: add `LOG_LEVEL=debug` under the service's `environment:` in
    `docker-compose.yaml`. If you don't set it, the container uses `info`.
+   To keep a long `debug` log for a bug report, add `LOG_FILE = astrameter.log`
+   under `[GENERAL]` in `config.ini`; the file lands next to the config file
+   in the mounted folder, rotated at 20 MB with two older files kept.
 
 > **Note:** Host network mode is required because Marstek devices use UDP
 > broadcasts to discover devices. Without host networking, the container can't

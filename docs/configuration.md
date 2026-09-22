@@ -59,7 +59,24 @@ THROTTLE_INTERVAL = 0
 # fall to a whole fraction of its own poll rate (half, a third, ...) — the value
 # is honoured exactly, but its effect changes in steps, not smoothly.
 #DEDUPE_TIME_WINDOW = 0
+# Also write the log to this file, on top of the console. Rotated at 20 MB
+# with two older files kept, so it never grows past 60 MB. A relative path is
+# taken from the working directory; in the Home Assistant add-on it is a name
+# inside the add-on's /config folder. Unset, the log goes to the console only.
+#LOG_FILE = astrameter.log
 ```
+
+### Keeping a long debug log
+
+The console shows what is happening now, but a steering problem can take
+hours to show up, and the add-on's Log tab hands out at most 10,000 lines,
+about ten minutes at `debug`. Set `LOG_FILE` and the same log, with the same
+credentials masked, also goes to that file, rotated at 20 MB with two older
+files kept. Run at `debug` (`LOG_LEVEL=debug` in Docker, the `Log Level`
+option in the add-on, `--loglevel debug` on the command line) until the
+problem shows, then attach the file to your report. In the add-on the file
+lives in `/addon_configs/a0ef98c5_b2500_meter/`, next to a custom config file;
+see [the add-on guide](installation/home-assistant.md#getting-a-long-debug-log).
 
 ### Per-powermeter options
 

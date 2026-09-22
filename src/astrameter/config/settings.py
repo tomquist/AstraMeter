@@ -133,6 +133,11 @@ class GeneralSettings:
     #: is the one thing an outside site can point at this port, so unlike IPs,
     #: ``localhost`` and ``.local`` it must be listed (``is_allowed_host``).
     dashboard_allowed_hosts: str = ""
+    #: Also write the log to this file, rotated at a fixed size with a couple
+    #: of backups (``config.logger``); empty keeps it on the console only.
+    #: Under the add-on it is a name inside the ``/config`` mount, so the file
+    #: can be fetched without shell access to the host.
+    log_file: str = ""
     #: Conditioning every power source starts from; a source may override it.
     signal: SignalSettings = SignalSettings()
 

@@ -583,3 +583,52 @@ def test_supervisor_token_defaults_to_the_environment(
 ) -> None:
     monkeypatch.setenv("SUPERVISOR_TOKEN", "from-env")
     assert addon.SupervisorClient().token == "from-env"
+
+
+def test_log_file_option_lands_inside_the_config_mount(tmp_path: Path) -> None:
+    """The option is a name; the add-on decides the folder, so the user can
+    fetch the file from ``/addon_configs`` without shell access."""
+    cfg = addon.AddonAppConfig(
+        {**BASE_OPTIONS, "log_file": " astrameter.log "},
+        FakeSupervisor(),
+        config_dir=str(tmp_path),
+    )
+    assert cfg.general().log_file == str(tmp_path / "astrameter.log")
+
+
+def test_no_log_file_option_means_no_log_file(tmp_path: Path) -> None:
+    cfg = addon.AddonAppConfig(
+        {**BASE_OPTIONS, "log_file": ""}, FakeSupervisor(), config_dir=str(tmp_path)
+    )
+    assert cfg.general().log_file == ""
+    assert config(BASE_OPTIONS).general().log_file == ""
+
+
+@pytest.mark.parametrize(
+    "name", ["/var/log/astrameter.log", "../astrameter.log", "logs/../../out.log"]
+)
+def test_log_file_cannot_escape_the_addon_config_mount(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    cfg = addon.AddonAppConfig(
+        {**BASE_OPTIONS, "log_file": name}, FakeSupervisor(), config_dir=str(config_dir)
+    )
+    with caplog.at_level("WARNING"):
+        general = cfg.general()
+    # Refused, so the log stays on the console.
+    assert general.log_file == ""
+    assert "outside" in caplog.text
+    assert name in caplog.text
+
+
+def test_custom_config_log_file_is_held_to_the_config_mount_too(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    general = _custom(tmp_path, caplog, "[GENERAL]\nLOG_FILE = debug/astra.log\n")
+    assert general.log_file == str(tmp_path / "debug" / "astra.log")
+
+    general = _custom(tmp_path, caplog, "[GENERAL]\nLOG_FILE = /tmp/astra.log\n")
+    assert general.log_file == ""
+    assert "outside" in caplog.text

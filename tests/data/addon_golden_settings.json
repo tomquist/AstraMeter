@@ -52,6 +52,7 @@
       "ct002"
     ],
     "enable_web_server": true,
+    "log_file": "/config/astrameter.log",
     "signal": {
       "deadband": 0.0,
       "hampel_min_threshold": 0.0,
@@ -127,6 +128,7 @@
     "hampel_n_sigma": 2.5,
     "hampel_window": 9,
     "import_trim_w": 17,
+    "log_file": "astrameter.log",
     "log_level": "debug",
     "marstek_auto_register_ct_device": true,
     "marstek_mailbox": "user@example.com",

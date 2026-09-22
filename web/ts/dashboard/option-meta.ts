@@ -636,6 +636,16 @@ export const OPTION_META: Record<string, OptionMeta> = {
     group: ADDON,
     help: "How much the add-on writes to its log. debug while chasing a problem.",
   },
+  log_file: {
+    label: "Log file",
+    group: ADDON,
+    placeholder: "log tab only",
+    help:
+      "Also writes the log to this file in the add-on's /config folder " +
+      "(/addon_configs/… in the File editor), rotated at 20 MB with two " +
+      "older files kept — a debug capture that outlasts the 10,000 lines " +
+      "the Log tab can download, ready to attach to a bug report.",
+  },
   mqtt_uri: {
     label: "MQTT broker URL",
     group: ADDON,

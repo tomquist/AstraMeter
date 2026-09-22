@@ -350,6 +350,10 @@ function deviceCard(): HTMLElement {
         fieldControl({ key: "throttleInterval", label: "Global throttle interval (s)", help: "Minimum seconds between readings for every meter. 0 = off. You can override per meter below.", type: "number", placeholder: "0" }, g, {}),
         fieldControl({ key: "waitForNextMessage", label: "Wait for fresh push (global)", help: "Wait up to 2s for the newest reading from push-based meters.", type: "select", options: [{ value: "", label: "Default (on)" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] }, g, {}),
         fieldControl({ key: "dedupeTimeWindow", label: "Dedupe window (s)", help: "Ignore repeated requests from the same client within this window. 0 = off.", type: "number", placeholder: "0" }, g, {}),
+        // A file is how a long debug capture gets attached to a bug report;
+        // the add-on's Log tab stops at 10,000 lines. An ESP32 has no disk,
+        // and this card is not rendered for that target.
+        fieldControl({ key: "logFile", label: "Log file", help: state.target === "homeassistant" ? "Also write the log to this file in the add-on's /config folder (rotated at 20 MB, two older files kept). Leave empty to log to the Log tab only." : "Also write the log to this file, rotated at 20 MB with two older files kept. A relative path is taken from the working directory. Leave empty for the console only.", type: "text", placeholder: "astrameter.log" }, g, {}),
       ]),
     ]),
   ]);
