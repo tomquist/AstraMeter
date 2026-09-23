@@ -512,6 +512,55 @@ def _scenario_import_trim() -> list[str]:
     return lines
 
 
+def _scenario_power_ceilings() -> list[str]:
+    """Two batteries capped at 800 W next to an uncapped one (issue #655).
+
+    The capped pair holds flat while pushed until both stacks learn their
+    ceiling; the third keeps ramping, and the tracking share and the
+    water-filled balance target must then agree poll for poll.  A charge swing
+    exercises the other direction, and one capped unit finally exceeds its
+    ceiling so both stacks drop it.
+    """
+    lines = ["cfg 1 0 900 0.4 0.15 20 90 0", "clock 3000"]
+    big = 700
+    for step in range(14):
+        grid = 1500 - 60 * step
+        pool = [
+            _report("a", "A", 800, "VNSE3"),
+            _report("b", "A", 800, "VNSE3"),
+            _report("c", "A", big, "VNSE3"),
+        ]
+        for cid in ("a", "b", "c"):
+            lines.append(_target(cid, pool, grid=grid))
+            lines.append(f"last {cid}")
+        lines.append("advance 1")
+        big += 60
+    for step in range(4):
+        pool = [
+            _report("a", "A", 600 - 150 * step, "VNSE3"),
+            _report("b", "A", 800, "VNSE3"),
+            _report("c", "A", 1200, "VNSE3"),
+        ]
+        for cid in ("a", "b", "c"):
+            lines.append(_target(cid, pool, grid=-400))
+        lines.append("advance 1")
+    pool = [
+        _report("a", "A", 900, "VNSE3"),
+        _report("b", "A", 800, "VNSE3"),
+        _report("c", "A", 1500, "VNSE3"),
+    ]
+    for _ in range(3):
+        for cid in ("a", "b", "c"):
+            lines.append(_target(cid, pool, grid=300))
+        lines.append("advance 1")
+    return lines
+
+
+def test_parity_power_ceilings(harness: Path) -> None:
+    lines = _scenario_power_ceilings()
+    _compare("power_ceilings", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
 def test_parity_import_trim(harness: Path) -> None:
     lines = _scenario_import_trim()
     _compare("import_trim", lines, _run_cpp(harness, lines), _run_py(lines))

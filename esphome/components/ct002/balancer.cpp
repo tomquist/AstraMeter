@@ -133,13 +133,14 @@ std::string format_steer_log(const SteerLog &entry) {
   std::snprintf(buf, sizeof(buf),
                 "CT002 steer %s: mode=%s rotation=%s weight=%.2f grid=%s ctrl=%s "
                 "share=%s reported=%s intent=%s send=%s unpaced=%s pace_cap=%s "
-                "sat=%.2f",
+                "sat=%.2f ceil=%s/%s",
                 entry.consumer_id.c_str(), entry.mode.c_str(), entry.rotation.c_str(),
                 static_cast<double>(entry.weight), num(entry.grid).c_str(),
                 num(entry.control_grid).c_str(), num(entry.fair_share).c_str(),
                 num(entry.reported).c_str(), num(entry.intent).c_str(),
                 num(entry.send).c_str(), num(entry.unpaced).c_str(),
-                num(entry.pace_cap).c_str(), entry.saturation);
+                num(entry.pace_cap).c_str(), entry.saturation,
+                num(entry.ceiling_discharge).c_str(), num(entry.ceiling_charge).c_str());
   return std::string(buf);
 }
 
@@ -582,6 +583,11 @@ static inline const std::string &key_of(const std::string *s) { return *s; }
 static inline const std::string &key_of(const std::pair<const std::string, ConsumerReport> &p) {
   return p.first;
 }
+static inline const std::string &key_of(const std::pair<const std::string, float> &p) {
+  return p.first;
+}
+
+static inline int sign_of(float value) { return value > 0.0f ? 1 : (value < 0.0f ? -1 : 0); }
 
 // *total* split across *ids* in proportion to *weights*, falling back to an even
 // split when the weights sum to zero, so a pool whose every member is saturated
@@ -601,6 +607,50 @@ static float weighted_share(float total, const std::unordered_map<std::string, f
     if (it != weights.end()) mine = it->second;
   }
   return total * mine / total_weight;
+}
+
+// weighted_share, water-filled against per-consumer ceilings: a consumer whose
+// share would pass its ceiling (a magnitude in *total*'s direction; absent or 0
+// = unlimited) is fixed there and the rest of *total* is split among the
+// others, until nobody is over (issue #655). Mirrors balancer.py
+// capped_weighted_share.
+template<typename Ids>
+static float capped_weighted_share(float total,
+                                   const std::unordered_map<std::string, float> &weights,
+                                   const Ids &ids,
+                                   const std::unordered_map<std::string, float> &ceilings,
+                                   const std::string *consumer_id) {
+  const int sign = sign_of(total);
+  std::vector<std::string> free;
+  for (const auto &cid : ids) free.push_back(key_of(cid));
+  float remaining = total;
+  auto ceiling_of = [&](const std::string &cid) {
+    auto it = ceilings.find(cid);
+    return it != ceilings.end() ? it->second : 0.0f;
+  };
+  while (sign != 0 && !free.empty()) {
+    std::unordered_set<std::string> over;
+    for (const auto &cid : free) {
+      const float ceiling = ceiling_of(cid);
+      if (ceiling > 0.0f &&
+          ceiling < weighted_share(remaining, weights, free, free.size(), &cid) *
+                        static_cast<float>(sign))
+        over.insert(cid);
+    }
+    if (over.empty()) break;
+    if (consumer_id != nullptr && over.count(*consumer_id))
+      return ceiling_of(*consumer_id) * static_cast<float>(sign);
+    std::vector<std::string> rest;
+    for (const auto &cid : free) {
+      if (over.count(cid)) {
+        remaining -= ceiling_of(cid) * static_cast<float>(sign);
+      } else {
+        rest.push_back(cid);
+      }
+    }
+    free = std::move(rest);
+  }
+  return weighted_share(remaining, weights, free, free.size(), consumer_id);
 }
 
 float LoadBalancer::compute_desired_contribution_(
@@ -831,6 +881,10 @@ void LoadBalancer::log_steer_(const std::optional<std::string> &consumer_id,
     entry.unpaced = state_it->second.last_intent_reading;
     entry.pace_cap = state_it->second.pace_cap;
     entry.saturation = state_it->second.saturation_score;
+    if (state_it->second.ceiling_discharge > 0.0f)
+      entry.ceiling_discharge = state_it->second.ceiling_discharge;
+    if (state_it->second.ceiling_charge > 0.0f)
+      entry.ceiling_charge = state_it->second.ceiling_charge;
   }
   this->steer_log_sink_(format_steer_log(entry));
 }
@@ -861,6 +915,83 @@ void LoadBalancer::track_saturation_(const std::string &consumer_id,
       saturation_floor(state, report, this->effective_min_dc_output_(consumer_id, reports)));
 }
 
+// Learn, confirm or drop this consumer's output ceilings, judged on
+// last_target — the reading actually put on the wire last poll, which pacing
+// can hold far below the unpaced intent. Skipped for the same consumers as
+// track_saturation_. Mirrors balancer.py _track_ceiling (whose INFO lines on
+// learning and dropping a ceiling have no firmware counterpart; the steer
+// line's ceil= field carries the same facts).
+void LoadBalancer::track_ceiling_(const std::string &consumer_id, BalancerConsumerState &state,
+                                  ConsumerMode mode, ReportMap &reports) {
+  if (reports.find(consumer_id) == reports.end() || mode.kind == ConsumerModeKind::MANUAL)
+    return;
+  const auto probe_set = this->probe_participants_();
+  if (probe_set.find(consumer_id) != probe_set.end() ||
+      this->deprioritized_.find(consumer_id) != this->deprioritized_.end())
+    return;
+  const double now = this->clock_();
+  const float power = reports[consumer_id].power;
+  if (state.ceiling_discharge > 0.0f &&
+      (power > state.ceiling_discharge + CEILING_RELEASE_W ||
+       now - state.ceiling_discharge_seen > CEILING_TTL_SECONDS)) {
+    state.ceiling_discharge = 0.0f;
+    state.ceiling_discharge_seen = now;
+  }
+  if (state.ceiling_charge > 0.0f &&
+      (-power > state.ceiling_charge + CEILING_RELEASE_W ||
+       now - state.ceiling_charge_seen > CEILING_TTL_SECONDS)) {
+    state.ceiling_charge = 0.0f;
+    state.ceiling_charge_seen = now;
+  }
+
+  const int sign = sign_of(power);
+  const bool pushed = sign != 0 && std::fabs(power) >= CEILING_MIN_POWER_W &&
+                      state.last_target.has_value() &&
+                      *state.last_target * static_cast<float>(sign) >= CEILING_PUSH_W;
+  if (!pushed || state.ceiling_run_polls == 0 ||
+      std::fabs(power - state.ceiling_run_anchor) > CEILING_FLAT_W) {
+    state.ceiling_run_anchor = power;
+    state.ceiling_run_since = now;
+    state.ceiling_run_polls = pushed ? 1 : 0;
+    return;
+  }
+  state.ceiling_run_polls += 1;
+  if (state.ceiling_run_polls >= CEILING_STALL_POLLS &&
+      now - state.ceiling_run_since >= CEILING_STALL_SECONDS) {
+    if (sign > 0) {
+      state.ceiling_discharge = std::fabs(power);
+      state.ceiling_discharge_seen = now;
+    } else {
+      state.ceiling_charge = std::fabs(power);
+      state.ceiling_charge_seen = now;
+    }
+  }
+}
+
+template<typename Ids>
+std::unordered_map<std::string, float> LoadBalancer::ceilings_(const Ids &ids, int sign) const {
+  std::unordered_map<std::string, float> out;
+  for (const auto &id : ids) {
+    const std::string &cid = key_of(id);
+    auto it = this->consumers_.find(cid);
+    const float ceiling = it != this->consumers_.end() ? it->second.ceiling(sign) : 0.0f;
+    if (ceiling > 0.0f) out[cid] = ceiling;
+  }
+  return out;
+}
+
+std::unordered_set<std::string> LoadBalancer::pinned_(
+    const ReportMap &reports, const std::unordered_map<std::string, float> &ids,
+    int sign) const {
+  std::unordered_set<std::string> out;
+  for (const auto &kv : this->ceilings_(ids, sign)) {
+    auto it = reports.find(kv.first);
+    const float power = it != reports.end() ? it->second.power : 0.0f;
+    if (power * static_cast<float>(sign) >= kv.second - CEILING_AT_MARGIN_W) out.insert(kv.first);
+  }
+  return out;
+}
+
 std::array<float, 3> LoadBalancer::compute_target(
     const std::optional<std::string> &consumer_id, ConsumerMode mode,
     const ReportMap &all_reports, float grid_total,
@@ -886,6 +1017,7 @@ std::array<float, 3> LoadBalancer::compute_target(
   if (consumer_id) {
     state = &this->get_consumer_(*consumer_id);
     this->track_saturation_(*consumer_id, *state, mode, active_reports);
+    this->track_ceiling_(*consumer_id, *state, mode, active_reports);
   }
 
   if (mode.kind == ConsumerModeKind::MANUAL && consumer_id && state) {
@@ -1071,9 +1203,12 @@ float LoadBalancer::residual_share_(const std::optional<std::string> &consumer_i
                                     const ReportMap &reports, float control_grid,
                                     const std::unordered_map<std::string, float> &eff_part,
                                     const std::unordered_set<std::string> &charge_blind) {
-  float fair_share = fair_share_(consumer_id, reports, control_grid, eff_part);
-  const auto concentrated =
-      this->concentrated_share_(consumer_id, reports, control_grid, eff_part, charge_blind);
+  // Batteries already at their ceiling in the direction the grid asks for
+  // cannot take a slice of it (issue #655).
+  const auto pinned = this->pinned_(reports, eff_part, sign_of(control_grid));
+  float fair_share = fair_share_(consumer_id, reports, control_grid, eff_part, pinned);
+  const auto concentrated = this->concentrated_share_(consumer_id, reports, control_grid,
+                                                      eff_part, charge_blind, pinned);
   if (concentrated) fair_share = *concentrated;
   this->diag_fair_share_ = fair_share;
 
@@ -1297,7 +1432,8 @@ std::array<float, 3> LoadBalancer::fading_target_(
 
 float LoadBalancer::fair_share_(const std::optional<std::string> &consumer_id,
                                 const ReportMap &reports, float control_grid,
-                                const std::unordered_map<std::string, float> &eff_part) {
+                                const std::unordered_map<std::string, float> &eff_part,
+                                const std::unordered_set<std::string> &pinned) {
   // Fold the per-battery user weight into the effectiveness map so the
   // fair-share split honours the configured ratio. `eff_part` stays the pure
   // health/saturation map (used for participation/probing); the weighted
@@ -1315,6 +1451,15 @@ float LoadBalancer::fair_share_(const std::optional<std::string> &consumer_id,
   const size_t num_consumers = std::max<size_t>(1, reports.size());
   if (consumer_id && reports.count(*consumer_id) && total_effective > 0.0f) {
     const float w = share_part.count(*consumer_id) ? share_part[*consumer_id] : 1.0f;
+    // A pinned battery cannot act on a slice, so the others split the whole
+    // error; it keeps its nominal slice as the push that confirms its ceiling
+    // (or exposes one since raised). See balancer.py _fair_share.
+    float free_total = 0.0f;
+    for (const auto &kv : share_part) {
+      if (!pinned.count(kv.first)) free_total += kv.second;
+    }
+    if (!pinned.count(*consumer_id) && free_total > 0.0f)
+      return (control_grid / free_total) * w;
     return (control_grid / total_effective) * w;
   }
   return control_grid / num_consumers;
@@ -1323,7 +1468,8 @@ float LoadBalancer::fair_share_(const std::optional<std::string> &consumer_id,
 std::optional<float> LoadBalancer::concentrated_share_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
     float control_grid, const std::unordered_map<std::string, float> &eff_part,
-    const std::unordered_set<std::string> &charge_blind) {
+    const std::unordered_set<std::string> &charge_blind,
+    const std::unordered_set<std::string> &pinned) {
   // Deadband concentration (concentrate_deadband): a small grid error split N
   // ways can drop each battery's share below the firmware's ~20 W input
   // deadband, so none move and the pool tolerates ~N* the offset. Hand the whole
@@ -1344,6 +1490,8 @@ std::optional<float> LoadBalancer::concentrated_share_(
     bool have_first = false;
     for (const auto &kv : reports) {
       if (charge_blind.count(kv.first)) continue;
+      // Pinned at its ceiling: often the most active, and cannot act on it.
+      if (pinned.count(kv.first)) continue;
       auto ep = eff_part.find(kv.first);
       if (ep == eff_part.end() || ep->second <= 0.1f) continue;
       if (kv.second.weight <= 0.0f) continue;  // explicit zero share takes none
@@ -1619,9 +1767,10 @@ bool LoadBalancer::concentration_pool_balanced_(const ReportMap &reports,
     actual_total += rep.power;
     weights[*cid] = rep.weight;
   }
+  const auto ceilings = this->ceilings_(conc_ids, sign_of(actual_total));
   for (const auto *cid : conc_ids) {
     const float target_share =
-        weighted_share(actual_total, weights, conc_ids, conc_ids.size(), cid);
+        capped_weighted_share(actual_total, weights, conc_ids, ceilings, cid);
     if (std::fabs(target_share - reports.at(*cid).power) >= deadband) return false;
   }
   return true;
@@ -1655,8 +1804,12 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
     auto it = reports.find(cid);
     weights[cid] = (it != reports.end()) ? it->second.weight : 1.0f;
   }
-  const float target_share =
-      weighted_share(actual_total, weights, participating, participating.size(), &consumer_id);
+  // A battery's share stops at its learned ceiling and the rest goes to the
+  // others, so an unlimited battery is not pulled down toward limited ones
+  // (issue #655).
+  const float target_share = capped_weighted_share(
+      actual_total, weights, participating,
+      this->ceilings_(participating, sign_of(actual_total)), &consumer_id);
   const float error = target_share - actual_self;
   const float err_abs = std::fabs(error);
   if (cfg.balance_deadband > 0.0f && err_abs < cfg.balance_deadband) return fair_share;
