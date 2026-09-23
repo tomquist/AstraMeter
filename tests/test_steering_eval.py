@@ -277,11 +277,9 @@ def test_scenario_registry_shape() -> None:
             for b in scenarios[f"mixed_power_limits/{mode}"].batteries
         ]
         assert sorted(limits) == [800, 800, 2500]
-    # Its /eff floor leaves a single battery at base load, unlike the default.
-    assert (
-        scenarios["mixed_power_limits/eff"].ct_kwargs["min_efficient_power"]
-        > scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"]
-    )
+    # Its /eff floor is the reporter's 400 W, which leaves a single battery at
+    # base load, unlike the default.
+    assert scenarios["mixed_power_limits/eff"].ct_kwargs["min_efficient_power"] == 400.0
     for sc in scenarios.values():
         assert sc.duration_s > 0 and sc.batteries
 
