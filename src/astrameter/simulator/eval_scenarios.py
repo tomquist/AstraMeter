@@ -51,6 +51,11 @@ _B2500_PAIR = BatterySpec(
     initial_soc=0.8,
 )
 
+# A Venus whose discharge is capped at 800 W in the Marstek app (a plug-in
+# solar limit) beside an uncapped 2500 W unit: the fleet in issue #655.
+_VENUS_800 = BatterySpec(phase="B", max_discharge_power=800)
+_VENUS_2500 = BatterySpec(phase="A")
+
 # Efficiency-optimization mode knobs (mirrors a typical multi-battery setup).
 _EFF_MODE: dict[str, float] = {
     "min_efficient_power": 150.0,
@@ -154,6 +159,33 @@ def _household_steps(rng: random.Random, duration: float) -> list[Event]:
     # Dishwasher: one long block in the second half.
     load_event(duration * 0.8, "dishwasher", True)
     load_event(duration * 0.8 + 600.0, "dishwasher", False)
+    return events
+
+
+def _hob_sessions(rng: random.Random, duration: float) -> list[Event]:
+    """Two cooking sessions on a hob that cycles its element (~45 s on, ~30 s
+    off), each lasting about ten minutes: a load well above what the two
+    800 W units can cover together, switching often enough that which battery
+    is already running when it steps up decides how fast the pool follows."""
+    events: list[Event] = []
+    for start_frac in (0.2, 0.65):
+        t = duration * start_frac + rng.uniform(-30.0, 30.0)
+        end = t + 600.0
+        while t + 45.0 < end:
+            on = rng.uniform(35.0, 55.0)
+            events.append(
+                Event(
+                    at=t, label="hob_on", apply=_bind(EvalWorld.set_load, "hob", True)
+                )
+            )
+            events.append(
+                Event(
+                    at=t + on,
+                    label="hob_off",
+                    apply=_bind(EvalWorld.set_load, "hob", False),
+                )
+            )
+            t += on + rng.uniform(20.0, 40.0)
     return events
 
 
@@ -762,6 +794,26 @@ def build_scenarios() -> dict[str, Scenario]:
         build_events=lambda rng: (
             _household_steps(rng, dur_mixed)
             + _solar_day(dur_mixed, 700.0, dc_battery=2)
+        ),
+    )
+    # Issue #655: two batteries capped at 800 W beside an uncapped 2500 W one.
+    # Once the capped pair saturates, an even split still hands them shares
+    # they cannot deliver and pulls the big unit toward the pool average, so
+    # the grid imports while the big unit has headroom (avoidable_import_wh).
+    # /eff uses the reporter's 400 W floor, so the ~300 W base load leaves one
+    # battery holding the single low-demand slot. The capped units are listed
+    # first, so the rotation starts with one of them in it and the big unit
+    # parked when the first hob session begins.
+    add_modes(
+        "mixed_power_limits",
+        "One 2500 W Venus + two Venus capped at 800 W discharge, household "
+        "load + a cycling 3 kW hob (issue #655)",
+        eff={**_EFF_MODE, "min_efficient_power": 400.0},
+        batteries=[_VENUS_800, _VENUS_800, _VENUS_2500],
+        duration_s=dur_steps,
+        loads=[*_HOUSEHOLD_LOADS, Load("hob", 3000.0, "A")],
+        build_events=lambda rng: (
+            _household_steps(rng, dur_steps) + _hob_sessions(rng, dur_steps)
         ),
     )
     add_modes(

@@ -269,6 +269,19 @@ def test_scenario_registry_shape() -> None:
     assert "venus_d_plus_c/eff" in scenarios
     assert scenarios["single_venus_d_steps"].batteries[0].device_type == "VNSD-0"
     assert scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"] > 0
+    # Mixed power limits (issue #655): an uncapped unit beside two capped at
+    # 800 W, so a cap binds while another battery still has headroom.
+    for mode in ("fair", "eff"):
+        limits = [
+            b.max_discharge_power
+            for b in scenarios[f"mixed_power_limits/{mode}"].batteries
+        ]
+        assert sorted(limits) == [800, 800, 2500]
+    # Its /eff floor leaves a single battery at base load, unlike the default.
+    assert (
+        scenarios["mixed_power_limits/eff"].ct_kwargs["min_efficient_power"]
+        > scenarios["two_venus/eff"].ct_kwargs["min_efficient_power"]
+    )
     for sc in scenarios.values():
         assert sc.duration_s > 0 and sc.batteries
 
@@ -657,6 +670,8 @@ def test_metric_glossary_covers_every_reported_metric() -> None:
         "single_venus_fill",
         "phase_imbalance",
         "single_venus_pv",
+        "mixed_power_limits/fair",
+        "mixed_power_limits/eff",
     ],
 )
 def test_full_scenario_definitions_build(name) -> None:
