@@ -69,6 +69,8 @@ schema:
   efficiency_rotation_interval: int(1,)?
   min_dc_output: float(0,)?
   grid_predict_trust: float(0,1)?
+  saturation_grace_seconds: float(0,)?
+  saturation_stall_timeout_seconds: float(0,)?
   dashboard_allow_write: bool?
   dashboard_direct_access: bool?
   dashboard_allowed_hosts: str?
