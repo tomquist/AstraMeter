@@ -709,6 +709,47 @@ code {
   border-radius: 6px;
   flex: 0 0 auto;
 }
+/* At the very top of the page (ts/site.ts sets .at-top) the bar is taller with
+ * a larger name, and eases down to the compact bar once you scroll. The
+ * negative margin keeps the space it takes in the layout at 60px either way,
+ * so nothing below it jumps as it shrinks. */
+.site-nav.at-top {
+  margin-bottom: -28px;
+  border-bottom-color: transparent;
+}
+.site-nav.at-top .nav-inner {
+  height: 88px;
+}
+.site-nav.at-top .brand {
+  font-size: 24px;
+  gap: 12px;
+}
+.site-nav.at-top .brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .site-nav,
+  .site-nav .nav-inner,
+  .site-nav .brand,
+  .site-nav .brand-mark {
+    transition-duration: 0.25s;
+    transition-timing-function: ease;
+  }
+  .site-nav {
+    transition-property: margin-bottom, border-color;
+  }
+  .site-nav .nav-inner {
+    transition-property: height;
+  }
+  .site-nav .brand {
+    transition-property: font-size, gap;
+  }
+  .site-nav .brand-mark {
+    transition-property: width, height, border-radius;
+  }
+}
 .nav-links {
   display: flex;
   align-items: center;
@@ -1272,7 +1313,7 @@ code {
 /* ── generator page header ── */
 .gen-head {
   border-bottom: 1px solid var(--border);
-  padding: 32px 0 26px;
+  padding: 48px 0 26px;
 }
 .gen-head h1 {
   margin: 6px 0 8px;

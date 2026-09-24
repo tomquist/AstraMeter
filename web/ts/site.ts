@@ -1,8 +1,8 @@
-// site.ts — light enhancements shared by all pages: mobile nav, nav border on
-// scroll, resolving data-gh links to the deployed GitHub ref, and (on the
-// landing page) rendering the supported-power-meter list and counts from the
-// same schema the generator uses, so the page can't drift from the actual
-// capabilities.
+// site.ts — light enhancements shared by all pages: mobile nav, the nav
+// shrinking on scroll, resolving data-gh links to the deployed GitHub ref, and
+// (on the landing page) rendering the supported-power-meter list and counts
+// from the same schema the generator uses, so the page can't drift from the
+// actual capabilities.
 import { POWERMETERS } from "./schema.js";
 import { ghDoc, resolveGh } from "./links.js";
 
@@ -28,10 +28,10 @@ if (toggle && links) {
   });
 }
 
-// ── nav shadow on scroll ──
+// ── nav: large at the top of the page, compact once scrolled ──
 const nav = document.getElementById("nav");
 if (nav) {
-  const onScroll = () => nav.classList.toggle("scrolled", window.scrollY > 8);
+  const onScroll = () => nav.classList.toggle("at-top", window.scrollY <= 8);
   window.addEventListener("scroll", onScroll, { passive: true });
   onScroll();
 }
