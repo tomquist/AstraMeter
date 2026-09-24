@@ -23,6 +23,22 @@ for (const item of ["css", "assets", "CNAME", "robots.txt"]) {
   await cp(item, `${outdir}/${item}`, { recursive: true });
 }
 
+// IBM Plex Sans + Mono, self-hosted so the site makes no third-party requests.
+// Both are SIL OFL 1.1 with no Reserved Font Name; the licence must travel with
+// the font files, so each package's LICENSE is published next to them. Latin
+// subsets only; anything else falls back to the system stack in css/styles.css.
+await mkdir(`${outdir}/fonts`, { recursive: true });
+await cp("node_modules/@fontsource-variable/ibm-plex-sans/LICENSE", `${outdir}/fonts/IBM-Plex-Sans-OFL.txt`);
+await cp("node_modules/@fontsource/ibm-plex-mono/LICENSE", `${outdir}/fonts/IBM-Plex-Mono-OFL.txt`);
+for (const [pkg, file] of [
+  ["@fontsource-variable/ibm-plex-sans", "ibm-plex-sans-latin-wght-normal.woff2"],
+  ["@fontsource-variable/ibm-plex-sans", "ibm-plex-sans-latin-ext-wght-normal.woff2"],
+  ["@fontsource/ibm-plex-mono", "ibm-plex-mono-latin-400-normal.woff2"],
+  ["@fontsource/ibm-plex-mono", "ibm-plex-mono-latin-500-normal.woff2"],
+]) {
+  await cp(`node_modules/${pkg}/files/${file}`, `${outdir}/fonts/${file}`);
+}
+
 // Dashboard screenshots live with the docs that also embed them (one copy,
 // referenced by both) and are published under assets/ for the landing page.
 // Regenerate with `npm run screenshots`; see web/tools/screenshots.ts.

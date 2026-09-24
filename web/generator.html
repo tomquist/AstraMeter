@@ -11,6 +11,7 @@
     <meta name="theme-color" content="#020617" />
     <link rel="icon" type="image/svg+xml" href="assets/astrameter-icon.svg" />
     <link rel="apple-touch-icon" href="assets/astrameter-icon.png" />
+    <link rel="preload" href="fonts/ibm-plex-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
@@ -18,21 +19,22 @@
     <header class="site-nav" id="nav">
       <div class="nav-inner">
         <a class="brand" href="index.html"><img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter</a>
-        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
+        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false">Menu</button>
         <nav class="nav-links" id="nav-links">
           <a href="index.html#features">Features</a>
-          <a href="index.html#devices">Devices</a>
-          <a href="index.html#meters">Power meters</a>
+          <a href="index.html#compatibility">Compatibility</a>
+          <a href="index.html#meters">Meters</a>
           <a href="index.html#install">Install</a>
-          <a class="nav-cta active" href="generator.html">Config Generator</a>
-          <a class="nav-gh" data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub ★</a>
+          <a href="index.html#faq">FAQ</a>
+          <a data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub</a>
+          <a class="nav-cta active" href="generator.html">Config generator</a>
         </nav>
       </div>
     </header>
 
     <header class="gen-head">
       <div class="container">
-        <p class="eyebrow"><a href="index.html">← Back to AstraMeter</a></p>
+        <p class="eyebrow"><a href="index.html">← AstraMeter</a></p>
         <h1>Config Generator</h1>
         <p class="lead">
           Answer a few questions and get a ready-to-use configuration. No experience required — every option is
