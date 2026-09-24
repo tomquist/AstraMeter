@@ -296,6 +296,14 @@ hr {
   gap: 8px;
 }
 
+/* Collapsible sections contain their children's margins, so the height
+ * ts/site.ts animates to is the height they settle at. */
+details.adv,
+details.intro-box,
+details.intro {
+  display: flow-root;
+}
+
 /* span full width for some elements inside grids */
 .field-grid > details.adv,
 .card-body > details.adv {
@@ -328,7 +336,7 @@ details.adv > summary::after {
   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   transition: transform 0.2s ease;
 }
-details.adv[open] > summary::after {
+details.adv[open]:not(.closing) > summary::after {
   transform: rotate(45deg);
 }
 details.adv > summary:hover {
@@ -565,6 +573,20 @@ code {
   font-size: inherit;
   white-space: pre;
   color: var(--text);
+}
+/* lines the last change touched (ts/app.ts marks them) */
+@media (prefers-reduced-motion: no-preference) {
+  .preview pre .changed {
+    animation: line-changed 1.6s ease-out;
+  }
+}
+@keyframes line-changed {
+  from {
+    background: rgba(251, 191, 36, 0.22);
+  }
+  to {
+    background: transparent;
+  }
 }
 .preview-actions {
   display: flex;
@@ -927,6 +949,129 @@ code {
   border: 4.5px solid transparent;
   border-left: 7px solid var(--tick);
   border-right: 0;
+}
+
+/* data dots: a reading travels meter → AstraMeter, which lights up while it
+ * handles it, then on to the batteries. Runs only once the diagram is drawn
+ * (or straight away without the script), and pauses off screen. */
+.pulse {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pulse {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: calc(50% - 3px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.7);
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* longhands, so the per-wire animation-name below survives */
+  .wiring:not(.draw) .pulse,
+  .wiring.draw.in .pulse {
+    animation-duration: 3.2s;
+    animation-timing-function: linear;
+    animation-delay: 1.3s;
+    animation-iteration-count: infinite;
+  }
+  .wiring:not(.draw) .wire-core,
+  .wiring.draw.in .wire-core {
+    animation: core-busy 3.2s ease 1.3s infinite;
+  }
+  .wiring > :nth-child(2) .pulse {
+    animation-name: pulse-in;
+  }
+  .wiring > :nth-child(4) .pulse {
+    animation-name: pulse-out;
+  }
+  .wiring.paused .pulse,
+  .wiring.paused .wire-core {
+    animation-play-state: paused;
+  }
+}
+@keyframes pulse-in {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+  }
+  34% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    left: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes pulse-out {
+  0%,
+  54% {
+    left: 0;
+    opacity: 0;
+  }
+  59% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  92%,
+  100% {
+    left: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes core-busy {
+  0%,
+  36%,
+  60%,
+  100% {
+    background: var(--bg-card);
+  }
+  44%,
+  52% {
+    background: #10283a;
+  }
+}
+
+@keyframes pulse-in-down {
+  0% {
+    top: 0;
+    opacity: 0;
+  }
+  5%,
+  34% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    top: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes pulse-out-down {
+  0%,
+  54% {
+    top: 0;
+    opacity: 0;
+  }
+  59%,
+  88% {
+    opacity: 1;
+  }
+  92%,
+  100% {
+    top: calc(100% - 14px);
+    opacity: 0;
+  }
 }
 
 /* ── feature list ── */
@@ -1314,6 +1459,16 @@ main section[id] {
     bottom: 6px;
     border-top: none;
     border-left: 1px solid var(--tick);
+  }
+  .pulse {
+    left: 17px;
+    top: 0;
+  }
+  .wiring > :nth-child(2) .pulse {
+    animation-name: pulse-in-down;
+  }
+  .wiring > :nth-child(4) .pulse {
+    animation-name: pulse-out-down;
   }
   .wire-link::after {
     left: 16px;

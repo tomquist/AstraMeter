@@ -137,54 +137,73 @@ if (motionOk && "IntersectionObserver" in window) {
     el.classList.add(cls);
     observer.observe(el);
   };
-  document.querySelectorAll<HTMLElement>(".band .rail-head, .band .rail-body, .band .shot").forEach((el) => watch(el, "reveal"));
-  document.querySelectorAll<HTMLElement>(".band .spec > div").forEach((el, i) => {
-    el.style.transitionDelay = `${(i % 2) * 90}ms`;
-    watch(el, "reveal");
+  // One tick after DOMContentLoaded, so the generator (app.ts, which draws its
+  // step cards in its own DOMContentLoaded handler) has rendered. Module
+  // scripts run while readyState is already "interactive", so only an
+  // already-complete page sets up at once.
+  const setUp = () => {
+    document
+      .querySelectorAll<HTMLElement>(".band .rail-head, .band .rail-body, .band .shot, .form-col > .card")
+      .forEach((el) => watch(el, "reveal"));
+    document.querySelectorAll<HTMLElement>(".band .spec > div").forEach((el, i) => {
+      el.style.transitionDelay = `${(i % 2) * 90}ms`;
+      watch(el, "reveal");
+    });
+    document.querySelectorAll<HTMLElement>(".wiring").forEach((el) => watch(el, "draw"));
+  };
+  if (document.readyState === "complete") setUp();
+  else document.addEventListener("DOMContentLoaded", () => setTimeout(setUp));
+
+  // The data dots on the wiring diagram only run while it's on screen.
+  const flow = new IntersectionObserver((entries) => {
+    for (const entry of entries) entry.target.classList.toggle("paused", !entry.isIntersecting);
   });
-  document.querySelectorAll<HTMLElement>(".wiring").forEach((el) => watch(el, "draw"));
+  document.querySelectorAll(".wiring").forEach((el) => flow.observe(el));
 }
 
-// ── FAQ: slide answers open and shut ──
+// ── collapsible sections: slide open and shut ──
 // <details> toggles instantly on its own; this animates the height between
-// the closed and open sizes. Without the script, or under reduced motion, the
-// native toggle is left alone.
+// the closed and open sizes, for the FAQ and for the generator's sections
+// (delegated, since the generator redraws them). Without the script, or under
+// reduced motion, the native toggle is left alone.
+const SLIDING = ".faq details, details.adv, details.intro-box, details.intro";
 if (motionOk) {
-  document.querySelectorAll<HTMLDetailsElement>(".faq details").forEach((details) => {
-    const summary = details.querySelector("summary");
-    if (!summary) return;
-    let running: Animation | undefined;
-    const slide = (from: number, to: number, done?: () => void) => {
-      details.style.overflow = "hidden";
-      running = details.animate(
-        { height: [`${from}px`, `${to}px`] },
-        { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" },
-      );
-      running.onfinish = () => {
-        running = undefined;
-        details.style.overflow = "";
-        done?.();
-      };
-    };
-    summary.addEventListener("click", (e) => {
-      e.preventDefault();
-      // Start from wherever a running slide has got to, then measure the
-      // real sizes with it out of the way.
-      const from = details.offsetHeight;
-      running?.cancel();
+  const running = new WeakMap<HTMLDetailsElement, Animation>();
+  const slide = (details: HTMLDetailsElement, from: number, to: number, done?: () => void) => {
+    details.style.overflow = "hidden";
+    const animation = details.animate(
+      { height: [`${from}px`, `${to}px`] },
+      { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+    running.set(details, animation);
+    animation.onfinish = () => {
+      running.delete(details);
       details.style.overflow = "";
-      if (details.open && !details.classList.contains("closing")) {
-        details.classList.add("closing");
-        const borders = details.offsetHeight - details.clientHeight;
-        slide(from, summary.offsetHeight + borders, () => {
-          details.open = false;
-          details.classList.remove("closing");
-        });
-      } else {
+      done?.();
+    };
+  };
+  document.addEventListener("click", (e) => {
+    const summary = (e.target as Element).closest?.("summary");
+    const details = summary?.parentElement;
+    if (!summary || !(details instanceof HTMLDetailsElement) || !details.matches(SLIDING)) return;
+    if (summary !== details.querySelector(":scope > summary")) return;
+    e.preventDefault();
+    // Start from wherever a running slide has got to, then measure the real
+    // sizes with it out of the way.
+    const from = details.offsetHeight;
+    running.get(details)?.cancel();
+    details.style.overflow = "";
+    if (details.open && !details.classList.contains("closing")) {
+      details.classList.add("closing");
+      const borders = details.offsetHeight - details.clientHeight;
+      slide(details, from, summary.offsetHeight + borders, () => {
+        details.open = false;
         details.classList.remove("closing");
-        details.open = true;
-        slide(from, details.offsetHeight);
-      }
-    });
+      });
+    } else {
+      details.classList.remove("closing");
+      details.open = true;
+      slide(details, from, details.offsetHeight);
+    }
   });
 }

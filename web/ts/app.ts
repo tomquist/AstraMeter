@@ -24,6 +24,7 @@ import {
 } from "./schema.js";
 import { generate } from "./generate.js";
 import { ghDoc } from "./links.js";
+import { changedLines } from "./preview-diff.js";
 import { STORAGE_KEY, newMeter, defaultState, safeParse, migrate, type State, type Meter } from "./state.js";
 
 let state: State = loadState() || defaultState();
@@ -648,10 +649,33 @@ function refreshPreview(): void {
   } catch (err) {
     text = "# Error generating config: " + (err as Error).message;
   }
-  pre.textContent = text;
+  showPreview(pre, text);
   const fn = document.getElementById("preview-filename");
   if (fn) fn.textContent = outputFilename();
   saveState();
+}
+
+// Render the config one line per <span>, and after the first render mark the
+// lines the last change touched so the user can see what their answer did.
+// The first changed line is scrolled into view inside the preview if needed.
+let previewText: string | null = null;
+function showPreview(code: HTMLElement, text: string): void {
+  if (text === previewText) return;
+  const lines = text.split("\n");
+  let changed = previewText === null ? new Set<number>() : changedLines(previewText.split("\n"), lines);
+  // Switching the target rewrites the whole file; lighting all of it up says nothing.
+  if (changed.size > lines.length / 2) changed = new Set();
+  previewText = text;
+  const spans = lines.map((line, i) => el("span", changed.has(i) ? { class: "changed" } : {}, line + "\n"));
+  code.replaceChildren(...spans);
+  const first = spans.find((span) => span.classList.contains("changed"));
+  const scroller = code.closest("pre");
+  if (!first || !scroller) return;
+  const top = first.offsetTop - scroller.offsetTop;
+  if (top < scroller.scrollTop || top > scroller.scrollTop + scroller.clientHeight - 40) {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scroller.scrollTo({ top: Math.max(0, top - 40), behavior: reduce ? "auto" : "smooth" });
+  }
 }
 
 function previewPanel(): HTMLElement {
