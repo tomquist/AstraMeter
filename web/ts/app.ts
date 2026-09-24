@@ -436,13 +436,17 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
       ? fieldControl({ key: "netmask", label: "NETMASK (which batteries use this meter)", help: "CIDR of battery IPs that should use this meter, e.g. 192.168.1.0/24.", type: "text", placeholder: "192.168.1.0/24" }, meter, {})
       : null;
 
+  // The reference for the platform being configured, falling back to the other one.
+  const doc = state.target === "esphome" ? pm.docEsphome ?? pm.docPython : pm.docPython ?? pm.docEsphome;
+  const docLink = doc ? el("a", { class: "doclink", href: ghDoc(doc), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null;
+
   return el("div", { class: "meter" }, [
     el("div", { class: "meter-head" }, [
       typeField,
       badge,
     ]),
     el("p", { class: "blurb", text: pm.blurb }),
-    pm.docPython ? el("a", { class: "doclink", href: ghDoc(pm.docPython!), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
+    docLink,
     suffixField,
     phaseToggle,
     el("div", { class: "field-grid" }, fieldGroup(fields, meter.fields, { phases: meter.phases })),

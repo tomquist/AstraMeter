@@ -4,7 +4,7 @@
 // same schema the generator uses, so the page can't drift from the actual
 // capabilities.
 import { POWERMETERS } from "./schema.js";
-import { resolveGh } from "./links.js";
+import { ghDoc, resolveGh } from "./links.js";
 
 // ── data-gh links → ref-correct GitHub URLs (set at runtime from the build ref) ──
 document.querySelectorAll<HTMLAnchorElement>("a[data-gh]").forEach((a) => {
@@ -37,21 +37,40 @@ if (nav) {
 }
 
 // ── supported-meter list (landing only) ──
+// Each row shows where the source runs; hovering or focusing it swaps that for
+// links to its section in whichever docs cover it (always shown on touch).
 const ESP32_SUPPORT: Record<string, string> = {
   native: "ESP32",
   generic: "ESP32 via HTTP",
   alternate: "ESP32, other interface",
   unsupported: "Python only",
 };
+const escapeHtml = (text: string) =>
+  text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const pmList = document.getElementById("pm-grid");
 if (pmList) {
   for (const pm of POWERMETERS) {
     const tier = (pm.esphome && pm.esphome.tier) || "unsupported";
     const support = pm.esphomeOnly ? "ESP32 only" : ESP32_SUPPORT[tier];
     // The status column already says "ESP32 only"; drop the label's own note.
-    const name = pm.label.replace(/\s*\(ESPHome only\)$/, "");
+    const name = escapeHtml(pm.label.replace(/\s*\(ESPHome only\)$/, ""));
+    const docs = (
+      [
+        ["Python", pm.docPython],
+        ["ESP32", pm.docEsphome],
+      ] as const
+    )
+      .filter(([, doc]) => doc)
+      .map(
+        ([platform, doc]) =>
+          `<a href="${ghDoc(doc!)}" target="_blank" rel="noopener" aria-label="${name}: ${platform} documentation">${platform}</a>`,
+      )
+      .join("");
     const item = document.createElement("li");
-    item.innerHTML = `<span class="pm-name">${name}</span><span class="pm-esp pm-${tier}">${support}</span>`;
+    item.innerHTML =
+      `<span class="pm-name">${name}</span>` +
+      `<span class="pm-right"><span class="pm-esp pm-${tier}">${support}</span>` +
+      `<span class="pm-docs"><span>Docs</span>${docs}</span></span>`;
     pmList.appendChild(item);
   }
 }

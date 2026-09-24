@@ -999,14 +999,55 @@ code {
   justify-content: space-between;
   align-items: baseline;
   gap: 16px;
-  padding: 9px 0;
+  padding: 9px 8px;
+  margin: 0 -8px;
   border-bottom: 1px solid var(--border);
   font-size: 15px;
 }
-.pm-esp {
+.pm-right {
   flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
   font-size: 12.5px;
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.pm-esp {
   color: var(--muted);
+}
+.pm-docs {
+  display: flex;
+  gap: 10px;
+  color: var(--tick);
+}
+.pm-docs a {
+  color: var(--accent);
+}
+/* With a mouse, the doc links take the status's place while the row is
+ * hovered or focused; touch screens show both, stacked. */
+@media (hover: hover) {
+  .pm-list li {
+    transition: background-color 0.15s;
+  }
+  .pm-list li:hover,
+  .pm-list li:focus-within {
+    background: rgba(148, 163, 184, 0.06);
+  }
+  .pm-esp,
+  .pm-docs {
+    grid-area: 1 / 1;
+    transition: opacity 0.15s;
+  }
+  .pm-docs {
+    opacity: 0;
+  }
+  .pm-list li:hover .pm-docs,
+  .pm-list li:focus-within .pm-docs {
+    opacity: 1;
+  }
+  .pm-list li:hover .pm-esp,
+  .pm-list li:focus-within .pm-esp {
+    opacity: 0;
+  }
 }
 .pm-unsupported {
   color: var(--tick);
