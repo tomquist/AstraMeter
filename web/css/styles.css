@@ -1052,15 +1052,23 @@ code {
 .faq summary::-webkit-details-marker {
   display: none;
 }
+.faq summary:hover {
+  color: var(--accent);
+}
 .faq summary::after {
   content: "+";
   color: var(--muted);
+  flex: 0 0 auto;
 }
-.faq details[open] summary::after {
-  content: "−";
+/* ts/site.ts adds .closing while the answer slides shut */
+.faq details[open]:not(.closing) summary::after {
+  transform: rotate(45deg);
 }
 .faq details p {
-  margin: 0 0 18px;
+  /* padding, not margin: a margin would collapse out of <details> except
+   * while the slide animation clips it, and the height would jump */
+  margin: 0;
+  padding-bottom: 18px;
   color: var(--muted);
   max-width: 680px;
 }
@@ -1127,8 +1135,114 @@ code {
   color: var(--text);
 }
 
+/* ── scroll effects (classes added by ts/site.ts) ── */
+main section[id] {
+  /* anchor jumps land below the sticky nav, not under it */
+  scroll-margin-top: 60px;
+}
+.nav-links a.active:not(.nav-cta) {
+  color: var(--text);
+  text-decoration: underline 2px var(--accent);
+  text-underline-offset: 8px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+  /* Transitions live on the .in state only, so hiding an element never
+   * animates; it just waits, then eases in. */
+  .reveal {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  .reveal.in {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.5s ease,
+      transform 0.5s ease;
+  }
+  /* the wiring diagram draws left to right: node, wire, arrowhead, next node */
+  .wiring.draw > .wire-node,
+  .wiring.draw .wire-link span,
+  .wiring.draw .wire-link::after {
+    opacity: 0;
+  }
+  .wiring.draw .wire-link::before {
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  .wiring.draw.in > .wire-node,
+  .wiring.draw.in .wire-link span {
+    opacity: 1;
+    transition: opacity 0.35s ease;
+  }
+  .wiring.draw.in .wire-link::after {
+    opacity: 1;
+    transition: opacity 0.15s ease;
+  }
+  .wiring.draw.in .wire-link::before {
+    transform: none;
+    transition: transform 0.35s ease;
+  }
+  .wiring.draw.in > :nth-child(2)::before {
+    transition-delay: 0.2s;
+  }
+  .wiring.draw.in > :nth-child(2) span {
+    transition-delay: 0.3s;
+  }
+  .wiring.draw.in > :nth-child(2)::after {
+    transition-delay: 0.5s;
+  }
+  .wiring.draw.in > :nth-child(3) {
+    transition-delay: 0.55s;
+  }
+  .wiring.draw.in > :nth-child(4)::before {
+    transition-delay: 0.75s;
+  }
+  .wiring.draw.in > :nth-child(4) span {
+    transition-delay: 0.85s;
+  }
+  .wiring.draw.in > :nth-child(4)::after {
+    transition-delay: 1.05s;
+  }
+  .wiring.draw.in > :nth-child(5) {
+    transition-delay: 1.1s;
+  }
+
+  /* hover and open states ease rather than snap */
+  .nav-links a,
+  .footer-grid a,
+  .btn,
+  .nav-cta,
+  .faq summary {
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .faq summary::after {
+    transition: transform 0.2s ease;
+  }
+  .nav-links.open {
+    animation: menu-in 0.18s ease-out;
+  }
+  @keyframes menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
+}
+
 /* ── responsive ── */
 @media (max-width: 960px) {
+  .wiring.draw .wire-link::before {
+    transform-origin: top;
+  }
+  .wiring.draw:not(.in) .wire-link::before {
+    transform: scaleY(0);
+  }
   .rail {
     grid-template-columns: 1fr;
     gap: 20px;
