@@ -266,7 +266,7 @@ function deviceCard(): HTMLElement {
         el("p", { html: "You'll need to <strong>buy an ESP32 board</strong> (see below), install ESPHome once, paste the file this tool generates, and flash it over USB. Step-by-step instructions appear at the bottom of the page." }),
       ]),
       el("div", { class: "hw" }, [
-        el("h3", { text: "🛒 Recommended hardware" }),
+        el("h3", { text: "Recommended hardware" }),
         el("p", { class: "help", html: "We recommend the <strong>ESP32-S3 DevKitC-1</strong> — it's cheap, widely available, and is the board this tool defaults to. One board is enough no matter how many batteries you have." }),
         el("ul", { class: "hw-links" }, [
           el("li", {}, [linkOut(HARDWARE.single.url, "Buy 1× " + "ESP32-S3 DevKitC-1"), el("span", { class: "help", text: " — for a single setup" })]),
@@ -659,7 +659,7 @@ function previewPanel(): HTMLElement {
     ]),
     el("pre", {}, [el("code", { id: "preview-code" })]),
     el("div", { class: "preview-actions" }, [
-      el("button", { type: "button", class: "primary", onclick: copyConfig }, "Copy"),
+      el("button", { type: "button", class: "secondary", onclick: copyConfig }, "Copy"),
       el("button", { type: "button", class: "primary", onclick: downloadConfig }, "Download file"),
     ]),
   ]);
@@ -795,9 +795,9 @@ function projectCard(): HTMLElement {
   const fileInput = el("input", { type: "file", accept: "application/json", class: "hidden", onchange: (e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) loadProject(f); } });
   return card(null, "Save your work", "Your answers are saved in this browser automatically. You can also export a project file to back up or continue on another device.", [
     el("div", { class: "btn-row" }, [
-      el("button", { type: "button", class: "secondary", onclick: saveProject }, "💾 Save project file"),
-      el("button", { type: "button", class: "secondary", onclick: () => fileInput.click() }, "📂 Load project file"),
-      el("button", { type: "button", class: "secondary", onclick: shareLink }, "🔗 Copy share link"),
+      el("button", { type: "button", class: "secondary", onclick: saveProject }, "Save project file"),
+      el("button", { type: "button", class: "secondary", onclick: () => fileInput.click() }, "Load project file"),
+      el("button", { type: "button", class: "secondary", onclick: shareLink }, "Copy share link"),
       el("button", { type: "button", class: "link-danger", onclick: resetProject }, "Start over"),
       fileInput,
     ]),
