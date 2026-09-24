@@ -1528,6 +1528,13 @@ class LoadBalancer:
         poll: it is what the battery was asked to add, and pacing can hold it
         far below the unpaced intent.  Skipped for the same consumers as
         :meth:`_track_saturation`, whose commands are not the pool's asks.
+        *reports* is the auto pool.
+
+        A battery sitting at a ceiling that still binds (its plain share of
+        the pool's output is past it) counts as confirming it.  Once the pool
+        has settled around the ceiling nothing pushes the battery any more,
+        and letting the ceiling lapse then would pull the unlimited batteries
+        back down until it is relearned.
         """
         if (
             consumer_id not in reports
@@ -1538,6 +1545,20 @@ class LoadBalancer:
             return
         now = self._clock()
         power = float(_report_of(reports, consumer_id).power)
+        sign = _sign(power)
+        ceiling = state.ceiling(sign)
+        if ceiling > 0.0 and power * sign >= ceiling - CEILING_AT_MARGIN_W:
+            share = weighted_share(
+                sum(r.power for r in reports.values()),
+                {cid: r.weight for cid, r in reports.items()},
+                reports,
+                consumer_id,
+            )
+            if share * sign >= ceiling + CEILING_PUSH_W:
+                if sign > 0:
+                    state.ceiling_discharge_seen = now
+                else:
+                    state.ceiling_charge_seen = now
         for sign in (1, -1):
             ceiling = state.ceiling(sign)
             if ceiling <= 0.0:
@@ -1663,7 +1684,12 @@ class LoadBalancer:
         if consumer_id:
             state = self._get_consumer(consumer_id)
             self._track_saturation(consumer_id, state, consumer_mode, active_reports)
-            self._track_ceiling(consumer_id, state, consumer_mode, active_reports)
+            self._track_ceiling(
+                consumer_id,
+                state,
+                consumer_mode,
+                {cid: r for cid, r in active_reports.items() if cid not in manual},
+            )
 
         if consumer_mode.mode == "manual" and state is not None:
             reported = _report_of(active_reports, consumer_id).power

@@ -519,7 +519,8 @@ def _scenario_power_ceilings() -> list[str]:
     ceiling; the third keeps ramping, and the tracking share and the
     water-filled balance target must then agree poll for poll.  A charge swing
     exercises the other direction, and one capped unit finally exceeds its
-    ceiling so both stacks drop it.
+    ceiling so both stacks drop it.  In between, the pool sits settled past
+    the ceiling TTL: a ceiling that still binds must survive it on both.
     """
     lines = ["cfg 1 0 900 0.4 0.15 20 90 0", "clock 3000"]
     big = 700
@@ -535,6 +536,16 @@ def _scenario_power_ceilings() -> list[str]:
             lines.append(f"last {cid}")
         lines.append("advance 1")
         big += 60
+    settled = [
+        _report("a", "A", 800, "VNSE3"),
+        _report("b", "A", 800, "VNSE3"),
+        _report("c", "A", 1700, "VNSE3"),
+    ]
+    for _ in range(12):
+        for cid in ("a", "b", "c"):
+            lines.append(_target(cid, settled, grid=0))
+            lines.append(f"last {cid}")
+        lines.append("advance 120")
     for step in range(4):
         pool = [
             _report("a", "A", 600 - 150 * step, "VNSE3"),

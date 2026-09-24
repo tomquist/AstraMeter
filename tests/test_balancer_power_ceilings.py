@@ -201,6 +201,22 @@ def test_an_unconfirmed_ceiling_expires() -> None:
     assert _ceiling(lb, SMALL_1) == 0.0
 
 
+def test_a_ceiling_that_still_binds_does_not_expire() -> None:
+    # The pool has settled with the grid at zero, so nothing pushes the capped
+    # batteries, but each one's plain share of the 3300 W is still past its
+    # ceiling.  Letting the ceiling lapse would pull the big battery back down.
+    clock = _Clock()
+    lb = _balancer(clock)
+    for _ in range(LEARN_ROUNDS):
+        _round(lb, clock, _reports(small=800, big=900), grid=1200)
+    settled = _reports(small=800, big=1700)
+    for _ in range(int(2 * CEILING_TTL_SECONDS / 60)):
+        clock.now += 60.0
+        sent = _round(lb, clock, settled, grid=0)
+    assert _ceiling(lb, SMALL_1) == _ceiling(lb, SMALL_2) == 800
+    assert sent[BIG] == pytest.approx(0)
+
+
 def test_learning_and_dropping_a_ceiling_is_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
