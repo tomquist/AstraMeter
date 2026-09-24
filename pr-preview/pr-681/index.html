@@ -97,13 +97,13 @@
                 <strong>What you have</strong>
                 <span>Shelly, Home Assistant, MQTT, SML, Modbus, HomeWizard…</span>
               </div>
-              <div class="wire-link"><span>HTTP · MQTT · Modbus · SML</span></div>
+              <div class="wire-link"><span>HTTP · MQTT · Modbus · SML</span><i class="pulse" aria-hidden="true"></i></div>
               <div class="wire-node wire-core">
                 <span class="wire-kind">AstraMeter</span>
                 <strong>Filters and splits</strong>
                 <span>Smooths the reading, works out a target per battery</span>
               </div>
-              <div class="wire-link"><span>UDP, as Shelly or CT002/CT003</span></div>
+              <div class="wire-link"><span>UDP, as Shelly or CT002/CT003</span><i class="pulse" aria-hidden="true"></i></div>
               <div class="wire-node">
                 <span class="wire-kind">Batteries</span>
                 <strong>What they expect</strong>
@@ -232,8 +232,11 @@
           <div class="rail-body">
             <p>
               The right-hand column says whether the ESP32 build can read each one. Everything not marked
-              <em>ESP32 only</em> also works with the Python version.
-              <a data-gh="doc:docs/powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/powermeters.md" target="_blank" rel="noopener">Per-source settings</a>
+              <em>ESP32 only</em> also works with the Python version. Each row links to its settings in the
+              <a data-gh="doc:docs/powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/powermeters.md" target="_blank" rel="noopener">Python</a>
+              and
+              <a data-gh="doc:docs/esphome-powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/esphome-powermeters.md" target="_blank" rel="noopener">ESP32</a>
+              docs.
             </p>
             <ul class="pm-list" id="pm-grid"></ul>
           </div>

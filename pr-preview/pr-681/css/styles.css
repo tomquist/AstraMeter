@@ -296,6 +296,14 @@ hr {
   gap: 8px;
 }
 
+/* Collapsible sections contain their children's margins, so the height
+ * ts/site.ts animates to is the height they settle at. */
+details.adv,
+details.intro-box,
+details.intro {
+  display: flow-root;
+}
+
 /* span full width for some elements inside grids */
 .field-grid > details.adv,
 .card-body > details.adv {
@@ -328,7 +336,7 @@ details.adv > summary::after {
   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   transition: transform 0.2s ease;
 }
-details.adv[open] > summary::after {
+details.adv[open]:not(.closing) > summary::after {
   transform: rotate(45deg);
 }
 details.adv > summary:hover {
@@ -566,6 +574,20 @@ code {
   white-space: pre;
   color: var(--text);
 }
+/* lines the last change touched (ts/app.ts marks them) */
+@media (prefers-reduced-motion: no-preference) {
+  .preview pre .changed {
+    animation: line-changed 1.6s ease-out;
+  }
+}
+@keyframes line-changed {
+  from {
+    background: rgba(251, 191, 36, 0.22);
+  }
+  to {
+    background: transparent;
+  }
+}
 .preview-actions {
   display: flex;
   gap: 10px;
@@ -686,6 +708,47 @@ code {
   height: 26px;
   border-radius: 6px;
   flex: 0 0 auto;
+}
+/* At the very top of the page (ts/site.ts sets .at-top) the bar is taller with
+ * a larger name, and eases down to the compact bar once you scroll. The
+ * negative margin keeps the space it takes in the layout at 60px either way,
+ * so nothing below it jumps as it shrinks. */
+.site-nav.at-top {
+  margin-bottom: -28px;
+  border-bottom-color: transparent;
+}
+.site-nav.at-top .nav-inner {
+  height: 88px;
+}
+.site-nav.at-top .brand {
+  font-size: 24px;
+  gap: 12px;
+}
+.site-nav.at-top .brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .site-nav,
+  .site-nav .nav-inner,
+  .site-nav .brand,
+  .site-nav .brand-mark {
+    transition-duration: 0.25s;
+    transition-timing-function: ease;
+  }
+  .site-nav {
+    transition-property: margin-bottom, border-color;
+  }
+  .site-nav .nav-inner {
+    transition-property: height;
+  }
+  .site-nav .brand {
+    transition-property: font-size, gap;
+  }
+  .site-nav .brand-mark {
+    transition-property: width, height, border-radius;
+  }
 }
 .nav-links {
   display: flex;
@@ -929,6 +992,129 @@ code {
   border-right: 0;
 }
 
+/* data dots: a reading travels meter → AstraMeter, which lights up while it
+ * handles it, then on to the batteries. Runs only once the diagram is drawn
+ * (or straight away without the script), and pauses off screen. */
+.pulse {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pulse {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: calc(50% - 3px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.7);
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* longhands, so the per-wire animation-name below survives */
+  .wiring:not(.draw) .pulse,
+  .wiring.draw.in .pulse {
+    animation-duration: 3.2s;
+    animation-timing-function: linear;
+    animation-delay: 1.3s;
+    animation-iteration-count: infinite;
+  }
+  .wiring:not(.draw) .wire-core,
+  .wiring.draw.in .wire-core {
+    animation: core-busy 3.2s ease 1.3s infinite;
+  }
+  .wiring > :nth-child(2) .pulse {
+    animation-name: pulse-in;
+  }
+  .wiring > :nth-child(4) .pulse {
+    animation-name: pulse-out;
+  }
+  .wiring.paused .pulse,
+  .wiring.paused .wire-core {
+    animation-play-state: paused;
+  }
+}
+@keyframes pulse-in {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+  }
+  34% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    left: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes pulse-out {
+  0%,
+  54% {
+    left: 0;
+    opacity: 0;
+  }
+  59% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  92%,
+  100% {
+    left: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes core-busy {
+  0%,
+  36%,
+  60%,
+  100% {
+    background: var(--bg-card);
+  }
+  44%,
+  52% {
+    background: #10283a;
+  }
+}
+
+@keyframes pulse-in-down {
+  0% {
+    top: 0;
+    opacity: 0;
+  }
+  5%,
+  34% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    top: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes pulse-out-down {
+  0%,
+  54% {
+    top: 0;
+    opacity: 0;
+  }
+  59%,
+  88% {
+    opacity: 1;
+  }
+  92%,
+  100% {
+    top: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+
 /* ── feature list ── */
 .spec {
   margin: 0;
@@ -999,14 +1185,55 @@ code {
   justify-content: space-between;
   align-items: baseline;
   gap: 16px;
-  padding: 9px 0;
+  padding: 9px 8px;
+  margin: 0 -8px;
   border-bottom: 1px solid var(--border);
   font-size: 15px;
 }
-.pm-esp {
+.pm-right {
   flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
   font-size: 12.5px;
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.pm-esp {
   color: var(--muted);
+}
+.pm-docs {
+  display: flex;
+  gap: 10px;
+  color: var(--tick);
+}
+.pm-docs a {
+  color: var(--accent);
+}
+/* With a mouse, the doc links take the status's place while the row is
+ * hovered or focused; touch screens show both, stacked. */
+@media (hover: hover) {
+  .pm-list li {
+    transition: background-color 0.15s;
+  }
+  .pm-list li:hover,
+  .pm-list li:focus-within {
+    background: rgba(148, 163, 184, 0.06);
+  }
+  .pm-esp,
+  .pm-docs {
+    grid-area: 1 / 1;
+    transition: opacity 0.15s;
+  }
+  .pm-docs {
+    opacity: 0;
+  }
+  .pm-list li:hover .pm-docs,
+  .pm-list li:focus-within .pm-docs {
+    opacity: 1;
+  }
+  .pm-list li:hover .pm-esp,
+  .pm-list li:focus-within .pm-esp {
+    opacity: 0;
+  }
 }
 .pm-unsupported {
   color: var(--tick);
@@ -1086,7 +1313,7 @@ code {
 /* ── generator page header ── */
 .gen-head {
   border-bottom: 1px solid var(--border);
-  padding: 32px 0 26px;
+  padding: 48px 0 26px;
 }
 .gen-head h1 {
   margin: 6px 0 8px;
@@ -1273,6 +1500,16 @@ main section[id] {
     bottom: 6px;
     border-top: none;
     border-left: 1px solid var(--tick);
+  }
+  .pulse {
+    left: 17px;
+    top: 0;
+  }
+  .wiring > :nth-child(2) .pulse {
+    animation-name: pulse-in-down;
+  }
+  .wiring > :nth-child(4) .pulse {
+    animation-name: pulse-out-down;
   }
   .wire-link::after {
     left: 16px;
