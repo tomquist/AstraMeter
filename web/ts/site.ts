@@ -47,8 +47,11 @@ const pmList = document.getElementById("pm-grid");
 if (pmList) {
   for (const pm of POWERMETERS) {
     const tier = (pm.esphome && pm.esphome.tier) || "unsupported";
+    const support = pm.esphomeOnly ? "ESP32 only" : ESP32_SUPPORT[tier];
+    // The status column already says "ESP32 only"; drop the label's own note.
+    const name = pm.label.replace(/\s*\(ESPHome only\)$/, "");
     const item = document.createElement("li");
-    item.innerHTML = `<span class="pm-name">${pm.label}</span><span class="pm-esp pm-${tier}">${ESP32_SUPPORT[tier]}</span>`;
+    item.innerHTML = `<span class="pm-name">${name}</span><span class="pm-esp pm-${tier}">${support}</span>`;
     pmList.appendChild(item);
   }
 }

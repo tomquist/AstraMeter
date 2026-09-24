@@ -1,15 +1,15 @@
 # Marstek CT002 / CT003 MQTT & HTTP (cloud / app) protocol
 
 This documents how a CT002 (`HME-4`) / CT003 (`HME-3`) talks to the Marstek
-mobile app over MQTT and to the Marstek cloud over HTTP. It is a reference for
-**replicating** that side (the `mqtt_insights:` Marstek responder emulates part
-of it). The UDP control protocol between the CT and the batteries is separate —
-see [ct002-ct003-protocol.md](ct002-ct003-protocol.md).
+mobile app over MQTT and to the Marstek cloud over HTTP. Use it to **replicate**
+that side; the `mqtt_insights:` Marstek responder emulates part of it. The UDP
+control protocol between the CT and the batteries is separate — see
+[ct002-ct003-protocol.md](ct002-ct003-protocol.md).
 
 Both models speak the same MQTT protocol **and both report to the HTTP cloud**
 (`setCtReporting` + `getDateInfoeu.php`). The report **field set differs by
 model** (see §6): the `HME-4` clamp adds instantaneous voltage/current and uses
-32-bit energy; the `HME-3` smart-meter reader uses 64-bit energy and omits
+32-bit energy; the `HME-3` smart-meter reader uses 64-bit energy and leaves out
 voltage/current.
 
 ## 1. MQTT connection
@@ -24,19 +24,18 @@ voltage/current.
 | username / password | **none** — the device authenticates with a **client certificate** |
 | broker host | **provisioned at runtime** (not hard‑coded in the image); the cloud side lives under `hamedata.com` (the HTTP host is `eu.hamedata.com` for the EU region) |
 
-TLS is **mutual**: the device is provisioned with a **CA certificate, a client
-certificate, and a client private key** (all carried on the device) and presents
-the client cert to the broker. Certificate verification of the server is
-configured permissively (the connect proceeds on the client cert). To replicate
-the device you need its provisioned client cert/key for that broker; a stand‑in
-broker that doesn't require the client cert can be used for local testing (this
-is what the AstraMeter responder + [hame‑relay](https://github.com/tomquist/hame-relay)
-rely on).
+TLS is **mutual**: the device carries a **CA certificate, a client certificate,
+and a client private key**, and presents the client cert to the broker. Server
+certificate verification is permissive — the connect proceeds on the client cert.
+To replicate the device you need its provisioned client cert and key for that
+broker. For local testing, use a stand‑in broker that doesn't require the client
+cert; that is what the AstraMeter responder +
+[hame‑relay](https://github.com/tomquist/hame-relay) rely on.
 
 Connection bring‑up sequence (the device drives a Quectel Wi‑Fi module over `AT`):
 load the three certs, configure TLS (`verify` permissive, all ciphersuites,
 TLS 1.2), then `QMTOPEN` (host, 8883) → `QMTCONN` (`mst_<mac>`) → `QMTSUB` the
-App topic. On Wi‑Fi loss it `QMTCLOSE`/`QMTDISC` and retries with backoff.
+App topic. On Wi‑Fi loss it runs `QMTCLOSE`/`QMTDISC` and retries with backoff.
 
 ## 2. Topics
 
@@ -56,11 +55,11 @@ publish   (device → app):  <prefix>/<ct_type>/device/<mac>/ctrl
 ## 3. Message framing
 
 Payloads are UTF‑8 CSV `key=value` text. The app's parser strips spaces, splits
-on `,`, then splits each token on `=` expecting exactly one `=`. Lists of repeated
-records use `;` between records.
+on `,`, then splits each token on `=`, expecting exactly one `=`. Lists of
+repeated records use `;` between records.
 
 **App → device** commands are a single `cd=<NN>` token (zero‑padded, e.g.
-`cd=01`), optionally followed by parameters (`,p1=<n>` etc.). The device parses
+`cd=01`), optionally followed by parameters (`,p1=<n>` etc.). The device reads
 the `cd` number, latches it as the pending response type plus any parameter, and
 the publish task then emits the matching frame on the device topic. **Replies do
 not echo a `cd=` key** — the app already knows what it asked for.
@@ -85,10 +84,11 @@ device topic):
 | `41` | slave list (page, slaves 0–4) | repeated `slv_ip=…;` |
 | `42` | slave list (page, slaves 5–8) | repeated `slv_ip=…;` |
 
-`cd` `1`–`7` are the core read polls; `1` (runtime info) and `4` (slave list)
-are the two the app uses most and the two the AstraMeter responder implements. The other low codes return the auxiliary frames
-in §5 (network, identity, smart‑meter, etc.); their exact `cd` numbers beyond the
-table above were not all pinned down.
+`cd` `1`–`7` are the core read polls. `1` (runtime info) and `4` (slave list)
+are the two the app uses most, and the two the AstraMeter responder implements.
+The other low codes return the auxiliary frames in §5 (network, identity,
+smart‑meter, etc.); their exact `cd` numbers beyond the table above were not all
+pinned down.
 
 ## 5. Device → app payloads
 
@@ -133,8 +133,8 @@ Repeated, `;`‑terminated, **max 5 records per message** (hence the page codes)
 slv_ip=%s,slv_t=%s,slv_p=%c,slv_id=%s;
 ```
 `slv_ip` = battery IP, `slv_t` = battery type, `slv_p` = its phase char
-(`A`/`B`/`C`/`D`/`0`), `slv_id` = battery MAC. A second compact slave/device form
-also exists: `type=%s,sid=%s,ip=%s,phpos=%c;`.
+(`A`/`B`/`C`/`D`/`0`), `slv_id` = battery MAC. A second, more compact
+slave/device form also exists: `type=%s,sid=%s,ip=%s,phpos=%c;`.
 
 ### 5.3 Network / identity
 
@@ -174,15 +174,15 @@ phase‑1 connected, wiring, etc.).
 ## 6. HTTP cloud reporting (both models)
 
 **Both** the CT002 (`HME-4`) and CT003 (`HME-3`) report to the Marstek cloud over
-plain **HTTP GET** — no TLS, no token/signature; the device is identified only by
-the cleartext `id`/`aid` query params. The Wi‑Fi module does it in three AT steps
-(`AT+QHTTPCFG="url",…` → `AT+QHTTPGET=60` → `AT+QHTTPREAD=60`). Two endpoints,
-both under `eu.hamedata.com` (the EU‑region host; other regions presumably swap
-the host).
+plain **HTTP GET** — no TLS, no token or signature. The device is identified only
+by the cleartext `id`/`aid` query params. The Wi‑Fi module does it in three AT
+steps (`AT+QHTTPCFG="url",…` → `AT+QHTTPGET=60` → `AT+QHTTPREAD=60`). There are
+two endpoints, both under `eu.hamedata.com` (the EU‑region host; other regions
+presumably swap the host).
 
 ### 6.1 Status report — `setCtReporting`
 
-The query string is **model‑dependent**. The exact templates:
+The query string **depends on the model**. The exact templates:
 
 **CT002 (`HME-4`)** — 32‑bit energy, **plus** instantaneous voltage/current:
 ```text
@@ -217,19 +217,19 @@ GET http://eu.hamedata.com/prod/api/v1/setCtReporting
 | `dz,da,db,dc,dd` | discharge power: combined‑unassigned (`z`) + phases A/B/C/D |
 
 The `cz/ca/cb/cc/cd` and `dz/da/db/dc/dd` groups mirror the UDP response's
-`x`/`A`/`B`/`C`/`ABC` charge/discharge buckets (`z`↔`x`, `d`↔`ABC`). This is the
-cloud's source of the per‑phase power and energy history shown in the app. The
-`HME-4` additionally feeds the cloud its clamp‑measured voltage/current; the
-`HME-3` (which reads a smart meter, not a clamp) sends only the energy registers.
+`x`/`A`/`B`/`C`/`ABC` charge/discharge buckets (`z`↔`x`, `d`↔`ABC`). This is
+where the cloud gets the per‑phase power and energy history the app shows. The
+`HME-4` also feeds the cloud its clamp‑measured voltage/current. The `HME-3`
+reads a smart meter rather than a clamp, so it sends only the energy registers.
 
-> **`HME-3` quirk:** the on‑wire URL has a **missing `&`** between
+> **`HME-3` quirk:** the on‑wire URL is **missing an `&`** between
 > `slv=%d` and `udp=%d` (`…&slv=%dudp=%d…`), so the slave count and udp flag run
 > together as one token. The `HME-4` template has the `&`. Replicas mimicking
 > the `HME-3` byte‑for‑byte should reproduce the quirk; a tolerant server should
 > parse `slv` as everything up to `udp=`.
 
-**Cadence.** This is a **timer‑driven, repeating** push — each report carries an
-incrementing `timeNo` and a `date`, i.e. it is scheduled, not event‑driven. The
+**Cadence.** This is a **timer‑driven, repeating** push: each report carries an
+incrementing `timeNo` and a `date`, so it is scheduled, not event‑driven. The
 exact interval between reports is **not documented** here. To get the real
 cadence, **measure it from the device** — the gap between successive
 `setCtReporting` GETs to `eu.hamedata.com` in a DNS/HTTP capture is the ground
@@ -243,12 +243,13 @@ GET http://eu.hamedata.com/app/neng/getDateInfoeu.php?uid=%s&fcv=%s&aid=%s&sv=%d
 A one‑shot handshake the device runs before reporting. The response body is just
 the server's wall‑clock time (`_YYYY_MM_DD_HH_MM_SS_…`), but **the call is also a
 device upsert**: empirically the server writes `aid`→the device record's **`type`**
-and `sv`→its **`version`** (the param names mislead — `aid` is the model, `sv` the
-firmware version, not an account id / settings version). `uid` = device id (MAC),
-`fcv` = a firmware build stamp. (`hamedata.com` is also the OTA download host.)
+and `sv`→its **`version`**. The param names mislead — `aid` is the model and `sv`
+the firmware version, not an account id or a settings version. `uid` = device id
+(MAC), `fcv` = a firmware build stamp. (`hamedata.com` is also the OTA download
+host.)
 
-> ⚠️ Because this endpoint **overwrites `type`/`version`**, sending wrong values
-> corrupts the device record — e.g. a non‑model `type` makes the Marstek app fall
+> ⚠️ Because this endpoint **overwrites `type`/`version`**, wrong values corrupt
+> the device record — a non‑model `type`, for example, makes the Marstek app fall
 > back to a generic, default‑locale device card. AstraMeter therefore sends the
 > CT model (`HME-4`/`HME-3`) as `aid` and the managed firmware version (`121`, the
 > value [§6.1] registration uses) as `sv`, so the handshake *re‑asserts* the
@@ -256,13 +257,13 @@ firmware version, not an account id / settings version). `uid` = device id (MAC)
 
 ### 6.3 What's needed to replicate, and the open unknowns
 
-Because it's plaintext GET with no signing, reproducing the requests is
-mechanical. The blockers for a cloud the real backend will *accept* are identity
-and semantics, not crypto:
+Because it's a plaintext GET with no signing, reproducing the requests is
+mechanical. What blocks a cloud the real backend will *accept* is identity and
+semantics, not crypto:
 
-- **The report `id` (MAC)** must be a device the cloud already knows. The
-  associated‑account binding comes from having registered/paired that device;
-  `setCtReporting` itself carries no account id.
+- **The report `id` (MAC)** must be a device the cloud already knows. The binding
+  to an account comes from having registered/paired that device; `setCtReporting`
+  itself carries no account id.
 - **Field units/scaling/sign** and the **report cadence** are not documented
   here. A single DNS‑redirect + HTTP‑proxy capture of a real CT yields them.
 
@@ -279,27 +280,27 @@ and semantics, not crypto:
 
 The `mqtt_insights:` Marstek responder
 (`src/astrameter/mqtt_insights/marstek_mqtt.py`) emulates the **`cd=1`** runtime
-frame and the **`cd=4`** slave list against a local broker so the app shows live
+frame and the **`cd=4`** slave list against a local broker, so the app shows live
 grid power via [hame‑relay](https://github.com/tomquist/hame-relay). It emits a
 tolerant superset rather than a byte‑exact copy (different key order, extra
 `kwh/...` keys, comma‑joined `cd=4` rows); see that module's note. AstraMeter does
 **not** implement the auxiliary `cd` frames (§5.3–§5.6) or the mutual‑TLS cloud
-MQTT connection — those are documented here for completeness and for anyone aiming
+MQTT connection. Those are documented here for completeness, and for anyone aiming
 to fully replicate a real CT.
 
 **HTTP cloud reporting is implemented as an opt‑in feature** (§6) on **both**
-stacks. In Python set `CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]` section;
-on ESPHome add a `cloud_reporting:` sub‑block under `ct002:` (it needs an
-`http_request:` block). Either way AstraMeter runs the same
-handshake‑then‑periodic‑`setCtReporting` flow a real CT does, choosing the
+stacks. In Python, set `CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]`
+section; on ESPHome, add a `cloud_reporting:` sub‑block under `ct002:` (it needs
+an `http_request:` block). Either way AstraMeter runs the same
+handshake‑then‑periodic‑`setCtReporting` flow a real CT does, and picks the
 `HME-4`/`HME-3` field layout from the emulated `ct_type`. It fills the fields
 AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
 count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
-V/I on `HME-4`). The reported `id` is the CT's MAC — when a Marstek account is
+V/I on `HME-4`). The reported `id` is the CT's MAC. When a Marstek account is
 configured (the `[MARSTEK]` section, or the ESPHome `marstek_registration:`
-block), the MAC of the device AstraMeter registers there is used (the id the
-cloud already knows), otherwise the configured `CT_MAC` / `ct_mac`. The model and
-firmware version the handshake re‑asserts (§6.2) are derived automatically, so
-there is no account‑id knob to set; just tune the interval to the cadence you
-measure. The web config generator produces all three forms (config.ini, the add‑on
-options, the ESPHome sub‑block). See `config.ini.example`.
+block), it uses the MAC of the device AstraMeter registers there — the id the
+cloud already knows; otherwise it uses the configured `CT_MAC` / `ct_mac`. The
+model and firmware version the handshake re‑asserts (§6.2) are derived
+automatically, so there is no account‑id knob to set; just tune the interval to
+the cadence you measure. The web config generator produces all three forms
+(config.ini, the add‑on options, the ESPHome sub‑block). See `config.ini.example`.

@@ -6,19 +6,19 @@ GitHub Pages. It has two parts:
 1. **Landing page** (`index.html`) — what AstraMeter is, features, supported
    devices and power meters, installation options, and an FAQ.
 2. **Config generator** (`generator.html`) — a beginner-friendly tool that
-   generates an AstraMeter configuration: a Python `config.ini` (Home Assistant
+   writes an AstraMeter configuration: a Python `config.ini` (Home Assistant
    add-on / Docker / direct install) or an ESPHome YAML (run on an ESP32).
 
-Everything runs in the browser — nothing is uploaded. The generator form is
-data-driven from `ts/schema.ts`, and the landing page renders its supported-meter
-list and source counts from the same schema, so the page can't drift from the
-real capabilities.
+Everything runs in the browser — nothing is uploaded. `ts/schema.ts` drives the
+generator form, and the landing page builds its supported-meter list and source
+counts from that same schema, so the page can't drift from the real
+capabilities.
 
 ## Stack
 
-TypeScript sources in `ts/` are bundled with **esbuild** into `dist/` (the
-publishable site), type-checked with **tsc**, and tested with **tsx**. The
-GitHub ref the site links to is injected at build time (see *Deploying*).
+**esbuild** bundles the TypeScript sources in `ts/` into `dist/`, the site you
+publish. **tsc** type-checks them and **tsx** runs the tests. The build injects
+the GitHub ref the site links to (see *Deploying*).
 
 ## Files
 
@@ -32,15 +32,15 @@ GitHub ref the site links to is injected at build time (see *Deploying*).
 | `robots.txt` | Allows crawling; staging/preview de-indexing is done per page (see below). |
 | `ts/schema.ts` | Single source of truth: every powermeter, field, and tuning option, fully typed. Pure data. |
 | `ts/links.ts` | Builds every GitHub URL from the build-injected ref (`__GH_REF__`). |
-| `ts/state.ts` | State model + persistence helpers (defaults, `migrate`, sanitisation of untrusted restored input). Pure, no DOM. |
+| `ts/state.ts` | State model + persistence helpers (defaults, `migrate`, sanitising untrusted restored input). Pure, no DOM. |
 | `ts/generate.ts` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
-| `ts/app.ts` | Renders the generator form from the schema; state, live preview, save/load. Entry point → `dist/js/app.js`. |
-| `ts/site.ts` | Shared site behaviour: mobile nav, scroll state, `data-gh` link resolution, the landing page's meter list and counts. Entry point → `dist/js/site.js`. |
+| `ts/app.ts` | Draws the generator form from the schema; state, live preview, save/load. Entry point → `dist/js/app.js`. |
+| `ts/site.ts` | Shared site behaviour: mobile nav, scroll state, `data-gh` links, the landing page's meter list and counts. Entry point → `dist/js/site.js`. |
 | `ts/schema.test.ts` | Structural validation of the schema (typo guard). |
 | `ts/state.test.ts` | Tests for the state model + untrusted-input sanitisation. |
 | `ts/generate.test.ts` | Assertions for the generators. |
-| `build.mjs` | esbuild build: copies static files and fonts + bundles the entry points into `dist/`. |
-| `tools/screenshots.ts` | Regenerates the dashboard screenshots in `docs/images/` (`npm run screenshots`). Boots the real stack against a three-battery house and drives a browser; see *Screenshots* below. |
+| `build.mjs` | esbuild build: copies the static files and fonts, and bundles the entry points into `dist/`. |
+| `tools/screenshots.ts` | Redraws the dashboard screenshots in `docs/images/` (`npm run screenshots`). Boots the real stack against a three-battery house and drives a browser; see *Screenshots* below. |
 
 ## Develop locally
 
@@ -54,28 +54,28 @@ python3 -m http.server 8000 --directory dist
 # config generator: http://localhost:8000/generator.html
 ```
 
-To preview the links for another ref: `GH_REF=main npm run build`.
+To preview the links for another ref, run `GH_REF=main npm run build`.
 
 ## Screenshots
 
-The dashboard screenshots embedded by the landing page, `README.md` and
-`docs/dashboard.md` are generated, not hand-captured:
+The landing page, `README.md` and `docs/dashboard.md` embed dashboard
+screenshots. A script makes them; nobody captures them by hand:
 
 ```bash
 cd web && npm run screenshots        # ~4 minutes, writes 8 PNGs to docs/images/
 npm run screenshots -- --help       # narrow it: --tabs, --themes, --warmup, --out
 ```
 
-They live in `docs/images/` — one copy, referenced by the docs directly and
-copied into `dist/assets/screenshots/` by `build.mjs` for the landing page.
-Nothing is staged: the script boots the same stack `npm run e2e` uses (the
-battery simulator speaking real CT002 UDP to a real AstraMeter) with three
-batteries, five switchable appliances and solar, waits for the trend lines to
-fill from actual polls, and shoots each tab at a moment when the grid is held
+They live in `docs/images/` — one copy. The docs point at it directly, and
+`build.mjs` copies it into `dist/assets/screenshots/` for the landing page.
+Nothing is staged. The script boots the same stack `npm run e2e` uses — the
+battery simulator speaking real CT002 UDP to a real AstraMeter — with three
+batteries, five switchable appliances and solar. It waits for the trend lines to
+fill from actual polls, then shoots each tab at a moment when the grid is held
 near zero with every battery working.
 
-Every run produces different numbers, so there is no staleness check — refresh
-them when a UI change makes them wrong, and commit the result.
+Every run produces different numbers, so nothing checks them for staleness.
+Refresh them when a UI change makes them wrong, and commit the result.
 
 ## Test & type-check
 
@@ -84,21 +84,21 @@ npm run typecheck    # tsc --noEmit
 npm test             # schema, state, and generate suites via tsx
 ```
 
-CI runs `typecheck` + `test` + `build` before every deploy (see
+CI runs `typecheck`, `test` and `build` before every deploy (see
 `.github/workflows/pages.yml` and `.github/workflows/pr-preview.yml`).
 
 ## Save / load
 
-User progress is saved automatically to `localStorage`. Users can also:
+Your progress saves itself to `localStorage`. You can also:
 
 - **Save project file** — download the current answers as `astrameter-project.json`.
-- **Load project file** — restore from that JSON to keep iterating later.
-- **Copy share link** — encode the whole state into a URL hash to share or bookmark.
+- **Load project file** — reload that JSON later and keep going.
+- **Copy share link** — pack the whole state into a URL hash to share or bookmark.
 
 ## Deploying
 
-The build (`dist/`) is published to the **`gh-pages`** branch and served by
-GitHub Pages.
+The build (`dist/`) goes to the **`gh-pages`** branch, and GitHub Pages serves
+it.
 
 One-time setup: repository **Settings → Pages → Build and deployment → Source →
 "Deploy from a branch" → `gh-pages` / `/ (root)`**, and **Settings → Actions →
@@ -114,34 +114,35 @@ every push that touches `web/`:
 - **Staging** — pushes to **`develop`** publish under **`/develop/`**:
   `https://astrameter.com/develop/`
 - **Per-PR previews** — the *Deploy PR preview* workflow deploys each pull
-  request to `pr-preview/pr-<number>/` and comments the live URL on the PR; it's
-  removed when the PR closes. (Same-repo branches only; forks can't write
+  request to `pr-preview/pr-<number>/` and comments the live URL on the PR. It
+  goes away when the PR closes. (Same-repo branches only; forks can't write
   `gh-pages`.)
 
-Root, `/develop/`, and `/pr-preview/` all coexist on `gh-pages` (`keep_files:
-true`). The site uses only relative URLs, so it works under any subpath. They all
-serve under the custom domain, so only the **production** build (`GH_REF=main`)
-is indexable: every other build (develop, PR previews — and local builds, which
-default to `develop`) has the build inject a `<meta name="robots" content="noindex">`
-into each HTML page. `robots.txt` deliberately allows crawling so search engines
-can fetch those pages and honor the noindex (a `Disallow` would block the crawl
-and leave the URLs indexable from external links instead).
+Root, `/develop/`, and `/pr-preview/` all live side by side on `gh-pages`
+(`keep_files: true`). The site uses only relative URLs, so it works under any
+subpath. All of them serve under the custom domain, so only the **production**
+build (`GH_REF=main`) is indexable. Into every other build — develop, PR
+previews, and local builds, which default to `develop` — the build injects a
+`<meta name="robots" content="noindex">` in each HTML page. `robots.txt`
+deliberately allows crawling so search engines can fetch those pages and honor
+the noindex; a `Disallow` would block the crawl and leave the URLs indexable
+from external links instead.
 
 ### GitHub links track the deployed ref
 
-Every GitHub URL — bare repo links, README section anchors (install cards), the
-doc-file links, the per-meter reference link, and the ESPHome
-`external_components` source in generated configs — is produced by `ts/links.ts`
-from a single ref. The deploy workflow passes that ref to the build via the
-`GH_REF` env var (`main` / `develop` / the PR's `head_ref`), which esbuild bakes
-in as `__GH_REF__`. So a `main` build links to `@main`, a PR preview to the PR's
-branch, and develop to `@develop` — no post-build rewriting. (Only `/issues` is
+`ts/links.ts` builds every GitHub URL from a single ref: bare repo links, README
+section anchors (install cards), the doc-file links, the per-meter reference
+link, and the ESPHome `external_components` source in generated configs. The
+deploy workflow passes that ref to the build in the `GH_REF` env var (`main` /
+`develop` / the PR's `head_ref`), and esbuild bakes it in as `__GH_REF__`. So a
+`main` build links to `@main`, a PR preview to the PR's branch, and develop to
+`@develop` — nothing is rewritten after the build. (Only `/issues` is
 ref-agnostic.) Static HTML links carry a `data-gh` attribute that `site.ts`
 resolves at load; their hardcoded `href` is a no-JS fallback.
 
 ## Adding or editing a powermeter
 
-Almost everything lives in **`ts/schema.ts`** — common changes are a one-file
+Almost everything lives in **`ts/schema.ts`**. Common changes are a one-file
 edit, `tsc` catches type slips, and `schema.test.ts` guards the structure.
 
 **Edit an existing field** (label, help, default, placeholder, options): find the
@@ -149,7 +150,7 @@ meter in `POWERMETERS` and change the field object. Done.
 
 **Add a field to a meter**: add a `{ key, label, help, type, … }` object to that
 meter's `fields` array. `key` is the `config.ini` key. Use `phase: true` for
-per-phase values; `advanced: true` to tuck it behind the disclosure.
+per-phase values, and `advanced: true` to tuck it behind the disclosure.
 
 **Add a whole new powermeter**: append a typed entry to `POWERMETERS`:
 
@@ -175,7 +176,7 @@ per-phase values; `advanced: true` to tuck it behind the disclosure.
 
 Then, if the meter can report three phases, add its `id` to `PHASE_CAPABLE`.
 
-**The `esphome.kind` handlers are generic** — meter-specific behaviour is
+**The `esphome.kind` handlers are generic.** Meter-specific behaviour is
 declarative, so you rarely touch `ts/generate.ts`:
 
 - per-meter ESP warning → `esphome.warn` (string, or `(f) => string|null`)
@@ -183,15 +184,15 @@ declarative, so you rarely touch `ts/generate.ts`:
 - a `homeassistant`-kind source that names its own entity → `esphome.haEntity: (f) => "sensor.x"`
 - MQTT 3-phase key renames → top-level `phaseListKeys: { topic, jsonPath }`
 
-You only edit `ts/generate.ts` to introduce a brand-new `esphome.kind` — then add
-a handler and extend `ESP_KINDS` in `schema.test.ts`.
+Edit `ts/generate.ts` only to introduce a brand-new `esphome.kind`. Then add a
+handler and extend `ESP_KINDS` in `schema.test.ts`.
 
-After any change, run `npm run check` and add an assertion to
-`ts/generate.test.ts` for the new output.
+After any change, run `npm run check` and add an assertion for the new output to
+`ts/generate.test.ts`.
 
 ## Keeping it in sync
 
-The schema mirrors the options documented in the repo. The sources of truth are
+The schema mirrors the options the repo documents. The sources of truth are
 `config.ini.example`, `esphome.example.yaml`, `docs/powermeters.md`,
 `docs/esphome-powermeters.md`, and the **Configuration** section of the main
 `README.md`.

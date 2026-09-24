@@ -393,6 +393,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "TLS": {"type": "boolean"},
         "PASSWORD": {"type": "password"},
         "HA_DISCOVERY": {"type": "boolean"},
+        "STATE_THROTTLE_INTERVAL": {"type": "float", "min": 0},
     },
 }
 # Resolve aliases

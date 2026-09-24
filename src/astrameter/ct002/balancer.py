@@ -116,6 +116,46 @@ def weighted_share(
     return total * mine / total_weight
 
 
+def capped_weighted_share(
+    total: float,
+    weights: Mapping[str, float],
+    ids: Collection[str],
+    ceilings: Mapping[str, float],
+    consumer_id: str | None,
+) -> float:
+    """:func:`weighted_share`, water-filled against per-consumer ceilings.
+
+    *ceilings* holds the most each consumer can output in *total*'s direction,
+    as a magnitude; absent or zero means unlimited.  A consumer whose share
+    would pass its ceiling is fixed there and the rest of *total* is split
+    among the others, repeated until nobody is over, so the unlimited batteries
+    carry what the limited ones cannot (issue #655).
+    """
+    sign = _sign(total)
+    free = list(ids)
+    remaining = total
+    while sign != 0 and free:
+        over = [
+            cid
+            for cid in free
+            if 0.0
+            < ceilings.get(cid, 0.0)
+            < weighted_share(remaining, weights, free, cid) * sign
+        ]
+        if not over:
+            break
+        if consumer_id in over:
+            return ceilings[consumer_id] * sign
+        for cid in over:
+            remaining -= ceilings[cid] * sign
+        free = [cid for cid in free if cid not in over]
+    return weighted_share(remaining, weights, free, consumer_id)
+
+
+def _sign(value: float) -> int:
+    return 1 if value > 0 else -1 if value < 0 else 0
+
+
 def _report_of(reports: Reports, consumer_id: str | None) -> ConsumerReport:
     """*consumer_id*'s report, or :data:`NO_REPORT` when it did not report.
 
@@ -226,6 +266,30 @@ SATURATION_REFERENCE_DT = 1.0
 # A longer gap between saturation updates (battery offline) re-seeds the EMA
 # instead of dosing it with a huge rise or decay step.
 SATURATION_LONG_GAP_SECONDS = 30.0
+
+# Output ceilings (issue #655).  A battery whose firmware caps its output below
+# what the pool asks of it (a Venus limited to 800 W next to a 2500 W one) sits
+# flat at the cap however hard it is pushed.  Left alone the balancer keeps
+# handing it an even slice and pulls the unlimited battery down toward the pool
+# average, so the pool stalls short of the load.  A ceiling is learned once a
+# battery sent at least CEILING_PUSH_W further in its current direction has
+# held within CEILING_FLAT_W for CEILING_STALL_POLLS polls spanning
+# CEILING_STALL_SECONDS, at an output of at least CEILING_MIN_POWER_W (below
+# that, a battery that does not move is the saturation detector's business).
+# The push sits just above the firmware's ±20 W deadband, which a battery that
+# can move answers with at least a 10 W step per poll.
+CEILING_PUSH_W = 25.0
+CEILING_FLAT_W = 15.0
+CEILING_MIN_POWER_W = 100.0
+CEILING_STALL_POLLS = 5
+CEILING_STALL_SECONDS = 5.0
+# A battery within CEILING_AT_MARGIN_W of its ceiling counts as pinned there.
+CEILING_AT_MARGIN_W = 25.0
+# Output more than CEILING_RELEASE_W past a ceiling disproves it.
+CEILING_RELEASE_W = 30.0
+# A ceiling not confirmed for this long is forgotten, so a limit the user has
+# since raised, or one learned by mistake, does not outlive the evidence.
+CEILING_TTL_SECONDS = 600.0
 
 # ---------------------------------------------------------------------------
 # Device capabilities — every device-type decision (AC-charge eligibility, the
@@ -505,6 +569,25 @@ class BalancerConsumerState:
     # the first post-grace sample, so the next update re-seeds instead of
     # applying stale dt.
     last_saturation_update: float = 0.0
+    # Learned output ceilings (see CEILING_PUSH_W), as magnitudes per
+    # direction, and when each was last confirmed; 0.0 = none learned.
+    ceiling_discharge: float = 0.0
+    ceiling_charge: float = 0.0
+    ceiling_discharge_seen: float = 0.0
+    ceiling_charge_seen: float = 0.0
+    # The current run of pushed-but-flat polls: the output it started at, when,
+    # and how many polls it has lasted (0 = no run).
+    ceiling_run_anchor: float = 0.0
+    ceiling_run_since: float = 0.0
+    ceiling_run_polls: int = 0
+
+    def ceiling(self, sign: int) -> float:
+        """Learned ceiling in direction *sign* (+ discharge), 0.0 if none."""
+        if sign > 0:
+            return self.ceiling_discharge
+        if sign < 0:
+            return self.ceiling_charge
+        return 0.0
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1375,7 +1458,7 @@ class LoadBalancer:
         logger.debug(
             "CT002 steer %s: mode=%s rotation=%s weight=%.2f grid=%s ctrl=%s "
             "share=%s reported=%s intent=%s send=%s unpaced=%s pace_cap=%s "
-            "sat=%.2f",
+            "sat=%.2f ceil=%s/%s",
             consumer_id,
             f"manual={mode.manual_value:g}" if mode.mode == "manual" else mode.mode,
             rotation,
@@ -1389,6 +1472,8 @@ class LoadBalancer:
             self._diag_num(state.last_intent_reading if state else None),
             self._diag_num(state.pace_cap if state else None),
             state.saturation_score if state else 0.0,
+            self._diag_num((state.ceiling_discharge or None) if state else None),
+            self._diag_num((state.ceiling_charge or None) if state else None),
         )
 
     def _track_saturation(
@@ -1430,6 +1515,139 @@ class LoadBalancer:
             ),
         )
 
+    def _track_ceiling(
+        self,
+        consumer_id: str,
+        state: BalancerConsumerState,
+        consumer_mode: ConsumerMode,
+        reports: Reports,
+    ) -> None:
+        """Learn, confirm or drop this consumer's output ceilings.
+
+        Judged on ``last_target``, the reading actually put on the wire last
+        poll: it is what the battery was asked to add, and pacing can hold it
+        far below the unpaced intent.  Skipped for the same consumers as
+        :meth:`_track_saturation`, whose commands are not the pool's asks.
+        *reports* is the auto pool.
+
+        A battery sitting at a ceiling that still binds (its plain share of
+        the pool's output is past it) counts as confirming it.  Once the pool
+        has settled around the ceiling nothing pushes the battery any more,
+        and letting the ceiling lapse then would pull the unlimited batteries
+        back down until it is relearned.
+        """
+        if (
+            consumer_id not in reports
+            or consumer_mode.mode == "manual"
+            or consumer_id in self._probe_participants()
+            or consumer_id in self._deprioritized
+        ):
+            return
+        now = self._clock()
+        power = float(_report_of(reports, consumer_id).power)
+        sign = _sign(power)
+        ceiling = state.ceiling(sign)
+        if ceiling > 0.0 and power * sign >= ceiling - CEILING_AT_MARGIN_W:
+            share = weighted_share(
+                sum(r.power for r in reports.values()),
+                {cid: r.weight for cid, r in reports.items()},
+                reports,
+                consumer_id,
+            )
+            if share * sign >= ceiling + CEILING_PUSH_W:
+                if sign > 0:
+                    state.ceiling_discharge_seen = now
+                else:
+                    state.ceiling_charge_seen = now
+        for sign in (1, -1):
+            ceiling = state.ceiling(sign)
+            if ceiling <= 0.0:
+                continue
+            seen = (
+                state.ceiling_discharge_seen if sign > 0 else state.ceiling_charge_seen
+            )
+            if power * sign > ceiling + CEILING_RELEASE_W:
+                self._set_ceiling(consumer_id, state, sign, 0.0, now, "exceeded")
+            elif now - seen > CEILING_TTL_SECONDS:
+                self._set_ceiling(consumer_id, state, sign, 0.0, now, "expired")
+
+        sign = _sign(power)
+        sent = state.last_target
+        pushed = (
+            sign != 0
+            and abs(power) >= CEILING_MIN_POWER_W
+            and sent is not None
+            and sent * sign >= CEILING_PUSH_W
+        )
+        if (
+            not pushed
+            or state.ceiling_run_polls == 0
+            or abs(power - state.ceiling_run_anchor) > CEILING_FLAT_W
+        ):
+            state.ceiling_run_anchor = power
+            state.ceiling_run_since = now
+            state.ceiling_run_polls = 1 if pushed else 0
+            return
+        state.ceiling_run_polls += 1
+        if (
+            state.ceiling_run_polls >= CEILING_STALL_POLLS
+            and now - state.ceiling_run_since >= CEILING_STALL_SECONDS
+        ):
+            self._set_ceiling(consumer_id, state, sign, abs(power), now, "held")
+
+    @staticmethod
+    def _set_ceiling(
+        consumer_id: str,
+        state: BalancerConsumerState,
+        sign: int,
+        value: float,
+        now: float,
+        reason: str,
+    ) -> None:
+        """Record (or with ``value == 0`` drop) a ceiling in direction *sign*."""
+        previous = state.ceiling(sign)
+        if sign > 0:
+            state.ceiling_discharge = value
+            state.ceiling_discharge_seen = now
+        else:
+            state.ceiling_charge = value
+            state.ceiling_charge_seen = now
+        direction = "discharge" if sign > 0 else "charge"
+        if value > 0.0 and previous <= 0.0:
+            logger.info(
+                "CT002: %s holds at %.0f W %s though asked for more; "
+                "treating that as its limit",
+                consumer_id,
+                value,
+                direction,
+            )
+        elif value <= 0.0 and previous > 0.0:
+            logger.info(
+                "CT002: %s %s limit of %.0f W %s",
+                consumer_id,
+                direction,
+                previous,
+                reason,
+            )
+
+    def _ceilings(self, ids: Collection[str], sign: int) -> dict[str, float]:
+        """Learned ceilings of *ids* in direction *sign*, where one is known."""
+        out: dict[str, float] = {}
+        for cid in ids:
+            state = self._consumers.get(cid)
+            ceiling = state.ceiling(sign) if state is not None else 0.0
+            if ceiling > 0.0:
+                out[cid] = ceiling
+        return out
+
+    def _pinned(self, reports: Reports, ids: Collection[str], sign: int) -> set[str]:
+        """Consumers of *ids* already at their ceiling in direction *sign*."""
+        return {
+            cid
+            for cid, ceiling in self._ceilings(ids, sign).items()
+            if _report_of(reports, cid).power * sign >= ceiling - CEILING_AT_MARGIN_W
+        }
+
     def compute_target(
         self,
         consumer_id: str | None,
@@ -1466,6 +1684,12 @@ class LoadBalancer:
         if consumer_id:
             state = self._get_consumer(consumer_id)
             self._track_saturation(consumer_id, state, consumer_mode, active_reports)
+            self._track_ceiling(
+                consumer_id,
+                state,
+                consumer_mode,
+                {cid: r for cid, r in active_reports.items() if cid not in manual},
+            )
 
         if consumer_mode.mode == "manual" and state is not None:
             reported = _report_of(active_reports, consumer_id).power
@@ -1985,9 +2209,14 @@ class LoadBalancer:
         against the predicted grid direction — zeroing the balancing term too
         would make equalization one-sided near steady state (issue #523).
         """
-        fair_share = self._fair_share(consumer_id, reports, control_grid, eff_part)
+        # Batteries already at their ceiling in the direction the grid asks
+        # for cannot take a slice of it (issue #655).
+        pinned = self._pinned(reports, eff_part, _sign(control_grid))
+        fair_share = self._fair_share(
+            consumer_id, reports, control_grid, eff_part, pinned
+        )
         concentrated = self._concentrated_share(
-            consumer_id, reports, control_grid, eff_part, charge_blind
+            consumer_id, reports, control_grid, eff_part, charge_blind, pinned
         )
         if concentrated is not None:
             fair_share = concentrated
@@ -2095,6 +2324,7 @@ class LoadBalancer:
         reports: Reports,
         control_grid: float,
         eff_part: dict[str, float],
+        pinned: Collection[str] = (),
     ) -> float:
         """This consumer's weight-proportional slice of the grid error.
 
@@ -2103,13 +2333,22 @@ class LoadBalancer:
         map (participation and probing).  The ``total_effective > 0`` guard also
         covers every share rounding to zero (charge-blind / faded / zero-weight):
         fall back to an even split.
+
+        The *pinned* batteries (at their ceiling in the grid's direction) cannot
+        act on a slice, so the others split the whole error between them.  A
+        pinned battery still gets its nominal slice as a push: that is what
+        confirms its ceiling, and what exposes one that has since been raised.
         """
         share_part = {
             cid: eff_part[cid] * _report_of(reports, cid).weight for cid in eff_part
         }
         total_effective = sum(share_part.values())
         if consumer_id and consumer_id in reports and total_effective > 0:
-            return (control_grid / total_effective) * share_part.get(consumer_id, 1.0)
+            mine = share_part.get(consumer_id, 1.0)
+            free_total = sum(v for cid, v in share_part.items() if cid not in pinned)
+            if consumer_id not in pinned and free_total > 0:
+                return (control_grid / free_total) * mine
+            return (control_grid / total_effective) * mine
         return control_grid / max(1, len(reports))
 
     def _concentrated_share(
@@ -2119,6 +2358,7 @@ class LoadBalancer:
         control_grid: float,
         eff_part: dict[str, float],
         charge_blind: set[str],
+        pinned: Collection[str] = (),
     ) -> float | None:
         """Deadband concentration, or ``None`` when it doesn't apply this tick.
 
@@ -2129,12 +2369,15 @@ class LoadBalancer:
         units take no share) on the *same* phase (``control_grid`` sums phases),
         gated on ``fair_distribution`` and on the pool already being balanced so
         it never suppresses the equalization of a real imbalance (issue #523).
+        A battery *pinned* at its ceiling in the grid's direction is left out:
+        it is often the most active, and cannot act on the correction.
         """
         cfg = self._cfg
         conc_ids = [
             cid
             for cid in reports
             if cid not in charge_blind
+            and cid not in pinned
             and eff_part.get(cid, 0.0) > 0.1
             and reports[cid].weight > 0.0
         ]
@@ -2415,9 +2658,12 @@ class LoadBalancer:
             return False
         actual_total = sum(_report_of(reports, cid).power for cid in conc_ids)
         weights = {cid: _report_of(reports, cid).weight for cid in conc_ids}
+        ceilings = self._ceilings(conc_ids, _sign(actual_total))
         for cid in conc_ids:
             actual_self = _report_of(reports, cid).power
-            target_share = weighted_share(actual_total, weights, conc_ids, cid)
+            target_share = capped_weighted_share(
+                actual_total, weights, conc_ids, ceilings, cid
+            )
             if abs(target_share - actual_self) >= deadband:
                 return False
         return True
@@ -2441,9 +2687,17 @@ class LoadBalancer:
         # total output, so the configured ratio is the steady state; with
         # neutral weights this is the plain average.  Participation is still
         # decided by ``eff_part`` above, so a small weight never drops a
-        # healthy battery from the pool.
+        # healthy battery from the pool.  A battery's share stops at its
+        # learned ceiling and the rest goes to the others, so an unlimited
+        # battery is not pulled down toward limited ones (issue #655).
         weights = {cid: _report_of(reports, cid).weight for cid in participating}
-        target_share = weighted_share(actual_total, weights, participating, consumer_id)
+        target_share = capped_weighted_share(
+            actual_total,
+            weights,
+            participating,
+            self._ceilings(participating, _sign(actual_total)),
+            consumer_id,
+        )
         error = target_share - actual_self
         err_abs = abs(error)
         if cfg.balance_deadband > 0 and err_abs < cfg.balance_deadband:

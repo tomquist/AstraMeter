@@ -34,6 +34,17 @@ stack. Shared behavior lands on **both** sides in the same change;
   a device write with no `value` (except the `force_rotation` button, which
   carries none), requires a JSON number where Python accepts anything `float()`
   swallows, and ignores `device_id`, having one device to write to.
+
+  A dashboard write is mirrored onto its retained MQTT command topic so the
+  broker's replay on the next reconnect agrees with it — but **only settings**.
+  A button (`controls.py`'s `DEVICE_BUTTONS` ↔ `controls.cpp`'s, read through
+  `is_device_button` on both) has no retained state to protect, and publishing
+  a press retained fires the action a second time off our own command
+  subscription and again on every reconnect. A fourth divergence follows: only
+  Python also ignores a *retained* press the broker replays and clears it off
+  the topic, because the firmware's `MQTTClient::subscribe` callback is handed
+  `(topic, payload)` with no retain flag. It needs no such cleanup anyway,
+  having never published a press.
 - **Configuration** — permanently waived. An ESPHome device's config is compiled
   into its firmware, so there is nothing for a dashboard to write; the page hides
   its Configuration tab when the backend reports no `config_mode`.

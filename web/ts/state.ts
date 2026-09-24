@@ -169,6 +169,12 @@ export function migrate(s: any): State {
     const first = meters[0];
     meters = [first && first.type === "homeassistant" ? first : cleanMeter(newMeter("homeassistant"))];
   }
+  // ESPHome-only sources have no Python section, so a saved/shared state that
+  // pairs one with another target would generate a config.ini the loader
+  // rejects. Fall back to the default meter instead.
+  if (target !== "esphome") {
+    meters = meters.map((m: Meter) => (getPowermeter(m.type)?.esphomeOnly ? cleanMeter(newMeter(d.meters[0].type)) : m));
+  }
   return {
     ...d,
     ...s,

@@ -23,7 +23,11 @@ from aiohttp import web
 
 from astrameter.addon_client import SupervisorClient
 from astrameter.config.logger import logger
-from astrameter.ct002.controls import CONSUMER_CONTROLS_BY_FIELD, apply_device_control
+from astrameter.ct002.controls import (
+    CONSUMER_CONTROLS_BY_FIELD,
+    apply_device_control,
+    is_device_button,
+)
 from astrameter.status.assets import dashboard_html
 from astrameter.status.config_mode import materialize_config
 from astrameter.status.secrets import redact_sections, restore_sections
@@ -553,7 +557,14 @@ class WebServer:
             self._actor(request),
         )
         insights = self._insights()
-        if insights is not None:
+        # Settings are mirrored so the retained command the broker replays on
+        # the next reconnect agrees with what the user just set.  A button has
+        # no such state: mirroring one publishes a *retained press*, which the
+        # broker hands straight back to our own command subscription — firing
+        # the action a second time on every click — and re-fires it on every
+        # reconnect thereafter.  ``dashboard.cpp`` skips buttons for the same
+        # reason.
+        if insights is not None and not is_device_button(field):
             await self._mirror_to_mqtt(
                 "device",
                 lambda: insights.publish_device_command(device_id, {field: value}),

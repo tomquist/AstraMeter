@@ -1,13 +1,13 @@
 # AstraMeter
 
-> **Formerly known as b2500-meter.** The project was renamed to reflect support
-> for the full range of Marstek storage systems (B2500, Jupiter, Venus, …), not
-> just the B2500.
+> **Formerly known as b2500-meter.** We renamed the project because it supports
+> the full range of Marstek storage systems (B2500, Jupiter, Venus, …), not just
+> the B2500.
 
 AstraMeter emulates Smart Meter devices for Marstek storage systems such as the
-B2500, Jupiter, and Venus, while letting you feed it from almost any real smart
-meter. Your storage system sees a meter it understands; AstraMeter reads your
-actual grid power from a source of your choosing and steers the batteries toward
+B2500, Jupiter, and Venus. You can feed it from almost any real smart meter.
+Your storage system sees a meter it understands, while AstraMeter reads your
+actual grid power from a source you choose and steers the batteries toward
 net-zero grid exchange.
 
 <picture>
@@ -32,33 +32,33 @@ net-zero grid exchange.
 
 It does this by emulating one or more of these devices:
 
-- **CT002 / CT003** (Marstek's native CT protocol) — use for **multiple** storage
-  devices; it coordinates a shared target across the fleet.
+- **CT002 / CT003** (Marstek's native CT protocol) — use this for **multiple**
+  storage devices. It coordinates one shared target across the whole fleet.
 - **Shelly Pro 3EM** — uses port 1010 (B2500 firmware up to v224) and port 2220
-  (B2500 firmware v226+); target a specific port with `shellypro3em_old` (1010) or
+  (B2500 firmware v226+). To pick one port, use `shellypro3em_old` (1010) or
   `shellypro3em_new` (2220).
 - **Shelly EM gen3**
 - **Shelly Pro EM50**
 
 > **Which device type?** Use **CT002**/**CT003** when you steer **multiple**
-> storage devices; use a **Shelly** type (`shellypro3em`, `shellyemg3`,
-> `shellyproem50`, …) otherwise. See
+> storage devices. Otherwise use a **Shelly** type (`shellypro3em`,
+> `shellyemg3`, `shellyproem50`, …). See
 > [CT002 / CT003 steering](docs/ct002.md) and the
 > [Configuration reference](docs/configuration.md).
 
 ## ⚡ Quick start with the config generator
 
-The easiest way to get going is the
-[**config generator**](https://astrameter.com/generator.html): a
-beginner-friendly tool that asks a few questions about your power meter and
-produces a ready-to-use `config.ini` (Home Assistant add-on / Docker / direct
-install) or ESPHome YAML, explaining each option as you go. It runs entirely in
-your browser — nothing is uploaded — and you can save, share, and reload your
+The easiest way to start is the
+[**config generator**](https://astrameter.com/generator.html). This
+beginner-friendly tool asks a few questions about your power meter and writes a
+ready-to-use `config.ini` (Home Assistant add-on / Docker / direct install) or
+ESPHome YAML, explaining each option as you go. It runs entirely in your
+browser — nothing is uploaded — and you can save, share, and reload your
 answers.
 
 ## Installation
 
-AstraMeter can be installed and run in several ways:
+You can install and run AstraMeter in several ways:
 
 | Method | Best for | Guide |
 |--------|----------|-------|
@@ -67,14 +67,14 @@ AstraMeter can be installed and run in several ways:
 | **Direct (Python)** | Development or custom setups | [docs/installation/direct.md](docs/installation/direct.md) |
 | **ESPHome on an ESP32** | A dedicated board, no server | [docs/installation/esphome.md](docs/installation/esphome.md) |
 
-When AstraMeter is running, switch your Marstek battery to "Self-Adaptation" mode
-to enable the powermeter functionality.
+Once AstraMeter is running, switch your Marstek battery to "Self-Adaptation"
+mode to turn on the powermeter functionality.
 
 ## Supported power meter sources
 
-AstraMeter reads your real grid power from a wide range of sources. The full
-per-source `config.ini` reference lives in
-**[docs/powermeters.md](docs/powermeters.md)**; for the ESPHome external
+AstraMeter reads your real grid power from many kinds of source. For the
+`config.ini` settings of each one, see
+**[docs/powermeters.md](docs/powermeters.md)**. For the ESPHome external
 component, see **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)**.
 
 Supported sources include: Shelly, Tasmota, Shrdzm, Emlog, ioBroker, Home
@@ -85,9 +85,9 @@ and SML.
 
 ## Configuration
 
-Configuration is managed via a `config.ini` file (or ESPHome YAML on an ESP32).
+You configure AstraMeter in a `config.ini` file, or in ESPHome YAML on an ESP32.
 Start with the [**config generator**](https://astrameter.com/generator.html),
-then consult the reference docs as needed:
+then read the reference docs as needed:
 
 - **[Configuration reference](docs/configuration.md)** — general options, value
   transformation, the PID controller, and running multiple powermeters.
@@ -96,10 +96,10 @@ then consult the reference docs as needed:
 - **[CT002 / CT003 steering](docs/ct002.md)** — the CT emulator, active control,
   multi-battery balancing, efficiency optimization, and Marstek cloud
   registration.
-- **[Live status dashboard](docs/dashboard.md)** — the built-in web UI showing
-  live grid and per-battery state, and editing your configuration from the
-  browser. On by default in the Home Assistant add-on and in Docker or
-  standalone runs; an ESP32 can serve it too.
+- **[Live status dashboard](docs/dashboard.md)** — the built-in web UI. It shows
+  live grid and per-battery state, and lets you edit your configuration in the
+  browser. It is on by default in the Home Assistant add-on and in Docker or
+  standalone runs, and an ESP32 can serve it too.
 - **[MQTT Insights & Home Assistant entities](docs/mqtt-insights.md)** —
   publishing internal state to MQTT, HA Device Discovery, and per-battery
   controls.
@@ -108,9 +108,9 @@ then consult the reference docs as needed:
 
 ## Testing without hardware
 
-The bundled **[simulator](docs/simulator.md)** (`astra-sim`) simulates N batteries
-speaking the CT002 UDP protocol and serves a powermeter endpoint, so you can
-exercise the full emulator and balancer end-to-end without any real devices.
+The bundled **[simulator](docs/simulator.md)** (`astra-sim`) mimics N batteries
+speaking the CT002 UDP protocol and serves a powermeter endpoint. You can run
+the full emulator and balancer end-to-end without any real devices.
 
 ## Help & reference
 
@@ -125,5 +125,5 @@ exercise the full emulator and balancer end-to-end without any real devices.
 
 ## License
 
-This project is licensed under the General Public License v3.0 — see the
+This project uses the General Public License v3.0. See the
 [LICENSE](LICENSE) file for details.

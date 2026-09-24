@@ -205,12 +205,56 @@ def _host_name(host: str) -> str:
     return host
 
 
+def _configured_host_name(entry: str) -> str:
+    """The name inside an allowlist *entry*, without a URL's scheme and path.
+
+    Only used to tell a bare name from the address someone pasted out of their
+    browser — the comparison itself stays on ``Host`` header values.
+    """
+    name = entry.strip()
+    scheme = name.find("://")
+    if scheme != -1:
+        name = name[scheme + len("://") :]
+    for separator in ("/", "?", "#"):
+        cut = name.find(separator)
+        if cut != -1:
+            name = name[:cut]
+    return _host_name(name)
+
+
 def parse_allowed_hosts(value: str | Iterable[str] | None) -> tuple[str, ...]:
-    """Normalise the configured host allowlist to compare against."""
+    """Normalise the configured host allowlist to compare against.
+
+    Entries are host names. ``https://astrameter.example.com:1234`` is the
+    address you type, not the one the browser sends, so it can never match the
+    ``Host`` header and is dropped with a warning rather than sitting in the
+    list looking like it works.
+    """
     if not value:
         return ()
     items = value.split(",") if isinstance(value, str) else value
-    return tuple(name for name in (_normalise_host(item) for item in items) if name)
+    names = []
+    for item in items:
+        name = _normalise_host(item)
+        if not name:
+            continue
+        plain = _normalise_host(_configured_host_name(item))
+        if plain == name:
+            names.append(name)
+        elif plain:
+            logger.warning(
+                "Ignoring %r in DASHBOARD_ALLOWED_HOSTS: entries are host "
+                "names, not URLs — a browser sends no scheme, port or path in "
+                "the Host header. List %r instead.",
+                item.strip(),
+                plain,
+            )
+        else:
+            logger.warning(
+                "Ignoring %r in DASHBOARD_ALLOWED_HOSTS: it holds no host name.",
+                item.strip(),
+            )
+    return tuple(names)
 
 
 def _normalise_host(name: str) -> str:
