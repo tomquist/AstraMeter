@@ -1,6 +1,18 @@
 // Lightweight assertions for the config generators. Run with:
 //   node web/js/generate.test.mjs
+import { readFileSync } from "node:fs";
 import { generateConfigIni, generateEsphome, generateHomeAssistant } from "./generate.js";
+import {
+  CT_ACTIVE,
+  CT_BALANCER,
+  CT_BASIC,
+  CT_CLOUD,
+  CT_DC_KEEPALIVE,
+  CT_EFFICIENCY,
+  CT_SATURATION,
+  PER_METER_TUNING,
+  type Field,
+} from "./schema.js";
 
 let failures = 0;
 function ok(cond, msg) {
@@ -808,6 +820,80 @@ const haDashReadOnly = generateHomeAssistant({
   ct: { fields: {} },
 });
 has(haDashReadOnly, "dashboard_allow_write: false", "ha-opts: read-only dashboard is emitted");
+
+
+// ── Home Assistant add-on options: every editor field the add-on offers ──────
+// An add-on option named after an editor field (the INI key, lower-cased) must
+// come out of the add-on generator when that field is set; otherwise a user who
+// fills it in and picks the add-on target silently loses it. Driven by the
+// add-on's own schema block, so a newly offered option is covered without
+// touching this test.
+{
+  const yaml = readFileSync(new URL("../../ha_addon/config.yaml", import.meta.url), "utf8");
+  const offered = new Set<string>();
+  let inSchema = false;
+  for (const line of yaml.split("\n")) {
+    if (/^schema:/.test(line)) {
+      inSchema = true;
+      continue;
+    }
+    if (!inSchema) continue;
+    const match = /^ {2}([a-z0-9_]+):/.exec(line);
+    if (match) offered.add(match[1]);
+    else if (/^\S/.test(line)) break;
+  }
+  ok(offered.size > 40, "ha-opts coverage: the add-on's schema block was found and parsed");
+
+  // A value the generator cannot mistake for "unset": the last choice of a
+  // select (never the blank "default" entry), else something non-zero.
+  const sample = (fld: Field): string | boolean => {
+    if (fld.type === "checkbox") return true;
+    if (fld.type === "select") return fld.options![fld.options!.length - 1].value;
+    if (fld.type === "number") return "7";
+    return "x";
+  };
+  // Editor fields that share an add-on option's name but are not its source.
+  const NOT_THE_SOURCE: Record<string, string> = {
+    // The add-on reads it from the General card's dedupe field; the CT card's
+    // copy is the ESPHome `dedupe_window`.
+    DEDUPE_TIME_WINDOW: "general.dedupeTimeWindow",
+  };
+  const pick = (fields: Field[]) =>
+    fields.filter((fld) => offered.has(fld.key.toLowerCase()) && !(fld.key in NOT_THE_SOURCE));
+  const ctFields = pick([
+    ...CT_BASIC,
+    ...CT_ACTIVE,
+    ...CT_BALANCER,
+    ...CT_DC_KEEPALIVE,
+    ...CT_EFFICIENCY,
+    ...CT_SATURATION,
+    ...CT_CLOUD,
+  ]);
+  const tuningFields = pick(PER_METER_TUNING);
+  ok(ctFields.length > 20, "ha-opts coverage: CT fields matched add-on options");
+  ok(tuningFields.length > 5, "ha-opts coverage: meter tuning fields matched add-on options");
+
+  const out = generateHomeAssistant({
+    target: "homeassistant",
+    general: { deviceTypes: ["ct002"] },
+    meters: [
+      {
+        type: "homeassistant",
+        phases: 1,
+        fields: { CURRENT_POWER_ENTITY: "sensor.p" },
+        tuning: Object.fromEntries(tuningFields.map((fld) => [fld.key, sample(fld)])),
+      },
+    ],
+    ct: { fields: Object.fromEntries(ctFields.map((fld) => [fld.key, sample(fld)])) },
+  });
+  for (const fld of [...ctFields, ...tuningFields]) {
+    const option = fld.key.toLowerCase();
+    ok(
+      new RegExp(`^${option}:`, "m").test(out),
+      `ha-opts coverage: ${fld.key} is emitted as the add-on option ${option}`,
+    );
+  }
+}
 
 
 console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));

@@ -43,6 +43,61 @@ jobs:
       - name: Mypy
         run: uv run mypy src/
 
+  # A reminder, never a failure: refactors, tooling and test-only work rightly
+  # skip the changelog (CLAUDE.md), and no path list can tell those apart from
+  # a user-facing change. It warns on the PR when shipped code changed but
+  # CHANGELOG.md did not; the `no-changelog` label silences it.
+  changelog-nudge:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # The base commit has to be present to diff against it.
+          fetch-depth: 0
+
+      - name: Look for a changelog entry
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SILENCED: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+          # What ships to users: the Python service, the add-on, the ESPHome
+          # component and the web editor / dashboard sources.
+          SHIPPED: '^(src/astrameter/|ha_addon/|esphome/components/|web/ts/)'
+        run: |
+          if [ "$SILENCED" = "true" ]; then
+            echo "Silenced by the 'no-changelog' label."
+            exit 0
+          fi
+          if ! changed=$(git diff --name-only "$BASE_SHA...HEAD"); then
+            echo "Could not diff against $BASE_SHA; skipping."
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md is updated."
+            exit 0
+          fi
+          # Tests beside the code ship nothing, and neither does the add-on's
+          # CHANGELOG.md, which is a symlink to the root one.
+          shipped=$(printf '%s\n' "$changed" \
+            | grep -E "$SHIPPED" \
+            | grep -vE '(_test\.py|\.test\.ts)$|^ha_addon/CHANGELOG\.md$' || true)
+          if [ -z "$shipped" ]; then
+            echo "Nothing user-facing changed."
+            exit 0
+          fi
+          msg="This PR changes shipped code but not CHANGELOG.md. If users will notice the change, add one bullet under '## Next'; for a refactor, tooling or test-only change, label the PR 'no-changelog'."
+          echo "::warning file=CHANGELOG.md,title=No changelog entry::$msg"
+          {
+            echo "### No changelog entry"
+            echo
+            echo "$msg"
+            echo
+            echo "Shipped files changed:"
+            echo
+            printf '%s\n' "$shipped" | sed 's/^/- `/; s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   ct002-host-protocol:
     needs: [ lint ]
     runs-on: ubuntu-latest
