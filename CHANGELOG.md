@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** the saturation probe window and stall timeout as Home Assistant add-on options, so a battery whose inverter is slow to wake from sleep is no longer passed over in the efficiency rotation ([#677](https://github.com/tomquist/astrameter/pull/677)).
+
 - **Fixed** a larger battery holding back under heavy load when the others in the pool have a lower output limit, leaving the house drawing a few hundred watts from the grid ([#655](https://github.com/tomquist/astrameter/issues/655), [#679](https://github.com/tomquist/astrameter/pull/679)).
 
 - **Added** `STATE_THROTTLE_INTERVAL`, which limits how often each battery's state is published to MQTT. Batteries poll about once a second, and on a small machine that stream can cost the subscriber more CPU than the broker ([#663](https://github.com/tomquist/astrameter/issues/663), [#669](https://github.com/tomquist/astrameter/pull/669)). Set it to the coarsest resolution your Home Assistant graphs can live with; `0`, the default, keeps publishing on every poll.
