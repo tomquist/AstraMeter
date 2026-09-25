@@ -69,7 +69,7 @@ if (pmList) {
     const item = document.createElement("li");
     item.innerHTML =
       `<span class="pm-name">${name}</span>` +
-      `<span class="pm-right"><span class="pm-esp pm-${tier}">${support}</span>` +
+      `<span class="pm-right"><span class="pm-esp">${support}</span>` +
       `<span class="pm-docs"><span>Docs</span>${docs}</span></span>`;
     pmList.appendChild(item);
   }
