@@ -919,6 +919,9 @@ def read_mqtt_insights_config(
                     addon_slug=("ADDON_SLUG", str),
                     marstek_mqtt_enabled=("MARSTEK_MQTT_ENABLED", bool),
                     marstek_mqtt_interval=("MARSTEK_MQTT_INTERVAL", float),
+                    cloud_reporting_aux_topic=(
+                        "CLOUD_REPORTING_AUX_TOPIC", str
+                    ),
                     powermeter_health_interval=("POWERMETER_HEALTH_INTERVAL", float),
                     state_throttle_interval=("STATE_THROTTLE_INTERVAL", float),
                 ),

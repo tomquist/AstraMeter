@@ -112,6 +112,11 @@ class MqttInsightsConfig:
     # publish power values for every registered binding at this cadence so the
     # Marstek app stays up-to-date without relying solely on its own polls.
     marstek_mqtt_interval: float = 300.0
+    # Optional JSON topic carrying auxiliary meter data for the HME-4 HTTP
+    # cloud reporter. The topic uses this MQTT connection and is ignored when
+    # blank. Expected keys are voltage_l1..3 and current_l1..3.
+    cloud_reporting_aux_topic: str = ""
+
     # Per-powermeter "Online" diagnostic sensor publish cadence (seconds).
     # 0 disables the health loop entirely.
     powermeter_health_interval: float = 30.0
@@ -219,6 +224,10 @@ class MqttInsightsService:
         # reconnect / shutdown. Keyed by binding device_id so we serialize
         # work per binding (skip spawning while a prior task is in flight).
         self._marstek_tasks_by_binding: dict[str, asyncio.Task[None]] = {}
+        # Latest JSON document from CLOUD_REPORTING_AUX_TOPIC. The cloud
+        # reporter interprets only the optional keys it knows.
+        self._cloud_reporting_aux: dict[str, Any] = {}
+
 
     def on_ct002_response(
         self, device_id: str, consumer_id: str, data: dict[str, Any]
@@ -307,6 +316,10 @@ class MqttInsightsService:
     def connected(self) -> bool:
         """True once connected *and* subscribed (cleared on every drop)."""
         return self._connected.is_set()
+
+    def cloud_reporting_aux_snapshot(self) -> dict[str, Any]:
+        """Return a copy of the latest auxiliary meter JSON document."""
+        return dict(self._cloud_reporting_aux)
 
     async def start(self) -> None:
         self._connected.clear()
@@ -459,6 +472,9 @@ class MqttInsightsService:
 
         await client.subscribe(consumer_command_filter(cfg.base_topic))
         await client.subscribe(device_command_filter(cfg.base_topic))
+        if cfg.cloud_reporting_aux_topic:
+            await client.subscribe(cfg.cloud_reporting_aux_topic)
+
 
         # Store the client so register_marstek() called while already connected
         # can live-subscribe, and so the dashboard write path has a connection
@@ -904,6 +920,28 @@ class MqttInsightsService:
 
         async for message in client.messages:
             topic_str = str(message.topic)
+            if (
+                self._config.cloud_reporting_aux_topic
+                and topic_str == self._config.cloud_reporting_aux_topic
+            ):
+                raw = message.payload
+                try:
+                    payload_str = raw.decode() if isinstance(raw, bytes) else str(raw)
+                    document = json.loads(payload_str)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    logger.warning(
+                        "Invalid CLOUD_REPORTING_AUX_TOPIC JSON on %s", topic_str
+                    )
+                    continue
+                if not isinstance(document, dict):
+                    logger.warning(
+                        "CLOUD_REPORTING_AUX_TOPIC payload on %s is not a JSON object",
+                        topic_str,
+                    )
+                    continue
+                self._cloud_reporting_aux = document
+                continue
+
             if topic_str.startswith("hame_energy/") or topic_str.startswith(
                 "marstek_energy/"
             ):
