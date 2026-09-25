@@ -47,9 +47,8 @@ An option only one entry point understands is a bug. Adding or renaming a
 `tests/test_addon_golden_settings.py` and `dashboard.test.ts` fail until steps 5
 and 6 are done — `addon_schema_test.py` and `dashboard.test.ts` also fail on an
 entry for an option that no longer exists — and `generate.test.ts` fails until
-step 4 emits an add-on option named after an editor field, so an option that
-does nothing cannot ship. None of them checks that `app.ts` shows the field for
-the add-on target; that stays on you.
+step 4 emits an add-on option named after an editor field. None of them checks
+that `app.ts` shows the field for the add-on target, so check that by hand.
 
 ## Verifying the add-on container
 

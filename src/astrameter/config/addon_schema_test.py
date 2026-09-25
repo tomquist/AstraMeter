@@ -89,8 +89,21 @@ def translated_options() -> dict[str, dict[str, str]]:
             continue
         entry = re.match(r"\s{4}(name|description):\s*(.*)$", line)
         assert entry and current is not None, f"unexpected translation line: {line!r}"
-        current[entry.group(1)] = entry.group(2).strip().strip('"').strip("'")
+        current[entry.group(1)] = _scalar(entry.group(2))
     return options
+
+
+def _scalar(raw: str) -> str:
+    """A one-line YAML scalar's text, or ``""`` when it is null or blank.
+
+    Quoted scalars lose their quotes; a plain one loses a trailing ``# comment``
+    — which is all of ``name: # TODO`` — as YAML would.
+    """
+    raw = raw.strip()
+    if raw[:1] in ('"', "'"):
+        return raw[1 : raw.rindex(raw[0])] if raw.count(raw[0]) > 1 else ""
+    value = re.split(r"(?:^|\s)#", raw, maxsplit=1)[0].strip()
+    return "" if value in ("~", "null") else value
 
 
 def mapped_options() -> set[str]:

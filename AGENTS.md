@@ -66,7 +66,7 @@ several PRs edits that same bullet rather than adding one each. `## Next`
 holding several bullets is normal and correct — one per change heading into
 the release — but never touch a bullet belonging to a different change. Skip
 `CHANGELOG.md` entirely for refactors, tooling and tests-only work, and label
-the PR `no-changelog` so CI's reminder (the `changelog-nudge` job) stays quiet.
+the PR `no-changelog` so CI's reminder (the `changelog-nudge` workflow) stays quiet.
 
 Write it for the user: the visible problem and outcome, **one sentence of about
 30 words**, no implementation details (internal names, config mechanics, parity
