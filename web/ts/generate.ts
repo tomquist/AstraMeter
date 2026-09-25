@@ -813,6 +813,10 @@ export function generateHomeAssistant(state: State): string {
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  // Probe window / stall escape for the efficiency rotation (the "saturation"
+  // group); same 1:1 lower-cased mapping.
+  add("saturation_grace_seconds", ctf.SATURATION_GRACE_SECONDS);
+  add("saturation_stall_timeout_seconds", ctf.SATURATION_STALL_TIMEOUT_SECONDS);
   // Balancer / active-control tuning (the "balancer" group). These map 1:1 to
   // the add-on options of the same lower-cased name; only values the user set
   // are emitted. Fair distribution is a tri-state select in the editor

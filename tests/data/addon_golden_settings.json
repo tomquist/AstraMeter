@@ -36,8 +36,8 @@
     "saturation_alpha": 0.15,
     "saturation_decay_factor": 0.995,
     "saturation_detection": true,
-    "saturation_grace_seconds": 90.0,
-    "saturation_stall_timeout_seconds": 60.0,
+    "saturation_grace_seconds": 200.0,
+    "saturation_stall_timeout_seconds": 180.0,
     "udp_port": 12345,
     "wifi_rssi": -50
   },
@@ -151,6 +151,8 @@
     "power_multiplier": "1.5",
     "power_offset": "10,20,30",
     "power_output_alias": "",
+    "saturation_grace_seconds": 200.0,
+    "saturation_stall_timeout_seconds": 180.0,
     "smooth_target_alpha": 0.35,
     "throttle_interval": 2.5,
     "wait_for_next_message": false

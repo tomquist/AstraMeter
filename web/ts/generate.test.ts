@@ -511,6 +511,8 @@ const haOpts = generateHomeAssistant({
       OSC_DAMP_MAX: "0.5",
       CONCENTRATE_DEADBAND: "0",
       IMPORT_TRIM_W: "20",
+      SATURATION_GRACE_SECONDS: "200",
+      SATURATION_STALL_TIMEOUT_SECONDS: "180",
     },
   },
 });
@@ -531,6 +533,8 @@ has(haOpts, "pace_max_step: 600", "ha-opts: pace max step");
 has(haOpts, "osc_damp_max: 0.5", "ha-opts: oscillation damping");
 has(haOpts, "concentrate_deadband: 0", "ha-opts: concentrate deadband (explicit 0 kept)");
 has(haOpts, "import_trim_w: 20", "ha-opts: steady-import trim");
+has(haOpts, "saturation_grace_seconds: 200", "ha-opts: probe window");
+has(haOpts, "saturation_stall_timeout_seconds: 180", "ha-opts: stall timeout");
 has(haOpts, 'power_offset: "-20"', "ha-opts: power offset (quoted str)");
 has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
 has(haOpts, "deadband: 5", "ha-opts: deadband");
@@ -558,6 +562,8 @@ lacks(haMin, "pace_base_step", "ha-opts: omits unset pace base step");
 lacks(haMin, "grid_predict_trust", "ha-opts: omits unset grid predict trust");
 lacks(haMin, "fair_distribution", "ha-opts: omits unset fair distribution");
 lacks(haMin, "import_trim_w", "ha-opts: omits unset import trim");
+lacks(haMin, "saturation_grace_seconds", "ha-opts: omits unset probe window");
+lacks(haMin, "saturation_stall_timeout_seconds", "ha-opts: omits unset stall timeout");
 
 // ── Home Assistant add-on options: calculate from in/out ─────────────────────
 const haCalc = generateHomeAssistant({

@@ -139,6 +139,8 @@ _CT_FIELDS = (
     "osc_damp_threshold",
     "concentrate_deadband",
     "import_trim_w",
+    "saturation_grace_seconds",
+    "saturation_stall_timeout_seconds",
     "cloud_reporting",
     "cloud_reporting_host",
     "cloud_reporting_interval",
