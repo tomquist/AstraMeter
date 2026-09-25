@@ -18,6 +18,7 @@ from astrameter.ct002.controls import (
     CONSUMER_CONTROLS_BY_FIELD,
     ControllableDevice,
     apply_device_control,
+    is_device_button,
 )
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.version_info import get_version
@@ -114,6 +115,15 @@ class MqttInsightsConfig:
     # Per-powermeter "Online" diagnostic sensor publish cadence (seconds).
     # 0 disables the health loop entirely.
     powermeter_health_interval: float = 30.0
+    # Smallest gap between two state publishes for the same battery, and for
+    # the same meter's device status (seconds). A battery polls about once a
+    # second and every poll carries a fresh reading, so without this the state
+    # topics go out at the poll rate — which is what every subscriber then has
+    # to parse (issue #663). 0 (the default) publishes on every poll, as
+    # before; raising it trades resolution in Home Assistant's history for a
+    # proportionally quieter broker. Never applies to availability, removals,
+    # discovery or commands.
+    state_throttle_interval: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +191,14 @@ class MqttInsightsService:
         # so a new device family adds a kind instead of a sixth parallel set,
         # a sixth ``clear()`` and a sixth counter.
         self._discovered: set[tuple[str, str]] = set()
+        # Availability already published this session, by availability topic.
+        # Cleared alongside ``_discovered`` on every connect, so a reconnect
+        # re-asserts it even if the broker lost the retained value.
+        self._availability: dict[str, bytes] = {}
+        # When each throttled topic last went out, by key.  Empty means "due",
+        # so the first event for a battery always publishes and a reconnect
+        # re-publishes immediately.  See ``_state_due``.
+        self._last_state_publish: dict[tuple[str, str, str], float] = {}
         # Devices whose controls MQTT commands may drive, by device id.
         self._devices: dict[str, ControllableDevice] = {}
         # Latest retained consumer command per (consumer_id, field), by device.
@@ -422,6 +440,8 @@ class MqttInsightsService:
         cfg = self._config
         # Clear discovery on (re)connect so we re-publish.
         self._discovered.clear()
+        self._availability.clear()
+        self._last_state_publish.clear()
         await client.publish(
             system_status_topic(cfg.base_topic), payload=b"online", qos=1, retain=True
         )
@@ -572,10 +592,24 @@ class MqttInsightsService:
             evt = await self._queue.get()
 
             did, eid = evt.device_id, evt.entity_id
+            # Throttling drops the whole event, not just its state publish:
+            # everything else the handler does is idempotent on the next one
+            # (discovery is ``_discover_once``-guarded, availability only
+            # moves on change, the bridge count follows discovery), and a
+            # battery's first event is always due — nothing is remembered for
+            # it until it publishes, and eviction forgets it again — so
+            # discovery and the opening state go out at once, for a battery
+            # that comes back as much as for a new one.  Removals are never
+            # dropped.
+            if evt.kind in ("ct002", "shelly") and not self._state_due(
+                evt.kind, did, eid
+            ):
+                continue
             try:
                 if evt.kind == "ct002":
                     await self._handle_ct002_event(client, base, cfg, evt)
                 elif evt.kind == "ct002_remove":
+                    self._forget_state_publish(evt.kind, did, eid)
                     await self._mark_offline(
                         client,
                         cfg,
@@ -586,6 +620,7 @@ class MqttInsightsService:
                 elif evt.kind == "shelly":
                     await self._handle_shelly_event(client, base, cfg, evt)
                 elif evt.kind == "shelly_remove":
+                    self._forget_state_publish(evt.kind, did, eid)
                     await self._mark_offline(
                         client,
                         cfg,
@@ -596,7 +631,75 @@ class MqttInsightsService:
             except aiomqtt.MqttError:
                 raise
             except Exception:
+                # The gate above already recorded this event as published, so
+                # leaving that behind would hold the retry off for a whole
+                # interval.  A broken connection never lands here (``MqttError``
+                # is re-raised and the reconnect clears the lot); what does is
+                # the handler failing mid-way, and we cannot tell which of its
+                # publishes got through, so forget both keys and let the next
+                # event redo them.
+                self._forget_state_publish(evt.kind, did, eid)
                 logger.exception("Error publishing MQTT Insights event")
+
+    def _state_due(self, kind: str, device_id: str, entity_id: str) -> bool:
+        """Whether a throttled topic may go out now, remembering that it did.
+
+        ``STATE_THROTTLE_INTERVAL`` is a floor on the gap between two publishes
+        of the same topic, not a schedule.  Events arrive continuously — a
+        battery polls about once a second for as long as it is there — so a
+        floor is all it takes to coalesce them: whatever is current when the
+        gap has passed is what goes out, and the readings in between are
+        superseded rather than queued.  That is why nothing here needs a timer
+        or a pending buffer.
+
+        A battery that falls silent is the one case the floor cannot cover: its
+        last reading may be suppressed.  Its availability flips to ``offline``
+        on eviction regardless (removals are never throttled), so a subscriber
+        already knows not to trust the retained value.
+        """
+        interval = self._config.state_throttle_interval
+        if interval <= 0:
+            return True
+        key = (kind, device_id, entity_id)
+        now = time.monotonic()
+        last = self._last_state_publish.get(key)
+        if last is not None and now - last < interval:
+            return False
+        self._last_state_publish[key] = now
+        return True
+
+    def _forget_state_publish(self, kind: str, device_id: str, entity_id: str) -> None:
+        """Drop what ``_state_due`` remembered for a battery and for its meter.
+
+        Two callers, both undoing a record that no longer stands for anything:
+        eviction, so a battery that comes back inside the interval is published
+        at once rather than up to an interval later, and a handler that raised,
+        so the retry is not held off either.  The meter's device-status key goes
+        with it — on eviction because ``consumer_count`` has just changed and is
+        worth sending, on failure because one exception covers every publish the
+        handler makes and we cannot tell which of them got through.
+        """
+        kind = kind.removesuffix("_remove")
+        self._last_state_publish.pop((kind, device_id, entity_id), None)
+        self._last_state_publish.pop((f"{kind}_status", device_id, ""), None)
+
+    async def _publish_availability(
+        self, client: aiomqtt.Client, avail_topic: str, payload: bytes
+    ) -> None:
+        """Publish *payload* on *avail_topic*, unless it is already there.
+
+        Availability is a retained flag that only moves when a battery goes
+        silent or comes back, but the events that carry it arrive on every
+        poll — once a second per battery.  Re-asserting ``online`` at that rate
+        was a third of everything this service put on the broker, and each one
+        costs every subscriber a message to parse (issue #663).  Nothing here
+        expires: no discovery payload sets ``expire_after``, so the retained
+        value stands until the other one is published.
+        """
+        if self._availability.get(avail_topic) == payload:
+            return
+        await client.publish(avail_topic, payload=payload, retain=True)
+        self._availability[avail_topic] = payload
 
     @staticmethod
     async def _publish_discovery(
@@ -656,7 +759,7 @@ class MqttInsightsService:
         }
 
         await _publish_json(client, state_topic, consumer_state)
-        await client.publish(avail_topic, payload=b"online", retain=True)
+        await self._publish_availability(client, avail_topic, b"online")
 
         device_status = {
             "smooth_target": data.get("smooth_target", 0),
@@ -676,7 +779,11 @@ class MqttInsightsService:
             ),
             "control_quality_band_w": data.get("control_quality_band_w"),
         }
-        await _publish_json(client, ct002_status_topic(base, did), device_status)
+        # Device-level data on its own topic, but published from the
+        # per-consumer handler, so N batteries would send it N times per
+        # interval.  Its own gate keeps it to once per meter.
+        if self._state_due("ct002_status", did, ""):
+            await _publish_json(client, ct002_status_topic(base, did), device_status)
 
         efficiency_rotation = bool(data.get("efficiency_rotation", False))
         await self._discover_once(
@@ -719,8 +826,8 @@ class MqttInsightsService:
     ) -> None:
         """A battery went silent: flip its availability and forget its
         discovery so a return republishes it."""
-        await client.publish(
-            availability_topic(state_topic), payload=b"offline", retain=True
+        await self._publish_availability(
+            client, availability_topic(state_topic), b"offline"
         )
         self._discovered.discard((kind, key))
         await self._publish_bridge(client, cfg)
@@ -765,12 +872,13 @@ class MqttInsightsService:
         }
 
         await _publish_json(client, state_topic, battery_state)
-        await client.publish(avail_topic, payload=b"online", retain=True)
+        await self._publish_availability(client, avail_topic, b"online")
 
         device_status = {
             "battery_count": data.get("battery_count", 0),
         }
-        await _publish_json(client, shelly_status_topic(base, did), device_status)
+        if self._state_due("shelly_status", did, ""):
+            await _publish_json(client, shelly_status_topic(base, did), device_status)
 
         await self._discover_once(
             client,
@@ -820,7 +928,11 @@ class MqttInsightsService:
                     parsed.device_id, parsed.consumer_id, parsed.field, payload_str
                 )
                 continue
-            # Device-level: JSON body.
+            # Device-level: JSON body.  An empty payload is how a retained
+            # command gets cleared — ignore it rather than reporting the empty
+            # string as malformed JSON.
+            if not payload_str.strip():
+                continue
             try:
                 cmd = json.loads(payload_str)
             except json.JSONDecodeError:
@@ -829,7 +941,10 @@ class MqttInsightsService:
             if not isinstance(cmd, dict):
                 logger.warning("Command payload is not a JSON object on %s", topic_str)
                 continue
-            self._handle_device_command(parsed.device_id, cmd)
+            retained = bool(message.retain)
+            if retained and any(is_device_button(name) for name in cmd):
+                await self._drop_retained_button_press(client, topic_str, cmd)
+            self._handle_device_command(parsed.device_id, cmd, retained=retained)
 
     def _handle_consumer_field_command(
         self, device_id: str, consumer_id: str, field: str, payload: str
@@ -907,13 +1022,38 @@ class MqttInsightsService:
         for (consumer_id, name), payload in list((pending or {}).items()):
             self._handle_consumer_field_command(device_id, consumer_id, name, payload)
 
-    def _handle_device_command(self, device_id: str, cmd: dict) -> None:
+    async def _drop_retained_button_press(
+        self, client: aiomqtt.Client, topic: str, cmd: dict
+    ) -> None:
+        """Strip a retained button press off the device command topic.
+
+        A press is an event, so the broker should never be holding one.  One
+        left over from a release that mirrored dashboard button writes would
+        otherwise re-fire on every reconnect, so rewrite the topic with the
+        settings it also carried, or clear it when the press was all of it.
+        """
+        kept = {
+            name: value for name, value in cmd.items() if not is_device_button(name)
+        }
+        payload = json.dumps(kept).encode() if kept else b""
+        try:
+            await client.publish(topic, payload=payload, qos=1, retain=True)
+        except Exception:
+            logger.exception("Failed to clear retained button press on %s", topic)
+            return
+        logger.info("Cleared a stale retained button press on %s", topic)
+
+    def _handle_device_command(
+        self, device_id: str, cmd: dict, *, retained: bool = False
+    ) -> None:
         device = self._devices.get(device_id)
         if device is None:
             logger.debug("No device %s registered for %r", device_id, cmd)
             return
         names = []
-        if cmd.get("force_rotation") is True:
+        # A button is momentary: honour a live press, never a retained one the
+        # broker replayed at subscribe time.
+        if cmd.get("force_rotation") is True and not retained:
             names.append("force_rotation")
         if "active_control" in cmd:
             names.append("active_control")

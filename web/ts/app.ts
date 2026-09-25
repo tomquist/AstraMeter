@@ -24,6 +24,7 @@ import {
 } from "./schema.js";
 import { generate } from "./generate.js";
 import { ghDoc } from "./links.js";
+import { changedLines } from "./preview-diff.js";
 import { STORAGE_KEY, newMeter, defaultState, safeParse, migrate, type State, type Meter } from "./state.js";
 
 let state: State = loadState() || defaultState();
@@ -235,7 +236,11 @@ function targetCard(): HTMLElement {
           // Both targets ship dashboard writes on, so the box carries over as
           // the user left it. (The ESP32's own controls are a separate flag —
           // it has no login to sit behind.)
-          state.target = value;
+          // Re-migrate rather than just assigning: a meter the new target
+          // can't run (an esphomeOnly source leaving the ESPHome target)
+          // has to be replaced here, or the generator emits a section the
+          // Python loader silently skips.
+          state = migrate({ ...state, target: value });
           if (value === "homeassistant") coerceHaMeter();
           rerenderAll();
         },
@@ -262,7 +267,7 @@ function deviceCard(): HTMLElement {
         el("p", { html: "You'll need to <strong>buy an ESP32 board</strong> (see below), install ESPHome once, paste the file this tool generates, and flash it over USB. Step-by-step instructions appear at the bottom of the page." }),
       ]),
       el("div", { class: "hw" }, [
-        el("h3", { text: "🛒 Recommended hardware" }),
+        el("h3", { text: "Recommended hardware" }),
         el("p", { class: "help", html: "We recommend the <strong>ESP32-S3 DevKitC-1</strong> — it's cheap, widely available, and is the board this tool defaults to. One board is enough no matter how many batteries you have." }),
         el("ul", { class: "hw-links" }, [
           el("li", {}, [linkOut(HARDWARE.single.url, "Buy 1× " + "ESP32-S3 DevKitC-1"), el("span", { class: "help", text: " — for a single setup" })]),
@@ -378,7 +383,9 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
         rerenderAll();
       },
     },
-    POWERMETERS.map((p) => el("option", { value: p.id, ...(p.id === meter.type ? { selected: true } : {}) }, p.label)),
+    POWERMETERS.filter((p) => !p.esphomeOnly || state.target === "esphome").map((p) =>
+      el("option", { value: p.id, ...(p.id === meter.type ? { selected: true } : {}) }, p.label),
+    ),
   );
 
   const badge =
@@ -430,13 +437,17 @@ function meterEditor(meter: Meter, index: number): HTMLElement {
       ? fieldControl({ key: "netmask", label: "NETMASK (which batteries use this meter)", help: "CIDR of battery IPs that should use this meter, e.g. 192.168.1.0/24.", type: "text", placeholder: "192.168.1.0/24" }, meter, {})
       : null;
 
+  // The reference for the platform being configured, falling back to the other one.
+  const doc = state.target === "esphome" ? pm.docEsphome ?? pm.docPython : pm.docPython ?? pm.docEsphome;
+  const docLink = doc ? el("a", { class: "doclink", href: ghDoc(doc), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null;
+
   return el("div", { class: "meter" }, [
     el("div", { class: "meter-head" }, [
       typeField,
       badge,
     ]),
     el("p", { class: "blurb", text: pm.blurb }),
-    pm.docPython ? el("a", { class: "doclink", href: ghDoc(pm.docPython!), target: "_blank", rel: "noopener" }, "Reference for this meter ↗") : null,
+    docLink,
     suffixField,
     phaseToggle,
     el("div", { class: "field-grid" }, fieldGroup(fields, meter.fields, { phases: meter.phases })),
@@ -638,10 +649,33 @@ function refreshPreview(): void {
   } catch (err) {
     text = "# Error generating config: " + (err as Error).message;
   }
-  pre.textContent = text;
+  showPreview(pre, text);
   const fn = document.getElementById("preview-filename");
   if (fn) fn.textContent = outputFilename();
   saveState();
+}
+
+// Render the config one line per <span>, and after the first render mark the
+// lines the last change touched so the user can see what their answer did.
+// The first changed line is scrolled into view inside the preview if needed.
+let previewText: string | null = null;
+function showPreview(code: HTMLElement, text: string): void {
+  if (text === previewText) return;
+  const lines = text.split("\n");
+  let changed = previewText === null ? new Set<number>() : changedLines(previewText.split("\n"), lines);
+  // Switching the target rewrites the whole file; lighting all of it up says nothing.
+  if (changed.size > lines.length / 2) changed = new Set();
+  previewText = text;
+  const spans = lines.map((line, i) => el("span", changed.has(i) ? { class: "changed" } : {}, line + "\n"));
+  code.replaceChildren(...spans);
+  const first = spans.find((span) => span.classList.contains("changed"));
+  const scroller = code.closest("pre");
+  if (!first || !scroller) return;
+  const top = first.offsetTop - scroller.offsetTop;
+  if (top < scroller.scrollTop || top > scroller.scrollTop + scroller.clientHeight - 40) {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scroller.scrollTo({ top: Math.max(0, top - 40), behavior: reduce ? "auto" : "smooth" });
+  }
 }
 
 function previewPanel(): HTMLElement {
@@ -653,7 +687,7 @@ function previewPanel(): HTMLElement {
     ]),
     el("pre", {}, [el("code", { id: "preview-code" })]),
     el("div", { class: "preview-actions" }, [
-      el("button", { type: "button", class: "primary", onclick: copyConfig }, "Copy"),
+      el("button", { type: "button", class: "secondary", onclick: copyConfig }, "Copy"),
       el("button", { type: "button", class: "primary", onclick: downloadConfig }, "Download file"),
     ]),
   ]);
@@ -789,9 +823,9 @@ function projectCard(): HTMLElement {
   const fileInput = el("input", { type: "file", accept: "application/json", class: "hidden", onchange: (e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) loadProject(f); } });
   return card(null, "Save your work", "Your answers are saved in this browser automatically. You can also export a project file to back up or continue on another device.", [
     el("div", { class: "btn-row" }, [
-      el("button", { type: "button", class: "secondary", onclick: saveProject }, "💾 Save project file"),
-      el("button", { type: "button", class: "secondary", onclick: () => fileInput.click() }, "📂 Load project file"),
-      el("button", { type: "button", class: "secondary", onclick: shareLink }, "🔗 Copy share link"),
+      el("button", { type: "button", class: "secondary", onclick: saveProject }, "Save project file"),
+      el("button", { type: "button", class: "secondary", onclick: () => fileInput.click() }, "Load project file"),
+      el("button", { type: "button", class: "secondary", onclick: shareLink }, "Copy share link"),
       el("button", { type: "button", class: "link-danger", onclick: resetProject }, "Start over"),
       fileInput,
     ]),

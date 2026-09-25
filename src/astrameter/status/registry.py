@@ -24,6 +24,7 @@ from astrameter.status.serialize import (
     compact,
     ct002_to_wire,
     iso,
+    iso_datetime,
     powermeter_to_wire,
     round_or_none,
     shelly_to_wire,
@@ -270,8 +271,9 @@ def _as_wire_dict(snapshot: Any) -> dict[str, Any]:
     """Shallow dataclass → wire dict for the integration snapshots.
 
     Their field names are already the wire names, so unlike the device
-    snapshots they need no rename layer — only ``None``-dropping and nested
-    dataclass expansion.
+    snapshots they need no rename layer — only ``None``-dropping, nested
+    dataclass expansion, and the per-value conversion :func:`_wire_value`
+    does.
     """
     if not dataclasses.is_dataclass(snapshot) or isinstance(snapshot, type):
         return {}
@@ -280,15 +282,42 @@ def _as_wire_dict(snapshot: Any) -> dict[str, Any]:
         value = getattr(snapshot, field.name)
         if value is None:
             continue
-        if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            out[field.name] = _as_wire_dict(value)
-        elif isinstance(value, (tuple, list)):
-            out[field.name] = [
-                _as_wire_dict(v)
-                if dataclasses.is_dataclass(v) and not isinstance(v, type)
-                else v
-                for v in value
-            ]
+        if isinstance(value, (tuple, list)):
+            out[field.name] = [_wire_value(v, field.name) for v in value]
         else:
-            out[field.name] = value
+            out[field.name] = _wire_value(value, field.name)
     return out
+
+
+#: The types ``json.dumps`` already writes as themselves.  ``bool`` is a
+#: subclass of ``int``, so it is covered.
+_WIRE_SCALARS = (str, int, float)
+
+
+def _wire_value(value: Any, field_name: str) -> Any:
+    """One integration-snapshot field, or one element of one, as its wire value.
+
+    Refuses a type with no wire form instead of passing it through.  The only
+    thing downstream of here is the plain ``json.dumps`` in
+    ``web_guard.json_response``, so an unconverted value is a ``TypeError``
+    that takes down the whole status response — and it surfaces in production
+    rather than in the suite, since a test comparing dicts cannot tell a live
+    ``datetime`` from the string it should have become.  Raising moves that
+    discovery into any test that reaches this path, and names the field; the
+    cost is one branch per new type, which is where the conversion belongs
+    anyway (``status/serialize.py``, beside :func:`iso` and
+    :func:`iso_datetime`).
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _as_wire_dict(value)
+    if isinstance(value, datetime):
+        return iso_datetime(value)
+    # `None` is dropped a level up when it is a whole field; inside a sequence
+    # it is a position, so it stays as the `null` it serializes to.
+    if value is None or isinstance(value, _WIRE_SCALARS):
+        return value
+    raise TypeError(
+        f"{field_name}: a {type(value).__name__} has no wire form. Convert it "
+        "in status/serialize.py and give _wire_value a branch — reaching "
+        "json.dumps unconverted would drop the whole status response."
+    )

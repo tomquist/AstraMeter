@@ -102,6 +102,18 @@ class MqttPowermeter(PushPowermeter):
                     exc_info=False,
                 )
                 await asyncio.sleep(RECONNECT_DELAY)
+            except Exception:
+                # Anything else ends the reader for good: nothing awaits this
+                # task, so the meter would sit on its last value forever while
+                # stream_online() still called it healthy, and the traceback
+                # would surface only when the task is garbage-collected.
+                # Reconnect instead, and log it where it happens.
+                self._connected_event.clear()
+                logger.exception(
+                    "Unexpected MQTT reader error. Reconnecting in %ss...",
+                    RECONNECT_DELAY,
+                )
+                await asyncio.sleep(RECONNECT_DELAY)
 
     async def _serve_connection(self, tls_context: ssl.SSLContext | None) -> None:
         """Subscribe and store every message, until the connection drops."""
@@ -138,7 +150,7 @@ class MqttPowermeter(PushPowermeter):
                     self.values[index] = extract_json_value(document, json_path)
                 else:
                     self.values[index] = float(payload)
-            except (json.JSONDecodeError, ValueError) as exc:
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 logger.error(
                     "Failed to parse MQTT payload on %s for index %d: %s",
                     topic,

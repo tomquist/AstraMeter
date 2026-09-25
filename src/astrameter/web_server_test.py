@@ -4,7 +4,9 @@ the control-write validation."""
 import asyncio
 import dataclasses
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +15,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from astrameter import web_server
 from astrameter.ct002 import CT002
 from astrameter.status import StatusRegistry
+from astrameter.status import registry as status_registry
 from astrameter.status.secrets import SENTINEL
 from astrameter.web_server import WebServer
 
@@ -672,6 +675,32 @@ def test_is_allowed_host_reads_the_header_the_way_a_browser_writes_it() -> None:
     assert parse_allowed_hosts(None) == ()
 
 
+def test_parse_allowed_hosts_refuses_the_address_bar_form(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A URL is what you type; the Host header carries the name alone.
+
+    Such an entry could never match, so it is dropped loudly rather than
+    sitting in the list looking like the name was allowed (issue #671).
+    """
+    from astrameter.web_server import is_allowed_host, parse_allowed_hosts
+
+    with caplog.at_level(logging.WARNING):
+        allowed = parse_allowed_hosts(
+            "https://astra.example.com:1234,http://proxy.lan/dash,good.lan"
+        )
+    assert allowed == ("good.lan",)
+    assert not is_allowed_host("astra.example.com:1234", allowed)
+    # Both say what to write instead.
+    assert "List 'astra.example.com' instead" in caplog.text
+    assert "List 'proxy.lan' instead" in caplog.text
+
+    # A bracketed IPv6 entry keeps its colons; only the port is a mistake.
+    assert parse_allowed_hosts(["fd00::1"]) == ("fd00::1",)
+    with caplog.at_level(logging.WARNING):
+        assert parse_allowed_hosts(["[fd00::1]:80"]) == ()
+
+
 #: Colon-bearing values that are NOT addresses, and the IPv6 forms that are.
 #: The C++ mirror has to agree on every one of them — it hand-rolls what
 #: `ipaddress` does here, so this is the list `host_controls_test.cpp` pins
@@ -726,7 +755,20 @@ async def test_dashboard_off_serves_no_routes(tmp_path: Path) -> None:
 # -- status -----------------------------------------------------------
 
 
-async def test_status_returns_a_snapshot_and_revalidates(tmp_path: Path) -> None:
+async def test_status_returns_a_snapshot_and_revalidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ETag mixes a coarse monotonic bucket in with the revision, so that a
+    # client cannot hold a 304 while the age fields go stale
+    # (``_ETAG_BUCKET_SECONDS``). Two requests that straddle a bucket boundary
+    # therefore get different ETags and a correct 200 — which is a real race
+    # for a test that fires them back to back. This one is about revalidating
+    # an *unchanged* registry, so pin the clock instead of racing it. Patching
+    # the name inside the registry module leaves the stdlib clock, and the
+    # event loop that runs on it, alone.
+    monkeypatch.setattr(
+        status_registry, "time", SimpleNamespace(monotonic=lambda: 1000.0)
+    )
     registry = _registry(tmp_path, direct_access=True)
     registry.register_device("ct-1", "ct002", _device())
     client = await _client(registry)
@@ -1006,6 +1048,48 @@ async def test_force_rotation_is_accepted(tmp_path: Path) -> None:
     )
     assert response.status == 200
     assert (await response.json())["applied"] is True
+    await client.close()
+
+
+async def test_force_rotation_is_not_mirrored_to_mqtt(tmp_path: Path) -> None:
+    """A button press must not be published to the retained command topic.
+
+    We subscribe to that topic ourselves, so a retained press comes straight
+    back and fires the rotation a second time on every click, then again on
+    every reconnect.  The Active Control switch, being a setting, is still
+    mirrored.
+    """
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+
+    mirrored: list[tuple] = []
+
+    class _Insights:
+        def status_snapshot(self) -> _InsightsSnapshot:
+            return _InsightsSnapshot()
+
+        async def publish_device_command(self, device_id: str, payload: dict) -> None:
+            mirrored.append((device_id, payload))
+
+    registry.insights = _Insights()
+    client = await _client(registry)
+
+    assert (
+        await client.post(
+            "/api/control/device",
+            json={"device_id": "ct-1", "field": "force_rotation", "value": True},
+        )
+    ).status == 200
+    assert mirrored == []
+
+    assert (
+        await client.post(
+            "/api/control/device",
+            json={"device_id": "ct-1", "field": "active_control", "value": False},
+        )
+    ).status == 200
+    assert mirrored == [("ct-1", {"active_control": False})]
     await client.close()
 
 

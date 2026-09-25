@@ -270,6 +270,37 @@ def test_dashboard_path_normalizes_to_a_prefix() -> None:
     assert ct002_component._validate_dashboard_path("/astrameter/") == "/astrameter"
 
 
+def test_allowed_host_takes_a_bare_name() -> None:
+    assert ct002_component._validate_allowed_host("astrameter.fritz.box") == (
+        "astrameter.fritz.box"
+    )
+    assert ct002_component._validate_allowed_host(" nas.lan ") == "nas.lan"
+    assert ct002_component._validate_allowed_host("fd00::1") == "fd00::1"
+
+
+def test_allowed_host_rejects_the_address_bar_form() -> None:
+    """The header carries the name alone, so a URL could never match.
+
+    Saying so at compile time is the only chance: at runtime a listed name that
+    cannot match looks exactly like one that was never listed (issue #671).
+    """
+    import esphome.config_validation as cv
+
+    for spelling in (
+        "https://astra.example.com:1234",
+        "http://astra.example.com",
+        "astra.example.com:1234",
+        "astra.example.com/dashboard",
+        "[fd00::1]:80",
+    ):
+        with pytest.raises(cv.Invalid) as exc_info:
+            ct002_component._validate_allowed_host(spelling)
+        # Every message names the value to write instead.
+        assert "host names, not URLs" in str(exc_info.value)
+    with pytest.raises(cv.Invalid):
+        ct002_component._validate_allowed_host("https://")
+
+
 def test_dashboard_path_requires_a_leading_slash() -> None:
     import esphome.config_validation as cv
 

@@ -92,7 +92,8 @@
     "port": 1883,
     "powermeter_health_interval": 30.0,
     "tls": false,
-    "username": "addons"
+    "username": "addons",
+    "state_throttle_interval": 0.0
   },
   "mqtt_service": {
     "host": "core-mosquitto",

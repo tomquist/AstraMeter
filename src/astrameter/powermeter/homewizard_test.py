@@ -139,6 +139,138 @@ def test_total_only_is_noted_once_and_is_not_a_warning() -> None:
     assert log.warning.call_count == 0
 
 
+def _rendered(call: Any) -> str:
+    template, *args = call.args
+    return str(template) % tuple(args)
+
+
+def _clocked(start: float = 0.0) -> tuple[HomeWizardPowermeter, list[float]]:
+    now = [start]
+    return _create_powermeter(clock=lambda: now[0]), now
+
+
+def test_every_measurement_is_recorded_at_debug() -> None:
+    """The registers as published, beside the reading taken from them.
+
+    Downstream of here the wrappers, the emulator and the balancer all see one
+    number, so this is the only place a meter that zeroes its per-phase
+    registers is still distinguishable from a house at 0 W (issue #655).
+    """
+    pm = _create_powermeter()
+    with patch("astrameter.powermeter.homewizard.logger") as log:
+        log.isEnabledFor.return_value = True
+        pm._handle_measurement(
+            {"power_w": 44, "power_l1_w": 42, "power_l2_w": 136, "power_l3_w": -134}
+        )
+        pm._handle_measurement(
+            {"power_w": 500, "power_l1_w": 0, "power_l2_w": 0, "power_l3_w": 0}
+        )
+    lines = [_rendered(call) for call in log.debug.call_args_list]
+    assert lines == [
+        "HomeWizard measurement: l1=42 l2=136 l3=-134 power_w=44 "
+        "-> per-phase [42.0, 136.0, -134.0]",
+        "HomeWizard measurement: l1=0 l2=0 l3=0 power_w=500 -> total-only [500.0]",
+    ]
+
+
+def test_debug_line_tells_an_absent_register_from_an_unusable_one() -> None:
+    """The selection collapses both into "no per-phase set"; the log must not."""
+    pm = _create_powermeter()
+    with patch("astrameter.powermeter.homewizard.logger") as log:
+        log.isEnabledFor.return_value = True
+        pm._handle_measurement({"power_w": 700, "power_l1_w": None, "power_l2_w": 0})
+        pm._handle_measurement({"power_w": 250})
+    lines = [_rendered(call) for call in log.debug.call_args_list]
+    assert lines == [
+        "HomeWizard measurement: l1=!None l2=0 l3=- power_w=700 -> total-only [700.0]",
+        "HomeWizard measurement: l1=- l2=- l3=- power_w=250 -> total-only [250.0]",
+    ]
+
+
+def test_nothing_is_rendered_for_the_debug_line_when_debug_is_off() -> None:
+    pm = _create_powermeter()
+    with patch("astrameter.powermeter.homewizard.logger") as log:
+        log.isEnabledFor.return_value = False
+        pm._handle_measurement(
+            {"power_w": 44, "power_l1_w": 42, "power_l2_w": 136, "power_l3_w": -134}
+        )
+    assert log.debug.call_count == 0
+
+
+def test_the_return_to_per_phase_is_reported_too() -> None:
+    """Half a switching meter is no use: #650 only announced the way in."""
+    pm, now = _clocked()
+    with patch("astrameter.powermeter.homewizard.logger") as log:
+        pm._handle_measurement(
+            {"power_w": 500, "power_l1_w": 0, "power_l2_w": 0, "power_l3_w": 0}
+        )
+        now[0] += 60.0
+        pm._handle_measurement(
+            {"power_w": 310, "power_l1_w": 90, "power_l2_w": 120, "power_l3_w": 100}
+        )
+    lines = [_rendered(call) for call in log.info.call_args_list]
+    assert lines == [
+        "HomeWizard: meter publishes no per-phase power (all phases 0 W); "
+        "reading the total instead (l1=0 l2=0 l3=0 power_w=500)",
+        "HomeWizard: per-phase power is back; reading the phases again "
+        "(l1=90 l2=120 l3=100 power_w=310)",
+    ]
+
+
+def test_an_alternating_meter_is_rate_limited_and_counted() -> None:
+    """One line a minute, and the switches it folded in are the symptom."""
+    pm, now = _clocked()
+    with patch("astrameter.powermeter.homewizard.logger") as log:
+        for _ in range(10):
+            now[0] += 1.0
+            pm._handle_measurement(
+                {"power_w": 800, "power_l1_w": 0, "power_l2_w": 0, "power_l3_w": 0}
+            )
+            now[0] += 1.0
+            pm._handle_measurement(
+                {
+                    "power_w": 800,
+                    "power_l1_w": 300,
+                    "power_l2_w": 250,
+                    "power_l3_w": 250,
+                }
+            )
+        now[0] += 60.0
+        pm._handle_measurement(
+            {"power_w": 800, "power_l1_w": 0, "power_l2_w": 0, "power_l3_w": 0}
+        )
+    lines = [_rendered(call) for call in log.info.call_args_list]
+    assert len(lines) == 2
+    assert lines[0].endswith("(l1=0 l2=0 l3=0 power_w=800)")
+    # 21 switches in all: 1 already reported, 1 being reported, 19 folded in.
+    assert lines[1].endswith("; 19 further switches since the last line")
+
+
+def test_a_steady_per_phase_meter_says_nothing() -> None:
+    pm, now = _clocked()
+    with patch("astrameter.powermeter.homewizard.logger") as log:
+        for _ in range(5):
+            now[0] += 1.0
+            pm._handle_measurement(
+                {"power_w": 310, "power_l1_w": 90, "power_l2_w": 120, "power_l3_w": 100}
+            )
+    assert log.info.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_start_resets_the_source_tracking() -> None:
+    pm = _create_powermeter()
+    pm._handle_measurement(
+        {"power_w": 500, "power_l1_w": 0, "power_l2_w": 0, "power_l3_w": 0}
+    )
+    assert pm._source_switches == 1
+    with patch.object(type(pm).__mro__[1], "start", AsyncMock()):
+        await pm.start()
+    assert pm._source_switches == 0
+    assert pm._reading_source == "per-phase"
+    assert pm._phases_unusable is False
+
+
 def test_measurement_no_power_fields() -> None:
     pm = _create_powermeter()
     pm._handle_measurement({"energy_import_kwh": 1234.5})

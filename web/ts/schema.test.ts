@@ -20,6 +20,8 @@ import {
   formatChannels,
   refossChannelIds,
 } from "./schema.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 let failures = 0;
 function check(cond, msg) {
@@ -32,8 +34,8 @@ function check(cond, msg) {
 // Allowed shapes — anything outside these lists is almost certainly a typo.
 const FIELD_TYPES = new Set(["text", "number", "password", "select", "checkbox"]);
 const FIELD_PROPS = new Set(["key", "label", "help", "type", "default", "placeholder", "options", "required", "phase", "advanced", "ey"]);
-const PM_PROPS = new Set(["id", "label", "section", "blurb", "docPython", "fields", "esphome", "phaseListKeys", "phaseFlagKey", "phaseChannelsValue"]);
-const ESP_KINDS = new Set(["homeassistant", "mqtt", "sml", "modbus", "http", "unsupported"]);
+const PM_PROPS = new Set(["id", "label", "section", "esphomeOnly", "blurb", "docPython", "docEsphome", "fields", "esphome", "phaseListKeys", "phaseFlagKey", "phaseChannelsValue"]);
+const ESP_KINDS = new Set(["homeassistant", "mqtt", "sml", "dsmr", "modbus", "http", "unsupported"]);
 const ESP_TIERS = new Set(["native", "generic", "alternate", "unsupported"]);
 const ESP_PROPS = new Set(["kind", "tier", "note", "url1", "url3", "lambda1", "lambda3", "jsonRoot", "haEntity", "headersField", "warn"]);
 
@@ -120,6 +122,45 @@ for (const pm of POWERMETERS) {
       typeof pm.phaseChannelsValue === "string" && pm.phaseChannelsValue.trim() !== "",
       `${where}: phaseChannelsValue must be a non-empty string`,
     );
+  }
+}
+
+// ── doc links point at real headings ──
+// The landing page and the generator link each meter to its section in the
+// docs. GitHub derives a heading's anchor from its text, so renaming a heading
+// silently breaks the link; this catches it.
+const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const anchorCache = new Map();
+function anchorsOf(file) {
+  if (!anchorCache.has(file)) {
+    const anchors = new Set();
+    const seen = new Map();
+    let fenced = false;
+    for (const line of readFileSync(repoRoot + file, "utf8").split("\n")) {
+      if (line.startsWith("```")) fenced = !fenced;
+      const m = !fenced && /^#{1,6}\s+(.*)$/.exec(line);
+      if (!m) continue;
+      // GitHub's slug: lowercase, drop punctuation, spaces become hyphens,
+      // repeats get -1, -2, ...
+      const slug = m[1].trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
+      const n = seen.get(slug) ?? 0;
+      seen.set(slug, n + 1);
+      anchors.add(n ? `${slug}-${n}` : slug);
+    }
+    anchorCache.set(file, anchors);
+  }
+  return anchorCache.get(file);
+}
+const DOC_FILES = { docPython: "docs/powermeters.md", docEsphome: "docs/esphome-powermeters.md" };
+for (const pm of POWERMETERS) {
+  const where = `powermeter "${pm.id}"`;
+  check(pm.esphomeOnly || pm.docPython, `${where}: has a docPython link (it runs in Python)`);
+  for (const [prop, file] of Object.entries(DOC_FILES)) {
+    const link = pm[prop];
+    if (link === undefined) continue;
+    const [path, anchor] = link.split("#");
+    check(path === file, `${where}: ${prop} points into ${file}`);
+    check(anchor && anchorsOf(file).has(anchor), `${where}: ${prop} anchor "#${anchor}" is a heading in ${file}`);
   }
 }
 

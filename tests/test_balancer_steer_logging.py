@@ -76,7 +76,7 @@ def test_the_line_matches_the_firmware_format_byte_for_byte(
     assert lines[MANUAL] == (
         "CT002 steer aaaaaaaaaaaa: mode=manual=800 rotation=active weight=1.00 "
         "grid=1000 ctrl=- share=- reported=400 intent=800 send=400 "
-        "unpaced=400 pace_cap=0 sat=0.00"
+        "unpaced=400 pace_cap=0 sat=0.00 ceil=-/-"
     )
 
 

@@ -111,6 +111,24 @@ inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
 inline constexpr double SATURATION_REFERENCE_DT = 1.0;
 inline constexpr double SATURATION_LONG_GAP_SECONDS = 30.0;
 
+// Output ceilings (issue #655): a battery whose firmware caps its output below
+// what the pool asks of it sits flat at the cap however hard it is pushed. A
+// ceiling is learned once a battery sent at least CEILING_PUSH_W further in its
+// current direction has held within CEILING_FLAT_W for CEILING_STALL_POLLS
+// polls spanning CEILING_STALL_SECONDS, at an output of at least
+// CEILING_MIN_POWER_W. Mirrors balancer.py; see it for the reasoning.
+inline constexpr float CEILING_PUSH_W = 25.0f;
+inline constexpr float CEILING_FLAT_W = 15.0f;
+inline constexpr float CEILING_MIN_POWER_W = 100.0f;
+inline constexpr int CEILING_STALL_POLLS = 5;
+inline constexpr double CEILING_STALL_SECONDS = 5.0;
+// Within this of its ceiling a battery counts as pinned there.
+inline constexpr float CEILING_AT_MARGIN_W = 25.0f;
+// Output more than this past a ceiling disproves it.
+inline constexpr float CEILING_RELEASE_W = 30.0f;
+// A ceiling not confirmed for this long is forgotten.
+inline constexpr double CEILING_TTL_SECONDS = 600.0;
+
 // Device capabilities — the single source of truth for every device-type
 // decision (mirrors balancer.py device_capabilities). All downstream policy
 // (AC-charge eligibility, the MIN_DC_OUTPUT wake floor) is derived from these.
@@ -284,6 +302,24 @@ struct BalancerConsumerState {
   double saturation_grace_until{0.0};
   double saturation_grace_started_at{0.0};
   double last_saturation_update{0.0};
+  // Learned output ceilings (see CEILING_PUSH_W), as magnitudes per direction,
+  // and when each was last confirmed; 0 = none learned.
+  float ceiling_discharge{0.0f};
+  float ceiling_charge{0.0f};
+  double ceiling_discharge_seen{0.0};
+  double ceiling_charge_seen{0.0};
+  // The current run of pushed-but-flat polls: the output it started at, when,
+  // and how many polls it has lasted (0 = no run).
+  float ceiling_run_anchor{0.0f};
+  double ceiling_run_since{0.0};
+  int ceiling_run_polls{0};
+
+  // Learned ceiling in direction *sign* (+ discharge), 0 if none.
+  float ceiling(int sign) const {
+    if (sign > 0) return this->ceiling_discharge;
+    if (sign < 0) return this->ceiling_charge;
+    return 0.0f;
+  }
 };
 
 // ── Read-only status surface (dashboard / diagnostics) ──────────────────
@@ -394,6 +430,9 @@ struct SteerLog {
   std::optional<float> unpaced{};
   std::optional<float> pace_cap{};
   double saturation{0.0};
+  // Learned output ceilings; absent when none is known.
+  std::optional<float> ceiling_discharge{};
+  std::optional<float> ceiling_charge{};
 };
 
 // Render a SteerLog as the single line both stacks emit. Byte-identical to the
@@ -551,6 +590,19 @@ class LoadBalancer {
   // _track_saturation.
   void track_saturation_(const std::string &consumer_id, BalancerConsumerState &state,
                          ConsumerMode mode, ReportMap &reports);
+  // Learn, confirm or drop a consumer's output ceilings. Mirrors balancer.py
+  // _track_ceiling.
+  void track_ceiling_(const std::string &consumer_id, BalancerConsumerState &state,
+                      ConsumerMode mode, ReportMap &reports);
+  // Learned ceilings of *ids* in direction *sign*, where one is known. Mirrors
+  // balancer.py _ceilings.
+  template<typename Ids>
+  std::unordered_map<std::string, float> ceilings_(const Ids &ids, int sign) const;
+  // Consumers of *ids* already at their ceiling in direction *sign*. Mirrors
+  // balancer.py _pinned.
+  std::unordered_set<std::string> pinned_(const ReportMap &reports,
+                                          const std::unordered_map<std::string, float> &ids,
+                                          int sign) const;
   void invalidate_efficiency_cache_();
   std::unordered_set<std::string> probe_participants_() const;
   float next_probe_requested_abs_(float current_requested_abs, float ceiling) const;
@@ -629,13 +681,15 @@ class LoadBalancer {
   // balancer.py _fair_share.
   static float fair_share_(const std::optional<std::string> &consumer_id,
                            const ReportMap &reports, float control_grid,
-                           const std::unordered_map<std::string, float> &eff_part);
+                           const std::unordered_map<std::string, float> &eff_part,
+                           const std::unordered_set<std::string> &pinned);
   // Deadband concentration, or absent when it doesn't apply this tick. Mirrors
   // balancer.py _concentrated_share.
   std::optional<float> concentrated_share_(
       const std::optional<std::string> &consumer_id, const ReportMap &reports,
       float control_grid, const std::unordered_map<std::string, float> &eff_part,
-      const std::unordered_set<std::string> &charge_blind);
+      const std::unordered_set<std::string> &charge_blind,
+      const std::unordered_set<std::string> &pinned);
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
                             float fair_share);
