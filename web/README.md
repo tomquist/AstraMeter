@@ -10,8 +10,8 @@ GitHub Pages. It has two parts:
    add-on / Docker / direct install) or an ESPHome YAML (run on an ESP32).
 
 Everything runs in the browser — nothing is uploaded. `ts/schema.ts` drives the
-generator form, and the landing page builds its supported-meter grid and feature
-list from that same schema, so the marketing copy can't drift from the real
+generator form, and the landing page builds its supported-meter list and source
+counts from that same schema, so the page can't drift from the real
 capabilities.
 
 ## Stack
@@ -27,6 +27,7 @@ the GitHub ref the site links to (see *Deploying*).
 | `index.html`, `generator.html` | Landing page and generator page (static shells). |
 | `css/styles.css` | Styling for both pages. |
 | `assets/` | Logo (SVG + PNG), favicon, og:image. |
+| fonts | IBM Plex Sans + Mono (SIL OFL 1.1), self-hosted: `build.mjs` copies the Latin subsets and their licence files from the `@fontsource` packages into `dist/fonts/`. |
 | `CNAME` | Custom domain (`astrameter.com`) published to the `gh-pages` root by the build. |
 | `robots.txt` | Allows crawling; staging/preview de-indexing is done per page (see below). |
 | `ts/schema.ts` | Single source of truth: every powermeter, field, and tuning option, fully typed. Pure data. |
@@ -34,11 +35,11 @@ the GitHub ref the site links to (see *Deploying*).
 | `ts/state.ts` | State model + persistence helpers (defaults, `migrate`, sanitising untrusted restored input). Pure, no DOM. |
 | `ts/generate.ts` | Pure functions that turn the app state into `config.ini` or ESPHome YAML. No DOM. |
 | `ts/app.ts` | Draws the generator form from the schema; state, live preview, save/load. Entry point → `dist/js/app.js`. |
-| `ts/site.ts` | Shared site behaviour: mobile nav, scroll state, `data-gh` links, landing-page grids. Entry point → `dist/js/site.js`. |
+| `ts/site.ts` | Shared site behaviour: mobile nav, scroll state, `data-gh` links, the landing page's meter list and counts. Entry point → `dist/js/site.js`. |
 | `ts/schema.test.ts` | Structural validation of the schema (typo guard). |
 | `ts/state.test.ts` | Tests for the state model + untrusted-input sanitisation. |
 | `ts/generate.test.ts` | Assertions for the generators. |
-| `build.mjs` | esbuild build: copies the static files and bundles the entry points into `dist/`. |
+| `build.mjs` | esbuild build: copies the static files and fonts, and bundles the entry points into `dist/`. |
 | `tools/screenshots.ts` | Redraws the dashboard screenshots in `docs/images/` (`npm run screenshots`). Boots the real stack against a three-battery house and drives a browser; see *Screenshots* below. |
 
 ## Develop locally
