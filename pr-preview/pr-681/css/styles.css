@@ -1235,9 +1235,6 @@ code {
     opacity: 0;
   }
 }
-.pm-unsupported {
-  color: var(--tick);
-}
 
 /* ── config generator callout ── */
 .generator-note {

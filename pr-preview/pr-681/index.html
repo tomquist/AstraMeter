@@ -155,8 +155,8 @@
             <div>
               <dt>ESP32 build</dt>
               <dd>
-                The emulator also ships as an ESPHome component, so a small ESP32 board can do the job without a
-                server.
+                The CT002/CT003 emulator also ships as an ESPHome component, so a small ESP32 board can do the job
+                without a server.
               </dd>
             </div>
           </dl>
@@ -170,9 +170,10 @@
           </div>
           <div class="rail-body">
             <p>
-              Open it from the Home Assistant sidebar, or on port 52500 anywhere else. It shows the grid reading,
-              what each battery is being asked to do, and the health of your meter, and lets you edit the
-              configuration from the browser.
+              Open it from the Home Assistant sidebar, on port 52500 with Docker or Python, or at the ESP32's
+              own address. It shows the grid reading, what each battery is being asked to do, and the health of
+              your meter. Except on an ESP32, whose settings are compiled in, you can also edit the configuration
+              from the browser.
               <a data-gh="doc:docs/dashboard.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/dashboard.md" target="_blank" rel="noopener">Dashboard docs</a>
             </p>
           </div>
@@ -310,7 +311,7 @@
             </details>
             <details>
               <summary>What's the difference between Home Assistant, Docker and ESP32?</summary>
-              <p>They all run the same emulator. The add-on and Docker run it as software on a machine that's already on; the ESP32 build runs on a small board of its own. The config generator writes the right file for each.</p>
+              <p>The add-on, Docker and Python run the full emulator as software on a machine that's already on. The ESP32 build runs on a small board of its own, but emulates only CT002/CT003, not a Shelly; if your battery can only pair with a Shelly, run one of the others. The config generator writes the right file for each.</p>
             </details>
             <details>
               <summary>Does it cost anything?</summary>
