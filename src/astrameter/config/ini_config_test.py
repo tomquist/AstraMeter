@@ -3,7 +3,7 @@ from io import StringIO
 
 from astrameter.config.config_loader import new_config_parser
 from astrameter.config.ini_config import IniAppConfig, render_ini
-from astrameter.config.settings import CtSettings, GeneralSettings
+from astrameter.config.settings import CtSettings, GeneralSettings, ShellySettings
 from astrameter.powermeter import ThrottledPowermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 
@@ -297,3 +297,74 @@ def test_declared_general_keys_reports_only_what_the_file_sets() -> None:
     assert cfg.declared_general_keys("enable_web_server", "dashboard") == [
         "DASHBOARD_ENABLED"
     ]
+
+
+# -- the Shelly emulation's own section ----------------------------------------
+
+
+def test_the_shelly_emulation_answers_on_port_80_by_default() -> None:
+    """Hoymiles and Growatt batteries connect on 80 whatever is announced.
+
+    So the default is load-bearing for them, not a convenience; see
+    docs/shelly-battery-research.md before changing it.
+    """
+    assert ShellySettings().tcp_port == 80
+    for device_type in ("shellypro3em", "shellypro3em_old", "shellypro3em_new"):
+        settings = config("").shelly(device_type)
+        assert settings.tcp_port == 80, device_type
+        assert settings.mdns_enabled is True, device_type
+
+
+def test_a_device_type_without_an_http_surface_gets_no_port() -> None:
+    """Even with the section present: only the Pro 3EM family serves HTTP."""
+    cfg = config("[EMULATOR_SHELLYPRO3EM]\nTCP_PORT = 8080\n")
+    for device_type in ("ct002", "ct003", "shellyemg3", "shellyproem50"):
+        assert cfg.shelly(device_type).tcp_port == -1, device_type
+
+
+def test_the_emulator_section_is_read_by_every_pro3em_spelling() -> None:
+    cfg = config(
+        """
+[EMULATOR_SHELLYPRO3EM]
+TCP_PORT = 8080
+MDNS_ENABLED = false
+MAC = AABBCCDDEEFF
+"""
+    )
+    for device_type in ("shellypro3em", "shellypro3em_old", "shellypro3em_new"):
+        settings = cfg.shelly(device_type)
+        assert (settings.tcp_port, settings.mdns_enabled, settings.mac) == (
+            8080,
+            False,
+            "AABBCCDDEEFF",
+        ), device_type
+
+
+def test_a_section_named_like_a_power_meter_is_not_read() -> None:
+    """``[SHELLY…]`` sections describe a meter to *read*; the emulator's is prefixed.
+
+    Power-source sections are matched by prefix, so the emulator reading a
+    ``[SHELLYPRO3EM]`` section would put its settings in the one place a user
+    configuring a real Shelly would also write.
+    """
+    cfg = config("[SHELLYPRO3EM]\nTCP_PORT = 8080\n")
+    assert cfg.shelly("shellypro3em").tcp_port == 80
+
+
+def test_shelly_settings_survive_the_round_trip() -> None:
+    """Every field, so a key written under the wrong name is caught."""
+    body = "\n".join(
+        f"{f.name.upper()} = {_sample(f)}" for f in dataclasses.fields(ShellySettings)
+    )
+    cfg = config(
+        f"[GENERAL]\nDEVICE_TYPE = shellypro3em\n\n[EMULATOR_SHELLYPRO3EM]\n{body}\n"
+    )
+    assert cfg.shelly("shellypro3em") != ShellySettings()
+    assert _round_trip(cfg).shelly("shellypro3em") == cfg.shelly("shellypro3em")
+
+
+def test_no_emulator_section_is_rendered_without_the_emulation() -> None:
+    """A CT-only file must not grow a section reading it back would obey."""
+    assert "EMULATOR_SHELLYPRO3EM" not in render_ini(
+        config("[GENERAL]\nDEVICE_TYPE = ct002\n")
+    )

@@ -29,6 +29,10 @@ Shelly by logging in to its Shelly Cloud account, and AstraMeter has none.
 
 Marstek batteries poll the meter over UDP and need nothing on this page.
 
+Where each of these comes from, and what it would take to serve two batteries
+that each insist on a meter of their own, is in the
+[research notes](shelly-battery-research.md).
+
 ## What it announces
 
 AstraMeter advertises two mDNS services, which is what a Shelly does:
