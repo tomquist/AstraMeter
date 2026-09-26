@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AstraMeter — Smart power-meter emulator for Marstek batteries</title>
+    <meta
+      name="description"
+      content="AstraMeter acts as the power meter your Marstek battery trusts (Shelly, CT002, CT003). Balance several batteries. Watch them live. Free and open source."
+    />
+    <meta property="og:title" content="AstraMeter" />
+    <meta property="og:description" content="A software power meter for Marstek storage systems. Balance several batteries, read 18+ power-meter sources, run on Home Assistant, Docker or an ESP32." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://astrameter.com/assets/astrameter-logo.png" />
+    <meta name="theme-color" content="#020617" />
+    <link rel="icon" type="image/svg+xml" href="assets/astrameter-icon.svg" />
+    <link rel="apple-touch-icon" href="assets/astrameter-icon.png" />
+    <link rel="preload" href="fonts/ibm-plex-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="css/styles.css" />
+    <meta name="robots" content="noindex" />
+  </head>
+  <body class="landing">
+    <header class="site-nav" id="nav">
+      <div class="nav-inner">
+        <a class="brand" href="index.html">
+          <img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter
+        </a>
+        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false">Menu</button>
+        <nav class="nav-links" id="nav-links">
+          <a href="#features">Features</a>
+          <a href="#compatibility">Compatibility</a>
+          <a href="#meters">Meters</a>
+          <a href="#install">Install</a>
+          <a href="#faq">FAQ</a>
+          <a data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub</a>
+          <a class="nav-cta" href="generator.html">Config generator</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container">
+          <div class="hero-text">
+            <h1>Use the meter you already have.</h1>
+            <p class="lead">
+              A B2500, Venus or Jupiter only steers toward zero when it can see a power meter it recognises.
+              AstraMeter pretends to be that meter (a Shelly Pro 3EM, CT002 or CT003) and feeds it live grid
+              readings from your Shelly, Home Assistant, MQTT broker, smart-meter IR head, or any of
+              <span data-meter-count>18</span> supported sources.
+            </p>
+            <div class="hero-cta">
+              <a class="btn btn-primary" href="generator.html">Generate a config</a>
+              <a class="btn btn-secondary" data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">Source on GitHub</a>
+            </div>
+            <p class="hero-note">
+              Free software, GPL-3.0. Runs as a Home Assistant add-on, in Docker, with plain Python, or on an ESP32.
+            </p>
+          </div>
+
+          <figure class="shot hero-shot">
+            <img
+              src="assets/screenshots/dashboard-overview-dark.png"
+              alt="The Overview tab: the grid held within a few watts of zero while three batteries between them supply what the house is drawing"
+              width="1280"
+              height="654"
+              decoding="async"
+              fetchpriority="high"
+            />
+            <figcaption>
+              Three batteries, one house. The grid sits at zero because the fleet is holding it there.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="band" id="how">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>How it fits in</h2>
+          </div>
+          <div class="rail-body">
+            <p>
+              The battery polls AstraMeter over your local network, exactly as it would poll a real meter, and gets
+              back the current grid power. AstraMeter reads that number from whatever you already measure it
+              with.
+            </p>
+            <p>
+              With a single battery, Shelly emulation is enough. With two or more, use CT002 or CT003: AstraMeter
+              then gives each battery its own target, so they share the load instead of all reacting to the same
+              reading and overshooting.
+            </p>
+
+            <figure class="wiring" aria-label="Grid meter to AstraMeter to batteries">
+              <div class="wire-node">
+                <span class="wire-kind">Grid meter</span>
+                <strong>What you have</strong>
+                <span>Shelly, Home Assistant, MQTT, SML, Modbus, HomeWizard…</span>
+              </div>
+              <div class="wire-link"><span>HTTP · MQTT · Modbus · SML</span><i class="pulse" aria-hidden="true"></i></div>
+              <div class="wire-node wire-core">
+                <span class="wire-kind">AstraMeter</span>
+                <strong>Filters and splits</strong>
+                <span>Smooths the reading, works out a target per battery</span>
+              </div>
+              <div class="wire-link"><span>UDP, as Shelly or CT002/CT003</span><i class="pulse" aria-hidden="true"></i></div>
+              <div class="wire-node">
+                <span class="wire-kind">Batteries</span>
+                <strong>What they expect</strong>
+                <span>One or more Marstek storage systems</span>
+              </div>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="features">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>Features</h2>
+          </div>
+          <dl class="spec">
+            <div>
+              <dt>Several batteries, one grid connection</dt>
+              <dd>
+                In CT002/CT003 mode the load is split evenly, or by a weight you set per battery. On small loads
+                it can run fewer batteries so each stays above its efficient minimum, rotating them to share wear.
+              </dd>
+            </div>
+            <div>
+              <dt><span data-meter-count>18</span> meter sources</dt>
+              <dd>
+                Shelly, Tasmota, Home Assistant, MQTT, Modbus TCP/UDP, SML over an IR head, HomeWizard, Enphase,
+                SMA, Fronius, Tibber Pulse, a JSON endpoint, or your own script.
+              </dd>
+            </div>
+            <div>
+              <dt>Filtering for noisy meters</dt>
+              <dd>
+                Smoothing, a deadband and Hampel outlier rejection, plus an optional PID controller, for meters
+                that jump around or report late.
+              </dd>
+            </div>
+            <div>
+              <dt>Three-phase</dt>
+              <dd>Per-phase readings on L1, L2 and L3, each with its own offset and multiplier for calibration.</dd>
+            </div>
+            <div>
+              <dt>Home Assistant entities</dt>
+              <dd>
+                MQTT Insights publishes grid power, per-battery targets and meter health through MQTT discovery,
+                along with controls to pause a battery or set its share.
+              </dd>
+            </div>
+            <div>
+              <dt>ESP32 build</dt>
+              <dd>
+                The CT002/CT003 emulator also ships as an ESPHome component, so a small ESP32 board can do the job
+                without a server.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="band" id="dashboard">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>Status page</h2>
+          </div>
+          <div class="rail-body">
+            <p>
+              Open it from the Home Assistant sidebar, on port 52500 with Docker or Python, or at the ESP32's
+              own address. It shows the grid reading, what each battery is being asked to do, and the health of
+              your meter. Except on an ESP32, whose settings are compiled in, you can also edit the configuration
+              from the browser.
+              <a data-gh="doc:docs/dashboard.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/dashboard.md" target="_blank" rel="noopener">Dashboard docs</a>
+            </p>
+          </div>
+        </div>
+        <div class="container">
+          <figure class="shot">
+            <img
+              src="assets/screenshots/dashboard-batteries-dark.png"
+              alt="The Batteries tab: three battery cards side by side, each with its own trend line, phase, target and saturation"
+              width="1280"
+              height="497"
+              loading="lazy"
+              decoding="async"
+            />
+            <figcaption>
+              Every battery's own power, target and share of the load, with a trend line drawn as the readings
+              arrive.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="band" id="compatibility">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>Compatibility</h2>
+          </div>
+          <div class="rail-body">
+            <p>
+              Works with the <strong>B2500</strong>, <strong>Venus</strong>, <strong>Jupiter</strong> and other
+              Marstek storage systems that can be paired with a Shelly or CT002/CT003 meter. Once AstraMeter is
+              running, switch the battery to <em>Self-Adaptation</em> mode.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Emulated meter</th><th>Use it for</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Shelly Pro 3EM</td><td>One battery</td><td>Port 1010 for B2500 firmware up to v224, 2220 from v226</td></tr>
+                  <tr><td>Shelly EM Gen3</td><td>One battery</td><td></td></tr>
+                  <tr><td>Shelly Pro EM-50</td><td>One battery</td><td></td></tr>
+                  <tr><td>Marstek CT002 (HME-4)</td><td>Two or more</td><td>Per-battery targets and load sharing</td></tr>
+                  <tr><td>Marstek CT003 (HME-3)</td><td>Two or more</td><td>Same as CT002</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="meters">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>Meter sources</h2>
+          </div>
+          <div class="rail-body">
+            <p>
+              The right-hand column says whether the ESP32 build can read each one. Everything not marked
+              <em>ESP32 only</em> also works with the Python version. Each row links to its settings in the
+              <a data-gh="doc:docs/powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/powermeters.md" target="_blank" rel="noopener">Python</a>
+              and
+              <a data-gh="doc:docs/esphome-powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/esphome-powermeters.md" target="_blank" rel="noopener">ESP32</a>
+              docs.
+            </p>
+            <ul class="pm-list" id="pm-grid"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="install">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>Install</h2>
+          </div>
+          <div class="rail-body">
+            <div class="table-wrap">
+              <table class="install-table">
+                <thead>
+                  <tr><th>Method</th><th>Best for</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Home Assistant add-on</td>
+                    <td>Home Assistant users. The easiest route.</td>
+                    <td><a data-gh="doc:docs/installation/home-assistant.md" href="https://github.com/tomquist/astrameter/blob/main/docs/installation/home-assistant.md" target="_blank" rel="noopener">Guide</a></td>
+                  </tr>
+                  <tr>
+                    <td>Docker</td>
+                    <td>A NAS or home server</td>
+                    <td><a data-gh="doc:docs/installation/docker.md" href="https://github.com/tomquist/astrameter/blob/main/docs/installation/docker.md" target="_blank" rel="noopener">Guide</a></td>
+                  </tr>
+                  <tr>
+                    <td>Python</td>
+                    <td>Linux, macOS or a Raspberry Pi</td>
+                    <td><a data-gh="doc:docs/installation/direct.md" href="https://github.com/tomquist/astrameter/blob/main/docs/installation/direct.md" target="_blank" rel="noopener">Guide</a></td>
+                  </tr>
+                  <tr>
+                    <td>ESPHome on an ESP32</td>
+                    <td>A dedicated board, no server</td>
+                    <td><a data-gh="doc:docs/installation/esphome.md" href="https://github.com/tomquist/astrameter/blob/main/docs/installation/esphome.md" target="_blank" rel="noopener">Guide</a></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="generator-note">
+              <div>
+                <h3>Config generator</h3>
+                <p>
+                  Tell it how you'll run AstraMeter and which meter you have, and it writes the
+                  <code>config.ini</code> or ESPHome YAML, explaining each option. It runs in your browser and
+                  uploads nothing.
+                </p>
+              </div>
+              <a class="btn btn-primary" href="generator.html">Open the generator</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="faq">
+        <div class="container rail">
+          <div class="rail-head">
+            <h2>FAQ</h2>
+          </div>
+          <div class="rail-body faq">
+            <details>
+              <summary>Do I need to buy a specific power meter?</summary>
+              <p>No. AstraMeter reads grid power from something you probably already have (a Shelly, Home Assistant, an MQTT topic, a smart-meter reader, Modbus and so on) and presents it to the battery as the meter it expects.</p>
+            </details>
+            <details>
+              <summary>Should I use Shelly emulation or CT002/CT003?</summary>
+              <p>Shelly for a single battery. CT002/CT003 when two or more batteries should share the load; AstraMeter then gives each one its own target.</p>
+            </details>
+            <details>
+              <summary>What's the difference between Home Assistant, Docker and ESP32?</summary>
+              <p>The add-on, Docker and Python run the full emulator as software on a machine that's already on. The ESP32 build runs on a small board of its own, but emulates only CT002/CT003, not a Shelly; if your battery can only pair with a Shelly, run one of the others. The config generator writes the right file for each.</p>
+            </details>
+            <details>
+              <summary>Does it cost anything?</summary>
+              <p>No. AstraMeter is free software under the GPL-3.0. The config generator runs in your browser and uploads nothing.</p>
+            </details>
+            <details>
+              <summary>Which Marstek batteries are supported?</summary>
+              <p>B2500, Venus, Jupiter and others. If the battery can be paired with a CT002/CT003 or Shelly meter, AstraMeter can drive it.</p>
+            </details>
+            <p class="faq-more">
+              More in the
+              <a data-gh="readme" href="https://github.com/tomquist/astrameter#readme" target="_blank" rel="noopener">documentation</a>
+              and the
+              <a data-gh="doc:docs/faq.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/faq.md" target="_blank" rel="noopener">troubleshooting FAQ</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-grid">
+        <div>
+          <a class="brand" href="index.html"><img class="brand-mark" src="assets/astrameter-icon.svg" alt="" width="26" height="26" /> AstraMeter</a>
+          <p class="help">Power-meter emulator for Marstek storage systems. Formerly b2500-meter. Not affiliated with Marstek.</p>
+        </div>
+        <div>
+          <h4>Project</h4>
+          <a data-gh="repo" href="https://github.com/tomquist/astrameter" target="_blank" rel="noopener">GitHub</a>
+          <a data-gh="readme" href="https://github.com/tomquist/astrameter#readme" target="_blank" rel="noopener">Documentation</a>
+          <a data-gh="doc:CHANGELOG.md" href="https://github.com/tomquist/astrameter/blob/develop/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+          <a data-gh="doc:LICENSE" href="https://github.com/tomquist/astrameter/blob/develop/LICENSE" target="_blank" rel="noopener">License (GPL-3.0)</a>
+        </div>
+        <div>
+          <h4>Tools &amp; docs</h4>
+          <a href="generator.html">Config generator</a>
+          <a data-gh="doc:docs/powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/powermeters.md" target="_blank" rel="noopener">Power meters (Python)</a>
+          <a data-gh="doc:docs/esphome-powermeters.md" href="https://github.com/tomquist/astrameter/blob/develop/docs/esphome-powermeters.md" target="_blank" rel="noopener">Power meters (ESPHome)</a>
+          <a data-gh="issues" href="https://github.com/tomquist/astrameter/issues" target="_blank" rel="noopener">Report an issue</a>
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="js/site.js"></script>
+  </body>
+</html>
