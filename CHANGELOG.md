@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** SML meters read over a USB IR head never delivering a reading when their telegrams are long, such as signed EMH meters, logging only "failed to read SML frame" ([#680](https://github.com/tomquist/astrameter/discussions/680), [#689](https://github.com/tomquist/astrameter/pull/689)).
+
 
 ## 2.3.1
 

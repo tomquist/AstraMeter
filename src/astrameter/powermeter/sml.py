@@ -26,6 +26,10 @@ _OBIS_POWER_L3 = "01004c0700ff"
 
 _OBIS_HEX_RE = re.compile(r"^[0-9a-f]{12}$")
 
+# How long one reading waits for a complete frame. Meters send every 1-4 s,
+# so this covers skipping a partial frame and receiving the next whole one.
+_FRAME_TIMEOUT = 10.0
+
 
 def _normalize_obis_hex(raw: str, label: str) -> str:
     v = raw.strip().lower()
@@ -119,6 +123,7 @@ class Sml(Powermeter):
         self._lock = asyncio.Lock()
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._stream = SmlStreamReader()
 
     async def start(self) -> None:
         if self._reader is not None:
@@ -133,6 +138,7 @@ class Sml(Powermeter):
             await self._writer.wait_closed()
             self._reader = None
             self._writer = None
+            self._stream.clear()
 
     async def get_powermeter_watts(self) -> list[float]:
         if self._lock.locked():
@@ -144,16 +150,10 @@ class Sml(Powermeter):
     async def _read_serial(self) -> None:
         if self._reader is None:
             raise RuntimeError("Sml not started; call start() first")
-        stream = SmlStreamReader()
-        data = await self._read_chunk()
-        if data is None:
-            return
-        if not data:
-            logger.error("serial connection closed")
-            return
-        stream.add(data)
-        for i in range(10):
-            sml_frame = await self._try_read_frame(stream)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _FRAME_TIMEOUT
+        while True:
+            sml_frame = self._next_buffered_frame()
             if sml_frame is not None:
                 self._current = EnergyStats.from_sml_frame(
                     sml_frame,
@@ -162,38 +162,43 @@ class Sml(Powermeter):
                     self._obis_l2,
                     self._obis_l3,
                 )
-                logger.debug("got sml frame: %s after %s attempts", self._current, i)
+                logger.debug("got sml frame: %s", self._current)
                 return
-        logger.error("failed to read SML frame after 10 attempts")
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                logger.error("failed to read SML frame within %.0f s", _FRAME_TIMEOUT)
+                return
+            data = await self._read_chunk(remaining)
+            if data is None:
+                return
+            if not data:
+                logger.error("serial connection closed")
+                return
+            # At 9600 baud a read returns only the few bytes that have
+            # arrived, so a frame is assembled across many reads -- and
+            # across calls, as the buffer outlives this one.
+            self._stream.add(data)
 
-    async def _read_chunk(self) -> bytes | None:
+    async def _read_chunk(self, timeout: float) -> bytes | None:
         """Read the next chunk from the serial port, or ``None`` on timeout."""
         assert self._reader is not None
         try:
-            return await asyncio.wait_for(self._reader.read(512), timeout=10)
+            return await asyncio.wait_for(self._reader.read(512), timeout=timeout)
         except asyncio.TimeoutError:
             logger.error("serial read timed out")
             return None
 
-    async def _try_read_frame(self, stream: SmlStreamReader) -> SmlFrame | None:
-        try:
-            sml_frame = stream.get_frame()
-        except smllib.errors.CrcError as e:
-            logger.debug("CRC error, keep reading: %s", e)
-            sml_frame = None
-        except smllib.errors.SmlLibException as e:
-            logger.error("error reading frame: %s", e)
-            sml_frame = None
-        if sml_frame is None:
-            data = await self._read_chunk()
-            if data is None:
+    def _next_buffered_frame(self) -> SmlFrame | None:
+        """Return the next complete frame already buffered, skipping bad ones."""
+        while True:
+            try:
+                return self._stream.get_frame()
+            except smllib.errors.CrcError as e:
+                # get_frame drops the corrupt frame, so the next may be intact.
+                logger.debug("CRC error, keep reading: %s", e)
+            except smllib.errors.SmlLibException as e:
+                logger.error("error reading frame: %s", e)
                 return None
-            if not data:
-                logger.error("serial connection closed")
-                return None
-            # May buffer partial SML; frame may parse on a later loop iteration.
-            stream.add(data)
-        return sml_frame
 
 
 def parse_sml_powers(

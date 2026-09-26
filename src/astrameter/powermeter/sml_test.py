@@ -431,3 +431,84 @@ async def test_empty_first_read_reports_a_closed_connection(
     assert "failed to read SML frame" not in caplog.text
     # One read, then stop -- no futile frame attempts against an empty stream.
     assert reader.await_count == 1
+
+
+class _ChunkedReader:
+    """Serial stand-in that hands out *data* a few bytes per read, as a
+    9600-baud port does; returns ``b""`` (EOF) once exhausted."""
+
+    def __init__(self, data: bytes, chunk: int) -> None:
+        self._data = data
+        self._chunk = chunk
+        self.reads = 0
+
+    async def read(self, n: int) -> bytes:
+        self.reads += 1
+        out = self._data[: min(n, self._chunk)]
+        self._data = self._data[len(out) :]
+        return out
+
+
+async def test_frame_assembled_from_many_small_reads() -> None:
+    """A frame arriving a few bytes per read, starting mid-telegram, still
+    decodes (#680: a ~400-byte signed EMH telegram never fit the old
+    11-read budget)."""
+    frame = _build_sml_frame(power_agg=110, power_l1=0, power_l2=0, power_l3=0)
+    # Tail of an earlier telegram first, then a whole one.
+    data = frame[len(frame) // 2 :] + frame
+    sml = Sml("/dev/ttyUSB0")
+    reader = _ChunkedReader(data, chunk=8)
+    sml._reader = cast("asyncio.StreamReader", reader)
+    await sml._read_serial()
+    assert sml._current.powers == [0, 0, 0]
+    assert reader.reads > 11
+
+
+async def test_partial_frame_carries_over_to_next_reading() -> None:
+    """Bytes buffered by one reading are kept for the next one."""
+    frame = _build_sml_frame(power_agg=1234, power_l1=400, power_l2=500, power_l3=334)
+    sml = Sml("/dev/ttyUSB0")
+    sml._reader = cast("asyncio.StreamReader", _ChunkedReader(frame[:40], chunk=8))
+    await sml._read_serial()  # ends on EOF with the frame incomplete
+    assert sml._current.powers == [0]
+    sml._reader = cast("asyncio.StreamReader", _ChunkedReader(frame[40:], chunk=8))
+    await sml._read_serial()
+    assert sml._current.powers == [400, 500, 334]
+
+
+async def test_gives_up_after_frame_timeout(caplog: pytest.LogCaptureFixture) -> None:
+    """Bytes that never form a frame end the reading after the time budget."""
+    sml = Sml("/dev/ttyUSB0")
+    reader = AsyncMock(return_value=b"\x00" * 8)
+    sml._reader = cast("asyncio.StreamReader", SimpleNamespace(read=reader))
+    with (
+        patch("astrameter.powermeter.sml._FRAME_TIMEOUT", 0.05),
+        caplog.at_level(logging.ERROR),
+    ):
+        await sml._read_serial()
+    assert "failed to read SML frame" in caplog.text
+    assert sml._current.powers == [0]
+
+
+async def test_silent_port_bounded_by_frame_timeout() -> None:
+    """A read started just before the deadline waits only for the time left,
+    not a fresh full timeout."""
+
+    class _TrickleThenSilent:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def read(self, n: int) -> bytes:
+            self.reads += 1
+            if self.reads == 1:
+                return b"\x00" * 8
+            await asyncio.sleep(3600)
+            return b""
+
+    sml = Sml("/dev/ttyUSB0")
+    sml._reader = cast("asyncio.StreamReader", _TrickleThenSilent())
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with patch("astrameter.powermeter.sml._FRAME_TIMEOUT", 0.2):
+        await sml._read_serial()
+    assert loop.time() - start < 1.0
