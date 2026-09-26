@@ -164,10 +164,11 @@ class Sml(Powermeter):
                 )
                 logger.debug("got sml frame: %s", self._current)
                 return
-            if loop.time() >= deadline:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 logger.error("failed to read SML frame within %.0f s", _FRAME_TIMEOUT)
                 return
-            data = await self._read_chunk()
+            data = await self._read_chunk(remaining)
             if data is None:
                 return
             if not data:
@@ -178,11 +179,11 @@ class Sml(Powermeter):
             # across calls, as the buffer outlives this one.
             self._stream.add(data)
 
-    async def _read_chunk(self) -> bytes | None:
+    async def _read_chunk(self, timeout: float) -> bytes | None:
         """Read the next chunk from the serial port, or ``None`` on timeout."""
         assert self._reader is not None
         try:
-            return await asyncio.wait_for(self._reader.read(512), timeout=10)
+            return await asyncio.wait_for(self._reader.read(512), timeout=timeout)
         except asyncio.TimeoutError:
             logger.error("serial read timed out")
             return None

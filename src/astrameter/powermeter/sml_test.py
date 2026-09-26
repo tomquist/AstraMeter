@@ -488,3 +488,27 @@ async def test_gives_up_after_frame_timeout(caplog: pytest.LogCaptureFixture) ->
         await sml._read_serial()
     assert "failed to read SML frame" in caplog.text
     assert sml._current.powers == [0]
+
+
+async def test_silent_port_bounded_by_frame_timeout() -> None:
+    """A read started just before the deadline waits only for the time left,
+    not a fresh full timeout."""
+
+    class _TrickleThenSilent:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def read(self, n: int) -> bytes:
+            self.reads += 1
+            if self.reads == 1:
+                return b"\x00" * 8
+            await asyncio.sleep(3600)
+            return b""
+
+    sml = Sml("/dev/ttyUSB0")
+    sml._reader = cast("asyncio.StreamReader", _TrickleThenSilent())
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with patch("astrameter.powermeter.sml._FRAME_TIMEOUT", 0.2):
+        await sml._read_serial()
+    assert loop.time() - start < 1.0
