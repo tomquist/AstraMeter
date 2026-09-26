@@ -6,7 +6,10 @@ description: Adds a grid powermeter backend end to end: the module, the config-l
 
 Powermeters are Python-only and have **no** C++/ESPHome counterpart — the
 ESPHome component reads grid power from any native ESPHome sensor instead — so
-the parity rule doesn't apply here. A new meter still touches several places
+the parity rule doesn't apply here. The one exception is the Tibber Pulse: stock
+ESPHome can't read its bridge, so `esphome/components/tibber_pulse/` does, and a
+change to how `tibber_pulse.py` fetches or `sml.py` decodes lands there too (see
+`CONTRIBUTING.md`). A new meter still touches several places
 beyond the implementation; grep an existing one (`HomeWizard` / `HOMEWIZARD`) to
 find every spot, and work through all eight so the config loader, web editor,
 generator and both doc sets stay in sync.
@@ -42,7 +45,8 @@ generator and both doc sets stay in sync.
    `warn`). Run `cd web && npm run check`.
 6. **ESPHome docs** — even without a C++ port, document how to read the *same
    source* on an ESP32 in `docs/esphome-powermeters.md`: a tier section (🟢
-   native / 🔵 generic HTTP / 🟠 alternate via HA, Modbus or MQTT / 🔴 not yet)
+   native, by a built-in component or one of ours / 🔵 generic HTTP / 🟠
+   alternate via HA, Modbus or MQTT / 🔴 not yet)
    **and** its entry in the Contents legend, consistent with step 5's `esphome`
    spec.
 7. **Examples, docs and changelog** — a commented example in

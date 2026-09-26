@@ -1,0 +1,43 @@
+esphome:
+  name: tibber-pulse-esp32-ard-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+wifi:
+  ssid: "test"
+  password: "testpassword"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002, tibber_pulse]
+
+# A user-supplied http_request: block, shared with ct002's cloud reporting.
+http_request:
+  timeout: 20s
+
+sensor:
+  - platform: tibber_pulse
+    host: pulse-bridge.local
+    password: AD56-54BA
+    user: admin
+    node_id: 2
+    update_interval: 3s
+    timeout: 8s
+    obis_power_current: "1-0:16.7.0*255"
+    obis_power_l1: 0100240700ff
+    power:
+      id: grid_l1
+      name: Grid Power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  ct_type: HME-3
+  cloud_reporting:
+    interval: 60s

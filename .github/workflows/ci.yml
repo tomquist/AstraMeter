@@ -69,9 +69,16 @@ jobs:
       - name: Run host-gcc protocol + wrappers + balancer parity tests
         run: uv run pytest tests/components/ct002/test_host_protocol.py -v
 
-  # Discover the ct002 compile targets dynamically so adding a
-  # tests/components/ct002/test.*.yaml file is automatically compiled in CI
-  # without editing this workflow.
+      # The tibber_pulse component's SML decoder (held to the Python one) and
+      # its /node_data.json <-> /data.json fallback.
+      - name: Run tibber_pulse host gtests
+        run: uv run pytest tests/components/tibber_pulse/test_tibber_pulse_gtests.py -v
+
+  # Discover the compile targets dynamically so adding a
+  # tests/components/<component>/test.*.yaml file is automatically compiled in
+  # CI without editing this workflow. Covers every external component in
+  # esphome/components/ (ct002 and tibber_pulse); the job keeps its ct002 name
+  # so required-check settings that name it keep matching.
   ct002-esphome-yaml:
     needs: [ lint ]
     runs-on: ubuntu-latest
@@ -84,7 +91,7 @@ jobs:
       - name: Collect test YAML files
         id: find
         run: |
-          matrix=$(ls tests/components/ct002/test.*.yaml | jq -R -s -c 'split("\n")[:-1]')
+          matrix=$(ls tests/components/*/test.*.yaml | jq -R -s -c 'split("\n")[:-1]')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   ct002-esphome-compile:
@@ -141,6 +148,9 @@ jobs:
       - name: Build ct002 test-hooks (e2e control) binary
         run: esphome compile tests/components/ct002/test.e2e.host.yaml
 
+      - name: Build tibber_pulse host binary
+        run: esphome compile tests/components/tibber_pulse/test.host.yaml
+
       # All cross-backend suites are tagged `@pytest.mark.esphome_e2e`
       # (see pyproject.toml). Selecting by marker means new suites are
       # picked up automatically without editing this workflow. Their
@@ -160,8 +170,11 @@ jobs:
       - name: Install esphome into venv for codegen tests
         run: uv pip install esphome
 
-      - name: Run ct002 codegen unit tests (esphome schema validators)
-        run: uv run --no-sync pytest tests/components/ct002/test_codegen.py -v
+      - name: Run ct002 + tibber_pulse codegen unit tests (esphome schema validators)
+        run: >-
+          uv run --no-sync pytest -v
+          tests/components/ct002/test_codegen.py
+          tests/components/tibber_pulse/test_tibber_pulse_codegen.py
 
   # The add-on image, exercised the way the Supervisor starts it: the app
   # reads its configuration from the add-on options and the Supervisor API,

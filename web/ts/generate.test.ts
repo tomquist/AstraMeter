@@ -426,6 +426,55 @@ const eySml = generateEsphome({
 has(eySml, "platform: sml", "esp/sml: sml sensor");
 has(eySml, 'obis_code: "1-0:16.7.0"', "esp/sml: default obis");
 
+// ── ESPHome: Tibber Pulse (our tibber_pulse component) ──────────────────────
+const eyTibber1 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyTibber1, "components: [ct002, tibber_pulse]", "esp/tibber: loads the tibber_pulse external component");
+has(eyTibber1, "- platform: tibber_pulse\n    host: 192.168.1.140\n    password: \"AD56-54BA\"", "esp/tibber: bridge host + password");
+has(eyTibber1, "    power:\n      id: grid_l1", "esp/tibber: single phase reads the total");
+has(eyTibber1, "power_sensor_l1: grid_l1", "esp/tibber: ct002 reads it");
+lacks(eyTibber1, "power_l1:", "esp/tibber: no phase sensors for one phase");
+lacks(eyTibber1, "http_request:", "esp/tibber: the component loads http_request itself");
+lacks(eyTibber1, "uart:", "esp/tibber: no IR head any more");
+lacks(eyTibber1, "node_id:", "esp/tibber: default node id not written");
+lacks(eyTibber1, "user:", "esp/tibber: default user not written");
+lacks(eyTibber1, "platform: sml", "esp/tibber: not the sml component");
+lacks(eyTibber1, "# ⚠", "esp/tibber: nothing to warn about");
+
+const eyTibber3 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [
+    {
+      type: "tibber_pulse",
+      phases: 3,
+      fields: {
+        IP: "192.168.1.141",
+        PASSWORD: "AB12-34CD",
+        USER: "admin",
+        NODE_ID: "2",
+        TIMEOUT: "8",
+        OBIS_POWER_L1: "0100240700ff",
+      },
+      tuning: { POWER_OFFSET: "10" },
+    },
+  ],
+  ct: { fields: {} },
+  marstek: { enabled: true, fields: {} },
+});
+has(eyTibber3, "    power_l1:\n      id: grid_l1\n      filters:\n        - offset: 10", "esp/tibber: phase sensor carries its filters at sub-sensor depth");
+has(eyTibber3, "    power_l3:\n      id: grid_l3", "esp/tibber: three phases");
+has(eyTibber3, "    node_id: 2", "esp/tibber: node id override");
+has(eyTibber3, "    timeout: 8s", "esp/tibber: timeout override");
+has(eyTibber3, '    obis_power_l1: "0100240700ff"', "esp/tibber: OBIS override passed through in the Python form");
+lacks(eyTibber3, "user:", "esp/tibber: explicit default user not written");
+has(eyTibber3, "power_sensor_l3: grid_l3", "esp/tibber: ct002 reads all three phases");
+has(eyTibber3, "http_request:\n  timeout: 20s", "esp/tibber: registration still gets its own http_request block");
+
 // ── ESPHome: DSMR / P1 ────────────────────────────────────────────────────────
 const eyDsmr = generateEsphome({
   target: "esphome",

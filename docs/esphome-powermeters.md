@@ -40,7 +40,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 | Tier | Meaning |
 |------|---------|
-| 🟢 **Native** | A built-in ESPHome component reads this exact source. |
+| 🟢 **Native** | An ESPHome component reads this exact source: a built-in one, or one AstraMeter ships next to `ct002`. |
 | 🔵 **Generic** | No device-specific component, but ESPHome's built-in `http_request`+`json` or `mqtt_subscribe` reads it with a small lambda. |
 | 🟠 **Alternate** | No ESPHome component speaks the API the Python class uses, but another route reaches the same reading — a second protocol on the same device, its HTTP API, or a Home Assistant bridge. |
 | 🔴 **Not yet available** | No practical way to read this on an ESP32 today. Documented so we know what to build. |
@@ -69,7 +69,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
 - [Fronius Smart Meter](#fronius-smart-meter) — 🔵 Generic
 - [Refoss / Meross energy monitor](#refoss--meross-energy-monitor) — 🔵 Generic
-- [Tibber Pulse](#tibber-pulse) — 🟠 Alternate (native SML / community component)
+- [Tibber Pulse](#tibber-pulse) — 🟢 Native (AstraMeter's `tibber_pulse` component)
 
 > **Script** (the Python `[SCRIPT]` source) has no ESPHome equivalent by design:
 > an ESP32 can't run a host shell command. It is left out here on purpose.
@@ -1118,47 +1118,98 @@ mDNS `*.local` names often fail on ESPHome as well.
 
 ## Tibber Pulse
 
-**Tier: 🟠 Alternate.** The Python `[TIBBER_PULSE]` source receives **binary SML
-telegrams** from the Pulse Bridge — pushed over its `/ws` WebSocket, or polled
-from `/node_data.json` (`/data.json` on older firmware) — over HTTP basic auth,
-then decodes them. Stock ESPHome's `http_request`/`json` can't decode binary
-SML, so there is no direct port of the bridge API.
+**Tier: 🟢 Native.** AstraMeter ships a `tibber_pulse` external component next
+to `ct002`. It reads the Pulse Bridge over your LAN, the same way the Python
+`[TIBBER_PULSE]` source does. It uses HTTP basic auth, decodes the meter's
+binary SML telegram on the ESP, and publishes grid power in watts. No Tibber
+cloud is involved, and the Pulse stays on the meter's optical port.
 
-The Pulse IR head just reads your meter's SML output. So the clean ESP path is
-to **read the meter directly** with the native
-[`sml`](https://esphome.io/components/sml/) component via your own IR head,
-skipping the bridge. It is the same approach as the [SML](#sml) source:
+Before you start, enable the bridge's local webserver (its
+`webserver_force_enable` setting). The password is the nine-character code
+printed on the bridge, dash included, e.g. `AD56-54BA`. The user is `admin`.
 
 ```yaml
 external_components:
   - source: github://tomquist/astrameter@develop
-    components: [ct002]
-
-uart:
-  id: uart_bus
-  rx_pin: GPIO16
-  baud_rate: 9600
-  data_bits: 8
-  parity: NONE
-  stop_bits: 1
-
-sml:
-  id: mysml
-  uart_id: uart_bus
+    components: [ct002, tibber_pulse]
 
 sensor:
-  - platform: sml
-    id: grid_l1
-    sml_id: mysml
-    obis_code: "1-0:16.7.0"     # aggregate active power
-    unit_of_measurement: W
-    # per-phase instead: 1-0:36.7.0 (L1), 1-0:56.7.0 (L2), 1-0:76.7.0 (L3)
+  - platform: tibber_pulse
+    host: 192.168.1.140          # the bridge; prefer an IP over a .local name
+    password: AD56-54BA
+    power:                       # 1-0:16.7.0, the whole house
+      id: grid_l1
 
 ct002:
   id: ct002_main
   power_sensor_l1: grid_l1
 ```
 
-**Bridge alternative:** if you'd rather keep the Pulse Bridge, a community
-external component (e.g. `tibber_pulse_local_esphome`) can query it on the ESP
-and decode the SML. Point its resulting power sensor at `grid_l1`.
+For three phases, publish the per-phase registers instead and point all three
+`power_sensor_l*` keys at them:
+
+```yaml
+sensor:
+  - platform: tibber_pulse
+    host: 192.168.1.140
+    password: AD56-54BA
+    power_l1: { id: grid_l1 }    # 1-0:36.7.0
+    power_l2: { id: grid_l2 }    # 1-0:56.7.0
+    power_l3: { id: grid_l3 }    # 1-0:76.7.0
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+```
+
+The per-phase sensors publish only when the meter sends all three phase
+registers. That is the same rule the Python source follows. `power` publishes
+the aggregate register, or the sum of the phases if the meter sends no
+aggregate.
+
+| Option | Default | |
+|---|---|---|
+| `host` | — | The bridge's address, optionally with `:port`. |
+| `password` | — | The code printed on the bridge. |
+| `user` | `admin` | HTTP basic-auth user. |
+| `node_id` | `1` | The Pulse's node on the bridge (see `http://<bridge>/nodes/`). |
+| `update_interval` | `2s` | How often to poll. |
+| `timeout` | `5s` | How long the bridge may take to answer. See below. |
+| `obis_power_current`, `obis_power_l1` … `_l3` | 1-0:16.7.0, 1-0:36.7.0, 1-0:56.7.0, 1-0:76.7.0 | Override the registers read. Takes the Python section's 12-hex form (`0100100700ff`) or `1-0:16.7.0`. |
+
+**How it polls.** The bridge serves the telegram at `/node_data.json` on
+firmware from about 1794 (September 2026), and at `/data.json` before that.
+Each generation answers the other's path with 404. The component asks for
+`/node_data.json` first and falls back to `/data.json` on a 404. It then
+remembers whichever path answered, and switches back if a later bridge update
+makes that one 404 too.
+
+The bridge's webserver is slow; answers regularly take over a second. So each
+request runs on a background task, and the ESP keeps answering your batteries
+while it waits. A poll that comes due while the last one is still running is
+skipped. ESPHome's `http_request` component, which the requests go through, has
+one timeout for the whole device. So `timeout:` raises that one when it is
+shorter, and never lowers it.
+
+The bridge now and then hands out a telegram that doesn't decode. The component
+skips it and keeps the last reading, and only warns once no telegram has
+decoded for 15 seconds. `ct002`'s own `max_sensor_age` still applies if the
+readings stop altogether.
+
+**Differences from the Python source.**
+
+- **Polling only.** Newer bridge firmware can also push every telegram over a
+  WebSocket (`ws://<bridge>/ws`), and the Python source prefers that. Stock
+  ESPHome has no WebSocket client, so the ESP always polls.
+- **ESP32 only.** The request runs on its own FreeRTOS task, which the ESP8266
+  doesn't have.
+- **No zero on a telegram without power registers.** In that case the Python
+  source reports 0 W, while the ESP publishes nothing and logs a warning. If
+  you see that warning, your meter uses different registers: set the `obis_*`
+  options.
+
+**Reading the meter without the bridge.** If you'd rather not use the bridge,
+put your own IR head on the meter and read it with the native [SML](#sml)
+component. This only works once the Pulse is off the optical port.

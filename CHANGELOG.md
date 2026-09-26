@@ -24,6 +24,8 @@
 
 - **Fixed** the dashboard's **Force Rotation** button rotating the battery order twice per click, and again on every MQTT reconnect afterwards ([#674](https://github.com/tomquist/astrameter/issues/674), [#675](https://github.com/tomquist/astrameter/pull/675)).
 
+- **Added** native Tibber Pulse support to the ESPHome build: the ESP32 reads the Pulse Bridge over your network, so no second IR head or broken community component is needed.
+
 
 ## 2.3.0
 
