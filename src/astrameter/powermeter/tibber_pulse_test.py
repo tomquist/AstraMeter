@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -131,15 +132,19 @@ _FRAME = _build_sml_frame(power_l1=100, power_l2=200, power_l3=300)
 _WATTS = [100.0, 200.0, 300.0]
 
 
-def _bridge(served: set[str], frame: bytes) -> tuple[MagicMock, list[str]]:
+def _bridge(
+    served: set[str], frame: bytes, delays: dict[int, float] | None = None
+) -> tuple[MagicMock, list[str]]:
     """A session whose bridge serves only the endpoint names in *served*.
 
     Returns the session and the list of URLs it was asked for; mutate *served*
-    to simulate a firmware update between polls.
+    to simulate a firmware update between polls. *delays* maps a request's
+    index to how long its response takes, to interleave concurrent polls.
     """
     requested: list[str] = []
 
     def get(url: str, **_: object) -> MagicMock:
+        delay = (delays or {}).get(len(requested), 0.0)
         requested.append(url)
         endpoint = url.split("/")[3].split("?")[0]
         resp = MagicMock()
@@ -150,7 +155,12 @@ def _bridge(served: set[str], frame: bytes) -> tuple[MagicMock, list[str]]:
             resp.raise_for_status.side_effect = ClientResponseError(
                 MagicMock(), (), status=404, message="Not Found"
             )
-        resp.__aenter__ = AsyncMock(return_value=resp)
+
+        async def enter() -> MagicMock:
+            await asyncio.sleep(delay)
+            return resp
+
+        resp.__aenter__ = AsyncMock(side_effect=enter)
         resp.__aexit__ = AsyncMock(return_value=False)
         return resp
 
@@ -207,6 +217,25 @@ async def test_firmware_update_while_running_switches_endpoint() -> None:
         "http://10.0.0.5/node_data.json?node_id=1",
         "http://10.0.0.5/node_data.json?node_id=1",
     ]
+
+
+async def test_overlapping_polls_both_fall_back() -> None:
+    # Two polls in flight on old firmware: both 404 on /node_data.json, but
+    # the second 404 arrives only after the first poll has already switched
+    # the remembered endpoint. The second must still fall back to /data.json.
+    session, requested = _bridge({"data.json"}, _FRAME, delays={1: 0.05})
+    with patch("aiohttp.ClientSession", return_value=session):
+        pm = TibberPulse("10.0.0.5", "pw")
+        await pm.start()
+        results = await asyncio.gather(
+            pm.get_powermeter_watts(), pm.get_powermeter_watts()
+        )
+        await pm.stop()
+    assert results == [_WATTS, _WATTS]
+    assert sorted(requested) == sorted(
+        ["http://10.0.0.5/node_data.json?node_id=1"] * 2
+        + ["http://10.0.0.5/data.json?node_id=1"] * 2
+    )
 
 
 async def test_404_on_both_endpoints_raises() -> None:

@@ -89,14 +89,17 @@ class TibberPulse(HttpPowermeter):
         }
 
     async def _fetch_telegram(self) -> bytes:
+        # Pick the fallback from the path this poll tried, not from
+        # ``self._endpoint``, which an overlapping poll may already have moved.
+        tried = self._endpoint
         try:
-            return await self.get_bytes(self._url(self._endpoint))
+            return await self.get_bytes(self._url(tried))
         except ClientResponseError as e:
             if e.status != 404:
                 raise
         # The bridge doesn't serve this path, so it runs the other firmware
         # generation: at startup, or after an OTA update while running.
-        other = next(ep for ep in _DATA_ENDPOINTS if ep != self._endpoint)
+        other = next(ep for ep in _DATA_ENDPOINTS if ep != tried)
         data = await self.get_bytes(self._url(other))
         logger.info("Tibber Pulse: bridge serves /%s, using it from now on", other)
         self._endpoint = other
