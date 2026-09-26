@@ -37,7 +37,7 @@ export interface Field {
 
 /** How a source is read on an ESP32 (see docs/esphome-powermeters.md). */
 export interface EsphomeSpec {
-  kind: "homeassistant" | "mqtt" | "sml" | "dsmr" | "modbus" | "http" | "unsupported";
+  kind: "homeassistant" | "mqtt" | "sml" | "dsmr" | "modbus" | "http" | "tibber_pulse" | "unsupported";
   tier: "native" | "generic" | "alternate" | "unsupported";
   note: string;
   url1?: (f: Fields) => string;
@@ -278,6 +278,7 @@ export const PER_METER_TUNING: Field[] = [
 //   'homeassistant' native HA sensor    'mqtt' native mqtt_subscribe
 //   'sml' native sml component          'modbus' native modbus_controller
 //   'http' generic http_request poll    'unsupported' no ESP path yet
+//   'tibber_pulse' this repo's tibber_pulse component (Pulse Bridge over LAN)
 
 /**
  * Parse a CHANNELS value into positive decimal integers.
@@ -816,9 +817,9 @@ export const POWERMETERS: Powermeter[] = [
       { key: "OBIS_POWER_L3", label: "OBIS: L3", type: "text", placeholder: "01004c0700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
     ],
     esphome: {
-      kind: "sml",
-      tier: "alternate",
-      note: "The bridge serves a binary SML telegram over HTTP basic auth, which stock ESPHome can't decode. Instead read the meter directly with the native sml component via your own IR head (the config below), or use a community external component for the bridge.",
+      kind: "tibber_pulse",
+      tier: "native",
+      note: "Read with AstraMeter's tibber_pulse component, which polls the bridge over your LAN and decodes the telegram on the ESP. Polling only: ESPHome has no WebSocket client for the bridge's push stream.",
     },
   },
   {

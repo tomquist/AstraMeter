@@ -45,6 +45,9 @@ covers three-phase sensors, the cross-phase filter pipeline (Hampel / smoothing
 sub-blocks below. For the grid-power `sensor:` configuration per meter type (and
 which meters the ESP doesn't support yet), see
 **[esphome-powermeters.md](../esphome-powermeters.md)**.
+AstraMeter ships one more external component for that: `tibber_pulse` reads a
+Tibber Pulse through its bridge over your LAN (see
+[Tibber Pulse](../esphome-powermeters.md#tibber-pulse)).
 
 ## Optional sub-blocks
 

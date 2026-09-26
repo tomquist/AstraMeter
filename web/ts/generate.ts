@@ -240,9 +240,17 @@ export function generateConfigIni(state: State): string {
 const IND = "  ";
 
 
-// Render the upstream grid sensor(s) for the chosen meter. Returns
-// { topBlocks: [...], sensorBlock: string, phases: number, warnings: [...] }
-function esphomeSensor(state: State) {
+interface EsphomeSensor {
+  topBlocks: string[];
+  sensorBlock: string;
+  phases: number;
+  warnings: string[];
+  /** External components from this repo the sensor needs besides ct002. */
+  components?: string[];
+}
+
+// Render the upstream grid sensor(s) for the chosen meter.
+function esphomeSensor(state: State): EsphomeSensor {
   const meter = (state.meters && state.meters[0]) || { type: "homeassistant", fields: {}, phases: 1, tuning: {} };
   const pm = getPowermeter(meter.type) || getPowermeter("homeassistant")!;
   const phases = meter.phases === 3 ? 3 : 1;
@@ -261,7 +269,9 @@ function esphomeSensor(state: State) {
     const parts = String(raw).split(",").map((s) => s.trim());
     return parts.length === 1 ? parts[0] : (parts[idx] ?? "");
   }
-  function phaseFilterBlock(idx: number): string {
+  // `depth` is the sensor's own indent level: 2 for a list item under
+  // `sensor:`, 3 for a sub-sensor of a platform (e.g. tibber_pulse's power_l1).
+  function phaseFilterBlock(idx: number, depth = 2): string {
     const lines: string[] = [];
     const off = phaseValue(tuning.POWER_OFFSET, idx);
     const mul = phaseValue(tuning.POWER_MULTIPLIER, idx);
@@ -269,9 +279,8 @@ function esphomeSensor(state: State) {
     if (!isBlank(mul)) lines.push(`- multiply: ${mul}`);
     if (!isBlank(tuning.THROTTLE_INTERVAL) && Number(tuning.THROTTLE_INTERVAL) > 0)
       lines.push(`- throttle: ${tuning.THROTTLE_INTERVAL}s`);
-    return lines.length
-      ? `\n${IND}${IND}filters:\n` + lines.map((l) => `${IND}${IND}${IND}${l}`).join("\n")
-      : "";
+    const pad = IND.repeat(depth);
+    return lines.length ? `\n${pad}filters:\n` + lines.map((l) => `${pad}${IND}${l}`).join("\n") : "";
   }
 
   function templateSensor(id: string): string {
@@ -319,6 +328,25 @@ function esphomeSensor(state: State) {
       return `${IND}- platform: sml\n${IND}${IND}id: ${id}\n${IND}${IND}sml_id: mysml\n${IND}${IND}obis_code: "${obis[i]}"\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(i)}`;
     });
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
+  }
+
+  if (esp.kind === "tibber_pulse") {
+    // Our own component (esphome/components/tibber_pulse): it loads
+    // http_request itself and raises its timeout for the slow bridge, so no
+    // other block is needed.
+    const lines = [`${IND}- platform: tibber_pulse`, `${IND}${IND}host: ${quoteYaml(String(f.IP || "192.168.1.140").trim())}`];
+    lines.push(`${IND}${IND}password: ${quoteYaml(String(f.PASSWORD || "AD56-54BA"))}`);
+    if (!isBlank(f.USER) && String(f.USER).trim() !== "admin") lines.push(`${IND}${IND}user: ${quoteYaml(String(f.USER).trim())}`);
+    if (!isBlank(f.NODE_ID) && String(f.NODE_ID).trim() !== "1") lines.push(`${IND}${IND}node_id: ${String(f.NODE_ID).trim()}`);
+    if (!isBlank(f.TIMEOUT) && Number(f.TIMEOUT) > 0) lines.push(`${IND}${IND}timeout: ${f.TIMEOUT}s`);
+    for (const key of ["OBIS_POWER_CURRENT", "OBIS_POWER_L1", "OBIS_POWER_L2", "OBIS_POWER_L3"]) {
+      if (!isBlank(f[key])) lines.push(`${IND}${IND}${key.toLowerCase()}: ${quoteYaml(String(f[key]).trim())}`);
+    }
+    const keys = phases === 3 ? ["power_l1", "power_l2", "power_l3"] : ["power"];
+    ids.forEach((id, i) => {
+      lines.push(`${IND}${IND}${keys[i]}:\n${IND}${IND}${IND}id: ${id}${phaseFilterBlock(i, 3)}`);
+    });
+    return { topBlocks, sensorBlock: "sensor:\n" + lines.join("\n"), phases, warnings, components: ["tibber_pulse"] };
   }
 
   if (esp.kind === "dsmr") {
@@ -560,7 +588,7 @@ function ct002FilterBlock(meter: Meter | undefined): string | null {
 export function generateEsphome(state: State): string {
   const esp = state.esphome || {};
   const meter = (state.meters && state.meters[0]) || {};
-  const { topBlocks, sensorBlock, phases, warnings } = esphomeSensor(state);
+  const { topBlocks, sensorBlock, phases, warnings, components: extraComponents } = esphomeSensor(state);
 
   // ESPHome allows only one top-level `mqtt:` block, so an MQTT meter and
   // MQTT Insights must share the same broker. Warn if they were set differently
@@ -608,7 +636,8 @@ export function generateEsphome(state: State): string {
   out.push("logger:");
   out.push(`ota:\n${IND}- platform: esphome`);
   out.push(`wifi:\n${IND}ssid: !secret wifi_ssid\n${IND}password: !secret wifi_password`);
-  out.push(`external_components:\n${IND}- source: ${esphomeSource()}\n${IND}${IND}components: [ct002]`);
+  const components = ["ct002", ...(extraComponents || [])].join(", ");
+  out.push(`external_components:\n${IND}- source: ${esphomeSource()}\n${IND}${IND}components: [${components}]`);
 
   // mqtt_insights needs a top-level mqtt: block. If the meter itself is MQTT,
   // its broker wins (the data source is what matters) and Insights reuses it;

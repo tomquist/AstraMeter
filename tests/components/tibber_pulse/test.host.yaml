@@ -1,0 +1,46 @@
+# Host build of the tibber_pulse component feeding ct002. Also the binary the
+# e2e test (test_host_e2e.py) runs against a fake Pulse Bridge on
+# 127.0.0.1:18181 — keep the host and port in step with it.
+esphome:
+  name: tibber-pulse-host-test
+
+host:
+
+# The e2e test reads published states off the log, and sensors log those at
+# VERBOSE. http_request's per-header lines would drown them out.
+logger:
+  level: VERBOSE
+  logs:
+    http_request.host: INFO
+    scheduler: DEBUG
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002, tibber_pulse]
+
+sensor:
+  - platform: tibber_pulse
+    host: 127.0.0.1:18181
+    password: AD56-54BA
+    update_interval: 500ms
+    power:
+      id: grid_total
+      name: Grid Total
+    power_l1:
+      id: grid_l1
+      name: Grid L1
+    power_l2:
+      id: grid_l2
+      name: Grid L2
+    power_l3:
+      id: grid_l3
+      name: Grid L3
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  udp_port: 12346

@@ -1,0 +1,37 @@
+esphome:
+  name: tibber-pulse-esp32-idf-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+wifi:
+  ssid: "test"
+  password: "testpassword"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002, tibber_pulse]
+
+# No http_request: block — the component loads it itself.
+sensor:
+  - platform: tibber_pulse
+    host: 192.168.1.140
+    password: AD56-54BA
+    power_l1:
+      id: grid_l1
+    power_l2:
+      id: grid_l2
+    power_l3:
+      id: grid_l3
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  ct_type: HME-4
