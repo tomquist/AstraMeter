@@ -284,10 +284,21 @@ async def _bind_marstek_responder(
 
 
 def _ct_measurement(
-    device: CT002, phases: list[float], mqtt_connected: bool
+    device: CT002,
+    phases: list[float],
+    mqtt_connected: bool,
+    aux: dict[str, Any] | None = None,
 ) -> CtMeasurement:
     """What a real CT reports to the cloud: the grid phases plus the charge and
     discharge power aggregated per phase bucket."""
+    aux = aux or {}
+
+    def aux_float(key: str) -> float:
+        try:
+            return float(aux.get(key, 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
     ap, bp, cp = (round(p) for p in phases)
     buckets = device.reporting_phase_buckets()
 
@@ -316,6 +327,12 @@ def _ct_measurement(
         db=discharge("B"),
         dc=discharge("C"),
         dd=discharge("ABC"),
+        va=round(aux_float("voltage_l1")),
+        vb=round(aux_float("voltage_l2")),
+        vc=round(aux_float("voltage_l3")),
+        ia=aux_float("current_l1"),
+        ib=aux_float("current_l2"),
+        ic=aux_float("current_l3"),
     )
 
 
@@ -325,7 +342,7 @@ def _start_cloud_reporting(
     device_id: str,
     powermeters: list[ConfiguredPowermeter],
     report_id: str,
-    mqtt_connected: bool,
+    insights: MqttInsightsService | None,
     registry: StatusRegistry | None,
 ) -> asyncio.Task[None] | None:
     """Opt-in reporting to hamedata.com the way a real CT does: a handshake,
@@ -340,8 +357,14 @@ def _start_cloud_reporting(
         return None
 
     async def gather() -> CtMeasurement:
+        aux = (
+            insights.cloud_reporting_aux_snapshot() if insights is not None else {}
+        )
         return _ct_measurement(
-            device, await _read_grid_phases(powermeters), mqtt_connected
+            device,
+            await _read_grid_phases(powermeters),
+            insights.connected if insights is not None else False,
+            aux,
         )
 
     reporter = CloudReporter(
@@ -414,7 +437,7 @@ async def run_device(
                 device_id,
                 powermeters,
                 marstek_mac or ct.ct_mac,
-                insights is not None,
+                insights,
                 registry,
             )
 
