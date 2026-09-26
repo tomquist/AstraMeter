@@ -23,6 +23,8 @@
 
 - **Fixed** an MQTT power meter freezing on its last reading, while still reporting itself healthy, after the meter published a single null or non-numeric value ([#657](https://github.com/tomquist/astrameter/issues/657), [#658](https://github.com/tomquist/astrameter/pull/658)).
 
+- **Fixed** SML meters read over a USB IR head never delivering a reading when their telegrams are long, such as signed EMH meters, logging only "failed to read SML frame" ([#680](https://github.com/tomquist/astrameter/discussions/680)).
+
 - **Added** DSMR/P1 smart meters to the ESPHome config generator and docs, so a P1 meter and the emulator can share one ESP32 instead of needing a separate bridge ([#664](https://github.com/tomquist/astrameter/issues/664), [#665](https://github.com/tomquist/astrameter/pull/665)).
 
 - **Fixed** the dashboard's **Force Rotation** button rotating the battery order twice per click, and again on every MQTT reconnect afterwards ([#674](https://github.com/tomquist/astrameter/issues/674), [#675](https://github.com/tomquist/astrameter/pull/675)).
