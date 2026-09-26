@@ -910,7 +910,7 @@ export const CT_BASIC: Field[] = [
  * firmware's own block.
  */
 export const SHELLY_EMULATOR: Field[] = [
-  { key: "TCP_PORT", label: "HTTP port", help: "Port the emulated meter answers HTTP on. Batteries that find it over mDNS talk to this port, and several models expect 80. Set -1 to serve no HTTP at all (the meter is still announced). Default 80.", type: "number", placeholder: "80" },
+  { key: "TCP_PORT", label: "HTTP port", help: "Port the emulated meter answers HTTP on. Batteries that find it over mDNS talk to this port, and Hoymiles and Growatt always use 80. Set -1 to serve no HTTP at all (the meter is still announced). Default 80.", type: "number", placeholder: "80" },
   { key: "MDNS_ENABLED", label: "Announce over mDNS", help: "Let batteries discover the meter instead of being given its address. Default on.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "SERVE_GEN1_ENDPOINTS", label: "Serve older endpoints", help: "Also answer the older single-page endpoints some batteries probe to confirm what they are talking to. Default on; harmless to leave on.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "MAC", label: "Emulated MAC", help: "Pins the MAC the meter identifies itself by, which batteries use to recognise it. Blank derives it from this machine — set it only if the derived value cannot be stable, such as on Docker bridge networking.", type: "text", placeholder: "(derived)" },
