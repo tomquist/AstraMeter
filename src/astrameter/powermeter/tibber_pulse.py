@@ -39,8 +39,9 @@ class TibberPulse(HttpPowermeter):
     """Reads a Tibber Pulse via the local Pulse Bridge HTTP API.
 
     Fetches the raw SML telegram from the bridge's ``/node_data.json`` endpoint
-    (``/data.json`` on firmware before ~1794) over HTTP Basic auth and decodes the instantaneous active power locally — no
-    Tibber cloud involved. The bridge's local webserver must be enabled
+    (``/data.json`` on firmware before ~1794) over HTTP Basic auth and decodes
+    the instantaneous active power locally — no Tibber cloud involved. The
+    bridge's local webserver must be enabled
     (``webserver-force-enable``) and the password is the nine-character code
     printed on the bridge (e.g. ``AD56-54BA``); the user is ``admin``.
 
