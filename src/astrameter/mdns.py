@@ -18,8 +18,11 @@ would otherwise make two responders fight over one name.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import socket
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING
 
 from zeroconf import InterfaceChoice, IPVersion, ServiceInfo
@@ -39,6 +42,11 @@ if TYPE_CHECKING:
 #: looks for; ``_http._tcp`` is what generic browsers and some consumers use.
 SHELLY_SERVICE_TYPE = "_shelly._tcp.local."
 HTTP_SERVICE_TYPE = "_http._tcp.local."
+
+#: How long a shutdown waits for its goodbye packets to go out. The library
+#: sends each goodbye several times a fraction of a second apart; this bounds
+#: the wait so a wedged socket cannot hold up a stop.
+GOODBYE_TIMEOUT_S = 5.0
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -170,6 +178,10 @@ class MdnsAdvertiser:
         self._zc: AsyncZeroconf | None = None
         self._infos: list[ServiceInfo] = []
         self._addresses = frozenset[str]()
+        # The announcements the library is still sending in the background.
+        # Each register/update call returns one; they are tracked so a stop
+        # can settle them instead of leaving them for a closing loop to find.
+        self._broadcasts: set[asyncio.Future[object]] = set()
 
     @property
     def registered(self) -> bool:
@@ -190,7 +202,9 @@ class MdnsAdvertiser:
         for info in infos:
             # Another responder on this host is expected, not a conflict: skip
             # the probe that would otherwise treat it as a name clash.
-            await zc.async_register_service(info, cooperating_responders=True)
+            self._track(
+                await zc.async_register_service(info, cooperating_responders=True)
+            )
         self._zc = zc
         self._infos = infos
         self._addresses = local_ipv4_set()
@@ -211,7 +225,7 @@ class MdnsAdvertiser:
             return
         for info in self._infos:
             info.addresses = [packed]
-            await self._zc.async_update_service(info)
+            self._track(await self._zc.async_update_service(info))
         logger.info("Re-announced the emulated Shelly at %s", announced_ip)
 
     async def refresh_interfaces(self) -> bool:
@@ -238,15 +252,41 @@ class MdnsAdvertiser:
         logger.info("Rebuilt the mDNS sockets after a network change")
         return True
 
+    def _track(self, broadcast: Awaitable[object]) -> None:
+        future = asyncio.ensure_future(broadcast)
+        self._broadcasts.add(future)
+        future.add_done_callback(self._broadcasts.discard)
+
     async def stop(self) -> None:
-        """Send goodbyes, then close, tolerating a partial start."""
+        """Send goodbyes, wait for them to go out, then close.
+
+        Tolerates a partial start. The wait is the point: the library sends
+        goodbyes from background tasks, and a stop that returned before they
+        finished would have them destroyed with the event loop — so the
+        goodbye never reaches the network, and every consumer keeps the stale
+        record until it expires.
+        """
         if self._zc is None:
             return
+        # An announcement still repeating is superseded by the goodbye.
+        for future in list(self._broadcasts):
+            future.cancel()
+        goodbyes: list[asyncio.Future[object]] = []
         for info in self._infos:
             try:
-                await self._zc.async_unregister_service(info)
+                goodbyes.append(
+                    asyncio.ensure_future(await self._zc.async_unregister_service(info))
+                )
             except (OSError, RuntimeError) as exc:
                 logger.debug("Could not unregister %s: %s", info.name, exc)
+        pending = [*goodbyes, *self._broadcasts]
+        if pending:
+            _, late = await asyncio.wait(pending, timeout=GOODBYE_TIMEOUT_S)
+            for future in late:
+                future.cancel()
+            if late:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.gather(*late, return_exceptions=True)
         try:
             await self._zc.async_close()
         except (OSError, RuntimeError) as exc:

@@ -129,7 +129,7 @@ def test_sys_get_status_is_timezone_independent(ctx: rpc.RequestContext) -> None
         '{"mac":"B827EB364242","restart_required":false,"time":"14:13",'
         '"unixtime":1789999999,"last_sync_ts":1789999999,"uptime":3600,'
         '"ram_size":259176,"ram_free":87268,"ram_min_free":74044,'
-        '"fs_size":524288,"fs_free":196608,"cfg_rev":9,"kvs_rev":0,'
+        '"fs_size":524288,"fs_free":196608,"cfg_rev":10,"kvs_rev":0,'
         '"schedule_rev":0,"webhook_rev":0,"btrelay_rev":0,'
         '"available_updates":{},"reset_reason":1,"utc_offset":0}'
     )
@@ -302,7 +302,7 @@ def test_shelly_get_components(ctx: rpc.RequestContext) -> None:
         "em:0",
         "emdata:0",
     ]
-    assert result["cfg_rev"] == 1
+    assert result["cfg_rev"] == rpc.CFG_REV
     assert result["offset"] == 0
     # The vendor documents `total` as the number of components matching the
     # request, so it agrees with the list rather than counting something else.
@@ -318,7 +318,7 @@ def test_shelly_get_components_dynamic_only_is_empty(
     ``"false"`` as true — which is how an earlier design got this wrong.
     """
     result = rpc.shelly_get_components(ctx, {"dynamic_only": "true"}, READING)
-    assert result == {"components": [], "cfg_rev": 1, "offset": 0, "total": 0}
+    assert result == {"components": [], "cfg_rev": rpc.CFG_REV, "offset": 0, "total": 0}
     assert rpc.shelly_get_components(ctx, {"dynamic_only": "false"}, READING)[
         "components"
     ]
@@ -559,3 +559,20 @@ def test_energy_counters_ignore_a_clock_jump() -> None:
     clock[0] = 100000.0
     counters.update((3600.0, 0.0, 0.0))
     assert counters.snapshot()["a_total_act_energy"] == 0.0
+
+
+def test_every_surface_reports_one_configuration_revision(
+    ctx: rpc.RequestContext,
+) -> None:
+    """One device, one revision.
+
+    A consumer that caches configuration keyed on ``cfg_rev`` would take three
+    different values as three devices, or as a configuration that never stops
+    changing.
+    """
+    revisions = {
+        rpc.sys_get_config(ctx, {}, None)["cfg_rev"],
+        rpc.sys_get_status(ctx, {}, None)["cfg_rev"],
+        rpc.shelly_get_components(ctx, {}, READING)["cfg_rev"],
+    }
+    assert revisions == {rpc.CFG_REV}

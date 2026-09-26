@@ -7,6 +7,7 @@ a multicast group.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 from typing import Any
 
@@ -46,21 +47,34 @@ class FakeZeroconf:
         self.closed = False
         self.cooperating: list[bool] = []
         self.zeroconf = self
+        # The library hands back each broadcast as a task still running in
+        # the background; the fakes do the same so a caller that forgets to
+        # settle them is caught.
+        self.goodbyes: list[asyncio.Task[None]] = []
+
+    @staticmethod
+    def _broadcast() -> asyncio.Task[None]:
+        return asyncio.ensure_future(asyncio.sleep(0.05))
 
     async def async_wait_for_start(self) -> None:
         return None
 
     async def async_register_service(
         self, info: ServiceInfo, cooperating_responders: bool = False
-    ) -> None:
+    ) -> asyncio.Task[None]:
         self.registered.append(info)
         self.cooperating.append(cooperating_responders)
+        return self._broadcast()
 
-    async def async_update_service(self, info: ServiceInfo) -> None:
+    async def async_update_service(self, info: ServiceInfo) -> asyncio.Task[None]:
         self.updated.append(info)
+        return self._broadcast()
 
-    async def async_unregister_service(self, info: ServiceInfo) -> None:
+    async def async_unregister_service(self, info: ServiceInfo) -> asyncio.Task[None]:
         self.unregistered.append(info)
+        goodbye = self._broadcast()
+        self.goodbyes.append(goodbye)
+        return goodbye
 
     async def async_update_interfaces(self, **kwargs: Any) -> None:
         self.interface_updates += 1
@@ -265,6 +279,30 @@ async def test_stop_sends_goodbyes_before_closing(
     assert len(fake.unregistered) == 2
     assert fake.closed
     assert not advertiser.registered
+
+
+async def test_stop_waits_for_the_goodbyes_to_go_out(
+    services: list[mdns.MdnsService],
+) -> None:
+    """The goodbyes are sent from background tasks; ``stop`` has to wait.
+
+    Returning first leaves them for the closing event loop, which destroys
+    them unsent — logged as an error on every shutdown, and the consumers
+    never hear that the device left.
+    """
+    advertiser = MdnsAdvertiser(services, zc_factory=FakeZeroconf)  # type: ignore[arg-type]
+    await advertiser.start()
+    fake = advertiser._zc
+    assert isinstance(fake, FakeZeroconf)
+    await advertiser.stop()
+    assert len(fake.goodbyes) == 2
+    assert all(goodbye.done() and not goodbye.cancelled() for goodbye in fake.goodbyes)
+    pending = [
+        task
+        for task in asyncio.all_tasks()
+        if task is not asyncio.current_task() and not task.done()
+    ]
+    assert not pending
 
 
 async def test_stop_is_safe_without_a_start(

@@ -144,17 +144,15 @@ def test_the_container_still_starts_with_capabilities_dropped(
     plain interpreter when exec of it is refused, so a hardened deployment
     still runs — it merely cannot bind a privileged port, which is a logged
     error the operator can act on.
+
+    ``--help`` goes through the same arm, and the same interpreter choice, as
+    the default command, but exits at once. Had the entrypoint exec'd the
+    capable copy anyway, the kernel would refuse it before a line of Python
+    ran, so a clean exit with the usage text is the fallback working.
     """
-    result = run(
-        *dropped,
-        *HOST_NET,
-        IMAGE,
-        "-c",
-        "print('started')",
-        entrypoint="/usr/local/bin/docker-entrypoint.sh",
-    )
+    result = run(*dropped, IMAGE, "astrameter", "--help")
     assert result.returncode == 0, result.stderr
-    assert "started" in result.stdout
+    assert "usage" in (result.stdout + result.stderr).lower()
 
 
 @pytest.mark.parametrize(

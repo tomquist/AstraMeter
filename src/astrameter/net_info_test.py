@@ -123,11 +123,29 @@ def test_an_unresolvable_name_falls_back_to_the_route(
     assert announced_ipv4("typo0") == "10.0.0.5"
 
 
+def test_no_default_route_announces_a_lan_address_not_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An isolated LAN with no gateway still has an address batteries reach.
+
+    Announcing loopback there would send a discovering battery to itself.
+    Link-local is skipped too, and a private address wins over a public one.
+    """
+    monkeypatch.setattr(net_info, "local_ipv4", lambda: None)
+    monkeypatch.setattr(
+        net_info,
+        "local_ipv4_set",
+        lambda: frozenset({"127.0.0.1", "169.254.3.4", "203.0.113.9", "192.168.1.50"}),
+    )
+    assert announced_ipv4("") == "192.168.1.50"
+
+
 def test_no_address_at_all_falls_back_to_loopback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Callers always have a string to serve, even on a host with no network."""
+    """Only when there is nothing else: callers always need a string."""
     monkeypatch.setattr(net_info, "local_ipv4", lambda: None)
+    monkeypatch.setattr(net_info, "local_ipv4_set", lambda: frozenset({"127.0.0.1"}))
     assert announced_ipv4("") == "127.0.0.1"
 
 
