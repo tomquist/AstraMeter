@@ -1,6 +1,7 @@
 import dataclasses
 import inspect
 import json
+import logging
 from ipaddress import IPv4Network
 
 import pytest
@@ -86,6 +87,27 @@ async def test_status_snapshot_batteries_sorted_and_marked_inactive() -> None:
     assert [b.ip for b in snap.batteries] == ["127.0.0.1", "127.0.0.2"]
     assert [b.active for b in snap.batteries] == [True, False]
     assert snap.batteries[1].last_seen_age > BATTERY_INACTIVE_TIMEOUT_SECONDS
+
+
+async def test_the_inactivity_log_names_the_port_it_went_quiet_on(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A UDP-only install should read exactly as it always did.
+
+    All three battery log lines name the transport *and its port*; for a
+    battery seen only over UDP that is the port the emulator listens on, and
+    an install that never touches the HTTP surface must not start seeing a
+    bare transport key instead.
+    """
+    shelly = _shelly()
+    transport = _FakeTransport()
+    await shelly._handle_request(REQUEST, ("127.0.0.1", 54321), transport)
+    shelly._battery_last_seen["127.0.0.1"] -= BATTERY_INACTIVE_TIMEOUT_SECONDS + 1
+
+    with caplog.at_level(logging.INFO):
+        shelly._log_inactive_batteries()
+
+    assert f"Battery inactive on Shelly UDP port {shelly.udp_port}" in caplog.text
 
 
 async def test_status_snapshot_is_detached_from_the_device() -> None:
