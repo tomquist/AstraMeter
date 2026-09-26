@@ -69,8 +69,10 @@ jobs:
           python-version: "3.13"
 
       - name: Run release script
-        run: ./release.sh "${{ github.event.inputs.version }}"
+        # The version goes through env, not into the script text, so it can't inject shell.
+        run: ./release.sh "$VERSION"
         env:
+          VERSION: ${{ github.event.inputs.version }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Create GitHub Release

@@ -151,6 +151,9 @@ _PYPROJECT = """\
 [project]
 name = "astrameter"
 version = "1.0.0"
+
+[tool.example]
+fixed = false
 """
 
 _UVLOCK = """\
@@ -273,29 +276,57 @@ def test_release_happy_path(tmp_path: Path) -> None:
     assert "gh pr create --base develop --head release/v9.9.9-develop" in calls
 
 
+def _commit_on(work: Path, branch: str, path: str, text: str, msg: str) -> None:
+    """Write ``path`` on ``branch`` and push it (as a merged PR or hotfix would)."""
+    _git(work, "checkout", branch)
+    _git(work, "reset", "--hard", f"origin/{branch}")
+    (work / path).write_text(text)
+    _git(work, "add", path)
+    _git(work, "commit", "-m", msg)
+    _git(work, "push", "origin", branch)
+    _git(work, "checkout", "develop")
+
+
+def _after_first_release(work: Path, env: dict) -> None:
+    """Release 9.9.9, squash its sync PR, and land one more feature on develop."""
+    _release(work, env, "9.9.9")
+    _squash_merge_sync(work, "9.9.9")
+    changelog = (work / "CHANGELOG.md").read_text()
+    _commit_on(
+        work,
+        "develop",
+        "CHANGELOG.md",
+        changelog.replace("## Next\n", "## Next\n\n- **Added** a second thing.\n", 1),
+        "second feature",
+    )
+
+
+def _assert_nothing_pushed(work: Path, version: str, main_before: str) -> None:
+    _git(work, "fetch", "origin")
+    assert _git(work, "rev-parse", "origin/main") == main_before
+    assert f"refs/tags/{version}" not in _git(work, "ls-remote", "--tags", "origin")
+    assert f"release/v{version}" not in _git(work, "ls-remote", "--heads", "origin")
+
+
 def test_release_after_squashed_sync(tmp_path: Path) -> None:
     """A second release works although develop never merged main.
 
-    develop squashes the sync PR, so main is not its ancestor; a main hotfix
-    must still ship, and the release must not rename develop's new ## Next."""
+    develop squashes the sync PR, so main is not its ancestor; main hotfixes
+    (including to a file the script manages) must still ship, and the release
+    must not rename develop's new ## Next."""
     work = _init_sandbox(tmp_path)
     env, _ = _stub_env(tmp_path)
-    _release(work, env, "9.9.9")
-    _squash_merge_sync(work, "9.9.9")
+    _after_first_release(work, env)
 
-    changelog = (work / "CHANGELOG.md").read_text()
-    (work / "CHANGELOG.md").write_text(
-        changelog.replace("## Next\n", "## Next\n\n- **Added** a second thing.\n", 1)
+    _commit_on(work, "main", "hotfix.txt", "hotfix\n", "hotfix")
+    pyproject = _show(work, "origin/main", "pyproject.toml")
+    _commit_on(
+        work,
+        "main",
+        "pyproject.toml",
+        pyproject.replace("fixed = false", "fixed = true"),
+        "hotfix pyproject",
     )
-    _git(work, "commit", "-am", "second feature")
-    _git(work, "push", "origin", "develop")
-
-    _git(work, "checkout", "main")
-    (work / "hotfix.txt").write_text("hotfix\n")
-    _git(work, "add", "hotfix.txt")
-    _git(work, "commit", "-m", "hotfix")
-    _git(work, "push", "origin", "main")
-    _git(work, "checkout", "develop")
 
     _release(work, env, "9.9.10")
 
@@ -304,7 +335,9 @@ def test_release_after_squashed_sync(tmp_path: Path) -> None:
     assert main_changelog.count("## 9.9.10") == 1
     assert main_changelog.count("## 9.9.9") == 1
     assert main_changelog.index("second thing") < main_changelog.index("## 9.9.9")
-    assert 'version = "9.9.10"' in _show(work, "main", "pyproject.toml")
+    main_pyproject = _show(work, "main", "pyproject.toml")
+    assert 'version = "9.9.10"' in main_pyproject
+    assert "fixed = true" in main_pyproject
     assert 'version: "9.9.10"' in _show(work, "main", "ha_addon/config.yaml")
     assert "astrameter@9.9.10" in _show(work, "main", "esphome.example.yaml")
     assert _show(work, "main", "hotfix.txt") == "hotfix\n"
@@ -313,8 +346,68 @@ def test_release_after_squashed_sync(tmp_path: Path) -> None:
 
     sync = "origin/release/v9.9.10-develop"
     assert _show(work, sync, "hotfix.txt") == "hotfix\n"
+    assert "fixed = true" in _show(work, sync, "pyproject.toml")
     sync_changelog = _show(work, sync, "CHANGELOG.md")
     assert sync_changelog.index("## Next") < sync_changelog.index("## 9.9.10")
+
+
+def test_release_stops_on_changelog_lines_only_on_main(tmp_path: Path) -> None:
+    """develop's CHANGELOG replaces main's, so main-only lines must stop it."""
+    work = _init_sandbox(tmp_path)
+    env, _ = _stub_env(tmp_path)
+    _after_first_release(work, env)
+    changelog = _show(work, "origin/main", "CHANGELOG.md")
+    _commit_on(
+        work,
+        "main",
+        "CHANGELOG.md",
+        changelog.replace("## 9.9.9\n", "## 9.9.9\n\n- **Fixed** a hotfix.\n", 1),
+        "hotfix changelog",
+    )
+    main_before = _git(work, "rev-parse", "origin/main")
+
+    res = _run(["bash", "release.sh", "9.9.10"], work, env)
+
+    assert res.returncode != 0
+    assert "- **Fixed** a hotfix." in res.stdout + res.stderr
+    _assert_nothing_pushed(work, "9.9.10", main_before)
+
+
+def test_release_stops_on_conflicting_hotfix(tmp_path: Path) -> None:
+    work = _init_sandbox(tmp_path)
+    env, _ = _stub_env(tmp_path)
+    _after_first_release(work, env)
+    _commit_on(work, "develop", "README.md", "# Project on develop\n", "readme dev")
+    _commit_on(work, "main", "README.md", "# Project hotfixed\n", "readme main")
+    main_before = _git(work, "rev-parse", "origin/main")
+
+    res = _run(["bash", "release.sh", "9.9.10"], work, env)
+
+    assert res.returncode != 0
+    assert "README.md" in res.stdout + res.stderr
+    _assert_nothing_pushed(work, "9.9.10", main_before)
+
+
+def test_release_survives_sync_push_failure(tmp_path: Path) -> None:
+    """Once the tag is out, a failed sync push must not fail the run (the
+    workflow's GitHub Release step only runs after a successful script)."""
+    work = _init_sandbox(tmp_path)
+    env, uv_log = _stub_env(tmp_path)
+    hook = tmp_path / "origin.git" / "hooks" / "pre-receive"
+    hook.write_text(
+        "#!/usr/bin/env bash\n"
+        "while read -r _ _ ref; do\n"
+        '  case "$ref" in *-develop) echo "rejected $ref" >&2; exit 1;; esac\n'
+        "done\n"
+    )
+    hook.chmod(0o755)
+
+    res = _run(["bash", "release.sh", "9.9.9"], work, env)
+
+    assert res.returncode == 0, f"release.sh failed:\n{res.stdout}\n{res.stderr}"
+    assert "Could not push release/v9.9.9-develop" in res.stdout + res.stderr
+    assert "refs/tags/9.9.9" in _git(work, "ls-remote", "--tags", "origin")
+    assert "gh pr create" not in uv_log.read_text()
 
 
 def test_release_rejects_non_semver(tmp_path: Path) -> None:
