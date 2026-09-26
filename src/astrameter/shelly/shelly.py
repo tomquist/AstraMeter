@@ -260,6 +260,17 @@ class Shelly:
             return f"HTTP port {self.tcp_port}"
         return f"UDP port {self._udp_port}"
 
+    def _transports_label(self, battery_ip: str) -> str:
+        """Every transport *battery_ip* has been seen on, as one log phrase.
+
+        Keyed off the same set the snapshot reports, so a battery cannot be
+        described one way in the log and another on the dashboard.
+        """
+        transports = self._battery_transports.get(battery_ip) or {"udp"}
+        return " + ".join(
+            self._transport_label(transport) for transport in sorted(transports)
+        )
+
     def _track_battery_seen(self, battery_ip: str, transport: str) -> float | None:
         """Refresh liveness for *battery_ip*, seen on *transport*.
 
@@ -322,7 +333,7 @@ class Shelly:
         for battery_ip in newly_inactive_batteries:
             logger.info(
                 "Battery inactive on Shelly %s for >= %ss: %s",
-                "+".join(sorted(self._battery_transports.get(battery_ip, {"udp"}))),
+                self._transports_label(battery_ip),
                 BATTERY_INACTIVE_TIMEOUT_SECONDS,
                 battery_ip,
             )
