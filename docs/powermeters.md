@@ -572,9 +572,20 @@ both.
 ## Tibber Pulse
 
 Reads a [Tibber Pulse](https://tibber.com/) locally through the **Pulse Bridge**,
-with no need for the Tibber cloud. AstraMeter polls the bridge's `/data.json`
-endpoint (HTTP Basic auth) and decodes the meter's SML telegram on the fly, so
-this works with the SML smart meters the Pulse IR head is attached to.
+with no need for the Tibber cloud. AstraMeter decodes the meter's SML telegram
+on the fly, so this works with the SML smart meters the Pulse IR head is
+attached to.
+
+**Push, with polling as the fallback.** By default AstraMeter takes each
+telegram live as the bridge pushes it over `ws://<bridge>/ws` (bridge firmware
+1428 / 795 and later), so readings arrive as the meter emits them instead of one
+slow HTTP round trip per poll. Whenever no live pushed reading is at hand — at
+startup, while the bridge reconnects, or when the stream stalls — it polls the
+bridge's `/node_data.json` endpoint instead (`/data.json` on firmware before
+~1794, picked automatically). If the bridge can't push at all (older firmware
+answers `/ws` with 404, and some newer firmware accepts the connection but never
+sends a telegram), AstraMeter logs it and sticks to polling. Set
+`FORCE_POLLING = True` to skip push entirely.
 
 ```ini
 [TIBBER_PULSE]
@@ -589,6 +600,8 @@ PASSWORD = AD56-54BA
 # Optional: request timeout in seconds (default 5); the bridge's webserver can
 # be slow, so raise this if readings drop with connection timeouts
 # TIMEOUT = 5.0
+# Optional: poll over HTTP instead of using push (default False)
+# FORCE_POLLING = False
 ## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
 # OBIS_POWER_CURRENT = 0100100700ff
 # OBIS_POWER_L1 = 0100240700ff
@@ -598,16 +611,21 @@ PASSWORD = AD56-54BA
 
 **Enable the local API first.** In the bridge's web UI open the *params* page, set
 `webserver-force-enable` to `true`, save, and **Store params to flash**. Without
-this the `/data.json` endpoint is not served.
+this neither push nor the data endpoint is served.
 
 **Multi-phase.** This works like the [SML](#sml) source. If the meter reports
 per-phase active power for L1–L3, those three values are used; otherwise the
 aggregate register is used as a single reading. Override the OBIS codes only if
 your meter uses different registers.
 
-**Update rate.** SML meters refresh roughly every few seconds, so a
-`THROTTLE_INTERVAL` of `2`–`3` avoids hammering the bridge between fresh
+**Update rate.** With push, each reading is the latest telegram, so there is
+nothing to throttle. When polling, SML meters refresh roughly every few seconds,
+so a `THROTTLE_INTERVAL` of `2`–`3` avoids hammering the bridge between fresh
 telegrams.
+
+**Several Pulses on one bridge.** Pushed telegrams are matched to `NODE_ID`
+through the node's EUI in the bridge's `/nodes.json`, so each section reads its
+own meter.
 
 **Sign.** Power is signed (positive = import, negative = feed-in). If your
 readings are reversed, flip them with the global `POWER_MULTIPLIER = -1`.

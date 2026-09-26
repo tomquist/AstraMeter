@@ -27,6 +27,9 @@ class HttpPowermeter(Powermeter):
     timeout: float | None = None
 
     def __init__(self, *, timeout: float | None = None) -> None:
+        # Cooperative, so a source that also pushes (e.g. Tibber Pulse) gets
+        # PushPowermeter's setup too.
+        super().__init__()
         if timeout is not None:
             self.timeout = timeout
 

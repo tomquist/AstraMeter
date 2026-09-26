@@ -385,6 +385,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
     "TIBBER_PULSE": _pm(
         PASSWORD={"type": "password"},
         TIMEOUT={"type": "float"},
+        FORCE_POLLING={"type": "boolean"},
     ),
     "SCRIPT": _pm(),
     "SML": _pm(),
