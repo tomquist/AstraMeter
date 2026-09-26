@@ -1,10 +1,10 @@
 """End-to-end tests for ``release.sh``.
 
 The release script does a lot of git orchestration (branch → bump → merge →
-tag → sync develop), so the highest-value test drives the whole thing against
-a self-contained sandbox: a local *bare* repo stands in for ``origin`` (no
-network), and ``uv`` / ``yq`` are replaced by tiny stubs on ``PATH`` so the
-test needs nothing beyond ``git`` and ``bash``.
+tag → open the develop sync PR), so the highest-value test drives the whole
+thing against a self-contained sandbox: a local *bare* repo stands in for
+``origin`` (no network), and ``uv`` / ``yq`` / ``gh`` are replaced by tiny stubs
+on ``PATH`` so the test needs nothing beyond ``git`` and ``bash``.
 
 The stubs faithfully emulate the one operation the script asks of each tool
 (``uv lock`` rewrites the version pin in ``uv.lock``; ``yq`` sets the
@@ -53,7 +53,9 @@ def _show(repo: Path, ref: str, path: str) -> str:
 
 
 def _make_stub_bin(tmp_path: Path) -> tuple[Path, Path]:
-    """Write `uv` + `yq` stubs into a bin dir; return (bin_dir, uv_log)."""
+    """Write `uv` + `yq` + `gh` stubs into a bin dir; return (bin_dir, uv_log).
+
+    `gh` calls are logged to the same file as `uv` calls."""
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
     uv_log = tmp_path / "uv_calls.log"
@@ -82,7 +84,10 @@ def _make_stub_bin(tmp_path: Path) -> tuple[Path, Path]:
         "exit 0\n"
     )
 
-    for f in (uv, yq):
+    gh = stub_bin / "gh"
+    gh.write_text('#!/usr/bin/env bash\necho "gh $*" >> "$UV_STUB_LOG"\nexit 0\n')
+
+    for f in (uv, yq, gh):
         f.chmod(0o755)
     return stub_bin, uv_log
 
@@ -146,6 +151,9 @@ _PYPROJECT = """\
 [project]
 name = "astrameter"
 version = "1.0.0"
+
+[tool.example]
+fixed = false
 """
 
 _UVLOCK = """\
@@ -198,16 +206,34 @@ def _init_sandbox(tmp_path: Path) -> Path:
     return work
 
 
-def test_release_happy_path(tmp_path: Path) -> None:
-    work = _init_sandbox(tmp_path)
+def _stub_env(tmp_path: Path) -> tuple[dict, Path]:
     stub_bin, uv_log = _make_stub_bin(tmp_path)
-
     env = os.environ.copy()
     env["PATH"] = f"{stub_bin}{os.pathsep}{env['PATH']}"
     env["UV_STUB_LOG"] = str(uv_log)
+    return env, uv_log
 
-    res = _run(["bash", "release.sh", "9.9.9"], work, env)
+
+def _release(work: Path, env: dict, version: str) -> None:
+    res = _run(["bash", "release.sh", version], work, env)
     assert res.returncode == 0, f"release.sh failed:\n{res.stdout}\n{res.stderr}"
+
+
+def _squash_merge_sync(work: Path, version: str) -> None:
+    """Merge the develop sync PR the only way develop allows: squash."""
+    _git(work, "checkout", "develop")
+    _git(work, "reset", "--hard", "origin/develop")
+    _git(work, "merge", "--squash", f"origin/release/v{version}-develop")
+    _git(work, "commit", "-m", f"Sync develop with release v{version}")
+    _git(work, "push", "origin", "develop")
+
+
+def test_release_happy_path(tmp_path: Path) -> None:
+    work = _init_sandbox(tmp_path)
+    env, uv_log = _stub_env(tmp_path)
+    develop_before = _git(work, "rev-parse", "origin/develop")
+
+    _release(work, env, "9.9.9")
 
     # --- main: fully released state ------------------------------------
     assert 'version = "9.9.9"' in _show(work, "main", "pyproject.toml")
@@ -227,21 +253,161 @@ def test_release_happy_path(tmp_path: Path) -> None:
     assert "9.9.9" in _git(work, "tag", "--list").split()
     assert "refs/tags/9.9.9" in _git(work, "ls-remote", "--tags", "origin")
 
-    # --- develop: prepped for next dev cycle ---------------------------
-    assert 'version: "next"' in _show(work, "develop", "ha_addon/config.yaml")
-    assert "## Next" in _show(work, "develop", "CHANGELOG.md")
-    assert "astrameter@develop" in _show(
-        work, "develop", "docs/installation/esphome.md"
-    )
-    assert "astrameter@develop" in _show(work, "develop", "esphome.example.yaml")
-    develop_docs = _show(work, "develop", "docs/esphome-powermeters.md")
-    assert "astrameter@develop" in develop_docs
-    assert "astrameter@9.9.9" not in develop_docs
-    # The release version carried over via the merge (script doesn't reset it).
-    assert 'version = "9.9.9"' in _show(work, "develop", "pyproject.toml")
+    # --- develop only takes pull requests: it is left alone ------------
+    _git(work, "fetch", "origin")
+    assert _git(work, "rev-parse", "origin/develop") == develop_before
 
-    # --- uv.lock was actually refreshed by `uv lock` -------------------
-    assert "uv lock" in uv_log.read_text()
+    # --- the sync branch preps develop for the next dev cycle ----------
+    sync = "origin/release/v9.9.9-develop"
+    assert 'version: "next"' in _show(work, sync, "ha_addon/config.yaml")
+    sync_changelog = _show(work, sync, "CHANGELOG.md")
+    assert sync_changelog.index("## Next") < sync_changelog.index("## 9.9.9")
+    assert "astrameter@develop" in _show(work, sync, "docs/installation/esphome.md")
+    assert "astrameter@develop" in _show(work, sync, "esphome.example.yaml")
+    sync_docs = _show(work, sync, "docs/esphome-powermeters.md")
+    assert "astrameter@develop" in sync_docs
+    assert "astrameter@9.9.9" not in sync_docs
+    # The release version carries over (script doesn't reset it).
+    assert 'version = "9.9.9"' in _show(work, sync, "pyproject.toml")
+
+    # --- uv.lock was refreshed and the develop PR opened ---------------
+    calls = uv_log.read_text()
+    assert "uv lock" in calls
+    assert "gh pr create --base develop --head release/v9.9.9-develop" in calls
+
+
+def _commit_on(work: Path, branch: str, path: str, text: str, msg: str) -> None:
+    """Write ``path`` on ``branch`` and push it (as a merged PR or hotfix would)."""
+    _git(work, "checkout", branch)
+    _git(work, "reset", "--hard", f"origin/{branch}")
+    (work / path).write_text(text)
+    _git(work, "add", path)
+    _git(work, "commit", "-m", msg)
+    _git(work, "push", "origin", branch)
+    _git(work, "checkout", "develop")
+
+
+def _after_first_release(work: Path, env: dict) -> None:
+    """Release 9.9.9, squash its sync PR, and land one more feature on develop."""
+    _release(work, env, "9.9.9")
+    _squash_merge_sync(work, "9.9.9")
+    changelog = (work / "CHANGELOG.md").read_text()
+    _commit_on(
+        work,
+        "develop",
+        "CHANGELOG.md",
+        changelog.replace("## Next\n", "## Next\n\n- **Added** a second thing.\n", 1),
+        "second feature",
+    )
+
+
+def _assert_nothing_pushed(work: Path, version: str, main_before: str) -> None:
+    _git(work, "fetch", "origin")
+    assert _git(work, "rev-parse", "origin/main") == main_before
+    assert f"refs/tags/{version}" not in _git(work, "ls-remote", "--tags", "origin")
+    assert f"release/v{version}" not in _git(work, "ls-remote", "--heads", "origin")
+
+
+def test_release_after_squashed_sync(tmp_path: Path) -> None:
+    """A second release works although develop never merged main.
+
+    develop squashes the sync PR, so main is not its ancestor; main hotfixes
+    (including to a file the script manages) must still ship, and the release
+    must not rename develop's new ## Next."""
+    work = _init_sandbox(tmp_path)
+    env, _ = _stub_env(tmp_path)
+    _after_first_release(work, env)
+
+    _commit_on(work, "main", "hotfix.txt", "hotfix\n", "hotfix")
+    pyproject = _show(work, "origin/main", "pyproject.toml")
+    _commit_on(
+        work,
+        "main",
+        "pyproject.toml",
+        pyproject.replace("fixed = false", "fixed = true"),
+        "hotfix pyproject",
+    )
+
+    _release(work, env, "9.9.10")
+
+    main_changelog = _show(work, "main", "CHANGELOG.md")
+    assert "## Next" not in main_changelog
+    assert main_changelog.count("## 9.9.10") == 1
+    assert main_changelog.count("## 9.9.9") == 1
+    assert main_changelog.index("second thing") < main_changelog.index("## 9.9.9")
+    main_pyproject = _show(work, "main", "pyproject.toml")
+    assert 'version = "9.9.10"' in main_pyproject
+    assert "fixed = true" in main_pyproject
+    assert 'version: "9.9.10"' in _show(work, "main", "ha_addon/config.yaml")
+    assert "astrameter@9.9.10" in _show(work, "main", "esphome.example.yaml")
+    assert _show(work, "main", "hotfix.txt") == "hotfix\n"
+    # main holds exactly the released tree.
+    assert _git(work, "diff", "main", "origin/release/v9.9.10") == ""
+
+    sync = "origin/release/v9.9.10-develop"
+    assert _show(work, sync, "hotfix.txt") == "hotfix\n"
+    assert "fixed = true" in _show(work, sync, "pyproject.toml")
+    sync_changelog = _show(work, sync, "CHANGELOG.md")
+    assert sync_changelog.index("## Next") < sync_changelog.index("## 9.9.10")
+
+
+def test_release_stops_on_changelog_lines_only_on_main(tmp_path: Path) -> None:
+    """develop's CHANGELOG replaces main's, so main-only lines must stop it."""
+    work = _init_sandbox(tmp_path)
+    env, _ = _stub_env(tmp_path)
+    _after_first_release(work, env)
+    changelog = _show(work, "origin/main", "CHANGELOG.md")
+    _commit_on(
+        work,
+        "main",
+        "CHANGELOG.md",
+        changelog.replace("## 9.9.9\n", "## 9.9.9\n\n- **Fixed** a hotfix.\n", 1),
+        "hotfix changelog",
+    )
+    main_before = _git(work, "rev-parse", "origin/main")
+
+    res = _run(["bash", "release.sh", "9.9.10"], work, env)
+
+    assert res.returncode != 0
+    assert "- **Fixed** a hotfix." in res.stdout + res.stderr
+    _assert_nothing_pushed(work, "9.9.10", main_before)
+
+
+def test_release_stops_on_conflicting_hotfix(tmp_path: Path) -> None:
+    work = _init_sandbox(tmp_path)
+    env, _ = _stub_env(tmp_path)
+    _after_first_release(work, env)
+    _commit_on(work, "develop", "README.md", "# Project on develop\n", "readme dev")
+    _commit_on(work, "main", "README.md", "# Project hotfixed\n", "readme main")
+    main_before = _git(work, "rev-parse", "origin/main")
+
+    res = _run(["bash", "release.sh", "9.9.10"], work, env)
+
+    assert res.returncode != 0
+    assert "README.md" in res.stdout + res.stderr
+    _assert_nothing_pushed(work, "9.9.10", main_before)
+
+
+def test_release_survives_sync_push_failure(tmp_path: Path) -> None:
+    """Once the tag is out, a failed sync push must not fail the run (the
+    workflow's GitHub Release step only runs after a successful script)."""
+    work = _init_sandbox(tmp_path)
+    env, uv_log = _stub_env(tmp_path)
+    hook = tmp_path / "origin.git" / "hooks" / "pre-receive"
+    hook.write_text(
+        "#!/usr/bin/env bash\n"
+        "while read -r _ _ ref; do\n"
+        '  case "$ref" in *-develop) echo "rejected $ref" >&2; exit 1;; esac\n'
+        "done\n"
+    )
+    hook.chmod(0o755)
+
+    res = _run(["bash", "release.sh", "9.9.9"], work, env)
+
+    assert res.returncode == 0, f"release.sh failed:\n{res.stdout}\n{res.stderr}"
+    assert "Could not push release/v9.9.9-develop" in res.stdout + res.stderr
+    assert "refs/tags/9.9.9" in _git(work, "ls-remote", "--tags", "origin")
+    assert "gh pr create" not in uv_log.read_text()
 
 
 def test_release_rejects_non_semver(tmp_path: Path) -> None:
