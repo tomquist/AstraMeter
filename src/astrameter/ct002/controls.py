@@ -129,6 +129,17 @@ def coerce_consumer_control(field: str, value: object) -> bool | float:
     return CONSUMER_CONTROLS_BY_FIELD[field].coerce(value)
 
 
+#: Buttons, not settings: they carry no value, and there is no retained state
+#: for a dashboard write to mirror onto MQTT — a retained press would re-fire
+#: on every reconnect.  Mirrors ``DEVICE_BUTTONS`` in ``controls.cpp``.
+DEVICE_BUTTONS: frozenset[str] = frozenset({"force_rotation"})
+
+
+def is_device_button(field: str) -> bool:
+    """Whether *field* is a momentary device button rather than a setting."""
+    return field in DEVICE_BUTTONS
+
+
 def apply_device_control(device: ControllableDevice, field: str, value: object) -> None:
     """Apply a device-wide control.  ``force_rotation`` is a button and
     carries no value; ``active_control`` is a switch."""

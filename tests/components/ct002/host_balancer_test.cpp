@@ -709,7 +709,7 @@ TEST(SteerLog, RendersTheSameLineThePythonStackDoes) {
   EXPECT_EQ(format_steer_log(entry),
             "CT002 steer b42f0398a5ce: mode=auto rotation=active weight=1.00 "
             "grid=1118 ctrl=1091 share=342 reported=338 intent=1350 send=30 "
-            "unpaced=1000 pace_cap=30 sat=0.00");
+            "unpaced=1000 pace_cap=30 sat=0.00 ceil=-/-");
 }
 
 TEST(SteerLog, TiesRoundHalfToEvenOnBothStacks) {
@@ -745,7 +745,7 @@ TEST(SteerLog, AbsentAllocationStagesRenderAsADashNotAZero) {
   EXPECT_EQ(format_steer_log(entry),
             "CT002 steer 7ce71219ae84: mode=manual=800 rotation=active weight=1.00 "
             "grid=1118 ctrl=- share=- reported=400 intent=800 send=400 "
-            "unpaced=400 pace_cap=0 sat=0.00");
+            "unpaced=400 pace_cap=0 sat=0.00 ceil=-/-");
 }
 
 TEST(SteerLog, TheBalancerFeedsTheSinkOneLinePerModeItSteers) {
@@ -782,6 +782,16 @@ TEST(SteerLog, TheBalancerFeedsTheSinkOneLinePerModeItSteers) {
   EXPECT_NE(lines[0].find("ctrl=- share=-"), std::string::npos) << lines[0];
   EXPECT_EQ(lines[1].find("ctrl=- share=-"), std::string::npos) << lines[1];
   EXPECT_NE(lines[2].find("ctrl=- share=-"), std::string::npos) << lines[2];
+}
+
+TEST(SteerLog, ShowsLearnedCeilingsPerDirection) {
+  SteerLog entry;
+  entry.consumer_id = "a";
+  entry.mode = "auto";
+  entry.rotation = "active";
+  entry.ceiling_discharge = 800.0f;
+  EXPECT_NE(format_steer_log(entry).find("sat=0.00 ceil=800/-"), std::string::npos)
+      << format_steer_log(entry);
 }
 
 TEST(SteerLog, WithNoSinkTheBalancerFormatsNothing) {
@@ -826,4 +836,45 @@ TEST(LoadBalancer, ParkingProbeParticipantCancelsBeforeResume) {
     EXPECT_FALSE(b.has_probe());
     EXPECT_GT(out[0] + out[1] + out[2], 100.0f);
   }
+}
+
+
+// Issue #655: two batteries capped at 800 W next to an uncapped one. Once the
+// capped pair has held flat while pushed, the uncapped battery takes the whole
+// grid error instead of an even slice pulled back toward the pool average.
+// Mirrors tests/test_balancer_power_ceilings.py.
+TEST(PowerCeilings, UnlimitedBatteryTakesTheWholeErrorOnceTheOthersAreCapped) {
+  auto run = [](bool learn_first) {
+    double now = 1000.0;
+    BalancerConfig cfg;
+    cfg.pace_base_step = 0.0f;
+    cfg.osc_damp_max = 0.0f;
+    cfg.grid_predict_trust = 0.0f;
+    cfg.import_trim_w = 0.0f;
+    LoadBalancer lb(cfg, 0.15, 20.0f, 0.995, 90.0f, 60.0f, true, [&now]() { return now; },
+                    []() {});
+    auto round = [&](float small, float big, float grid) {
+      ReportMap reports;
+      reports["a"] = ConsumerReport{"VNSE3", "A", small, 1.0f, 1.0f, {}};
+      reports["b"] = ConsumerReport{"VNSE3", "A", small, 1.0f, 1.0f, {}};
+      reports["c"] = ConsumerReport{"VNSE3", "A", big, 1.0f, 1.0f, {}};
+      std::unordered_map<std::string, float> sent;
+      for (const auto &cid : {"a", "b", "c"}) {
+        const auto out = lb.compute_target(cid, ConsumerMode{}, reports, grid, {}, {},
+                                           {grid, static_cast<float>(cid[0])});
+        sent[cid] = out[0] + out[1] + out[2];
+      }
+      now += 1.0;
+      return sent;
+    };
+    if (learn_first) {
+      for (int i = 0; i < 7; i++) round(800.0f, 900.0f, 1200.0f);
+    }
+    return round(800.0f, 1400.0f, 600.0f);
+  };
+  const auto learned = run(true);
+  EXPECT_NEAR(learned.at("c"), 600.0f, 0.5f);
+  // Still pushed: that is what confirms the ceiling.
+  EXPECT_NEAR(learned.at("a"), 200.0f, 0.5f);
+  EXPECT_LT(run(false).at("c"), 150.0f);
 }

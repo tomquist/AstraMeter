@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.3.1
+
+- **Fixed** the Tibber Pulse source failing with `404 Not Found` after the Pulse Bridge updated to firmware 1798; it now also takes the readings the bridge pushes live, and polls only where the bridge can't push ([#685](https://github.com/tomquist/astrameter/issues/685), [#686](https://github.com/tomquist/astrameter/pull/686)).
+
+- **Added** the saturation probe window and stall timeout as Home Assistant add-on options, so a battery whose inverter is slow to wake from sleep is no longer passed over in the efficiency rotation ([#677](https://github.com/tomquist/astrameter/pull/677)).
+
+- **Fixed** a larger battery holding back under heavy load when the others in the pool have a lower output limit, leaving the house drawing a few hundred watts from the grid ([#655](https://github.com/tomquist/astrameter/issues/655), [#679](https://github.com/tomquist/astrameter/pull/679)).
+
+- **Added** `STATE_THROTTLE_INTERVAL`, which limits how often each battery's state is published to MQTT. Batteries poll about once a second, and on a small machine that stream can cost the subscriber more CPU than the broker ([#663](https://github.com/tomquist/astrameter/issues/663), [#669](https://github.com/tomquist/astrameter/pull/669)). Set it to the coarsest resolution your Home Assistant graphs can live with; `0`, the default, keeps publishing on every poll.
+
+- **Fixed** MQTT Insights sending about a third more messages than it needed to: each battery's availability was re-sent on every poll, roughly once a second, instead of only when the battery appears or goes silent ([#663](https://github.com/tomquist/astrameter/issues/663), [#668](https://github.com/tomquist/astrameter/pull/668)).
+
+- **Fixed** a battery being driven to full charge or discharge against the house for up to a minute after it ran its phase detection, on setups using the optional Hampel outlier filter ([#652](https://github.com/tomquist/astrameter/issues/652), [#653](https://github.com/tomquist/astrameter/pull/653)).
+
+- **Fixed** the dashboard staying blank and `/api/status` returning nothing once cloud reporting had sent its first push ([#654](https://github.com/tomquist/astrameter/issues/654), [#656](https://github.com/tomquist/astrameter/pull/656)).
+
+- **Fixed** a dashboard `allowed_hosts` entry written as a URL, such as `https://astrameter.example.com:1234`, silently never matching the name it was meant to allow ([#671](https://github.com/tomquist/astrameter/issues/671), [#673](https://github.com/tomquist/astrameter/pull/673)). List the name on its own, without the scheme or port.
+
+- **Fixed** an MQTT power meter freezing on its last reading, while still reporting itself healthy, after the meter published a single null or non-numeric value ([#657](https://github.com/tomquist/astrameter/issues/657), [#658](https://github.com/tomquist/astrameter/pull/658)).
+
+- **Added** DSMR/P1 smart meters to the ESPHome config generator and docs, so a P1 meter and the emulator can share one ESP32 instead of needing a separate bridge ([#664](https://github.com/tomquist/astrameter/issues/664), [#665](https://github.com/tomquist/astrameter/pull/665)).
+
+- **Fixed** the dashboard's **Force Rotation** button rotating the battery order twice per click, and again on every MQTT reconnect afterwards ([#674](https://github.com/tomquist/astrameter/issues/674), [#675](https://github.com/tomquist/astrameter/pull/675)).
+
+- **Added** native Tibber Pulse support to the ESPHome build: the ESP32 reads the Pulse Bridge over your network, so no second IR head or broken community component is needed ([#687](https://github.com/tomquist/astrameter/pull/687)).
+
+
 ## 2.3.0
 
 - **Fixed** batteries resuming automatic charging or discharging when every distribution weight was set to zero; all parked batteries now wind down to zero until their weights are restored ([#646](https://github.com/tomquist/astrameter/pull/646)).

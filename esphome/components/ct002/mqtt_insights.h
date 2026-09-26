@@ -18,6 +18,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "esphome/core/component.h"
@@ -63,6 +64,7 @@ class MqttInsightsComponent : public Component {
   void set_ha_discovery_prefix(const std::string &v) { this->ha_discovery_prefix_ = v; }
   void set_marstek_mqtt_enabled(bool v) { this->marstek_mqtt_enabled_ = v; }
   void set_marstek_mqtt_interval_ms(uint32_t v) { this->marstek_mqtt_interval_ms_ = v; }
+  void set_state_throttle_interval_ms(uint32_t v) { this->state_throttle_interval_ms_ = v; }
   // The broker locator, passed down from the `mqtt:` block at codegen time
   // (the client keeps its credentials struct private, and this must never
   // reach for the username/password beside them). Reported by the dashboard.
@@ -142,6 +144,10 @@ class MqttInsightsComponent : public Component {
   // service.py::_handle_ct002_event.
   void publish_consumer_event_(const std::string &consumer_id);
   void publish_consumer_removed_(const std::string &consumer_id);
+  void publish_availability_(const std::string &consumer_id, const std::string &avail_topic,
+                             bool online);
+  bool state_due_(const std::string &key);
+  void forget_state_publish_(const std::string &key);
 
   // Discovery republish — called on every connect rising edge.
   void on_mqtt_connected_();
@@ -180,6 +186,9 @@ class MqttInsightsComponent : public Component {
   std::string git_commit_;
   bool marstek_mqtt_enabled_{true};
   uint32_t marstek_mqtt_interval_ms_{300000};
+  // Smallest gap between two state publishes of the same topic (ms). 0 = every
+  // poll, as before. Mirrors service.py's state_throttle_interval.
+  uint32_t state_throttle_interval_ms_{0};
 
   // Connection state tracking.
   bool was_connected_{false};
@@ -187,6 +196,18 @@ class MqttInsightsComponent : public Component {
   // Discovery dedupe — keys cleared on disconnect.
   bool device_discovered_{false};
   std::unordered_set<std::string> discovered_consumers_;
+
+  // Availability dedupe — what each consumer's availability topic already
+  // carries (true = "online"), so a poll that changes nothing does not
+  // re-assert it. Mirrors service.py's ``_availability``, which keys the
+  // same state by topic; one consumer family here makes the consumer id the
+  // whole key. Cleared with the discovery keys on connect.
+  std::unordered_map<std::string, bool> availability_published_;
+
+  // When each throttled topic last went out, by consumer id ("" = the
+  // device status topic). Empty means due, so the first event for a battery
+  // publishes at once. Cleared with the other caches on connect.
+  std::unordered_map<std::string, uint32_t> last_state_publish_;
 
   // Marstek broadcast scheduling — uses set_interval, captured here so we
   // can cancel if reconfigured at runtime. Single timer because there's

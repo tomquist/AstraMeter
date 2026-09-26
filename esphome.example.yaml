@@ -34,7 +34,7 @@ wifi:
   password: !secret wifi_password
 
 external_components:
-  - source: github://tomquist/astrameter@2.3.0
+  - source: github://tomquist/astrameter@2.3.1
     components: [ct002]
 
 # Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
@@ -216,6 +216,8 @@ ct002:
   #   ha_discovery_prefix: homeassistant
   #   marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
   #   marstek_mqtt_interval: 300s    # periodic broadcast cadence (0 = poll-only)
+  #   state_throttle_interval: 0s    # smallest gap between two state publishes
+  #                                  # of the same topic (0 = every poll)
 
   # ── Optional sub-block: marstek_registration ─────────────────────────
   # Registers a "managed" CT002/CT003 with your Marstek cloud account on

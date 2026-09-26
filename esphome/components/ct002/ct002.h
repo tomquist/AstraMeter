@@ -384,6 +384,14 @@ class CT002Component : public Component {
   // timestamp), matching RequestDeduplicator.should_process.
   bool dedup_should_process_(const std::string &consumer_id);
 
+  // Keeps the filter pipeline out of an inspection sweep: resets the wrapper
+  // state on every inspection poll and once more when the sweep ends, so the
+  // battery sees a CT that follows its own swing and the control loop restarts
+  // from a baseline the sweep did not write. Mirrors ct002.py
+  // _sync_inspection_filters — see its docstring for the full rationale
+  // (issue #652).
+  void sync_inspection_filters_(const std::string &consumer_id, bool inspecting);
+
   // Folds the gap since the previous reply to this consumer into its
   // answer_interval. Called right after a response goes out.
   void track_answer_(const std::string &consumer_id);
@@ -463,6 +471,10 @@ class CT002Component : public Component {
   // Pipeline: head is SensorBackedPowermeter, then optional wrappers.
   std::vector<std::unique_ptr<Powermeter>> pipeline_;
   Powermeter *pipeline_head_{nullptr};
+
+  // Consumers whose last poll was an inspection poll (phase "0"), mirroring
+  // ct002.py's _inspecting.
+  std::unordered_set<std::string> inspecting_;
 
   // Pending wrapper configs captured before setup() — applied at setup()
   // time when the SensorBackedPowermeter exists.

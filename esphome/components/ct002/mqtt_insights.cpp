@@ -108,6 +108,8 @@ void MqttInsightsComponent::on_mqtt_connected_() {
   // broker dropped retained messages).
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
+  this->availability_published_.clear();
+  this->last_state_publish_.clear();
 
   if (this->ha_discovery_) {
     auto [topic, payload] = build_ct002_device_discovery(
@@ -126,6 +128,8 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   ESP_LOGD(TAG, "MQTT disconnected");
   this->device_discovered_ = false;
   this->discovered_consumers_.clear();
+  this->availability_published_.clear();
+  this->last_state_publish_.clear();
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
@@ -181,8 +185,36 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
   ESP_LOGI(TAG, "Marstek MQTT: subscribed App topics for %s/%s", ct.c_str(), mac.c_str());
 }
 
+bool MqttInsightsComponent::state_due_(const std::string &key) {
+  // STATE_THROTTLE_INTERVAL is a floor on the gap between two publishes of the
+  // same topic, not a schedule. A battery polls roughly once a second for as
+  // long as it is there, so a floor is enough to coalesce: whatever is current
+  // when the gap has passed is what goes out. Mirrors service.py::_state_due.
+  if (this->state_throttle_interval_ms_ == 0) return true;
+  const uint32_t now = millis();
+  auto it = this->last_state_publish_.find(key);
+  // Unsigned arithmetic, so the millis() wrap at ~49 days needs no special case.
+  if (it != this->last_state_publish_.end() &&
+      now - it->second < this->state_throttle_interval_ms_)
+    return false;
+  this->last_state_publish_[key] = now;
+  return true;
+}
+
+void MqttInsightsComponent::forget_state_publish_(const std::string &key) {
+  // Undoes a state_due_ record that no longer stands for anything: a publish
+  // the client rejected, so the retry is not held off for a whole interval,
+  // and an evicted consumer, so one that comes back inside the interval is
+  // published at once. Mirrors service.py::_forget_state_publish, except that
+  // Python cannot tell which publish of an event failed and so forgets the
+  // consumer and the device-status key together; here the two publishes are
+  // adjacent and each reports for itself.
+  this->last_state_publish_.erase(key);
+}
+
 void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_id) {
   if (!this->mqtt_->is_connected()) return;
+  if (!this->state_due_(consumer_id)) return;
   auto snap = this->ct002_->snapshot_consumer(consumer_id);
   const std::string state_topic = this->base_topic_ + "/ct002/" + this->device_id_ +
                                   "/consumer/" + consumer_id;
@@ -255,8 +287,9 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
       root["min_dc_output"] = nullptr;
     }
   });
-  this->mqtt_->publish(state_topic, state_buf, 0, true);
-  this->mqtt_->publish(state_topic + "/availability", "online", 6, 0, true);
+  if (!this->mqtt_->publish(state_topic, state_buf, 0, true))
+    this->forget_state_publish_(consumer_id);
+  this->publish_availability_(consumer_id, state_topic + "/availability", true);
 
   // Device-level status — published on every consumer update so HA sees
   // fresh smooth_target / consumer_count. Mirrors the device_status dict in
@@ -299,8 +332,13 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     }
     root["control_quality_band_w"] = std::round(quality.band * 10.0f) / 10.0f;
   });
-  this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status", device_buf, 0,
-                       true);
+  // Device-level data, but published per consumer, so N batteries would
+  // send it N times per interval. Its own gate keeps it to once per meter.
+  if (this->state_due_("")) {
+    if (!this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/status",
+                              device_buf, 0, true))
+      this->forget_state_publish_("");
+  }
 
   // Consumer-level discovery on first sight. The payload no longer depends on
   // battery_ip (no `connections` are emitted; see ha_discovery.cpp / #438), so
@@ -335,8 +373,39 @@ void MqttInsightsComponent::publish_consumer_removed_(const std::string &consume
   if (!this->mqtt_->is_connected()) return;
   const std::string avail_topic = this->base_topic_ + "/ct002/" + this->device_id_ +
                                   "/consumer/" + consumer_id + "/availability";
-  this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
+  this->publish_availability_(consumer_id, avail_topic, false);
+  // The consumer's own key, so one that comes back inside the interval is
+  // published at once, and the device-status key, whose consumer_count has
+  // just changed. Mirrors the ct002_remove branch of service.py's publish loop.
+  this->forget_state_publish_(consumer_id);
+  this->forget_state_publish_("");
   this->discovered_consumers_.erase(consumer_id);
+}
+
+void MqttInsightsComponent::publish_availability_(const std::string &consumer_id,
+                                                  const std::string &avail_topic,
+                                                  bool online) {
+  // Availability is a retained flag that only moves when a battery goes
+  // silent or comes back, but publish_consumer_event_ runs on every poll —
+  // once a second per battery. Re-asserting "online" at that rate was a
+  // third of everything this component put on the broker, and each one costs
+  // every subscriber a message to parse (issue #663). Nothing expires: no
+  // discovery payload sets expire_after, so the retained value stands until
+  // the other one is published. Mirrors service.py::_publish_availability.
+  auto it = this->availability_published_.find(consumer_id);
+  if (it != this->availability_published_.end() && it->second == online) return;
+  // Record only what actually went out: publish() returns false when the
+  // client is disconnected or the backend rejects the message twice, and
+  // nothing retries it. Caching a failed publish would suppress every later
+  // attempt, stranding the topic on its previous value — a removed battery
+  // stuck at "online" until the next reconnect clears this map. The Python
+  // side gets the same property for free: aiomqtt raises on failure, and
+  // _publish_availability assigns its cache only after the await returns.
+  const bool published = online ? this->mqtt_->publish(avail_topic, "online", 6, 0, true)
+                                : this->mqtt_->publish(avail_topic, "offline", 7, 0, true);
+  if (published) {
+    this->availability_published_[consumer_id] = online;
+  }
 }
 
 void MqttInsightsComponent::handle_command_message_(const std::string &topic,

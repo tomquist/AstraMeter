@@ -385,6 +385,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
     "TIBBER_PULSE": _pm(
         PASSWORD={"type": "password"},
         TIMEOUT={"type": "float"},
+        FORCE_POLLING={"type": "boolean"},
     ),
     "SCRIPT": _pm(),
     "SML": _pm(),
@@ -393,6 +394,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "TLS": {"type": "boolean"},
         "PASSWORD": {"type": "password"},
         "HA_DISCOVERY": {"type": "boolean"},
+        "STATE_THROTTLE_INTERVAL": {"type": "float", "min": 0},
     },
 }
 # Resolve aliases

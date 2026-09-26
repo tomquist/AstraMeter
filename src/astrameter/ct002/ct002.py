@@ -475,6 +475,15 @@ class CT002:
         # battery.  A single in-flight handler per consumer emits the one
         # response for the next reading; duplicate polls are dropped.
         self._inflight_consumers: set[str] = set()
+        # Consumers whose last poll was an inspection poll (phase '0').  Used
+        # to keep the meter's conditioning filters out of the way for the whole
+        # sweep and to hand the control loop a fresh baseline once it ends —
+        # see _sync_inspection_filters.
+        self._inspecting: set[str] = set()
+        # Clears the powermeter wrappers' rolling state (Hampel window, EMA,
+        # deadband).  The balancer holds the same hook for its efficiency
+        # probe; the CT002 emulator uses it around an inspection sweep.
+        self._reset_fn = reset_fn
         self._info_idx_counter = 0
         # Use wall-clock (time.time) so the dedup shares a timebase with
         # _cleanup_consumers' purge; RequestDeduplicator would otherwise
@@ -771,6 +780,10 @@ class CT002:
             del self._consumers[key]
             self._balancer.remove_consumer(key)
             self._last_target_by_consumer.pop(key, None)
+            # A battery that fell silent mid-sweep never sends the committed-
+            # phase poll that ends the sweep, so drop it here rather than leave
+            # it marked as inspecting forever.
+            self._inspecting.discard(key)
         if stale:
             self._rev += 1
         # Dedup entries only matter within the dedupe window; with an adaptive
@@ -1251,6 +1264,9 @@ class CT002:
             source_ip=str(addr[0]),
             participates=request.participates,
         )
+        # Before the dedupe decision, and before the meter read in _serve: the
+        # sweep is under way whether or not this particular poll earns a reply.
+        self._sync_inspection_filters(consumer_id, request.in_inspection_mode)
 
         if not self._should_serve(request):
             return
@@ -1260,6 +1276,43 @@ class CT002:
             await self._serve(request, transport)
         finally:
             self._inflight_consumers.discard(consumer_id)
+
+    def _sync_inspection_filters(self, consumer_id: str, inspecting: bool) -> None:
+        """Keep the meter's conditioning filters out of an inspection sweep.
+
+        A battery that polls with phase ``'0'`` has taken itself off the CT and
+        is sweeping its own output — up to full discharge, then full charge —
+        to watch the CT reading follow.  Those kilowatt swings are real, and
+        seeing them is the entire point of the sweep, but to a rolling-median
+        filter they look exactly like the meter glitches it exists to reject:
+        with ``HAMPEL_WINDOW`` set, the emulator answers the whole sweep with
+        the frozen pre-sweep reading, so the battery is testing against a CT
+        that never responds.  The filter then adopts the sweep as its new
+        normal just as the sweep ends, and rejects the true readings that come
+        back — which resumed active control against an inverted grid sign,
+        driving the battery to full charge while the house imported (issue
+        #652).
+
+        So reset the wrapper state on every inspection poll (the window never
+        fills, which is what makes the relay path genuinely raw) and once more
+        on the first committed-phase poll after the sweep, so the control loop
+        restarts from a baseline the sweep did not write.  This is the same
+        hook, for the same reason, the balancer uses around an efficiency probe
+        — a deliberate power swing must not be filtered as noise.
+
+        The hook resets every configured powermeter, so a second battery
+        steering through the sweep loses its filtering too.  That is correct:
+        the swing is on the grid it shares, so those readings are just as real
+        for it.
+        """
+        if inspecting:
+            self._inspecting.add(consumer_id)
+        elif consumer_id in self._inspecting:
+            self._inspecting.discard(consumer_id)
+        else:
+            return
+        if self._reset_fn is not None:
+            self._reset_fn()
 
     def _decode_request(
         self, data: bytes, addr: tuple[str, int]

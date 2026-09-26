@@ -481,9 +481,11 @@ THROTTLE_INTERVAL = 0
 # POWER_MULTIPLIER = -1
 
 # [TIBBER_PULSE]
-## Tibber Pulse read locally via the Pulse Bridge HTTP API (no Tibber cloud).
-## Decodes the meter's SML telegram from /data.json. Enable the bridge's local
-## webserver first: params page > webserver-force-enable = true > Store params.
+## Tibber Pulse read locally via the Pulse Bridge (no Tibber cloud). Takes each
+## SML telegram live as the bridge pushes it (ws://<bridge>/ws), polling
+## /node_data.json (/data.json on older firmware) wherever push isn't available.
+## Enable the bridge's local webserver first: params page >
+## webserver-force-enable = true > Store params.
 # IP = 192.168.1.140
 ## Username is always "admin"; password is the nine-character code printed on the
 ## bridge (with the dash), e.g. AD56-54BA.
@@ -495,12 +497,15 @@ THROTTLE_INTERVAL = 0
 ## Optional: request timeout in seconds (default 5). The bridge's webserver can
 ## be slow to respond — raise this if readings drop with connection timeouts.
 # TIMEOUT = 5.0
+## Optional: poll over HTTP instead of using push (default False). Push already
+## falls back to polling on its own when the bridge can't push.
+# FORCE_POLLING = False
 ## Optional OBIS overrides (12 hex digits; omit to use eHZ-style defaults)
 # OBIS_POWER_CURRENT = 0100100700ff
 # OBIS_POWER_L1 = 0100240700ff
 # OBIS_POWER_L2 = 0100380700ff
 # OBIS_POWER_L3 = 01004c0700ff
-## SML meters refresh every few seconds; throttle to avoid hammering the bridge.
+## When polling, throttle to avoid hammering the bridge's slow webserver.
 # THROTTLE_INTERVAL = 2
 ## If readings are reversed, flip the sign:
 # POWER_MULTIPLIER = -1
@@ -606,6 +611,11 @@ THROTTLE_INTERVAL = 0
 # MARSTEK_MQTT_ENABLED = true
 ## Seconds between optional Marstek aggregate (cd=1) broadcasts when the app is quiet; 0 = polls only.
 # MARSTEK_MQTT_INTERVAL = 300
+## Smallest gap between two state publishes for the same battery (seconds); 0 = every poll (default).
+## A battery polls about once a second, so without this its state topic goes out at that rate and
+## every subscriber pays to parse it. Raising it trades resolution in Home Assistant's history for a
+## quieter broker. Availability, removals, discovery and commands are never throttled.
+# STATE_THROTTLE_INTERVAL = 0
 ## Seconds between per-powermeter "Online" diagnostic sensor updates (default: 30); 0 disables it.
 ## Each configured powermeter section gets an "AstraMeter Powermeter <section>" device with an
 ## Online binary sensor that flips off when the source stops delivering fresh/usable readings.

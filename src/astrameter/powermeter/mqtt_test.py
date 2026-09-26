@@ -5,6 +5,7 @@ import pytest
 
 from astrameter.conftest import needs_mosquitto
 
+from . import mqtt as mqtt_module
 from .mqtt import MqttPowermeter, extract_json_value
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,32 @@ def test_extract_nonexistent_path() -> None:
 def test_extract_float_value() -> None:
     data = {"SML": {"curr_w": 381.75}}
     assert extract_json_value(data, "$.SML.curr_w") == 381.75
+
+
+def test_extract_json_null_raises_value_error() -> None:
+    # Issue #657: a meter that publishes ``null`` for a reading it has no
+    # answer for matches the path but converts to nothing. float(None) raises
+    # TypeError, which no caller expects — it must surface as a ValueError.
+    data = {"power": None}
+    with pytest.raises(ValueError, match="non-numeric"):
+        extract_json_value(data, "$.power")
+
+
+def test_extract_json_object_raises_value_error() -> None:
+    data = {"power": {"value": 42}}
+    with pytest.raises(ValueError, match="non-numeric"):
+        extract_json_value(data, "$.power")
+
+
+def test_extract_json_non_numeric_string_raises_value_error() -> None:
+    data = {"power": "n/a"}
+    with pytest.raises(ValueError, match="non-numeric"):
+        extract_json_value(data, "$.power")
+
+
+def test_extract_numeric_string_still_converts() -> None:
+    data = {"power": "381.75"}
+    assert extract_json_value(data, "$.power") == 381.75
 
 
 def test_extract_from_array() -> None:
@@ -308,6 +335,64 @@ def test_stream_online_false_when_a_topic_never_received() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bad-payload handling — issue #657
+# ---------------------------------------------------------------------------
+
+
+def test_store_survives_json_null_payload() -> None:
+    # The OBI Energytracker gateway publishes {"power": null} now and then.
+    # One such payload must not take the reader down with it.
+    pm = _make_pm(topic="t", json_path="$.power")
+    pm._store("t", json.dumps({"power": 100.0}))
+    assert pm.values == [100.0]
+
+    pm._store("t", json.dumps({"power": None}))
+    assert pm.values == [100.0], "a null payload must leave the last reading alone"
+
+    pm._store("t", json.dumps({"power": 200.0}))
+    assert pm.values == [200.0], "the reader must still accept the next good value"
+
+
+def test_store_bad_path_does_not_block_sibling_paths() -> None:
+    # One null phase must not cost the other phases their reading.
+    pm = _make_pm(topic="t", json_path=["$.l1", "$.l2"])
+    pm._store("t", json.dumps({"l1": None, "l2": 220.0}))
+    assert pm.values == [None, 220.0]
+
+
+async def test_run_reconnects_after_unexpected_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-MqttError out of the message loop must not end the reader.
+
+    Nothing awaits ``_run``, so an escaping exception used to kill the task
+    silently: the meter kept serving its last value and ``stream_online()``
+    kept calling it healthy, forever (issue #657).
+    """
+    pm = _make_pm()
+    attempts = 0
+
+    async def _serve(tls_context: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TypeError("float() argument must be a string or a real number")
+        pm._connected_event.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(mqtt_module, "RECONNECT_DELAY", 0.01)
+    monkeypatch.setattr(pm, "_serve_connection", _serve)
+
+    await pm.start()
+    try:
+        await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
+        assert attempts == 2, "the reader did not reconnect after the error"
+        assert pm._run_task is not None and not pm._run_task.done()
+    finally:
+        await pm.stop()
+
+
+# ---------------------------------------------------------------------------
 # Integration tests (require mosquitto)
 # ---------------------------------------------------------------------------
 
@@ -424,5 +509,43 @@ async def test_receives_single_topic_multi_json_paths(mqtt_broker: int) -> None:
             await pub.publish(topic, payload=json.dumps(payload).encode())
         await pm.wait_for_message(timeout=5)
         assert await pm.get_powermeter_watts() == [110.5, 220.3, 330.1]
+    finally:
+        await pm.stop()
+
+
+@needs_mosquitto
+async def test_null_json_payload_does_not_freeze_the_meter(mqtt_broker: int) -> None:
+    """Issue #657: one ``{"power": null}`` used to freeze the reading for good.
+
+    ``float(None)`` raised TypeError, which ``_store`` did not catch and
+    ``_run`` only handled for ``MqttError``. The reader task died, so every
+    later publish was dropped while ``get_powermeter_watts()`` kept returning
+    the stale value and ``stream_online()`` kept reporting the meter healthy.
+    """
+    import aiomqtt
+
+    port = mqtt_broker
+    topic = "test/null-json"
+    pm = MqttPowermeter(broker="127.0.0.1", port=port, topic=topic, json_path="$.power")
+    await pm.start()
+    try:
+        await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as pub:
+            await pub.publish(topic, payload=json.dumps({"power": 100.0}).encode())
+            await pm.wait_for_message(timeout=5)
+            assert await pm.get_powermeter_watts() == [100.0]
+
+            await pub.publish(topic, payload=json.dumps({"power": None}).encode())
+            await asyncio.sleep(0.3)
+            assert pm._run_task is not None and not pm._run_task.done(), (
+                "a null payload killed the MQTT reader task"
+            )
+
+            await pub.publish(topic, payload=json.dumps({"power": 200.0}).encode())
+            await pm.wait_for_next_message(timeout=5)
+        assert await pm.get_powermeter_watts() == [200.0], (
+            "the meter stayed frozen on the value it held before the null payload"
+        )
+        assert pm.stream_online() is True
     finally:
         await pm.stop()

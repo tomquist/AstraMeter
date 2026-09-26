@@ -326,6 +326,24 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "if you need it; 0 is off.",
     placeholder: "0",
   },
+  saturation_grace_seconds: {
+    label: "Probe window (s)",
+    group: CONTROL,
+    help:
+      "How long a battery taking its turn in the rotation gets to start " +
+      "delivering before it is passed over. Raise it for an inverter that " +
+      "wakes slowly from sleep.",
+    placeholder: "90",
+  },
+  saturation_stall_timeout_seconds: {
+    label: "Stall timeout (s)",
+    group: CONTROL,
+    help:
+      "How long a battery returning to automatic control may sit at 0 W under " +
+      "a real target before it counts as unable to deliver. Only takes effect " +
+      "while shorter than the probe window.",
+    placeholder: "60",
+  },
 
   // ── meter reading ──
   throttle_interval: {
@@ -620,7 +638,8 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "Extra names port 52500 answers under, comma-separated. IP addresses, " +
       "localhost, .local and .home.arpa names always work — add a name here " +
       "if you reach the dashboard through a reverse proxy, a private DNS " +
-      "entry, or a router-assigned name such as astrameter.fritz.box.",
+      "entry, or a router-assigned name such as astrameter.fritz.box. The " +
+      "name on its own — no https:// and no port.",
   },
   custom_config: {
     label: "Custom config file",

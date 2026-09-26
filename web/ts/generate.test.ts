@@ -1,6 +1,18 @@
 // Lightweight assertions for the config generators. Run with:
 //   node web/js/generate.test.mjs
+import { readFileSync } from "node:fs";
 import { generateConfigIni, generateEsphome, generateHomeAssistant } from "./generate.js";
+import {
+  CT_ACTIVE,
+  CT_BALANCER,
+  CT_BASIC,
+  CT_CLOUD,
+  CT_DC_KEEPALIVE,
+  CT_EFFICIENCY,
+  CT_SATURATION,
+  PER_METER_TUNING,
+  type Field,
+} from "./schema.js";
 
 let failures = 0;
 function ok(cond, msg) {
@@ -189,10 +201,11 @@ lacks(eyRefossFour, 'root["status"][3]["power"]', "esp/refoss: four-id does not 
 const tibber = generateConfigIni({
   target: "python",
   general: { deviceTypes: ["ct002"] },
-  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA", TIMEOUT: "10" }, tuning: {} }],
+  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA", TIMEOUT: "10", FORCE_POLLING: "True" }, tuning: {} }],
 });
 has(tibber, "[TIBBER_PULSE]", "tibber: section header");
 has(tibber, "TIMEOUT = 10", "tibber: timeout override emitted");
+has(tibber, "FORCE_POLLING = True", "tibber: force-polling override emitted");
 
 // ── config.ini: ESPHome native API ───────────────────────────────────────────
 const esphomeNative = generateConfigIni({
@@ -249,12 +262,13 @@ const extras = generateConfigIni({
   general: { deviceTypes: ["ct002"] },
   meters: [{ type: "shelly", phases: 1, fields: { TYPE: "1PM", IP: "1.1.1.1" }, tuning: {} }],
   marstek: { enabled: true, fields: { MAILBOX: "a@b.c", PASSWORD: "pw" } },
-  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.9" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.9", STATE_THROTTLE_INTERVAL: "5" } },
 });
 has(extras, "[MARSTEK]\nENABLE = True", "extras: marstek enabled");
 has(extras, "MAILBOX = a@b.c", "extras: marstek mailbox");
 has(extras, "[MQTT_INSIGHTS]", "extras: insights section");
 has(extras, "BROKER = 192.168.1.9", "extras: insights broker");
+has(extras, "STATE_THROTTLE_INTERVAL = 5", "extras: insights state throttle");
 
 // ── config.ini: enabled-but-empty extras are omitted (default-on safety) ──────
 const extrasEmpty = generateConfigIni({
@@ -328,7 +342,7 @@ const eyMqtt = generateEsphome({
   esphome: { ctType: "HME-3" },
   meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "192.168.1.10", TOPIC: "home/p" }, tuning: { DEADBAND: "20" } }],
   ct: { fields: { ACTIVE_CONTROL: "False" } },
-  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.10", BASE_TOPIC: "astrameter", HA_DISCOVERY: "true" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.10", BASE_TOPIC: "astrameter", HA_DISCOVERY: "true", STATE_THROTTLE_INTERVAL: "5" } },
   marstek: { enabled: true, fields: { MAILBOX: "a@b.c", TIMEZONE: "Europe/Berlin" } },
 });
 has(eyMqtt, "platform: mqtt_subscribe", "esp/mqtt: subscribe sensor");
@@ -336,6 +350,7 @@ has(eyMqtt, "topic: home/p", "esp/mqtt: topic");
 has(eyMqtt, "active_control: false", "esp/mqtt: active control off");
 has(eyMqtt, "deadband: 20", "esp/mqtt: deadband filter");
 has(eyMqtt, "mqtt_insights:", "esp/mqtt: insights sub-block");
+has(eyMqtt, "state_throttle_interval: 5s", "esp/mqtt: insights state throttle");
 has(eyMqtt, "marstek_registration:", "esp/mqtt: marstek sub-block");
 has(eyMqtt, "device_type: ct003", "esp/mqtt: ct003 from HME-3");
 has(eyMqtt, "ct_type: HME-3", "esp/mqtt: ct_type HME-3");
@@ -411,6 +426,106 @@ const eySml = generateEsphome({
 has(eySml, "platform: sml", "esp/sml: sml sensor");
 has(eySml, 'obis_code: "1-0:16.7.0"', "esp/sml: default obis");
 
+// ── ESPHome: Tibber Pulse (our tibber_pulse component) ──────────────────────
+const eyTibber1 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyTibber1, "components: [ct002, tibber_pulse]", "esp/tibber: loads the tibber_pulse external component");
+has(eyTibber1, "- platform: tibber_pulse\n    host: \"192.168.1.140\"\n    password: \"AD56-54BA\"", "esp/tibber: bridge host + password, both quoted so YAML keeps them strings");
+has(eyTibber1, "    power:\n      id: grid_l1", "esp/tibber: single phase reads the total");
+has(eyTibber1, "power_sensor_l1: grid_l1", "esp/tibber: ct002 reads it");
+lacks(eyTibber1, "power_l1:", "esp/tibber: no phase sensors for one phase");
+lacks(eyTibber1, "http_request:", "esp/tibber: the component loads http_request itself");
+lacks(eyTibber1, "uart:", "esp/tibber: no IR head any more");
+lacks(eyTibber1, "node_id:", "esp/tibber: default node id not written");
+lacks(eyTibber1, "user:", "esp/tibber: default user not written");
+lacks(eyTibber1, "platform: sml", "esp/tibber: not the sml component");
+lacks(eyTibber1, "# ⚠", "esp/tibber: nothing to warn about");
+
+const eyTibber3 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [
+    {
+      type: "tibber_pulse",
+      phases: 3,
+      fields: {
+        IP: "192.168.1.141",
+        PASSWORD: "AB12-34CD",
+        USER: "admin",
+        NODE_ID: "2",
+        TIMEOUT: "8",
+        OBIS_POWER_L1: "0100240700ff",
+      },
+      tuning: { POWER_OFFSET: "10" },
+    },
+  ],
+  ct: { fields: {} },
+  marstek: { enabled: true, fields: {} },
+});
+has(eyTibber3, "    power_l1:\n      id: grid_l1\n      filters:\n        - offset: 10", "esp/tibber: phase sensor carries its filters at sub-sensor depth");
+has(eyTibber3, "    power_l3:\n      id: grid_l3", "esp/tibber: three phases");
+has(eyTibber3, "    node_id: 2", "esp/tibber: node id override");
+has(eyTibber3, "    timeout: 8s", "esp/tibber: timeout override");
+has(eyTibber3, '    obis_power_l1: "0100240700ff"', "esp/tibber: OBIS override passed through in the Python form");
+lacks(eyTibber3, "user:", "esp/tibber: explicit default user not written");
+has(eyTibber3, "power_sensor_l3: grid_l3", "esp/tibber: ct002 reads all three phases");
+has(eyTibber3, "http_request:\n  timeout: 20s", "esp/tibber: registration still gets its own http_request block");
+
+// ── ESPHome: DSMR / P1 ────────────────────────────────────────────────────────
+const eyDsmr = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 1, fields: {}, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmr, "platform: dsmr", "esp/dsmr: dsmr sensor");
+has(eyDsmr, "baud_rate: 115200", "esp/dsmr: DSMR 5 serial settings by default");
+has(eyDsmr, "rx_buffer_size: 1700", "esp/dsmr: telegram-sized rx buffer");
+has(eyDsmr, "(delivered - returned) * 1000.0f", "esp/dsmr: net watts from kW");
+has(eyDsmr, "std::isnan(delivered)", "esp/dsmr: guards the first telegram");
+lacks(eyDsmr, "decryption_key", "esp/dsmr: no decryption key unless set");
+
+has(eyDsmr, "rx_pin: GPIO4", "esp/dsmr: default rx pin");
+has(eyDsmr, "max_telegram_length: 1700", "esp/dsmr: telegram cap raised with the buffer");
+lacks(eyDsmr, "crc_check", "esp/dsmr: CRC left on for DSMR 4/5");
+
+const eyDsmrPin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 1, fields: { RX_PIN: "GPIO17" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmrPin, "rx_pin: GPIO17", "esp/dsmr: custom rx pin");
+
+const eyDsmr3 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 3, fields: { DSMR_VERSION: "3", DECRYPTION_KEY: "AAAA" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmr3, "baud_rate: 9600", "esp/dsmr: DSMR 3 serial settings");
+has(eyDsmr3, "parity: EVEN", "esp/dsmr: DSMR 3 parity");
+has(eyDsmr3, "decryption_key: AAAA", "esp/dsmr: decryption key when set");
+has(eyDsmr3, "power_delivered_l3:", "esp/dsmr: per-phase keys when three-phase");
+has(eyDsmr3, "power_sensor_l3: grid_l3", "esp/dsmr: three phases wired into ct002");
+has(eyDsmr3, "crc_check: false", "esp/dsmr: DSMR 3 sends no CRC either");
+
+// DSMR 2.2 is 7N1 and sends no CRC at all — both differ from DSMR 3.
+const eyDsmr22 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "dsmr", phases: 1, fields: { DSMR_VERSION: "2.2" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyDsmr22, "baud_rate: 9600", "esp/dsmr: DSMR 2.2 baud rate");
+has(eyDsmr22, "parity: NONE", "esp/dsmr: DSMR 2.2 has no parity bit");
+has(eyDsmr22, "crc_check: false", "esp/dsmr: DSMR 2.2 sends no CRC");
+has(eyDsmr22, "parity: NONE", "esp/dsmr: DSMR 2.2 parity differs from DSMR 3");
+
 // ── ESPHome: unsupported meter warns ──────────────────────────────────────────
 const eyEnvoy = generateEsphome({
   target: "esphome",
@@ -458,6 +573,8 @@ const haOpts = generateHomeAssistant({
       OSC_DAMP_MAX: "0.5",
       CONCENTRATE_DEADBAND: "0",
       IMPORT_TRIM_W: "20",
+      SATURATION_GRACE_SECONDS: "200",
+      SATURATION_STALL_TIMEOUT_SECONDS: "180",
     },
   },
 });
@@ -478,6 +595,8 @@ has(haOpts, "pace_max_step: 600", "ha-opts: pace max step");
 has(haOpts, "osc_damp_max: 0.5", "ha-opts: oscillation damping");
 has(haOpts, "concentrate_deadband: 0", "ha-opts: concentrate deadband (explicit 0 kept)");
 has(haOpts, "import_trim_w: 20", "ha-opts: steady-import trim");
+has(haOpts, "saturation_grace_seconds: 200", "ha-opts: probe window");
+has(haOpts, "saturation_stall_timeout_seconds: 180", "ha-opts: stall timeout");
 has(haOpts, 'power_offset: "-20"', "ha-opts: power offset (quoted str)");
 has(haOpts, "smooth_target_alpha: 0.3", "ha-opts: smoothing alpha");
 has(haOpts, "deadband: 5", "ha-opts: deadband");
@@ -505,6 +624,8 @@ lacks(haMin, "pace_base_step", "ha-opts: omits unset pace base step");
 lacks(haMin, "grid_predict_trust", "ha-opts: omits unset grid predict trust");
 lacks(haMin, "fair_distribution", "ha-opts: omits unset fair distribution");
 lacks(haMin, "import_trim_w", "ha-opts: omits unset import trim");
+lacks(haMin, "saturation_grace_seconds", "ha-opts: omits unset probe window");
+lacks(haMin, "saturation_stall_timeout_seconds", "ha-opts: omits unset stall timeout");
 
 // ── Home Assistant add-on options: calculate from in/out ─────────────────────
 const haCalc = generateHomeAssistant({
@@ -755,6 +876,80 @@ const haDashReadOnly = generateHomeAssistant({
   ct: { fields: {} },
 });
 has(haDashReadOnly, "dashboard_allow_write: false", "ha-opts: read-only dashboard is emitted");
+
+
+// ── Home Assistant add-on options: every editor field the add-on offers ──────
+// An add-on option named after an editor field (the INI key, lower-cased) must
+// come out of the add-on generator when that field is set; otherwise a user who
+// fills it in and picks the add-on target silently loses it. Driven by the
+// add-on's own schema block, so a newly offered option is covered without
+// touching this test.
+{
+  const yaml = readFileSync(new URL("../../ha_addon/config.yaml", import.meta.url), "utf8");
+  const offered = new Set<string>();
+  let inSchema = false;
+  for (const line of yaml.split("\n")) {
+    if (/^schema:/.test(line)) {
+      inSchema = true;
+      continue;
+    }
+    if (!inSchema) continue;
+    const match = /^ {2}([a-z0-9_]+):/.exec(line);
+    if (match) offered.add(match[1]);
+    else if (/^\S/.test(line)) break;
+  }
+  ok(offered.size > 40, "ha-opts coverage: the add-on's schema block was found and parsed");
+
+  // A value the generator cannot mistake for "unset": the last choice of a
+  // select (never the blank "default" entry), else something non-zero.
+  const sample = (fld: Field): string | boolean => {
+    if (fld.type === "checkbox") return true;
+    if (fld.type === "select") return fld.options![fld.options!.length - 1].value;
+    if (fld.type === "number") return "7";
+    return "x";
+  };
+  // Editor fields that share an add-on option's name but are not its source.
+  const NOT_THE_SOURCE: Record<string, string> = {
+    // The add-on reads it from the General card's dedupe field; the CT card's
+    // copy is the ESPHome `dedupe_window`.
+    DEDUPE_TIME_WINDOW: "general.dedupeTimeWindow",
+  };
+  const pick = (fields: Field[]) =>
+    fields.filter((fld) => offered.has(fld.key.toLowerCase()) && !(fld.key in NOT_THE_SOURCE));
+  const ctFields = pick([
+    ...CT_BASIC,
+    ...CT_ACTIVE,
+    ...CT_BALANCER,
+    ...CT_DC_KEEPALIVE,
+    ...CT_EFFICIENCY,
+    ...CT_SATURATION,
+    ...CT_CLOUD,
+  ]);
+  const tuningFields = pick(PER_METER_TUNING);
+  ok(ctFields.length > 20, "ha-opts coverage: CT fields matched add-on options");
+  ok(tuningFields.length > 5, "ha-opts coverage: meter tuning fields matched add-on options");
+
+  const out = generateHomeAssistant({
+    target: "homeassistant",
+    general: { deviceTypes: ["ct002"] },
+    meters: [
+      {
+        type: "homeassistant",
+        phases: 1,
+        fields: { CURRENT_POWER_ENTITY: "sensor.p" },
+        tuning: Object.fromEntries(tuningFields.map((fld) => [fld.key, sample(fld)])),
+      },
+    ],
+    ct: { fields: Object.fromEntries(ctFields.map((fld) => [fld.key, sample(fld)])) },
+  });
+  for (const fld of [...ctFields, ...tuningFields]) {
+    const option = fld.key.toLowerCase();
+    ok(
+      new RegExp(`^${option}:`, "m").test(out),
+      `ha-opts coverage: ${fld.key} is emitted as the add-on option ${option}`,
+    );
+  }
+}
 
 
 console.log("\n" + (failures ? `${failures} FAILED` : "ALL PASSED"));

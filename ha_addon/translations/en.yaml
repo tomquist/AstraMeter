@@ -38,6 +38,12 @@ configuration:
   min_dc_output:
     name: Min DC Output
     description: "Minimum discharge (in watts) to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Applies per battery and only affects DC-only batteries without their own inverter (Venus and Jupiter are unaffected). Set to 0 to disable (default); recommended >= 20. Only applies to CT002/CT003 device types."
+  saturation_grace_seconds:
+    name: Saturation Probe Window
+    description: "Seconds a battery promoted by the efficiency rotation (Min Efficient Power) gets to start delivering before the probe is rejected and it goes back to the end of the rotation (default 90). The previous battery covers as backup meanwhile. Raise it for an inverter that takes minutes to wake from sleep. Minimum value is 1. Only applies to CT002/CT003 device types."
+  saturation_stall_timeout_seconds:
+    name: Saturation Stall Timeout
+    description: "Seconds a battery returning to automatic control may sit at 0 W under a real target before it counts as unable to deliver (default 60). Only takes effect while shorter than the probe window above. Minimum value is 1. Only applies to CT002/CT003 device types."
   grid_predict_trust:
     name: Grid Prediction
     description: "Keeps the grid closer to zero — less import, less export, less overshoot and hunting — by adapting automatically to your power meter, including meters that report with a delay (e.g. a Home Assistant push sensor). 0.5 (default) is recommended and needs no tuning; lower values react more cautiously and 0 turns the feature off (steer directly on the raw meter reading). Only applies to CT002/CT003 device types."
@@ -49,7 +55,7 @@ configuration:
     description: "Also serves the dashboard on http://<your-host>:52500 without any authentication. Home Assistant's login does not protect this, so anyone on your network can see and (if changes are allowed) alter your configuration. Leave this off unless you specifically need it. Off by default."
   dashboard_allowed_hosts:
     name: Extra Dashboard Host Names
-    description: "Extra host names the dashboard answers under on http://<your-host>:52500, separated by commas. IP addresses, localhost, .local and .home.arpa names always work, so leave this empty unless you reach the dashboard through a name that resolves via a nameserver — a reverse proxy, a private DNS entry, or a router-assigned name such as astrameter.fritz.box. Other names are refused because a name is the one part of the address another website can aim at this port from your browser, and this port has no login. Does not affect opening the dashboard from the Home Assistant sidebar."
+    description: "Extra host names the dashboard answers under on http://<your-host>:52500, separated by commas. IP addresses, localhost, .local and .home.arpa names always work, so leave this empty unless you reach the dashboard through a name that resolves via a nameserver — a reverse proxy, a private DNS entry, or a router-assigned name such as astrameter.fritz.box. Write the name on its own, without the https:// or the port — that is what your browser sends and what is matched. Other names are refused because a name is the one part of the address another website can aim at this port from your browser, and this port has no login. Does not affect opening the dashboard from the Home Assistant sidebar."
   pace_base_step:
     name: Ramp Pacing Base Step (W)
     description: "Starting cap on how many watts each battery's command may change per poll. It grows toward the max step only while the battery is observed following the command, which keeps the firmware's accelerating ramp from overshooting when the meter reports with a delay. Lower = gentler, slower reaction to load steps; higher = faster, more like a plain CT002. Default 30; set 0 to turn pacing off entirely. Raise this (and the max step) if the batteries ramp too slowly in small steps and your meter is fast/low-latency. Only applies to CT002/CT003 device types."

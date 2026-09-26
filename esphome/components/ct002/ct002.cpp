@@ -355,6 +355,11 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
                                 static_cast<float>(reported_power), meter_dev_type, addr_ip,
                                 participates);
 
+  // Before the dedupe decision, and before the pipeline read below: the sweep
+  // is under way whether or not this particular poll earns a reply. Mirrors
+  // ct002.py _handle_request ordering.
+  this->sync_inspection_filters_(consumer_id, in_inspection_mode);
+
   // Deduplication — drop repeat polls from the same consumer inside the
   // configured window (keyed by consumer_id so retransmits are suppressed
   // regardless of source UDP port). Disabled (default window 0) means every
@@ -439,6 +444,32 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   if (!in_inspection_mode) {
     for (auto &cb : this->consumer_event_listeners_) cb(consumer_id);
   }
+}
+
+// Keep the meter's conditioning filters out of an inspection sweep.
+//
+// A battery that polls with phase "0" has taken itself off the CT and is
+// sweeping its own output -- up to full discharge, then full charge -- to watch
+// the CT reading follow. Those kilowatt swings are real, and seeing them is the
+// entire point of the sweep, but to a rolling-median filter they look exactly
+// like the meter glitches it exists to reject: with hampel: set, the emulator
+// answers the whole sweep with the frozen pre-sweep reading, so the battery is
+// testing against a CT that never responds. The filter then adopts the sweep as
+// its new normal just as the sweep ends, and rejects the true readings that come
+// back -- which resumed active control against an inverted grid sign, driving the
+// battery to full charge while the house imported (issue #652).
+//
+// So reset the wrapper state on every inspection poll (the window never fills,
+// which is what makes the relay path genuinely raw) and once more on the first
+// committed-phase poll after the sweep. Mirrors ct002.py
+// _sync_inspection_filters.
+void CT002Component::sync_inspection_filters_(const std::string &consumer_id, bool inspecting) {
+  if (inspecting) {
+    this->inspecting_.insert(consumer_id);
+  } else if (this->inspecting_.erase(consumer_id) == 0) {
+    return;
+  }
+  for (auto &p : this->pipeline_) p->reset();
 }
 
 std::string CT002Component::consumer_key_(const std::string &meter_mac,
@@ -968,6 +999,10 @@ void CT002Component::evict_stale_consumers_() {
     for (auto &cb : this->consumer_removed_listeners_) cb(id);
     this->consumers_.erase(id);
     if (this->balancer_) this->balancer_->remove_consumer(id);
+    // A battery that fell silent mid-sweep never sends the committed-phase
+    // poll that ends the sweep, so drop it here rather than leave it marked as
+    // inspecting forever (mirrors Python's _cleanup_consumers).
+    this->inspecting_.erase(id);
   }
   if (!stale.empty()) {
     ESP_LOGD(TAG, "Evicted %u stale consumer(s)", static_cast<unsigned>(stale.size()));

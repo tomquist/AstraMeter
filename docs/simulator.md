@@ -1,8 +1,8 @@
 # Simulator (`astra-sim`)
 
-The project includes a standalone battery and powermeter simulator (`astra-sim`)
-that lets you test the CT002 emulator without real hardware. It simulates N
-batteries speaking the CT002 UDP protocol and exposes an HTTP endpoint that
+The project ships a standalone battery and powermeter simulator (`astra-sim`),
+so you can test the CT002 emulator without real hardware. It simulates N
+batteries speaking the CT002 UDP protocol, and serves an HTTP endpoint that
 astrameter reads as a powermeter.
 
 ## Install
@@ -96,17 +96,17 @@ Example `sim_config.json`:
 }
 ```
 
-Optional top-level `power_update_delay_ticks` (or per-battery
-`power_update_delay_ticks`) delays how many simulator ticks pass before the
-battery applies each new CT-derived power setpoint (`reported_power +
-grid_reading` from the response; `0` = immediate). The same delay can be set from
-the CLI with `astra-sim run --power-update-delay N` (also supported on `astra-sim
-start`). With a non-zero delay, `GET /status` and the TUI expose **`target`** as
-the latest CT-requested watts and **`applied_target`** as the setpoint the battery
-is ramping toward after the delay. When delay is `0`, both match.
+The optional top-level `power_update_delay_ticks` (or the per-battery
+`power_update_delay_ticks`) sets how many simulator ticks pass before a battery
+applies each new CT-derived power setpoint (`reported_power + grid_reading`
+from the response; `0` = immediate). You can set the same delay from the CLI
+with `astra-sim run --power-update-delay N` (also supported on `astra-sim
+start`). With a non-zero delay, `GET /status` and the TUI show **`target`** as
+the latest CT-requested watts, and **`applied_target`** as the setpoint the
+battery is ramping toward after the delay. When the delay is `0`, both match.
 
-A more complete example simulating a European 3-phase household with rooftop
-solar, multiple appliances, and 4 batteries (two on the heaviest phase):
+A fuller example simulates a European 3-phase household with rooftop solar,
+several appliances, and 4 batteries (two on the heaviest phase):
 
 ```json
 {
@@ -180,33 +180,33 @@ solar, multiple appliances, and 4 batteries (two on the heaviest phase):
 
 This configuration demonstrates:
 
-- **Phase imbalance**: Kitchen loads (coffee machine, microwave) are concentrated
-  on phase A with two batteries to compensate; entertainment/laundry on B;
-  fridge/cleaning on C
-- **Two batteries on one phase**: Batteries `0001` and `0002` both serve phase A —
-  CT002's fair distribution algorithm splits the target between them
-- **Mixed capacities**: Battery `0003` has a larger 5.12 kWh capacity (simulating
-  a newer model)
+- **Phase imbalance**: Kitchen loads (coffee machine, microwave) sit on phase A,
+  with two batteries to compensate; entertainment and laundry on B; fridge and
+  cleaning on C
+- **Two batteries on one phase**: Batteries `0001` and `0002` both serve phase A,
+  so CT002's fair distribution algorithm splits the target between them
+- **Mixed capacities**: Battery `0003` has a larger 5.12 kWh capacity
+  (simulating a newer model)
 - **Varied SOC**: Batteries start at different charge levels (90%, 70%, 40%, 20%)
   to test saturation timing
 - **3-phase solar**: 5 kWp rooftop system balanced across all three phases — even
-  moderate production exceeds the base load, causing grid export (negative
-  readings) and battery charging
+  moderate production exceeds the base load, so the grid exports (negative
+  readings) and the batteries charge
 - **Custom ramp rate**: Battery `0001` ramps at 150 W/s instead of the default
   200 W/s
-- **Auto mode**: Randomly toggles loads and solar every 15–45 seconds for
+- **Auto mode**: Toggles loads and solar at random every 15–45 seconds for
   hands-free testing
 
 ## Interactive controls
 
-When running with the TUI (`astra-sim run`, without `--no-tui`), you can interact
-with the simulation using keyboard shortcuts displayed on screen. The TUI shows
-live battery state (power, SOC, targets), grid readings per phase, and active
-loads. If `power_update_delay_ticks` is non-zero, the battery table adds **Req**
-(CT request) and **Appl** (delayed setpoint) columns so you can see the latency
+With the TUI (`astra-sim run`, without `--no-tui`), you drive the simulation
+with the keyboard shortcuts shown on screen. The TUI displays live battery state
+(power, SOC, targets), grid readings per phase, and active loads. If
+`power_update_delay_ticks` is non-zero, the battery table adds **Req** (CT
+request) and **Appl** (delayed setpoint) columns so you can see the latency
 effect; otherwise a single **Target** column shows the setpoint.
 
-Without the TUI, you can control the simulation via the HTTP API:
+Without the TUI, control the simulation through the HTTP API:
 
 ```bash
 # Toggle a load on/off (1-based index)
@@ -225,7 +225,7 @@ astra-sim status
 
 ## Daemon mode
 
-Run the simulator in the background and attach/detach the TUI:
+Run the simulator in the background, and attach or detach the TUI:
 
 ```bash
 # Start headless daemon
@@ -260,8 +260,8 @@ astra-sim run --batteries 2 --phases 3 --no-tui
 
 ## How it works
 
-The simulator is fully decoupled from astrameter — it communicates purely over
-the network:
+The simulator is fully decoupled from astrameter — everything goes over the
+network:
 
 - **Battery simulators** send UDP requests to astrameter's CT002 emulator using
   the same protocol as real Marstek batteries
@@ -269,5 +269,6 @@ the network:
   astrameter reads via its `[JSON_HTTP]` powermeter config
 - Grid power is computed as:
   `grid = base_load + active_loads + noise - solar - battery_output`
-- When solar exceeds consumption, grid goes negative (export) and batteries charge
+- When solar exceeds consumption, the grid goes negative (export) and the
+  batteries charge
 - Batteries track SOC and saturate at 0%/100%
