@@ -285,7 +285,7 @@ export const OPTION_META: Record<string, OptionMeta> = {
     group: DEVICE,
     help:
       "Port the emulated Shelly answers HTTP on. Batteries that find the " +
-      "meter by themselves talk to this port, and several models expect 80. " +
+      "meter by themselves talk to this port, and Hoymiles and Growatt always use 80. " +
       "Set -1 to serve no HTTP at all.",
     placeholder: "80",
   },

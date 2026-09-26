@@ -70,6 +70,7 @@ or, if you run AstraMeter under systemd, add it to the unit instead:
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 ```
 
-Or set `TCP_PORT` to a port above 1024, which needs no privileges — though some
-battery models have port 80 hardcoded and will only find the meter there. See
+Or set `TCP_PORT` to a port above 1024, which needs no privileges — though the
+Hoymiles and Growatt batteries always connect on port 80 and will not find the
+meter anywhere else. See
 [Shelly discovery and the HTTP surface](../shelly-tcp.md).

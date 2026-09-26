@@ -9,6 +9,26 @@ and answers the HTTP requests those batteries make. Both are on by default and
 neither needs configuring, so if your battery discovers meters by itself, it
 should find AstraMeter without you doing anything.
 
+## Batteries
+
+What each model is known to need, from the experience of people running other
+Shelly emulators. None of it has been confirmed with AstraMeter on real
+hardware yet — if you try one, please open an issue saying what happened.
+
+| Battery | Finds the meter by | What to know |
+|---|---|---|
+| **Hoymiles** MS-A2, HiBattery 1920 AC / 4020-X | discovery | Always connects on port 80, whatever port is announced. |
+| **Growatt** NOAH 2000, NEXA 2000 | discovery | Always connects on port 80. In the ShinePhone app, add it as the Shelly Pro 3EM *in the same network* — the older option that asks for a Shelly account login cannot find it. |
+| **Solakon** One | discovery, or its address | If the app does not find it, enter the AstraMeter host's address in the app's connection settings. |
+| **Indevolt** SolidFlex 2000, BK1600 | its address and device ID | The device ID is on the dashboard's Shelly card, as *Identifies as*. One meter pairs with one Indevolt system, so a second system cannot share it. |
+| **Anker** SOLIX Solarbank 2 / 3 | its address, reportedly | Anker's own instructions add a Shelly through a Shelly Cloud login, which cannot find AstraMeter; adding it by address in a recent app version is reported to work. |
+| **Jackery** SolarVault 3 | unknown | Reported to work with other emulators; how it pairs is not documented. |
+
+**Zendure** SolarFlow and **EcoFlow** STREAM cannot use AstraMeter: both add a
+Shelly by logging in to its Shelly Cloud account, and AstraMeter has none.
+
+Marstek batteries poll the meter over UDP and need nothing on this page.
+
 ## What it announces
 
 AstraMeter advertises two mDNS services, which is what a Shelly does:
@@ -72,8 +92,8 @@ Everything here lives in `[EMULATOR_SHELLYPRO3EM]`, or under the matching
 
 ### Port 80
 
-Several battery models have port 80 hardcoded and cannot be pointed anywhere
-else, which is why it is the default. Ports below 1024 need extra privileges on
+The Hoymiles and Growatt batteries connect on port 80 whatever port is
+announced, which is why it is the default. Ports below 1024 need extra privileges on
 Linux, so what you have to do depends on how you run AstraMeter — see the
 [installation matrix](#per-installation-notes).
 

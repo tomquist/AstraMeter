@@ -166,7 +166,7 @@ configuration:
     description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."
   shelly_tcp_port:
     name: Shelly HTTP Port
-    description: "Optional. Port the emulated Shelly Pro 3EM answers HTTP on. Batteries that find the meter over mDNS talk to this port, and several models expect 80. Set -1 to serve no HTTP at all (the meter is still announced over mDNS). Default 80."
+    description: "Optional. Port the emulated Shelly Pro 3EM answers HTTP on. Batteries that find the meter over mDNS talk to this port, and Hoymiles and Growatt always use 80. Set -1 to serve no HTTP at all (the meter is still announced over mDNS). Default 80."
   shelly_mdns_enabled:
     name: Announce Over mDNS
     description: "Optional. Announce the emulated meter on your network so batteries can discover it without being given an IP address. Default on. Turn off only if you configure the battery with the address by hand."

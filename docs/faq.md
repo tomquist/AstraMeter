@@ -111,18 +111,20 @@ A: Use one of these device types:
 - `shellypro3em_new`: Port 2220 (B2500 firmware ≥226)
 - `shellypro3em`: Both ports (most compatible)
 
-### Can I use this with non-Marstek storage systems (e.g., Zendure, Hoymiles)?
+### Can I use this with non-Marstek storage systems (e.g., Hoymiles, Growatt)?
 
-A: Possibly. The CT002/CT003 emulation is Marstek-specific, but the Shelly
-emulation is not: any storage system that reads a Shelly Pro 3EM as its meter
-can use AstraMeter. Pick a `shellypro3em` device type, and if your battery
-discovers meters by itself rather than taking an address, it should find
-AstraMeter with no extra setup — see
-[Shelly discovery and the HTTP surface](shelly-tcp.md).
+A: Often, yes. The CT002/CT003 emulation is Marstek-specific, but the Shelly
+emulation is not: a storage system that reads a Shelly Pro 3EM over your local
+network can use AstraMeter. Pick a `shellypro3em` device type; the
+[battery table](shelly-tcp.md#batteries) says what each known model needs.
 
-This is not verified against every model, so treat it as "worth trying" rather
-than supported. If it works — or doesn't — please open an issue saying which
-model and what happened.
+Two kinds cannot: those that add a Shelly by logging in to a Shelly Cloud
+account, such as Zendure SolarFlow and EcoFlow STREAM. AstraMeter is not in
+anyone's Shelly Cloud account, so there is nothing for them to find.
+
+None of this is confirmed on real hardware yet, so treat it as "worth trying".
+If it works — or doesn't — please open an issue saying which model and what
+happened.
 
 ## Troubleshooting
 

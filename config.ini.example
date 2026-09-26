@@ -215,7 +215,7 @@ THROTTLE_INTERVAL = 0
 ## from, so this one is prefixed to keep the two apart.
 ##
 ## Port the emulated meter answers HTTP on. Batteries that discover it over
-## mDNS talk to this port, and several models have 80 hardcoded — which is why
+## mDNS talk to this port, and Hoymiles and Growatt always use 80 — which is why
 ## it is the default. Ports below 1024 need extra privileges; see docs/faq.md.
 ## Set -1 to serve no HTTP at all: the meter is still announced over mDNS, for
 ## batteries that discover it that way and then poll the UDP port.

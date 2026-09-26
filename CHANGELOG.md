@@ -15,7 +15,7 @@
 
 - **Fixed** MQTT Insights sending about a third more messages than it needed to: each battery's availability was re-sent on every poll, roughly once a second, instead of only when the battery appears or goes silent ([#663](https://github.com/tomquist/astrameter/issues/663), [#668](https://github.com/tomquist/astrameter/pull/668)).
 
-- **Added** Shelly discovery, so batteries that look for a Shelly Pro 3EM on the network — Hoymiles MS-A2, Growatt NOAH/NEXA 2000, Solakon One, Zendure, Anker SOLIX — can find AstraMeter without setup; not yet confirmed on the batteries themselves.
+- **Added** a Shelly Pro 3EM network interface, so batteries that read their meter that way — Hoymiles MS-A2 and HiBattery, Growatt NOAH/NEXA 2000, Solakon One, Indevolt SolidFlex 2000 — can use AstraMeter; not yet confirmed on the batteries themselves.
 
 - **Fixed** a battery being driven to full charge or discharge against the house for up to a minute after it ran its phase detection, on setups using the optional Hampel outlier filter ([#652](https://github.com/tomquist/astrameter/issues/652), [#653](https://github.com/tomquist/astrameter/pull/653)).
 
