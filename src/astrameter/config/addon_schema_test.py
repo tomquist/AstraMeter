@@ -4,6 +4,9 @@
 An option offered there but never read is a setting that silently does nothing,
 and a mapping that names an option the schema does not have is a typo that can
 never fire. Both directions are checked here.
+
+``ha_addon/translations/en.yaml`` gives each option the name and description
+that Configuration tab shows. An option without one appears as its bare key.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ FIELD_LISTS = (
 )
 
 CONFIG_YAML = Path(__file__).parents[3] / "ha_addon" / "config.yaml"
+TRANSLATIONS_YAML = Path(__file__).parents[3] / "ha_addon" / "translations" / "en.yaml"
 
 #: Options that do not map onto a settings field one-to-one: they select the
 #: configuration source, or shape the power source / Marstek account in code.
@@ -61,6 +65,45 @@ def schema_options() -> set[str]:
         assert match, f"unexpected schema line: {line!r}"
         options.add(match.group(1))
     return options
+
+
+def translated_options() -> dict[str, dict[str, str]]:
+    """``{option: {"name": ..., "description": ...}}`` from ``en.yaml``.
+
+    Hand-parsed like :func:`schema_options`: under ``configuration:`` each
+    option is a two-space key holding four-space ``name:`` / ``description:``
+    scalars.
+    """
+    lines = TRANSLATIONS_YAML.read_text(encoding="utf-8").splitlines()
+    start = lines.index("configuration:")
+    options: dict[str, dict[str, str]] = {}
+    current: dict[str, str] | None = None
+    for line in lines[start + 1 :]:
+        if not line.strip():
+            continue
+        if not line.startswith("  "):
+            break  # end of the block
+        option = re.match(r"\s{2}([a-z0-9_]+):\s*$", line)
+        if option:
+            current = options.setdefault(option.group(1), {})
+            continue
+        entry = re.match(r"\s{4}(name|description):\s*(.*)$", line)
+        assert entry and current is not None, f"unexpected translation line: {line!r}"
+        current[entry.group(1)] = _scalar(entry.group(2))
+    return options
+
+
+def _scalar(raw: str) -> str:
+    """A one-line YAML scalar's text, or ``""`` when it is null or blank.
+
+    Quoted scalars lose their quotes; a plain one loses a trailing ``# comment``
+    — which is all of ``name: # TODO`` — as YAML would.
+    """
+    raw = raw.strip()
+    if raw[:1] in ('"', "'"):
+        return raw[1 : raw.rindex(raw[0])] if raw.count(raw[0]) > 1 else ""
+    value = re.split(r"(?:^|\s)#", raw, maxsplit=1)[0].strip()
+    return "" if value in ("~", "null") else value
 
 
 def mapped_options() -> set[str]:
@@ -98,3 +141,23 @@ def test_an_option_is_read_by_exactly_one_mapping() -> None:
             seen[option] = seen.get(option, 0) + 1
     duplicates = {option for option, count in seen.items() if count > 1}
     assert not duplicates, f"options read by more than one mapping: {duplicates}"
+
+
+def test_every_offered_option_is_described() -> None:
+    """An option without a translation shows up in the add-on UI as its bare key."""
+    translations = translated_options()
+    undescribed = sorted(
+        option
+        for option in schema_options()
+        if not translations.get(option, {}).get("name")
+        or not translations.get(option, {}).get("description")
+    )
+    assert not undescribed, (
+        "add-on options without a name and description in "
+        f"ha_addon/translations/en.yaml: {undescribed}"
+    )
+
+
+def test_no_translations_for_options_no_longer_offered() -> None:
+    stale = set(translated_options()) - schema_options()
+    assert not stale, f"translations for options not in the schema: {sorted(stale)}"
