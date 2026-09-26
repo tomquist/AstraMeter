@@ -195,7 +195,8 @@ DecodeStatus to_watts(const Register &reg, double *out) {
   } else if (reg.scaler < 0) {
     // Divide rather than multiply by 10^-n, so 170000 * 10^-3 lands on 170
     // exactly instead of 170.00000000000003.
-    *out = reg.value / std::pow(10.0, static_cast<double>(-reg.scaler));
+    // Negate as a double: -INT64_MIN overflows an int64_t.
+    *out = reg.value / std::pow(10.0, -static_cast<double>(reg.scaler));
   } else {
     *out = reg.value * std::pow(10.0, static_cast<double>(reg.scaler));
   }

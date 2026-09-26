@@ -1128,6 +1128,11 @@ Before you start, enable the bridge's local webserver (its
 `webserver_force_enable` setting). The password is the nine-character code
 printed on the bridge, dash included, e.g. `AD56-54BA`. The user is `admin`.
 
+The bridge only speaks plain HTTP, so that password crosses your network
+unencrypted on every poll, as it does with the Python source. Keep the bridge
+and the ESP on a network you trust, and don't reuse the bridge's code
+anywhere else.
+
 ```yaml
 external_components:
   - source: github://tomquist/astrameter@develop

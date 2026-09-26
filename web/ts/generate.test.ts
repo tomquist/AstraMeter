@@ -434,7 +434,7 @@ const eyTibber1 = generateEsphome({
   ct: { fields: {} },
 });
 has(eyTibber1, "components: [ct002, tibber_pulse]", "esp/tibber: loads the tibber_pulse external component");
-has(eyTibber1, "- platform: tibber_pulse\n    host: 192.168.1.140\n    password: \"AD56-54BA\"", "esp/tibber: bridge host + password");
+has(eyTibber1, "- platform: tibber_pulse\n    host: \"192.168.1.140\"\n    password: \"AD56-54BA\"", "esp/tibber: bridge host + password, both quoted so YAML keeps them strings");
 has(eyTibber1, "    power:\n      id: grid_l1", "esp/tibber: single phase reads the total");
 has(eyTibber1, "power_sensor_l1: grid_l1", "esp/tibber: ct002 reads it");
 lacks(eyTibber1, "power_l1:", "esp/tibber: no phase sensors for one phase");

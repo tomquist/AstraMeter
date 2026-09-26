@@ -81,7 +81,12 @@ def _entry(e: Entry) -> bytes:
     else:
         out += b"\x01"
     out += b"\x62" + bytes([e.unit])
-    out += b"\x01" if e.scaler is None else b"\x52" + struct.pack(">b", e.scaler)
+    if e.scaler is None:
+        out += b"\x01"
+    elif -128 <= e.scaler <= 127:
+        out += b"\x52" + struct.pack(">b", e.scaler)
+    else:  # an eight-byte scaler, which no sane meter sends but a CRC admits
+        out += b"\x59" + struct.pack(">q", e.scaler)
     if e.octet is not None:
         size = len(e.octet) + 2  # two TL bytes
         out += bytes([0x80 | (size >> 4), size & 0x0F]) + e.octet
@@ -149,6 +154,11 @@ def vectors() -> list[Vector]:
         Vector(
             "scaler_plus_1",
             telegram([Entry(_OBIS_POWER_CURRENT, 123, scaler=1)]),
+        ),
+        # INT64_MIN: negating it as an integer overflows; 10^-huge is 0 W.
+        Vector(
+            "scaler_int64_min",
+            telegram([Entry(_OBIS_POWER_CURRENT, 500, scaler=-(2**63))]),
         ),
         Vector("scaler_absent", telegram(_all(250, 100, 50, 100, scaler=None))),
         Vector(

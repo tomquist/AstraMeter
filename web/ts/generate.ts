@@ -334,7 +334,7 @@ function esphomeSensor(state: State): EsphomeSensor {
     // Our own component (esphome/components/tibber_pulse): it loads
     // http_request itself and raises its timeout for the slow bridge, so no
     // other block is needed.
-    const lines = [`${IND}- platform: tibber_pulse`, `${IND}${IND}host: ${f.IP || "192.168.1.140"}`];
+    const lines = [`${IND}- platform: tibber_pulse`, `${IND}${IND}host: ${quoteYaml(String(f.IP || "192.168.1.140").trim())}`];
     lines.push(`${IND}${IND}password: ${quoteYaml(String(f.PASSWORD || "AD56-54BA"))}`);
     if (!isBlank(f.USER) && String(f.USER).trim() !== "admin") lines.push(`${IND}${IND}user: ${quoteYaml(String(f.USER).trim())}`);
     if (!isBlank(f.NODE_ID) && String(f.NODE_ID).trim() !== "1") lines.push(`${IND}${IND}node_id: ${String(f.NODE_ID).trim()}`);
