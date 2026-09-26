@@ -61,7 +61,7 @@ Everything here lives in `[EMULATOR_SHELLYPRO3EM]`, or under the matching
 
 | Key | Add-on option | Default | What it does |
 |---|---|---|---|
-| `TCP_PORT` | `shelly_tcp_port` | `80` | Port the HTTP surface answers on. `-1` serves no HTTP but still announces the meter. |
+| `TCP_PORT` | `shelly_tcp_port` | `80` | Port the HTTP surface answers on. `-1` serves no HTTP but still announces the meter, with the UDP port as its port. |
 | `MDNS_ENABLED` | `shelly_mdns_enabled` | `True` | Announce the meter on your network. |
 | `SERVE_GEN1_ENDPOINTS` | `shelly_serve_gen1_endpoints` | `True` | Also answer `/status` and `/emeter/N`. |
 | `MAC` | `shelly_mac` | derived | The MAC the meter identifies itself by. |
@@ -106,6 +106,12 @@ already stable for a given machine, so the identity normally survives a restart
 anyway. Set `MAC` when it cannot — most often **Docker bridge networking**,
 where the container gets a new address on every start.
 
+With Docker's usual single-file mount of `config.ini`, "beside it" is inside
+the container, so the file survives a restart but not a recreate — pulling a
+new image, say. On host networking that costs nothing, because step 4 derives
+the same MAC again. Mount a directory instead (see
+[Docker](installation/docker.md)) if you want the file itself to persist.
+
 > This does not change your MQTT or Home Assistant entities. The emulator keeps
 > its existing `DEVICE_IDS` identity for those; the MAC here is used only for
 > discovery and the HTTP surface.
@@ -123,6 +129,11 @@ as the two differ.
 | **Docker, `network_mode: host`** | works | works — the image grants its interpreter the one capability needed to bind it |
 | **Docker, bridge networking** | **does not work**; set `MDNS_ENABLED = False` and give the battery the host's address | publish `80:80` |
 | **Direct install** | works | needs `CAP_NET_BIND_SERVICE`, root, or a port above 1024 — see below |
+| **ESPHome (ESP32)** | not available | not available |
+
+The ESP32 component emulates a CT002/CT003 only — it is never a Shelly — so
+there is nothing for a battery to discover or read over HTTP there. Run the
+Python emulator (any of the rows above) for a battery that needs a Shelly.
 
 Discovery cannot work on Docker bridge networking, and that is not a setting
 AstraMeter can fix: a battery's query is sent to a multicast address that a NAT

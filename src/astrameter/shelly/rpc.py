@@ -43,6 +43,11 @@ GEN1_SERIAL = 1
 #: address after a DHCP change.
 ANNOUNCE_WATCHDOG_S = 30
 
+#: The configuration revision every surface reports. A device has one; a
+#: consumer that caches configuration keyed on it would otherwise see three
+#: devices' worth of revisions and refetch on every call.
+CFG_REV = 10
+
 #: A clock jump must not inject a spurious integral into the energy counters.
 ENERGY_DT_CLAMP_S = (0.0, 60.0)
 
@@ -511,7 +516,7 @@ def sys_get_config(
         "ui_data": {},
         "rpc_udp": {"dst_addr": None, "listen_port": ctx.udp_port},
         "sntp": {"server": "pool.ntp.org"},
-        "cfg_rev": 10,
+        "cfg_rev": CFG_REV,
     }
 
 
@@ -536,7 +541,7 @@ def sys_get_status(
         "ram_min_free": _RAM_MIN_FREE,
         "fs_size": _FS_SIZE,
         "fs_free": _FS_FREE,
-        "cfg_rev": 9,
+        "cfg_rev": CFG_REV,
         "kvs_rev": 0,
         "schedule_rev": 0,
         "webhook_rev": 0,
@@ -833,7 +838,7 @@ def shelly_get_components(
     dynamic_only = _bool_param(params, "dynamic_only")
     offset = _int_param(params, "offset", default=0)
     if dynamic_only:
-        return {"components": [], "cfg_rev": 1, "offset": offset, "total": 0}
+        return {"components": [], "cfg_rev": CFG_REV, "offset": offset, "total": 0}
     components = [
         {"key": "ble", "status": {}, "config": _ble_config()},
         {
@@ -849,7 +854,7 @@ def shelly_get_components(
     ]
     return {
         "components": components,
-        "cfg_rev": 1,
+        "cfg_rev": CFG_REV,
         "offset": offset,
         "total": len(components),
     }

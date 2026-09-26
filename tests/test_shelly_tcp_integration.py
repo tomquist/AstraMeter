@@ -290,12 +290,12 @@ async def test_over_the_cap_a_composite_still_answers() -> None:
     await asyncio.gather(*parked)
 
 
-async def test_one_clients_burst_is_answered_from_one_reading() -> None:
-    """Serialised per client, as the UDP path already coalesces.
+async def test_one_clients_burst_gets_a_fresh_reading_per_request() -> None:
+    """Serialised per client, each request answered from its own reading.
 
     A battery runs a closed-loop controller against the value we report, so
-    answering a burst from one pre-adjustment reading several times winds it
-    past target.
+    answering a burst from one pre-adjustment reading several times would wind
+    it past target: every request in the burst waits its turn and reads anew.
     """
     meter = StubMeter()
     emulator = build_emulator(meter)
@@ -396,6 +396,31 @@ async def test_a_failed_udp_bind_still_brings_up_the_http_surface(
         assert snapshot.tcp_running is True
     finally:
         await emulator.stop()
+
+
+async def test_a_failed_udp_bind_is_still_fatal_without_the_http_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every other Shelly device fails to start exactly as it always did.
+
+    Only the device carrying the HTTP surface has something left to serve
+    without its UDP port. For the rest — the other half of the pair, and every
+    other Shelly type — a bind failure stays a failed start, which is what
+    leaves the device off the dashboard instead of listed as not running.
+    """
+    from astrameter.shelly import shelly as shelly_module
+
+    async def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(shelly_module.UdpServer, "serve", refuse)
+    emulator = build_emulator(StubMeter(), owns_tcp=False)
+    with pytest.raises(OSError):
+        await emulator.start()
+    # The caller stops a device that failed to start; nothing may outlive it.
+    await emulator.stop()
+    assert emulator._inactive_check_task is None
+    assert emulator._announce_task is None
 
 
 async def test_the_eviction_sweep_runs_without_a_udp_bind(

@@ -76,6 +76,11 @@ Optional sub-blocks nest under the same `ct002:` key:
 MQTT-insights, and Marstek cloud registration all work. Wider field testing
 welcome.
 
+**Not included:** the component emulates a CT002/CT003 only, so it cannot stand
+in for a Shelly — no Shelly UDP ports, no discovery, no Shelly HTTP surface. A
+battery that looks for a Shelly on the network needs the Python emulator; see
+[Shelly discovery and the HTTP surface](../shelly-tcp.md).
+
 **Requirements:** an ESP32 with ≥4 MB flash (the default for `esp32dev`,
 `esp32-s3-devkitc-1`, etc.). ESP8266 is not supported in v1: its RAM and flash
 budgets are too tight once HTTPS+TLS, MQTT, and the balancer are linked

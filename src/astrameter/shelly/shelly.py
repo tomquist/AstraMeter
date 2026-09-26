@@ -614,12 +614,21 @@ class Shelly:
             pass
 
     async def _start_udp(self) -> None:
-        """Stage one: the battery-facing UDP responder."""
+        """Stage one: the battery-facing UDP responder.
+
+        A bind failure is fatal to the device exactly as it always was —
+        unless this device also carries the HTTP surface and the announcement,
+        which must come up regardless: those are what a discovering battery
+        uses, and they would otherwise go down with a UDP port the battery may
+        never touch.
+        """
         try:
             self._server = await UdpServer.serve(
                 self._udp_port, self._safe_handle_request
             )
         except OSError as exc:
+            if not self._owns_tcp or self._identity is None:
+                raise
             logger.error(
                 "Could not bind the Shelly UDP port %s (errno %s: %s). Batteries "
                 "that poll this port will not be answered; the HTTP surface and "

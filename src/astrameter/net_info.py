@@ -11,6 +11,7 @@ off fixture trees with no network at all.
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 from collections.abc import Callable
 from pathlib import Path
@@ -133,8 +134,11 @@ def announced_ipv4(mdns_host: str) -> str:
     *mdns_host* may be an address — for a host whose reachable LAN address is
     not the one the sockets bind, such as a virtual IP — or an interface name,
     which is resolved to that interface's first IPv4 address. An empty value
-    derives the address from the default route. Falls back to loopback so
-    callers always have a string to serve.
+    derives the address from the default route.
+
+    A host with no default route — an isolated LAN with no gateway — still has
+    a LAN address, and that is what gets announced then. Loopback is the last
+    resort only: announced, it would send a discovering battery to itself.
     """
     configured = mdns_host.strip()
     if configured:
@@ -151,7 +155,25 @@ def announced_ipv4(mdns_host: str) -> str:
             )
         else:
             return configured
-    return local_ipv4() or "127.0.0.1"
+    return local_ipv4() or _any_lan_ipv4() or "127.0.0.1"
+
+
+def _any_lan_ipv4() -> str | None:
+    """A usable address of this host when the default route gives none.
+
+    Loopback and link-local are skipped (neither is reachable from a battery);
+    a private address is preferred over a public one, and the choice is the
+    lowest of them so it does not move between calls.
+    """
+    usable = sorted(
+        (
+            address
+            for address in map(ipaddress.IPv4Address, local_ipv4_set())
+            if not address.is_loopback and not address.is_link_local
+        ),
+        key=lambda address: (not address.is_private, int(address)),
+    )
+    return str(usable[0]) if usable else None
 
 
 class AnnouncedAddress:
