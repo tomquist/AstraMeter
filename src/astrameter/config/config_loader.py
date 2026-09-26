@@ -841,6 +841,7 @@ def create_tibber_pulse_powermeter(
             node_id=("NODE_ID", str),
             user=("USER", str),
             timeout=("TIMEOUT", float),
+            force_polling=("FORCE_POLLING", bool),
         ),
     )
 

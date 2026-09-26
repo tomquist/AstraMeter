@@ -189,10 +189,11 @@ lacks(eyRefossFour, 'root["status"][3]["power"]', "esp/refoss: four-id does not 
 const tibber = generateConfigIni({
   target: "python",
   general: { deviceTypes: ["ct002"] },
-  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA", TIMEOUT: "10" }, tuning: {} }],
+  meters: [{ type: "tibber_pulse", phases: 1, fields: { IP: "192.168.1.140", PASSWORD: "AD56-54BA", TIMEOUT: "10", FORCE_POLLING: "True" }, tuning: {} }],
 });
 has(tibber, "[TIBBER_PULSE]", "tibber: section header");
 has(tibber, "TIMEOUT = 10", "tibber: timeout override emitted");
+has(tibber, "FORCE_POLLING = True", "tibber: force-polling override emitted");
 
 // ── config.ini: ESPHome native API ───────────────────────────────────────────
 const esphomeNative = generateConfigIni({

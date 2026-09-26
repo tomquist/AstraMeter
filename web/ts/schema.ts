@@ -800,7 +800,7 @@ export const POWERMETERS: Powermeter[] = [
     label: "Tibber Pulse (local Bridge)",
     section: "TIBBER_PULSE",
     blurb:
-      "A Tibber Pulse read locally through the Pulse Bridge HTTP API (no Tibber cloud). The bridge decodes your meter's SML telegram; enable its local webserver first.",
+      "A Tibber Pulse read locally through the Pulse Bridge (no Tibber cloud): live readings pushed by the bridge, or HTTP polling where it can't push. Enable the bridge's local webserver first.",
     docPython: "docs/powermeters.md#tibber-pulse",
     docEsphome: "docs/esphome-powermeters.md#tibber-pulse",
     fields: [
@@ -809,6 +809,7 @@ export const POWERMETERS: Powermeter[] = [
       { key: "USER", label: "Username", type: "text", default: "admin", placeholder: "admin", advanced: true, help: "HTTP Basic-auth user; the bridge uses 'admin'." },
       { key: "NODE_ID", label: "Node id", type: "text", default: "1", placeholder: "1", advanced: true, help: "Pulse node id (see http://<bridge>/nodes/). Usually 1." },
       { key: "TIMEOUT", label: "Timeout (seconds)", type: "number", default: "5.0", placeholder: "5.0", advanced: true, help: "Request timeout. The bridge's webserver can be slow to respond — raise this if readings drop with connection timeouts." },
+      { key: "FORCE_POLLING", label: "Force polling", type: "select", default: "", options: [{ value: "", label: "Default (off: use push)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }], advanced: true, help: "Poll the bridge over HTTP instead of taking its live push readings. Push falls back to polling on its own when the bridge can't push, so only set this if push misbehaves." },
       { key: "OBIS_POWER_CURRENT", label: "OBIS: aggregate power", type: "text", placeholder: "0100100700ff", advanced: true, help: "12-hex OBIS code. Leave blank for the common eHZ default." },
       { key: "OBIS_POWER_L1", label: "OBIS: L1", type: "text", placeholder: "0100240700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
       { key: "OBIS_POWER_L2", label: "OBIS: L2", type: "text", placeholder: "0100380700ff", advanced: true, help: "Per-phase OBIS code (optional)." },
