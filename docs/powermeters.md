@@ -572,9 +572,10 @@ both.
 ## Tibber Pulse
 
 Reads a [Tibber Pulse](https://tibber.com/) locally through the **Pulse Bridge**,
-with no need for the Tibber cloud. AstraMeter polls the bridge's `/data.json`
-endpoint (HTTP Basic auth) and decodes the meter's SML telegram on the fly, so
-this works with the SML smart meters the Pulse IR head is attached to.
+with no need for the Tibber cloud. AstraMeter polls the bridge's `/node_data.json`
+endpoint (`/data.json` on older bridge firmware, picked automatically) over HTTP
+Basic auth and decodes the meter's SML telegram on the fly, so this works with
+the SML smart meters the Pulse IR head is attached to.
 
 ```ini
 [TIBBER_PULSE]
@@ -598,7 +599,7 @@ PASSWORD = AD56-54BA
 
 **Enable the local API first.** In the bridge's web UI open the *params* page, set
 `webserver-force-enable` to `true`, save, and **Store params to flash**. Without
-this the `/data.json` endpoint is not served.
+this the data endpoint is not served.
 
 **Multi-phase.** This works like the [SML](#sml) source. If the meter reports
 per-phase active power for L1–L3, those three values are used; otherwise the

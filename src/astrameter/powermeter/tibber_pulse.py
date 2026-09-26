@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from aiohttp import BasicAuth
+from aiohttp import BasicAuth, ClientResponseError
 
 from .http_client import HttpPowermeter
 from .sml import (
@@ -28,12 +28,18 @@ _STALE_AFTER_S = 15.0
 # the default must leave comfortable headroom. Overridable via TIMEOUT.
 DEFAULT_TIMEOUT_S = 5.0
 
+# Bridge firmware ~1794 (September 2026) renamed the telegram endpoint from
+# ``/data.json`` to ``/node_data.json`` and 404s the old path (#685); older
+# firmware only serves ``/data.json``. No path works on both, so try the new
+# one first (bridges update over the air) and fall back to the other on 404.
+_DATA_ENDPOINTS = ("node_data.json", "data.json")
+
 
 class TibberPulse(HttpPowermeter):
     """Reads a Tibber Pulse via the local Pulse Bridge HTTP API.
 
-    Fetches the raw SML telegram from the bridge's ``/data.json`` endpoint
-    (HTTP Basic auth) and decodes the instantaneous active power locally — no
+    Fetches the raw SML telegram from the bridge's ``/node_data.json`` endpoint
+    (``/data.json`` on firmware before ~1794) over HTTP Basic auth and decodes the instantaneous active power locally — no
     Tibber cloud involved. The bridge's local webserver must be enabled
     (``webserver-force-enable``) and the password is the nine-character code
     printed on the bridge (e.g. ``AD56-54BA``); the user is ``admin``.
@@ -71,6 +77,9 @@ class TibberPulse(HttpPowermeter):
         # transient undecodable telegram can reuse it instead of erroring.
         self._last_powers: list[float] | None = None
         self._last_good: float | None = None
+        # The endpoint that last answered, so the fallback costs one extra
+        # request per switch rather than one per poll.
+        self._endpoint = _DATA_ENDPOINTS[0]
 
     def _session_options(self) -> dict[str, Any]:
         return {
@@ -78,10 +87,25 @@ class TibberPulse(HttpPowermeter):
             "auth": BasicAuth(self.user, self.password),
         }
 
+    async def _fetch_telegram(self) -> bytes:
+        try:
+            return await self.get_bytes(self._url(self._endpoint))
+        except ClientResponseError as e:
+            if e.status != 404:
+                raise
+        # The bridge doesn't serve this path, so it runs the other firmware
+        # generation: at startup, or after an OTA update while running.
+        other = next(ep for ep in _DATA_ENDPOINTS if ep != self._endpoint)
+        data = await self.get_bytes(self._url(other))
+        logger.info("Tibber Pulse: bridge serves /%s, using it from now on", other)
+        self._endpoint = other
+        return data
+
+    def _url(self, endpoint: str) -> str:
+        return f"http://{self.ip}/{endpoint}?node_id={self.node_id}"
+
     async def get_powermeter_watts(self) -> list[float]:
-        data = await self.get_bytes(
-            f"http://{self.ip}/data.json?node_id={self.node_id}"
-        )
+        data = await self._fetch_telegram()
         powers = parse_sml_powers(
             data,
             self._obis_current,

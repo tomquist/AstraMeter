@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** the Tibber Pulse source failing with `404 Not Found` after the Pulse Bridge updated to firmware 1798, which moved its data endpoint; older bridge firmware keeps working ([#685](https://github.com/tomquist/astrameter/issues/685)).
+
 - **Added** the saturation probe window and stall timeout as Home Assistant add-on options, so a battery whose inverter is slow to wake from sleep is no longer passed over in the efficiency rotation ([#677](https://github.com/tomquist/astrameter/pull/677)).
 
 - **Fixed** a larger battery holding back under heavy load when the others in the pool have a lower output limit, leaving the house drawing a few hundred watts from the grid ([#655](https://github.com/tomquist/astrameter/issues/655), [#679](https://github.com/tomquist/astrameter/pull/679)).

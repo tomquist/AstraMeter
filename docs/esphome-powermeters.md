@@ -1119,9 +1119,10 @@ mDNS `*.local` names often fail on ESPHome as well.
 ## Tibber Pulse
 
 **Tier: 🟠 Alternate.** The Python `[TIBBER_PULSE]` source fetches a **binary SML
-telegram** from the Pulse Bridge's `/data.json` over HTTP basic auth, then decodes
-it. Stock ESPHome's `http_request`/`json` can't decode binary SML, so there is no
-direct port of the bridge API.
+telegram** from the Pulse Bridge's `/node_data.json` (`/data.json` on older
+firmware) over HTTP basic auth, then decodes it. Stock ESPHome's
+`http_request`/`json` can't decode binary SML, so there is no direct port of the
+bridge API.
 
 The Pulse IR head just reads your meter's SML output. So the clean ESP path is
 to **read the meter directly** with the native
