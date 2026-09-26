@@ -1,5 +1,6 @@
-# Requires repository secret RELEASE_TOKEN (fine-grained PAT: Contents read/write on this repo).
-# See CONTRIBUTING.md — "Personal access token for releases".
+# Requires repository secret RELEASE_TOKEN (fine-grained PAT on this repo: Contents
+# read/write to push main and the tag, Pull requests read/write to open the develop
+# sync PR, since develop only accepts pull requests).
 
 name: Release
 

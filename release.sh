@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Release astrameter from develop: bump version, finalize CHANGELOG, merge to main, tag, sync develop.
+# Release astrameter from develop: bump version, finalize CHANGELOG, merge to main, tag,
+# and open a pull request that prepares develop for the next release.
 # Requires: git, yq (https://github.com/mikefarah/yq), clean develop, origin/develop up to date.
+# Optional: gh (https://cli.github.com/) to open the develop pull request; without it the
+# script prints the link to open it by hand.
 # Usage: ./release.sh X.Y.Z
+#
+# develop only accepts squash-merged pull requests, so main never becomes an ancestor of
+# develop. Each release therefore merges main into its release branch first: the merge
+# into main is then conflict-free, and the develop sync can be squashed like any other PR.
 
 set -euo pipefail
 
@@ -38,6 +45,7 @@ fi
 
 VERSION="$1"
 RELEASE_BRANCH="release/v${VERSION}"
+SYNC_BRANCH="release/v${VERSION}-develop"
 
 if ! command -v yq >/dev/null 2>&1; then
   print_error "yq is required. Install: https://github.com/mikefarah/yq"
@@ -82,10 +90,12 @@ if git show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
   exit 1
 fi
 
-if [ -n "$(git ls-remote --heads origin "$RELEASE_BRANCH" 2>/dev/null)" ]; then
-  print_error "Branch $RELEASE_BRANCH already exists on origin."
-  exit 1
-fi
+for branch in "$RELEASE_BRANCH" "$SYNC_BRANCH"; do
+  if [ -n "$(git ls-remote --heads origin "$branch" 2>/dev/null)" ]; then
+    print_error "Branch $branch already exists on origin."
+    exit 1
+  fi
+done
 
 if git show-ref --verify --quiet "refs/tags/$VERSION"; then
   print_error "Tag $VERSION already exists."
@@ -128,6 +138,20 @@ print_info "Pre-checks passed. Starting release $VERSION"
 
 print_info "Creating branch $RELEASE_BRANCH"
 git checkout -b "$RELEASE_BRANCH"
+
+# Bring in main's history (the previous release merge, any hotfixes) so main is an
+# ancestor of the release. The files this script manages are develop's: it already
+# carries the previous release's bump (squashed), and a line-level merge of them goes
+# wrong (it renames develop's new "## Next"). Elsewhere develop wins any conflict.
+if ! git merge-base --is-ancestor origin/main HEAD; then
+  print_info "Merging origin/main into $RELEASE_BRANCH"
+  if ! git merge origin/main --no-ff --no-commit -X ours; then
+    print_error "Merging origin/main into $RELEASE_BRANCH failed. Resolve manually."
+    exit 1
+  fi
+  git checkout "$LOCAL" -- pyproject.toml uv.lock ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}" CHANGELOG.md
+  git commit -m "Merge main into release v${VERSION}"
+fi
 
 print_info "Setting version in pyproject.toml"
 sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
@@ -182,26 +206,14 @@ print_info "Pushing main and tag $VERSION"
 git push origin main
 git push origin "$VERSION"
 
-print_info "Merging main into develop"
-git checkout develop
-git pull origin develop
+print_info "Preparing $SYNC_BRANCH for develop"
+git checkout -b "$SYNC_BRANCH" "$RELEASE_BRANCH"
 
-if ! git merge main --no-ff -m "Sync develop with main after release v${VERSION}"; then
-  print_error "Merge main into develop failed. Resolve manually."
-  exit 1
-fi
-
-print_info "Setting ha_addon/config.yaml version to next on develop"
+print_info "Setting ha_addon/config.yaml version to next"
 yq eval --inplace '.version = "next"' ha_addon/config.yaml
 
 print_info "Resetting ESPHome external_components ref to develop"
 set_component_ref "develop"
-
-needs_commit=false
-if ! git diff --quiet ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}"; then
-  git add ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}"
-  needs_commit=true
-fi
 
 if ! grep -q '^## Next$' CHANGELOG.md; then
   print_info "Prepending ## Next to CHANGELOG.md"
@@ -214,16 +226,27 @@ if ! grep -q '^## Next$' CHANGELOG.md; then
     tail -n +2 CHANGELOG.md
   } >"$tmp"
   mv "$tmp" CHANGELOG.md
-  git add CHANGELOG.md
-  needs_commit=true
 fi
 
-if [ "$needs_commit" = true ]; then
+git add ha_addon/config.yaml "${COMPONENT_REF_FILES[@]}" CHANGELOG.md
+if ! git diff --cached --quiet; then
   git commit -m "Prepare develop for next release (add-on next, ## Next)"
 fi
 
-print_info "Pushing develop"
-git push origin develop
+print_info "Pushing $SYNC_BRANCH"
+git push origin "$SYNC_BRANCH"
+
+# main and the tag are already out; a missing PR is fixable by hand, so don't fail here.
+SYNC_TITLE="Sync develop with release v${VERSION}"
+SYNC_BODY="Brings v${VERSION}'s version bump and finalized CHANGELOG back to develop, sets the add-on version to \`next\`, points the ESPHome external_components ref back at \`develop\`, and opens a new \`## Next\` section. Squash-merge as usual."
+if command -v gh >/dev/null 2>&1 &&
+  gh pr create --base develop --head "$SYNC_BRANCH" --title "$SYNC_TITLE" --body "$SYNC_BODY"; then
+  print_success "Opened pull request $SYNC_BRANCH -> develop."
+else
+  REPO_URL=$(git remote get-url origin | sed -E 's#^git@github\.com:#https://github.com/#; s#\.git$##')
+  print_error "Could not open the develop pull request. Open it by hand:"
+  echo "  ${REPO_URL}/compare/develop...${SYNC_BRANCH}?expand=1"
+fi
 
 print_success "Release v${VERSION} complete."
-print_info "Summary: branch $RELEASE_BRANCH kept; main and tag $VERSION pushed; develop updated."
+print_info "Summary: main and tag $VERSION pushed; merge the $SYNC_BRANCH pull request to update develop."
