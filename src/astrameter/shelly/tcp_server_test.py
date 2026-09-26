@@ -90,6 +90,27 @@ async def test_every_method_answers_over_get(client: Any) -> None:
         assert response.headers["Content-Type"] == "application/json", name
 
 
+async def test_every_response_declares_its_length(client: Any) -> None:
+    """Batteries read the body by its declared length.
+
+    Emulators without ``Content-Length`` were reported to fail with batteries
+    that discover the meter, and nothing else would notice it going missing:
+    aiohttp sends it for a whole-body response and drops it the moment a
+    handler streams, which is one refactor away.
+    """
+    for path in (
+        "/shelly",
+        "/status",
+        "/rpc/EM.GetStatus?id=0",
+        "/rpc/EM.GetConfig?id=0",
+        "/rpc/Shelly.GetStatus",
+    ):
+        response = await client.get(path)
+        body = await response.read()
+        assert response.headers.get("Content-Length") == str(len(body)), path
+        assert "Transfer-Encoding" not in response.headers, path
+
+
 async def test_the_content_type_carries_no_charset(client: Any) -> None:
     """Real firmware sends the bare type.
 
