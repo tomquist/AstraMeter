@@ -1,10 +1,10 @@
 # Agent notes
 
-The rules that apply to every change are below. Procedures for one area —
-CT002 parity, the dashboard build, the steering evaluation, config options,
-adding a powermeter, the Shelly emulation — are skills in `.agents/skills/`,
-each a plain `SKILL.md` you can read directly. Keep all of it true: when a change makes something here
-or in a skill wrong, fix it in the same change.
+The rules that apply to every change are below. Procedures for one area — CT002
+parity, the dashboard build, the steering evaluation, config options, adding a
+powermeter, the Shelly emulation — are skills in `.agents/skills/`, each a plain
+`SKILL.md` you can read directly. Keep all of it true: when a change makes
+something here or in a skill wrong, fix it in the same change.
 
 ## Verify
 
