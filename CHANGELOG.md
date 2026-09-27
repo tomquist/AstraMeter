@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** SML meters steering on outdated readings, and staying offline after a dropped connection (such as one shared through ser2net) until AstraMeter was restarted ([#680](https://github.com/tomquist/astrameter/discussions/680)).
+- **Fixed** SML meters steering on outdated readings, and staying offline after a dropped connection (such as one shared through ser2net) until AstraMeter was restarted ([#680](https://github.com/tomquist/astrameter/discussions/680), [#697](https://github.com/tomquist/astrameter/pull/697)).
 
 - **Fixed** SML meters read over a USB IR head never delivering a reading when their telegrams are long, such as signed EMH meters, logging only "failed to read SML frame" ([#680](https://github.com/tomquist/astrameter/discussions/680), [#689](https://github.com/tomquist/astrameter/pull/689)).
 
