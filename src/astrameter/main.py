@@ -68,7 +68,11 @@ async def read_ct_powermeter(
 async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
     """Raw three-phase reading from the meter that serves every client (or the
     first one), waiting briefly for a fresh push so an idle meter cannot pin
-    the caller."""
+    the caller.
+
+    Its callers only report the reading, so it reuses the one the batteries'
+    polls last fetched and reads a polled meter only when none did recently.
+    """
     chosen = next(
         (c.powermeter for c in powermeters if c.client_filter.matches("0.0.0.0")), None
     )

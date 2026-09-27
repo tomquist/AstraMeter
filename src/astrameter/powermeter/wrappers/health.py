@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from astrameter.powermeter.base import Powermeter
 
 from .base import PowermeterWrapper
+from .last_reading import LastReadingPowermeter
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -85,7 +86,10 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         pipeline: list[str] = []
         node: Powermeter = self.wrapped_powermeter
         while isinstance(node, PowermeterWrapper):
-            pipeline.append(type(node).__name__)
+            # Not a filter: it only shares the source's reading with passive
+            # readers, so the dashboard's pipeline leaves it out.
+            if not isinstance(node, LastReadingPowermeter):
+                pipeline.append(type(node).__name__)
             node = node.wrapped_powermeter
         return PowermeterHealth(
             name=self.name,

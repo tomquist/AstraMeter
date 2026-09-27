@@ -52,6 +52,10 @@ from astrameter.powermeter import (
 )
 from astrameter.powermeter.wrappers.hampel import HampelPowermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
+from astrameter.powermeter.wrappers.last_reading import (
+    PASSIVE_READING_MAX_AGE_S,
+    LastReadingPowermeter,
+)
 from astrameter.powermeter.wrappers.smoothing import (
     DeadbandPowermeter,
     SmoothedPowermeter,
@@ -383,6 +387,13 @@ def apply_signal_wrappers(
     Shared by every config backend, so a power source behaves the same however
     it was configured. *name* labels it in logs and MQTT Insights.
     """
+    # Innermost, so passive readers see the source's own reading. The throttle
+    # above it lets a control read through at most once per interval, so the
+    # reading may be that much older before a passive reader reads for itself.
+    powermeter = LastReadingPowermeter(
+        powermeter, max_age=PASSIVE_READING_MAX_AGE_S + signal.throttle_interval
+    )
+
     if signal.offsets is not None or signal.multipliers is not None:
         offsets = signal.offsets if signal.offsets is not None else [0.0]
         multipliers = signal.multipliers if signal.multipliers is not None else [1.0]

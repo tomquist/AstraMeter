@@ -1,10 +1,19 @@
 import argparse
+from dataclasses import replace
 from ipaddress import IPv4Network
 
-from astrameter.config.config_loader import ClientFilter, new_config_parser
+from astrameter.config.config_loader import (
+    ClientFilter,
+    apply_signal_wrappers,
+    new_config_parser,
+)
 from astrameter.config.ini_config import IniAppConfig
-from astrameter.config.settings import ConfiguredPowermeter
-from astrameter.main import _resolve_device_config, read_ct_powermeter
+from astrameter.config.settings import ConfiguredPowermeter, SignalSettings
+from astrameter.main import (
+    _read_grid_phases,
+    _resolve_device_config,
+    read_ct_powermeter,
+)
 from astrameter.powermeter import Powermeter
 
 
@@ -85,6 +94,52 @@ async def test_read_ct_powermeter_swallows_timeout_and_serves_cached() -> None:
     powermeters = [ConfiguredPowermeter(pm, _LOCAL, True)]
     result = await read_ct_powermeter(("127.0.0.1", 0), powermeters)
     assert result == [11.0, 22.0, 33.0]
+
+
+class _PolledMeter(Powermeter):
+    """A pull source that counts how often it is actually read."""
+
+    def __init__(self, values: list[float]) -> None:
+        self.values = values
+        self.reads = 0
+
+    async def get_powermeter_watts(self) -> list[float]:
+        self.reads += 1
+        return list(self.values)
+
+
+_EVERYONE = ClientFilter([IPv4Network("0.0.0.0/0")])
+
+
+def _configured(source: Powermeter) -> list[ConfiguredPowermeter]:
+    """*source* behind the wrappers the config loader builds, smoothing on."""
+    signal = replace(SignalSettings(), smooth_alpha=0.5)
+    return [
+        ConfiguredPowermeter(
+            apply_signal_wrappers(source, "SCRIPT_1", signal), _EVERYONE, False
+        )
+    ]
+
+
+async def test_grid_phases_reuse_the_control_loops_read() -> None:
+    """The Marstek responder and cloud reporting only report the reading, so
+    while a battery polls the meter they must not read it again."""
+    source = _PolledMeter([100.0, 200.0, 300.0])
+    powermeters = _configured(source)
+
+    await read_ct_powermeter(("10.0.0.5", 0), powermeters)
+    source.values = [0.0, 0.0, 0.0]
+
+    assert await _read_grid_phases(powermeters) == [100.0, 200.0, 300.0]
+    assert source.reads == 1
+
+
+async def test_grid_phases_read_an_idle_meter_themselves() -> None:
+    source = _PolledMeter([100.0, 200.0, 300.0])
+    powermeters = _configured(source)
+
+    assert await _read_grid_phases(powermeters) == [100.0, 200.0, 300.0]
+    assert source.reads == 1
 
 
 def _resolve(device_type: str) -> tuple[list[str], list[str]]:
