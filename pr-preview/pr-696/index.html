@@ -87,8 +87,7 @@
             </p>
             <p>
               As a CT002 or CT003, AstraMeter gives each battery its own target, so they share the load instead
-              of all reacting to the same reading and overshooting. If your battery can only pair with a Shelly,
-              AstraMeter can pretend to be one of those instead.
+              of all reacting to the same reading and overshooting.
             </p>
 
             <figure class="wiring" aria-label="Grid meter to AstraMeter to batteries">
@@ -307,11 +306,11 @@
             </details>
             <details>
               <summary>Should I use Shelly emulation or CT002/CT003?</summary>
-              <p>CT002/CT003. Each battery reports its output back, so AstraMeter can steer it to its own target and share the load across batteries. Pick Shelly only if your battery can only pair with a Shelly.</p>
+              <p>CT002/CT003. Each battery reports its output back, so AstraMeter can steer it to its own target and share the load across batteries.</p>
             </details>
             <details>
               <summary>What's the difference between Home Assistant, Docker and ESP32?</summary>
-              <p>The add-on, Docker and Python run the full emulator as software on a machine that's already on. The ESP32 build runs on a small board of its own, but emulates only CT002/CT003, not a Shelly; if your battery can only pair with a Shelly, run one of the others. The config generator writes the right file for each.</p>
+              <p>The add-on, Docker and Python run the full emulator as software on a machine that's already on. The ESP32 build runs on a small board of its own and emulates CT002/CT003 only. The config generator writes the right file for each.</p>
             </details>
             <details>
               <summary>Does it cost anything?</summary>
