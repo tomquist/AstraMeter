@@ -78,6 +78,11 @@ class Scenario:
     # only to isolate controller behaviour from meter latency.
     meter_latency_s: float = 0.5
 
+    @property
+    def peakshaving_threshold(self) -> float:
+        """The CT's peak shaving threshold (W) for this scenario; 0 = off."""
+        return float(self.ct_kwargs.get("peakshaving_threshold", 0.0))
+
 
 @dataclass
 class EvalWorld:

@@ -8,6 +8,7 @@ the harness itself covered by CI's pytest run.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -30,9 +31,13 @@ from astrameter.simulator.eval_harness import run_scenario
 from astrameter.simulator.eval_metrics import (
     FEEDIN_CT_PER_KWH,
     GRAPH_POINTS,
+    PEAK_WINDOW_S,
     RETAIL_CT_PER_KWH,
     _grid_cost_ct,
     _oracle_cost_ct,
+    _peak_metrics,
+    _policy_target,
+    _tracking_error,
 )
 from astrameter.simulator.eval_report import render_html_report
 from astrameter.simulator.eval_scenarios import build_scenarios
@@ -670,6 +675,8 @@ def test_metric_glossary_covers_every_reported_metric() -> None:
         "single_venus_pv",
         "mixed_power_limits/fair",
         "mixed_power_limits/eff",
+        "peak_shaving",
+        "peak_shaving_slow",
     ],
 )
 def test_full_scenario_definitions_build(name) -> None:
@@ -905,3 +912,111 @@ class TestRampPacingRegression:
         assert unpaced["overshoot_max_w"] > 250, unpaced
         # Both must still settle every step event inside its window.
         assert paced["unsettled_events"] == 0, paced
+
+
+# ── Peak shaving ────────────────────────────────────────────────────────────
+
+
+def test_policy_target_is_zero_without_peak_shaving() -> None:
+    for net in (-800.0, 0.0, 400.0, 5000.0):
+        assert _policy_target(0.0, net) == 0.0
+
+
+def test_policy_target_under_peak_shaving() -> None:
+    """The grid carries demand up to the threshold, the batteries the rest,
+    and a surplus is charged rather than exported."""
+    assert _policy_target(2500.0, 400.0) == 400.0
+    assert _policy_target(2500.0, 2500.0) == 2500.0
+    assert _policy_target(2500.0, 4000.0) == 2500.0
+    assert _policy_target(2500.0, -700.0) == 0.0
+
+
+def test_tracking_error_is_the_raw_grid_without_peak_shaving() -> None:
+    """Every existing scenario keeps scoring exactly what it did before."""
+    err = _tracking_error(_one_battery_scenario(BatterySpec(), 60.0))
+    sample = _Sample(t=0.0, grid=123.4, consumption=900.0, powers=(0.0,), socs=(0.5,))
+    assert err(sample) == 123.4
+
+
+def _peak_scenario(threshold: float = 2500.0) -> Scenario:
+    return Scenario(
+        name="peak",
+        description="",
+        batteries=[BatterySpec()],
+        duration_s=2 * PEAK_WINDOW_S,
+        build_events=lambda _rng: [],
+        ct_kwargs={"peakshaving_threshold": threshold},
+    )
+
+
+def test_an_idle_battery_below_the_threshold_is_on_target() -> None:
+    err = _tracking_error(_peak_scenario())
+    idle = _Sample(t=0.0, grid=800.0, consumption=800.0, powers=(0.0,), socs=(0.5,))
+    assert err(idle) == 0.0
+    # Still discharging 300 W under the threshold is 300 W off target.
+    lingering = _Sample(
+        t=0.0, grid=500.0, consumption=800.0, powers=(300.0,), socs=(0.5,)
+    )
+    assert err(lingering) == -300.0
+
+
+def test_peak_metrics_take_the_worst_quarter_hour_mean() -> None:
+    """A quarter-hour importing 2600 W on average bills 100 W over a 2500 W
+    threshold; a brief spike inside a calm quarter-hour does not, though it
+    still counts as energy above the threshold."""
+    samples = []
+    for i in range(int(2 * PEAK_WINDOW_S) + 1):
+        t = float(i)
+        # A one-minute spike in a calm first quarter-hour, then a heavy one.
+        grid = (3500.0 if t < 60 else 2000.0) if t < PEAK_WINDOW_S else 2600.0
+        samples.append(
+            _Sample(t=t, grid=grid, consumption=grid, powers=(0.0,), socs=(0.5,))
+        )
+    out = _peak_metrics(_peak_scenario(), samples)
+    assert out["peak_qh_over_w"] == pytest.approx(100.0, abs=0.2)
+    # 1000 W over for 60 s, then 100 W over for the second quarter-hour.
+    assert out["peak_excess_wh"] == pytest.approx(
+        1000 * 60 / 3600 + 100 * 900 / 3600, abs=0.5
+    )
+
+
+def test_peak_metrics_are_zero_without_peak_shaving() -> None:
+    samples = _steady_samples(5000.0, 60.0)
+    out = _peak_metrics(_one_battery_scenario(BatterySpec(), 60.0), samples)
+    assert out == {"peak_qh_over_w": 0.0, "peak_excess_wh": 0.0}
+
+
+def test_oracle_follows_the_peak_shaving_policy() -> None:
+    """Under the threshold the perfect battery idles and the house pays for its
+    own import; above it, only the threshold is imported."""
+    spec = BatterySpec(capacity_wh=100_000.0, initial_soc=0.5)
+    sc = replace(
+        _one_battery_scenario(spec, 3600.0), ct_kwargs={"peakshaving_threshold": 2500.0}
+    )
+    assert _oracle_cost_ct(sc, _steady_samples(800.0, 3600.0)) == pytest.approx(
+        _grid_cost_ct(800.0, 0.0), rel=1e-3
+    )
+    assert _oracle_cost_ct(sc, _steady_samples(4000.0, 3600.0)) == pytest.approx(
+        _grid_cost_ct(2500.0, 0.0), rel=1e-3
+    )
+    # A surplus is still charged, not exported.
+    assert _oracle_cost_ct(sc, _steady_samples(-600.0, 3600.0)) == pytest.approx(0.0)
+
+
+def test_peak_shaving_scenario_holds_the_threshold() -> None:
+    """The batteries keep every quarter-hour under the threshold, cover the
+    peaks, and wind back to idle when demand drops under it."""
+    sc = build_scenarios()["peak_shaving"]
+    assert sc.peakshaving_threshold == 2500.0
+    res = asyncio.run(run_scenario(sc, seed=1))
+    # The scripted peaks really cross the threshold, and the pack is sized to
+    # cover all of them.
+    assert res["events_measured"] > 0
+    assert res["unsettled_events"] == 0
+    assert res["peak_qh_over_w"] == 0.0
+    # Scored against the policy, not against zero: the house pays for its own
+    # sub-threshold import, which the oracle pays too.
+    assert res["import_wh"] > 1000
+    assert res["cost_regret_ct"] < 1.0
+    for key in _REPORT_METRICS:
+        assert res[key] >= 0, key

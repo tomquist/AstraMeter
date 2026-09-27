@@ -229,6 +229,60 @@ def _washer_cycle(rng: random.Random, duration: float) -> list[Event]:
     return events
 
 
+# Peak shaving: the batteries only cover net demand above this, the 2.5 kW
+# floor of the Belgian capacity tariff.
+_PEAK_THRESHOLD_W = 2500.0
+# A car charger is what pushes a house over the threshold for long stretches;
+# the kettle and oven only get over it on top of it or each other.
+_PEAK_LOADS = [
+    Load("ev_charger", 3700.0, "A"),
+    Load("kettle", 2000.0, "A"),
+    Load("oven", 1500.0, "A"),
+]
+# Lowish so the midday lulls turn into a surplus without cancelling the peaks.
+_PEAK_SOLAR_W = 1200.0
+
+
+def _peak_steps(rng: random.Random, duration: float) -> list[Event]:
+    """Appliance schedule for peak shaving, over a small solar day: demand
+    crosses the threshold in both directions, stays under it with an
+    appliance running, and turns into a surplus in between.
+
+    Leaving a peak is what the scenario is about: the batteries must wind
+    back to 0 W and stay there, not hold on or undershoot into charging.
+    """
+
+    def jitter(t: float, spread: float = 20.0) -> float:
+        return max(1.0, t + rng.uniform(-spread, spread))
+
+    events: list[Event] = []
+    for name, on, off in (
+        # EV alone is over the threshold, then the kettle stacks on top.
+        ("ev_charger", 0.08, 0.42),
+        ("kettle", 0.25, 0.30),
+        # Oven alone stays under it; the kettle on top briefly crosses.
+        ("oven", 0.50, 0.70),
+        ("kettle", 0.58, 0.63),
+        # A second charge late in the day, once the sun is going.
+        ("ev_charger", 0.75, 0.92),
+    ):
+        t_on = jitter(duration * on)
+        t_off = max(t_on + 30.0, jitter(duration * off))
+        events.append(
+            Event(
+                at=t_on, label=f"{name}_on", apply=_bind(EvalWorld.set_load, name, True)
+            )
+        )
+        events.append(
+            Event(
+                at=t_off,
+                label=f"{name}_off",
+                apply=_bind(EvalWorld.set_load, name, False),
+            )
+        )
+    return events + _solar_day(duration, _PEAK_SOLAR_W)
+
+
 def _unscripted(_rng: random.Random) -> list[Event]:
     """No scripted events: base load, its noise and any solar drive the loop."""
     return []
@@ -833,5 +887,35 @@ def build_scenarios() -> dict[str, Scenario]:
         loads=list(_HOUSEHOLD_LOADS),
         build_events=lambda rng: _household_and_solar(rng, dur_solar, solar_peak_house),
     )
+
+    # Peak shaving: the batteries only cover demand above the threshold and
+    # idle below it, so the metrics score the grid against that policy rather
+    # than against zero. One unit starts the run discharging under the
+    # threshold: winding it down is the first thing asked of the loop.
+    peak_batteries = [_VENUS, replace(_VENUS, initial_power=600.0)]
+    for suffix, extra, meter in (
+        ("", "", {}),
+        (
+            "_slow",
+            f" {_SLOW_METER}",
+            {"meter_interval_s": 10.0, "meter_latency_s": 1.0},
+        ),
+    ):
+        add(
+            Scenario(
+                name=f"peak_shaving{suffix}",
+                description=(
+                    f"Two Venus peak shaving at {_PEAK_THRESHOLD_W:g} W: EV "
+                    f"charging, kettle and oven over a small solar day{extra}"
+                ),
+                batteries=list(peak_batteries),
+                duration_s=dur_steps,
+                base_load=[400.0, 0.0, 0.0],
+                loads=list(_PEAK_LOADS),
+                build_events=lambda rng: _peak_steps(rng, dur_steps),
+                ct_kwargs={"peakshaving_threshold": _PEAK_THRESHOLD_W},
+                **meter,
+            )
+        )
 
     return scenarios

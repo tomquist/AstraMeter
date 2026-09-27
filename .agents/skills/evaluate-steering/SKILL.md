@@ -57,6 +57,15 @@ provably optimal under a flat tariff). It is the one ungameable "money left on
 the table" number: 0 means it matched the optimum, and the irreducible cost when
 the pack saturates is subtracted out, so regret is purely controllable loss.
 
+Every tracking metric measures the grid against its **policy target**
+(`_policy_target`): 0 W, except in a peak shaving scenario (`peak_shaving`,
+`peak_shaving_slow`), where the batteries are meant to idle below the
+threshold, so the target is the demand itself up to the threshold. The oracle
+follows the same policy, so `cost_regret_ct` stays "money lost against doing
+the policy perfectly". Those scenarios add `peak_qh_over_w`, the billed
+quarter-hour peak over the threshold and a guardrail, and `peak_excess_wh`;
+both read 0 everywhere else.
+
 **`grid_rms_w`** is the whole-run L2 tracking error — control quality,
 transients included — paired with `battery_travel_w_per_h` as the effort term.
 The two LQR terms are kept separate rather than fused with an arbitrary weight.
