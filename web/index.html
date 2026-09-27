@@ -91,16 +91,24 @@
             </p>
 
             <figure class="wiring" aria-label="Grid meter feeds AstraMeter, which sends each battery a target and gets back what it delivered">
-              <div class="wire-node">
-                <span class="wire-kind">Grid meter</span>
-                <strong>What you have</strong>
+              <div class="wire-node wire-meter">
+                <div class="node-head">
+                  <span class="node-icon" aria-hidden="true"
+                    ><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 0 1 16 0" /><path d="M12 16l4.5-5" /><path d="M7 16h.01M17 16h.01M12 8v.01" /></svg
+                  ></span>
+                  <span class="wire-kind">Source</span>
+                </div>
+                <strong>Your grid meter</strong>
                 <span>Shelly, Home Assistant, MQTT, SML, Modbus, HomeWizard…</span>
               </div>
               <div class="wire-link"><span>HTTP · MQTT · Modbus · SML</span><i class="pulse" aria-hidden="true"></i></div>
               <div class="wire-node wire-core">
-                <span class="wire-kind">AstraMeter</span>
-                <strong>Filters and splits</strong>
-                <span>Smooths the reading, works out a target per battery</span>
+                <div class="node-head">
+                  <img class="node-icon" src="assets/astrameter-icon.svg" alt="" width="34" height="34" />
+                  <span class="wire-kind">Emulator</span>
+                </div>
+                <strong>AstraMeter</strong>
+                <span>Poses as a CT002/CT003, smooths the reading and works out a target per battery</span>
               </div>
               <div class="wire-link wire-loop">
                 <span>Target per battery</span>
@@ -110,9 +118,14 @@
                 <i class="pulse pulse-back" aria-hidden="true"></i>
               </div>
               <div class="wire-node wire-stack">
-                <span class="wire-kind">Batteries</span>
-                <strong>What they expect</strong>
-                <span>One or more Marstek storage systems</span>
+                <div class="node-head">
+                  <span class="node-icon" aria-hidden="true"
+                    ><svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="16" height="10" rx="2" /><path d="M21.5 10.5v3" /><path d="M11.5 9l-2.5 3.5h3.5L10 16" /></svg
+                  ></span>
+                  <span class="wire-kind">Storage</span>
+                </div>
+                <strong>Your batteries</strong>
+                <span>One or more Marstek batteries: B2500, Venus, Jupiter…</span>
                 <span class="cells" aria-hidden="true"><i></i><i></i><i></i></span>
               </div>
             </figure>
