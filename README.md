@@ -40,9 +40,7 @@ It does this by emulating one or more of these devices:
 - **Shelly EM gen3**
 - **Shelly Pro EM50**
 
-> **Which device type?** Use **CT002**/**CT003**, unless your storage device
-> can only pair with a Shelly; then use a **Shelly** type (`shellypro3em`,
-> `shellyemg3`, `shellyproem50`, …). See
+> **Which device type?** Use **CT002**/**CT003**. See
 > [CT002 / CT003 steering](docs/ct002.md) and the
 > [Configuration reference](docs/configuration.md).
 

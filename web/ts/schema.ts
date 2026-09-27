@@ -99,7 +99,7 @@ export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "shellypro3em",
     label: "Shelly Pro 3EM",
-    help: "For a battery that can only pair with a Shelly. Works with most Marstek firmware.",
+    help: "Works with most Marstek firmware.",
   },
   {
     value: "shellyemg3",

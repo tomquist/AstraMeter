@@ -33,7 +33,7 @@ that apply to the whole app and to every powermeter. For one specific area, see:
 
 ```ini
 [GENERAL]
-# Use ct002/ct003, unless your storage device can only pair with a Shelly.
+# Use ct002/ct003.
 # Comma-separated list of device types to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new)
 DEVICE_TYPE = ct002
 # Optional: comma-separated device IDs, same order as DEVICE_TYPE (auto-generated if omitted). Use for stable IDs across reinstalls or to match an existing device.

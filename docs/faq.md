@@ -92,8 +92,8 @@ A: CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`). Each battery reports its
 output back to the CT emulator, so AstraMeter steers it to its own target and
 spreads the load evenly across batteries. With Shelly emulation each battery
 reacts to the grid reading on its own, and several of them tend to fight each
-other — one charges while another discharges. Use a Shelly type only if your
-battery can only pair with a Shelly. See [CT002 / CT003 steering](ct002.md).
+other — one charges while another discharges. See
+[CT002 / CT003 steering](ct002.md).
 
 ## Device and firmware specific
 
