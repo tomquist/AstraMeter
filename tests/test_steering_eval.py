@@ -200,6 +200,19 @@ def test_overrides_reach_the_balancer() -> None:
     assert res["samples"] > 200
 
 
+def test_a_peakshaving_override_reaches_the_metrics_too() -> None:
+    """A threshold set with --set steers the controller, so the metrics must
+    score against the same policy: with the whole run under the threshold the
+    battery idles, and that is on target, not ~200-800 W off it."""
+    res = asyncio.run(
+        run_scenario(
+            _tiny_scenario(), seed=3, overrides={"peakshaving_threshold": 5000.0}
+        )
+    )
+    assert res["mean_abs_grid_w"] < 50
+    assert res["peak_qh_over_w"] == 0.0
+
+
 def test_scenario_registry_shape() -> None:
     scenarios = build_scenarios()
     # Multi-battery scenarios exist in both balancer modes.

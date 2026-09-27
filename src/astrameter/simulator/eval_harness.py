@@ -11,6 +11,7 @@ import os
 import random
 import socket
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import replace
 
 from astrameter.ct002.balancer import split_balancer_knobs
 from astrameter.ct002.ct002 import CT002
@@ -129,6 +130,9 @@ async def run_scenario(
 
     ct_kwargs: dict[str, float] = dict(scenario.ct_kwargs)
     ct_kwargs.update(overrides or {})
+    # The metrics read the policy (e.g. the peak shaving threshold) off the
+    # scenario, so they must see the same overridden config as the controller.
+    scenario = replace(scenario, ct_kwargs=ct_kwargs)
     balancer, other_kwargs = split_balancer_knobs(ct_kwargs)
     ct002 = CT002(
         udp_port=0,  # assigned by _start_ct002 below
