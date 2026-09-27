@@ -537,7 +537,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -585,13 +584,26 @@ jobs:
       # accepts exactly one file and uses the filename as the artifact name, so
       # the report and the raw metrics go to separate artifacts.
       - name: Upload report (unzipped, browser-viewable)
-        id: report
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           archive: false
           path: steering-eval-report.html
           if-no-files-found: ignore
+
+      # The sticky PR comment is posted by steering-eval-comment.yml, which
+      # runs after this workflow with a write token (a pull_request run from a
+      # fork only gets a read-only one). It can't learn a fork PR's number
+      # from the workflow_run event, so record it here; the poster re-checks
+      # it against the PR's current head before trusting it.
+      - name: Record PR identity for the comment poster
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          jq -n --arg number "$PR_NUMBER" --arg head_sha "$HEAD_SHA" \
+            '{number: $number, head_sha: $head_sha}' > pr.json
 
       - name: Upload raw metrics
         uses: actions/upload-artifact@v7
@@ -601,56 +613,8 @@ jobs:
             head.json
             base.json
             steering-eval-comment.md
+            pr.json
           if-no-files-found: ignore
-
-      # Forks get a read-only token; they still see the table in the job
-      # summary above.
-      - name: Post sticky PR comment
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v8
-        env:
-          # Direct per-artifact URL from the upload step (login-required, valid
-          # until the artifact/run expires) — the closest thing to a direct
-          # link to the report; GitHub has no stable raw-file permalink.
-          REPORT_URL: ${{ steps.report.outputs.artifact-url }}
-        with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- steering-eval -->';
-            const reportUrl = process.env.REPORT_URL;
-            const link = reportUrl
-              ? `\n\n📊 [**Open the interactive report**](${reportUrl}) — ` +
-                `\`steering-eval-report.html\`, a single self-contained file ` +
-                `(opens in-browser; download it if your browser blocks inline ` +
-                `scripts).\n`
-              : '';
-            const body = marker + '\n' +
-              fs.readFileSync('steering-eval-comment.md', 'utf8') + link;
-            const {data: comments} = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-            });
-            const existing = comments.find(
-              c => c.body && c.body.startsWith(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
   build:
     needs: [ validate, web ]
