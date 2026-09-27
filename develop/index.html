@@ -86,28 +86,48 @@
               with.
             </p>
             <p>
-              With a single battery, Shelly emulation is enough. With two or more, use CT002 or CT003: AstraMeter
-              then gives each battery its own target, so they share the load instead of all reacting to the same
-              reading and overshooting.
+              As a CT002 or CT003, AstraMeter gives each battery its own target. Every poll also reports what
+              that battery delivered, so AstraMeter corrects the next target and the batteries share the load
+              instead of all reacting to the same reading and overshooting.
             </p>
 
-            <figure class="wiring" aria-label="Grid meter to AstraMeter to batteries">
-              <div class="wire-node">
-                <span class="wire-kind">Grid meter</span>
-                <strong>What you have</strong>
+            <figure class="wiring" aria-label="Grid meter feeds AstraMeter, which sends each battery a target and gets back what it delivered">
+              <div class="wire-node wire-meter">
+                <div class="node-head">
+                  <span class="node-icon" aria-hidden="true"
+                    ><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 0 1 16 0" /><path d="M12 16l4.5-5" /><path d="M7 16h.01M17 16h.01M12 8v.01" /></svg
+                  ></span>
+                  <span class="wire-kind">Source</span>
+                </div>
+                <strong>Your grid meter</strong>
                 <span>Shelly, Home Assistant, MQTT, SML, Modbus, HomeWizard…</span>
               </div>
               <div class="wire-link"><span>HTTP · MQTT · Modbus · SML</span><i class="pulse" aria-hidden="true"></i></div>
               <div class="wire-node wire-core">
-                <span class="wire-kind">AstraMeter</span>
-                <strong>Filters and splits</strong>
-                <span>Smooths the reading, works out a target per battery</span>
+                <div class="node-head">
+                  <img class="node-icon" src="assets/astrameter-icon.svg" alt="" width="34" height="34" />
+                  <span class="wire-kind">Emulator</span>
+                </div>
+                <strong>AstraMeter</strong>
+                <span>Poses as a CT002/CT003, smooths the reading and works out a target per battery</span>
               </div>
-              <div class="wire-link"><span>UDP, as Shelly or CT002/CT003</span><i class="pulse" aria-hidden="true"></i></div>
-              <div class="wire-node">
-                <span class="wire-kind">Batteries</span>
-                <strong>What they expect</strong>
-                <span>One or more Marstek storage systems</span>
+              <div class="wire-link wire-loop">
+                <span>Target per battery</span>
+                <span class="wire-note">What each delivered</span>
+                <i class="wire-back" aria-hidden="true"></i>
+                <i class="pulse" aria-hidden="true"></i>
+                <i class="pulse pulse-back" aria-hidden="true"></i>
+              </div>
+              <div class="wire-node wire-stack">
+                <div class="node-head">
+                  <span class="node-icon" aria-hidden="true"
+                    ><svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="16" height="10" rx="2" /><path d="M21.5 10.5v3" /><path d="M11.5 9l-2.5 3.5h3.5L10 16" /></svg
+                  ></span>
+                  <span class="wire-kind">Storage</span>
+                </div>
+                <strong>Your batteries</strong>
+                <span>One or more Marstek batteries: B2500, Venus, Jupiter…</span>
+                <span class="cells" aria-hidden="true"><i></i><i></i><i></i></span>
               </div>
             </figure>
           </div>
@@ -204,20 +224,20 @@
           <div class="rail-body">
             <p>
               Works with the <strong>B2500</strong>, <strong>Venus</strong>, <strong>Jupiter</strong> and other
-              Marstek storage systems that can be paired with a Shelly or CT002/CT003 meter. Once AstraMeter is
+              Marstek storage systems that can be paired with a CT002/CT003 or Shelly meter. Once AstraMeter is
               running, switch the battery to <em>Self-Adaptation</em> mode.
             </p>
             <div class="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Emulated meter</th><th>Use it for</th><th>Notes</th></tr>
+                  <tr><th>Emulated meter</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td>Shelly Pro 3EM</td><td>One battery</td><td>Port 1010 for B2500 firmware up to v224, 2220 from v226</td></tr>
-                  <tr><td>Shelly EM Gen3</td><td>One battery</td><td></td></tr>
-                  <tr><td>Shelly Pro EM-50</td><td>One battery</td><td></td></tr>
-                  <tr><td>Marstek CT002 (HME-4)</td><td>Two or more</td><td>Per-battery targets and load sharing</td></tr>
-                  <tr><td>Marstek CT003 (HME-3)</td><td>Two or more</td><td>Same as CT002</td></tr>
+                  <tr><td>Marstek CT002 (HME-4)</td><td>Recommended. Per-battery targets and load sharing</td></tr>
+                  <tr><td>Marstek CT003 (HME-3)</td><td>Same as CT002</td></tr>
+                  <tr><td>Shelly Pro 3EM</td><td>Port 1010 for B2500 firmware up to v224, 2220 from v226</td></tr>
+                  <tr><td>Shelly EM Gen3</td><td></td></tr>
+                  <tr><td>Shelly Pro EM-50</td><td></td></tr>
                 </tbody>
               </table>
             </div>
@@ -307,11 +327,11 @@
             </details>
             <details>
               <summary>Should I use Shelly emulation or CT002/CT003?</summary>
-              <p>Shelly for a single battery. CT002/CT003 when two or more batteries should share the load; AstraMeter then gives each one its own target.</p>
+              <p>CT002/CT003. Each battery reports its output back, so AstraMeter can steer it to its own target and share the load across batteries.</p>
             </details>
             <details>
               <summary>What's the difference between Home Assistant, Docker and ESP32?</summary>
-              <p>The add-on, Docker and Python run the full emulator as software on a machine that's already on. The ESP32 build runs on a small board of its own, but emulates only CT002/CT003, not a Shelly; if your battery can only pair with a Shelly, run one of the others. The config generator writes the right file for each.</p>
+              <p>The add-on, Docker and Python run the full emulator as software on a machine that's already on. The ESP32 build runs on a small board of its own and emulates CT002/CT003 only. The config generator writes the right file for each.</p>
             </details>
             <details>
               <summary>Does it cost anything?</summary>
