@@ -836,6 +836,31 @@ def test_peakshaving_leaves_unsteered_batteries_alone(backend: Backend) -> None:
     )
 
 
+@pytest.mark.timeout(30, func_only=True)
+def test_peakshaving_idles_each_battery_on_its_own(backend: Backend) -> None:
+    """Under the threshold, a pair left trading power (one charging from the
+    other) is wound to 0 W battery by battery, not handed shares of a
+    correction that nets to nothing."""
+    backend.set_clock(4000)
+    backend.set_active_control(True)
+    backend.set_peakshaving_threshold(500)
+    backend.set_grid(110)  # house 100 W plus the pair's net 10 W charge
+
+    assert backend.poll("112233445500", "A", -30) is not None
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("AABBCCDDEEFF", "A", 20)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == -20, (
+        f"[{backend.name}] the discharging unit should wind to 0, got {r[4]}"
+    )
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("112233445500", "A", -30)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == 30, (
+        f"[{backend.name}] the charging unit should wind to 0, got {r[4]}"
+    )
+
+
 # ── Direct dual-backend wire comparison ────────────────────────────────────
 #
 # The strongest parity guard: drive the *same* randomized poll sequence

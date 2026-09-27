@@ -37,6 +37,11 @@ long round_half_even(double v) {
   return (fll % 2 == 0) ? fll : fll + 1;  // tie → nearest even
 }
 
+// Under peak shaving, how close to 0 W every battery of a pool trading power
+// must already be before each is held at 0 W on its own. Mirrors
+// PEAKSHAVING_IDLE_BAND_W in src/astrameter/ct002/ct002.py.
+constexpr float PEAKSHAVING_IDLE_BAND_W = 100.0f;
+
 // Fold a fresh gap into an EMA-smoothed interval, rounded to a tenth.
 // Mirrors src/astrameter/ct002/ct002.py::_ema_interval — including the
 // banker's rounding, so poll_interval / answer_interval published to MQTT
@@ -671,24 +676,39 @@ void CT002Component::set_peakshaving_threshold(float threshold) {
   }
 }
 
-float CT002Component::apply_peakshaving_(float total) const {
-  if (this->peakshaving_threshold_ <= 0.0f) return total;
-  // Only the batteries the balancer steers count toward demand (mirrors
-  // CT002._apply_peakshaving): one on a manual setpoint, paused, opted out or
-  // gone silent is not ours to move, so its output lowers demand the way
-  // solar does. Counting it would have the steered batteries cancel it out
-  // by charging from the grid.
+std::pair<float, bool> CT002Component::peakshaving_(float total) const {
+  // Returns the grid total handed to the balancer and whether the steered
+  // batteries should each idle at 0 W on their own: demand above zero but not
+  // above the threshold, every steered battery within PEAKSHAVING_IDLE_BAND_W
+  // of zero, and one charging while another discharges. Everything else stays
+  // on the shared correction: a wind-down still under way because it
+  // compensates for meter latency, a one-direction residual because it
+  // concentrates a sub-deadband correction on one battery. Mirrors
+  // CT002._peakshaving.
+  if (this->peakshaving_threshold_ <= 0.0f) return {total, false};
+  // Only the batteries the balancer steers count toward demand: one on a
+  // manual setpoint, paused, opted out or gone silent is not ours to move, so
+  // its output lowers demand the way solar does. Counting it would have the
+  // steered batteries cancel it out by charging from the grid.
   const double now = this->now_seconds_();
   float steered_power = 0.0f;
+  bool any_charging = false;
+  bool any_discharging = false;
+  bool all_near_zero = true;
   for (const auto &kv : this->consumers_) {
     const auto &c = kv.second;
     if (c.timestamp <= 0.0 || !c.active || !c.participates || c.manual_enabled) continue;
     if (this->consumer_expired_(c, now)) continue;
     steered_power += c.power;
+    any_charging = any_charging || c.power < 0.0f;
+    any_discharging = any_discharging || c.power > 0.0f;
+    all_near_zero = all_near_zero && std::fabs(c.power) <= PEAKSHAVING_IDLE_BAND_W;
   }
   const float household_demand = total + steered_power;
-  if (household_demand <= 0.0f) return total;
-  return total - std::min(household_demand, this->peakshaving_threshold_);
+  if (household_demand <= 0.0f) return {total, false};
+  const bool hold = household_demand <= this->peakshaving_threshold_ && all_near_zero &&
+                    any_charging && any_discharging;
+  return {total - std::min(household_demand, this->peakshaving_threshold_), hold};
 }
 
 std::vector<float> CT002Component::compute_smooth_target_(const std::vector<float> &values,
@@ -728,9 +748,9 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   // the balancer's per-phase output targets. mqtt_insights publishes this
   // as the device-level smooth_target sensor.
   this->last_smooth_target_ = grid_total;
-  const float shaved_total = this->apply_peakshaving_(grid_total);
-  auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, shaved_total,
-                                                 inactive, manual, values);
+  const auto shaved = this->peakshaving_(grid_total);
+  auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, shaved.first,
+                                                 inactive, manual, values, shaved.second);
   for (size_t i = 0; i < 3; ++i) this->last_target_[i] = out_arr[i];
   return {out_arr[0], out_arr[1], out_arr[2]};
 }

@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "esphome/core/component.h"
@@ -420,9 +421,10 @@ class CT002Component : public Component {
   bool consumer_expired_(const Consumer &c, double now) const;
   std::vector<float> compute_smooth_target_(const std::vector<float> &values,
                                             const std::string &consumer_id);
-  // Caps household demand handed to the balancer at peakshaving_threshold_
-  // (mirrors CT002._apply_peakshaving in ct002.py).
-  float apply_peakshaving_(float total) const;
+  // Caps household demand handed to the balancer at peakshaving_threshold_,
+  // and says whether the steered batteries should idle at 0 W (mirrors
+  // CT002._peakshaving in ct002.py).
+  std::pair<float, bool> peakshaving_(float total) const;
   // Monotonic seconds used for all time-gated logic (saturation, probe,
   // eviction, dedup, poll_interval). Instance method (not static) so the
   // test-hook mock clock can override it. Falls back to millis() in

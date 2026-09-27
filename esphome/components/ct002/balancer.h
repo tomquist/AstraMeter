@@ -552,7 +552,8 @@ class LoadBalancer {
                                       float grid_total,
                                       const std::unordered_set<std::string> &inactive,
                                       const std::unordered_set<std::string> &manual,
-                                      const std::vector<float> &sample_id);
+                                      const std::vector<float> &sample_id,
+                                      bool hold_at_zero = false);
 
   // Where the per-poll steering line goes. Unset by default, so a balancer
   // built without one (host tests, the parity harness) formats nothing and
@@ -656,7 +657,8 @@ class LoadBalancer {
 
   std::array<float, 3> compute_auto_target_(const std::optional<std::string> &consumer_id,
                                             const ReportMap &reports, float grid_total,
-                                            const std::vector<float> &sample_id);
+                                            const std::vector<float> &sample_id,
+                                            bool hold_at_zero = false);
   // Batteries that cannot absorb the current surplus, plus whether any battery
   // in the pool can charge from AC at all. Mirrors balancer.py _charge_blind.
   static std::pair<std::unordered_set<std::string>, bool> charge_blind_(

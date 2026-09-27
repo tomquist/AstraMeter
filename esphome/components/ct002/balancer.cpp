@@ -1018,7 +1018,7 @@ std::array<float, 3> LoadBalancer::compute_target(
     const ReportMap &all_reports, float grid_total,
     const std::unordered_set<std::string> &inactive,
     const std::unordered_set<std::string> &manual,
-    const std::vector<float> &sample_id) {
+    const std::vector<float> &sample_id, bool hold_at_zero) {
   // Diagnostics only: cleared per call so a manual or inactive consumer never
   // reports the figures of whichever consumer ran before it.
   this->diag_control_grid_.reset();
@@ -1059,8 +1059,8 @@ std::array<float, 3> LoadBalancer::compute_target(
   for (const auto &r : active_reports) {
     if (manual.find(r.first) == manual.end()) auto_reports[r.first] = r.second;
   }
-  auto result =
-      this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id);
+  auto result = this->compute_auto_target_(consumer_id, auto_reports, grid_total, sample_id,
+                                           hold_at_zero);
   const auto paced = this->apply_min_dc_output_(consumer_id, auto_reports, result);
   this->log_steer_(consumer_id, mode, auto_reports, grid_total, paced);
   return paced;
@@ -1253,7 +1253,7 @@ float LoadBalancer::residual_share_(const std::optional<std::string> &consumer_i
 
 std::array<float, 3> LoadBalancer::compute_auto_target_(
     const std::optional<std::string> &consumer_id, const ReportMap &reports,
-    float grid_total, const std::vector<float> &sample_id) {
+    float grid_total, const std::vector<float> &sample_id, bool hold_at_zero) {
   // Predicted grid the residual/fair-share control acts on (compensates for
   // meter latency; see predict_control_grid_). Updated on every call so the
   // estimate stays continuous across the probe / fading / charge-blind early
@@ -1282,6 +1282,17 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   if (consumer_id && reports.count(*consumer_id) && reports.at(*consumer_id).weight == 0.0f) {
     if (this->probe_participants_().count(*consumer_id)) {
       this->clear_probe_state_("participant parked");
+    }
+    return this->steer_to_zero_(consumer_id, reports, true);
+  }
+
+  // Peak shaving below its threshold: the pool has nothing to cover, so each
+  // battery winds itself to 0 W. Sharing the correction instead would ask an
+  // idle unit to charge while another winds down, and the pair would then sit
+  // trading power inside their deadbands (mirrors balancer.py).
+  if (hold_at_zero && consumer_id) {
+    if (this->probe_participants_().count(*consumer_id)) {
+      this->clear_probe_state_("peak shaving idle");
     }
     return this->steer_to_zero_(consumer_id, reports, true);
   }

@@ -248,3 +248,66 @@ class TestThresholdValidation:
     def test_an_invalid_configured_value_leaves_it_off(self):
         assert _ct002(peakshaving_threshold=float("nan")).peakshaving_threshold == 0.0
         assert _ct002(peakshaving_threshold=-5.0).peakshaving_threshold == 0.0
+
+
+class TestIdleBelowThreshold:
+    """Once demand is under the threshold and the pool has wound down to about
+    net zero, every steered battery is held at 0 W on its own.
+
+    Sharing the correction instead left a pair trading power inside their
+    deadbands, one charging from the other, for as long as demand stayed under
+    the threshold.
+    """
+
+    def _device(self) -> CT002:
+        return _ct002(
+            active_control=True,
+            fair_distribution=True,
+            peakshaving_threshold=2500.0,
+        )
+
+    def _trading_pair(self) -> CT002:
+        device = self._device()
+        device._update_consumer_report("charging", "A", -30)
+        device._update_consumer_report("discharging", "A", 20)
+        return device
+
+    def test_a_pair_trading_power_is_idled_battery_by_battery(self):
+        device = self._trading_pair()
+        # House 400 W: the grid carries it plus the pair's net 10 W charge.
+        assert device._peakshaving(410.0) == (-(-30 + 20), True)
+        assert device._compute_smooth_target([410, 0, 0], "charging")[0] == 30
+        assert device._compute_smooth_target([410, 0, 0], "discharging")[0] == -20
+
+    def test_a_real_wind_down_stays_on_the_shared_correction(self):
+        """A battery still delivering hundreds of watts is wound down by the
+        latency-compensated shared correction, not dropped: with a stale meter
+        the fresh, falling battery output makes demand look under the threshold
+        for a few polls when it is not."""
+        device = self._device()
+        device._update_consumer_report("idle", "A", 0)
+        device._update_consumer_report("busy", "A", 300)
+        shaved, hold = device._peakshaving(400.0)
+        assert shaved == -300.0
+        assert hold is False
+
+    def test_a_residual_in_one_direction_stays_on_the_shared_correction(self):
+        """Two units each charging a few watts are not trading power, and each
+        one's own sub-deadband correction would be ignored by its firmware;
+        the shared correction concentrates it on one battery instead."""
+        device = self._device()
+        device._update_consumer_report("a", "A", -18)
+        device._update_consumer_report("b", "A", -15)
+        assert device._peakshaving(433.0) == (33.0, False)
+
+    def test_above_the_threshold_the_pool_shares_the_excess(self):
+        device = self._trading_pair()
+        assert device._peakshaving(3500.0)[1] is False
+        out_a = device._compute_smooth_target([3500, 0, 0], "charging")
+        out_b = device._compute_smooth_target([3500, 0, 0], "discharging")
+        assert out_a[0] > 0 and out_b[0] > 0
+
+    def test_a_surplus_still_charges_through_the_pool(self):
+        device = self._trading_pair()
+        assert device._peakshaving(-800.0) == (-800.0, False)
+        assert device._compute_smooth_target([-800, 0, 0], "charging")[0] < 0

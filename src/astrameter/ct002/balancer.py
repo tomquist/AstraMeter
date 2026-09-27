@@ -1657,6 +1657,7 @@ class LoadBalancer:
         inactive: frozenset[str],
         manual: frozenset[str],
         sample_id: tuple = (),
+        hold_at_zero: bool = False,
     ) -> list[float]:
         """Return ``[phase_A, phase_B, phase_C]`` target for *consumer_id*.
 
@@ -1664,6 +1665,9 @@ class LoadBalancer:
         *inactive* / *manual* are the sets of paused and manual-override
         consumer IDs; this method filters internally.
         *sample_id* identifies the current meter reading for cache keying.
+        *hold_at_zero* asks an auto-pool consumer to idle at 0 W on its own
+        (peak shaving below its threshold) instead of taking a share of the
+        grid correction.
         """
         # Diagnostics only: cleared per call so a manual/inactive consumer
         # never reports the figures of whichever consumer ran before it.
@@ -1707,7 +1711,9 @@ class LoadBalancer:
         # Auto-pool reports (exclude manual consumers)
         reports = {cid: r for cid, r in active_reports.items() if cid not in manual}
 
-        result = self._compute_auto_target(consumer_id, reports, grid_total, sample_id)
+        result = self._compute_auto_target(
+            consumer_id, reports, grid_total, sample_id, hold_at_zero=hold_at_zero
+        )
         result = self._apply_min_dc_output(consumer_id, reports, result)
         self._log_steer(consumer_id, consumer_mode, reports, grid_total, result)
         return result
@@ -2099,6 +2105,8 @@ class LoadBalancer:
         reports: Reports,
         grid_total: float,
         sample_id: tuple = (),
+        *,
+        hold_at_zero: bool = False,
     ) -> list[float]:
         """Automatic allocation for auto-pool consumers."""
         # The predicted grid (meter-latency compensation, see
@@ -2133,6 +2141,15 @@ class LoadBalancer:
         if consumer_id and consumer_id in reports and reports[consumer_id].weight == 0:
             if consumer_id in self._probe_participants():
                 self._clear_probe_state("participant parked")
+            return self._steer_to_zero(consumer_id, reports, paced=True)
+
+        # Peak shaving below its threshold: the pool has nothing to cover, so
+        # each battery winds itself to 0 W.  Sharing the correction instead
+        # would ask an idle unit to charge while another winds down, and the
+        # pair would then sit trading power inside their deadbands.
+        if hold_at_zero and consumer_id:
+            if consumer_id in self._probe_participants():
+                self._clear_probe_state("peak shaving idle")
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
         charge_blind, any_ac_chargeable = self._charge_blind(reports, grid_total)
