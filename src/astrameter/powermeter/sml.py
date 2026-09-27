@@ -1,8 +1,11 @@
 import asyncio
 import configparser
+import contextlib
 import datetime
 import logging
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,7 +14,7 @@ import smllib.errors
 from smllib import SmlFrame, SmlStreamReader
 from smllib.const import UNITS
 
-from .base import Powermeter
+from .base import PushPowermeter, stream_fresh
 
 # Stdlib logger: avoid importing astrameter.config (config_loader imports powermeter).
 logger = logging.getLogger("astrameter")
@@ -26,9 +29,14 @@ _OBIS_POWER_L3 = "01004c0700ff"
 
 _OBIS_HEX_RE = re.compile(r"^[0-9a-f]{12}$")
 
-# How long one reading waits for a complete frame. Meters send every 1-4 s,
-# so this covers skipping a partial frame and receiving the next whole one.
-_FRAME_TIMEOUT = 10.0
+# A reading older than this is stale.  Meters send every 1-4 s, so this is
+# several missed telegrams in a row.
+_MAX_READING_AGE = 10.0
+# Silence on an open port for this long means the connection is dead (e.g. a
+# half-open TCP link to ser2net), so the reader reopens it.
+_READ_TIMEOUT = 30.0
+# How long to wait before reopening the port after it fails.
+RECONNECT_DELAY_SECONDS = 5.0
 
 
 def _normalize_obis_hex(raw: str, label: str) -> str:
@@ -102,7 +110,16 @@ def _expect_unit(ov: Any, expected: str, label: str) -> None:
         )
 
 
-class Sml(Powermeter):
+class Sml(PushPowermeter):
+    """Push source fed by an SML meter's IR head.
+
+    The meter sends a telegram every 1-4 s whether or not anyone asks, so a
+    background task reads the port continuously and publishes each frame as it
+    completes.  A reading is therefore never older than the last telegram, and
+    no backlog of old telegrams builds up in the serial or TCP buffers between
+    battery polls.
+    """
+
     def __init__(
         self,
         serial_device: str,
@@ -112,6 +129,7 @@ class Sml(Powermeter):
         obis_power_l2: str = _OBIS_POWER_L2,
         obis_power_l3: str = _OBIS_POWER_L3,
     ) -> None:
+        super().__init__()
         if not serial_device.strip():
             raise ValueError("serial_device must be non-empty (config: SERIAL)")
         self._serial_device = serial_device.strip()
@@ -119,74 +137,98 @@ class Sml(Powermeter):
         self._obis_l1 = obis_power_l1
         self._obis_l2 = obis_power_l2
         self._obis_l3 = obis_power_l3
-        self._current = EnergyStats()
-        self._lock = asyncio.Lock()
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
+        self._clock: Callable[[], float] = time.monotonic
+        self._current: EnergyStats | None = None
+        self._last_frame_time: float | None = None
         self._stream = SmlStreamReader()
+        self._connected = False
+        self._reader_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        if self._reader is not None:
+        if self._reader_task is not None:
             return
-        self._reader, self._writer = await serial_asyncio_fast.open_serial_connection(
-            url=self._serial_device, baudrate=9600
-        )
+        self._reader_task = asyncio.create_task(self._read_loop())
 
     async def stop(self) -> None:
-        if self._writer is not None:
-            self._writer.close()
-            await self._writer.wait_closed()
-            self._reader = None
-            self._writer = None
-            self._stream.clear()
+        # Cleared before cancelling: cancellation leaves the loop before its
+        # own reset runs, so stream_online() would otherwise stay True.
+        self._connected = False
+        task, self._reader_task = self._reader_task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    def stream_online(self) -> bool | None:
+        return self._connected and stream_fresh(
+            self._last_frame_time, _MAX_READING_AGE, self._clock
+        )
 
     async def get_powermeter_watts(self) -> list[float]:
-        if self._lock.locked():
-            return [float(x) for x in self._current.powers]
-        async with self._lock:
-            await self._read_serial()
-            return [float(x) for x in self._current.powers]
+        if self._current is None or self._last_frame_time is None:
+            raise ValueError("No value received from SML meter")
+        if not stream_fresh(self._last_frame_time, _MAX_READING_AGE, self._clock):
+            age = self._clock() - self._last_frame_time
+            raise ValueError(f"SML reading is stale ({age:.0f} s old)")
+        return [float(x) for x in self._current.powers]
 
-    async def _read_serial(self) -> None:
-        if self._reader is None:
-            raise RuntimeError("Sml not started; call start() first")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _FRAME_TIMEOUT
+    async def _read_loop(self) -> None:
+        """Read the port for the life of the source, reopening it after errors."""
         while True:
-            sml_frame = self._next_buffered_frame()
-            if sml_frame is not None:
-                self._current = EnergyStats.from_sml_frame(
-                    sml_frame,
-                    self._obis_current,
-                    self._obis_l1,
-                    self._obis_l2,
-                    self._obis_l3,
+            writer: asyncio.StreamWriter | None = None
+            try:
+                reader, writer = await serial_asyncio_fast.open_serial_connection(
+                    url=self._serial_device, baudrate=9600
                 )
-                logger.debug("got sml frame: %s", self._current)
-                return
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                logger.error("failed to read SML frame within %.0f s", _FRAME_TIMEOUT)
-                return
-            data = await self._read_chunk(remaining)
-            if data is None:
+                self._connected = True
+                logger.info("SML connected to %s", self._serial_device)
+                await self._read_stream(reader)
+            except Exception as exc:
+                logger.error("SML read from %s failed: %s", self._serial_device, exc)
+            finally:
+                self._connected = False
+                # A partial frame from the old connection can't be completed
+                # by the new one.
+                self._stream.clear()
+                if writer is not None:
+                    writer.close()
+                    with contextlib.suppress(Exception):
+                        await writer.wait_closed()
+            await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+
+    async def _read_stream(self, reader: asyncio.StreamReader) -> None:
+        """Publish every frame from *reader* until it closes or goes silent."""
+        while True:
+            try:
+                data = await asyncio.wait_for(reader.read(512), timeout=_READ_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "SML: no data from %s for %.0f s, reconnecting",
+                    self._serial_device,
+                    _READ_TIMEOUT,
+                )
                 return
             if not data:
-                logger.error("serial connection closed")
+                logger.error("SML: serial connection to %s closed", self._serial_device)
                 return
             # At 9600 baud a read returns only the few bytes that have
-            # arrived, so a frame is assembled across many reads -- and
-            # across calls, as the buffer outlives this one.
+            # arrived, so a frame is assembled across many reads.
             self._stream.add(data)
+            while (frame := self._next_buffered_frame()) is not None:
+                self._publish(frame)
 
-    async def _read_chunk(self, timeout: float) -> bytes | None:
-        """Read the next chunk from the serial port, or ``None`` on timeout."""
-        assert self._reader is not None
+    def _publish(self, frame: SmlFrame) -> None:
         try:
-            return await asyncio.wait_for(self._reader.read(512), timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.error("serial read timed out")
-            return None
+            stats = EnergyStats.from_sml_frame(
+                frame, self._obis_current, self._obis_l1, self._obis_l2, self._obis_l3
+            )
+        except (ValueError, smllib.errors.SmlLibException) as e:
+            logger.error("error decoding SML frame: %s", e)
+            return
+        self._current = stats
+        self._last_frame_time = self._clock()
+        logger.debug("got sml frame: %s", stats)
+        self._message_event.set()
 
     def _next_buffered_frame(self) -> SmlFrame | None:
         """Return the next complete frame already buffered, skipping bad ones."""
@@ -198,6 +240,7 @@ class Sml(Powermeter):
                 logger.debug("CRC error, keep reading: %s", e)
             except smllib.errors.SmlLibException as e:
                 logger.error("error reading frame: %s", e)
+                self._stream.clear()
                 return None
 
 

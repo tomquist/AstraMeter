@@ -1,14 +1,13 @@
 import asyncio
 import configparser
-import logging
 import os
 import struct
 import threading
 import time
 import unittest
 from types import SimpleNamespace
-from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import cast
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -165,152 +164,6 @@ class TestCreateSmlPowermeter(unittest.TestCase):
         self.assertEqual(pm._obis_l1, "0100240700ff")
 
 
-# --- Async tests for the migrated Sml class ---
-
-
-async def test_async_read_returns_updated_powers() -> None:
-    sml = Sml("/dev/ttyUSB0")
-
-    async def fake_read() -> None:
-        sml._current = EnergyStats(powers=[500])
-
-    with patch.object(sml, "_read_serial", side_effect=fake_read):
-        result = await sml.get_powermeter_watts()
-    assert result == [500.0]
-
-
-async def test_async_skip_if_busy_returns_cached() -> None:
-    sml = Sml("/dev/ttyUSB0")
-    sml._current = EnergyStats(powers=[999])
-
-    read_called = False
-
-    async def fake_read() -> None:
-        nonlocal read_called
-        read_called = True
-
-    with patch.object(sml, "_read_serial", side_effect=fake_read):
-        # Hold the lock externally to simulate a read in progress
-        await sml._lock.acquire()
-        try:
-            result = await sml.get_powermeter_watts()
-        finally:
-            sml._lock.release()
-
-    assert result == [999.0]
-    assert not read_called
-
-
-async def test_async_lock_released_on_exception() -> None:
-    sml = Sml("/dev/ttyUSB0")
-    original_powers = sml._current.powers[:]
-
-    async def failing_read() -> None:
-        raise OSError("serial port error")
-
-    async def successful_read() -> None:
-        sml._current = EnergyStats(powers=[42])
-
-    with (
-        patch.object(sml, "_read_serial", side_effect=failing_read),
-        pytest.raises(OSError, match="serial port error"),
-    ):
-        await sml.get_powermeter_watts()
-
-    # Lock should be released; current should be unchanged
-    assert not sml._lock.locked()
-    assert sml._current.powers == original_powers
-
-    # Subsequent call should succeed
-    with patch.object(sml, "_read_serial", side_effect=successful_read):
-        result = await sml.get_powermeter_watts()
-    assert result == [42.0]
-
-
-async def test_async_cold_start_skip_returns_zero() -> None:
-    sml = Sml("/dev/ttyUSB0")
-    await sml._lock.acquire()
-    try:
-        result = await sml.get_powermeter_watts()
-    finally:
-        sml._lock.release()
-    assert result == [0.0]
-
-
-async def test_async_concurrent_callers() -> None:
-    sml = Sml("/dev/ttyUSB0")
-    sml._current = EnergyStats(powers=[100])
-    read_count = 0
-    read_started = asyncio.Event()
-
-    async def slow_read() -> None:
-        nonlocal read_count
-        read_count += 1
-        read_started.set()
-        await asyncio.sleep(0.1)
-        sml._current = EnergyStats(powers=[200])
-
-    with patch.object(sml, "_read_serial", side_effect=slow_read):
-        # Launch 3 concurrent callers
-        async def caller() -> list[float]:
-            return await sml.get_powermeter_watts()
-
-        task1 = asyncio.create_task(caller())
-        # Wait for the first caller to acquire the lock and start reading
-        await read_started.wait()
-        # These two should see the lock as busy and return cached
-        r2 = await caller()
-        r3 = await caller()
-        r1 = await task1
-
-    assert read_count == 1  # Only one actual read
-    assert r1 == [200.0]  # Fresh data from the read
-    assert r2 == [100.0]  # Cached value (before read completed)
-    assert r3 == [100.0]  # Cached value (before read completed)
-
-
-async def test_read_serial_retries_on_crc_error() -> None:
-    sml = Sml("/dev/ttyUSB0")
-
-    mock_reader = AsyncMock()
-    mock_reader.read = AsyncMock(return_value=b"\x00" * 64)
-    sml._reader = mock_reader
-
-    call_count = 0
-    mock_frame = MagicMock()
-    mock_frame.get_obis.return_value = [
-        _obis_value(_OBIS_POWER_CURRENT, 750, 27),
-    ]
-
-    import smllib.errors
-
-    def patched_get_frame(stream_self: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise smllib.errors.CrcError(b"", 0, 0)
-        return mock_frame
-
-    with patch("smllib.SmlStreamReader.get_frame", patched_get_frame):
-        await sml._read_serial()
-
-    assert sml._current.powers == [750]
-    assert call_count == 2
-
-
-async def test_read_serial_timeout() -> None:
-    sml = Sml("/dev/ttyUSB0")
-
-    mock_reader = AsyncMock()
-    mock_reader.read = AsyncMock(side_effect=asyncio.TimeoutError())
-    sml._reader = mock_reader
-
-    original_powers = sml._current.powers[:]
-    # Should not raise — timeout is handled gracefully
-    await sml._read_serial()
-    assert sml._current.powers == original_powers
-
-
 # --- E2E test using PTY virtual serial port ---
 
 
@@ -390,7 +243,7 @@ def test_parse_sml_powers_returns_none_on_garbage() -> None:
 
 
 async def test_e2e_pty_serial_read() -> None:
-    """Full E2E test: PTY pair → async serial read → SML parse → power values."""
+    """Full E2E test: PTY pair -> background reader -> SML parse -> power values."""
     master_fd, slave_fd = os.openpty()
     slave_name = os.ttyname(slave_fd)
 
@@ -408,29 +261,15 @@ async def test_e2e_pty_serial_read() -> None:
     sml = Sml(slave_name)
     try:
         await sml.start()
-        result = await sml.get_powermeter_watts()
+        await sml.wait_for_message(timeout=5)
         # 3-phase preferred over aggregate when all three present
-        assert result == [400.0, 500.0, 334.0]
+        assert await sml.get_powermeter_watts() == [400.0, 500.0, 334.0]
+        assert sml.stream_online() is True
     finally:
         await sml.stop()
         os.close(master_fd)
         os.close(slave_fd)
-
-
-@pytest.mark.asyncio
-async def test_empty_first_read_reports_a_closed_connection(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """EOF on the first read is end-of-stream, not an unparseable frame."""
-    sml = Sml("/dev/null")
-    reader = AsyncMock(return_value=b"")
-    sml._reader = cast("asyncio.StreamReader", SimpleNamespace(read=reader))
-    with caplog.at_level(logging.ERROR):
-        await sml._read_serial()
-    assert "serial connection closed" in caplog.text
-    assert "failed to read SML frame" not in caplog.text
-    # One read, then stop -- no futile frame attempts against an empty stream.
-    assert reader.await_count == 1
+    assert sml.stream_online() is False
 
 
 class _ChunkedReader:
@@ -440,75 +279,135 @@ class _ChunkedReader:
     def __init__(self, data: bytes, chunk: int) -> None:
         self._data = data
         self._chunk = chunk
-        self.reads = 0
 
     async def read(self, n: int) -> bytes:
-        self.reads += 1
         out = self._data[: min(n, self._chunk)]
         self._data = self._data[len(out) :]
         return out
 
 
-async def test_frame_assembled_from_many_small_reads() -> None:
-    """A frame arriving a few bytes per read, starting mid-telegram, still
-    decodes (#680: a ~400-byte signed EMH telegram never fit the old
-    11-read budget)."""
-    frame = _build_sml_frame(power_agg=110, power_l1=0, power_l2=0, power_l3=0)
-    # Tail of an earlier telegram first, then a whole one.
-    data = frame[len(frame) // 2 :] + frame
+def _build_single_frame(watts: int) -> bytes:
+    """A telegram reading *watts* on L1 and nothing on L2/L3."""
+    return _build_sml_frame(power_agg=watts, power_l1=watts, power_l2=0, power_l3=0)
+
+
+async def _feed(sml: Sml, data: bytes, chunk: int = 8) -> None:
+    await sml._read_stream(cast("asyncio.StreamReader", _ChunkedReader(data, chunk)))
+
+
+async def test_frames_assembled_from_small_reads() -> None:
+    """A telegram arriving a few bytes per read, starting mid-telegram, still
+    decodes (#680: a ~400-byte signed EMH telegram)."""
+    frame = _build_single_frame(110)
     sml = Sml("/dev/ttyUSB0")
-    reader = _ChunkedReader(data, chunk=8)
-    sml._reader = cast("asyncio.StreamReader", reader)
-    await sml._read_serial()
-    assert sml._current.powers == [0, 0, 0]
-    assert reader.reads > 11
+    await _feed(sml, frame[len(frame) // 2 :] + frame)
+    assert await sml.get_powermeter_watts() == [110.0, 0.0, 0.0]
 
 
-async def test_partial_frame_carries_over_to_next_reading() -> None:
-    """Bytes buffered by one reading are kept for the next one."""
-    frame = _build_sml_frame(power_agg=1234, power_l1=400, power_l2=500, power_l3=334)
+async def test_newest_frame_wins() -> None:
+    """Every telegram is published as it completes, so a reading is the latest
+    one rather than the oldest still buffered."""
     sml = Sml("/dev/ttyUSB0")
-    sml._reader = cast("asyncio.StreamReader", _ChunkedReader(frame[:40], chunk=8))
-    await sml._read_serial()  # ends on EOF with the frame incomplete
-    assert sml._current.powers == [0]
-    sml._reader = cast("asyncio.StreamReader", _ChunkedReader(frame[40:], chunk=8))
-    await sml._read_serial()
-    assert sml._current.powers == [400, 500, 334]
+    await _feed(sml, _build_single_frame(100) + _build_single_frame(200), chunk=512)
+    assert await sml.get_powermeter_watts() == [200.0, 0.0, 0.0]
 
 
-async def test_gives_up_after_frame_timeout(caplog: pytest.LogCaptureFixture) -> None:
-    """Bytes that never form a frame end the reading after the time budget."""
+async def test_wait_for_next_message_resolves_on_next_frame() -> None:
     sml = Sml("/dev/ttyUSB0")
-    reader = AsyncMock(return_value=b"\x00" * 8)
-    sml._reader = cast("asyncio.StreamReader", SimpleNamespace(read=reader))
-    with (
-        patch("astrameter.powermeter.sml._FRAME_TIMEOUT", 0.05),
-        caplog.at_level(logging.ERROR),
-    ):
-        await sml._read_serial()
-    assert "failed to read SML frame" in caplog.text
-    assert sml._current.powers == [0]
+    await _feed(sml, _build_single_frame(100))
+    waiter = asyncio.create_task(sml.wait_for_next_message(timeout=5))
+    await asyncio.sleep(0)
+    assert not waiter.done()
+    await _feed(sml, _build_single_frame(300))
+    await waiter
+    assert await sml.get_powermeter_watts() == [300.0, 0.0, 0.0]
 
 
-async def test_silent_port_bounded_by_frame_timeout() -> None:
-    """A read started just before the deadline waits only for the time left,
-    not a fresh full timeout."""
+async def test_crc_error_skipped() -> None:
+    """A corrupt telegram is dropped and the next intact one still decodes."""
+    bad = bytearray(_build_single_frame(100))
+    bad[-1] ^= 0xFF
+    sml = Sml("/dev/ttyUSB0")
+    await _feed(sml, bytes(bad) + _build_single_frame(250))
+    assert await sml.get_powermeter_watts() == [250.0, 0.0, 0.0]
 
-    class _TrickleThenSilent:
-        def __init__(self) -> None:
-            self.reads = 0
 
-        async def read(self, n: int) -> bytes:
-            self.reads += 1
-            if self.reads == 1:
-                return b"\x00" * 8
+async def test_no_reading_before_first_frame() -> None:
+    sml = Sml("/dev/ttyUSB0")
+    with pytest.raises(ValueError, match="No value received"):
+        await sml.get_powermeter_watts()
+    assert sml.stream_online() is False
+
+
+async def test_stale_reading_raises() -> None:
+    """A reading older than the age limit is refused, not served."""
+    now = 1000.0
+    sml = Sml("/dev/ttyUSB0")
+    sml._clock = lambda: now
+    await _feed(sml, _build_single_frame(100))
+    assert await sml.get_powermeter_watts() == [100.0, 0.0, 0.0]
+    now += 60
+    with pytest.raises(ValueError, match="stale"):
+        await sml.get_powermeter_watts()
+
+
+async def _serve(
+    connections: list[bytes | None],
+) -> tuple[asyncio.AbstractServer, str]:
+    """TCP server standing in for ser2net: the n-th connection gets the n-th
+    payload and is then closed (``None``: accept and stay silent)."""
+    queue = list(connections)
+
+    async def handle(reader: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        payload = queue.pop(0) if queue else None
+        if payload is None:
             await asyncio.sleep(3600)
-            return b""
+            return
+        w.write(payload)
+        await w.drain()
+        w.close()
 
-    sml = Sml("/dev/ttyUSB0")
-    sml._reader = cast("asyncio.StreamReader", _TrickleThenSilent())
-    loop = asyncio.get_running_loop()
-    start = loop.time()
-    with patch("astrameter.powermeter.sml._FRAME_TIMEOUT", 0.2):
-        await sml._read_serial()
-    assert loop.time() - start < 1.0
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, f"socket://127.0.0.1:{port}"
+
+
+async def _wait_for_watts(sml: Sml, watts: float) -> None:
+    for _ in range(200):
+        try:
+            if (await sml.get_powermeter_watts())[0] == watts:
+                return
+        except ValueError:
+            pass
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"never read {watts} W")
+
+
+async def test_reconnects_after_connection_closes() -> None:
+    """A dropped connection (e.g. ser2net closing it) is reopened by itself."""
+    server, url = await _serve([_build_single_frame(100), _build_single_frame(200)])
+    sml = Sml(url)
+    with patch("astrameter.powermeter.sml.RECONNECT_DELAY_SECONDS", 0.05):
+        try:
+            await sml.start()
+            await _wait_for_watts(sml, 100)
+            await _wait_for_watts(sml, 200)
+        finally:
+            await sml.stop()
+            server.close()
+
+
+async def test_silent_connection_is_reopened() -> None:
+    """An open but silent connection (half-open TCP) is treated as dead."""
+    server, url = await _serve([None, _build_single_frame(150)])
+    sml = Sml(url)
+    with (
+        patch("astrameter.powermeter.sml.RECONNECT_DELAY_SECONDS", 0.05),
+        patch("astrameter.powermeter.sml._READ_TIMEOUT", 0.2),
+    ):
+        try:
+            await sml.start()
+            await _wait_for_watts(sml, 150)
+        finally:
+            await sml.stop()
+            server.close()
