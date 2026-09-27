@@ -1033,6 +1033,52 @@ code {
     10px 10px 0 0 var(--border-strong);
 }
 
+/* the batteries themselves, each at its own charge level */
+.cells {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.cells i {
+  position: relative;
+  width: 26px;
+  height: 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+.cells i::before {
+  /* charge */
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: calc((100% - 4px) * var(--lvl));
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+.cells i::after {
+  /* terminal */
+  content: "";
+  position: absolute;
+  right: -4px;
+  top: 3px;
+  width: 3px;
+  height: 5px;
+  border-radius: 0 1px 1px 0;
+  background: var(--border-strong);
+}
+.cells i:nth-child(1) {
+  --lvl: 0.8;
+}
+.cells i:nth-child(2) {
+  --lvl: 0.55;
+}
+.cells i:nth-child(3) {
+  --lvl: 0.3;
+}
+
 /* data dots: a reading travels meter → AstraMeter, which lights up while it
  * handles it, then on to the batteries as a target, and the batteries report
  * back what they delivered. Runs only once the diagram is drawn (or straight
@@ -1081,8 +1127,57 @@ code {
   .wiring > :nth-child(4) .pulse-back {
     animation-name: pulse-back;
   }
+  /* a short comet trail behind each dot */
+  .pulse::after {
+    content: "";
+    position: absolute;
+    top: 2.5px;
+    right: 3px;
+    width: 24px;
+    height: 2px;
+    border-radius: 1px;
+    background: linear-gradient(to left, var(--accent), transparent);
+  }
+  .pulse-back::after {
+    right: auto;
+    left: 3px;
+    background: linear-gradient(to right, var(--accent), transparent);
+  }
+  /* a wire's label lights up while its dot travels */
+  /* longhands, so the per-label animation-name below survives */
+  .wiring:not(.draw) .wire-link span,
+  .wiring.draw.in .wire-link span {
+    animation-duration: 4s;
+    animation-timing-function: linear;
+    animation-delay: 1.3s;
+    animation-iteration-count: infinite;
+  }
+  .wiring > .wire-link:nth-child(2) span {
+    animation-name: label-in;
+  }
+  .wiring > .wire-link:nth-child(4) span {
+    animation-name: label-out;
+  }
+  .wiring > .wire-link:nth-child(4) .wire-note {
+    animation-name: label-back;
+  }
+  /* each battery blinks as its target arrives */
+  .wiring:not(.draw) .cells i,
+  .wiring.draw.in .cells i {
+    animation: cell-hit 4s ease 1.3s infinite;
+  }
+  .wiring:not(.draw) .cells i:nth-child(2),
+  .wiring.draw.in .cells i:nth-child(2) {
+    animation-delay: 1.38s;
+  }
+  .wiring:not(.draw) .cells i:nth-child(3),
+  .wiring.draw.in .cells i:nth-child(3) {
+    animation-delay: 1.46s;
+  }
   .wiring.paused .pulse,
-  .wiring.paused .wire-core {
+  .wiring.paused .wire-core,
+  .wiring.paused .wire-link span,
+  .wiring.paused .cells i {
     animation-play-state: paused;
   }
 }
@@ -1137,12 +1232,60 @@ code {
   0%,
   28%,
   48%,
-  100% {
+  95% {
     background: var(--bg-card);
   }
   34%,
-  42% {
+  42%,
+  100% {
     background: #10283a;
+  }
+}
+@keyframes label-in {
+  0%,
+  32%,
+  100% {
+    color: var(--muted);
+  }
+  6%,
+  26% {
+    color: var(--accent);
+  }
+}
+@keyframes label-out {
+  0%,
+  44%,
+  72%,
+  100% {
+    color: var(--muted);
+  }
+  50%,
+  66% {
+    color: var(--accent);
+  }
+}
+@keyframes label-back {
+  0%,
+  72%,
+  100% {
+    color: var(--muted);
+  }
+  78%,
+  94% {
+    color: var(--accent);
+  }
+}
+@keyframes cell-hit {
+  0%,
+  69%,
+  80%,
+  100% {
+    border-color: var(--border-strong);
+    box-shadow: none;
+  }
+  72% {
+    border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
   }
 }
 
@@ -1637,6 +1780,20 @@ main section[id] {
   }
   .wiring > :nth-child(4) .pulse-back {
     animation-name: pulse-back-up;
+  }
+  .pulse::after {
+    top: auto;
+    bottom: 3px;
+    right: auto;
+    left: 2.5px;
+    width: 2px;
+    height: 24px;
+    background: linear-gradient(to top, var(--accent), transparent);
+  }
+  .pulse-back::after {
+    bottom: auto;
+    top: 3px;
+    background: linear-gradient(to bottom, var(--accent), transparent);
   }
   .wire-link::after {
     left: 16px;
