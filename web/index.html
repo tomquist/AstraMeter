@@ -85,9 +85,10 @@
               with.
             </p>
             <p>
-              With a single battery, Shelly emulation is enough. With two or more, use CT002 or CT003: AstraMeter
-              then gives each battery its own target, so they share the load instead of all reacting to the same
-              reading and overshooting.
+              Use CT002 or CT003, whether you have one battery or several. Each battery reports its output back,
+              so AstraMeter steers it to a target instead of just passing on the reading. With two or more, each
+              gets its own target, so they share the load instead of all reacting to the same reading and
+              overshooting. Shelly emulation is there for batteries that can't pair with a CT.
             </p>
 
             <figure class="wiring" aria-label="Grid meter to AstraMeter to batteries">
@@ -212,11 +213,11 @@
                   <tr><th>Emulated meter</th><th>Use it for</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td>Shelly Pro 3EM</td><td>One battery</td><td>Port 1010 for B2500 firmware up to v224, 2220 from v226</td></tr>
-                  <tr><td>Shelly EM Gen3</td><td>One battery</td><td></td></tr>
-                  <tr><td>Shelly Pro EM-50</td><td>One battery</td><td></td></tr>
-                  <tr><td>Marstek CT002 (HME-4)</td><td>Two or more</td><td>Per-battery targets and load sharing</td></tr>
-                  <tr><td>Marstek CT003 (HME-3)</td><td>Two or more</td><td>Same as CT002</td></tr>
+                  <tr><td>Marstek CT002 (HME-4)</td><td>One or more (recommended)</td><td>Feedback from each battery, per-battery targets and load sharing</td></tr>
+                  <tr><td>Marstek CT003 (HME-3)</td><td>One or more (recommended)</td><td>Same as CT002</td></tr>
+                  <tr><td>Shelly Pro 3EM</td><td>A battery that can't pair with a CT</td><td>Port 1010 for B2500 firmware up to v224, 2220 from v226</td></tr>
+                  <tr><td>Shelly EM Gen3</td><td>A battery that can't pair with a CT</td><td></td></tr>
+                  <tr><td>Shelly Pro EM-50</td><td>A battery that can't pair with a CT</td><td></td></tr>
                 </tbody>
               </table>
             </div>
@@ -306,7 +307,7 @@
             </details>
             <details>
               <summary>Should I use Shelly emulation or CT002/CT003?</summary>
-              <p>Shelly for a single battery. CT002/CT003 when two or more batteries should share the load; AstraMeter then gives each one its own target.</p>
+              <p>CT002/CT003, for one battery or several. The battery reports its output back, so AstraMeter can steer it to a target, and with two or more each gets its own target and they share the load. Pick Shelly only if your battery can't pair with a CT002/CT003.</p>
             </details>
             <details>
               <summary>What's the difference between Home Assistant, Docker and ESP32?</summary>

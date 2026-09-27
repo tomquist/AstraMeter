@@ -92,14 +92,14 @@ export const SHELLY_TYPES: Option[] = [
   { value: "3EMPro", label: "Shelly 3EM Pro" },
 ];
 
-// Device types AstraMeter can emulate (Python add-on). The shelly* family
-// emulates a single Shelly meter; ct002/ct003 emulate Marstek CT clamps and
-// are recommended when you run more than one battery.
+// Device types AstraMeter can emulate (Python add-on). ct002/ct003 emulate
+// Marstek CT clamps and are recommended for any number of batteries; the
+// shelly* family emulates a Shelly meter for batteries that can't pair with a CT.
 export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "shellypro3em",
     label: "Shelly Pro 3EM",
-    help: "Best all-round choice for a single battery. Works with most Marstek firmware.",
+    help: "Fallback for a battery that can't pair with a CT002/CT003. Works with most Marstek firmware.",
   },
   {
     value: "shellyemg3",
@@ -114,7 +114,7 @@ export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "ct002",
     label: "Marstek CT002 (HME-4)",
-    help: "Marstek's CT meter. Recommended when you have two or more batteries that should share the load.",
+    help: "Marstek's CT meter. Recommended for one battery or several: each battery reports its output back, so AstraMeter can steer it to a target and share the load across batteries.",
   },
   {
     value: "ct003",

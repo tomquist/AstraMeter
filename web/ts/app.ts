@@ -321,7 +321,7 @@ function deviceCard(): HTMLElement {
   // (user-controlled) is used only as a membership filter, not rendered.
   const selectedHelp = DEVICE_TYPES.filter((d) => g.deviceTypes.includes(d.value)).map((d) => el("li", { html: `<strong>${d.label}:</strong> ${d.help}` }));
 
-  return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. Two or more batteries that should share load → keep CT002. A single battery → Shelly Pro 3EM works too.", [
+  return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. Keep CT002, for one battery or several. Pick a Shelly only if your battery can't pair with a CT002/CT003.", [
     el("div", { class: "pill-row" }, typeButtons),
     el("ul", { class: "pill-help" }, selectedHelp),
     el("details", { class: "adv" }, [

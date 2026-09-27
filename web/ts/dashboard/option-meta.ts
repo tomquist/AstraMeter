@@ -268,9 +268,10 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "Emulated device",
     group: DEVICE,
     help:
-      "Which meter AstraMeter pretends to be. ct002 or ct003 for Marstek " +
-      "batteries — the only types it can steer several of; a Shelly type " +
-      "otherwise. Comma-separated to emulate more than one.",
+      "Which meter AstraMeter pretends to be. ct002 or ct003 for one " +
+      "battery or several: the battery reports back, so AstraMeter can " +
+      "steer it. A Shelly type only for a battery that can't pair with a " +
+      "CT. Comma-separated to emulate more than one.",
   },
   ct_mac: {
     label: "CT MAC address",
