@@ -86,11 +86,12 @@
               with.
             </p>
             <p>
-              As a CT002 or CT003, AstraMeter gives each battery its own target, so they share the load instead
-              of all reacting to the same reading and overshooting.
+              As a CT002 or CT003, AstraMeter gives each battery its own target. Every poll also reports what
+              that battery delivered, so AstraMeter corrects the next target and the batteries share the load
+              instead of all reacting to the same reading and overshooting.
             </p>
 
-            <figure class="wiring" aria-label="Grid meter to AstraMeter to batteries">
+            <figure class="wiring" aria-label="Grid meter feeds AstraMeter, which sends each battery a target and gets back what it delivered">
               <div class="wire-node">
                 <span class="wire-kind">Grid meter</span>
                 <strong>What you have</strong>
@@ -102,8 +103,14 @@
                 <strong>Filters and splits</strong>
                 <span>Smooths the reading, works out a target per battery</span>
               </div>
-              <div class="wire-link"><span>UDP, as Shelly or CT002/CT003</span><i class="pulse" aria-hidden="true"></i></div>
-              <div class="wire-node">
+              <div class="wire-link wire-loop">
+                <span>Target per battery</span>
+                <span class="wire-note">What each delivered</span>
+                <i class="wire-back" aria-hidden="true"></i>
+                <i class="pulse" aria-hidden="true"></i>
+                <i class="pulse pulse-back" aria-hidden="true"></i>
+              </div>
+              <div class="wire-node wire-stack">
                 <span class="wire-kind">Batteries</span>
                 <strong>What they expect</strong>
                 <span>One or more Marstek storage systems</span>
