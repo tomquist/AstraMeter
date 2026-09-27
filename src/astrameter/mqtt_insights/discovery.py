@@ -6,7 +6,10 @@ import re
 from functools import partial
 
 from astrameter.ct002.balancer import CONTROL_QUALITY_STATES, _needs_dc_output_floor
-from astrameter.ct002.controls import CONSUMER_CONTROLS_BY_FIELD
+from astrameter.ct002.controls import (
+    CONSUMER_CONTROLS_BY_FIELD,
+    PEAKSHAVING_THRESHOLD_MAX,
+)
 from astrameter.version_info import get_git_commit_sha
 
 from .topics import (
@@ -551,7 +554,7 @@ def build_ct002_device_discovery(
             "unit_of_measurement": "W",
             "device_class": "power",
             "min": 0,
-            "max": 10000,
+            "max": int(PEAKSHAVING_THRESHOLD_MAX),
             "step": 50,
             "mode": "box",
             "state_topic": state_topic,

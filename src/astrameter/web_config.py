@@ -278,6 +278,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "CONSUMER_TTL": {"type": "integer"},
         "DEBUG_STATUS": {"type": "boolean"},
         "ACTIVE_CONTROL": {"type": "boolean"},
+        "PEAKSHAVING_THRESHOLD": {"type": "float", "min": 0, "max": 10000},
         "FAIR_DISTRIBUTION": {"type": "boolean"},
         "BALANCE_GAIN": {"type": "float"},
         "BALANCE_DEADBAND": {"type": "integer"},

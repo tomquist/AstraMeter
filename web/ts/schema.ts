@@ -905,6 +905,7 @@ export const CT_BASIC: Field[] = [
 
 export const CT_ACTIVE: Field[] = [
   { key: "ACTIVE_CONTROL", ey: "active_control", label: "Active control", help: "On (default): the emulator smooths the reading, splits the target across batteries and balances them. Off: relay raw readings and let batteries decide.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "PEAKSHAVING_THRESHOLD", ey: "peakshaving_threshold", label: "Peak shaving threshold (W)", help: "For tariffs that bill on peak demand: the batteries only cover net demand above this. Below it they stay idle instead of covering everyday load; solar surplus still charges them. 0 = off. Adjustable live from the dashboard or Home Assistant.", type: "number", placeholder: "0" },
 ];
 
 export const CT_BALANCER: Field[] = [

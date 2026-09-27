@@ -686,6 +686,9 @@ export function generateEsphome(state: State): string {
   if (!isBlank(ctf.WIFI_RSSI)) ctLines.push(`${IND}wifi_rssi: ${ctf.WIFI_RSSI}`);
   if (ctf.ACTIVE_CONTROL === "True") ctLines.push(`${IND}active_control: true`);
   else if (ctf.ACTIVE_CONTROL === "False") ctLines.push(`${IND}active_control: false`);
+  if (!isBlank(ctf.PEAKSHAVING_THRESHOLD)) {
+    ctLines.push(`${IND}peakshaving_threshold: ${ctf.PEAKSHAVING_THRESHOLD}`);
+  }
   if (!isBlank(ctf.CONSUMER_TTL)) ctLines.push(`${IND}consumer_ttl: ${ctf.CONSUMER_TTL}s`);
   if (!isBlank(ctf.DEDUPE_TIME_WINDOW)) ctLines.push(`${IND}dedupe_window: ${ctf.DEDUPE_TIME_WINDOW}s`);
 
@@ -839,6 +842,7 @@ export function generateHomeAssistant(state: State): string {
   // add-on option is a plain bool, so only an explicit On/Off is emitted.
   if (ctf.ACTIVE_CONTROL === "True") add("active_control", true);
   else if (ctf.ACTIVE_CONTROL === "False") add("active_control", false);
+  add("peakshaving_threshold", ctf.PEAKSHAVING_THRESHOLD);
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);

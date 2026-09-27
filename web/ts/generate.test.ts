@@ -65,6 +65,7 @@ const ha = generateConfigIni({
       CT_MAC: "001122334455",
       BALANCE_GAIN: "0.3",
       ACTIVE_CONTROL: "True",
+      PEAKSHAVING_THRESHOLD: "2500",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_INTERVAL: "30",
     },
@@ -78,6 +79,7 @@ has(ha, "POWER_MULTIPLIER = -1", "ha: transform");
 has(ha, "PID_KP = 0.5", "ha: pid");
 has(ha, "[CT002]", "ha: CT002 section emitted");
 has(ha, "CT_MAC = 001122334455", "ha: ct mac");
+has(ha, "PEAKSHAVING_THRESHOLD = 2500", "ha: peak shaving threshold");
 has(ha, "BALANCE_GAIN = 0.3", "ha: balancer option");
 has(ha, "CLOUD_REPORTING = True", "ha: cloud reporting on");
 has(ha, "CLOUD_REPORTING_INTERVAL = 30", "ha: cloud reporting interval");
@@ -341,13 +343,14 @@ const eyMqtt = generateEsphome({
   target: "esphome",
   esphome: { ctType: "HME-3" },
   meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "192.168.1.10", TOPIC: "home/p" }, tuning: { DEADBAND: "20" } }],
-  ct: { fields: { ACTIVE_CONTROL: "False" } },
+  ct: { fields: { ACTIVE_CONTROL: "False", PEAKSHAVING_THRESHOLD: "2500" } },
   mqttInsights: { enabled: true, fields: { BROKER: "192.168.1.10", BASE_TOPIC: "astrameter", HA_DISCOVERY: "true", STATE_THROTTLE_INTERVAL: "5" } },
   marstek: { enabled: true, fields: { MAILBOX: "a@b.c", TIMEZONE: "Europe/Berlin" } },
 });
 has(eyMqtt, "platform: mqtt_subscribe", "esp/mqtt: subscribe sensor");
 has(eyMqtt, "topic: home/p", "esp/mqtt: topic");
 has(eyMqtt, "active_control: false", "esp/mqtt: active control off");
+has(eyMqtt, "  peakshaving_threshold: 2500", "esp/mqtt: peak shaving threshold on ct002:");
 has(eyMqtt, "deadband: 20", "esp/mqtt: deadband filter");
 has(eyMqtt, "mqtt_insights:", "esp/mqtt: insights sub-block");
 has(eyMqtt, "state_throttle_interval: 5s", "esp/mqtt: insights state throttle");
@@ -563,6 +566,7 @@ const haOpts = generateHomeAssistant({
       CT_MAC: "abc123",
       MIN_DC_OUTPUT: "30",
       ACTIVE_CONTROL: "False",
+      PEAKSHAVING_THRESHOLD: "2500",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_INTERVAL: "30",
       GRID_PREDICT_TRUST: "0.7",
@@ -586,6 +590,7 @@ has(haOpts, "throttle_interval: 2", "ha-opts: throttle interval");
 has(haOpts, "wait_for_next_message: false", "ha-opts: wait for next message");
 has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
 has(haOpts, "active_control: false", "ha-opts: active control off");
+has(haOpts, "peakshaving_threshold: 2500", "ha-opts: peak shaving threshold");
 has(haOpts, "min_dc_output: 30", "ha-opts: min dc output");
 has(haOpts, "grid_predict_trust: 0.7", "ha-opts: grid predict trust");
 has(haOpts, "fair_distribution: false", "ha-opts: fair distribution off");

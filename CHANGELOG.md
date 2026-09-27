@@ -4,7 +4,7 @@
 
 - **Fixed** SML meters read over a USB IR head never delivering a reading when their telegrams are long, such as signed EMH meters, logging only "failed to read SML frame" ([#680](https://github.com/tomquist/astrameter/discussions/680), [#689](https://github.com/tomquist/astrameter/pull/689)).
 
-- **Added** `PEAKSHAVING_THRESHOLD` (and a matching "Peak Shaving Threshold" add-on option / Home Assistant number entity), which caps the household demand handed to the balancer at a fixed wattage, reconstructed from the raw grid reading plus what the batteries are currently contributing. Useful for capacity-tariff billing (e.g. Belgian peak-tariff structures), where only demand above a threshold needs to be covered by the batteries. Set to 0 to disable (default); adjustable live via MQTT or the dashboard without a restart. ([#690](https://github.com/tomquist/astrameter/pull/690))
+- **Added** a peak shaving threshold for tariffs that bill on peak demand, such as Belgium's capacity tariff: batteries only cover demand above it and stay idle below it ([#690](https://github.com/tomquist/astrameter/pull/690)).
 
 
 ## 2.3.1

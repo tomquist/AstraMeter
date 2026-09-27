@@ -94,8 +94,8 @@ then read the reference docs as needed:
 - **[Powermeter sources](docs/powermeters.md)** — the `config.ini` section for
   each supported meter.
 - **[CT002 / CT003 steering](docs/ct002.md)** — the CT emulator, active control,
-  multi-battery balancing, efficiency optimization, and Marstek cloud
-  registration.
+  peak shaving, multi-battery balancing, efficiency optimization, and Marstek
+  cloud registration.
 - **[Live status dashboard](docs/dashboard.md)** — the built-in web UI. It shows
   live grid and per-battery state, and lets you edit your configuration in the
   browser. It is on by default in the Home Assistant add-on and in Docker or

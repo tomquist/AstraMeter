@@ -137,7 +137,9 @@ void DashboardComponent::loop() {
     // protect, and a retained press would re-fire on every reconnect.
     if (applied && this->mqtt_insights_ != nullptr && !controls::is_device_button(write.field)) {
       if (write.consumer_id.empty()) {
-        this->mqtt_insights_->mirror_device_command(write.field, write.wire_value);
+        // The device settings share one retained topic, so this publishes
+        // all of them rather than just the one written.
+        this->mqtt_insights_->mirror_device_setting(write.field);
       } else {
         this->mqtt_insights_->mirror_consumer_command(write.consumer_id, write.field,
                                                       write.wire_value);
@@ -364,6 +366,13 @@ void DashboardComponent::handle_control_(AsyncWebServerRequest *request, bool de
   if (device_wide) {
     if (!controls::is_device_field(write.field)) {
       send_json(request, 404, "{\"error\":\"Unknown field\"}");
+      return;
+    }
+    // Same bounds as the MQTT command handler and the Python dashboard.
+    const std::string message = controls::coerce_device_control(write.field, write.value);
+    if (!message.empty()) {
+      const std::string payload = "{\"error\":\"" + message + "\"}";
+      send_json(request, 400, payload.c_str());
       return;
     }
   } else {

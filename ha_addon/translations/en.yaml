@@ -31,7 +31,7 @@ configuration:
     description: "When enabled (default), the emulator smooths the grid reading, splits the target across batteries and balances them. Disable for relay mode: the raw per-phase readings are forwarded and each battery decides on its own. Only applies to CT002/CT003 device types."
   peakshaving_threshold:
     name: Peak Shaving Threshold
-    description: "Caps the household demand (in watts) handed to the balancer, reconstructed from the raw grid reading plus what the batteries are currently contributing so partial battery output is never masked. Demand above this value is what the batteries are asked to cover; demand at or below it is treated as satisfied. Set to 0 to disable (default). Only applies to CT002/CT003 device types."
+    description: "For tariffs that bill on peak demand (e.g. the Belgian capacity tariff): the batteries only cover net household demand above this many watts. Below it they stay idle instead of covering everyday load, while solar surplus still charges them. Set to 0 to disable (default); up to 10000. Also adjustable live from the dashboard or Home Assistant. Only applies to CT002/CT003 device types with active control."
   min_efficient_power:
     name: Min Efficient Power
     description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."

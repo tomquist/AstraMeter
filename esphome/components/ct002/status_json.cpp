@@ -309,7 +309,7 @@ void write_device(JsonWriter &json, const DeviceStatus &device) {
   json.set_time("started_at", device.started_at);
   json.begin_object("control");
   json.set("active_control", device.active_control);
-  json.set("peakshaving_threshold", static_cast<double>(device.peakshaving_threshold), 1);
+  json.set("peakshaving_threshold_w", static_cast<double>(device.peakshaving_threshold), 1);
   if (device.consumer_ttl_s.has_value())
     json.set("consumer_ttl_s", static_cast<long long>(*device.consumer_ttl_s));
   json.set("dedupe_window_s", static_cast<double>(device.dedupe_window_s), 3);

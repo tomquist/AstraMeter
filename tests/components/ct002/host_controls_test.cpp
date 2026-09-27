@@ -99,6 +99,29 @@ TEST(Controls, RefusesABooleanForANumericField) {
   EXPECT_EQ(coerce_consumer_control("manual_target", value), "manual_target must be a number");
 }
 
+TEST(Controls, BoundsThePeakShavingThresholdLikePython) {
+  // Mirrors DEVICE_NUMBER_BOUNDS / coerce_device_number in controls.py.
+  EXPECT_TRUE(is_device_number("peakshaving_threshold"));
+  EXPECT_FALSE(is_device_number("active_control"));
+  EXPECT_FALSE(is_device_number("force_rotation"));
+  for (float ok : {0.0f, 2500.0f, 10000.0f}) {
+    ControlValue value = number(ok);
+    EXPECT_EQ(coerce_device_control("peakshaving_threshold", value), "") << ok;
+  }
+  for (float bad : {-1.0f, 10001.0f, NAN, INFINITY}) {
+    ControlValue value = number(bad);
+    EXPECT_EQ(coerce_device_control("peakshaving_threshold", value),
+              "peakshaving_threshold must be between 0 and 10000")
+        << bad;
+  }
+  ControlValue flag = boolean(true);
+  EXPECT_EQ(coerce_device_control("peakshaving_threshold", flag),
+            "peakshaving_threshold must be a number");
+  // Switches and buttons keep their own handling.
+  EXPECT_EQ(coerce_device_control("active_control", flag), "");
+  EXPECT_EQ(coerce_device_control("force_rotation", flag), "");
+}
+
 TEST(Controls, TellsButtonsApartFromSettings) {
   // Two consumers rely on this: a button may be written with no value, and a
   // button is never mirrored onto a retained MQTT topic.

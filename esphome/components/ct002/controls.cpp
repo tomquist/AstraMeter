@@ -168,7 +168,12 @@ constexpr Range NUMERIC_FIELDS[] = {
 constexpr const char *BOOL_FIELDS[] = {"active", "auto_target"};
 
 // Mirrors apply_device_control in src/astrameter/ct002/controls.py.
-constexpr const char *DEVICE_FIELDS[] = {"active_control", "peakshaving_threshold", "force_rotation"};
+constexpr const char *DEVICE_FIELDS[] = {"active_control", "peakshaving_threshold",
+                                         "force_rotation"};
+// Mirrors DEVICE_NUMBER_BOUNDS in src/astrameter/ct002/controls.py.
+constexpr Range DEVICE_NUMERIC_FIELDS[] = {
+    {"peakshaving_threshold", 0.0f, PEAKSHAVING_THRESHOLD_MAX, 1.0f},
+};
 // Buttons, not settings: they carry no value, so a write may arrive bare, and
 // there is no retained state for a dashboard write to mirror onto MQTT — a
 // retained press would re-fire on every reconnect.
@@ -176,6 +181,13 @@ constexpr const char *DEVICE_BUTTONS[] = {"force_rotation"};
 
 const Range *find_numeric(const std::string &field) {
   for (const Range &range : NUMERIC_FIELDS) {
+    if (field == range.field) return &range;
+  }
+  return nullptr;
+}
+
+const Range *find_device_numeric(const std::string &field) {
+  for (const Range &range : DEVICE_NUMERIC_FIELDS) {
     if (field == range.field) return &range;
   }
   return nullptr;
@@ -235,6 +247,18 @@ bool is_device_field(const std::string &field) {
     if (field == name) return true;
   }
   return false;
+}
+
+bool is_device_number(const std::string &field) { return find_device_numeric(field) != nullptr; }
+
+std::string coerce_device_control(const std::string &field, ControlValue &value) {
+  const Range *range = find_device_numeric(field);
+  if (range == nullptr) return {};
+  if (value.is_bool) return field + " must be a number";
+  if (!std::isfinite(value.number) || value.number < range->low || value.number > range->high) {
+    return field + " must be between " + compact(range->low) + " and " + compact(range->high);
+  }
+  return {};
 }
 
 std::string coerce_consumer_control(const std::string &field, ControlValue &value) {

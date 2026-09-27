@@ -457,12 +457,13 @@ class CT002:
         self.consumer_ttl = consumer_ttl
         self.debug_status = debug_status
         self.active_control = active_control
-        self.peakshaving_threshold = peakshaving_threshold
+        self.peakshaving_threshold = 0.0
         self.before_send: (
             Callable[[tuple, CT002Request, str], Awaitable[list[float] | None]] | None
         ) = None
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
         self._device_id = device_id
+        self.set_peakshaving_threshold(peakshaving_threshold)
         self._consumers: dict[str, Consumer] = {}
         # User-set control state, kept per consumer id so it survives the
         # consumer's eviction (battery silent past its TTL) and is re-seeded
@@ -689,9 +690,9 @@ class CT002:
         """Live-update the peak shaving threshold (W). Surfaced as the
         device's "Peak Shaving Threshold" number entity in Home Assistant;
         0 disables peak shaving. Takes effect on the next control cycle."""
-        if threshold < 0:
+        if not math.isfinite(threshold) or threshold < 0:
             logger.warning(
-                "Ignoring negative peak shaving threshold %.1f for %s",
+                "Ignoring invalid peak shaving threshold %r for %s",
                 threshold,
                 self._device_id or "(default)",
             )
@@ -699,11 +700,14 @@ class CT002:
         if self.peakshaving_threshold == threshold:
             return
         self.peakshaving_threshold = threshold
-        logger.info(
-            "Peak shaving threshold set to %.1fW for %s",
-            threshold,
-            self._device_id or "(default)",
-        )
+        if threshold > 0:
+            logger.info(
+                "Peak shaving threshold set to %.1fW for %s",
+                threshold,
+                self._device_id or "(default)",
+            )
+        else:
+            logger.info("Peak shaving disabled for %s", self._device_id or "(default)")
 
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
         consumer = self._get_consumer(consumer_id)
@@ -835,27 +839,33 @@ class CT002:
 
     def _apply_peakshaving(self, total: float) -> float:
         """Cap the household demand handed to the balancer at
-        peakshaving_threshold, reconstructing true demand (raw grid reading
-        + what the batteries are currently contributing) rather than
-        shaving the raw grid reading alone. See _compute_smooth_target for
-        why this avoids a "dead zone" where a partially discharging/
-        charging battery would otherwise never be driven back to zero.
+        peakshaving_threshold.
+
+        Demand is reconstructed as the grid reading plus what the batteries
+        the balancer steers are delivering right now, so a battery already
+        part-way into a discharge (or charge) is driven back to zero once
+        demand drops under the threshold instead of being frozen there.
+        Only those batteries count: a battery on a manual setpoint, paused,
+        opted out of control or gone silent is not ours to move, so its
+        output lowers demand the way solar does.  Counting it would ask the
+        steered batteries to cancel it out by charging from the grid.
         """
         if self.peakshaving_threshold <= 0:
             return total
-        if not hasattr(self, "_peakshaving_logged"):
-            logger.info(
-                "Peak shaving enabled (threshold=%.1fW)", self.peakshaving_threshold
-            )
-            self._peakshaving_logged = True
-        total_battery_power = sum(
-            parse_int(c.power, 0) for c in self._consumers.values() if c.timestamp > 0
+        now = self._clock()
+        steered_power = sum(
+            parse_int(c.power, 0)
+            for c in self._consumers.values()
+            if c.timestamp > 0
+            and c.active
+            and c.participates
+            and not c.manual_enabled
+            and not self._consumer_expired(c, now)
         )
-        household_demand = total + total_battery_power
+        household_demand = total + steered_power
         if household_demand <= 0:
             return total
-        shaved_target = min(household_demand, self.peakshaving_threshold)
-        return total - shaved_target
+        return total - min(household_demand, self.peakshaving_threshold)
 
     def _compute_smooth_target(
         self, values: list[float], consumer_id: str | None = None

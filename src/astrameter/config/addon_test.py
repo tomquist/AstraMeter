@@ -95,6 +95,7 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
             **BASE_OPTIONS,
             "ct_mac": "AA:BB:CC:DD:EE:FF",
             "active_control": False,
+            "peakshaving_threshold": 2500,
             "min_efficient_power": 100,
             "grid_predict_trust": 0.25,
             "fair_distribution": True,
@@ -109,6 +110,8 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
     ).ct("ct002")
     assert ct.ct_mac == "AA:BB:CC:DD:EE:FF"
     assert ct.active_control is False
+    assert ct.peakshaving_threshold == 2500.0
+    assert isinstance(ct.peakshaving_threshold, float)
     assert ct.min_efficient_power == 100
     assert ct.grid_predict_trust == 0.25
     assert ct.fair_distribution is True

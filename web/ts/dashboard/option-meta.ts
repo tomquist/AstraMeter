@@ -293,11 +293,9 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "Peak shaving threshold (W)",
     group: CONTROL,
     help:
-      "Caps the household demand handed to the balancer at this wattage, " +
-      "reconstructed from the raw grid reading plus what the batteries are " +
-      "currently contributing. Useful for capacity-tariff billing (e.g. " +
-      "Belgian peak-tariff structures). 0 disables it; adjustable live via " +
-      "MQTT or this dashboard without a restart.",
+      "For tariffs that bill on peak demand: the batteries only cover demand " +
+      "above this. Below it they stay idle instead of covering everyday load, " +
+      "while solar surplus still charges them. 0 turns it off.",
     placeholder: "0",
   },
   fair_distribution: {

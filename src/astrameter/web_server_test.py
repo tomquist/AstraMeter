@@ -1069,8 +1069,8 @@ async def test_force_rotation_is_not_mirrored_to_mqtt(tmp_path: Path) -> None:
         def status_snapshot(self) -> _InsightsSnapshot:
             return _InsightsSnapshot()
 
-        async def publish_device_command(self, device_id: str, payload: dict) -> None:
-            mirrored.append((device_id, payload))
+        async def publish_device_setting(self, device_id: str, field: str) -> None:
+            mirrored.append((device_id, field))
 
     registry.insights = _Insights()
     client = await _client(registry)
@@ -1089,7 +1089,55 @@ async def test_force_rotation_is_not_mirrored_to_mqtt(tmp_path: Path) -> None:
             json={"device_id": "ct-1", "field": "active_control", "value": False},
         )
     ).status == 200
-    assert mirrored == [("ct-1", {"active_control": False})]
+    assert mirrored == [("ct-1", "active_control")]
+    await client.close()
+
+
+async def test_peakshaving_threshold_is_written_as_a_number(tmp_path: Path) -> None:
+    """The threshold travels as a number; it must not be squashed into a
+    boolean on the way, which the setter then refused as "must be a number"."""
+    registry = _registry(tmp_path, direct_access=True, allow_write=True)
+    device = _device()
+    registry.register_device("ct-1", "ct002", device)
+    mirrored: list[tuple] = []
+
+    class _Insights:
+        def status_snapshot(self) -> _InsightsSnapshot:
+            return _InsightsSnapshot()
+
+        async def publish_device_setting(self, device_id: str, field: str) -> None:
+            mirrored.append((device_id, field))
+
+    registry.insights = _Insights()
+    client = await _client(registry)
+
+    async def write(value: object) -> Any:
+        return await client.post(
+            "/api/control/device",
+            json={
+                "device_id": "ct-1",
+                "field": "peakshaving_threshold",
+                "value": value,
+            },
+        )
+
+    response = await write(2500)
+    assert response.status == 200
+    assert device.peakshaving_threshold == 2500.0
+    assert mirrored == [("ct-1", "peakshaving_threshold")]
+
+    # The same bounds as MQTT and the firmware, and the reason is reported.
+    for bad in (-1, 10001, True, "lots"):
+        response = await write(bad)
+        assert response.status == 400, bad
+        assert "peakshaving_threshold must be" in (await response.json())["error"]
+    missing = await client.post(
+        "/api/control/device",
+        json={"device_id": "ct-1", "field": "peakshaving_threshold"},
+    )
+    assert missing.status == 400
+    assert device.peakshaving_threshold == 2500.0
+    assert mirrored == [("ct-1", "peakshaving_threshold")]
     await client.close()
 
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import ssl
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ import aiomqtt
 from astrameter.config.logger import logger
 from astrameter.ct002.controls import (
     CONSUMER_CONTROLS_BY_FIELD,
+    DEVICE_SETTINGS,
     ControllableDevice,
     apply_device_control,
     is_device_button,
@@ -206,17 +208,23 @@ class MqttInsightsService:
         # usually before the owning device has started and registered, so the
         # payload is kept here and replayed when the device registers.
         self._pending_consumer_commands: dict[str, dict[tuple[str, str], str]] = {}
-        # Device-level commands (active_control / peakshaving_threshold) that
-        # arrived -- retained or live -- before the device registered.  Kept
-        # here and replayed in register_device(), mirroring the consumer
-        # command buffer above.
+        # Device settings (active_control / peakshaving_threshold) that
+        # arrived before the device registered, replayed in register_device()
+        # like the consumer commands above.  A button press is not buffered:
+        # it is momentary and meaningless once delayed.
         self._pending_device_commands: dict[str, dict[str, object]] = {}
-        # Last-known-good value of each settable device field, by device id.
-        # active_control and peakshaving_threshold are written to the same
-        # retained command topic, so whenever one changes we republish the
-        # merged dict rather than letting the broker keep only the most
-        # recently written field.
-        self._last_device_settings: dict[str, dict[str, object]] = {}
+        # Devices whose buffered settings the broker no longer holds whole
+        # (a later message on the shared topic carried only some of them), so
+        # the replay has to publish them back.
+        self._pending_device_partial: set[str] = set()
+        # The device settings persisted on the retained command topic, by
+        # device id.  The settings share that one topic, so every write
+        # publishes all of these at their current value; a setting joins once
+        # anything writes it, so one only ever configured in the config file is
+        # never pinned on the broker.  Mirrors ``persisted_settings_`` in
+        # mqtt_insights.cpp.
+        self._persisted_settings: dict[str, set[str]] = {}
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
         self._marstek_bindings: dict[str, MarstekMqttBinding] = {}
@@ -411,14 +419,17 @@ class MqttInsightsService:
             str(payload).encode(),
         )
 
-    async def publish_device_command(
-        self, device_id: str, payload: dict[str, Any]
-    ) -> None:
-        """Publish a retained device-level command (JSON object payload)."""
-        await self._publish_command(
-            device_command_topic(self._config.base_topic, device_id),
-            json.dumps(payload).encode(),
-        )
+    async def publish_device_setting(self, device_id: str, field: str) -> None:
+        """Persist device setting *field* on the retained command topic.
+
+        The device settings share that topic, so this publishes every
+        persisted one at its current value, not just *field*: publishing one
+        alone would drop the others from the broker's copy.
+        """
+        if self._client is None:
+            raise RuntimeError("MQTT Insights is not connected")
+        self._persisted_settings.setdefault(device_id, set()).add(field)
+        await self._publish_device_settings(device_id, self._client)
 
     async def _publish_command(self, topic: str, payload: bytes) -> None:
         client = self._client
@@ -1069,89 +1080,115 @@ class MqttInsightsService:
         retained: bool = False,
     ) -> None:
         device = self._devices.get(device_id)
-        names = []
         # A button is momentary: honour a live press, never a retained one the
         # broker replayed at subscribe time.
-        if cmd.get("force_rotation") is True and not retained:
-            names.append("force_rotation")
-        if "active_control" in cmd:
-            names.append("active_control")
-        if "peakshaving_threshold" in cmd:
-            names.append("peakshaving_threshold")
+        press = cmd.get("force_rotation") is True and not retained
+        settings = [name for name in DEVICE_SETTINGS if name in cmd]
 
         if device is None:
             # The broker redelivers retained commands right after we
             # subscribe, usually before the owning device has registered.
-            # Buffer the settable fields so they are not lost; a button
-            # press is momentary and meaningless once delayed, so it is
-            # dropped rather than buffered.
             pending = self._pending_device_commands.setdefault(device_id, {})
-            for name in names:
-                if name != "force_rotation":
-                    pending[name] = cmd.get(name)
+            for name in settings:
+                pending[name] = cmd[name]
+            if pending.keys() <= cmd.keys():
+                self._pending_device_partial.discard(device_id)
+            else:
+                self._pending_device_partial.add(device_id)
             logger.debug("No device %s registered for %r", device_id, cmd)
             return
 
-        changed = False
-        for name in names:
-            try:
-                apply_device_control(device, name, cmd.get(name))
-            except ValueError as exc:
-                logger.warning("Rejected command for %s: %s", device_id, exc)
-                continue
-            except Exception:
-                logger.exception("Applying %s to %s failed", name, device_id)
-                continue
-            if name != "force_rotation":
-                settings = self._last_device_settings.setdefault(device_id, {})
-                value = cmd.get(name)
-                if name not in settings or settings[name] != value:
-                    changed = True
-                settings[name] = value
+        if press:
+            self._apply_device_control(device_id, device, "force_rotation", True)
+        persisted = self._persisted_settings.setdefault(device_id, set())
+        for name in settings:
+            if self._apply_device_control(device_id, device, name, cmd[name]):
+                persisted.add(name)
 
-        if changed:
-            await self._republish_device_settings(device_id, client)
+        # Home Assistant writes one setting at a time onto the shared topic,
+        # which drops the others from the broker's copy; publish them all
+        # back.  Our own publish echoes back whole, which is what stops this
+        # from looping.
+        if not self._holds_device_settings(device, persisted, cmd):
+            await self._publish_device_settings(device_id, client)
 
-    async def _republish_device_settings(
+    @staticmethod
+    def _apply_device_control(
+        device_id: str, device: ControllableDevice, name: str, value: object
+    ) -> bool:
+        try:
+            apply_device_control(device, name, value)
+        except ValueError as exc:
+            logger.warning("Rejected command for %s: %s", device_id, exc)
+        except Exception:
+            logger.exception("Applying %s to %s failed", name, device_id)
+        else:
+            return True
+        return False
+
+    @staticmethod
+    def _holds_device_settings(
+        device: ControllableDevice, persisted: set[str], cmd: dict
+    ) -> bool:
+        """Whether *cmd* carries every persisted setting at its current value."""
+        for name in persisted:
+            current = getattr(device, name)
+            value = cmd.get(name)
+            if isinstance(current, bool) or isinstance(value, bool):
+                if value is not current:
+                    return False
+            elif not isinstance(value, int | float) or not math.isclose(
+                value, current, abs_tol=0.01
+            ):
+                return False
+        return True
+
+    async def _publish_device_settings(
         self, device_id: str, client: aiomqtt.Client
     ) -> None:
-        """Re-publish the merged, retained settings for *device_id*.
-
-        active_control and peakshaving_threshold share one retained command
-        topic, so writing either one would otherwise replace the broker's
-        only copy of the other.  Republishing the merged dict after every
-        successful change keeps a single retained message that always
-        reflects every settable field.
-        """
-        settings = self._last_device_settings.get(device_id)
-        if not settings:
+        """Publish every persisted setting of *device_id* at its current value,
+        retained, as the one message on the device command topic."""
+        device = self._devices.get(device_id)
+        persisted = self._persisted_settings.get(device_id)
+        if device is None or not persisted:
             return
+        payload = {
+            name: getattr(device, name) for name in DEVICE_SETTINGS if name in persisted
+        }
         topic = device_command_topic(self._config.base_topic, device_id)
         try:
             await client.publish(
-                topic, payload=json.dumps(settings).encode(), qos=1, retain=True
+                topic, payload=json.dumps(payload).encode(), qos=1, retain=True
             )
         except Exception:
-            logger.exception("Failed to republish merged device settings on %s", topic)
+            logger.exception("Failed to publish device settings on %s", topic)
 
     def _replay_device_commands(self, device_id: str) -> None:
-        """Apply the device-level commands that arrived before *device_id*
+        """Apply the device settings that arrived before *device_id*
         registered (the normal order on an app restart)."""
         pending = self._pending_device_commands.pop(device_id, None)
-        if not pending:
-            return
+        partial = device_id in self._pending_device_partial
+        self._pending_device_partial.discard(device_id)
         device = self._devices.get(device_id)
-        if device is None:
+        if not pending or device is None:
             return
+        persisted = self._persisted_settings.setdefault(device_id, set())
         for name, value in pending.items():
-            try:
-                apply_device_control(device, name, value)
-            except ValueError as exc:
-                logger.warning("Rejected buffered command for %s: %s", device_id, exc)
-            except Exception:
-                logger.exception("Applying buffered %s to %s failed", name, device_id)
-            else:
-                self._last_device_settings.setdefault(device_id, {})[name] = value
+            if self._apply_device_control(device_id, device, name, value):
+                persisted.add(name)
+        client = self._client
+        if partial and client is not None:
+            self._spawn(self._publish_device_settings(device_id, client))
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run *coro* in the background, keeping a reference until it ends."""
+        try:
+            task = asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            coro.close()
+            return
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     # ── Powermeter health ─────────────────────────────────────────────
 

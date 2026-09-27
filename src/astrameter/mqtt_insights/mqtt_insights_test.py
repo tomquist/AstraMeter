@@ -1346,6 +1346,8 @@ class _FakeDevice:
 
     def __init__(self) -> None:
         self.calls: dict[str, list] = {}
+        self.active_control = True
+        self.peakshaving_threshold = 0.0
 
     def _record(self, field: str, *args: object) -> None:
         self.calls.setdefault(field, []).append(args if len(args) > 1 else args[0])
@@ -1369,9 +1371,11 @@ class _FakeDevice:
         self._record("min_dc_output", cid, v)
 
     def set_active_control(self, v: bool) -> None:
+        self.active_control = v
         self._record("active_control", v)
 
     def set_peakshaving_threshold(self, v: float) -> None:
+        self.peakshaving_threshold = v
         self._record("peakshaving_threshold", v)
 
     def force_efficiency_rotation(self) -> None:
@@ -2023,6 +2027,54 @@ async def test_force_rotation_command_via_mqtt(mqtt_broker: int) -> None:
         await service.stop()
 
 
+@needs_mosquitto
+async def test_device_settings_survive_single_field_writes_on_a_real_broker(
+    mqtt_broker: int,
+) -> None:
+    """Home Assistant writes each setting on its own onto the one retained
+    topic.  Against a real broker — which hands our own republish straight
+    back to us — the retained copy ends up holding both settings, and the
+    republish settles rather than echoing forever."""
+    port = mqtt_broker
+    service = _make_service(port)
+    topic = f"{service._config.base_topic}/ct002/dev1/set"
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    await service.start()
+    try:
+        await service.wait_connected()
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as ha:
+            await ha.publish(
+                topic, payload=b'{"active_control": false}', qos=1, retain=True
+            )
+            await _poll(lambda: device.active_control is False)
+            await ha.publish(
+                topic, payload=b'{"peakshaving_threshold": 2500}', qos=1, retain=True
+            )
+            await _poll(lambda: device.peakshaving_threshold == 2500.0)
+
+            async with aiomqtt.Client(hostname="127.0.0.1", port=port) as watcher:
+                await watcher.subscribe(topic)
+                seen: list[dict] = []
+
+                async def collect() -> None:
+                    async for message in watcher.messages:
+                        seen.append(json.loads(bytes(message.payload)))
+
+                task = asyncio.create_task(collect())
+                await asyncio.sleep(1.5)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+        merged = {"active_control": False, "peakshaving_threshold": 2500.0}
+        # The retained copy a fresh subscriber gets is whole, and nothing is
+        # still being published after it: the republish did not loop.
+        assert seen == [merged]
+    finally:
+        await service.stop()
+
+
 class _NullClient:
     """Minimal aiomqtt.Client double: publish() is a silent no-op."""
 
@@ -2152,6 +2204,139 @@ async def test_active_control_device_command_dispatch() -> None:
     service.unregister_device("dev1")
     await service._handle_device_command("dev1", {"active_control": True}, client)
     assert calls == [False, True]
+
+
+class _RecordingClient:
+    """aiomqtt.Client double that keeps every device-settings publish."""
+
+    def __init__(self) -> None:
+        self.published: list[dict[str, object]] = []
+
+    async def publish(
+        self, topic: str, payload: bytes = b"", qos: int = 0, retain: bool = False
+    ) -> None:
+        assert topic.endswith("/ct002/dev1/set")
+        assert retain is True
+        self.published.append(json.loads(payload))
+
+
+async def test_one_setting_written_alone_republishes_every_persisted_one() -> None:
+    """Home Assistant writes one setting at a time onto the shared retained
+    topic, which drops the others from the broker's copy.  The service puts
+    them all back, and its own publish coming back does not loop."""
+    service = _make_service(1883)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    client = _RecordingClient()
+    mqtt = cast(Any, client)
+
+    # The broker's retained copy at startup: whole, so nothing to restore.
+    await service._handle_device_command(
+        "dev1", {"active_control": False}, mqtt, retained=True
+    )
+    assert client.published == []
+
+    await service._handle_device_command("dev1", {"peakshaving_threshold": 2500}, mqtt)
+    assert device.peakshaving_threshold == 2500.0
+    merged = {"active_control": False, "peakshaving_threshold": 2500.0}
+    assert client.published == [merged]
+
+    # Our own publish echoes back whole: no second publish.
+    await service._handle_device_command("dev1", merged, mqtt)
+    assert client.published == [merged]
+
+    # Rewriting the same value still dropped active_control from the broker.
+    await service._handle_device_command("dev1", {"peakshaving_threshold": 2500}, mqtt)
+    assert client.published == [merged, merged]
+
+
+async def test_a_setting_nobody_wrote_is_not_pinned_on_the_broker() -> None:
+    """Changing the threshold must not also persist active_control: a later
+    config-file change to it would then be overridden at every restart."""
+    service = _make_service(1883)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    client = _RecordingClient()
+
+    await service._handle_device_command(
+        "dev1", {"peakshaving_threshold": 2500}, cast(Any, client)
+    )
+    assert client.published == []
+    assert service._persisted_settings["dev1"] == {"peakshaving_threshold"}
+
+
+async def test_a_rejected_value_is_replaced_by_the_current_one() -> None:
+    service = _make_service(1883)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    client = _RecordingClient()
+    mqtt = cast(Any, client)
+
+    await service._handle_device_command("dev1", {"peakshaving_threshold": 2500}, mqtt)
+    for bad in (-5, 20000, "lots", True):
+        await service._handle_device_command(
+            "dev1", {"peakshaving_threshold": bad}, mqtt
+        )
+    assert device.calls["peakshaving_threshold"] == [2500.0]
+    assert client.published == [{"peakshaving_threshold": 2500.0}] * 4
+
+
+async def test_settings_buffered_before_registration_are_replayed() -> None:
+    service = _make_service(1883)
+    client = _RecordingClient()
+    service._client = cast(Any, client)
+
+    await service._handle_device_command(
+        "dev1",
+        {"active_control": False, "peakshaving_threshold": 1500},
+        cast(Any, client),
+        retained=True,
+    )
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    await asyncio.gather(*service._background_tasks)
+
+    assert device.active_control is False
+    assert device.peakshaving_threshold == 1500.0
+    # The broker already holds exactly that, so there is nothing to restore.
+    assert client.published == []
+
+
+async def test_a_partial_buffer_is_published_back_on_registration() -> None:
+    """A second message before registration replaced the broker's copy with
+    only part of the buffered settings; the replay restores the rest."""
+    service = _make_service(1883)
+    client = _RecordingClient()
+    service._client = cast(Any, client)
+    mqtt = cast(Any, client)
+
+    await service._handle_device_command(
+        "dev1", {"active_control": False}, mqtt, retained=True
+    )
+    await service._handle_device_command("dev1", {"peakshaving_threshold": 1500}, mqtt)
+    service.register_device("dev1", _FakeDevice())
+    await asyncio.gather(*service._background_tasks)
+
+    assert client.published == [
+        {"active_control": False, "peakshaving_threshold": 1500.0}
+    ]
+
+
+async def test_a_dashboard_write_publishes_every_persisted_setting() -> None:
+    service = _make_service(1883)
+    client = _RecordingClient()
+    service._client = cast(Any, client)
+    device = _FakeDevice()
+    service.register_device("dev1", device)
+    await service._handle_device_command(
+        "dev1", {"active_control": False}, cast(Any, client), retained=True
+    )
+
+    device.set_peakshaving_threshold(3000.0)
+    await service.publish_device_setting("dev1", "peakshaving_threshold")
+    assert client.published == [
+        {"active_control": False, "peakshaving_threshold": 3000.0}
+    ]
 
 
 @needs_mosquitto
@@ -2848,17 +3033,21 @@ async def test_publish_consumer_command_accepts_the_native_scalars_it_is_given()
     assert parse_bool(payload.decode()) is False
 
 
-async def test_publish_device_command_lands_where_the_listener_reads() -> None:
+async def test_publish_device_setting_lands_where_the_listener_reads() -> None:
     service = MqttInsightsService(
         MqttInsightsConfig(broker="localhost", base_topic="am")
     )
     service._client = AsyncMock()
+    writer = _FakeDevice()
+    writer.active_control = False
+    service.register_device("dev1", writer)
 
-    await service.publish_device_command("dev1", {"active_control": False})
+    await service.publish_device_setting("dev1", "active_control")
 
     call = service._client.publish.call_args
     assert call.args[0] == "am/ct002/dev1/set"
     assert call.kwargs["retain"] is True
+    assert json.loads(call.kwargs["payload"]) == {"active_control": False}
 
     device = _FakeDevice()
     service.register_device("dev1", device)
@@ -2875,6 +3064,6 @@ async def test_publish_device_command_lands_where_the_listener_reads() -> None:
 async def test_publish_command_without_a_connection_raises() -> None:
     service = MqttInsightsService(MqttInsightsConfig(broker="localhost"))
     with pytest.raises(RuntimeError):
-        await service.publish_device_command("dev1", {"force_rotation": True})
+        await service.publish_device_setting("dev1", "active_control")
     with pytest.raises(RuntimeError):
         await service.publish_consumer_command("dev1", "c1", "active", "true")

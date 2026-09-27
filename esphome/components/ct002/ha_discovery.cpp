@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "balancer.h"
+#include "controls.h"
 #include "esphome/components/json/json_util.h"
 
 namespace esphome {
@@ -426,6 +427,7 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
 
     // Peak Shaving Threshold — caps household demand handed to the balancer
     // (mirrors discovery.py / CT002.set_peakshaving_threshold). 0 disables it.
+    // The bounds are the write path's, so HA never offers a value we refuse.
     JsonObject pst = components["peakshaving_threshold"].to<JsonObject>();
     pst["platform"] = "number";
     pst["unique_id"] = uid_prefix + "_peakshaving_threshold";
@@ -433,7 +435,7 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     pst["unit_of_measurement"] = "W";
     pst["device_class"] = "power";
     pst["min"] = 0;
-    pst["max"] = 10000;
+    pst["max"] = static_cast<int>(controls::PEAKSHAVING_THRESHOLD_MAX);
     pst["step"] = 50;
     pst["mode"] = "box";
     pst["state_topic"] = state_topic;

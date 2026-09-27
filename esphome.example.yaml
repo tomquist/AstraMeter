@@ -102,6 +102,8 @@ ct002:
   # wifi_rssi: -50                 # RSSI value reported back in CT002 replies
   # active_control: true           # true → balancer steers batteries to zero;
   #                                # false → forward raw grid readings as-is
+  # peakshaving_threshold: 0       # >0 → batteries only cover net demand
+  #                                # above this many W (capacity tariffs)
   # max_sensor_age: 30s            # treat the input as 0 if no sensor update
   #                                # arrives within this window
   # consumer_ttl: 120s             # fixed eviction window for a silent battery;

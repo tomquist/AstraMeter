@@ -658,30 +658,37 @@ CT002Component::PhaseBucketPowers CT002Component::reporting_phase_buckets() cons
 }
 
 void CT002Component::set_peakshaving_threshold(float threshold) {
-  if (threshold < 0.0f) {
-    ESP_LOGW(TAG, "Ignoring negative peak shaving threshold %.1f", threshold);
+  if (!std::isfinite(threshold) || threshold < 0.0f) {
+    ESP_LOGW(TAG, "Ignoring invalid peak shaving threshold %.1f", threshold);
     return;
   }
   if (this->peakshaving_threshold_ == threshold) return;
   this->peakshaving_threshold_ = threshold;
-  ESP_LOGI(TAG, "Peak shaving threshold set to %.1fW", threshold);
+  if (threshold > 0.0f) {
+    ESP_LOGI(TAG, "Peak shaving threshold set to %.1fW", threshold);
+  } else {
+    ESP_LOGI(TAG, "Peak shaving disabled");
+  }
 }
 
-float CT002Component::apply_peakshaving_(float total) {
+float CT002Component::apply_peakshaving_(float total) const {
   if (this->peakshaving_threshold_ <= 0.0f) return total;
-  if (!this->peakshaving_logged_) {
-    ESP_LOGI(TAG, "Peak shaving enabled (threshold=%.1fW)", this->peakshaving_threshold_);
-    this->peakshaving_logged_ = true;
-  }
-  float total_battery_power = 0.0f;
+  // Only the batteries the balancer steers count toward demand (mirrors
+  // CT002._apply_peakshaving): one on a manual setpoint, paused, opted out or
+  // gone silent is not ours to move, so its output lowers demand the way
+  // solar does. Counting it would have the steered batteries cancel it out
+  // by charging from the grid.
+  const double now = this->now_seconds_();
+  float steered_power = 0.0f;
   for (const auto &kv : this->consumers_) {
-    if (kv.second.timestamp > 0.0) total_battery_power += kv.second.power;
+    const auto &c = kv.second;
+    if (c.timestamp <= 0.0 || !c.active || !c.participates || c.manual_enabled) continue;
+    if (this->consumer_expired_(c, now)) continue;
+    steered_power += c.power;
   }
-  const float household_demand = total + total_battery_power;
+  const float household_demand = total + steered_power;
   if (household_demand <= 0.0f) return total;
-  const float shaved_target =
-      household_demand < this->peakshaving_threshold_ ? household_demand : this->peakshaving_threshold_;
-  return total - shaved_target;
+  return total - std::min(household_demand, this->peakshaving_threshold_);
 }
 
 std::vector<float> CT002Component::compute_smooth_target_(const std::vector<float> &values,
@@ -846,6 +853,8 @@ void CT002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  CT MAC: %s", this->ct_mac_.empty() ? "(mirror)" : this->ct_mac_.c_str());
   ESP_LOGCONFIG(TAG, "  UDP Port: %u", this->udp_port_);
   ESP_LOGCONFIG(TAG, "  Active Control: %s", YESNO(this->active_control_));
+  ESP_LOGCONFIG(TAG, "  Peak Shaving Threshold: %.0f W%s", this->peakshaving_threshold_,
+                this->peakshaving_threshold_ > 0.0f ? "" : " (off)");
   // uint32_t is `long unsigned` on xtensa, so %u needs the cast to match
   // (lossless — both are 32 bits here and on the host build).
   ESP_LOGCONFIG(TAG, "  Max Sensor Age: %u ms", static_cast<unsigned>(this->max_sensor_age_ms_));

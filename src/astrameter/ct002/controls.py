@@ -22,6 +22,11 @@ from typing import Protocol
 class ControllableDevice(Protocol):
     """What a device must offer for its controls to be driven remotely."""
 
+    # The current value of each of DEVICE_SETTINGS, read back when the
+    # merged retained settings are published.
+    active_control: bool
+    peakshaving_threshold: float
+
     def set_consumer_active(self, consumer_id: str, active: bool) -> None: ...
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None: ...
     def set_consumer_manual_target(self, consumer_id: str, target: float) -> None: ...
@@ -135,15 +140,52 @@ def coerce_consumer_control(field: str, value: object) -> bool | float:
 #: on every reconnect.  Mirrors ``DEVICE_BUTTONS`` in ``controls.cpp``.
 DEVICE_BUTTONS: frozenset[str] = frozenset({"force_rotation"})
 
+#: Device-wide settings.  They share one retained command topic, so whatever
+#: writes one of them publishes all of them (see
+#: ``MqttInsightsService.publish_device_settings``).
+DEVICE_SETTINGS: tuple[str, ...] = ("active_control", "peakshaving_threshold")
+
+#: Upper bound of the peak shaving threshold, in W, on every surface: the
+#: dashboard, MQTT, the Home Assistant number entity and the config files.
+PEAKSHAVING_THRESHOLD_MAX = 10000.0
+
+#: Device-wide numeric settings and their bounds.  Mirrors
+#: ``DEVICE_NUMERIC_FIELDS`` in ``controls.cpp``.
+DEVICE_NUMBER_BOUNDS: dict[str, tuple[float, float]] = {
+    "peakshaving_threshold": (0.0, PEAKSHAVING_THRESHOLD_MAX),
+}
+
 
 def is_device_button(field: str) -> bool:
     """Whether *field* is a momentary device button rather than a setting."""
     return field in DEVICE_BUTTONS
 
 
+def is_device_number(field: str) -> bool:
+    """Whether *field* is a device-wide setting that takes a number."""
+    return field in DEVICE_NUMBER_BOUNDS
+
+
+def coerce_device_number(field: str, value: object) -> float:
+    """Validate a device-wide numeric setting; raises ``ValueError`` with the
+    same text the firmware's dashboard produces."""
+    low, high = DEVICE_NUMBER_BOUNDS[field]
+    # bool is an int subclass, so float(True) would quietly become 1.0.
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a number")
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a number") from exc
+    if not math.isfinite(number) or not low <= number <= high:
+        raise ValueError(f"{field} must be between {low:g} and {high:g}")
+    return number
+
+
 def apply_device_control(device: ControllableDevice, field: str, value: object) -> None:
     """Apply a device-wide control.  ``force_rotation`` is a button and
-    carries no value; ``active_control`` is a switch."""
+    carries no value; ``active_control`` is a switch;
+    ``peakshaving_threshold`` is a number in :data:`DEVICE_NUMBER_BOUNDS`."""
     if field == "force_rotation":
         device.force_efficiency_rotation()
     elif field == "active_control":
@@ -151,14 +193,6 @@ def apply_device_control(device: ControllableDevice, field: str, value: object) 
             raise ValueError("active_control must be true or false")
         device.set_active_control(value)
     elif field == "peakshaving_threshold":
-        if isinstance(value, bool):
-            raise ValueError("peakshaving_threshold must be a number")
-        try:
-            number = float(value)  # type: ignore[arg-type]
-        except (TypeError, ValueError) as exc:
-            raise ValueError("peakshaving_threshold must be a number") from exc
-        if not math.isfinite(number) or number < 0:
-            raise ValueError("peakshaving_threshold must be a non-negative number")
-        device.set_peakshaving_threshold(number)
+        device.set_peakshaving_threshold(coerce_device_number(field, value))
     else:
         raise KeyError(field)

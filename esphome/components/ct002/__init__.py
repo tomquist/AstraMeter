@@ -994,7 +994,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_UDP_PORT, default=12345): cv.port,
             cv.Optional(CONF_ACTIVE_CONTROL, default=True): cv.boolean,
             cv.Optional(CONF_PEAKSHAVING_THRESHOLD, default=0.0): cv.float_range(
-                min=0.0
+                min=0.0, max=10000.0
             ),
             cv.Optional(
                 CONF_MAX_SENSOR_AGE, default="30s"

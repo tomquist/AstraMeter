@@ -66,7 +66,7 @@ schema:
   cloud_reporting_host: str?
   cloud_reporting_interval: float(1,)?
   active_control: bool?
-  peakshaving_threshold: float(0,)?
+  peakshaving_threshold: float(0,10000)?
   min_efficient_power: int(0,)?
   efficiency_rotation_interval: int(1,)?
   min_dc_output: float(0,)?

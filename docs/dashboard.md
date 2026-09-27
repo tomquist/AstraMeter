@@ -174,7 +174,7 @@ those who run that sub-block. But:
 
 | Option | Default | What it does |
 |---|---|---|
-| `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / force rotation. |
+| `controls` | `false` | Lets the page change batteries: manual target, auto/manual, active, distribution weight, efficiency window, min DC output, and the device's active control / peak shaving threshold / force rotation. |
 | `path` | `/`, or `/astrameter` when `web_server:` is configured | Where the page is mounted. |
 | `allowed_hosts` | empty | Extra host names the device answers under. Give names only, with no scheme or port. Its IP address, `localhost`, its `.local` mDNS name and any `.home.arpa` name always work. You need it behind a reverse proxy, or for a router-assigned name. See [Security](#only-addresses-that-cannot-be-pointed-here). |
 | `web_server_link` | `true` | Adds a link to the dashboard at the top of ESPHome's own page. Only does anything when `web_server:` is configured. |

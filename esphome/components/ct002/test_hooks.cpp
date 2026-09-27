@@ -217,7 +217,11 @@ void CT002Component::handle_control_command_(const std::string &cmd,
       if (!parsed) {
         message = "Value must be a number";
       } else if (device_wide) {
-        if (!controls::is_device_field(field_str)) message = "Unknown field";
+        if (!controls::is_device_field(field_str)) {
+          message = "Unknown field";
+        } else {
+          message = controls::coerce_device_control(field_str, value);
+        }
       } else {
         message = controls::coerce_consumer_control(field_str, value);
       }

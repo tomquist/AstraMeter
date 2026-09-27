@@ -422,7 +422,7 @@ class CT002Component : public Component {
                                             const std::string &consumer_id);
   // Caps household demand handed to the balancer at peakshaving_threshold_
   // (mirrors CT002._apply_peakshaving in ct002.py).
-  float apply_peakshaving_(float total);
+  float apply_peakshaving_(float total) const;
   // Monotonic seconds used for all time-gated logic (saturation, probe,
   // eviction, dedup, poll_interval). Instance method (not static) so the
   // test-hook mock clock can override it. Falls back to millis() in
@@ -441,7 +441,6 @@ class CT002Component : public Component {
   uint16_t udp_port_{12345};
   bool active_control_{true};
   float peakshaving_threshold_{0.0f};
-  bool peakshaving_logged_{false};
   uint32_t max_sensor_age_ms_{30000};
   // Fixed eviction TTL for stale consumers, in seconds (Python:
   // consumer_ttl). Unset (default) = adaptive per-consumer TTL derived from

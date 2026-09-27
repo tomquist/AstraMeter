@@ -154,6 +154,7 @@ Availability companion:
 {
   "smooth_target": 90.0,
   "active_control": true,
+  "peakshaving_threshold": 0.0,
   "consumer_count": 2,
   "control_quality": "off_target",
   "control_quality_score": 41.5,
@@ -167,6 +168,7 @@ Availability companion:
 - `smooth_target` — the device-wide smoothed grid target (watts).
 - `active_control` — `true` when the emulator computes per-battery targets;
   `false` in relay mode, where the raw aggregate is forwarded.
+- `peakshaving_threshold` — the peak shaving threshold in watts; `0` when off.
 - `consumer_count` — number of batteries polling this device right now.
 - `control_quality` — whether the grid is being held at zero: `stable`,
   `off_target`, `limited`, `warmup` or `idle`. See
@@ -265,7 +267,11 @@ Per-device, JSON body on `{base}/ct002/{did}/set`:
 | Payload | Effect |
 |---|---|
 | `{"active_control": true}` / `{"active_control": false}` | Turn active control on (compute per-battery targets) or off (relay mode — the raw aggregate is forwarded, the live equivalent of `ACTIVE_CONTROL = False`). |
+| `{"peakshaving_threshold": 2500}` | Set the peak shaving threshold (watts, 0…10000; `0` turns it off) — the live equivalent of `PEAKSHAVING_THRESHOLD`. |
 | `{"force_rotation": true}` | Rotate the efficiency window to the next battery right away. |
+
+The settings share this one retained topic, so AstraMeter publishes them back
+together whenever one changes, and a restart restores all of them.
 
 Out-of-range, non-numeric, or non-boolean payloads are ignored with a warning.
 
@@ -344,12 +350,15 @@ client has the same controls:
   where it has an effect (e.g. the Marstek B2500); it overrides the global setting
   for that battery.
 
-The CT device itself also exposes a config switch:
+The CT device itself also exposes two config controls:
 
 - **Active Control** — on (the default) lets the emulator smooth the grid reading
   and compute per-battery targets. Turn it **off** to fall back to relay mode: the
   raw per-phase aggregate is forwarded and the batteries decide. That is the live
   equivalent of **ACTIVE_CONTROL = False**.
+- **Peak Shaving Threshold** — the batteries only cover net demand above this
+  many watts and stay idle below it; `0` turns it off. The live equivalent of
+  [PEAKSHAVING_THRESHOLD](ct002.md#active-steering-balancing--efficiency).
 
 Each of these controls publishes its set-command **retained**, so Home Assistant
 restores your values across an AstraMeter restart with no extra configuration.

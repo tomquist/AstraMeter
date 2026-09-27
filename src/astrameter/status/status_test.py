@@ -108,6 +108,20 @@ def test_relay_mode_reports_the_grid_it_served_not_zero() -> None:
     assert device.status_snapshot().grid_total == pytest.approx(-11.0)
 
 
+def test_peakshaving_threshold_reaches_the_wire() -> None:
+    """The dashboard's number box reads the threshold back from here; the
+    firmware's document carries the same field under the same name."""
+    device = _ct()
+    registry = _registry()
+    registry.register_device("ct-1", "ct002", device)
+    (wire,) = registry.snapshot(ingress=False)["devices"]
+    assert wire["control"]["peakshaving_threshold_w"] == 0.0
+
+    device.set_peakshaving_threshold(2500.0)
+    (wire,) = registry.snapshot(ingress=False)["devices"]
+    assert wire["control"]["peakshaving_threshold_w"] == 2500.0
+
+
 def test_control_quality_reaches_the_wire_with_its_evidence() -> None:
     """The verdict is the one balancer figure aimed at a user, so it has to
     survive the wire layer intact — with the numbers behind it, since "this

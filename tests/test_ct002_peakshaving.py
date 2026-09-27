@@ -181,3 +181,70 @@ class TestLivePeakshavingThreshold:
         device.set_peakshaving_threshold(0.0)
 
         assert device._apply_peakshaving(2800.0) == 2800.0
+
+
+class TestOnlySteeredBatteriesCountTowardDemand:
+    """A battery the balancer does not steer is not ours to move: its output
+    lowers household demand the way solar does.  Counting it would ask the
+    steered batteries to cancel it out by charging from the grid."""
+
+    def _device(self, **kwargs) -> CT002:
+        kwargs.setdefault("active_control", True)
+        kwargs.setdefault("fair_distribution", False)
+        kwargs.setdefault("peakshaving_threshold", 500.0)
+        return _ct002(**kwargs)
+
+    def test_a_manual_battery_does_not_make_the_others_charge(self):
+        device = self._device()
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("m", "A", 300)
+        device.set_consumer_auto_target("m", False)
+        device.set_consumer_manual_target("m", 300)
+        # House 400 W, the manual battery covers 300 of it: the grid reads
+        # 100 W, well under the threshold, so the auto battery stays at 0.
+        assert device._apply_peakshaving(100.0) == 0.0
+        out = device._compute_smooth_target([100, 0, 0], "a")
+        assert out[0] == 0
+
+    def test_a_battery_opted_out_of_control_is_left_alone(self):
+        device = self._device()
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("x", "A", 300, participates=False)
+        assert device._apply_peakshaving(100.0) == 0.0
+
+    def test_a_paused_battery_is_left_alone(self):
+        device = self._device()
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("p", "A", 300)
+        device.set_consumer_active("p", False)
+        assert device._apply_peakshaving(100.0) == 0.0
+
+    def test_a_battery_gone_silent_no_longer_counts(self):
+        now = [1000.0]
+        device = self._device(clock=lambda: now[0], consumer_ttl=5)
+        device._update_consumer_report("gone", "A", 300)
+        now[0] += 10
+        device._update_consumer_report("a", "A", 0)
+        assert device._apply_peakshaving(100.0) == 0.0
+
+    def test_above_the_threshold_only_the_excess_is_asked_of_steered_ones(self):
+        device = self._device()
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("m", "A", 300)
+        device.set_consumer_auto_target("m", False)
+        device.set_consumer_manual_target("m", 300)
+        # House 1100 W, the manual battery covers 300: the grid reads 800 W
+        # and the steered battery is asked for the 300 W above the threshold.
+        assert device._apply_peakshaving(800.0) == 300.0
+
+
+class TestThresholdValidation:
+    def test_invalid_values_are_ignored(self):
+        device = _ct002(peakshaving_threshold=1000.0)
+        for bad in (-1.0, float("nan"), float("inf")):
+            device.set_peakshaving_threshold(bad)
+            assert device.peakshaving_threshold == 1000.0
+
+    def test_an_invalid_configured_value_leaves_it_off(self):
+        assert _ct002(peakshaving_threshold=float("nan")).peakshaving_threshold == 0.0
+        assert _ct002(peakshaving_threshold=-5.0).peakshaving_threshold == 0.0

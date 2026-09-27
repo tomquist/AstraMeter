@@ -106,17 +106,20 @@ class MqttInsightsComponent : public Component {
 
   /// The device-level counterpart, whose topic carries a JSON object.
   ///
+  /// The device settings (active_control, peakshaving_threshold) share that
+  /// one retained topic, so this marks *field* as persisted and publishes
+  /// every persisted setting at its current value: publishing only the one
+  /// written would drop the others from the broker's copy.
+  ///
   /// Only settings are mirrored. `force_rotation` is a button — an event with
   /// no retained state to revert — and republishing it retained would re-fire
   /// a rotation on every reconnect, so the caller does not pass it here.
-  void mirror_device_command(const std::string &field, const std::string &payload) {
+  void mirror_device_setting(const std::string &field) {
 #ifdef USE_MQTT
-    if (this->mqtt_ == nullptr || !this->mqtt_->is_connected()) return;
-    this->mqtt_->publish(this->base_topic_ + "/ct002/" + this->device_id_ + "/set",
-                         "{\"" + field + "\":" + payload + "}", 1, true);
+    this->persisted_settings_ |= setting_bit_(field);
+    this->publish_device_settings_();
 #else
     (void) field;
-    (void) payload;
 #endif
   }
 
@@ -159,7 +162,14 @@ class MqttInsightsComponent : public Component {
   void handle_consumer_field_command_(const std::string &consumer_id, const std::string &field,
                                       const std::string &payload);
   void handle_device_command_(const std::string &payload);
-  void republish_device_settings_();
+  // The device settings persisted on the retained command topic, as bits of
+  // setting_bit_(). A setting joins once anything writes it, so one that was
+  // only ever configured in YAML is never pinned on the broker. Mirrors
+  // MqttInsightsService._persisted_settings.
+  static uint8_t setting_bit_(const std::string &field);
+  uint8_t persisted_settings_{0};
+  // Publish every persisted device setting at its current value, retained.
+  void publish_device_settings_();
 
   // Marstek periodic broadcast (runs on a set_interval timer).
   void marstek_broadcast_tick_();
