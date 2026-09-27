@@ -45,6 +45,7 @@
   --accent: #22d3ee; /* links, focus, the selected choice */
   --primary: #fbbf24; /* primary buttons: the amber of the logo's needle */
   --primary-hover: #fcd34d;
+  --charge: #10b981; /* the batteries in the wiring diagram: the logo's emerald */
 }
 
 * {
@@ -929,8 +930,9 @@ code {
 }
 .wire-node {
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-card);
+  border-radius: 10px;
+  background-color: var(--bg-card);
+  background-image: linear-gradient(180deg, rgba(148, 163, 184, 0.07), transparent 55%);
   padding: 14px;
   font-size: 13.5px;
   color: var(--muted);
@@ -940,16 +942,68 @@ code {
 .wire-node strong {
   display: block;
   color: var(--text);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  margin: 4px 0 4px;
+  margin: 12px 0 4px;
+}
+/* header row: what kind of thing this is, with an icon for it */
+.node-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.node-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+span.node-icon {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.25);
+}
+.node-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* the meter wears the amber of the logo's needle */
+.wire-meter span.node-icon {
+  color: var(--primary);
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.25);
 }
 .wire-kind {
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
+}
+.wire-meter .wire-kind {
+  color: var(--primary);
+}
+/* the batteries wear the emerald of the logo's energy arc */
+.wire-stack span.node-icon {
+  color: var(--charge);
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.28);
+}
+.wire-stack .wire-kind {
+  color: var(--charge);
 }
 .wire-core {
   border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.15),
+    0 12px 36px -12px rgba(34, 211, 238, 0.45);
 }
 .wire-core .wire-kind {
   color: var(--accent);
@@ -1055,8 +1109,8 @@ code {
   bottom: 2px;
   width: calc((100% - 4px) * var(--lvl));
   border-radius: 1px;
-  background: var(--accent);
-  opacity: 0.55;
+  background: var(--charge);
+  opacity: 0.7;
 }
 .cells i::after {
   /* terminal */
@@ -1233,12 +1287,12 @@ code {
   28%,
   48%,
   95% {
-    background: var(--bg-card);
+    background-color: var(--bg-card);
   }
   34%,
   42%,
   100% {
-    background: #10283a;
+    background-color: #10283a;
   }
 }
 @keyframes label-in {
