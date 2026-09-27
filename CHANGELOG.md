@@ -4,7 +4,7 @@
 
 - **Fixed** SML meters read over a USB IR head never delivering a reading when their telegrams are long, such as signed EMH meters, logging only "failed to read SML frame" ([#680](https://github.com/tomquist/astrameter/discussions/680), [#689](https://github.com/tomquist/astrameter/pull/689)).
 
-- **Added** a peak shaving threshold for tariffs that bill on peak demand, such as Belgium's capacity tariff: batteries only cover demand above it and stay idle below it ([#690](https://github.com/tomquist/astrameter/pull/690)).
+- **Added** a peak shaving threshold for tariffs that bill on peak demand, such as Belgium's capacity tariff: batteries only cover demand above it and stay idle below it ([#690](https://github.com/tomquist/astrameter/pull/690), [#692](https://github.com/tomquist/astrameter/pull/692)).
 
 
 ## 2.3.1
