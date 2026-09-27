@@ -32,20 +32,18 @@ net-zero grid exchange.
 
 It does this by emulating one or more of these devices:
 
-- **CT002 / CT003** (Marstek's native CT protocol) — **recommended**, whether
-  you have one storage device or several. Each battery reports its own output
-  back, so AstraMeter can steer it to a target instead of just relaying the grid
-  reading, and it shares one target fairly across a fleet.
+- **CT002 / CT003** (Marstek's native CT protocol) — recommended. AstraMeter
+  gives each storage device its own target and shares the load between them.
 - **Shelly Pro 3EM** — uses port 1010 (B2500 firmware up to v224) and port 2220
   (B2500 firmware v226+). To pick one port, use `shellypro3em_old` (1010) or
   `shellypro3em_new` (2220).
 - **Shelly EM gen3**
 - **Shelly Pro EM50**
 
-> **Which device type?** Use **CT002**/**CT003**, for a single storage device
-> as well as for several. Fall back to a **Shelly** type (`shellypro3em`,
-> `shellyemg3`, `shellyproem50`, …) only if your storage device can't be paired
-> with a CT002/CT003. See [CT002 / CT003 steering](docs/ct002.md) and the
+> **Which device type?** Use **CT002**/**CT003**, unless your storage device
+> can only pair with a Shelly; then use a **Shelly** type (`shellypro3em`,
+> `shellyemg3`, `shellyproem50`, …). See
+> [CT002 / CT003 steering](docs/ct002.md) and the
 > [Configuration reference](docs/configuration.md).
 
 ## ⚡ Quick start with the config generator

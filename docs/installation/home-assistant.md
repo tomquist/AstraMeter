@@ -48,9 +48,8 @@ You can configure the add-on in two ways.
   - `shellyemg3`: Shelly EM gen3 emulator
   - `shellyproem50`: Shelly Pro EM50 emulator
 
-  **Tip:** Use `ct002`/`ct003`, for a single device as well as for several.
-  Use a Shelly type (e.g. `shellypro3em` or `_old`/`_new`) only if your device
-  can't be paired with a CT002/CT003.
+  **Tip:** Use `ct002`/`ct003`, unless your device can only pair with a Shelly;
+  then use a Shelly type (e.g. `shellypro3em` or `_old`/`_new`).
 - The Configuration tab also has optional signal-conditioning filters, all off by
   default: power offset/multiplier, smoothing (EMA), deadband, the Hampel outlier
   filter (see

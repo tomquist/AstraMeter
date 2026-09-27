@@ -1,6 +1,5 @@
 [GENERAL]
-# Use ct002/ct003, for one storage device or several; use shelly* types only
-# if your storage device can't be paired with a CT002/CT003.
+# Use ct002/ct003, unless your storage device can only pair with a Shelly.
 # Comma-separated list of device types to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50)
 DEVICE_TYPE = ct002
 # Comma-separated list of device IDs (optional, auto-generated if not set)
