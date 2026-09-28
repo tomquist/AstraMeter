@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from astrameter.powermeter.base import Powermeter
 
 from .base import PowermeterWrapper
+from .last_reading import LastReadingPowermeter
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -85,7 +86,10 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         pipeline: list[str] = []
         node: Powermeter = self.wrapped_powermeter
         while isinstance(node, PowermeterWrapper):
-            pipeline.append(type(node).__name__)
+            # Not a filter: it only shares the source's reading with passive
+            # readers, so the dashboard's pipeline leaves it out.
+            if not isinstance(node, LastReadingPowermeter):
+                pipeline.append(type(node).__name__)
             node = node.wrapped_powermeter
         return PowermeterHealth(
             name=self.name,
@@ -105,8 +109,8 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         self._last_values = list(result)
         return result
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        return await self._tracked(self.wrapped_powermeter.get_powermeter_watts_raw)
+    async def get_passive_watts(self) -> list[float]:
+        return await self._tracked(self.wrapped_powermeter.get_passive_watts)
 
     async def _tracked(self, fn: Callable[[], Awaitable[list[float]]]) -> list[float]:
         self._last_attempt = self._clock()

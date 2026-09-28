@@ -21,7 +21,7 @@ class DummyPowermeter(Powermeter):
         self.call_count += 1
         return [1.0]
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
+    async def get_passive_watts(self) -> list[float]:
         # Same physical reading as get_powermeter_watts; do not bump call_count so
         # throttling/dedupe tests that only observe get_powermeter_watts stay stable.
         return [1.0]

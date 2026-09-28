@@ -5,7 +5,10 @@ import pytest
 
 from astrameter.powermeter.base import Powermeter
 
+from .conftest import FakePowermeter
 from .health import HealthTrackingPowermeter
+from .last_reading import LastReadingPowermeter
+from .throttling import ThrottledPowermeter
 
 
 class _FakeClock:
@@ -75,12 +78,12 @@ async def test_empty_result_counts_as_not_ok() -> None:
     assert pm.last_outcome_ok is False
 
 
-async def test_raw_read_also_tracked() -> None:
+async def test_passive_read_also_tracked() -> None:
     inner = Mock(spec=Powermeter)
-    inner.get_powermeter_watts_raw = AsyncMock(return_value=[7.0])
+    inner.get_passive_watts = AsyncMock(return_value=[7.0])
     pm = _make(inner)
 
-    assert await pm.get_powermeter_watts_raw() == [7.0]
+    assert await pm.get_passive_watts() == [7.0]
     assert pm.last_outcome_ok is True
 
 
@@ -104,3 +107,12 @@ async def test_lifecycle_delegates_to_inner() -> None:
     await pm.stop()
     inner.start.assert_awaited_once()
     inner.stop.assert_awaited_once()
+
+
+def test_pipeline_leaves_out_the_shared_reading() -> None:
+    """The dashboard's Filters row lists what shapes the reading; the wrapper
+    that only shares it with passive readers is not one of those."""
+    pm = _make(ThrottledPowermeter(LastReadingPowermeter(FakePowermeter()), 1.0))
+    snapshot = pm.status_snapshot()
+    assert snapshot.kind == "FakePowermeter"
+    assert snapshot.pipeline == ("ThrottledPowermeter",)

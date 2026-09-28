@@ -7,8 +7,8 @@ class PowermeterWrapper(Powermeter):
     def __init__(self, wrapped_powermeter: Powermeter) -> None:
         self.wrapped_powermeter = wrapped_powermeter
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        return await self.wrapped_powermeter.get_powermeter_watts_raw()
+    async def get_passive_watts(self) -> list[float]:
+        return await self.wrapped_powermeter.get_passive_watts()
 
     def stream_online(self) -> bool | None:
         return self.wrapped_powermeter.stream_online()
