@@ -16,13 +16,14 @@ class LastReadingPowermeter(PowermeterWrapper):
     """Innermost wrapper that lets passive readers reuse the control loop's read.
 
     Every real read of the source passes through here and is remembered.
-    :meth:`get_powermeter_watts_raw` — what the diagnostic readers call —
+    :meth:`get_passive_watts` — what the diagnostic readers call —
     serves that reading while it is at most ``max_age`` seconds old, and only
     reads the source itself when nothing has read it for longer, so those
     readers add no load on a meter the batteries are already polling.
 
     A push meter already answers from the reading it was sent, with no I/O, so
-    its raw reads go straight through and keep the meter's own staleness rule.
+    its passive reads go straight through and keep the meter's own staleness
+    rule.
 
     ``reset()`` passes through without forgetting the reading: it clears the
     filters' rolling state, and this is a fact about the meter.
@@ -48,9 +49,9 @@ class LastReadingPowermeter(PowermeterWrapper):
             self._read_at = self._clock()
         return values
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
+    async def get_passive_watts(self) -> list[float]:
         if self.wrapped_powermeter.stream_online() is not None:
-            return await self.wrapped_powermeter.get_powermeter_watts_raw()
+            return await self.wrapped_powermeter.get_passive_watts()
         if self._values is not None and stream_fresh(
             self._read_at, self.max_age, self._clock
         ):

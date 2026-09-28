@@ -9,7 +9,7 @@ from .transform import TransformedPowermeter
 def mock_powermeter() -> Mock:
     pm = Mock()
     pm.get_powermeter_watts = AsyncMock()
-    pm.get_powermeter_watts_raw = AsyncMock()
+    pm.get_passive_watts = AsyncMock()
     pm.wait_for_message = AsyncMock()
     pm.wait_for_next_message = AsyncMock()
     return pm
@@ -19,11 +19,11 @@ async def test_transformed_raw_matches_wrapped_without_offset(
     mock_powermeter: Mock,
 ) -> None:
     mock_powermeter.get_powermeter_watts.return_value = [110.0, 210.0, 310.0]
-    mock_powermeter.get_powermeter_watts_raw.return_value = [100.0, 200.0, 300.0]
+    mock_powermeter.get_passive_watts.return_value = [100.0, 200.0, 300.0]
     t = TransformedPowermeter(mock_powermeter, [10.0], [1.0])
     assert await t.get_powermeter_watts() == [120.0, 220.0, 320.0]
-    assert await t.get_powermeter_watts_raw() == [100.0, 200.0, 300.0]
-    mock_powermeter.get_powermeter_watts_raw.assert_awaited_once()
+    assert await t.get_passive_watts() == [100.0, 200.0, 300.0]
+    mock_powermeter.get_passive_watts.assert_awaited_once()
 
 
 async def test_identity_single_phase(mock_powermeter: Mock) -> None:

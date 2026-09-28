@@ -17,13 +17,6 @@ class Powermeter {
   // 3-element (three-phase) vectors; an empty vector signals "unavailable".
   virtual std::vector<float> get_powermeter_watts() = 0;
 
-  // Raw (unfiltered) per-phase readings — used by mqtt_insights to publish
-  // the unsmoothed signal alongside the filtered one. The base wrapper
-  // delegates to upstream's raw, so the call chain unwinds to the source.
-  virtual std::vector<float> get_powermeter_watts_raw() {
-    return this->get_powermeter_watts();
-  }
-
   // Clears any time-windowed state. Called by CT002 after long gaps where
   // accumulated state would be stale (e.g. Wi-Fi reconnect, sensor outage).
   virtual void reset() {}
@@ -36,9 +29,6 @@ class PowermeterWrapper : public Powermeter {
  public:
   explicit PowermeterWrapper(Powermeter *wrapped) : wrapped_(wrapped) {}
 
-  std::vector<float> get_powermeter_watts_raw() override {
-    return this->wrapped_->get_powermeter_watts_raw();
-  }
   void reset() override { this->wrapped_->reset(); }
 
  protected:

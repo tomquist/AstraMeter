@@ -78,12 +78,12 @@ async def test_empty_result_counts_as_not_ok() -> None:
     assert pm.last_outcome_ok is False
 
 
-async def test_raw_read_also_tracked() -> None:
+async def test_passive_read_also_tracked() -> None:
     inner = Mock(spec=Powermeter)
-    inner.get_powermeter_watts_raw = AsyncMock(return_value=[7.0])
+    inner.get_passive_watts = AsyncMock(return_value=[7.0])
     pm = _make(inner)
 
-    assert await pm.get_powermeter_watts_raw() == [7.0]
+    assert await pm.get_passive_watts() == [7.0]
     assert pm.last_outcome_ok is True
 
 

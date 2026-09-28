@@ -25,7 +25,7 @@ class FakePowermeter(Powermeter):
     async def get_powermeter_watts(self) -> list[float]:
         return list(self._values)
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
+    async def get_passive_watts(self) -> list[float]:
         return list(self._values)
 
     async def wait_for_message(self, timeout: float = 5) -> None:

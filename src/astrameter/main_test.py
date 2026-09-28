@@ -10,7 +10,7 @@ from astrameter.config.config_loader import (
 from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.settings import ConfiguredPowermeter, SignalSettings
 from astrameter.main import (
-    _read_grid_phases,
+    _passive_grid_phases,
     _resolve_device_config,
     read_ct_powermeter,
 )
@@ -33,7 +33,7 @@ class _StubPowermeter(Powermeter):
     async def get_powermeter_watts(self) -> list[float]:
         return list(self._values)
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
+    async def get_passive_watts(self) -> list[float]:
         return list(self._values)
 
     async def wait_for_next_message(self, timeout: float = 5) -> None:
@@ -75,7 +75,7 @@ async def test_read_ct_powermeter_calls_wait_with_2s_when_enabled() -> None:
 async def test_stub_powermeter_raw_matches_watts() -> None:
     pm = _StubPowermeter([3.0, 4.0, 5.0])
     assert (
-        await pm.get_powermeter_watts_raw()
+        await pm.get_passive_watts()
         == await pm.get_powermeter_watts()
         == [
             3.0,
@@ -130,7 +130,7 @@ async def test_grid_phases_reuse_the_control_loops_read() -> None:
     await read_ct_powermeter(("10.0.0.5", 0), powermeters)
     source.values = [0.0, 0.0, 0.0]
 
-    assert await _read_grid_phases(powermeters) == [100.0, 200.0, 300.0]
+    assert await _passive_grid_phases(powermeters) == [100.0, 200.0, 300.0]
     assert source.reads == 1
 
 
@@ -138,7 +138,7 @@ async def test_grid_phases_read_an_idle_meter_themselves() -> None:
     source = _PolledMeter([100.0, 200.0, 300.0])
     powermeters = _configured(source)
 
-    assert await _read_grid_phases(powermeters) == [100.0, 200.0, 300.0]
+    assert await _passive_grid_phases(powermeters) == [100.0, 200.0, 300.0]
     assert source.reads == 1
 
 

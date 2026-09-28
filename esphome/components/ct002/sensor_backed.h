@@ -24,7 +24,6 @@ class SensorBackedPowermeter : public Powermeter {
                         uint32_t max_sensor_age_ms);
 
   std::vector<float> get_powermeter_watts() override;
-  std::vector<float> get_powermeter_watts_raw() override { return this->get_powermeter_watts(); }
 
  private:
   uint8_t num_phases_;

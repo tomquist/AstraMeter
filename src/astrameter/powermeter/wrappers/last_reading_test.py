@@ -31,7 +31,7 @@ class _PushSource(_CountingSource):
     def stream_online(self) -> bool | None:
         return True
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
+    async def get_passive_watts(self) -> list[float]:
         return await self.get_powermeter_watts()
 
 
@@ -50,7 +50,7 @@ async def test_raw_read_reuses_a_recent_control_read() -> None:
     source.set([999.0, 999.0])
     clock.now = 5.0
 
-    assert await pm.get_powermeter_watts_raw() == [100.0, 200.0]
+    assert await pm.get_passive_watts() == [100.0, 200.0]
     assert source.reads == 1
 
 
@@ -61,12 +61,12 @@ async def test_raw_read_reads_the_source_once_the_reading_is_too_old() -> None:
 
     source.set([150.0])
     clock.now = 5.1
-    assert await pm.get_powermeter_watts_raw() == [150.0]
+    assert await pm.get_passive_watts() == [150.0]
     assert source.reads == 2
 
     # That read is remembered, so the next passive read within max_age is free.
     clock.now = 6.0
-    assert await pm.get_powermeter_watts_raw() == [150.0]
+    assert await pm.get_passive_watts() == [150.0]
     assert source.reads == 2
 
 
@@ -74,7 +74,7 @@ async def test_raw_read_reads_the_source_when_nothing_has_read_it() -> None:
     source = _CountingSource([42.0])
     pm, _ = _make(source)
 
-    assert await pm.get_powermeter_watts_raw() == [42.0]
+    assert await pm.get_passive_watts() == [42.0]
     assert source.reads == 1
 
 
@@ -89,13 +89,13 @@ async def test_failed_or_empty_reads_are_not_remembered() -> None:
         await pm.get_powermeter_watts()
     # The raw read does not fall back to the old reading: it asks the source.
     with pytest.raises(ValueError):
-        await pm.get_powermeter_watts_raw()
+        await pm.get_passive_watts()
 
     source.error = None
     source.set([])
     assert await pm.get_powermeter_watts() == []
     source.set([7.0])
-    assert await pm.get_powermeter_watts_raw() == [7.0]
+    assert await pm.get_passive_watts() == [7.0]
 
 
 async def test_served_reading_is_a_copy() -> None:
@@ -103,9 +103,9 @@ async def test_served_reading_is_a_copy() -> None:
     pm, _ = _make(source)
     await pm.get_powermeter_watts()
 
-    served = await pm.get_powermeter_watts_raw()
+    served = await pm.get_passive_watts()
     served[0] = 999.0
-    assert await pm.get_powermeter_watts_raw() == [1.0, 2.0]
+    assert await pm.get_passive_watts() == [1.0, 2.0]
 
 
 async def test_push_meter_raw_read_goes_straight_to_its_cache() -> None:
@@ -117,7 +117,7 @@ async def test_push_meter_raw_read_goes_straight_to_its_cache() -> None:
 
     source.error = ValueError("stale")
     with pytest.raises(ValueError, match="stale"):
-        await pm.get_powermeter_watts_raw()
+        await pm.get_passive_watts()
 
 
 async def test_reset_keeps_the_reading() -> None:
@@ -127,5 +127,5 @@ async def test_reset_keeps_the_reading() -> None:
 
     pm.reset()
     assert source.reset_count == 1
-    assert await pm.get_powermeter_watts_raw() == [100.0]
+    assert await pm.get_passive_watts() == [100.0]
     assert source.reads == 1

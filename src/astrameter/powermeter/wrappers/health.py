@@ -109,8 +109,8 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         self._last_values = list(result)
         return result
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        return await self._tracked(self.wrapped_powermeter.get_powermeter_watts_raw)
+    async def get_passive_watts(self) -> list[float]:
+        return await self._tracked(self.wrapped_powermeter.get_passive_watts)
 
     async def _tracked(self, fn: Callable[[], Awaitable[list[float]]]) -> list[float]:
         self._last_attempt = self._clock()
