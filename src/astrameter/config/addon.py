@@ -14,16 +14,17 @@ into a ``config.ini`` with bashio before starting the app.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from ipaddress import IPv4Network
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlparse
-
-import requests
 
 from astrameter.config.config_loader import (
     DEFAULT_MQTT_PORT,
@@ -43,7 +44,7 @@ from astrameter.config.settings import (
     GeneralSettings,
     MarstekSettings,
 )
-from astrameter.powermeter import HomeAssistant
+from astrameter.powermeter.homeassistant import HomeAssistant
 
 if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
@@ -240,6 +241,34 @@ def _apply_options(
     return cast("SettingsT", replace(cast("Any", settings), **values))
 
 
+@dataclass(frozen=True)
+class SupervisorResponse:
+    """Status and body of one Supervisor reply."""
+
+    status_code: int
+    body: bytes
+
+    def json(self) -> Any:
+        """The body as JSON; ``ValueError`` when it is not."""
+        return json.loads(self.body)
+
+
+def _http_get(url: str, headers: dict[str, str], timeout: float) -> SupervisorResponse:
+    """GET *url* with the standard library.
+
+    A handful of startup calls do not justify loading ``requests`` (several MiB
+    resident for the life of the process). An HTTP error status is a reply
+    like any other here; only a failure to get one raises.
+    """
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return SupervisorResponse(response.status, response.read())
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return SupervisorResponse(exc.code, exc.read())
+
+
 class SupervisorClient:
     """The handful of Supervisor API calls the add-on needs (bashio's job)."""
 
@@ -253,14 +282,14 @@ class SupervisorClient:
         self.token = os.environ.get("SUPERVISOR_TOKEN", "") if token is None else token
         self.timeout = timeout
 
-    def _get(self, path: str) -> requests.Response | None:
+    def _get(self, path: str) -> SupervisorResponse | None:
         try:
-            return requests.get(
+            return _http_get(
                 f"{self.base_url}{path}",
                 headers={"Authorization": f"Bearer {self.token}"},
                 timeout=self.timeout,
             )
-        except requests.RequestException as exc:
+        except (OSError, http.client.HTTPException, ValueError) as exc:
             logger.debug("Supervisor request %s failed: %s", path, exc, exc_info=False)
             return None
 

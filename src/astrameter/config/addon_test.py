@@ -520,7 +520,7 @@ def patch_requests(
         assert response is not None, f"unexpected request to {url}"
         return response
 
-    monkeypatch.setattr(addon.requests, "get", fake_get)
+    monkeypatch.setattr(addon, "_http_get", fake_get)
     return calls
 
 
@@ -556,7 +556,7 @@ def test_supervisor_client_survives_a_network_error(
 ) -> None:
     patch_requests(
         monkeypatch,
-        {"http://supervisor/addons/self/info": addon.requests.ConnectionError("boom")},
+        {"http://supervisor/addons/self/info": ConnectionRefusedError("boom")},
     )
     assert addon.SupervisorClient(token="tok").addon_slug() == ""
 
@@ -590,3 +590,65 @@ def test_supervisor_token_defaults_to_the_environment(
 ) -> None:
     monkeypatch.setenv("SUPERVISOR_TOKEN", "from-env")
     assert addon.SupervisorClient().token == "from-env"
+
+
+class _SupervisorStub:
+    """A real HTTP server on localhost answering like the Supervisor."""
+
+    def __init__(self, routes: dict[str, tuple[int, Any]]) -> None:
+        import http.server
+        import threading
+
+        self.auth: list[str | None] = []
+        stub = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                stub.auth.append(self.headers.get("Authorization"))
+                status, payload = routes.get(self.path, (404, {"result": "error"}))
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_supervisor_client_talks_http_to_a_real_server() -> None:
+    stub = _SupervisorStub(
+        {
+            "/addons/self/info": (200, {"result": "ok", "data": {"slug": "abc"}}),
+            "/services/mqtt": (400, {"result": "error", "message": "no service"}),
+            "/core/api/": (200, {"message": "API running."}),
+        }
+    )
+    try:
+        client = addon.SupervisorClient(base_url=stub.base_url, token="tok")
+        assert client.addon_slug() == "abc"
+        # An error status is an answer, not an exception.
+        assert client.mqtt_service() is None
+        assert client.home_assistant_ready() is True
+        assert stub.auth == ["Bearer tok"] * 3
+    finally:
+        stub.close()
+
+
+def test_supervisor_client_treats_an_unreachable_supervisor_as_no_answer() -> None:
+    stub = _SupervisorStub({})
+    base_url = stub.base_url
+    stub.close()
+    client = addon.SupervisorClient(base_url=base_url, token="tok", timeout=2)
+    assert client.addon_slug() == ""
+    assert client.home_assistant_ready() is False

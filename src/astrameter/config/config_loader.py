@@ -14,48 +14,20 @@ from urllib.parse import unquote, urlparse
 if TYPE_CHECKING:
     from astrameter.mqtt_insights import MqttInsightsConfig
 
+# Only the base class and the signal wrappers load here: each factory imports
+# its own backend, so a process pays for the one stack it actually runs.
 from astrameter.config.logger import logger
 from astrameter.config.settings import ConfiguredPowermeter, SignalSettings
-from astrameter.powermeter import (
-    AmisReader,
-    Emlog,
-    Envoy,
-    ESPHome,
-    ESPHomeNative,
-    FritzSmartEnergy,
-    Fronius,
-    HomeAssistant,
-    HomeWizardPowermeter,
-    IoBroker,
-    JsonHttpPowermeter,
-    ModbusPowermeter,
-    MqttPowermeter,
-    PidPowermeter,
-    Powermeter,
-    Refoss,
-    Script,
-    Shelly,
-    Shelly1PM,
-    Shelly3EMPro,
-    ShellyEM,
-    ShellyPlus1PM,
-    Shrdzm,
-    SmaEnergyMeter,
-    Sml,
-    Tasmota,
-    ThrottledPowermeter,
-    TibberPulse,
-    TQEnergyManager,
-    TransformedPowermeter,
-    VZLogger,
-    parse_sml_obis_config,
-)
+from astrameter.powermeter.base import Powermeter
 from astrameter.powermeter.wrappers.hampel import HampelPowermeter
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
+from astrameter.powermeter.wrappers.pid import PidPowermeter
 from astrameter.powermeter.wrappers.smoothing import (
     DeadbandPowermeter,
     SmoothedPowermeter,
 )
+from astrameter.powermeter.wrappers.throttling import ThrottledPowermeter
+from astrameter.powermeter.wrappers.transform import TransformedPowermeter
 
 SHELLY_SECTION = "SHELLY"
 TASMOTA_SECTION = "TASMOTA"
@@ -490,6 +462,14 @@ def create_client_filter(
 def create_shelly_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.shelly import (
+        Shelly,
+        Shelly1PM,
+        Shelly3EMPro,
+        ShellyEM,
+        ShellyPlus1PM,
+    )
+
     shelly_type = config.get(section, "TYPE", fallback="")
     models: dict[str, type[Shelly]] = {
         "1PM": Shelly1PM,
@@ -515,18 +495,24 @@ def create_shelly_powermeter(
 def create_amisreader_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.amisreader import AmisReader
+
     return AmisReader(config.get(section, "IP", fallback=""))
 
 
 def create_script_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.script import Script
+
     return Script(config.get(section, "COMMAND", fallback=""))
 
 
 def create_sml_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.sml import Sml, parse_sml_obis_config
+
     oc, o1, o2, o3 = parse_sml_obis_config(section, config)
     kwargs = dict(
         obis_power_current=oc,
@@ -545,6 +531,8 @@ def create_sml_powermeter(
 def create_mqtt_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.mqtt import MqttPowermeter
+
     # The plural key wins where both are set: a list of one is still a list,
     # which is one value per phase rather than the single value TOPIC means.
     topics = config.get(section, "TOPICS", fallback="")
@@ -571,6 +559,8 @@ def create_mqtt_powermeter(
 def create_json_http_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.json_http import JsonHttpPowermeter
+
     json_path_value = one_or_many(config.get(section, "JSON_PATHS", fallback=""))
     headers_raw = config.get(section, "HEADERS", fallback="")
     headers = (
@@ -596,6 +586,8 @@ def create_json_http_powermeter(
 def create_modbus_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.modbus import ModbusPowermeter
+
     return ModbusPowermeter(
         config.get(section, "HOST", fallback=""),
         config.getint(section, "PORT", fallback=502),
@@ -617,6 +609,8 @@ def create_modbus_powermeter(
 def create_esphomenative_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.esphome_native import ESPHomeNative
+
     return ESPHomeNative(
         address=config.get(section, "ADDRESS", fallback=""),
         port=config.get(section, "PORT", fallback="6053"),
@@ -629,6 +623,8 @@ def create_esphomenative_powermeter(
 def create_esphome_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.esphome import ESPHome
+
     return ESPHome(
         config.get(section, "IP", fallback=""),
         config.get(section, "PORT", fallback=""),
@@ -640,6 +636,8 @@ def create_esphome_powermeter(
 def create_vzlogger_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.vzlogger import VZLogger
+
     return VZLogger(
         config.get(section, "IP", fallback=""),
         config.get(section, "PORT", fallback=""),
@@ -650,6 +648,8 @@ def create_vzlogger_powermeter(
 def create_homeassistant_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.homeassistant import HomeAssistant
+
     ip = config.get(section, "IP", fallback="")
     if ip == "supervisor":
 
@@ -678,6 +678,8 @@ def create_homeassistant_powermeter(
 def create_iobroker_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.iobroker import IoBroker
+
     return IoBroker(
         config.get(section, "IP", fallback=""),
         config.get(section, "PORT", fallback=""),
@@ -691,6 +693,8 @@ def create_iobroker_powermeter(
 def create_emlog_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.emlog import Emlog
+
     return Emlog(
         config.get(section, "IP", fallback=""),
         config.get(section, "METER_INDEX", fallback=""),
@@ -701,6 +705,8 @@ def create_emlog_powermeter(
 def create_shrdzm_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.shrdzm import Shrdzm
+
     return Shrdzm(
         config.get(section, "IP", fallback=""),
         config.get(section, "USER", fallback=""),
@@ -716,6 +722,8 @@ def one_or_blank(raw: str) -> str | list[str]:
 def create_tasmota_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.tasmota import Tasmota
+
     return Tasmota(
         config.get(section, "IP", fallback=""),
         config.get(section, "USER", fallback=""),
@@ -732,6 +740,8 @@ def create_tasmota_powermeter(
 def create_tq_em_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.tq_em import TQEnergyManager
+
     return TQEnergyManager(
         config.get(section, "IP", fallback=""),
         **_declared(
@@ -743,6 +753,8 @@ def create_tq_em_powermeter(
 def create_homewizard_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.homewizard import HomeWizardPowermeter
+
     return HomeWizardPowermeter(
         config.get(section, "IP", fallback=""),
         config.get(section, "TOKEN", fallback=""),
@@ -754,6 +766,8 @@ def create_homewizard_powermeter(
 def create_envoy_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.envoy import Envoy
+
     return Envoy(
         host=config.get(section, "HOST", fallback=""),
         **_declared(
@@ -771,6 +785,8 @@ def create_envoy_powermeter(
 def create_sma_energy_meter_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.sma_energy_meter import SmaEnergyMeter
+
     return SmaEnergyMeter(
         **_declared(
             config,
@@ -786,6 +802,8 @@ def create_sma_energy_meter_powermeter(
 def create_fritz_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.fritz import FritzSmartEnergy
+
     return FritzSmartEnergy(
         config.get(section, "HOST", fallback="fritz.box"),
         config.get(section, "USER", fallback=""),
@@ -804,6 +822,8 @@ def create_fritz_powermeter(
 def create_fronius_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.fronius import Fronius
+
     return Fronius(
         config.get(section, "IP", fallback=""),
         **_declared(
@@ -816,7 +836,7 @@ def create_refoss_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
     """Build a Refoss/Meross powermeter from a ``[REFOSS]`` / ``[MEROSS]`` section."""
-    from astrameter.powermeter.refoss import parse_channels
+    from astrameter.powermeter.refoss import Refoss, parse_channels
 
     return Refoss(
         config.get(section, "IP", fallback=""),
@@ -827,6 +847,9 @@ def create_refoss_powermeter(
 def create_tibber_pulse_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
+    from astrameter.powermeter.sml import parse_sml_obis_config
+    from astrameter.powermeter.tibber_pulse import TibberPulse
+
     oc, o1, o2, o3 = parse_sml_obis_config(section, config)
     return TibberPulse(
         config.get(section, "IP", fallback=""),

@@ -14,8 +14,6 @@ import tempfile
 import threading
 from collections import OrderedDict
 
-from configupdater import ConfigUpdater
-
 from astrameter.config.config_loader import (
     new_config_parser,
     read_all_powermeter_configs,
@@ -165,6 +163,9 @@ def write_config_from_dict(config_path: str, sections: dict, order: list) -> Non
     """
     _validate_config_payload(sections, order)
     write_order = list(order) + [s for s in sections if s not in order]
+
+    # Loaded on the first save only: most processes never write the file.
+    from configupdater import ConfigUpdater
 
     with _CONFIG_WRITE_LOCK:
         updater = ConfigUpdater()
