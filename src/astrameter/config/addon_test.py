@@ -595,7 +595,11 @@ def test_supervisor_token_defaults_to_the_environment(
 class _SupervisorStub:
     """A real HTTP server on localhost answering like the Supervisor."""
 
-    def __init__(self, routes: dict[str, tuple[int, Any]]) -> None:
+    def __init__(
+        self,
+        routes: dict[str, tuple[int, Any]],
+        redirects: dict[str, str] | None = None,
+    ) -> None:
         import http.server
         import threading
 
@@ -605,6 +609,12 @@ class _SupervisorStub:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 stub.auth.append(self.headers.get("Authorization"))
+                if redirects and self.path in redirects:
+                    self.send_response(302)
+                    self.send_header("Location", redirects[self.path])
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 status, payload = routes.get(self.path, (404, {"result": "error"}))
                 body = json.dumps(payload).encode()
                 self.send_response(status)
@@ -652,3 +662,21 @@ def test_supervisor_client_treats_an_unreachable_supervisor_as_no_answer() -> No
     client = addon.SupervisorClient(base_url=base_url, token="tok", timeout=2)
     assert client.addon_slug() == ""
     assert client.home_assistant_ready() is False
+
+
+def test_supervisor_client_never_forwards_its_token_through_a_redirect() -> None:
+    elsewhere = _SupervisorStub(
+        {"/addons/self/info": (200, {"result": "ok", "data": {"slug": "x"}})}
+    )
+    supervisor = _SupervisorStub(
+        {}, redirects={"/addons/self/info": f"{elsewhere.base_url}/addons/self/info"}
+    )
+    try:
+        client = addon.SupervisorClient(base_url=supervisor.base_url, token="tok")
+        # A redirect is an answer that isn't the data, never a hop elsewhere.
+        assert client.addon_slug() == ""
+        assert supervisor.auth == ["Bearer tok"]
+        assert elsewhere.auth == []
+    finally:
+        supervisor.close()
+        elsewhere.close()

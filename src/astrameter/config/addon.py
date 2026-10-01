@@ -253,6 +253,17 @@ class SupervisorResponse:
         return json.loads(self.body)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would carry the bearer token to wherever
+    one points. The Supervisor never redirects, so a 3xx is just a failed call."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _http_get(url: str, headers: dict[str, str], timeout: float) -> SupervisorResponse:
     """GET *url* with the standard library.
 
@@ -262,7 +273,7 @@ def _http_get(url: str, headers: dict[str, str], timeout: float) -> SupervisorRe
     """
     request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             return SupervisorResponse(response.status, response.read())
     except urllib.error.HTTPError as exc:
         with exc:

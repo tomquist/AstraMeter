@@ -265,12 +265,13 @@ def summarize(samples: list[tuple[float, dict[str, float]]], warmup: float) -> d
         n = len(xs)
         mx, my = sum(xs) / n, sum(ys) / n
         den = sum((x - mx) ** 2 for x in xs)
-        slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / den
+        cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
+        slope = cov / den if den else 0.0
         out[key] = {
             "warm": round(ys[0], 1),
             "end": round(ys[-1], 1),
             "max": round(max(m[key] for _, m in samples), 1),
-            "slope_mib_per_h": round(slope * 3600, 2) if den else 0.0,
+            "slope_mib_per_h": round(slope * 3600, 2),
         }
     out["threads"] = samples[-1][1]["threads"]
     return out
@@ -463,6 +464,10 @@ def main() -> None:
     )
     ap.add_argument("--workdir", default=str(HERE / ".membench"))
     args = ap.parse_args()
+    if args.docker and args.snap_at:
+        # The image runs plain astrameter, which has no SIGUSR2 handler: the
+        # first snapshot would kill it.
+        ap.error("--snap-at works only for local runs, not with --docker")
     args.workdir = str(Path(args.workdir) / f"{args.label}-{args.scenario}")
     print(json.dumps(asyncio.run(run(args))))
 
