@@ -27,9 +27,14 @@ generator and both doc sets stay in sync.
      whose base default is a no-op, so it would be handed a stale one.
    - **Anything else** — `Powermeter`, overriding the waits only if its no-op
      defaults are wrong for the source.
-2. **Exports** — the import and `__all__` entry in `powermeter/__init__.py`.
-3. **Config loader** — in `config/config_loader.py`: import the class, define a
-   `*_SECTION` string, add a `create_*_powermeter()` factory reading the
+2. **Exports** — in `powermeter/__init__.py`: an `_LAZY` entry, the
+   `TYPE_CHECKING` import and the `__all__` entry. Backends load on first
+   access, never with the package: a process runs one of them, and importing
+   the rest kept every other backend's dependencies resident for nothing.
+   `tests/test_import_footprint.py` fails if one loads eagerly again.
+3. **Config loader** — in `config/config_loader.py`: define a `*_SECTION`
+   string, add a `create_*_powermeter()` factory that imports the class from
+   its own module *inside the function* and reads the
    section's options, and register the pair in `_FACTORIES` (matched
    longest-prefix-first, so ordering is not a hazard). Pass an optional key
    through `_declared(...)` so the class's own default applies when the key is
