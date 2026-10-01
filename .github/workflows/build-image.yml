@@ -21,6 +21,11 @@ on:
       dockerfile:
         required: true
         type: string
+      target:
+        required: false
+        type: string
+        default: ""
+        description: "Build stage to produce (the Dockerfile's last stage when empty)"
       build-args:
         required: false
         type: string
@@ -98,6 +103,7 @@ jobs:
           context: ${{ inputs.context }}
           platforms: ${{ inputs.platform }}
           file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
           push: true
           outputs: type=image,name=${{ inputs.registry }}/${{ steps.lower-repo.outputs.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
@@ -114,6 +120,7 @@ jobs:
           context: ${{ inputs.context }}
           platforms: ${{ inputs.platform }}
           file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
           push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |

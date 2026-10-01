@@ -12,7 +12,6 @@ panel_icon: "mdi:meter-electric"
 panel_title: "AstraMeter"
 ingress: true
 ingress_port: 52500
-init: false
 startup: application
 boot: auto
 auto_restart: true

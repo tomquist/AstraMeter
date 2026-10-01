@@ -34,8 +34,8 @@ An option only one entry point understands is a bug. Adding or renaming a
    name appended to `_CT_FIELDS` / `_SOURCE_SIGNAL_FIELDS` / `_GENERAL_FIELDS`;
    an `_OPTION_NAMES` entry only when the option isn't named after the field), a
    description in `ha_addon/translations/en.yaml`, and a test in
-   `addon_test.py`. `ha_addon/run.sh` only launches the app — nothing to change
-   there.
+   `addon_test.py`. The image's `addon` target only launches the app — nothing
+   to change there.
 6. **Dashboard guided form** — a label, a `help` sentence and a group in
    `OPTION_META` (`web/ts/dashboard/option-meta.ts`), plus a `placeholder` when
    leaving it empty means something worth stating. Groups are declared in
@@ -52,19 +52,22 @@ that `app.ts` shows the field for the add-on target, so check that by hand.
 
 ## Verifying the add-on container
 
-Only `tests/test_addon_container.py` covers `ha_addon/run.sh`, the venv path and
-`SUPERVISOR_TOKEN` reaching the app. It skips unless the image exists, so build
-it first when touching the add-on's container or launch path:
+Only `tests/test_addon_container.py` covers the image's launch command, the venv
+path and `SUPERVISOR_TOKEN` reaching the app. It skips unless the image exists,
+so build it first when touching the add-on's container or launch path:
 
 ```bash
-docker build -f ha_addon/Dockerfile -t astrameter-addon:test .
+docker build --target addon -t astrameter-addon:test .
 uv run pytest tests/test_addon_container.py
 ```
 
 CI does the same in the `addon-container` job — the durable path, since a
 sandbox may not manage it: Docker is installed but nothing starts it (`dockerd
 &` as root works, and doesn't survive the session), and behind a
-TLS-intercepting proxy `apk add` can't verify the certificate, so the build
-needs `--network host` and the proxy CA added in a *copy* of the Dockerfile —
-the real one stays proxy-free for CI. When neither is possible, leave the
-container tests to CI and say so rather than reporting the image as untested.
+TLS-intercepting proxy `pip`/`uv` in the builder stage can't verify the
+certificate, so the build needs `--network host`, `--build-arg HTTPS_PROXY`
+and the proxy CA added to the builder stage in a *copy* of the Dockerfile — the
+real one stays proxy-free for CI. If Docker Hub rate-limits the busybox pull,
+`docker pull mirror.gcr.io/library/busybox:<tag>` and tag it locally. When
+neither is possible, leave the container tests to CI and say so rather than
+reporting the image as untested.
