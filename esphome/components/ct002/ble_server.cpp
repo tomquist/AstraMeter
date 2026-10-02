@@ -6,6 +6,7 @@
 
 #include <esp_gap_ble_api.h>
 #include <esp_heap_caps.h>
+#include <esp_mac.h>
 
 #include "esphome/components/esp32_ble/ble_uuid.h"
 #include "esphome/components/esp32_ble_server/ble_2902.h"
@@ -42,9 +43,33 @@ static constexpr uint16_t ATT_OVERHEAD = 3;
 // Upper bound on queued frames, so a misbehaving client cannot grow it.
 static constexpr size_t MAX_PENDING = 8;
 
+static std::string mac_hex(const uint8_t *mac) {
+  static const char *const DIGITS = "0123456789abcdef";
+  std::string out;
+  for (size_t i = 0; i < 6; ++i) {
+    out.push_back(DIGITS[mac[i] >> 4]);
+    out.push_back(DIGITS[mac[i] & 0x0F]);
+  }
+  return out;
+}
+
 void BluetoothComponent::configure_identity() {
   this->model_ = ble::model_for_type(this->ct002_ != nullptr ? this->ct002_->ct_type() : "HME-4");
-  std::string id = this->ct002_ != nullptr ? ble::normalize_id(this->ct002_->ct_mac()) : "";
+  // A real meter's ID, its MAC and its Bluetooth address are one value: the
+  // app stores the reported MAC and later reconnects only to a device at that
+  // address. So either the radio takes ct_mac, or ct_mac is unset and the
+  // radio's own address becomes the ID.
+  const std::string configured = this->ct002_ != nullptr ? ble::normalize_id(this->ct002_->ct_mac()) : "";
+  uint8_t mac[6]{};
+  if (!configured.empty()) {
+    // normalize_id() guarantees 12 lowercase hex characters.
+    auto nibble = [](char c) -> uint8_t { return static_cast<uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10); };
+    for (size_t i = 0; i < 6; ++i) mac[i] = static_cast<uint8_t>((nibble(configured[2 * i]) << 4) | nibble(configured[2 * i + 1]));
+    // Must happen before the Bluetooth controller starts, which reads it then.
+    if ((mac[0] & 0x01) != 0 || esp_iface_mac_addr_set(mac, ESP_MAC_BT) != ESP_OK) this->bt_address_rejected_ = true;
+  }
+  if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) this->bt_address_ = mac_hex(mac);
+  std::string id = configured.empty() ? this->bt_address_ : configured;
   if (id.empty()) id = ble::normalize_id(get_mac_address());
   this->boot_id_ = id;
   this->set_name_(id);
@@ -70,6 +95,13 @@ void BluetoothComponent::follow_identity_() {
   // Restarting advertising rebuilds the packet with the new name.
   this->ble_->advertising_set_service_data_and_name(std::span<const uint8_t>{}, true);
   ESP_LOGI(TAG, "CT MAC changed; now advertising as %s", this->name_);
+  if (id != this->bt_address_) {
+    // The radio's address is fixed once Bluetooth runs.
+    ESP_LOGW(TAG,
+             "The Bluetooth address stays %s until ct_mac is set to %s in the YAML; until then the "
+             "app cannot reconnect to this meter over Bluetooth",
+             this->bt_address_.c_str(), id.c_str());
+  }
 }
 
 void BluetoothComponent::setup() {
@@ -77,6 +109,12 @@ void BluetoothComponent::setup() {
     ESP_LOGE(TAG, "No ct002 component bound");
     this->mark_failed();
     return;
+  }
+  if (this->bt_address_rejected_) {
+    ESP_LOGW(TAG,
+             "ct_mac %s cannot be the Bluetooth address (it must be a unicast MAC); the app will "
+             "not reconnect to this meter after adding it",
+             this->boot_id_.c_str());
   }
 }
 
@@ -231,9 +269,11 @@ void BluetoothComponent::dump_config() {
                 "AstraMeter Bluetooth:\n"
                 "  Name: %s\n"
                 "  Device ID: %s\n"
+                "  Bluetooth address: %s\n"
                 "  Advertising: %s\n"
                 "  Free internal heap: %u bytes",
-                this->name_, this->device_id_().c_str(), YESNO(this->advertising_started_),
+                this->name_, this->device_id_().c_str(), this->bt_address_.c_str(),
+                YESNO(this->advertising_started_),
                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
 }
 
