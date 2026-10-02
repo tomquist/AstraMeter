@@ -2,10 +2,11 @@
 
 This page covers the Bluetooth side of the Marstek CT002 (`HME-4`) and CT003
 (`HME-3`): how the Marstek app finds and onboards a meter, and the command set
-it speaks to the meter over BLE. AstraMeter does **not** implement any of this
-yet. The page records what an emulator would need, so that an ESP32 build could
-be added through the app's regular "Add device" flow instead of the cloud
-auto-registration in [ct002.md](ct002.md#marstek-cloud-auto-registration).
+it speaks to the meter over BLE. AstraMeter's ESPHome build implements it, so
+the app can add the board through its regular "Add device" flow instead of the
+cloud auto-registration in [ct002.md](ct002.md#marstek-cloud-auto-registration);
+see [AstraMeter's ESPHome implementation](#astrameters-esphome-implementation)
+for what it answers. The Python/Docker build has no Bluetooth.
 
 The meter's measurement protocol towards the batteries (UDP) is in
 [ct002-ct003-protocol.md](ct002-ct003-protocol.md). The cloud MQTT/HTTP side is
@@ -405,16 +406,82 @@ The exact field layouts of the `0x14` and `0x15` replies are unconfirmed.
   app can start that from BLE or MQTT, but the command bytes for the trigger
   were not decoded.
 
-## AstraMeter notes
+## AstraMeter's ESPHome implementation
 
-- **Name prefix.** AstraMeter's cloud auto-registration sets
+The `ct002:` component speaks this protocol on every ESP32 with a Bluetooth
+radio (all but the ESP32-S2). It is **on by default**; `bluetooth: false` under
+`ct002:` leaves the BLE stack out of the firmware.
+
+### Adding the board with the Marstek app
+
+1. Flash the board and let it join your Wi-Fi.
+2. In the Marstek app, tap **+** and wait for the scan. The board shows up as
+   `MST-TPM_xxxx` (`ct_type: HME-4`) or `MST-SMR_xxxx` (`ct_type: HME-3`).
+3. Pick it, give it a name, and go through the Wi-Fi step. The board keeps the
+   Wi-Fi from its YAML and ignores what the app sends; it only echoes the
+   network name back so the app counts the step as done.
+4. The firmware check reports the latest version; finish the setup.
+5. In the battery's settings, switch to automatic mode and select the new CT,
+   as with a real meter.
+
+The app then shows the CT's live grid power over Bluetooth while the phone is
+connected to it. The device stays "offline" in the app's cloud view, because
+the board doesn't connect to Marstek's cloud.
+
+### Identity
+
+The ID the board reports as `id` and `mac`, and whose last four characters end
+its advertised name, is:
+
+- `ct_mac`, when it is set (or the MAC `marstek_registration:` assigned);
+- otherwise the board's own Wi-Fi MAC.
+
+With `ct_mac` empty the UDP side answers polls for any CT MAC, so the battery
+works with the newly registered ID without further changes. To pin it, set
+`ct_mac` to the "Device ID" the board logs at boot.
+
+The advertised name is fixed when Bluetooth starts. If `marstek_registration:`
+assigns a MAC later, the replies use it straight away but the name only follows
+after a restart. With ESPHome's `name_add_mac_suffix` on, ESPHome appends its
+own suffix to the name; the app still finds the board, because it only looks
+for `MST`.
+
+### What the board answers
+
+| Command | Answer |
+|---|---|
+| `0x03` status | Live per-phase and total grid power: the same values the batteries get over UDP. Wi-Fi state and RSSI are real. The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. |
+| `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
+| `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`; the credentials are not applied |
+| `0x08` read SSID | The network the app last sent, otherwise the one the board is connected to |
+| `0x06`, `0x09` | Restart the board. Its configuration is untouched |
+| `0x12` linked batteries | Every battery currently polling the board |
+| `0x16` active power (CT002) | The three phase powers |
+
+Everything else, such as calibration, current-direction reversal, CT003 meter
+configuration and firmware updates, gets no reply. The app reports those
+buttons as failed. They have nothing to act on in an emulator, whose polarity
+and meter come from its YAML.
+
+Frames split across several writes are reassembled, and malformed ones are
+dropped silently, as on the meter. The board raises its local GATT MTU to 517,
+so the app's MTU request is honored and every reply fits in one notification.
+
+### Notes
+
+- **Other BLE features.** The service sits on ESPHome's `esp32_ble_server`, so
+  other components that use it, such as `esp32_improv`, share the GATT server
+  and the advertised name.
+- **Resources.** On an `esp32dev` build the BLE stack adds about 350 KB of flash
+  and 20 KB of static RAM, plus the heap Bluedroid allocates at runtime. The
+  test builds that combine it with the dashboard, MQTT and HTTPS still use at
+  most 1.42 MB of the 1.83 MB app partition. A classic ESP32 that also runs
+  the dashboard, MQTT and HTTPS registration is the tightest case for heap;
+  `bluetooth: false` takes all of it back.
+- **Cloud registration name.** AstraMeter's cloud auto-registration sets
   `bluetooth_name = MST-SMR_<suffix>` for both models. A real CT002 advertises as
   `MST-TPM_…`, and the app's name table maps `MST-TPM_` to "CT002". The field is
   only cosmetic in the app today, but a CT002 record should use `MST-TPM_`.
-- **ESPHome only.** A BLE emulator could exist only in the ESPHome component;
-  the Python/Docker stack has no BLE peripheral. It would be a deliberate
-  Python ↔ ESPHome divergence, to be listed in the parity skill when it lands.
-- **Resources.** Bluetooth and Wi-Fi run side by side on an ESP32. The BLE stack
-  costs roughly 60–100 KB of RAM, which is comfortable on an ESP32-S3 but tight
-  on a classic ESP32 with the dashboard enabled. Making BLE opt-in, or turning
-  it off once the meter is registered, keeps that cost optional.
+- **Field testing.** The reply layouts follow the meter firmware and the app's
+  parsers, and are covered by host tests; a run through the app with real
+  hardware is still outstanding.
