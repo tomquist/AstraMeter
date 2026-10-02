@@ -209,7 +209,10 @@ ble::Snapshot BluetoothComponent::snapshot_() const {
   if (wifi != nullptr && wifi->is_connected()) {
     s.wifi_connected = true;
     s.rssi_dbm = wifi->wifi_rssi();
-    s.ssid = wifi->wifi_ssid();
+    // wifi_ssid_to(), not wifi_ssid(): the latter is deprecated since
+    // ESPHome 2026.3 and gone from 2026.9.
+    char ssid[wifi::SSID_BUFFER_SIZE];
+    s.ssid = wifi->wifi_ssid_to(ssid);
   }
 #endif
   for (const auto &row : this->ct002_->reporting_consumer_rows()) {
