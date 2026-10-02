@@ -7,6 +7,9 @@ This document summarizes the CT002/CT003 protocol based on community reverse‑e
 Capture-based findings for issue #111 are documented in:
 - [ct002-capture-analysis.md](ct002-capture-analysis.md)
 
+The meters' Bluetooth side (app onboarding and the BLE command set) is in
+[ct002-ct003-ble.md](ct002-ct003-ble.md).
+
 The CT002 and CT003 share the **same protocol**. The only difference is the CT type value:
 - **CT002:** `HME-4`
 - **CT003:** `HME-3`

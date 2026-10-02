@@ -118,6 +118,8 @@ the full emulator and balancer end-to-end without any real devices.
   protocol used by Marstek storage systems.
 - **[Marstek MQTT & HTTP protocol](docs/marstek-mqtt-http.md)** — the cloud/app
   protocol.
+- **[CT002/CT003 Bluetooth protocol](docs/ct002-ct003-ble.md)** — how the
+  Marstek app onboards a meter over BLE, and the meter's BLE command set.
 - **[Contributing](CONTRIBUTING.md)** — development workflow and the
   Python ↔ ESPHome parity rules.
 
