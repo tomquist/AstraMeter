@@ -40,6 +40,8 @@ astra-sim = "astrameter.simulator.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/astrameter"]
+# Tests sit next to the code they test; they have no place in an install.
+exclude = ["*_test.py", "conftest.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]

@@ -1,7 +1,7 @@
 """The add-on image, started the way the Supervisor starts it.
 
 Everything else about the add-on is tested in-process, which cannot see the
-container itself: whether ``run.sh`` is launched with the container
+container itself: whether the app is launched with the container
 environment, whether ``SUPERVISOR_TOKEN`` reaches the app, whether the venv is
 on the path, whether the image survives the first minute instead of
 restart-looping. This runs the real image against the stand-in Supervisor on a
@@ -11,7 +11,7 @@ reading over UDP.
 Requires Docker and a built image (default tag ``astrameter-addon:test``,
 override with ``ASTRAMETER_ADDON_IMAGE``):
 
-    docker build -f ha_addon/Dockerfile -t astrameter-addon:test .
+    docker build --target addon -t astrameter-addon:test .
     uv run pytest tests/test_addon_container.py
 
 The tests skip when either is missing, so an ordinary test run is unaffected.
