@@ -128,6 +128,9 @@ inline constexpr float CEILING_AT_MARGIN_W = 25.0f;
 inline constexpr float CEILING_RELEASE_W = 30.0f;
 // A ceiling not confirmed for this long is forgotten.
 inline constexpr double CEILING_TTL_SECONDS = 600.0;
+// A battery pinned at a ceiling unconfirmed for this long is pushed past it
+// until it holds there (confirming it) or moves past it (dropping it).
+inline constexpr double CEILING_RETEST_SECONDS = 60.0;
 
 // Device capabilities — the single source of truth for every device-type
 // decision (mirrors balancer.py device_capabilities). All downstream policy
@@ -319,6 +322,10 @@ struct BalancerConsumerState {
     if (sign > 0) return this->ceiling_discharge;
     if (sign < 0) return this->ceiling_charge;
     return 0.0f;
+  }
+  // When the ceiling in direction *sign* was last confirmed.
+  double ceiling_seen(int sign) const {
+    return sign > 0 ? this->ceiling_discharge_seen : this->ceiling_charge_seen;
   }
 };
 
@@ -694,7 +701,7 @@ class LoadBalancer {
       const std::unordered_set<std::string> &pinned);
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
-                            float fair_share);
+                            float fair_share, bool retest_ceiling = false);
   bool concentration_pool_balanced_(const ReportMap &reports,
                                     const std::vector<const std::string *> &conc_ids);
   float pace_cap_(BalancerConsumerState &state, float reading, float reported, int sign,

@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a battery sometimes staying stuck below its share since 2.3.1 while the other carried the rest, letting their charge levels drift apart; a battery that only paused briefly is now back to sharing within a minute ([#704](https://github.com/tomquist/astrameter/issues/704)).
+
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 
 - **Fixed** SML meters steering on outdated readings, and staying offline after a dropped connection (such as one shared through ser2net) until AstraMeter was restarted ([#680](https://github.com/tomquist/astrameter/discussions/680), [#697](https://github.com/tomquist/astrameter/pull/697)).

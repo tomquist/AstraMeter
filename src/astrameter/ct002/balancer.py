@@ -290,6 +290,12 @@ CEILING_RELEASE_W = 30.0
 # A ceiling not confirmed for this long is forgotten, so a limit the user has
 # since raised, or one learned by mistake, does not outlive the evidence.
 CEILING_TTL_SECONDS = 600.0
+# A battery pinned at a ceiling unconfirmed for this long is pushed past it
+# until it holds there again (which confirms it) or moves past it (which drops
+# it), so a ceiling learned by mistake cannot hold a battery back for good
+# (issue #704).  Not on every poll: a steady push makes the firmware's spike
+# filter hold the battery's first step back when the load drops.
+CEILING_RETEST_SECONDS = 60.0
 
 # ---------------------------------------------------------------------------
 # Device capabilities — every device-type decision (AC-charge eligibility, the
@@ -588,6 +594,10 @@ class BalancerConsumerState:
         if sign < 0:
             return self.ceiling_charge
         return 0.0
+
+    def ceiling_seen(self, sign: int) -> float:
+        """When the ceiling in direction *sign* was last confirmed."""
+        return self.ceiling_discharge_seen if sign > 0 else self.ceiling_charge_seen
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1530,11 +1540,13 @@ class LoadBalancer:
         :meth:`_track_saturation`, whose commands are not the pool's asks.
         *reports* is the auto pool.
 
-        A battery sitting at a ceiling that still binds (its plain share of
-        the pool's output is past it) counts as confirming it.  Once the pool
-        has settled around the ceiling nothing pushes the battery any more,
-        and letting the ceiling lapse then would pull the unlimited batteries
-        back down until it is relearned.
+        A ceiling is confirmed the way it was learned, by the battery holding
+        flat at it while pushed further.  Once the pool has settled around the
+        ceiling nothing pushes the battery any more, so the balance correction
+        pushes it past the ceiling again every CEILING_RETEST_SECONDS (see
+        :meth:`_balance_correction`).  A ceiling is never confirmed merely by
+        the battery sitting at it: the balancer itself holds it there, so a
+        ceiling learned by mistake would confirm itself for good (issue #704).
         """
         if (
             consumer_id not in reports
@@ -1545,30 +1557,13 @@ class LoadBalancer:
             return
         now = self._clock()
         power = float(_report_of(reports, consumer_id).power)
-        sign = _sign(power)
-        ceiling = state.ceiling(sign)
-        if ceiling > 0.0 and power * sign >= ceiling - CEILING_AT_MARGIN_W:
-            share = weighted_share(
-                sum(r.power for r in reports.values()),
-                {cid: r.weight for cid, r in reports.items()},
-                reports,
-                consumer_id,
-            )
-            if share * sign >= ceiling + CEILING_PUSH_W:
-                if sign > 0:
-                    state.ceiling_discharge_seen = now
-                else:
-                    state.ceiling_charge_seen = now
         for sign in (1, -1):
             ceiling = state.ceiling(sign)
             if ceiling <= 0.0:
                 continue
-            seen = (
-                state.ceiling_discharge_seen if sign > 0 else state.ceiling_charge_seen
-            )
             if power * sign > ceiling + CEILING_RELEASE_W:
                 self._set_ceiling(consumer_id, state, sign, 0.0, now, "exceeded")
-            elif now - seen > CEILING_TTL_SECONDS:
+            elif now - state.ceiling_seen(sign) > CEILING_TTL_SECONDS:
                 self._set_ceiling(consumer_id, state, sign, 0.0, now, "expired")
 
         sign = _sign(power)
@@ -2248,7 +2243,7 @@ class LoadBalancer:
             and consumer_id in eff_part
         ):
             residual = self._balance_correction(
-                consumer_id, reports, eff_part, fair_share
+                consumer_id, reports, eff_part, fair_share, retest_ceiling=True
             )
 
         tracking = fair_share
@@ -2354,7 +2349,8 @@ class LoadBalancer:
         The *pinned* batteries (at their ceiling in the grid's direction) cannot
         act on a slice, so the others split the whole error between them.  A
         pinned battery still gets its nominal slice as a push: that is what
-        confirms its ceiling, and what exposes one that has since been raised.
+        confirms its ceiling under a load the pool cannot cover, and what
+        exposes one that has since been raised.
         """
         share_part = {
             cid: eff_part[cid] * _report_of(reports, cid).weight for cid in eff_part
@@ -2691,8 +2687,14 @@ class LoadBalancer:
         reports: Reports,
         eff_part: dict[str, float],
         fair_share: float,
+        *,
+        retest_ceiling: bool = False,
     ) -> float:
-        """Apply fair-share balance correction for *consumer_id*."""
+        """Apply fair-share balance correction for *consumer_id*.
+
+        *retest_ceiling* lets a ceiling due for a retest push the consumer past
+        it; the regulation loop's path, where the push is what confirms it.
+        """
         cfg = self._cfg
         actual_self = _report_of(reports, consumer_id).power
         participating = [cid for cid in reports if eff_part.get(cid, 1.0) > 0.1]
@@ -2707,13 +2709,26 @@ class LoadBalancer:
         # healthy battery from the pool.  A battery's share stops at its
         # learned ceiling and the rest goes to the others, so an unlimited
         # battery is not pulled down toward limited ones (issue #655).
+        #
+        # A battery pinned at a ceiling due for a retest (see
+        # CEILING_RETEST_SECONDS) is instead aimed at what it would carry
+        # without it, and pushed at least CEILING_PUSH_W past it.  A real limit
+        # holds against the push, which confirms it; a battery that merely
+        # paused on its way up follows it past the ceiling, which drops it.
+        sign = _sign(actual_total)
         weights = {cid: _report_of(reports, cid).weight for cid in participating}
+        ceilings = self._ceilings(participating, sign)
+        retest = (
+            retest_ceiling
+            and consumer_id in ceilings
+            and actual_self * sign >= ceilings[consumer_id] - CEILING_AT_MARGIN_W
+            and self._clock() - self._get_consumer(consumer_id).ceiling_seen(sign)
+            >= CEILING_RETEST_SECONDS
+        )
+        if retest:
+            del ceilings[consumer_id]
         target_share = capped_weighted_share(
-            actual_total,
-            weights,
-            participating,
-            self._ceilings(participating, _sign(actual_total)),
-            consumer_id,
+            actual_total, weights, participating, ceilings, consumer_id
         )
         error = target_share - actual_self
         err_abs = abs(error)
@@ -2727,6 +2742,8 @@ class LoadBalancer:
             boost = min(err_abs / cfg.error_boost_threshold, 1.0) * cfg.error_boost_max
             gain = gain * (1.0 + boost)
         correction = gain * error
+        if retest and error * sign >= CEILING_PUSH_W:
+            correction = sign * max(correction * sign, CEILING_PUSH_W)
         if cfg.max_correction_per_step > 0:
             cap = cfg.max_correction_per_step
             correction = max(-cap, min(cap, correction))

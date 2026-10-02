@@ -16,6 +16,9 @@ import pytest
 
 from astrameter.config.logger import logger
 from astrameter.ct002.balancer import (
+    CEILING_PUSH_W,
+    CEILING_RELEASE_W,
+    CEILING_RETEST_SECONDS,
     CEILING_STALL_POLLS,
     CEILING_STALL_SECONDS,
     CEILING_TTL_SECONDS,
@@ -202,9 +205,10 @@ def test_an_unconfirmed_ceiling_expires() -> None:
 
 
 def test_a_ceiling_that_still_binds_does_not_expire() -> None:
-    # The pool has settled with the grid at zero, so nothing pushes the capped
-    # batteries, but each one's plain share of the 3300 W is still past its
-    # ceiling.  Letting the ceiling lapse would pull the big battery back down.
+    # The pool has settled with the grid at zero, so the grid pushes nothing,
+    # but each capped battery's share of the 3300 W is still past its ceiling:
+    # the retest pushes it there, and its holding flat confirms the ceiling.
+    # Letting the ceiling lapse would pull the big battery back down.
     clock = _Clock()
     lb = _balancer(clock)
     for _ in range(LEARN_ROUNDS):
@@ -273,6 +277,119 @@ def test_a_pinned_battery_is_still_pushed() -> None:
     sent = _round(lb, clock, _reports(small=800, big=1400), grid=600)
     assert sent[SMALL_1] == pytest.approx(200)
     assert _ceiling(lb, SMALL_1) == 800
+
+
+# ---------------------------------------------------------------------------
+# Retesting a ceiling (issue #704)
+# ---------------------------------------------------------------------------
+
+PAUSED, FREE = SMALL_1, BIG
+
+
+def _pair(paused: int, free: int) -> dict[str, ConsumerReport]:
+    return {
+        PAUSED: ConsumerReport(device_type="VNSE3", phase="A", power=paused),
+        FREE: ConsumerReport(device_type="VNSE3", phase="A", power=free),
+    }
+
+
+def _paused_at_600(clock: _Clock, **cfg: float) -> LoadBalancer:
+    """A pair where PAUSED held at 600 W for a few seconds while pushed (a
+    battery merely pausing on its way up looks no different) and FREE kept
+    moving, so only PAUSED has a ceiling."""
+    lb = _balancer(clock, **cfg)
+    for step in range(LEARN_ROUNDS):
+        _round(lb, clock, _pair(paused=600, free=700 + 50 * step), grid=1200)
+    assert _ceiling(lb, PAUSED) == 600
+    assert _ceiling(lb, FREE) == 0.0
+    return lb
+
+
+def _settle(
+    lb: LoadBalancer, clock: _Clock, reports: dict, seconds: float
+) -> dict[str, float]:
+    """Poll the settled pool with the grid at zero for *seconds*; the last
+    readings sent."""
+    sent: dict[str, float] = {}
+    end = clock.now + seconds
+    while clock.now < end:
+        sent = _round(lb, clock, reports, grid=0)
+    return sent
+
+
+def test_a_fresh_ceiling_holds_the_battery_at_it() -> None:
+    # The pool has settled with the grid at zero and the pair split 600/1000.
+    # Until the ceiling is due for a retest, PAUSED is left at it and FREE is
+    # not pulled down toward it.
+    clock = _Clock()
+    lb = _paused_at_600(clock)
+    sent = _settle(lb, clock, _pair(paused=600, free=1000), CEILING_RETEST_SECONDS - 5)
+    assert sent[PAUSED] == pytest.approx(0)
+    assert sent[FREE] == pytest.approx(0)
+
+
+def test_a_ceiling_due_for_a_retest_pushes_the_battery_past_it() -> None:
+    # Aimed at its ceiling for good, PAUSED would stay at 600 W while FREE
+    # carried the rest: the uneven split of issue #704.  Once the ceiling is
+    # due, PAUSED is pushed toward the 800 W it would carry without one.
+    clock = _Clock()
+    lb = _paused_at_600(clock)
+    sent = _settle(lb, clock, _pair(paused=600, free=1000), CEILING_RETEST_SECONDS + 2)
+    assert sent[PAUSED] >= CEILING_PUSH_W
+    assert sent[FREE] == pytest.approx(0)
+
+
+def test_the_retest_push_clears_the_firmware_deadband() -> None:
+    # 40 W short of its share the plain correction would be ~9 W, inside the
+    # deadband of most firmwares, so a battery that could move would not.
+    clock = _Clock()
+    lb = _paused_at_600(clock)
+    sent = _settle(lb, clock, _pair(paused=600, free=680), CEILING_RETEST_SECONDS + 2)
+    assert sent[PAUSED] == pytest.approx(CEILING_PUSH_W)
+
+
+def test_a_battery_that_follows_the_retest_drops_its_ceiling() -> None:
+    # Issue #704: the battery merely paused, so it follows the push past its
+    # ceiling, and the pair goes back to sharing evenly.
+    clock = _Clock()
+    lb = _paused_at_600(clock)
+    _settle(lb, clock, _pair(paused=600, free=1000), CEILING_RETEST_SECONDS + 2)
+    moved = 600 + int(CEILING_RELEASE_W) + 10
+    sent = _round(lb, clock, _pair(paused=moved, free=1000), grid=0)
+    assert _ceiling(lb, PAUSED) == 0.0
+    assert sent[PAUSED] > 0
+    assert sent[FREE] < 0
+
+
+def test_a_battery_that_holds_against_the_retest_confirms_its_ceiling() -> None:
+    # A real limit: PAUSED stays at 600 W however hard it is pushed, so the
+    # ceiling is confirmed the way it was learned and the push stops until the
+    # next retest.
+    clock = _Clock()
+    lb = _paused_at_600(clock)
+    held = _pair(paused=600, free=1000)
+    assert _settle(lb, clock, held, CEILING_RETEST_SECONDS + 2)[PAUSED] > 0
+    pushes = 1
+    while _round(lb, clock, held, grid=0)[PAUSED] > 0:
+        pushes += 1
+        assert pushes <= LEARN_ROUNDS
+    assert pushes >= CEILING_STALL_POLLS
+    assert _ceiling(lb, PAUSED) == 600
+    sent = _settle(lb, clock, held, CEILING_RETEST_SECONDS - 5)
+    assert sent[PAUSED] == pytest.approx(0)
+
+
+def test_sitting_at_a_ceiling_does_not_confirm_it() -> None:
+    # Inside a wide balance deadband the retest pushes nothing, so nothing
+    # tests the ceiling: its share sitting past the ceiling used to keep it
+    # alive all the same, holding a battery that may well be free at 600 W.
+    clock = _Clock()
+    lb = _paused_at_600(clock, balance_deadband=100)
+    for _ in range(int(2 * CEILING_TTL_SECONDS / 60)):
+        clock.now += 60.0
+        sent = _round(lb, clock, _pair(paused=600, free=780), grid=0)
+        assert sent[PAUSED] == pytest.approx(0)
+    assert _ceiling(lb, PAUSED) == 0.0
 
 
 def test_below_its_ceiling_a_battery_shares_as_before() -> None:
