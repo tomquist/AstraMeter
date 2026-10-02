@@ -1152,6 +1152,19 @@ async def test_publishes_state_on_ct002_event(mqtt_broker: int) -> None:
 
 
 @needs_mosquitto
+async def test_connects_to_broker_refusing_empty_client_id(
+    strict_mqtt_broker: int,
+) -> None:
+    """Regression for #701: an empty client ID left the service timing out."""
+    service = _make_service(strict_mqtt_broker)
+    await service.start()
+    try:
+        await service.wait_connected(timeout=5)
+    finally:
+        await service.stop()
+
+
+@needs_mosquitto
 async def test_publishes_device_status(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)

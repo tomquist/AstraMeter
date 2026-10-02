@@ -31,8 +31,9 @@ uv run python -m astrameter.simulator.evaluation --json head.json     # after
 uv run python -m astrameter.simulator.evaluation --input head.json --compare base.json
 ```
 
-CI runs the same suite on PR base + head (job `steering-eval`) and posts a
-sticky comparison. It costs a runner per scenario twice over, so
+CI runs the same suite on PR base + head (job `steering-eval`), and
+`steering-eval-comment.yml` posts the sticky comparison afterwards — from a
+`workflow_run` with a write token, so fork PRs get it too. It costs a runner per scenario twice over, so
 `steering-eval-gate` keeps it off pushes entirely, and off any PR whose diff
 touches neither `src/astrameter/ct002/` nor `src/astrameter/simulator/`
 (`*_test.py` under those doesn't count) nor `.github/workflows/ci.yml` — label a
