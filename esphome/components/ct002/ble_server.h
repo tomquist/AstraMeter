@@ -75,6 +75,13 @@ class BluetoothComponent : public Component {
 
   ble::Model model_{ble::Model::CT002};
   std::string boot_id_;
+  // The radio's Bluetooth address, as 12 lowercase hex characters. The app
+  // reconnects to a known meter by its MAC and drops a connection whose
+  // address differs, so this has to equal the device ID.
+  std::string bt_address_;
+  // ct_mac could not become the Bluetooth address (not a unicast MAC, or
+  // refused); reported from setup(), where logging works.
+  bool bt_address_rejected_{false};
   // The ID the current advertised name was made from.
   std::string named_id_;
   // esp32_ble keeps a pointer to this, so it is a fixed buffer that lives as

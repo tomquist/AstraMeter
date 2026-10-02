@@ -430,25 +430,32 @@ the board doesn't connect to Marstek's cloud.
 
 ### Identity
 
-The ID the board reports as `id` and `mac`, and whose last four characters end
-its advertised name, is:
+A real meter's ID, its MAC and its Bluetooth address are one and the same. The
+app stores the MAC it was given at onboarding and later reconnects only to a
+device at that Bluetooth address, dropping any other. The board keeps the
+three equal:
 
-- `ct_mac`, when it is set (or the MAC `marstek_registration:` assigned);
-- otherwise the board's own Wi-Fi MAC.
+- With `ct_mac` set, the radio takes `ct_mac` as its Bluetooth address
+  before Bluetooth starts. It has to be a unicast MAC (lowest bit of the first
+  byte clear), which AstraMeter's own `02b250…` MACs are; otherwise the board
+  warns at boot that the app won't be able to reconnect.
+- Without `ct_mac`, the ID is the board's own Bluetooth address (its Wi-Fi
+  MAC + 2 on most ESP32s). The UDP side then answers polls for any CT MAC, so
+  the battery works with that ID without further changes. To pin it, set
+  `ct_mac` to the "Device ID" the board logs.
 
-With `ct_mac` empty the UDP side answers polls for any CT MAC, so the battery
-works with the newly registered ID without further changes. To pin it, set
-`ct_mac` to the "Device ID" the board logs at boot.
+The advertised name ends in the last four characters of the ID. It is carried
+in the advertisement itself, not only in the scan response, and it replaces
+any `esp32_ble: name:` in the YAML. With ESPHome's `name_add_mac_suffix` on,
+ESPHome appends its own suffix to the name; the app still finds the board,
+because it only looks for `MST`.
 
 If `marstek_registration:` applies a MAC after boot, the replies use it
-straight away and the board re-advertises under the matching name. That
-component has already put the device in your account, so there is no need to
-add it again from the app; Bluetooth then just serves the live view.
-
-The name is carried in the advertisement itself, not only in the scan
-response. It replaces any `esp32_ble: name:` in the YAML. With ESPHome's
-`name_add_mac_suffix` on, ESPHome appends its own suffix to the name; the app
-still finds the board, because it only looks for `MST`.
+straight away and the board re-advertises under the matching name, but the
+radio's address can't change while Bluetooth runs. The board then logs a
+warning; set `ct_mac` to that MAC in the YAML so the address follows on the
+next boot. That component has already put the device in your account, so
+there is no need to add it again from the app.
 
 ### What the board answers
 
