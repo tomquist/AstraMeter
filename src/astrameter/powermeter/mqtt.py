@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import ssl
+import uuid
 
 import aiomqtt
 
@@ -13,6 +14,17 @@ from .json_http import extract_json_value
 logger = logging.getLogger("astrameter")
 
 RECONNECT_DELAY = 5
+
+
+def mqtt_client_id() -> str:
+    """A fresh, non-empty MQTT client identifier.
+
+    Left unset, aiomqtt connects with an empty one, which brokers may reject
+    (Mosquitto with ``allow_zero_length_clientid false``); aiomqtt then just
+    times out. Random, so several clients and instances never kick each other
+    off the broker, and 23 alphanumerics, the most MQTT 3.1.1 guarantees.
+    """
+    return "astrameter" + uuid.uuid4().hex[:13]
 
 
 class MqttPowermeter(PushPowermeter):
@@ -123,6 +135,7 @@ class MqttPowermeter(PushPowermeter):
             username=self.username,
             password=self.password,
             tls_context=tls_context,
+            identifier=mqtt_client_id(),
             keepalive=60,
         ) as client:
             logger.info("Connected to MQTT broker %s:%s", self.broker, self.port)

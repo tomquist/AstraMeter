@@ -22,6 +22,7 @@ from astrameter.ct002.controls import (
     apply_device_control,
     is_device_button,
 )
+from astrameter.powermeter.mqtt import mqtt_client_id
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.version_info import get_version
 
@@ -458,6 +459,7 @@ class MqttInsightsService:
             "username": cfg.username,
             "password": cfg.password,
             "tls_context": tls_context,
+            "identifier": mqtt_client_id(),
         }
 
     async def _announce(self, client: aiomqtt.Client) -> None:

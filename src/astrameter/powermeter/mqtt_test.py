@@ -434,6 +434,35 @@ async def test_receives_json_value(mqtt_broker: int) -> None:
 
 
 @needs_mosquitto
+async def test_connects_to_broker_refusing_empty_client_id(
+    strict_mqtt_broker: int,
+) -> None:
+    """Regression for #701: an empty client ID left the meter timing out."""
+    import aiomqtt
+
+    port = strict_mqtt_broker
+    topic = "test/strict"
+    pm = MqttPowermeter(broker="127.0.0.1", port=port, topic=topic)
+    await pm.start()
+    try:
+        await asyncio.wait_for(pm._connected_event.wait(), timeout=5)
+        async with aiomqtt.Client(
+            hostname="127.0.0.1", port=port, identifier="test-publisher"
+        ) as pub:
+            await pub.publish(topic, payload=b"17")
+        await pm.wait_for_message(timeout=5)
+        assert await pm.get_powermeter_watts() == [17.0]
+    finally:
+        await pm.stop()
+
+
+def test_client_ids_are_unique_and_portable() -> None:
+    ids = {mqtt_module.mqtt_client_id() for _ in range(100)}
+    assert len(ids) == 100
+    assert all(len(i) <= 23 and i.isalnum() for i in ids)
+
+
+@needs_mosquitto
 async def test_wait_for_message_timeout_with_no_publish(mqtt_broker: int) -> None:
     port = mqtt_broker
     topic = "test/timeout"
