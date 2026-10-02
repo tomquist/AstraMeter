@@ -189,8 +189,12 @@ ct002:
   #
   # It is ON by default on ESP32 boards with Bluetooth and needs no block.
   # `bluetooth: false` leaves the BLE stack out of the firmware, which frees
-  # RAM and flash on a tight build.
+  # RAM and flash on a tight build. `advertising: false` keeps the service
+  # but hides the board from phones, the Marstek app included, so nobody
+  # nearby can connect to it once it is set up.
   # bluetooth: false
+  # bluetooth:
+  #   advertising: false
 
   # ── Optional sub-block: dashboard ────────────────────────────────────
   # AstraMeter's live status dashboard, served from this board — the same

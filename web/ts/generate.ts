@@ -723,6 +723,8 @@ export function generateEsphome(state: State): string {
   // only switching it off is worth writing down.
   if (state.general && state.general.esphomeBluetooth === false) {
     ctLines.push(`${IND}bluetooth: false`);
+  } else if (state.general && state.general.esphomeBluetoothAdvertising === false) {
+    ctLines.push(`${IND}bluetooth:\n${IND}${IND}advertising: false`);
   }
 
   if (wantInsights) {

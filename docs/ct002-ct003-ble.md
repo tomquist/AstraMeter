@@ -240,8 +240,9 @@ For the add flow to succeed, a BLE-provisioned AstraMeter would have to:
 - accept `0x05`, either ignoring the credentials or applying them, and echo the
   new SSID on the next `0x08`.
 
-The app's own Wi-Fi details for the meter are only used to provision it. An
-ESPHome build keeps using its own `wifi:` settings either way.
+The app's own Wi-Fi details for the meter are only used to provision it, so an
+emulator that keeps its own network still passes. AstraMeter's ESPHome build
+applies them; see [Wi-Fi from the app](#wi-fi-from-the-app).
 
 ## Command reference
 
@@ -410,16 +411,28 @@ The exact field layouts of the `0x14` and `0x15` replies are unconfirmed.
 
 The `ct002:` component speaks this protocol on every ESP32 with a Bluetooth
 radio of its own (all but the ESP32-S2 and the ESP32-P4). It is **on by default**; `bluetooth: false` under
-`ct002:` leaves the BLE stack out of the firmware.
+`ct002:` leaves the BLE stack out of the firmware. To keep the service but hide
+the board from scanning phones, set:
+
+```yaml
+ct002:
+  bluetooth:
+    advertising: false
+```
+
+Without advertising no phone can find or connect to the board, the Marstek
+app included, so turn it back on to add the board or to look at its live data.
+Another BLE component that advertises, such as `esp32_improv`, still makes the
+board visible.
 
 ### Adding the board with the Marstek app
 
 1. Flash the board and let it join your Wi-Fi.
 2. In the Marstek app, tap **+** and wait for the scan. The board shows up as
    `MST-TPM_xxxx` (`ct_type: HME-4`) or `MST-SMR_xxxx` (`ct_type: HME-3`).
-3. Pick it, give it a name, and go through the Wi-Fi step. The board keeps the
-   Wi-Fi from its YAML and ignores what the app sends; it only echoes the
-   network name back so the app counts the step as done.
+3. Pick it, give it a name, and go through the Wi-Fi step. If the board is
+   already on the network you pick, nothing changes. Otherwise it switches to
+   that network, as a real meter does; see [Wi-Fi from the app](#wi-fi-from-the-app).
 4. The firmware check reports the latest version; finish the setup.
 5. In the battery's settings, switch to automatic mode and select the new CT,
    as with a real meter.
@@ -457,13 +470,30 @@ warning; set `ct_mac` to that MAC in the YAML so the address follows on the
 next boot. That component has already put the device in your account, so
 there is no need to add it again from the app.
 
+### Wi-Fi from the app
+
+The board tries the network the app sends the way ESPHome's Improv
+provisioning does:
+
+- Connected within 30 seconds: the board saves the network, and it takes
+  precedence over the networks in the YAML from then on. Flashing a changed
+  configuration drops it again, which is how ESPHome treats any network saved
+  at runtime.
+- Not connected within 30 seconds: nothing is saved, and the board restarts on
+  the Wi-Fi it had before.
+- Already on that network: the board keeps its credentials, so a mistyped
+  password in the app can't take it offline.
+
+A board without Wi-Fi (Ethernet, or Wi-Fi disabled) logs the request and
+ignores it.
+
 ### What the board answers
 
 | Command | Answer |
 |---|---|
 | `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. |
 | `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
-| `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`; the credentials are not applied |
+| `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`, and the board tries the network (see [Wi-Fi from the app](#wi-fi-from-the-app)) |
 | `0x08` read SSID | The network the app sent during the current connection, otherwise the one the board is connected to |
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
@@ -484,8 +514,10 @@ accepted as is.
   other components that use it, such as `esp32_improv`, share the GATT server
   and the advertised name.
 - **Open access.** Like a real meter, the board accepts any phone in range
-  without pairing: anyone nearby can read its live data and restart it with
-  `0x06`/`0x09`. Set `bluetooth: false` if that matters where it is installed.
+  without pairing: anyone nearby can read its live data, restart it with
+  `0x06`/`0x09` and move it to another Wi-Fi network. Once the board is set
+  up, `advertising: false` closes that off; `bluetooth: false` removes the
+  stack altogether.
 - **Wi-Fi power saving.** ESP-IDF needs Wi-Fi modem sleep while Bluetooth runs.
   ESPHome's ESP32 default (`power_save_mode: light`) is fine; a config that
   sets `power_save_mode: none` should turn Bluetooth off.
@@ -501,5 +533,6 @@ accepted as is.
   `MST-TPM_…`, and the app's name table maps `MST-TPM_` to "CT002". The field is
   only cosmetic in the app today, but a CT002 record should use `MST-TPM_`.
 - **Field testing.** The reply layouts follow the meter firmware and the app's
-  parsers, and are covered by host tests; a run through the app with real
-  hardware is still outstanding.
+  parsers, and are covered by host tests. Adding the board, reconnecting after
+  a restart and the live view have been tried with the Android app on an
+  ESP32-S3; switching Wi-Fi from the app has not yet.

@@ -614,8 +614,23 @@ function extrasCard(): HTMLElement {
               type: "checkbox",
             },
             state.general,
-            {},
+            // Structural: the visibility switch below only exists while it is on.
+            { structural: true },
           ),
+          ...(state.general.esphomeBluetooth
+            ? [
+                fieldControl(
+                  {
+                    key: "esphomeBluetoothAdvertising",
+                    label: "Visible to phones",
+                    help: "On by default. Turn off once the board is set up, so nobody nearby can find it or connect to it over Bluetooth. The Marstek app can't reach it either until you turn this back on.",
+                    type: "checkbox",
+                  },
+                  state.general,
+                  {},
+                ),
+              ]
+            : []),
           el("hr", {}),
         ]
       : [];

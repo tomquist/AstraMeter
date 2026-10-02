@@ -38,6 +38,9 @@ export interface State {
     /// ESPHome only. The firmware speaks a real meter's Bluetooth protocol
     /// unless told not to, so the Marstek app can add it like a real CT.
     esphomeBluetooth: boolean;
+    /// ESPHome only. With Bluetooth on, false hides the board from phones
+    /// once it is set up (`bluetooth: advertising: false`).
+    esphomeBluetoothAdvertising: boolean;
     dashboardAllowWrite: boolean;
     dashboardDirectAccess: boolean;
     /// Comma-separated extra host names the web port answers under. Empty for
@@ -82,6 +85,7 @@ export function defaultState(): State {
       esphomeDashboard: true,
       esphomeControls: false,
       esphomeBluetooth: true,
+      esphomeBluetoothAdvertising: true,
       // On by default, matching the service and the add-on.
       dashboardAllowWrite: true,
       // Unauthenticated access to the add-on's port. Off unless asked for.
@@ -195,6 +199,7 @@ export function migrate(s: any): State {
         esphomeDashboard: asBool(sg.esphomeDashboard, dg.esphomeDashboard),
         esphomeControls: asBool(sg.esphomeControls, dg.esphomeControls),
         esphomeBluetooth: asBool(sg.esphomeBluetooth, dg.esphomeBluetooth),
+        esphomeBluetoothAdvertising: asBool(sg.esphomeBluetoothAdvertising, dg.esphomeBluetoothAdvertising),
         dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
         dashboardDirectAccess: asBool(sg.dashboardDirectAccess, dg.dashboardDirectAccess),
         dashboardAllowedHosts: asStr(sg.dashboardAllowedHosts, dg.dashboardAllowedHosts),
