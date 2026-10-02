@@ -144,8 +144,13 @@ void BluetoothComponent::loop() {
   if (!this->service_->is_running()) return;
   if (!this->advertising_started_) {
     // Name in the advertisement itself, not only the scan response, so even
-    // a passive scan finds it.
+    // a passive scan finds it. Set the payload first, then request
+    // advertising: since ESPHome 2026.9 advertising is reference-counted and
+    // an auto-loaded esp32_ble_server with no YAML services never asks for
+    // it, so without our own request the device stays silent. (Before 2026.9
+    // the payload call alone started it; requesting as well is harmless.)
     this->ble_->advertising_set_service_data_and_name(std::span<const uint8_t>{}, true);
+    this->ble_->advertising_start();
     this->advertising_started_ = true;
     ESP_LOGI(TAG, "Advertising as %s; free internal heap %u bytes (largest block %u)", this->name_,
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
@@ -225,8 +230,11 @@ void BluetoothComponent::dump_config() {
   ESP_LOGCONFIG(TAG,
                 "AstraMeter Bluetooth:\n"
                 "  Name: %s\n"
-                "  Device ID: %s",
-                this->name_, this->device_id_().c_str());
+                "  Device ID: %s\n"
+                "  Advertising: %s\n"
+                "  Free internal heap: %u bytes",
+                this->name_, this->device_id_().c_str(), YESNO(this->advertising_started_),
+                static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
 }
 
 }  // namespace bluetooth
