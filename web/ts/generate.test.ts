@@ -795,22 +795,22 @@ has(eyNoBle, "  bluetooth: false", "esp/bluetooth: turning it off is what has to
 const eyBleKeepWifi = generateEsphome({
   target: "esphome",
   esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
-  general: { deviceTypes: ["ct002"], esphomeBluetooth: true, esphomeBluetoothApplyWifi: false },
+  general: { deviceTypes: ["ct002"], esphomeBluetooth: true, esphomeBluetoothAllowWifiChange: false },
   meters: [
     { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
   ],
 });
-has(eyBleKeepWifi, "  bluetooth:\n    apply_wifi: false", "esp/bluetooth: keeping the YAML Wi-Fi writes the block form");
+has(eyBleKeepWifi, "  bluetooth:\n    allow_wifi_change: false", "esp/bluetooth: keeping the YAML Wi-Fi writes the block form");
 
 const eyNoBleKeepWifi = generateEsphome({
   target: "esphome",
   esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
-  general: { deviceTypes: ["ct002"], esphomeBluetooth: false, esphomeBluetoothApplyWifi: false },
+  general: { deviceTypes: ["ct002"], esphomeBluetooth: false, esphomeBluetoothAllowWifiChange: false },
   meters: [
     { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
   ],
 });
-lacks(eyNoBleKeepWifi, "apply_wifi", "esp/bluetooth: no Wi-Fi option once Bluetooth is off");
+lacks(eyNoBleKeepWifi, "allow_wifi_change", "esp/bluetooth: no Wi-Fi option once Bluetooth is off");
 
 // A state with no general block at all is "nothing said", not "off" — the
 // firmware default stands.

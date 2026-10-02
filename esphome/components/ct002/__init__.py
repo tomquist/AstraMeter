@@ -861,7 +861,7 @@ def _resolve_dashboard(config):
 # ────────────────────────────────────────────────────────────────────────
 
 CONF_BLUETOOTH = "bluetooth"
-CONF_APPLY_WIFI = "apply_wifi"
+CONF_ALLOW_WIFI_CHANGE = "allow_wifi_change"
 
 
 # No radio of its own: Bluetooth only through a companion chip
@@ -903,7 +903,7 @@ BLUETOOTH_SCHEMA = cv.All(
             cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
             # false: answer the app's Wi-Fi step but stay on the networks
             # from the YAML.
-            cv.Optional(CONF_APPLY_WIFI, default=True): cv.boolean,
+            cv.Optional(CONF_ALLOW_WIFI_CHANGE, default=True): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on([PLATFORM_ESP32]),
@@ -1389,6 +1389,6 @@ async def _to_code_bluetooth(config, ct002_var):
     cg.add(var.set_ct002(ct002_var))
     ble = await cg.get_variable(sub[esp32_ble.CONF_BLE_ID])
     cg.add(var.set_ble(ble))
-    cg.add(var.set_apply_wifi(sub[CONF_APPLY_WIFI]))
+    cg.add(var.set_allow_wifi_change(sub[CONF_ALLOW_WIFI_CHANGE]))
     esp32_ble.register_gatts_event_handler(ble, var)
     cg.add(var.configure_identity())

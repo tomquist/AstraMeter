@@ -217,7 +217,7 @@ void BluetoothComponent::process_frame_(const ble::Frame &frame) {
       this->apply_wifi_(*result.wifi);
     } else {
       // The app only needs its network echoed back to finish setup.
-      ESP_LOGI(TAG, "App sent Wi-Fi '%s'; keeping the configured Wi-Fi (apply_wifi: false)", result.wifi->ssid.c_str());
+      ESP_LOGI(TAG, "App sent Wi-Fi '%s'; keeping the configured Wi-Fi (allow_wifi_change: false)", result.wifi->ssid.c_str());
     }
   }
 
@@ -338,7 +338,7 @@ void BluetoothComponent::dump_config() {
                 "  Device ID: %s\n"
                 "  Bluetooth address: %s\n"
                 "  Advertising: %s\n"
-                "  Apply Wi-Fi from the app: %s\n"
+                "  Allow Wi-Fi change from the app: %s\n"
                 "  Free internal heap: %u bytes",
                 this->name_, this->device_id_().c_str(), this->bt_address_.c_str(),
                 YESNO(this->advertising_started_), YESNO(this->wifi_changes_allowed_),

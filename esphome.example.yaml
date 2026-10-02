@@ -190,11 +190,12 @@ ct002:
   # It is ON by default on ESP32 boards with Bluetooth and needs no block.
   # `bluetooth: false` leaves the BLE stack out of the firmware, which frees
   # RAM and flash on a tight build. The Wi-Fi network picked in the app
-  # replaces the one above once the board connects to it; `apply_wifi: false`
-  # keeps the board on the `wifi:` networks of this file.
+  # replaces the one above once the board connects to it;
+  # `allow_wifi_change: false` keeps the board on the `wifi:` networks of
+  # this file.
   # bluetooth: false
   # bluetooth:
-  #   apply_wifi: false
+  #   allow_wifi_change: false
 
   # ── Optional sub-block: dashboard ────────────────────────────────────
   # AstraMeter's live status dashboard, served from this board — the same

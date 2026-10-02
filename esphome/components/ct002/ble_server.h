@@ -45,7 +45,7 @@ class BluetoothComponent : public Component {
   void set_ct002(CT002Component *c) { this->ct002_ = c; }
   void set_ble(esp32_ble::ESP32BLE *ble) { this->ble_ = ble; }
   // false: answer the app's Wi-Fi step but stay on the configured network.
-  void set_apply_wifi(bool apply) { this->wifi_changes_allowed_ = apply; }
+  void set_allow_wifi_change(bool allow) { this->wifi_changes_allowed_ = allow; }
 
   // Settle the device ID and hand the advertised name to esp32_ble. Called
   // from the generated setup code, after the CT002 configuration is applied

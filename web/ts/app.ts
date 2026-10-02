@@ -621,8 +621,8 @@ function extrasCard(): HTMLElement {
             ? [
                 fieldControl(
                   {
-                    key: "esphomeBluetoothApplyWifi",
-                    label: "Let the app change the Wi-Fi",
+                    key: "esphomeBluetoothAllowWifiChange",
+                    label: "Allow the app to change the Wi-Fi",
                     help: "On by default: the Wi-Fi network you pick in the Marstek app replaces the one in this file once the board connects to it. Turn off to keep the board on the Wi-Fi in this file; the app's Wi-Fi step still completes.",
                     type: "checkbox",
                   },
