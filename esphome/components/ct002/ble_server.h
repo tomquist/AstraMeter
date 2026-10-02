@@ -47,14 +47,18 @@ class BluetoothComponent : public Component {
 
   // Settle the device ID and hand the advertised name to esp32_ble. Called
   // from the generated setup code, after the CT002 configuration is applied
-  // and before esp32_ble brings the stack up (it reads the name then).
+  // and before esp32_ble brings the stack up (it reads the name then). A CT
+  // MAC applied later (marstek_registration) renames the device from loop().
   void configure_identity();
 
-  // Registered with esp32_ble for the negotiated MTU.
+  // Registered with esp32_ble for the negotiated MTU and disconnects.
   void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
 
  protected:
   void create_service_();
+  void set_name_(const std::string &id);
+  // Re-advertise under a new name when the CT MAC changed after boot.
+  void follow_identity_();
   void on_write_(std::span<const uint8_t> data);
   void process_frame_(const ble::Frame &frame);
   ble::Snapshot snapshot_() const;
@@ -71,14 +75,17 @@ class BluetoothComponent : public Component {
 
   ble::Model model_{ble::Model::CT002};
   std::string boot_id_;
-  // esp32_ble keeps a pointer to this, so it lives as long as the component.
-  std::string name_;
+  // The ID the current advertised name was made from.
+  std::string named_id_;
+  // esp32_ble keeps a pointer to this, so it is a fixed buffer that lives as
+  // long as the component. BLE names are at most 20 characters.
+  char name_[21]{};
   ble::FrameAssembler assembler_;
   ble::Responder responder_;
-  // Writes arrive in the GATT event path; frames are answered from loop().
+  // esp32_ble delivers GATT events (writes included) from its loop(); frames
+  // are queued there and answered from this component's loop().
   std::deque<ble::Frame> pending_;
   uint16_t mtu_{23};
-  bool local_mtu_set_{false};
   bool advertising_started_{false};
 };
 

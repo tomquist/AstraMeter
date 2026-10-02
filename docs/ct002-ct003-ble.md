@@ -64,10 +64,10 @@ GATT server.
   The app picks the service and characteristics by checking whether the
   lower-cased UUID contains `ff00` / `ff01` / `ff02`, so both 16-bit and
   128-bit (`0000ff01-0000-1000-8000-00805f9b34fb`) forms work.
-- **MTU.** On Android the app requests an MTU of 500. Every reply fits in a
-  single notification, and the meter never splits one, so an emulator should
-  accept the MTU request. The largest reply is the CT003 status frame, at 42
-  bytes.
+- **MTU.** On Android the app requests an MTU of 500. The meter never splits a
+  reply across notifications, so an emulator should accept the MTU request.
+  The fixed-size replies are at most 42 bytes (the CT003 status frame); only
+  the linked-battery list grows, with the number of batteries.
 
 ## Frame format
 
@@ -409,7 +409,7 @@ The exact field layouts of the `0x14` and `0x15` replies are unconfirmed.
 ## AstraMeter's ESPHome implementation
 
 The `ct002:` component speaks this protocol on every ESP32 with a Bluetooth
-radio (all but the ESP32-S2). It is **on by default**; `bluetooth: false` under
+radio of its own (all but the ESP32-S2 and the ESP32-P4). It is **on by default**; `bluetooth: false` under
 `ct002:` leaves the BLE stack out of the firmware.
 
 ### Adding the board with the Marstek app
@@ -440,22 +440,26 @@ With `ct_mac` empty the UDP side answers polls for any CT MAC, so the battery
 works with the newly registered ID without further changes. To pin it, set
 `ct_mac` to the "Device ID" the board logs at boot.
 
-The advertised name is fixed when Bluetooth starts. If `marstek_registration:`
-assigns a MAC later, the replies use it straight away but the name only follows
-after a restart. With ESPHome's `name_add_mac_suffix` on, ESPHome appends its
-own suffix to the name; the app still finds the board, because it only looks
-for `MST`.
+If `marstek_registration:` applies a MAC after boot, the replies use it
+straight away and the board re-advertises under the matching name. That
+component has already put the device in your account, so there is no need to
+add it again from the app; Bluetooth then just serves the live view.
+
+The name is carried in the advertisement itself, not only in the scan
+response. It replaces any `esp32_ble: name:` in the YAML. With ESPHome's
+`name_add_mac_suffix` on, ESPHome appends its own suffix to the name; the app
+still finds the board, because it only looks for `MST`.
 
 ### What the board answers
 
 | Command | Answer |
 |---|---|
-| `0x03` status | Live per-phase and total grid power: the same values the batteries get over UDP. Wi-Fi state and RSSI are real. The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. |
+| `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. |
 | `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
 | `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`; the credentials are not applied |
-| `0x08` read SSID | The network the app last sent, otherwise the one the board is connected to |
+| `0x08` read SSID | The network the app sent during the current connection, otherwise the one the board is connected to |
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
-| `0x12` linked batteries | Every battery currently polling the board |
+| `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
 | `0x16` active power (CT002) | The three phase powers |
 
 Everything else, such as calibration, current-direction reversal, CT003 meter
@@ -464,20 +468,27 @@ buttons as failed. They have nothing to act on in an emulator, whose polarity
 and meter come from its YAML.
 
 Frames split across several writes are reassembled, and malformed ones are
-dropped silently, as on the meter. The board raises its local GATT MTU to 517,
-so the app's MTU request is honored and every reply fits in one notification.
+dropped silently, as on the meter. The app's MTU request (up to 517) is
+accepted as is.
 
 ### Notes
 
 - **Other BLE features.** The service sits on ESPHome's `esp32_ble_server`, so
   other components that use it, such as `esp32_improv`, share the GATT server
   and the advertised name.
+- **Open access.** Like a real meter, the board accepts any phone in range
+  without pairing: anyone nearby can read its live data and restart it with
+  `0x06`/`0x09`. Set `bluetooth: false` if that matters where it is installed.
+- **Wi-Fi power saving.** ESP-IDF needs Wi-Fi modem sleep while Bluetooth runs.
+  ESPHome's ESP32 default (`power_save_mode: light`) is fine; a config that
+  sets `power_save_mode: none` should turn Bluetooth off.
 - **Resources.** On an `esp32dev` build the BLE stack adds about 350 KB of flash
   and 20 KB of static RAM, plus the heap Bluedroid allocates at runtime. The
   test builds that combine it with the dashboard, MQTT and HTTPS still use at
   most 1.42 MB of the 1.83 MB app partition. A classic ESP32 that also runs
-  the dashboard, MQTT and HTTPS registration is the tightest case for heap;
-  `bluetooth: false` takes all of it back.
+  the dashboard, MQTT and HTTPS registration is the tightest case for heap.
+  The board logs its free internal heap when Bluetooth comes up; if that runs
+  low, `bluetooth: false` takes all of it back.
 - **Cloud registration name.** AstraMeter's cloud auto-registration sets
   `bluetooth_name = MST-SMR_<suffix>` for both models. A real CT002 advertises as
   `MST-TPM_…`, and the app's name table maps `MST-TPM_` to "CT002". The field is

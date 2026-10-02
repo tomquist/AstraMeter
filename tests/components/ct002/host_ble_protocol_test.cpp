@@ -380,3 +380,24 @@ TEST(BleAssembler, BadChecksumIsDroppedAndTheStreamRecovers) {
   const auto good = build_frame(CMD_STATUS, {0x01});
   EXPECT_EQ(assembler.feed(good.data(), good.size(), 10).size(), 1u);
 }
+
+TEST(BleBatteries, ListFitsTheNegotiatedMtu) {
+  Snapshot s = ct002_snapshot();
+  s.batteries.assign(6, BatteryRow{"HMG-50", "aabbccddeeff", "192.168.1.20", "A"});
+  s.max_frame_len = 182;  // iOS-sized MTU 185, minus the ATT header
+  Responder responder;
+  const auto f = responder.handle(request(CMD_LINKED_BATTERIES, {0x00}), s).reply;
+  expect_valid_reply(f, CMD_LINKED_BATTERIES);
+  EXPECT_LE(f.size(), 182u);
+  const std::string listed = reply_text(f);
+  EXPECT_EQ(listed.back(), ';');
+  EXPECT_LT(listed.size(), 6u * 54u);  // not all six fit
+}
+
+TEST(BleWifi, ResetForgetsTheProvisionedNetwork) {
+  Responder responder;
+  responder.handle(request(CMD_SET_WIFI, text("lab<.,.>pw")), ct002_snapshot());
+  responder.reset();
+  const auto f = responder.handle(request(CMD_READ_SSID, {0x01}), ct002_snapshot()).reply;
+  EXPECT_EQ(reply_text(f), "home");
+}

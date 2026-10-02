@@ -33,6 +33,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
 from esphome.components import esp32_ble, http_request, sensor, web_server_base
+from esphome.components.esp32 import get_esp32_variant
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import (
     CONF_ALPHA,
@@ -862,19 +863,28 @@ def _resolve_dashboard(config):
 CONF_BLUETOOTH = "bluetooth"
 
 
+# No radio of its own: Bluetooth only through a companion chip
+# (esp32_hosted), which a config has to set up deliberately — so no default.
+_NO_DEFAULT_BLUETOOTH_VARIANTS = ("ESP32P4",)
+
+
 def _bluetooth_supported() -> bool:
-    """True on ESP32 variants with a Bluetooth radio (all but the S2)."""
+    """True on ESP32 variants with a Bluetooth radio of their own.
+
+    That is all but the S2 (esp32_ble refuses it) and the P4 (no radio).
+    """
     if not CORE.is_esp32:
         return False
     try:
         esp32_ble.validate_variant(None)
+        variant = get_esp32_variant()
     except cv.Invalid:
         return False
     except KeyError:
         # Variant not recorded (only outside a real config run): assume the
         # classic ESP32, which has Bluetooth.
         return True
-    return True
+    return variant not in _NO_DEFAULT_BLUETOOTH_VARIANTS
 
 
 def _bluetooth_shorthand(value):

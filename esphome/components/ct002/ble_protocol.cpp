@@ -215,15 +215,19 @@ Result Responder::handle(const Frame &frame, const Snapshot &s) {
       break;
     }
     case CMD_FACTORY_RESET:
-      this->provisioned_ssid_.clear();
+      this->reset();
       result.action = Action::REBOOT;
       break;
     case CMD_REBOOT:
       result.action = Action::REBOOT;
       break;
-    case CMD_LINKED_BATTERIES:
-      result.reply = build_frame(CMD_LINKED_BATTERIES, text_bytes(linked_batteries_text(s.batteries, MAX_PAYLOAD_LEN)));
+    case CMD_LINKED_BATTERIES: {
+      // Whole entries only, as many as fit one notification.
+      size_t room = s.max_frame_len < MAX_FRAME_LEN ? s.max_frame_len : MAX_FRAME_LEN;
+      room = room > FRAME_OVERHEAD ? room - FRAME_OVERHEAD : 0;
+      result.reply = build_frame(CMD_LINKED_BATTERIES, text_bytes(linked_batteries_text(s.batteries, room)));
       break;
+    }
     case CMD_ACTIVE_POWER: {
       if (s.model != Model::CT002) break;
       std::vector<uint8_t> p(6, 0);
