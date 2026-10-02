@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory, or `advertising: false` inside it to hide a board that is already set up.
+- **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory, or `apply_wifi: false` inside it to keep the Wi-Fi from your YAML.
 
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 

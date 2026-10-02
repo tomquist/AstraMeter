@@ -46,13 +46,6 @@ static constexpr size_t MAX_PENDING = 8;
 // to its previous Wi-Fi (the same 30 s ESPHome's Improv allows).
 static constexpr uint32_t WIFI_ATTEMPT_TIMEOUT_MS = 30000;
 
-// Silence advertising this component never asked for. ESPHome 2026.9+ counts
-// advertising requests (ESP32BLE::advertising_stop exists) and a server with
-// no YAML services never requests any, so there is nothing to undo. Before
-// that, the server advertised by itself once running.
-template<typename B> static auto silence_advertising(B *ble, int) -> decltype(ble->advertising_stop(), void()) {}
-template<typename B> static void silence_advertising(B *, long) { esp_ble_gap_stop_advertising(); }
-
 static std::string mac_hex(const uint8_t *mac) {
   static const char *const DIGITS = "0123456789abcdef";
   std::string out;
@@ -103,7 +96,7 @@ void BluetoothComponent::follow_identity_() {
     return;
   }
   // Restarting advertising rebuilds the packet with the new name.
-  if (this->advertise_) this->ble_->advertising_set_service_data_and_name(std::span<const uint8_t>{}, true);
+  this->ble_->advertising_set_service_data_and_name(std::span<const uint8_t>{}, true);
   ESP_LOGI(TAG, "CT MAC changed; now advertising as %s", this->name_);
   if (id != this->bt_address_) {
     // The radio's address is fixed once Bluetooth runs.
@@ -190,13 +183,7 @@ void BluetoothComponent::loop() {
     return;
   }
   if (!this->service_->is_running()) return;
-  if (!this->advertise_) {
-    if (!this->advertising_started_) {
-      silence_advertising(this->ble_, 0);
-      this->advertising_started_ = true;  // settled: stays silent
-      ESP_LOGI(TAG, "Bluetooth service up as %s; advertising disabled", this->name_);
-    }
-  } else if (!this->advertising_started_) {
+  if (!this->advertising_started_) {
     // Name in the advertisement itself, not only the scan response, so even
     // a passive scan finds it. Set the payload first, then request
     // advertising: since ESPHome 2026.9 advertising is reference-counted and
@@ -225,7 +212,14 @@ void BluetoothComponent::process_frame_(const ble::Frame &frame) {
   ESP_LOGD(TAG, "Command 0x%02X (%u payload bytes) -> %u reply bytes", frame.cmd,
            static_cast<unsigned>(frame.payload.size()), static_cast<unsigned>(result.reply.size()));
 
-  if (result.wifi.has_value()) this->apply_wifi_(*result.wifi);
+  if (result.wifi.has_value()) {
+    if (this->wifi_changes_allowed_) {
+      this->apply_wifi_(*result.wifi);
+    } else {
+      // The app only needs its network echoed back to finish setup.
+      ESP_LOGI(TAG, "App sent Wi-Fi '%s'; keeping the configured Wi-Fi (apply_wifi: false)", result.wifi->ssid.c_str());
+    }
+  }
 
   if (!result.reply.empty()) {
     if (result.reply.size() + ATT_OVERHEAD > this->mtu_) {
@@ -344,9 +338,10 @@ void BluetoothComponent::dump_config() {
                 "  Device ID: %s\n"
                 "  Bluetooth address: %s\n"
                 "  Advertising: %s\n"
+                "  Apply Wi-Fi from the app: %s\n"
                 "  Free internal heap: %u bytes",
                 this->name_, this->device_id_().c_str(), this->bt_address_.c_str(),
-                YESNO(this->advertising_started_),
+                YESNO(this->advertising_started_), YESNO(this->wifi_changes_allowed_),
                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
 }
 

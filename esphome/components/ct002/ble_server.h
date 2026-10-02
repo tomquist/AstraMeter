@@ -44,9 +44,8 @@ class BluetoothComponent : public Component {
 
   void set_ct002(CT002Component *c) { this->ct002_ = c; }
   void set_ble(esp32_ble::ESP32BLE *ble) { this->ble_ = ble; }
-  // false: keep the service but never advertise, so nobody nearby finds or
-  // connects to the meter (the Marstek app included).
-  void set_advertise(bool advertise) { this->advertise_ = advertise; }
+  // false: answer the app's Wi-Fi step but stay on the configured network.
+  void set_apply_wifi(bool apply) { this->wifi_changes_allowed_ = apply; }
 
   // Settle the device ID and hand the advertised name to esp32_ble. Called
   // from the generated setup code, after the CT002 configuration is applied
@@ -99,7 +98,7 @@ class BluetoothComponent : public Component {
   // are queued there and answered from this component's loop().
   std::deque<ble::Frame> pending_;
   uint16_t mtu_{23};
-  bool advertise_{true};
+  bool wifi_changes_allowed_{true};
   bool advertising_started_{false};
   // A Wi-Fi network from the app being tried; saved only once connected.
   bool wifi_attempt_{false};

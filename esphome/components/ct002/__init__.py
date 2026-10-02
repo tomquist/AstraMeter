@@ -861,7 +861,7 @@ def _resolve_dashboard(config):
 # ────────────────────────────────────────────────────────────────────────
 
 CONF_BLUETOOTH = "bluetooth"
-CONF_ADVERTISING = "advertising"
+CONF_APPLY_WIFI = "apply_wifi"
 
 
 # No radio of its own: Bluetooth only through a companion chip
@@ -901,9 +901,9 @@ BLUETOOTH_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(BluetoothComponent),
             cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
-            # false: keep the service but stay invisible, so no phone nearby
-            # finds or connects to the meter (the Marstek app included).
-            cv.Optional(CONF_ADVERTISING, default=True): cv.boolean,
+            # false: answer the app's Wi-Fi step but stay on the networks
+            # from the YAML.
+            cv.Optional(CONF_APPLY_WIFI, default=True): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on([PLATFORM_ESP32]),
@@ -1389,6 +1389,6 @@ async def _to_code_bluetooth(config, ct002_var):
     cg.add(var.set_ct002(ct002_var))
     ble = await cg.get_variable(sub[esp32_ble.CONF_BLE_ID])
     cg.add(var.set_ble(ble))
-    cg.add(var.set_advertise(sub[CONF_ADVERTISING]))
+    cg.add(var.set_apply_wifi(sub[CONF_APPLY_WIFI]))
     esp32_ble.register_gatts_event_handler(ble, var)
     cg.add(var.configure_identity())
