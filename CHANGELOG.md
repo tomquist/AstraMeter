@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** the Marstek app listing an auto-registered CT002 as a CT003, because the new device got the CT003's Bluetooth name; devices registered earlier keep working unchanged.
+- **Fixed** the Marstek app listing an auto-registered CT002 as a CT003, because the new device got the CT003's Bluetooth name; devices registered earlier keep working unchanged ([#710](https://github.com/tomquist/astrameter/pull/710)).
 
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 
