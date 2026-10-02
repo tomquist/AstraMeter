@@ -4,6 +4,7 @@ import json
 import pytest
 
 from astrameter.conftest import needs_mosquitto
+from astrameter.mqtt_client_id import mqtt_client_id
 
 from . import mqtt as mqtt_module
 from .mqtt import MqttPowermeter, extract_json_value
@@ -457,7 +458,7 @@ async def test_connects_to_broker_refusing_empty_client_id(
 
 
 def test_client_ids_are_unique_and_portable() -> None:
-    ids = {mqtt_module.mqtt_client_id() for _ in range(100)}
+    ids = {mqtt_client_id() for _ in range(100)}
     assert len(ids) == 100
     assert all(len(i) <= 23 and i.isalnum() for i in ids)
 

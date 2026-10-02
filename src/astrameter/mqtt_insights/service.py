@@ -12,8 +12,6 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import aiomqtt
-
 from astrameter.config.logger import logger
 from astrameter.ct002.controls import (
     CONSUMER_CONTROLS_BY_FIELD,
@@ -22,7 +20,7 @@ from astrameter.ct002.controls import (
     apply_device_control,
     is_device_button,
 )
-from astrameter.powermeter.mqtt import mqtt_client_id
+from astrameter.mqtt_client_id import mqtt_client_id
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.version_info import get_version
 
@@ -38,6 +36,10 @@ from .discovery import (
 )
 
 if TYPE_CHECKING:
+    # Imported where it is used at run time instead: a setup without MQTT
+    # never needs aiomqtt and paho-mqtt resident.
+    import aiomqtt
+
     from astrameter.powermeter.base import Powermeter
 from .marstek_mqtt import (
     MarstekMqttBinding,
@@ -290,6 +292,8 @@ class MqttInsightsService:
         If already connected, live-subscribes to the App topics; otherwise
         the ``_run`` loop picks up the new entry on the next (re)connect.
         """
+        import aiomqtt
+
         if not self._config.marstek_mqtt_enabled:
             return
         async with self._marstek_lock:
@@ -309,6 +313,8 @@ class MqttInsightsService:
                         await client.subscribe(topic)
 
     async def unregister_marstek(self, device_id: str) -> None:
+        import aiomqtt
+
         async with self._marstek_lock:
             binding = self._marstek_bindings.pop(device_id, None)
             self._marstek_get_values_failed.discard(device_id)
@@ -520,6 +526,8 @@ class MqttInsightsService:
             await self._cancel_marstek_tasks()
 
     async def _run(self) -> None:
+        import aiomqtt
+
         cfg = self._config
         tls_context = ssl.create_default_context() if cfg.tls else None
 
@@ -603,6 +611,8 @@ class MqttInsightsService:
 
     async def _publish_offline(self, tls_context: ssl.SSLContext | None) -> None:
         """Reconnect just long enough to retract the retained "online" status."""
+        import aiomqtt
+
         async with aiomqtt.Client(**self._client_args(tls_context)) as client:
             await client.publish(
                 system_status_topic(self._config.base_topic),
@@ -612,6 +622,8 @@ class MqttInsightsService:
             )
 
     async def _publish_loop(self, client: aiomqtt.Client) -> None:
+        import aiomqtt
+
         cfg = self._config
         base = cfg.base_topic
 
@@ -1364,6 +1376,8 @@ class MqttInsightsService:
         binding: MarstekMqttBinding,
         poll: MarstekPollContext,
     ) -> None:
+        import aiomqtt
+
         try:
             if poll.echo_cd == 4:
                 slaves = ""

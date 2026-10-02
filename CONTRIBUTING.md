@@ -30,6 +30,7 @@ Application code lives under **`src/astrameter/`** (src layout). Notable pieces:
 | `src/astrameter/shelly/` | Shelly protocol emulation |
 | `src/astrameter/udp_server.py` | The listening socket both emulators serve on |
 | `tests/` | Integration-style tests |
+| `tools/membench.py` | Memory benchmark: runs AstraMeter against simulated batteries and meters and samples its RSS/USS (or a Docker image's `docker stats` figure); see its docstring |
 
 Co-located tests use `*_test.py` next to modules under `src/astrameter/`.
 

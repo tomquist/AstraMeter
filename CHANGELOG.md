@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
+
 - **Fixed** the MQTT source and MQTT Insights never connecting, logging only "Operation timed out", on brokers that refuse clients without a client ID ([#701](https://github.com/tomquist/astrameter/issues/701), [#706](https://github.com/tomquist/astrameter/pull/706)).
 
 - **Fixed** SML meters steering on outdated readings, and staying offline after a dropped connection (such as one shared through ser2net) until AstraMeter was restarted ([#680](https://github.com/tomquist/astrameter/discussions/680), [#697](https://github.com/tomquist/astrameter/pull/697)).
