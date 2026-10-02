@@ -599,7 +599,29 @@ function extrasCard(): HTMLElement {
         ]
       : [];
 
+  // A real meter's Bluetooth interface: on an ESP32 the Marstek app can add
+  // the board the way it adds a real CT, which is the alternative to the
+  // cloud registration below.
+  const bluetoothBody =
+    state.target === "esphome"
+      ? [
+          el("h3", { text: "Add with the Marstek app" }),
+          fieldControl(
+            {
+              key: "esphomeBluetooth",
+              label: "Act as a real CT over Bluetooth",
+              help: "On by default. The Marstek app finds the board in its regular Add device scan and can show live grid power over Bluetooth, with no Marstek login in this file. Turn off to leave Bluetooth out of the firmware (saves memory; also off on boards without Bluetooth, such as the ESP32-S2).",
+              type: "checkbox",
+            },
+            state.general,
+            {},
+          ),
+          el("hr", {}),
+        ]
+      : [];
+
   return card(5, "Optional extras", "Skip this unless you want Marstek-app integration or a custom MQTT broker.", [
+    ...bluetoothBody,
     el("h3", { text: "Marstek cloud registration" }),
     ...marstekBody,
     el("hr", {}),

@@ -771,6 +771,27 @@ const eyNoDash = generateEsphome({
 });
 has(eyNoDash, "  dashboard: false", "esp/dashboard: turning it off is what has to be written down");
 
+// The Bluetooth interface is on by default too, so only "off" is written.
+const eyBle = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], esphomeBluetooth: true },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+lacks(eyBle, "bluetooth", "esp/bluetooth: on is the default, so nothing is emitted");
+
+const eyNoBle = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], esphomeBluetooth: false },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+has(eyNoBle, "  bluetooth: false", "esp/bluetooth: turning it off is what has to be written down");
+
 // A state with no general block at all is "nothing said", not "off" — the
 // firmware default stands.
 const eyDashUnsaid = generateEsphome({

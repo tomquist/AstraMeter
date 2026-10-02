@@ -1,0 +1,89 @@
+// Bluetooth interface of a real CT002/CT003, so the Marstek app can add the
+// emulator through its regular "Add device" flow and read live data over BLE.
+//
+// A GATT service FF00 with FF01 (commands in), FF02 (replies out, notify) and
+// FF06 (declared like on the meter, unused), advertised as MST-TPM_xxxx
+// (CT002) or MST-SMR_xxxx (CT003). The protocol itself lives in
+// ble_protocol.{h,cpp}; this component only moves bytes between the GATT
+// server and that layer, and fills its snapshots from the CT002 component.
+//
+// ESPHome-only — the Python stack has no BLE peripheral. On by default on
+// ESP32 (`bluetooth: false` leaves it out); gated by USE_CT002_BLUETOOTH, set
+// from _to_code_bluetooth in ct002/__init__.py.
+#pragma once
+
+#include "esphome/core/defines.h"
+
+#ifdef USE_CT002_BLUETOOTH
+
+#include <cstdint>
+#include <deque>
+#include <span>
+#include <string>
+#include <vector>
+
+#include "esphome/components/esp32_ble/ble.h"
+#include "esphome/components/esp32_ble_server/ble_characteristic.h"
+#include "esphome/components/esp32_ble_server/ble_server.h"
+#include "esphome/components/esp32_ble_server/ble_service.h"
+#include "esphome/core/component.h"
+
+#include "ble_protocol.h"
+#include "ct002.h"
+
+namespace esphome {
+namespace ct002 {
+namespace bluetooth {
+
+class BluetoothComponent : public Component {
+ public:
+  void setup() override;
+  void loop() override;
+  void dump_config() override;
+  float get_setup_priority() const override { return setup_priority::AFTER_BLUETOOTH; }
+
+  void set_ct002(CT002Component *c) { this->ct002_ = c; }
+  void set_ble(esp32_ble::ESP32BLE *ble) { this->ble_ = ble; }
+
+  // Settle the device ID and hand the advertised name to esp32_ble. Called
+  // from the generated setup code, after the CT002 configuration is applied
+  // and before esp32_ble brings the stack up (it reads the name then).
+  void configure_identity();
+
+  // Registered with esp32_ble for the negotiated MTU.
+  void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
+
+ protected:
+  void create_service_();
+  void on_write_(std::span<const uint8_t> data);
+  void process_frame_(const ble::Frame &frame);
+  ble::Snapshot snapshot_() const;
+  // CT MAC when one is set (configured, or applied by marstek_registration),
+  // else the identity settled at boot.
+  std::string device_id_() const;
+
+  CT002Component *ct002_{nullptr};
+  esp32_ble::ESP32BLE *ble_{nullptr};
+  esp32_ble_server::BLEService *service_{nullptr};
+  esp32_ble_server::BLECharacteristic *command_{nullptr};
+  esp32_ble_server::BLECharacteristic *reply_{nullptr};
+  esp32_ble_server::BLECharacteristic *aux_{nullptr};
+
+  ble::Model model_{ble::Model::CT002};
+  std::string boot_id_;
+  // esp32_ble keeps a pointer to this, so it lives as long as the component.
+  std::string name_;
+  ble::FrameAssembler assembler_;
+  ble::Responder responder_;
+  // Writes arrive in the GATT event path; frames are answered from loop().
+  std::deque<ble::Frame> pending_;
+  uint16_t mtu_{23};
+  bool local_mtu_set_{false};
+  bool advertising_started_{false};
+};
+
+}  // namespace bluetooth
+}  // namespace ct002
+}  // namespace esphome
+
+#endif  // USE_CT002_BLUETOOTH

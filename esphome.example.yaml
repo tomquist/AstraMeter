@@ -181,6 +181,17 @@ ct002:
   #   grace_seconds: 90s
   #   stall_timeout_seconds: 60s
 
+  # ── Optional sub-block: bluetooth ────────────────────────────────────
+  # The Bluetooth interface of a real CT002/CT003: the Marstek app finds this
+  # board in its regular "Add device" scan (as MST-TPM_xxxx for ct_type HME-4,
+  # MST-SMR_xxxx for HME-3), registers it in your account and shows live grid
+  # power over Bluetooth. See docs/ct002-ct003-ble.md.
+  #
+  # It is ON by default on ESP32 boards with Bluetooth and needs no block.
+  # `bluetooth: false` leaves the BLE stack out of the firmware, which frees
+  # RAM and flash on a tight build.
+  # bluetooth: false
+
   # ── Optional sub-block: dashboard ────────────────────────────────────
   # AstraMeter's live status dashboard, served from this board — the same
   # page the Home Assistant add-on shows, at http://<device>/. Grid power,

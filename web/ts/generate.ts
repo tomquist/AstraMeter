@@ -719,6 +719,12 @@ export function generateEsphome(state: State): string {
     ctLines.push(dash.join("\n"));
   }
 
+  // A real meter's Bluetooth interface, on by default like the dashboard, so
+  // only switching it off is worth writing down.
+  if (state.general && state.general.esphomeBluetooth === false) {
+    ctLines.push(`${IND}bluetooth: false`);
+  }
+
   if (wantInsights) {
     const mf = state.mqttInsights.fields || {};
     const sub = [`${IND}mqtt_insights:`];
