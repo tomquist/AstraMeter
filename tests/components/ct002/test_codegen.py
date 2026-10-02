@@ -976,9 +976,9 @@ def test_auto_load_pulls_the_ble_stack_only_for_a_resolved_bluetooth() -> None:
     assert "esp32_ble" not in loads and "esp32_ble_server" not in loads
 
 
-def test_bluetooth_advertises_unless_told_not_to(esp32_core: Any) -> None:
-    # The bare key and the block form both validate; `advertising: false`
-    # keeps the service but leaves the board invisible to scanning phones.
-    for raw, expected in ((None, True), ({}, True), ({"advertising": False}, False)):
+def test_bluetooth_applies_wifi_unless_told_not_to(esp32_core: Any) -> None:
+    # The bare key and the block form both validate; `apply_wifi: false`
+    # keeps the board on its YAML networks whatever the app sends.
+    for raw, expected in ((None, True), ({}, True), ({"apply_wifi": False}, False)):
         config = ct002_component.BLUETOOTH_SCHEMA(raw)
-        assert config[ct002_component.CONF_ADVERTISING] is expected, raw
+        assert config[ct002_component.CONF_APPLY_WIFI] is expected, raw

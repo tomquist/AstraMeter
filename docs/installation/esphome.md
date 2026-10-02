@@ -63,8 +63,9 @@ Optional sub-blocks nest under the same `ct002:` key:
   in your account (no Marstek login in the YAML) and shows live grid power over
   Bluetooth. **On by default** on every ESP32 with a Bluetooth radio of its own
   (all but the ESP32-S2 and the ESP32-P4); `bluetooth: false` leaves the BLE
-  stack out of the firmware, and `advertising: false` inside the block hides
-  the board from phones once it is set up.
+  stack out of the firmware. The Wi-Fi network you pick in the app replaces
+  the one in the YAML once the board connects to it; `apply_wifi: false`
+  inside the block keeps the YAML network.
   See [Adding the board with the Marstek app](../ct002-ct003-ble.md#astrameters-esphome-implementation).
 - **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device
   per battery, plus a parent CT002 device with manual-target / active /

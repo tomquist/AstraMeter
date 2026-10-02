@@ -621,9 +621,9 @@ function extrasCard(): HTMLElement {
             ? [
                 fieldControl(
                   {
-                    key: "esphomeBluetoothAdvertising",
-                    label: "Visible to phones",
-                    help: "On by default. Turn off once the board is set up, so nobody nearby can find it or connect to it over Bluetooth. The Marstek app can't reach it either until you turn this back on.",
+                    key: "esphomeBluetoothApplyWifi",
+                    label: "Let the app change the Wi-Fi",
+                    help: "On by default: the Wi-Fi network you pick in the Marstek app replaces the one in this file once the board connects to it. Turn off to keep the board on the Wi-Fi in this file; the app's Wi-Fi step still completes.",
                     type: "checkbox",
                   },
                   state.general,
