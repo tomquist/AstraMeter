@@ -118,10 +118,15 @@ struct Snapshot {
   std::string ct_type{"HME-4"};
   std::string device_id;  // 12 lowercase hex characters
   std::array<float, 3> phase_w{0.0f, 0.0f, 0.0f};
+  // Network up (Wi-Fi or Ethernet): what the app reads as "Wi-Fi connected".
   bool wifi_connected{false};
-  int rssi_dbm{0};
-  std::string ssid;  // network the device is connected to
+  int rssi_dbm{0};   // only meaningful on Wi-Fi
+  std::string ssid;  // network the device is connected to ("" on Ethernet)
   std::vector<BatteryRow> batteries;
+  // Largest frame the link can carry in one notification (MTU - 3). Only
+  // the variable-length battery list needs it; everything else is smaller
+  // than the 23-byte minimum MTU allows.
+  size_t max_frame_len{MAX_FRAME_LEN};
 };
 
 // What the caller has to do after a request, besides sending `reply`.
@@ -154,6 +159,9 @@ class Responder {
  public:
   Result handle(const Frame &frame, const Snapshot &snapshot);
   const std::string &provisioned_ssid() const { return this->provisioned_ssid_; }
+  // Forget the provisioned SSID, e.g. when the client disconnects, so a later
+  // CMD_READ_SSID reports the network the device is really on.
+  void reset() { this->provisioned_ssid_.clear(); }
 
  private:
   std::string provisioned_ssid_;

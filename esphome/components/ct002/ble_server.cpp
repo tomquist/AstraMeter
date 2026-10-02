@@ -2,7 +2,10 @@
 
 #ifdef USE_CT002_BLUETOOTH
 
-#include <esp_gatt_common_api.h>
+#include <cstring>
+
+#include <esp_gap_ble_api.h>
+#include <esp_heap_caps.h>
 
 #include "esphome/components/esp32_ble/ble_uuid.h"
 #include "esphome/components/esp32_ble_server/ble_2902.h"
@@ -11,6 +14,9 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
+#ifdef USE_NETWORK
+#include "esphome/components/network/util.h"
+#endif
 #ifdef USE_WIFI
 #include "esphome/components/wifi/wifi_component.h"
 #endif
@@ -29,10 +35,9 @@ static constexpr uint16_t SERVICE_UUID = 0xFF00;
 static constexpr uint16_t COMMAND_UUID = 0xFF01;
 static constexpr uint16_t REPLY_UUID = 0xFF02;
 static constexpr uint16_t AUX_UUID = 0xFF06;
-// The largest MTU BLE allows. The app asks for 500 on Android; iOS
-// negotiates its own. Bluedroid stays at 23 unless the local side allows more.
-static constexpr uint16_t LOCAL_MTU = 517;
-// ATT notification header.
+// ATT notification header. Bluedroid already accepts MTUs up to 517, so the
+// app's request (500 on Android; iOS picks its own) goes through as is.
+static constexpr uint16_t DEFAULT_MTU = 23;
 static constexpr uint16_t ATT_OVERHEAD = 3;
 // Upper bound on queued frames, so a misbehaving client cannot grow it.
 static constexpr size_t MAX_PENDING = 8;
@@ -42,8 +47,29 @@ void BluetoothComponent::configure_identity() {
   std::string id = this->ct002_ != nullptr ? ble::normalize_id(this->ct002_->ct_mac()) : "";
   if (id.empty()) id = ble::normalize_id(get_mac_address());
   this->boot_id_ = id;
-  this->name_ = ble::advertised_name(this->model_, id);
-  if (this->ble_ != nullptr) this->ble_->set_name(this->name_.c_str());
+  this->set_name_(id);
+  if (this->ble_ != nullptr) this->ble_->set_name(this->name_);
+}
+
+void BluetoothComponent::set_name_(const std::string &id) {
+  const std::string name = ble::advertised_name(this->model_, id);
+  std::strncpy(this->name_, name.c_str(), sizeof(this->name_) - 1);
+  this->name_[sizeof(this->name_) - 1] = '\0';
+  this->named_id_ = id;
+}
+
+void BluetoothComponent::follow_identity_() {
+  const std::string id = this->device_id_();
+  if (id == this->named_id_) return;
+  this->set_name_(id);
+  const esp_err_t err = esp_ble_gap_set_device_name(this->name_);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Could not rename to %s: %d", this->name_, err);
+    return;
+  }
+  // Restarting advertising rebuilds the packet with the new name.
+  this->ble_->advertising_set_service_data_and_name(std::span<const uint8_t>{}, true);
+  ESP_LOGI(TAG, "CT MAC changed; now advertising as %s", this->name_);
 }
 
 void BluetoothComponent::setup() {
@@ -59,9 +85,12 @@ void BluetoothComponent::gatts_event_handler(esp_gatts_cb_event_t event, esp_gat
     this->mtu_ = param->mtu.mtu;
     ESP_LOGD(TAG, "MTU %u", this->mtu_);
   } else if (event == ESP_GATTS_DISCONNECT_EVT) {
-    // A half-received frame or a negotiated MTU belongs to that connection.
+    // A half-received frame, unanswered requests, the negotiated MTU and a
+    // provisioned SSID all belong to that connection.
     this->assembler_.reset();
-    this->mtu_ = 23;
+    this->pending_.clear();
+    this->responder_.reset();
+    this->mtu_ = DEFAULT_MTU;
   }
 }
 
@@ -104,11 +133,6 @@ void BluetoothComponent::loop() {
   auto *server = esp32_ble_server::global_ble_server;
   if (this->ble_ == nullptr || !this->ble_->is_active() || server == nullptr || !server->is_running()) return;
 
-  if (!this->local_mtu_set_) {
-    const esp_err_t err = esp_ble_gatt_set_local_mtu(LOCAL_MTU);
-    if (err != ESP_OK) ESP_LOGW(TAG, "esp_ble_gatt_set_local_mtu failed: %d", err);
-    this->local_mtu_set_ = true;
-  }
   if (this->service_ == nullptr) {
     this->create_service_();
     return;
@@ -119,10 +143,15 @@ void BluetoothComponent::loop() {
   }
   if (!this->service_->is_running()) return;
   if (!this->advertising_started_) {
-    this->ble_->advertising_start();
+    // Name in the advertisement itself, not only the scan response, so even
+    // a passive scan finds it.
+    this->ble_->advertising_set_service_data_and_name(std::span<const uint8_t>{}, true);
     this->advertising_started_ = true;
-    ESP_LOGI(TAG, "Advertising as %s", this->name_.c_str());
+    ESP_LOGI(TAG, "Advertising as %s; free internal heap %u bytes (largest block %u)", this->name_,
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
   }
+  this->follow_identity_();
 
   while (!this->pending_.empty()) {
     ble::Frame frame = std::move(this->pending_.front());
@@ -167,8 +196,14 @@ ble::Snapshot BluetoothComponent::snapshot_() const {
   s.model = this->model_;
   s.ct_type = this->ct002_->ct_type();
   s.device_id = this->device_id_();
+  s.max_frame_len = this->mtu_ > ATT_OVERHEAD ? this->mtu_ - ATT_OVERHEAD : 0;
   const std::vector<float> watts = this->ct002_->latest_grid_power();
   for (size_t i = 0; i < s.phase_w.size() && i < watts.size(); ++i) s.phase_w[i] = watts[i];
+#ifdef USE_NETWORK
+  // Wi-Fi or Ethernet: a board on a cable is just as online, and reporting
+  // it as down would have the app push Wi-Fi credentials at it.
+  s.wifi_connected = network::is_connected();
+#endif
 #ifdef USE_WIFI
   auto *wifi = wifi::global_wifi_component;
   if (wifi != nullptr && wifi->is_connected()) {
@@ -188,7 +223,7 @@ void BluetoothComponent::dump_config() {
                 "AstraMeter Bluetooth:\n"
                 "  Name: %s\n"
                 "  Device ID: %s",
-                this->name_.c_str(), this->device_id_().c_str());
+                this->name_, this->device_id_().c_str());
 }
 
 }  // namespace bluetooth

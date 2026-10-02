@@ -939,6 +939,16 @@ def test_bluetooth_absent_stays_absent_without_a_radio(esp32_core: Any) -> None:
         }
 
 
+def test_bluetooth_absent_stays_absent_on_the_p4(esp32_core: Any) -> None:
+    # The P4 has no radio of its own; Bluetooth there needs a companion chip
+    # the config sets up on purpose, so an upgrade must not switch it on.
+    with _esp32_variant("ESP32P4"):
+        config = {"power_sensor_l1": "grid_l1"}
+        assert ct002_component._resolve_bluetooth(config) == {
+            "power_sensor_l1": "grid_l1"
+        }
+
+
 def test_bluetooth_absent_stays_absent_off_esp32(host_core: Any) -> None:
     config = {"power_sensor_l1": "grid_l1"}
     assert ct002_component._resolve_bluetooth(config) == {"power_sensor_l1": "grid_l1"}
