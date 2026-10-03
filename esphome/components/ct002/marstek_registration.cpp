@@ -127,13 +127,7 @@ void MarstekRegistrationComponent::setup() {
     return;
   }
 
-  // Acquire a stable preferences slot. The hash combines the prefs type id
-  // with the configured ct_type so changing device_type forces a fresh
-  // registration (HME-3 and HME-4 records aren't interchangeable).
-  uint32_t hash = PREFS_TYPE_ID;
-  for (char c : this->device_type_) hash = hash * 33 + static_cast<uint8_t>(c);
-  this->pref_ = global_preferences->make_preference<StoredMac>(hash, /*in_flash=*/true);
-
+  this->open_prefs_();
   std::string persisted = this->load_persisted_mac_();
   if (!persisted.empty() && !this->force_reregister_) {
     ESP_LOGI(TAG, "Marstek MAC loaded from prefs: %s", persisted.c_str());
@@ -496,6 +490,23 @@ void MarstekRegistrationComponent::persist_mac_(const std::string &mac) {
   if (!this->pref_.save(&s)) {
     ESP_LOGW(TAG, "Could not persist Marstek MAC to flash");
   }
+}
+
+void MarstekRegistrationComponent::open_prefs_() {
+  if (this->prefs_open_) return;
+  // A stable preferences slot. The hash combines the prefs type id with the
+  // configured ct_type so changing device_type forces a fresh registration
+  // (HME-3 and HME-4 records aren't interchangeable).
+  uint32_t hash = PREFS_TYPE_ID;
+  for (char c : this->device_type_) hash = hash * 33 + static_cast<uint8_t>(c);
+  this->pref_ = global_preferences->make_preference<StoredMac>(hash, /*in_flash=*/true);
+  this->prefs_open_ = true;
+}
+
+std::string MarstekRegistrationComponent::saved_mac() {
+  if (this->force_reregister_ || global_preferences == nullptr) return {};
+  this->open_prefs_();
+  return this->load_persisted_mac_();
 }
 
 std::string MarstekRegistrationComponent::load_persisted_mac_() {

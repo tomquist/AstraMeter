@@ -55,6 +55,24 @@ function el(tag: string, props: ElProps = {}, children: ElChild | ElChild[] = []
   return node;
 }
 
+// Cloud registration's default: on for a CT002/CT003, except on an ESP32 with
+// Bluetooth, where the Marstek app adds the board itself and the cloud login
+// stays off unless asked for. Applied only when one of its inputs changes, so
+// a box the user set by hand stays as they left it.
+let registrationSetByHand = false;
+
+function registrationByDefault(): boolean {
+  // An ESPHome build always emulates a CT; the device types are the Python target's.
+  const hasCt = state.target === "esphome" || hasCtType(state.general.deviceTypes);
+  return hasCt && !(state.target === "esphome" && state.general.esphomeBluetooth);
+}
+
+// For the target and Bluetooth switches, which only change whether the cloud
+// login is the way to add the CT: a choice the user made stands.
+function followRegistrationDefault(): void {
+  if (!registrationSetByHand) state.marstek.enabled = registrationByDefault();
+}
+
 // ── generic field renderer ───────────────────────────────────────────────────
 // Renders one schema field bound to obj[field.key]. `phases` controls phase
 // expansion. Calls refreshPreview() on change; if field.structural, also calls
@@ -62,7 +80,11 @@ function el(tag: string, props: ElProps = {}, children: ElChild | ElChild[] = []
 function fieldControl(
   field: Field,
   obj: Record<string, any>,
-  { phases = 1, structural = false }: { phases?: number; structural?: boolean } = {},
+  {
+    phases = 1,
+    structural = false,
+    onChange,
+  }: { phases?: number; structural?: boolean; onChange?: () => void } = {},
 ): HTMLElement {
   const help = field.help ? el("p", { class: "help", text: field.help }) : null;
   const labelText = field.label + (field.required ? " *" : "");
@@ -104,6 +126,7 @@ function fieldControl(
     if (obj[field.key] === undefined && field.default !== undefined) obj[field.key] = field.default;
     control.addEventListener("change", () => {
       obj[field.key] = control.value;
+      onChange?.();
       if (structural) rerenderAll();
       else refreshPreview();
     });
@@ -112,6 +135,7 @@ function fieldControl(
     const cb = el("input", { type: "checkbox", ...(obj[field.key] ? { checked: true } : {}) });
     cb.addEventListener("change", () => {
       obj[field.key] = cb.checked;
+      onChange?.();
       if (structural) rerenderAll();
       else refreshPreview();
     });
@@ -241,8 +265,13 @@ function targetCard(): HTMLElement {
           // can't run (an esphomeOnly source leaving the ESPHome target)
           // has to be replaced here, or the generator emits a section the
           // Python loader silently skips.
+          const wasEsphome = state.target === "esphome";
           state = migrate({ ...state, target: value });
           if (value === "homeassistant") coerceHaMeter();
+          // Entering or leaving the ESP32 target changes whether the app can
+          // add the CT itself, so re-derive the registration default (edge-
+          // triggered like the device-type pills below).
+          if (wasEsphome !== (value === "esphome")) followRegistrationDefault();
           rerenderAll();
         },
       },
@@ -307,7 +336,8 @@ function deviceCard(): HTMLElement {
           // uncheck them afterwards without the next pill click snapping them back.
           const hasCt = hasCtType(g.deviceTypes);
           if (hasCt !== hadCt) {
-            state.marstek.enabled = hasCt;
+            state.marstek.enabled = registrationByDefault();
+            registrationSetByHand = false;
             state.mqttInsights.enabled = hasCt;
           }
           rerenderAll();
@@ -533,8 +563,17 @@ function extrasCard(): HTMLElement {
   const marstekFields = isHa ? MARSTEK_FIELDS.filter((fl) => HA_ADDON_MARSTEK_FIELDS.has(fl.key)) : MARSTEK_FIELDS;
   const insightsFields = isHa ? MQTT_INSIGHTS_FIELDS.filter((fl) => HA_ADDON_INSIGHTS_FIELDS.has(fl.key)) : MQTT_INSIGHTS_FIELDS;
 
+  // On an ESP32 with Bluetooth the app adds the board itself, so the cloud
+  // login is only for boards without it.
+  const marstekHelp =
+    state.target === "esphome" && state.general.esphomeBluetooth
+      ? "Not needed with Bluetooth on: the Marstek app adds the board itself. Use this on a board without Bluetooth (ESP32-S2, ESP32-P4) to create the CT in your Marstek account instead. Credentials are only needed once."
+      : "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.";
   const marstekBody = [
-    fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.", type: "checkbox" }, m, { structural: true }),
+    fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: marstekHelp, type: "checkbox" }, m, {
+      structural: true,
+      onChange: () => (registrationSetByHand = true),
+    }),
   ];
   if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, marstekFields.map((fl) => fieldControl(fl, m.fields, {}))));
 
@@ -599,7 +638,56 @@ function extrasCard(): HTMLElement {
         ]
       : [];
 
+  // A real meter's Bluetooth interface: on an ESP32 the Marstek app can add
+  // the board the way it adds a real CT, which is the alternative to the
+  // cloud registration below.
+  const bluetoothBody =
+    state.target === "esphome"
+      ? [
+          el("h3", { text: "Add with the Marstek app" }),
+          fieldControl(
+            {
+              key: "esphomeBluetooth",
+              label: "Act as a real CT over Bluetooth",
+              help: "On by default. The Marstek app finds the board in its regular Add device scan and can show live grid power over Bluetooth, with no Marstek login in this file. Turn off to leave Bluetooth out of the firmware (saves memory; also off on boards without Bluetooth, such as the ESP32-S2).",
+              type: "checkbox",
+            },
+            state.general,
+            // Structural: the two switches below and the cloud registration
+            // help depend on it. Turning Bluetooth off makes registration the
+            // way to add the CT again, so its default follows.
+            { structural: true, onChange: followRegistrationDefault },
+          ),
+          ...(state.general.esphomeBluetooth
+            ? [
+                fieldControl(
+                  {
+                    key: "esphomeBluetoothAllowWifiChange",
+                    label: "Allow the app to change the Wi-Fi",
+                    help: "Off by default: the board stays on the Wi-Fi in this file, and the app's Wi-Fi step still completes. Turn on to let the network you pick in the Marstek app replace it once the board connects. Any phone in Bluetooth range could then move the board to another network.",
+                    type: "checkbox",
+                  },
+                  state.general,
+                  {},
+                ),
+                fieldControl(
+                  {
+                    key: "esphomeBluetoothAllowDirectionChange",
+                    label: "Allow the app to reverse a phase",
+                    help: "Off by default. Turn on to let the Marstek app's Reverse Measurement Direction flip the sign of a phase's power (CT002). A wrong setting makes the batteries work against the grid, and any phone in Bluetooth range could change it. A sign that is wrong from the start is better fixed on the sensor.",
+                    type: "checkbox",
+                  },
+                  state.general,
+                  {},
+                ),
+              ]
+            : []),
+          el("hr", {}),
+        ]
+      : [];
+
   return card(5, "Optional extras", "Skip this unless you want Marstek-app integration or a custom MQTT broker.", [
+    ...bluetoothBody,
     el("h3", { text: "Marstek cloud registration" }),
     ...marstekBody,
     el("hr", {}),

@@ -296,7 +296,19 @@ class CT002Component : public Component {
   // Configured ct_type/ct_mac forwarded to the Marstek MQTT topics.
   const std::string &ct_type() const { return this->ct_type_; }
   const std::string &ct_mac() const { return this->ct_mac_; }
+  // The MAC the Marstek app knows this CT by: ct_mac, or else the Bluetooth
+  // identity. Only the App topics use it; UDP keeps mirroring the requested
+  // MAC while ct_mac is unset.
+  void set_app_mac_fallback(const std::string &v) { this->app_mac_fallback_ = v; }
+  const std::string &app_mac() const { return this->ct_mac_.empty() ? this->app_mac_fallback_ : this->ct_mac_; }
   int wifi_rssi() const { return this->wifi_rssi_; }
+
+  // Phases whose measured power is reversed, as a real CT002 does when the
+  // Marstek app sets it over Bluetooth (bit 0 = L1, bit 1 = L2, bit 2 = L3).
+  // Applied to each sensor reading as it arrives, so everything downstream
+  // sees the meter's view. ESPHome-only: set by the Bluetooth component.
+  void set_phase_reversal(uint8_t bits);
+  uint8_t phase_reversal() const { return this->phase_reversal_; }
   // Used by mqtt_insights for the device-level "active_control" entity so
   // HA reflects the configured state instead of always reading "running".
   bool active_control() const { return this->active_control_; }
@@ -439,6 +451,7 @@ class CT002Component : public Component {
   sensor::Sensor *power_sensor_l3_{nullptr};
   std::string ct_type_{"HME-4"};
   std::string ct_mac_;
+  std::string app_mac_fallback_;
   int wifi_rssi_{-50};
   uint16_t udp_port_{12345};
   bool active_control_{true};
@@ -466,6 +479,7 @@ class CT002Component : public Component {
   // Sensor input cache (written by per-sensor on_state callbacks).
   std::array<float, 3> raw_values_{0.0f, 0.0f, 0.0f};
   std::array<uint32_t, 3> raw_stamp_ms_{0, 0, 0};
+  uint8_t phase_reversal_{0};
   uint8_t num_phases_{0};
 
   // Unit→W scale per phase (1.0 unless the YAML sensor declares kW/MW/mW —
