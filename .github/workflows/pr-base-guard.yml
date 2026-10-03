@@ -119,6 +119,7 @@ jobs:
           BASE_REPO: ${{ github.repository }}
           AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
         run: |
           scripts/check_pr_history.sh \
             "$HEAD_SHA" \
@@ -128,4 +129,5 @@ jobs:
             "$HEAD_REPO" \
             "$BASE_REPO" \
             "$AUTHOR_LOGIN" \
-            "$AUTHOR_TYPE"
+            "$AUTHOR_TYPE" \
+            "$AUTHOR_ASSOCIATION"

@@ -49,6 +49,7 @@ def _guard(
     head_repo: str = "contributor/AstraMeter",
     author_login: str = "contributor",
     author_type: str = "User",
+    author_association: str = "NONE",
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -62,6 +63,7 @@ def _guard(
             "tomquist/AstraMeter",
             author_login,
             author_type,
+            author_association,
         ],
         cwd=repo,
         text=True,
@@ -97,7 +99,30 @@ def test_allows_internal_release_sync_branch_from_bot(tmp_path: Path) -> None:
     assert "release sync branch" in result.stdout
 
 
-def test_rejects_internal_release_named_branch_from_human(tmp_path: Path) -> None:
+def test_allows_internal_release_sync_branch_from_owner_recovery(
+    tmp_path: Path,
+) -> None:
+    repo, head, develop, main = _history(tmp_path)
+
+    result = _guard(
+        repo,
+        head,
+        develop,
+        main,
+        head_ref="release/v9.9.9-develop",
+        head_repo="tomquist/AstraMeter",
+        author_login="tomquist",
+        author_type="User",
+        author_association="OWNER",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "release sync branch" in result.stdout
+
+
+def test_rejects_internal_release_named_branch_from_collaborator(
+    tmp_path: Path,
+) -> None:
     repo, head, develop, main = _history(tmp_path)
 
     result = _guard(
@@ -109,6 +134,7 @@ def test_rejects_internal_release_named_branch_from_human(tmp_path: Path) -> Non
         head_repo="tomquist/AstraMeter",
         author_login="maintainer",
         author_type="User",
+        author_association="COLLABORATOR",
     )
 
     assert result.returncode == 1
@@ -124,6 +150,8 @@ def test_rejects_release_named_branch_from_fork(tmp_path: Path) -> None:
         main,
         head_ref="release/v9.9.9-develop",
         head_repo="contributor/AstraMeter",
+        author_login="astrameter-release[bot]",
+        author_type="Bot",
     )
 
     assert result.returncode == 1
