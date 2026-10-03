@@ -261,7 +261,7 @@ which app screens send the command, where known.
 | `0x10` | ✓ | – | `01` | – | not sent by the CT screens |
 | `0x11` | – | ✓ | 4 bytes | 1-byte result | CT003 meter configuration |
 | `0x12` | ✓ | ✓ | `00` | ASCII list of linked batteries, see [`0x12`](#0x12--linked-batteries) | CT screens |
-| `0x13` | ✓ | – | – | – | probably voltage diagnostics (unconfirmed) |
+| `0x13` | ✓ | – | ignored | 3 × uint16 + 1 byte | CT002 diagnostics (voltage) |
 | `0x14` | ✓ | – | `01` | frequency check | CT002 diagnostics |
 | `0x15` | ✓ | – | `01` | 3 × int16 + 1 byte | CT002 diagnostics (voltage phase angle) |
 | `0x16` | ✓ | – | `01` | 3 × int16 | CT002 diagnostics (active power) |
@@ -381,9 +381,15 @@ meter, with comma-separated `key=value` fields:
 type=<battery type>,sid=<battery id>,ip=<battery IP>,phpos=<phase letter>;
 ```
 
-### `0x14`–`0x17` — CT002 diagnostics
+### `0x13`–`0x17` — CT002 diagnostics
 
 These back the CT002 diagnostics screens.
+
+- `0x13` checks the grid voltage. The reply payload is the voltages of phases
+  A, B and C as little-endian `uint16` in whole volts (bytes 4–9), then one
+  result byte (byte 10): `1` when every phase is between 210 and 240 V,
+  otherwise `0`. The v124 firmware ignores the request payload. The app reports
+  the values as its "voltage" check.
 
 - `0x14` reads the grid frequency and checks it against 45.00–55.00 Hz
   (apparently held in 0.01 Hz).
@@ -398,7 +404,7 @@ The exact field layouts of the `0x14` and `0x15` replies are unconfirmed.
 
 ### Not covered
 
-- **`0x10`, `0x13`, `0x18`, `0x27`–`0x29`, `0x50`, `0x51`.** The meter handles
+- **`0x10`, `0x18`, `0x27`–`0x29`, `0x50`, `0x51`.** The meter handles
   these, but their payloads were not decoded. `0x50` and `0x51` take a
   sub-command byte and look like firmware-update and module-control functions.
 - **Other frame families.** The app also has frames that start with `0xAA`,
@@ -501,8 +507,9 @@ ignores it.
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
 | `0x16` active power (CT002) | The three phase powers |
 
-Everything else, such as calibration, current-direction reversal, CT003 meter
-configuration and firmware updates, gets no reply. The app reports those
+Everything else, such as calibration, current-direction reversal, the
+voltage, frequency and phase-angle checks, CT003 meter configuration and
+firmware updates, gets no reply. The app reports those
 buttons as failed. They have nothing to act on in an emulator, whose polarity
 and meter come from its YAML.
 
