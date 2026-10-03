@@ -33,6 +33,9 @@
 
 namespace esphome {
 namespace ct002 {
+namespace marstek_registration {
+class MarstekRegistrationComponent;
+}  // namespace marstek_registration
 namespace bluetooth {
 
 class BluetoothComponent : public Component {
@@ -44,6 +47,8 @@ class BluetoothComponent : public Component {
 
   void set_ct002(CT002Component *c) { this->ct002_ = c; }
   void set_ble(esp32_ble::ESP32BLE *ble) { this->ble_ = ble; }
+  // The registration whose saved MAC becomes the ID and Bluetooth address.
+  void set_registration(marstek_registration::MarstekRegistrationComponent *r) { this->registration_ = r; }
   // false: answer the app's Wi-Fi step but stay on the configured network.
   void set_allow_wifi_change(bool allow) { this->wifi_changes_allowed_ = allow; }
 
@@ -73,6 +78,7 @@ class BluetoothComponent : public Component {
 
   CT002Component *ct002_{nullptr};
   esp32_ble::ESP32BLE *ble_{nullptr};
+  marstek_registration::MarstekRegistrationComponent *registration_{nullptr};
   esp32_ble_server::BLEService *service_{nullptr};
   esp32_ble_server::BLECharacteristic *command_{nullptr};
   esp32_ble_server::BLECharacteristic *reply_{nullptr};
@@ -87,6 +93,9 @@ class BluetoothComponent : public Component {
   // ct_mac could not become the Bluetooth address (not a unicast MAC, or
   // refused); reported from setup(), where logging works.
   bool bt_address_rejected_{false};
+  // This boot's address came from the MAC marstek_registration saved.
+  bool address_from_registration_{false};
+  bool restart_pending_{false};
   // The ID the current advertised name was made from.
   std::string named_id_;
   // esp32_ble keeps a pointer to this, so it is a fixed buffer that lives as

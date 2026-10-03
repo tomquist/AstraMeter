@@ -458,12 +458,16 @@ any `esp32_ble: name:` in the YAML. With ESPHome's `name_add_mac_suffix` on,
 ESPHome appends its own suffix to the name; the app still finds the board,
 because it only looks for `MST`.
 
-If `marstek_registration:` applies a MAC after boot, the replies use it
-straight away and the board re-advertises under the matching name, but the
-radio's address can't change while Bluetooth runs. The board then logs a
-warning; set `ct_mac` to that MAC in the YAML so the address follows on the
-next boot. That component has already put the device in your account, so
-there is no need to add it again from the app.
+With `marstek_registration:`, the MAC it registered is the ID and the
+Bluetooth address, and it takes precedence over `ct_mac`. The board reads the
+saved MAC before Bluetooth starts, so a board that registered before
+Bluetooth was added keeps its device: open it in the app, with no need to add
+it again or to copy the MAC into the YAML. On a board's very first
+registration the MAC only exists once Bluetooth is already running, so the
+board restarts once, a few seconds after registering, to take it as its
+address. With `force_reregister: true` the board does neither and warns
+instead, as it does when some other change of `ct_mac` after boot leaves the
+address behind; set `ct_mac` in the YAML then.
 
 ### Wi-Fi from the app
 

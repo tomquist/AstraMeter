@@ -77,7 +77,9 @@ Optional sub-blocks nest under the same `ct002:` key:
   cloud account on first boot (the same flow as the Python `[MARSTEK]` section).
   It saves the assigned MAC and feeds it back into `ct002.ct_mac`. Requires an
   `http_request:` block. Add `mqtt_insights:` too and the App-topic subscription
-  picks up the MAC on its own — no reboot needed.
+  picks up the MAC on its own — no reboot needed. With Bluetooth on, the
+  board restarts once after its first registration, so its Bluetooth address
+  matches the registered device and the Marstek app can connect to it.
 
 ## Status & requirements
 
