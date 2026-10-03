@@ -227,10 +227,11 @@ class MqttInsightsComponent : public Component {
 
   // Currently-subscribed Marstek identity (normalised MAC + ct_type).
   // Empty when not subscribed. Set by ensure_marstek_subscription_ once
-  // ct002's ct_mac is known; cleared on disconnect so we re-subscribe on
+  // ct002's app_mac() is known; cleared on disconnect so we re-subscribe on
   // reconnect. handle_marstek_message_ / publish_marstek_reply_ key off
   // these, so they're always in sync with the live subscription.
   std::string marstek_mac_;
+  std::string marstek_mac_source_;  // app_mac() as it was when marstek_mac_ was set
   std::string marstek_ct_type_;
 };
 
