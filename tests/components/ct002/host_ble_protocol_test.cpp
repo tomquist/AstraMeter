@@ -134,6 +134,18 @@ TEST(BleIdentity, NormalizesMacSpellings) {
   EXPECT_EQ(normalize_id("02b25012abcz"), "");
 }
 
+TEST(BleIdentity, ManagedIdCarriesThePrefixAndFollowsTheChip) {
+  const std::array<uint8_t, 6> chip{0x24, 0x0a, 0xc4, 0x12, 0x34, 0x56};
+  const std::string id = managed_id(chip);
+  EXPECT_EQ(id.size(), 12u);
+  EXPECT_EQ(id.substr(0, 6), "02b250");
+  EXPECT_EQ(normalize_id(id), id);
+  EXPECT_EQ(managed_id(chip), id);  // the same on every boot
+  // Chips from another OUI with the same low bytes still get their own ID.
+  EXPECT_NE(managed_id({0x30, 0xae, 0xa4, 0x12, 0x34, 0x56}), id);
+  EXPECT_NE(managed_id({0x24, 0x0a, 0xc4, 0x12, 0x34, 0x57}), id);
+}
+
 TEST(BleIdentity, AnswersWhatTheAppParses) {
   Responder responder;
   const auto result = responder.handle(request(CMD_IDENTITY, {0x01}), ct002_snapshot());

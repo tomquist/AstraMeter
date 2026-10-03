@@ -13,6 +13,7 @@
 #include "esphome/core/alloc_helpers.h"
 #include "esphome/core/application.h"
 #include "esphome/core/hal.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
 #ifdef USE_NETWORK
@@ -65,8 +66,8 @@ void BluetoothComponent::configure_identity() {
   this->model_ = ble::model_for_type(this->ct002_ != nullptr ? this->ct002_->ct_type() : "HME-4");
   // A real meter's ID, its MAC and its Bluetooth address are one value: the
   // app stores the reported MAC and later reconnects only to a device at that
-  // address. So either the radio takes ct_mac, or ct_mac is unset and the
-  // radio's own address becomes the ID.
+  // address. So the radio takes the ID: ct_mac, else the registered MAC, else
+  // one derived from the chip with the managed prefix.
   std::string configured = this->ct002_ != nullptr ? ble::normalize_id(this->ct002_->ct_mac()) : "";
 #ifdef USE_CT002_MARSTEK_REGISTRATION
   // marstek_registration applies the MAC it saved over ct_mac once it starts,
@@ -80,6 +81,13 @@ void BluetoothComponent::configure_identity() {
     }
   }
 #endif
+  if (configured.empty()) {
+    // The same prefix registration assigns, so hame-relay recognises the CT
+    // the app adds, and stable, so the app finds it again after a restart.
+    std::array<uint8_t, 6> chip{};
+    get_mac_address_raw(chip.data());
+    configured = ble::managed_id(chip);
+  }
   uint8_t mac[6]{};
   if (!configured.empty()) {
     // normalize_id() guarantees 12 lowercase hex characters.
@@ -92,6 +100,7 @@ void BluetoothComponent::configure_identity() {
   std::string id = configured.empty() ? this->bt_address_ : configured;
   if (id.empty()) id = ble::normalize_id(get_mac_address());
   this->boot_id_ = id;
+  if (this->ct002_ != nullptr) this->ct002_->set_app_mac_fallback(id);
   this->set_name_(id);
   if (this->ble_ != nullptr) this->ble_->set_name(this->name_);
 }
@@ -160,7 +169,7 @@ void BluetoothComponent::setup() {
   }
   if (this->bt_address_rejected_) {
     ESP_LOGW(TAG,
-             "ct_mac %s cannot be the Bluetooth address (it must be a unicast MAC); the app will "
+             "%s cannot be the Bluetooth address (it must be a unicast MAC); the app will "
              "not reconnect to this meter after adding it",
              this->boot_id_.c_str());
   }
