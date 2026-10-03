@@ -59,10 +59,18 @@ function el(tag: string, props: ElProps = {}, children: ElChild | ElChild[] = []
 // Bluetooth, where the Marstek app adds the board itself and the cloud login
 // stays off unless asked for. Applied only when one of its inputs changes, so
 // a box the user set by hand stays as they left it.
+let registrationSetByHand = false;
+
 function registrationByDefault(): boolean {
   // An ESPHome build always emulates a CT; the device types are the Python target's.
   const hasCt = state.target === "esphome" || hasCtType(state.general.deviceTypes);
   return hasCt && !(state.target === "esphome" && state.general.esphomeBluetooth);
+}
+
+// For the target and Bluetooth switches, which only change whether the cloud
+// login is the way to add the CT: a choice the user made stands.
+function followRegistrationDefault(): void {
+  if (!registrationSetByHand) state.marstek.enabled = registrationByDefault();
 }
 
 // ── generic field renderer ───────────────────────────────────────────────────
@@ -263,7 +271,7 @@ function targetCard(): HTMLElement {
           // Entering or leaving the ESP32 target changes whether the app can
           // add the CT itself, so re-derive the registration default (edge-
           // triggered like the device-type pills below).
-          if (wasEsphome !== (value === "esphome")) state.marstek.enabled = registrationByDefault();
+          if (wasEsphome !== (value === "esphome")) followRegistrationDefault();
           rerenderAll();
         },
       },
@@ -329,6 +337,7 @@ function deviceCard(): HTMLElement {
           const hasCt = hasCtType(g.deviceTypes);
           if (hasCt !== hadCt) {
             state.marstek.enabled = registrationByDefault();
+            registrationSetByHand = false;
             state.mqttInsights.enabled = hasCt;
           }
           rerenderAll();
@@ -561,7 +570,10 @@ function extrasCard(): HTMLElement {
       ? "Not needed with Bluetooth on: the Marstek app adds the board itself. Use this on a board without Bluetooth (ESP32-S2, ESP32-P4) to create the CT in your Marstek account instead. Credentials are only needed once."
       : "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.";
   const marstekBody = [
-    fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: marstekHelp, type: "checkbox" }, m, { structural: true }),
+    fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: marstekHelp, type: "checkbox" }, m, {
+      structural: true,
+      onChange: () => (registrationSetByHand = true),
+    }),
   ];
   if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, marstekFields.map((fl) => fieldControl(fl, m.fields, {}))));
 
@@ -644,7 +656,7 @@ function extrasCard(): HTMLElement {
             // Structural: the two switches below and the cloud registration
             // help depend on it. Turning Bluetooth off makes registration the
             // way to add the CT again, so its default follows.
-            { structural: true, onChange: () => (state.marstek.enabled = registrationByDefault()) },
+            { structural: true, onChange: followRegistrationDefault },
           ),
           ...(state.general.esphomeBluetooth
             ? [
