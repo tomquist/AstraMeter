@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a battery sometimes staying stuck below its share since 2.3.1 while the other carried the rest, letting their charge levels drift apart; a battery that only paused briefly is now back to sharing within a minute ([#704](https://github.com/tomquist/astrameter/issues/704), [#707](https://github.com/tomquist/astrameter/pull/707)).
+
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 
 - **Fixed** the MQTT source and MQTT Insights never connecting, logging only "Operation timed out", on brokers that refuse clients without a client ID ([#701](https://github.com/tomquist/astrameter/issues/701), [#706](https://github.com/tomquist/astrameter/pull/706)).

@@ -918,11 +918,12 @@ void LoadBalancer::track_saturation_(const std::string &consumer_id,
 // Learn, confirm or drop this consumer's output ceilings, judged on
 // last_target — the reading actually put on the wire last poll, which pacing
 // can hold far below the unpaced intent. Skipped for the same consumers as
-// track_saturation_. *reports* is the auto pool. A battery sitting at a
-// ceiling that still binds (its plain share of the pool's output is past it)
-// confirms it: once the pool settles nothing pushes it, and a lapsed ceiling
-// would pull the unlimited batteries back down until relearned. Mirrors
-// balancer.py _track_ceiling (whose INFO lines on learning and dropping a
+// track_saturation_. *reports* is the auto pool. A ceiling is confirmed the
+// way it was learned, by holding flat while pushed; once the pool settles,
+// balance_correction_ pushes a pinned battery past it every
+// CEILING_RETEST_SECONDS. Never by merely sitting at it: the balancer holds it
+// there, so a ceiling learned by mistake would confirm itself (issue #704).
+// Mirrors balancer.py _track_ceiling (whose INFO lines on learning and dropping a
 // ceiling have no firmware counterpart; the steer line's ceil= field carries
 // the same facts).
 void LoadBalancer::track_ceiling_(const std::string &consumer_id, BalancerConsumerState &state,
@@ -936,23 +937,6 @@ void LoadBalancer::track_ceiling_(const std::string &consumer_id, BalancerConsum
   const double now = this->clock_();
   const float power = reports[consumer_id].power;
   const int sign = sign_of(power);
-  const float ceiling = state.ceiling(sign);
-  if (ceiling > 0.0f && power * static_cast<float>(sign) >= ceiling - CEILING_AT_MARGIN_W) {
-    float total = 0.0f;
-    std::unordered_map<std::string, float> weights;
-    for (const auto &kv : reports) {
-      total += kv.second.power;
-      weights[kv.first] = kv.second.weight;
-    }
-    const float share = weighted_share(total, weights, reports, reports.size(), &consumer_id);
-    if (share * static_cast<float>(sign) >= ceiling + CEILING_PUSH_W) {
-      if (sign > 0) {
-        state.ceiling_discharge_seen = now;
-      } else {
-        state.ceiling_charge_seen = now;
-      }
-    }
-  }
   if (state.ceiling_discharge > 0.0f &&
       (power > state.ceiling_discharge + CEILING_RELEASE_W ||
        now - state.ceiling_discharge_seen > CEILING_TTL_SECONDS)) {
@@ -1240,7 +1224,7 @@ float LoadBalancer::residual_share_(const std::optional<std::string> &consumer_i
   float residual = fair_share;
   if (this->cfg_.fair_distribution && !concentrated.has_value() && consumer_id &&
       reports.find(*consumer_id) != reports.end() && eff_part.count(*consumer_id)) {
-    residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share);
+    residual = this->balance_correction_(*consumer_id, reports, eff_part, fair_share, true);
   }
 
   float tracking = fair_share;
@@ -1815,7 +1799,7 @@ bool LoadBalancer::concentration_pool_balanced_(const ReportMap &reports,
 float LoadBalancer::balance_correction_(const std::string &consumer_id,
                                         const ReportMap &reports,
                                         const std::unordered_map<std::string, float> &eff_part,
-                                        float fair_share) {
+                                        float fair_share, bool retest_ceiling) {
   const auto &cfg = this->cfg_;
   auto self_it = reports.find(consumer_id);
   const float actual_self = (self_it != reports.end()) ? self_it->second.power : 0.0f;
@@ -1842,10 +1826,23 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
   }
   // A battery's share stops at its learned ceiling and the rest goes to the
   // others, so an unlimited battery is not pulled down toward limited ones
-  // (issue #655).
-  const float target_share = capped_weighted_share(
-      actual_total, weights, participating,
-      this->ceilings_(participating, sign_of(actual_total)), &consumer_id);
+  // (issue #655). A battery pinned at a ceiling due for a retest is instead
+  // aimed at what it would carry without it and pushed at least CEILING_PUSH_W
+  // past it: a real limit holds, which confirms it, and a battery that merely
+  // paused follows, which drops it (issue #704).
+  const int sign = sign_of(actual_total);
+  auto ceilings = this->ceilings_(participating, sign);
+  auto own_it = ceilings.find(consumer_id);
+  bool retest = false;
+  if (retest_ceiling && own_it != ceilings.end() &&
+      actual_self * static_cast<float>(sign) >= own_it->second - CEILING_AT_MARGIN_W) {
+    auto state_it = this->consumers_.find(consumer_id);
+    retest = state_it != this->consumers_.end() &&
+             this->clock_() - state_it->second.ceiling_seen(sign) >= CEILING_RETEST_SECONDS;
+  }
+  if (retest) ceilings.erase(own_it);
+  const float target_share =
+      capped_weighted_share(actual_total, weights, participating, ceilings, &consumer_id);
   const float error = target_share - actual_self;
   const float err_abs = std::fabs(error);
   if (cfg.balance_deadband > 0.0f && err_abs < cfg.balance_deadband) return fair_share;
@@ -1858,6 +1855,9 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
     gain = gain * (1.0f + boost);
   }
   float correction = gain * error;
+  if (retest && error * static_cast<float>(sign) >= CEILING_PUSH_W)
+    correction =
+        static_cast<float>(sign) * std::max(correction * static_cast<float>(sign), CEILING_PUSH_W);
   if (cfg.max_correction_per_step > 0.0f) {
     const float cap = cfg.max_correction_per_step;
     correction = std::max(-cap, std::min(cap, correction));
