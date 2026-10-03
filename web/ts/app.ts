@@ -630,7 +630,7 @@ function extrasCard(): HTMLElement {
                   {
                     key: "esphomeBluetoothAllowWifiChange",
                     label: "Allow the app to change the Wi-Fi",
-                    help: "On by default: the Wi-Fi network you pick in the Marstek app replaces the one in this file once the board connects to it. Turn off to keep the board on the Wi-Fi in this file; the app's Wi-Fi step still completes.",
+                    help: "Off by default: the board stays on the Wi-Fi in this file, and the app's Wi-Fi step still completes. Turn on to let the network you pick in the Marstek app replace it once the board connects. Any phone in Bluetooth range could then move the board to another network.",
                     type: "checkbox",
                   },
                   state.general,

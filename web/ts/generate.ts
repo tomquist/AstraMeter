@@ -723,8 +723,8 @@ export function generateEsphome(state: State): string {
   // only switching it off is worth writing down.
   if (state.general && state.general.esphomeBluetooth === false) {
     ctLines.push(`${IND}bluetooth: false`);
-  } else if (state.general && state.general.esphomeBluetoothAllowWifiChange === false) {
-    ctLines.push(`${IND}bluetooth:\n${IND}${IND}allow_wifi_change: false`);
+  } else if (state.general && state.general.esphomeBluetoothAllowWifiChange === true) {
+    ctLines.push(`${IND}bluetooth:\n${IND}${IND}allow_wifi_change: true`);
   }
 
   if (wantInsights) {

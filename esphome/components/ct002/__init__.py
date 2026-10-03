@@ -901,9 +901,10 @@ BLUETOOTH_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(BluetoothComponent),
             cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
-            # false: answer the app's Wi-Fi step but stay on the networks
-            # from the YAML.
-            cv.Optional(CONF_ALLOW_WIFI_CHANGE, default=True): cv.boolean,
+            # Off by default: the board answers the app's Wi-Fi step but
+            # stays on the YAML's networks, so a phone in Bluetooth range
+            # can't move it to another network. true applies what it sends.
+            cv.Optional(CONF_ALLOW_WIFI_CHANGE, default=False): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on([PLATFORM_ESP32]),

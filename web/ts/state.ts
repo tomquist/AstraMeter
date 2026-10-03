@@ -38,8 +38,8 @@ export interface State {
     /// ESPHome only. The firmware speaks a real meter's Bluetooth protocol
     /// unless told not to, so the Marstek app can add it like a real CT.
     esphomeBluetooth: boolean;
-    /// ESPHome only. With Bluetooth on, false keeps the board on its YAML
-    /// Wi-Fi whatever the app sends (`bluetooth: allow_wifi_change: false`).
+    /// ESPHome only. With Bluetooth on, true applies the Wi-Fi the app sends
+    /// (`bluetooth: allow_wifi_change: true`); off by default, like the firmware.
     esphomeBluetoothAllowWifiChange: boolean;
     dashboardAllowWrite: boolean;
     dashboardDirectAccess: boolean;
@@ -85,7 +85,7 @@ export function defaultState(): State {
       esphomeDashboard: true,
       esphomeControls: false,
       esphomeBluetooth: true,
-      esphomeBluetoothAllowWifiChange: true,
+      esphomeBluetoothAllowWifiChange: false,
       // On by default, matching the service and the add-on.
       dashboardAllowWrite: true,
       // Unauthenticated access to the add-on's port. Off unless asked for.

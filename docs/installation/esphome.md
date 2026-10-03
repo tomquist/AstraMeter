@@ -69,17 +69,19 @@ Bluetooth is on by default, so the minimal YAML above is all it takes.
    `MST-SMR_xxxx` (`ct_type: HME-3`).
 2. In the Marstek app, tap **+** and wait for the scan, with the phone near
    the board. Pick the board when it shows up, and give it a name.
-3. Go through the Wi-Fi step. If you pick the network the board is already on,
-   nothing changes. If you pick another one, the board tries it and keeps it
-   once it connects, or goes back to its old Wi-Fi after 30 seconds. The new
-   network then takes precedence over the one in the YAML. To keep the board
-   on the YAML's Wi-Fi whatever the app sends, set:
+3. Go through the Wi-Fi step. The board stays on the Wi-Fi from its YAML
+   whatever you pick there, and the step still completes. To let the app's
+   choice take over instead, set:
 
    ```yaml
    ct002:
      bluetooth:
-       allow_wifi_change: false
+       allow_wifi_change: true
    ```
+
+   The board then tries the network you pick and keeps it once it connects,
+   or goes back to its old Wi-Fi after 30 seconds. The new network takes
+   precedence over the one in the YAML.
 
 4. The firmware check finds nothing to update; finish the setup.
 5. In each battery's settings, switch to automatic mode and select the new CT.
@@ -89,8 +91,9 @@ over Bluetooth. The board doesn't connect to Marstek's cloud by default, so the
 CT shows as offline in the device list; that is expected.
 
 Like a real meter, the board accepts any phone in range without pairing, and
-that phone can read its live data, restart it and, unless
-`allow_wifi_change: false` is set, move it to another Wi-Fi network.
+that phone can read its live data and restart it. With
+`allow_wifi_change: true` it can also move the board to another Wi-Fi network,
+which is why that is off by default.
 `bluetooth: false` takes the Bluetooth stack out of the firmware entirely. The
 [Bluetooth reference](../ct002-ct003-ble.md#astrameters-esphome-implementation)
 lists everything the board answers.
@@ -157,8 +160,8 @@ Optional sub-blocks nest under the same `ct002:` key:
   Marstek app adds the board like a real meter and shows its live grid power.
   **On by default** on every ESP32 with a Bluetooth radio of its own (all but
   the ESP32-S2 and the ESP32-P4); `bluetooth: false` leaves the BLE stack out
-  of the firmware, and `allow_wifi_change: false` inside the block keeps the
-  board on the YAML's Wi-Fi. See [With Bluetooth](#with-bluetooth).
+  of the firmware, and `allow_wifi_change: true` inside the block lets the app
+  change the board's Wi-Fi. See [With Bluetooth](#with-bluetooth).
 - **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device
   per battery, plus a parent CT002 device with manual-target / active /
   auto-target / distribution-weight controls and a force-rotation button). It

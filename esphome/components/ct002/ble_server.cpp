@@ -249,7 +249,8 @@ void BluetoothComponent::process_frame_(const ble::Frame &frame) {
       this->apply_wifi_(*result.wifi);
     } else {
       // The app only needs its network echoed back to finish setup.
-      ESP_LOGI(TAG, "App sent Wi-Fi '%s'; keeping the configured Wi-Fi (allow_wifi_change: false)", result.wifi->ssid.c_str());
+      ESP_LOGI(TAG, "App sent Wi-Fi '%s'; keeping the configured Wi-Fi (set allow_wifi_change: true to apply it)",
+               result.wifi->ssid.c_str());
     }
   }
 
