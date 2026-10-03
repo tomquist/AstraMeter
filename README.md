@@ -118,6 +118,8 @@ the full emulator and balancer end-to-end without any real devices.
   protocol used by Marstek storage systems.
 - **[Marstek MQTT & HTTP protocol](docs/marstek-mqtt-http.md)** — the cloud/app
   protocol.
+- **[Battery CT selection](docs/battery-ct-selection.md)** — how the Marstek
+  app tells a battery which CT to follow, per battery family.
 - **[Contributing](CONTRIBUTING.md)** — development workflow and the
   Python ↔ ESPHome parity rules.
 
