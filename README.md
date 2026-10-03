@@ -66,7 +66,9 @@ You can install and run AstraMeter in several ways:
 | **ESPHome on an ESP32** | A dedicated board, no server | [docs/installation/esphome.md](docs/installation/esphome.md) |
 
 Once AstraMeter is running, switch your Marstek battery to "Self-Adaptation"
-mode to turn on the powermeter functionality.
+mode to turn on the powermeter functionality. On an ESP32, first add the board
+in the Marstek app like a real CT, over Bluetooth: see
+[Add the board to the Marstek app](docs/installation/esphome.md#add-the-board-to-the-marstek-app).
 
 ## Supported power meter sources
 

@@ -533,8 +533,14 @@ function extrasCard(): HTMLElement {
   const marstekFields = isHa ? MARSTEK_FIELDS.filter((fl) => HA_ADDON_MARSTEK_FIELDS.has(fl.key)) : MARSTEK_FIELDS;
   const insightsFields = isHa ? MQTT_INSIGHTS_FIELDS.filter((fl) => HA_ADDON_INSIGHTS_FIELDS.has(fl.key)) : MQTT_INSIGHTS_FIELDS;
 
+  // On an ESP32 with Bluetooth the app adds the board itself, so the cloud
+  // login is only for boards without it.
+  const marstekHelp =
+    state.target === "esphome" && state.general.esphomeBluetooth
+      ? "Not needed with Bluetooth on: the Marstek app adds the board itself. Use this on a board without Bluetooth (ESP32-S2, ESP32-P4) to create the CT in your Marstek account instead. Credentials are only needed once."
+      : "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.";
   const marstekBody = [
-    fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: "Optional. Creates a fake CT in your Marstek account so the app can select it. Credentials are only needed once.", type: "checkbox" }, m, { structural: true }),
+    fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: marstekHelp, type: "checkbox" }, m, { structural: true }),
   ];
   if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, marstekFields.map((fl) => fieldControl(fl, m.fields, {}))));
 
@@ -614,7 +620,8 @@ function extrasCard(): HTMLElement {
               type: "checkbox",
             },
             state.general,
-            // Structural: the visibility switch below only exists while it is on.
+            // Structural: the Wi-Fi switch below and the cloud registration
+            // help depend on it.
             { structural: true },
           ),
           ...(state.general.esphomeBluetooth

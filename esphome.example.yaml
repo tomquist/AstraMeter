@@ -243,6 +243,8 @@ ct002:
   # and MQTT topics line up with the cloud-side record, and is persisted so
   # later boots skip the cloud flow. Uncomment together with the top-level
   # `http_request:` block above. Leave ct_mac blank when using this.
+  # Not needed on a board with Bluetooth, where the Marstek app adds the
+  # board itself; this is for an ESP32-S2/P4 or `bluetooth: false`.
   # marstek_registration:
   #   base_url: https://eu.hamedata.com   # https://us.hamedata.com for US
   #   mailbox: you@example.com
