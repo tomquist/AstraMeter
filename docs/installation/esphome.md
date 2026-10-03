@@ -160,8 +160,9 @@ Optional sub-blocks nest under the same `ct002:` key:
   Marstek app adds the board like a real meter and shows its live grid power.
   **On by default** on every ESP32 with a Bluetooth radio of its own (all but
   the ESP32-S2 and the ESP32-P4); `bluetooth: false` leaves the BLE stack out
-  of the firmware, and `allow_wifi_change: true` inside the block lets the app
-  change the board's Wi-Fi. See [With Bluetooth](#with-bluetooth).
+  of the firmware. Inside the block, `allow_wifi_change: true` lets the app
+  change the board's Wi-Fi, and `allow_direction_change: true` lets it reverse
+  a phase's measured power (CT002). See [With Bluetooth](#with-bluetooth).
 - **`mqtt_insights:`** — publishes Home Assistant Device Discovery (one device
   per battery, plus a parent CT002 device with manual-target / active /
   auto-target / distribution-weight controls and a force-rotation button). It

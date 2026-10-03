@@ -68,7 +68,10 @@ stack. Shared behavior lands on **both** sides in the same change;
   `host_ble_protocol_test.cpp`; `ble_server.cpp` compiles only in the ESP32
   matrix, so compile an ESP32 config after touching it. The data it reports
   (grid power, linked batteries, CT MAC) comes from `CT002Component`'s
-  existing accessors, so a change to those reaches it without a mirror.
+  existing accessors, so a change to those reaches it without a mirror. Its one
+  write into the shared component, `set_phase_reversal` (the app's per-phase
+  current-direction reversal, applied in `ct002.cpp`'s sensor-callback cache),
+  is ESPHome-only too: only Bluetooth can set it.
 
 ## What the firmware constrains
 

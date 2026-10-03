@@ -40,7 +40,12 @@ enum Command : uint8_t {
   CMD_REBOOT = 0x09,
   CMD_LINKED_BATTERIES = 0x12,
   CMD_ACTIVE_POWER = 0x16,
+  CMD_SET_DIRECTION = 0x17,
 };
+
+// CMD_SET_DIRECTION payload: which phases have their measured power reversed,
+// bit 0 = L1/A, bit 1 = L2/B, bit 2 = L3/C. The meter ignores larger values.
+inline constexpr uint8_t DIRECTION_BITS_MASK = 0x07;
 
 // Separator between SSID and password in a CMD_SET_WIFI payload.
 inline constexpr const char *WIFI_SEPARATOR = "<.,.>";
@@ -123,6 +128,12 @@ struct Snapshot {
   int rssi_dbm{0};   // only meaningful on Wi-Fi
   std::string ssid;  // network the device is connected to ("" on Ethernet)
   std::vector<BatteryRow> batteries;
+  // Phases currently reversed (CMD_SET_DIRECTION bits), reported in the
+  // CT002 status reply.
+  uint8_t direction_bits{0};
+  // Whether CMD_SET_DIRECTION may change them. When it may not, the request
+  // goes unanswered, so the app reports the change as failed.
+  bool direction_change_allowed{false};
   // Largest frame the link can carry in one notification (MTU - 3). Only
   // the variable-length battery list needs it; everything else is smaller
   // than the 23-byte minimum MTU allows.
@@ -144,6 +155,7 @@ struct Result {
   std::vector<uint8_t> reply;  // empty: send nothing
   Action action{Action::NONE};
   std::optional<WifiCredentials> wifi;  // set by CMD_SET_WIFI
+  std::optional<uint8_t> direction;     // set by CMD_SET_DIRECTION: new bits
 };
 
 // Payload builders, exposed for tests.

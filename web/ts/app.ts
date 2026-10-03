@@ -620,7 +620,7 @@ function extrasCard(): HTMLElement {
               type: "checkbox",
             },
             state.general,
-            // Structural: the Wi-Fi switch below and the cloud registration
+            // Structural: the two switches below and the cloud registration
             // help depend on it.
             { structural: true },
           ),
@@ -631,6 +631,16 @@ function extrasCard(): HTMLElement {
                     key: "esphomeBluetoothAllowWifiChange",
                     label: "Allow the app to change the Wi-Fi",
                     help: "Off by default: the board stays on the Wi-Fi in this file, and the app's Wi-Fi step still completes. Turn on to let the network you pick in the Marstek app replace it once the board connects. Any phone in Bluetooth range could then move the board to another network.",
+                    type: "checkbox",
+                  },
+                  state.general,
+                  {},
+                ),
+                fieldControl(
+                  {
+                    key: "esphomeBluetoothAllowDirectionChange",
+                    label: "Allow the app to reverse a phase",
+                    help: "Off by default. Turn on to let the Marstek app's Reverse Measurement Direction flip the sign of a phase's power (CT002). A wrong setting makes the batteries work against the grid, and any phone in Bluetooth range could change it. A sign that is wrong from the start is better fixed on the sensor.",
                     type: "checkbox",
                   },
                   state.general,

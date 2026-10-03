@@ -265,7 +265,7 @@ which app screens send the command, where known.
 | `0x14` | ✓ | – | `01` | frequency check | CT002 diagnostics |
 | `0x15` | ✓ | – | `01` | 3 × int16 + 1 byte | CT002 diagnostics (voltage phase angle) |
 | `0x16` | ✓ | – | `01` | 3 × int16 | CT002 diagnostics (active power) |
-| `0x17` | ✓ | – | direction bits | 1-byte status | CT002 current-direction reverse |
+| `0x17` | ✓ | – | direction bits | the bits in effect | CT002 current-direction reverse |
 | `0x18` | – | ✓ | – | – | unknown |
 | `0x27`–`0x29` | ✓ | ✓ | – | – | unknown |
 | `0x50`, `0x51` | ✓ | ✓ | sub-command byte + data | – | probably firmware-update / module control |
@@ -397,8 +397,11 @@ These back the CT002 diagnostics screens.
   labels this check "voltage phase angle".
 - `0x16` returns three signed 16-bit per-phase active powers.
 - `0x17` sets which phases have their current direction reversed. The payload is
-  one byte with bit 0 = A, bit 1 = B and bit 2 = C. The meter answers with a
-  one-byte status. The MQTT equivalent is `cd=5,dir=<bits>`.
+  one byte with bit 0 = A, bit 1 = B and bit 2 = C. The v124 firmware applies
+  a value of 0–7, saves it to flash, ignores anything larger, and answers with
+  one byte: the bits now in effect. The app takes any answer as success and
+  reads the current setting from byte 22 of the status reply. The MQTT
+  equivalent is `cd=5,dir=<bits>`.
 
 The exact field layouts of the `0x14` and `0x15` replies are unconfirmed.
 
@@ -495,19 +498,41 @@ Improv provisioning does:
 A board without Wi-Fi (Ethernet, or Wi-Fi disabled) logs the request and
 ignores it.
 
+### Reversing a phase from the app
+
+The CT002 settings in the app include "Reverse Measurement Direction", which
+flips the sign of the power measured on chosen phases (`0x17`). The board does
+the same: it negates each reversed phase's reading as it arrives, so the
+batteries, the status replies, the dashboard and MQTT all see the reversed
+value, and it keeps the setting across restarts. A wrong setting makes the
+batteries charge when they should discharge, and any phone in range could
+send it, so the board only accepts it when allowed:
+
+```yaml
+ct002:
+  bluetooth:
+    allow_direction_change: true
+```
+
+Without it, the board doesn't answer, and the app reports the change as
+failed; any reversal saved earlier stops applying. A sign error that is there
+from the start is better fixed on the sensor, for example with
+`filters: - multiply: -1`.
+
 ### What the board answers
 
 | Command | Answer |
 |---|---|
-| `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. |
+| `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. The CT002's byte 22 reports the reversed phases. |
 | `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
 | `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`, and the board tries the network only with `allow_wifi_change: true` (see [Wi-Fi from the app](#wi-fi-from-the-app)) |
 | `0x08` read SSID | The network the app sent during the current connection, otherwise the one the board is connected to |
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
 | `0x16` active power (CT002) | The three phase powers |
+| `0x17` direction (CT002) | With `allow_direction_change: true`: applies bits 0–7 and answers with the bits in effect (see [above](#reversing-a-phase-from-the-app)); otherwise no answer |
 
-Everything else, such as calibration, current-direction reversal, the
+Everything else, such as calibration, the
 voltage, frequency and phase-angle checks, CT003 meter configuration and
 firmware updates, gets no reply. The app reports those
 buttons as failed. They have nothing to act on in an emulator, whose polarity

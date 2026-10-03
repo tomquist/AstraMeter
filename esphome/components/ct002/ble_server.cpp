@@ -43,6 +43,8 @@ static constexpr uint16_t AUX_UUID = 0xFF06;
 // app's request (500 on Android; iOS picks its own) goes through as is.
 static constexpr uint16_t DEFAULT_MTU = 23;
 static constexpr uint16_t ATT_OVERHEAD = 3;
+// Preferences slot for the phase reversal set from the app.
+static constexpr uint32_t DIRECTION_PREF_KEY = 0xC7002D17;
 // Upper bound on queued frames, so a misbehaving client cannot grow it.
 static constexpr size_t MAX_PENDING = 8;
 // How long a network from the app gets to connect before the board goes back
@@ -144,6 +146,17 @@ void BluetoothComponent::setup() {
   }
   if (this->address_from_registration_) {
     ESP_LOGI(TAG, "Bluetooth address taken from the Marstek registration: %s", this->boot_id_.c_str());
+  }
+  // Restore the reversal the app set before the last restart. Only while the
+  // app may change it: turning the option off returns every phase to the
+  // direction its sensor reports.
+  if (this->direction_changes_allowed_) {
+    this->direction_pref_ = global_preferences->make_preference<uint8_t>(DIRECTION_PREF_KEY, true);
+    uint8_t bits = 0;
+    if (this->direction_pref_.load(&bits) && bits <= ble::DIRECTION_BITS_MASK && bits != 0) {
+      this->ct002_->set_phase_reversal(bits);
+      ESP_LOGI(TAG, "Phase reversal from the app restored: 0x%02X", bits);
+    }
   }
   if (this->bt_address_rejected_) {
     ESP_LOGW(TAG,
@@ -254,6 +267,18 @@ void BluetoothComponent::process_frame_(const ble::Frame &frame) {
     }
   }
 
+  if (result.direction.has_value()) {
+    // Only produced when allowed (see ble::Responder).
+    this->ct002_->set_phase_reversal(*result.direction);
+    if (!this->direction_pref_.save(&*result.direction)) ESP_LOGW(TAG, "Could not save the phase reversal");
+    ESP_LOGI(TAG, "App set the phase reversal to 0x%02X (L1 %s, L2 %s, L3 %s)", *result.direction,
+             (*result.direction & 1) ? "reversed" : "normal", (*result.direction & 2) ? "reversed" : "normal",
+             (*result.direction & 4) ? "reversed" : "normal");
+  } else if (frame.cmd == ble::CMD_SET_DIRECTION && this->model_ == ble::Model::CT002 &&
+             !this->direction_changes_allowed_) {
+    ESP_LOGI(TAG, "App asked to reverse phase directions; refused (set allow_direction_change: true to allow it)");
+  }
+
   if (!result.reply.empty()) {
     if (result.reply.size() + ATT_OVERHEAD > this->mtu_) {
       ESP_LOGW(TAG, "Reply to 0x%02X is %u bytes but the MTU is %u; the app may not receive it", frame.cmd,
@@ -340,6 +365,8 @@ ble::Snapshot BluetoothComponent::snapshot_() const {
   s.ct_type = this->ct002_->ct_type();
   s.device_id = this->device_id_();
   s.max_frame_len = this->mtu_ > ATT_OVERHEAD ? this->mtu_ - ATT_OVERHEAD : 0;
+  s.direction_bits = this->ct002_->phase_reversal();
+  s.direction_change_allowed = this->direction_changes_allowed_;
   const std::vector<float> watts = this->ct002_->latest_grid_power();
   for (size_t i = 0; i < s.phase_w.size() && i < watts.size(); ++i) s.phase_w[i] = watts[i];
 #ifdef USE_NETWORK
@@ -372,9 +399,11 @@ void BluetoothComponent::dump_config() {
                 "  Bluetooth address: %s\n"
                 "  Advertising: %s\n"
                 "  Allow Wi-Fi change from the app: %s\n"
+                "  Allow direction change from the app: %s (reversed phases 0x%02X)\n"
                 "  Free internal heap: %u bytes",
                 this->name_, this->device_id_().c_str(), this->bt_address_.c_str(),
                 YESNO(this->advertising_started_), YESNO(this->wifi_changes_allowed_),
+                YESNO(this->direction_changes_allowed_), this->ct002_->phase_reversal(),
                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
 }
 

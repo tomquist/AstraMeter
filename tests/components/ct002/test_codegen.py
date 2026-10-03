@@ -986,3 +986,15 @@ def test_bluetooth_keeps_the_yaml_wifi_unless_allowed(esp32_core: Any) -> None:
     ):
         config = ct002_component.BLUETOOTH_SCHEMA(raw)
         assert config[ct002_component.CONF_ALLOW_WIFI_CHANGE] is expected, raw
+
+
+def test_bluetooth_keeps_phase_directions_unless_allowed(esp32_core: Any) -> None:
+    # Reversing a phase changes what the batteries do and needs no pairing,
+    # so the app may only do it once the YAML says so.
+    for raw, expected in (
+        (None, False),
+        ({}, False),
+        ({"allow_direction_change": True}, True),
+    ):
+        config = ct002_component.BLUETOOTH_SCHEMA(raw)
+        assert config[ct002_component.CONF_ALLOW_DIRECTION_CHANGE] is expected, raw
