@@ -41,6 +41,9 @@ export interface State {
     /// ESPHome only. With Bluetooth on, true applies the Wi-Fi the app sends
     /// (`bluetooth: allow_wifi_change: true`); off by default, like the firmware.
     esphomeBluetoothAllowWifiChange: boolean;
+    /// ESPHome only. With Bluetooth on, true lets the app reverse a phase's
+    /// measured power (`bluetooth: allow_direction_change: true`); off by default.
+    esphomeBluetoothAllowDirectionChange: boolean;
     dashboardAllowWrite: boolean;
     dashboardDirectAccess: boolean;
     /// Comma-separated extra host names the web port answers under. Empty for
@@ -86,6 +89,7 @@ export function defaultState(): State {
       esphomeControls: false,
       esphomeBluetooth: true,
       esphomeBluetoothAllowWifiChange: false,
+      esphomeBluetoothAllowDirectionChange: false,
       // On by default, matching the service and the add-on.
       dashboardAllowWrite: true,
       // Unauthenticated access to the add-on's port. Off unless asked for.
@@ -200,6 +204,10 @@ export function migrate(s: any): State {
         esphomeControls: asBool(sg.esphomeControls, dg.esphomeControls),
         esphomeBluetooth: asBool(sg.esphomeBluetooth, dg.esphomeBluetooth),
         esphomeBluetoothAllowWifiChange: asBool(sg.esphomeBluetoothAllowWifiChange, dg.esphomeBluetoothAllowWifiChange),
+        esphomeBluetoothAllowDirectionChange: asBool(
+          sg.esphomeBluetoothAllowDirectionChange,
+          dg.esphomeBluetoothAllowDirectionChange,
+        ),
         dashboardAllowWrite: asBool(sg.dashboardAllowWrite, dg.dashboardAllowWrite),
         dashboardDirectAccess: asBool(sg.dashboardDirectAccess, dg.dashboardDirectAccess),
         dashboardAllowedHosts: asStr(sg.dashboardAllowedHosts, dg.dashboardAllowedHosts),

@@ -862,6 +862,7 @@ def _resolve_dashboard(config):
 
 CONF_BLUETOOTH = "bluetooth"
 CONF_ALLOW_WIFI_CHANGE = "allow_wifi_change"
+CONF_ALLOW_DIRECTION_CHANGE = "allow_direction_change"
 
 
 # No radio of its own: Bluetooth only through a companion chip
@@ -905,6 +906,10 @@ BLUETOOTH_SCHEMA = cv.All(
             # stays on the YAML's networks, so a phone in Bluetooth range
             # can't move it to another network. true applies what it sends.
             cv.Optional(CONF_ALLOW_WIFI_CHANGE, default=False): cv.boolean,
+            # Off by default: reversing a phase's measured power changes what
+            # the batteries do, and any phone in range may ask for it. true
+            # lets the app's "Reverse Measurement Direction" apply (CT002).
+            cv.Optional(CONF_ALLOW_DIRECTION_CHANGE, default=False): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on([PLATFORM_ESP32]),
@@ -1394,5 +1399,6 @@ async def _to_code_bluetooth(config, ct002_var):
         registration = await cg.get_variable(config[CONF_MARSTEK_REGISTRATION][CONF_ID])
         cg.add(var.set_registration(registration))
     cg.add(var.set_allow_wifi_change(sub[CONF_ALLOW_WIFI_CHANGE]))
+    cg.add(var.set_allow_direction_change(sub[CONF_ALLOW_DIRECTION_CHANGE]))
     esp32_ble.register_gatts_event_handler(ble, var)
     cg.add(var.configure_identity())

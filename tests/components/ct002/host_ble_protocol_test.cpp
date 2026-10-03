@@ -303,6 +303,56 @@ TEST(BleDiagnostics, Ct003HasNoPhaseDiagnostics) {
   EXPECT_TRUE(responder.handle(request(CMD_ACTIVE_POWER, {0x01}), ct003_snapshot()).reply.empty());
 }
 
+// ── Current-direction reversal (0x17) ───────────────────────────────────
+
+static Snapshot direction_snapshot(uint8_t bits, bool allowed) {
+  Snapshot s = ct002_snapshot();
+  s.direction_bits = bits;
+  s.direction_change_allowed = allowed;
+  return s;
+}
+
+TEST(BleDirection, AppliesAndEchoesTheNewBitsWhenAllowed) {
+  Responder responder;
+  const auto result = responder.handle(request(CMD_SET_DIRECTION, {0x05}), direction_snapshot(0, true));
+  ASSERT_TRUE(result.direction.has_value());
+  EXPECT_EQ(*result.direction, 0x05);
+  expect_valid_reply(result.reply, CMD_SET_DIRECTION);
+  ASSERT_EQ(result.reply.size(), 6u);
+  EXPECT_EQ(result.reply[4], 0x05);
+}
+
+TEST(BleDirection, OutOfRangeValueKeepsAndReportsTheCurrentBits) {
+  // Like the meter: values above 7 are ignored, the answer is what is in effect.
+  Responder responder;
+  const auto result = responder.handle(request(CMD_SET_DIRECTION, {0x08}), direction_snapshot(0x02, true));
+  EXPECT_FALSE(result.direction.has_value());
+  expect_valid_reply(result.reply, CMD_SET_DIRECTION);
+  EXPECT_EQ(result.reply[4], 0x02);
+}
+
+TEST(BleDirection, RefusedWithoutPermissionGetsNoReply) {
+  // The app counts any answer as success, so a refusal must stay silent.
+  Responder responder;
+  const auto result = responder.handle(request(CMD_SET_DIRECTION, {0x01}), direction_snapshot(0, false));
+  EXPECT_FALSE(result.direction.has_value());
+  EXPECT_TRUE(result.reply.empty());
+}
+
+TEST(BleDirection, Ct003AndEmptyPayloadGetNoReply) {
+  Responder responder;
+  Snapshot ct003 = ct003_snapshot();
+  ct003.direction_change_allowed = true;
+  EXPECT_TRUE(responder.handle(request(CMD_SET_DIRECTION, {0x01}), ct003).reply.empty());
+  EXPECT_TRUE(responder.handle(request(CMD_SET_DIRECTION, {}), direction_snapshot(0, true)).reply.empty());
+}
+
+TEST(BleDirection, Ct002StatusReportsTheReversedPhases) {
+  const auto p = status_payload(direction_snapshot(0x06, false));
+  ASSERT_EQ(p.size(), 19u);
+  EXPECT_EQ(p[18], 0x06);  // frame byte 22
+}
+
 TEST(BleReset, ResetAndRebootRestartWithoutReplying) {
   Responder responder;
   responder.handle(request(CMD_SET_WIFI, text("lab<.,.>pw")), ct002_snapshot());

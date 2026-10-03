@@ -155,7 +155,7 @@ std::vector<uint8_t> status_payload(const Snapshot &s) {
   p[15] = wifi;
   p[16] = wifi;  // second connection state, see the CT003 branch
   p[17] = rssi_byte(s);
-  p[18] = 0;  // no phase has its current direction reversed
+  p[18] = s.direction_bits & DIRECTION_BITS_MASK;  // phases with reversed direction
   return p;
 }
 
@@ -235,6 +235,19 @@ Result Responder::handle(const Frame &frame, const Snapshot &s) {
       put_le16(p, 2, clamp_round<int16_t>(s.phase_w[1]));
       put_le16(p, 4, clamp_round<int16_t>(s.phase_w[2]));
       result.reply = build_frame(CMD_ACTIVE_POWER, p);
+      break;
+    }
+    case CMD_SET_DIRECTION: {
+      // CT002 only. The meter applies a value of 0-7, ignores anything else,
+      // and answers with the bits now in effect; the app takes any answer as
+      // success, so a refused change gets no answer at all.
+      if (s.model != Model::CT002 || !s.direction_change_allowed || frame.payload.empty()) break;
+      uint8_t bits = s.direction_bits & DIRECTION_BITS_MASK;
+      if (frame.payload[0] <= DIRECTION_BITS_MASK) {
+        bits = frame.payload[0];
+        result.direction = bits;
+      }
+      result.reply = build_frame(CMD_SET_DIRECTION, {bits});
       break;
     }
     default:

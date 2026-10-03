@@ -27,6 +27,7 @@
 #include "esphome/components/esp32_ble_server/ble_server.h"
 #include "esphome/components/esp32_ble_server/ble_service.h"
 #include "esphome/core/component.h"
+#include "esphome/core/preferences.h"
 
 #include "ble_protocol.h"
 #include "ct002.h"
@@ -52,6 +53,10 @@ class BluetoothComponent : public Component {
   // true: apply the Wi-Fi the app sends. Off by default, so a phone in range
   // can't move the board to another network; the app's step still completes.
   void set_allow_wifi_change(bool allow) { this->wifi_changes_allowed_ = allow; }
+  // true: let the app reverse phases' measured power (command 0x17). Off by
+  // default: the reversal changes what the batteries do, and any phone in
+  // range may send it.
+  void set_allow_direction_change(bool allow) { this->direction_changes_allowed_ = allow; }
 
   // Settle the device ID and hand the advertised name to esp32_ble. Called
   // from the generated setup code, after the CT002 configuration is applied
@@ -109,6 +114,9 @@ class BluetoothComponent : public Component {
   std::deque<ble::Frame> pending_;
   uint16_t mtu_{23};
   bool wifi_changes_allowed_{false};
+  bool direction_changes_allowed_{false};
+  // The reversal the app last set, kept across restarts like on the meter.
+  ESPPreferenceObject direction_pref_;
   bool advertising_started_{false};
   // A Wi-Fi network from the app being tried; saved only once connected.
   bool wifi_attempt_{false};

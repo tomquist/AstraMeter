@@ -723,8 +723,14 @@ export function generateEsphome(state: State): string {
   // only switching it off is worth writing down.
   if (state.general && state.general.esphomeBluetooth === false) {
     ctLines.push(`${IND}bluetooth: false`);
-  } else if (state.general && state.general.esphomeBluetoothAllowWifiChange === true) {
-    ctLines.push(`${IND}bluetooth:\n${IND}${IND}allow_wifi_change: true`);
+  } else if (state.general) {
+    // Both switches are off by default, so only "on" is written down.
+    const ble: string[] = [];
+    if (state.general.esphomeBluetoothAllowWifiChange === true) ble.push(`${IND}${IND}allow_wifi_change: true`);
+    if (state.general.esphomeBluetoothAllowDirectionChange === true) {
+      ble.push(`${IND}${IND}allow_direction_change: true`);
+    }
+    if (ble.length) ctLines.push([`${IND}bluetooth:`, ...ble].join("\n"));
   }
 
   if (wantInsights) {

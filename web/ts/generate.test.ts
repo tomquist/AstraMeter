@@ -812,6 +812,36 @@ const eyNoBleAppWifi = generateEsphome({
 });
 lacks(eyNoBleAppWifi, "allow_wifi_change", "esp/bluetooth: no Wi-Fi option once Bluetooth is off");
 
+const eyBleBoth = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: {
+    deviceTypes: ["ct002"],
+    esphomeBluetooth: true,
+    esphomeBluetoothAllowWifiChange: true,
+    esphomeBluetoothAllowDirectionChange: true,
+  },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+has(
+  eyBleBoth,
+  "  bluetooth:\n    allow_wifi_change: true\n    allow_direction_change: true",
+  "esp/bluetooth: both opt-ins share one block",
+);
+
+const eyBleDirection = generateEsphome({
+  target: "esphome",
+  esphome: { name: "my-ct002", ctType: "HME-4", board: "esp32dev" },
+  general: { deviceTypes: ["ct002"], esphomeBluetooth: true, esphomeBluetoothAllowDirectionChange: true },
+  meters: [
+    { type: "homeassistant", phases: 1, fields: { CURRENT_POWER_ENTITY: "sensor.p" }, tuning: {} },
+  ],
+});
+has(eyBleDirection, "  bluetooth:\n    allow_direction_change: true", "esp/bluetooth: phase reversal alone");
+lacks(eyBleDirection, "allow_wifi_change", "esp/bluetooth: Wi-Fi stays unwritten when off");
+
 // A state with no general block at all is "nothing said", not "off" — the
 // firmware default stands.
 const eyDashUnsaid = generateEsphome({

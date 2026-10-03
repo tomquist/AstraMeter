@@ -148,6 +148,16 @@ void CT002Component::enable_hampel(size_t window, float n_sigma, float min_thres
 void CT002Component::enable_smoothing(float alpha, float max_step) {
   this->smoothing_cfg_ = SmoothingCfg{alpha, max_step};
 }
+void CT002Component::set_phase_reversal(uint8_t bits) {
+  bits &= 0x07;
+  const uint8_t changed = bits ^ this->phase_reversal_;
+  this->phase_reversal_ = bits;
+  // Flip the cached readings too, so the change takes effect now rather than
+  // with each sensor's next update.
+  for (size_t i = 0; i < this->raw_values_.size(); ++i) {
+    if ((changed >> i) & 1) this->raw_values_[i] = -this->raw_values_[i];
+  }
+}
 void CT002Component::enable_deadband(float deadband) { this->deadband_threshold_ = deadband; }
 void CT002Component::enable_pid(float kp, float ki, float kd, float output_max, PidMode mode) {
   this->pid_cfg_ = PidCfg{kp, ki, kd, output_max, mode};
@@ -166,6 +176,7 @@ void CT002Component::setup() {
     // Convert a declared kW/MW/mW input to watts (issue #572); 1.0 when the
     // sensor declares W or nothing.
     v *= this->unit_scale_[i];
+    if ((this->phase_reversal_ >> i) & 1) v = -v;
     if (!this->unit_declared_[i] && !this->kw_suspect_warned_[i]) {
       if (v != 0.0f && std::fabs(v) < 1.0f) {
         if (++this->kw_suspect_count_[i] >= KW_SUSPECT_READINGS) {

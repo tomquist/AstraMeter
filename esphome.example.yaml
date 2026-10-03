@@ -194,8 +194,12 @@ ct002:
   # picked in the app replace them once the board connects to it; any phone
   # in Bluetooth range could then change it, so it is off by default.
   # bluetooth: false
+  # `allow_direction_change: true` lets the app's "Reverse Measurement
+  # Direction" flip a phase's measured power (CT002); also off by default,
+  # since a wrong setting makes the batteries work against the grid.
   # bluetooth:
   #   allow_wifi_change: true
+  #   allow_direction_change: true
 
   # ── Optional sub-block: dashboard ────────────────────────────────────
   # AstraMeter's live status dashboard, served from this board — the same
