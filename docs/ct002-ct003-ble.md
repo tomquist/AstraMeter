@@ -242,7 +242,8 @@ For the add flow to succeed, a BLE-provisioned AstraMeter would have to:
 
 The app's own Wi-Fi details for the meter are only used to provision it, so an
 emulator that keeps its own network still passes. AstraMeter's ESPHome build
-applies them; see [Wi-Fi from the app](#wi-fi-from-the-app).
+keeps its own by default and applies them only when allowed; see
+[Wi-Fi from the app](#wi-fi-from-the-app).
 
 ## Command reference
 
@@ -462,8 +463,19 @@ address behind; set `ct_mac` in the YAML then.
 
 ### Wi-Fi from the app
 
-The board tries the network the app sends the way ESPHome's Improv
-provisioning does:
+By default the board stays on the networks in its YAML whatever the app sends.
+The app's Wi-Fi step still completes, because the board echoes the network
+name back as the app expects. A phone in Bluetooth range needs no pairing, so
+letting it change the Wi-Fi is opt-in:
+
+```yaml
+ct002:
+  bluetooth:
+    allow_wifi_change: true
+```
+
+With that set, the board tries the network the app sends the way ESPHome's
+Improv provisioning does:
 
 - Connected within 30 seconds: the board saves the network, and it takes
   precedence over the networks in the YAML from then on. Flashing a changed
@@ -475,17 +487,7 @@ provisioning does:
   password in the app can't take it offline.
 
 A board without Wi-Fi (Ethernet, or Wi-Fi disabled) logs the request and
-ignores it. To keep the board on the networks in its YAML whatever the app
-sends, set:
-
-```yaml
-ct002:
-  bluetooth:
-    allow_wifi_change: false
-```
-
-The app's Wi-Fi step still completes, because the board echoes the network
-name back as the app expects.
+ignores it.
 
 ### What the board answers
 
@@ -493,7 +495,7 @@ name back as the app expects.
 |---|---|
 | `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. |
 | `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
-| `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`, and the board tries the network unless `allow_wifi_change: false` (see [Wi-Fi from the app](#wi-fi-from-the-app)) |
+| `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`, and the board tries the network only with `allow_wifi_change: true` (see [Wi-Fi from the app](#wi-fi-from-the-app)) |
 | `0x08` read SSID | The network the app sent during the current connection, otherwise the one the board is connected to |
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
@@ -514,9 +516,10 @@ accepted as is.
   other components that use it, such as `esp32_improv`, share the GATT server
   and the advertised name.
 - **Open access.** Like a real meter, the board accepts any phone in range
-  without pairing: anyone nearby can read its live data, restart it with
-  `0x06`/`0x09` and move it to another Wi-Fi network.
-  `allow_wifi_change: false` takes the last one away; `bluetooth: false` removes the stack altogether.
+  without pairing: anyone nearby can read its live data and restart it with
+  `0x06`/`0x09`. Moving it to another Wi-Fi network takes
+  `allow_wifi_change: true`, which is off by default; `bluetooth: false`
+  removes the stack altogether.
 - **Wi-Fi power saving.** ESP-IDF needs Wi-Fi modem sleep while Bluetooth runs.
   ESPHome's ESP32 default (`power_save_mode: light`) is fine; a config that
   sets `power_save_mode: none` should turn Bluetooth off.

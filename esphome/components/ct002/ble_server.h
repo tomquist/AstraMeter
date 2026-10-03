@@ -49,7 +49,8 @@ class BluetoothComponent : public Component {
   void set_ble(esp32_ble::ESP32BLE *ble) { this->ble_ = ble; }
   // The registration whose saved MAC becomes the ID and Bluetooth address.
   void set_registration(marstek_registration::MarstekRegistrationComponent *r) { this->registration_ = r; }
-  // false: answer the app's Wi-Fi step but stay on the configured network.
+  // true: apply the Wi-Fi the app sends. Off by default, so a phone in range
+  // can't move the board to another network; the app's step still completes.
   void set_allow_wifi_change(bool allow) { this->wifi_changes_allowed_ = allow; }
 
   // Settle the device ID and hand the advertised name to esp32_ble. Called
@@ -107,7 +108,7 @@ class BluetoothComponent : public Component {
   // are queued there and answered from this component's loop().
   std::deque<ble::Frame> pending_;
   uint16_t mtu_{23};
-  bool wifi_changes_allowed_{true};
+  bool wifi_changes_allowed_{false};
   bool advertising_started_{false};
   // A Wi-Fi network from the app being tried; saved only once connected.
   bool wifi_attempt_{false};

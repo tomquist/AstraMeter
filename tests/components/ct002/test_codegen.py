@@ -976,13 +976,13 @@ def test_auto_load_pulls_the_ble_stack_only_for_a_resolved_bluetooth() -> None:
     assert "esp32_ble" not in loads and "esp32_ble_server" not in loads
 
 
-def test_bluetooth_applies_wifi_unless_told_not_to(esp32_core: Any) -> None:
-    # The bare key and the block form both validate; `allow_wifi_change: false`
-    # keeps the board on its YAML networks whatever the app sends.
+def test_bluetooth_keeps_the_yaml_wifi_unless_allowed(esp32_core: Any) -> None:
+    # The bare key and the block form both validate. Off unless asked for, so
+    # a phone in Bluetooth range can't move the board to another network.
     for raw, expected in (
-        (None, True),
-        ({}, True),
-        ({"allow_wifi_change": False}, False),
+        (None, False),
+        ({}, False),
+        ({"allow_wifi_change": True}, True),
     ):
         config = ct002_component.BLUETOOTH_SCHEMA(raw)
         assert config[ct002_component.CONF_ALLOW_WIFI_CHANGE] is expected, raw
