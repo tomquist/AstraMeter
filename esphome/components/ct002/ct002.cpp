@@ -152,11 +152,16 @@ void CT002Component::set_phase_reversal(uint8_t bits) {
   bits &= 0x07;
   const uint8_t changed = bits ^ this->phase_reversal_;
   this->phase_reversal_ = bits;
+  if (changed == 0) return;
   // Flip the cached readings too, so the change takes effect now rather than
   // with each sensor's next update.
   for (size_t i = 0; i < this->raw_values_.size(); ++i) {
     if ((changed >> i) & 1) this->raw_values_[i] = -this->raw_values_[i];
   }
+  // The filter history still holds the old sign: Hampel would reject the
+  // flipped readings as outliers and smoothing would blend across the jump.
+  // Same reset the balancer uses (PID keeps its integral, as on that path).
+  for (auto &p : this->pipeline_) p->reset();
 }
 void CT002Component::enable_deadband(float deadband) { this->deadband_threshold_ = deadband; }
 void CT002Component::enable_pid(float kp, float ki, float kd, float output_max, PidMode mode) {
