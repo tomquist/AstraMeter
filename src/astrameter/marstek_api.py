@@ -86,6 +86,13 @@ def _desired_name(device_type: str) -> str:
     return "AstraMeter CT002" if device_type == "ct002" else "AstraMeter CT003"
 
 
+def _desired_bluetooth_name(device_type: str, devid_mac: str) -> str:
+    # Real meters advertise as MST-TPM_ (CT002) or MST-SMR_ (CT003); the app
+    # derives the model it shows from this prefix.
+    prefix = "MST-TPM_" if device_type == "ct002" else "MST-SMR_"
+    return f"{prefix}{devid_mac[-4:]}"
+
+
 def _is_managed_prefix(value: str) -> bool:
     return isinstance(value, str) and value.lower().startswith(MANAGED_MAC_PREFIX)
 
@@ -192,7 +199,6 @@ def _add_device(
 ) -> Any:
     add_url = f"{cfg.base_url.rstrip('/')}/app/Solar/v2_add_device.php"
     type_value = _desired_type(device_type)
-    suffix = devid_mac[-4:]
     payload = {
         "name": _desired_name(device_type),
         "mailbox": cfg.mailbox,
@@ -201,7 +207,7 @@ def _add_device(
         "type": type_value,
         "token": token,
         "access": "1",
-        "bluetooth_name": f"MST-SMR_{suffix}",
+        "bluetooth_name": _desired_bluetooth_name(device_type, devid_mac),
         "position": "{}",
         "timeZone": cfg.timezone,
         "version": "121",
