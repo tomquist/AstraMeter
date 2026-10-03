@@ -90,12 +90,13 @@ void MqttInsightsComponent::loop() {
   }
   this->was_connected_ = connected;
 
-  // Lazily subscribe to Marstek App topics once the MAC is known. Only
-  // poll while not yet subscribed (marstek_mac_ empty) so there's no
-  // steady-state per-loop cost; the MAC is applied once at boot by
-  // marstek_registration and cleared here only on disconnect, so a
-  // re-subscribe is driven by the reconnect path, not by polling.
-  if (connected && this->marstek_mqtt_enabled_ && this->marstek_mac_.empty()) {
+  // Lazily subscribe to Marstek App topics once the MAC is known, and again
+  // when it changes: without ct_mac, a Bluetooth board starts out on its own
+  // ID, which a first registration then replaces. The check compares the raw
+  // strings, so the steady state costs no allocation.
+  if (connected && this->marstek_mqtt_enabled_ &&
+      (this->marstek_mac_.empty() || this->ct002_->app_mac() != this->marstek_mac_source_ ||
+       this->ct002_->ct_type() != this->marstek_ct_type_)) {
     this->ensure_marstek_subscription_();
   }
 }
@@ -134,6 +135,7 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
+  this->marstek_mac_source_.clear();
   this->marstek_ct_type_.clear();
 }
 
@@ -170,7 +172,10 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
   const std::string ct = this->ct002_->ct_type();
   if (mac.empty()) return;  // not known yet — try again next loop
   // marstek_mac_/marstek_ct_type_ hold the CURRENTLY-subscribed identity.
-  if (mac == this->marstek_mac_ && ct == this->marstek_ct_type_) return;  // already current
+  if (mac == this->marstek_mac_ && ct == this->marstek_ct_type_) {  // already current
+    this->marstek_mac_source_ = this->ct002_->app_mac();
+    return;
+  }
   // Identity changed (or first subscribe): drop the stale subscription.
   if (!this->marstek_mac_.empty()) {
     for (const auto &t : app_topics_for(this->marstek_ct_type_, this->marstek_mac_))
@@ -183,6 +188,7 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
         0);
   }
   this->marstek_mac_ = mac;
+  this->marstek_mac_source_ = this->ct002_->app_mac();
   this->marstek_ct_type_ = ct;
   ESP_LOGI(TAG, "Marstek MQTT: subscribed App topics for %s/%s", ct.c_str(), mac.c_str());
 }

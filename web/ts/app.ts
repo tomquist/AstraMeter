@@ -60,7 +60,8 @@ function el(tag: string, props: ElProps = {}, children: ElChild | ElChild[] = []
 // stays off unless asked for. Applied only when one of its inputs changes, so
 // a box the user set by hand stays as they left it.
 function registrationByDefault(): boolean {
-  const hasCt = hasCtType(state.general.deviceTypes);
+  // An ESPHome build always emulates a CT; the device types are the Python target's.
+  const hasCt = state.target === "esphome" || hasCtType(state.general.deviceTypes);
   return hasCt && !(state.target === "esphome" && state.general.esphomeBluetooth);
 }
 
