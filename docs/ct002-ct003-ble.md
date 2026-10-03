@@ -421,20 +421,11 @@ reach too.
 
 ### Adding the board with the Marstek app
 
-1. Flash the board and let it join your Wi-Fi.
-2. In the Marstek app, tap **+** and wait for the scan. The board shows up as
-   `MST-TPM_xxxx` (`ct_type: HME-4`) or `MST-SMR_xxxx` (`ct_type: HME-3`).
-3. Pick it, give it a name, and go through the Wi-Fi step. If the board is
-   already on the network you pick, nothing changes. Otherwise it switches to
-   that network, as a real meter does, unless `allow_wifi_change: false` is
-   set; see [Wi-Fi from the app](#wi-fi-from-the-app).
-4. The firmware check reports the latest version; finish the setup.
-5. In the battery's settings, switch to automatic mode and select the new CT,
-   as with a real meter.
-
-The app then shows the CT's live grid power over Bluetooth while the phone is
-connected to it. The device stays "offline" in the app's cloud view, because
-the board doesn't connect to Marstek's cloud.
+The steps, and the alternatives for boards without Bluetooth, are in the
+[ESPHome installation guide](installation/esphome.md#add-the-board-to-the-marstek-app).
+In short: tap **+** in the app, pick the board, go through the Wi-Fi step and
+select the new CT in the battery's settings. The app then shows the CT's live
+grid power over Bluetooth while the phone is near the board.
 
 ### Identity
 

@@ -35,7 +35,10 @@ then the log.
 - The battery only sends requests after you select a meter for it and set it
   to Automatic (Self-Adaptation) mode.
 - For CT002/CT003, the Marstek app only lists CTs that are registered to your
-  account. If you don't own a real CT, AstraMeter can register one (see
+  account. On an ESP32 with Bluetooth, add the board with **+** in the Marstek
+  app, like a real CT (see
+  [Add the board to the Marstek app](installation/esphome.md#add-the-board-to-the-marstek-app)).
+  Otherwise, if you don't own a real CT, AstraMeter can register one (see
   [Do I need a Marstek account?](#do-i-need-a-marstek-account-and-how-does-astrameter-ct002-get-into-the-app)).
   Refresh the CT list or log out and back in, select `AstraMeter CT002` or
   `AstraMeter CT003`, and set the battery to automatic. The CT list shows the
@@ -90,6 +93,35 @@ then the log.
    `echo -n '{"id":1,"method":"EM.GetStatus","params":{"id":0}}' | nc -u -w2 <AstraMeter IP> 1010`.
    If you get a reply, AstraMeter works and the problem is between the battery
    and the host.
+
+### The Marstek app doesn't find my ESP32 when I tap **+**.
+
+A: Check these in order:
+
+- **The board advertises.** Its log shows `Advertising as MST-TPM_xxxx` (or
+  `MST-SMR_xxxx`) a few seconds after boot. No such line: the build has no
+  Bluetooth (an ESP32-S2 or ESP32-P4, or `bluetooth: false`).
+- **The phone can scan.** Bluetooth and location are on, and the Marstek app
+  has the Nearby devices (Android 12+) or location permission. A BLE scanner
+  such as nRF Connect should list the board under the same name.
+- **The phone is close.** Stay within a few metres while the app scans.
+- **Another phone is connected.** The board serves one connection at a time;
+  close the app on other phones.
+
+### The app added my ESP32 but can't connect to it later.
+
+A: The app reconnects to a CT by its MAC, so the board's Bluetooth address has
+to stay the CT's MAC:
+
+- **`ct_mac` changed.** The app keeps the MAC from when you added the board.
+  Changing `ct_mac` afterwards makes it a different CT; add it again, or put the
+  old value back.
+- **`ct_mac` isn't a unicast MAC.** The board then warns at boot that the app
+  won't be able to reconnect. Use a MAC whose first byte is even, such as
+  AstraMeter's own `02b250…` MACs.
+- **Cloud registration just ran.** On the first registration, the board
+  restarts once to take the registered MAC as its address. Wait for that
+  restart, then open the CT again.
 
 ### The emulator isn't visible in the Shelly app or network scanners. Is this normal?
 
