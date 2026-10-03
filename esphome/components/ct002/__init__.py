@@ -1389,6 +1389,9 @@ async def _to_code_bluetooth(config, ct002_var):
     cg.add(var.set_ct002(ct002_var))
     ble = await cg.get_variable(sub[esp32_ble.CONF_BLE_ID])
     cg.add(var.set_ble(ble))
+    if CONF_MARSTEK_REGISTRATION in config:
+        registration = await cg.get_variable(config[CONF_MARSTEK_REGISTRATION][CONF_ID])
+        cg.add(var.set_registration(registration))
     cg.add(var.set_allow_wifi_change(sub[CONF_ALLOW_WIFI_CHANGE]))
     esp32_ble.register_gatts_event_handler(ble, var)
     cg.add(var.configure_identity())

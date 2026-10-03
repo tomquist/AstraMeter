@@ -95,6 +95,12 @@ class MarstekRegistrationComponent : public Component {
   void set_retry_interval_ms(uint32_t v) { this->retry_interval_ms_ = v; }
   void set_force_reregister(bool v) { this->force_reregister_ = v; }
 
+  // The MAC an earlier boot registered and saved, or "" when there is none
+  // yet or force_reregister is set. Safe to call before setup(): preferences
+  // are up before any component starts, and the Bluetooth component reads
+  // this then, while the radio can still take it as its address.
+  std::string saved_mac();
+
  protected:
   // State machine. Mirrors the linear flow in
   // marstek_api.py::ensure_managed_fake_device: token → list → maybe-add
@@ -153,6 +159,8 @@ class MarstekRegistrationComponent : public Component {
   // Persist on success. Mirrors the implicit "remember next boot" from
   // a successful config_loader run on the Python side.
   void persist_mac_(const std::string &mac);
+  // Bind pref_ to this device type's slot; once, from setup() or saved_mac().
+  void open_prefs_();
   // Returns the MAC loaded from prefs at setup(), or "" if none.
   std::string load_persisted_mac_();
 
@@ -187,6 +195,7 @@ class MarstekRegistrationComponent : public Component {
   uint32_t backoff_deadline_ms_{0};
   uint32_t last_attempt_ms_{0};
   ESPPreferenceObject pref_;
+  bool prefs_open_{false};
   std::string applied_mac_;
 };
 

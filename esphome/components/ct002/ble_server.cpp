@@ -18,6 +18,9 @@
 #ifdef USE_NETWORK
 #include "esphome/components/network/util.h"
 #endif
+#ifdef USE_CT002_MARSTEK_REGISTRATION
+#include "marstek_registration.h"
+#endif
 #ifdef USE_WIFI
 #include "esphome/components/wifi/wifi_component.h"
 #endif
@@ -62,7 +65,19 @@ void BluetoothComponent::configure_identity() {
   // app stores the reported MAC and later reconnects only to a device at that
   // address. So either the radio takes ct_mac, or ct_mac is unset and the
   // radio's own address becomes the ID.
-  const std::string configured = this->ct002_ != nullptr ? ble::normalize_id(this->ct002_->ct_mac()) : "";
+  std::string configured = this->ct002_ != nullptr ? ble::normalize_id(this->ct002_->ct_mac()) : "";
+#ifdef USE_CT002_MARSTEK_REGISTRATION
+  // marstek_registration applies the MAC it saved over ct_mac once it starts,
+  // which is after Bluetooth. Take that MAC now, while the radio can still
+  // follow it, so the app finds the registered device at its address.
+  if (this->registration_ != nullptr) {
+    const std::string saved = ble::normalize_id(this->registration_->saved_mac());
+    if (!saved.empty()) {
+      configured = saved;
+      this->address_from_registration_ = true;
+    }
+  }
+#endif
   uint8_t mac[6]{};
   if (!configured.empty()) {
     // normalize_id() guarantees 12 lowercase hex characters.
@@ -100,6 +115,20 @@ void BluetoothComponent::follow_identity_() {
   ESP_LOGI(TAG, "CT MAC changed; now advertising as %s", this->name_);
   if (id != this->bt_address_) {
     // The radio's address is fixed once Bluetooth runs.
+#ifdef USE_CT002_MARSTEK_REGISTRATION
+    // First registration on this board: the MAC is saved now, and the next
+    // boot gives the radio that address. Restart once, rather than leave the
+    // app unable to reach the registered device until someone does. Only
+    // from a boot whose address did not already come from the registration,
+    // so an address the radio refuses can't turn this into a restart loop.
+    if (!this->address_from_registration_ && !this->restart_pending_ && this->registration_ != nullptr &&
+        ble::normalize_id(this->registration_->saved_mac()) == id) {
+      this->restart_pending_ = true;
+      ESP_LOGI(TAG, "Registered as %s; restarting so the Bluetooth address follows", id.c_str());
+      this->set_timeout("identity-restart", 5000, []() { App.safe_reboot(); });
+      return;
+    }
+#endif
     ESP_LOGW(TAG,
              "The Bluetooth address stays %s until ct_mac is set to %s in the YAML; until then the "
              "app cannot reconnect to this meter over Bluetooth",
@@ -112,6 +141,9 @@ void BluetoothComponent::setup() {
     ESP_LOGE(TAG, "No ct002 component bound");
     this->mark_failed();
     return;
+  }
+  if (this->address_from_registration_) {
+    ESP_LOGI(TAG, "Bluetooth address taken from the Marstek registration: %s", this->boot_id_.c_str());
   }
   if (this->bt_address_rejected_) {
     ESP_LOGW(TAG,
