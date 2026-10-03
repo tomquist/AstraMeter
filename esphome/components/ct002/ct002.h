@@ -296,6 +296,11 @@ class CT002Component : public Component {
   // Configured ct_type/ct_mac forwarded to the Marstek MQTT topics.
   const std::string &ct_type() const { return this->ct_type_; }
   const std::string &ct_mac() const { return this->ct_mac_; }
+  // The MAC the Marstek app knows this CT by: ct_mac, or else the Bluetooth
+  // identity. Only the App topics use it; UDP keeps mirroring the requested
+  // MAC while ct_mac is unset.
+  void set_app_mac_fallback(const std::string &v) { this->app_mac_fallback_ = v; }
+  const std::string &app_mac() const { return this->ct_mac_.empty() ? this->app_mac_fallback_ : this->ct_mac_; }
   int wifi_rssi() const { return this->wifi_rssi_; }
 
   // Phases whose measured power is reversed, as a real CT002 does when the
@@ -446,6 +451,7 @@ class CT002Component : public Component {
   sensor::Sensor *power_sensor_l3_{nullptr};
   std::string ct_type_{"HME-4"};
   std::string ct_mac_;
+  std::string app_mac_fallback_;
   int wifi_rssi_{-50};
   uint16_t udp_port_{12345};
   bool active_control_{true};

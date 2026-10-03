@@ -109,6 +109,16 @@ std::string advertised_name(Model model, const std::string &device_id);
 // is not one).
 std::string normalize_id(const std::string &raw);
 
+// The prefix every AstraMeter CT ID carries, the one cloud registration
+// assigns too (marstek_registration.h's MANAGED_MAC_PREFIX, Python's
+// marstek_api.MANAGED_MAC_PREFIX). hame-relay recognises AstraMeter by it.
+inline constexpr const char *MANAGED_ID_PREFIX = "02b250";
+
+// The ID of a board with neither ct_mac nor a registered MAC: the managed
+// prefix plus three bytes hashed from the chip's own MAC, so it stays the same
+// on every boot and differs from board to board.
+std::string managed_id(const std::array<uint8_t, 6> &chip_mac);
+
 struct BatteryRow {
   std::string type;   // battery device type, e.g. "HMG-50"
   std::string id;     // battery MAC / ID

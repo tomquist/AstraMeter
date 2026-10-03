@@ -167,7 +167,8 @@ Optional sub-blocks nest under the same `ct002:` key:
   per battery, plus a parent CT002 device with manual-target / active /
   auto-target / distribution-weight controls and a force-rotation button). It
   also answers Marstek-app polls on your MQTT broker, so the emulator shows up in
-  the app without hame-relay. Requires an `mqtt:` block. See
+  the app without hame-relay. With Bluetooth on, it answers as the CT the app
+  added. Requires an `mqtt:` block. See
   [MQTT Insights](../mqtt-insights.md).
 - **`marstek_registration:`** — registers a managed CT002/CT003 with your Marstek
   cloud account on first boot (the same flow as the Python `[MARSTEK]` section).

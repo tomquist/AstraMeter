@@ -68,10 +68,12 @@ stack. Shared behavior lands on **both** sides in the same change;
   `host_ble_protocol_test.cpp`; `ble_server.cpp` compiles only in the ESP32
   matrix, so compile an ESP32 config after touching it. The data it reports
   (grid power, linked batteries, CT MAC) comes from `CT002Component`'s
-  existing accessors, so a change to those reaches it without a mirror. Its one
-  write into the shared component, `set_phase_reversal` (the app's per-phase
-  current-direction reversal, applied in `ct002.cpp`'s sensor-callback cache),
-  is ESPHome-only too: only Bluetooth can set it.
+  existing accessors, so a change to those reaches it without a mirror. Its two
+  writes into the shared component are ESPHome-only too, since only Bluetooth
+  sets them: `set_phase_reversal` (the app's per-phase current-direction
+  reversal, applied in `ct002.cpp`'s sensor-callback cache) and
+  `set_app_mac_fallback` (the Bluetooth ID, which `app_mac()` hands
+  `mqtt_insights`' App topics while `ct_mac` is unset; UDP still mirrors).
 
 ## What the firmware constrains
 

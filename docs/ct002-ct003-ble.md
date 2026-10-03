@@ -448,10 +448,15 @@ three equal:
   before Bluetooth starts. It has to be a unicast MAC (lowest bit of the first
   byte clear), which AstraMeter's own `02b250…` MACs are; otherwise the board
   warns at boot that the app won't be able to reconnect.
-- Without `ct_mac`, the ID is the board's own Bluetooth address (its Wi-Fi
-  MAC + 2 on most ESP32s). The UDP side then answers polls for any CT MAC, so
-  the battery works with that ID without further changes. To pin it, set
-  `ct_mac` to the "Device ID" the board logs.
+- Without `ct_mac`, the board makes up an ID like the ones cloud
+  registration assigns: `02b250` followed by six hex digits hashed from the
+  chip's own MAC. It is the same on every boot, also after erasing the flash,
+  and the radio takes it as its Bluetooth address. The shared prefix is how
+  [hame-relay](https://github.com/tomquist/hame-relay) tells an AstraMeter CT
+  from a real one, and `mqtt_insights:` answers the app's MQTT polls under
+  this ID. The UDP side still answers polls for any CT MAC, so the battery
+  works with the ID without further changes. To pin it, set `ct_mac` to the
+  "Device ID" the board logs.
 
 The advertised name ends in the last four characters of the ID. It is carried
 in the advertisement itself, not only in the scan response, and it replaces

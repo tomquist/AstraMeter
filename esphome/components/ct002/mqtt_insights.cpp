@@ -164,8 +164,9 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
   if (!this->marstek_mqtt_enabled_) return;
   if (!this->mqtt_->is_connected()) return;
   // Resolve the current identity from ct002 each call — the MAC may be set
-  // by marstek_registration after we first connected.
-  const std::string mac = normalize_mac(this->ct002_->ct_mac());
+  // by marstek_registration after we first connected. Without ct_mac, a
+  // Bluetooth board answers as the ID the app added it under.
+  const std::string mac = normalize_mac(this->ct002_->app_mac());
   const std::string ct = this->ct002_->ct_type();
   if (mac.empty()) return;  // not known yet — try again next loop
   // marstek_mac_/marstek_ct_type_ hold the CURRENTLY-subscribed identity.
@@ -676,7 +677,7 @@ void MqttInsightsComponent::dump_config() {
   // ct_mac is resolved lazily at connect time; at dump_config (boot) it
   // may legitimately still be empty if marstek_registration hasn't applied
   // it yet — the App-topic subscribe happens once it's known.
-  const std::string mac_now = normalize_mac(this->ct002_->ct_mac());
+  const std::string mac_now = normalize_mac(this->ct002_->app_mac());
   ESP_LOGCONFIG(TAG, "  Marstek MAC: %s",
                 mac_now.empty() ? "(pending — subscribe deferred until MAC known)"
                                 : mac_now.c_str());

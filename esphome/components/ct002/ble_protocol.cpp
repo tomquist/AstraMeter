@@ -116,6 +116,20 @@ std::string normalize_id(const std::string &raw) {
   return out.size() == 12 ? out : "";
 }
 
+std::string managed_id(const std::array<uint8_t, 6> &chip_mac) {
+  // FNV-1a over all six bytes: chips from different Espressif OUIs share
+  // their low bytes, so those alone would collide.
+  uint32_t h = 2166136261u;
+  for (uint8_t b : chip_mac) {
+    h ^= b;
+    h *= 16777619u;
+  }
+  static const char HEX[] = "0123456789abcdef";
+  std::string id(MANAGED_ID_PREFIX);
+  for (int shift = 20; shift >= 0; shift -= 4) id.push_back(HEX[(h >> shift) & 0x0F]);
+  return id;
+}
+
 std::string advertised_name(Model model, const std::string &device_id) {
   const std::string suffix = device_id.size() >= 4 ? device_id.substr(device_id.size() - 4) : device_id;
   return std::string(model == Model::CT003 ? CT003_NAME_PREFIX : CT002_NAME_PREFIX) + "_" + suffix;
