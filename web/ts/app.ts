@@ -856,6 +856,7 @@ function loadProject(file: File): void {
   reader.onload = () => {
     try {
       state = migrate(safeParse(reader.result as string));
+      registrationSetByHand = false;
       rerenderAll();
       toast("Project loaded");
     } catch {
@@ -881,6 +882,7 @@ function shareLink(): void {
 function resetProject(): void {
   if (!confirm("Start over? This clears everything you've entered.")) return;
   state = defaultState();
+  registrationSetByHand = false;
   rerenderAll();
 }
 

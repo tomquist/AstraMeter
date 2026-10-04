@@ -21,9 +21,10 @@ from both ends of the link:
   [rweijnen/marstek-firmware-archive](https://github.com/rweijnen/marstek-firmware-archive),
   which shows what the device accepts and how it builds its replies.
 
-Nothing here has been tested against a live app session with an emulated meter
-yet. Where only one source confirms a detail, the text says which. "Unconfirmed"
-means neither source pins it down.
+With AstraMeter's emulation, adding the board, reconnecting and the live view
+have been tried with the Android app; the other commands have not (see
+[Field testing](#notes)). Where only one source confirms a detail, the text
+says which. "Unconfirmed" means neither source pins it down.
 
 ## At a glance
 
@@ -535,7 +536,7 @@ from the start is better fixed on the sensor, for example with
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
 | `0x16` active power (CT002) | The three phase powers |
-| `0x17` direction (CT002) | With `allow_direction_change: true`: applies bits 0–7 and answers with the bits in effect (see [above](#reversing-a-phase-from-the-app)); otherwise no answer |
+| `0x17` direction (CT002) | With `allow_direction_change: true`: applies values 0–7 (bits 0–2) and answers with the bits in effect (see [above](#reversing-a-phase-from-the-app)); otherwise no answer |
 
 Everything else, such as calibration, the
 voltage, frequency and phase-angle checks, CT003 meter configuration and
