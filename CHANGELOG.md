@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).
+
 - **Fixed** a battery sometimes staying stuck below its share since 2.3.1 while the other carried the rest, letting their charge levels drift apart; a battery that only paused briefly is now back to sharing within a minute ([#704](https://github.com/tomquist/astrameter/issues/704), [#707](https://github.com/tomquist/astrameter/pull/707)).
 
 - **Fixed** the Marstek app listing an auto-registered CT002 as a CT003, because the new device got the CT003's Bluetooth name; devices registered earlier keep working unchanged ([#710](https://github.com/tomquist/astrameter/pull/710)).

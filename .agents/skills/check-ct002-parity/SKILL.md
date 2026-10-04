@@ -59,6 +59,22 @@ stack. Shared behavior lands on **both** sides in the same change;
   into its firmware, so there is nothing for a dashboard to write; the page hides
   its Configuration tab when the backend reports no `config_mode`.
 
+## What only the firmware has
+
+- **Bluetooth** — `ble_protocol.{h,cpp}` (the meters' BLE command protocol) and
+  `ble_server.{h,cpp}` (the GATT service around it, the `bluetooth:` sub-block).
+  The Python stack has no BLE peripheral, so there is nothing to mirror; don't
+  add a Python stub. The protocol layer is std-only and held by
+  `host_ble_protocol_test.cpp`; `ble_server.cpp` compiles only in the ESP32
+  matrix, so compile an ESP32 config after touching it. The data it reports
+  (grid power, linked batteries, CT MAC) comes from `CT002Component`'s
+  existing accessors, so a change to those reaches it without a mirror. Its two
+  writes into the shared component are ESPHome-only too, since only Bluetooth
+  sets them: `set_phase_reversal` (the app's per-phase current-direction
+  reversal, applied in `ct002.cpp`'s sensor-callback cache) and
+  `set_app_mac_fallback` (the Bluetooth ID, which `app_mac()` hands
+  `mqtt_insights`' App topics while `ct_mac` is unset; UDP still mirrors).
+
 ## What the firmware constrains
 
 The dashboard is one page served by both stacks (see the `build-dashboard` skill), and

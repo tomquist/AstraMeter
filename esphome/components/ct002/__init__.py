@@ -15,6 +15,10 @@ schema accepts grid-power sensor IDs and the cross-phase filter pipeline
 * `dashboard:` — serve AstraMeter's live status dashboard from the ESP32
   itself. On by default (ESP32 only); `dashboard: false` leaves it out of
   the firmware entirely, and the block is only needed to change an option.
+* `bluetooth:` — speak a real CT002/CT003's Bluetooth protocol, so the
+  Marstek app can add the device through its regular "Add device" flow and
+  show live data over BLE. On by default on ESP32 variants with Bluetooth;
+  `bluetooth: false` leaves the BLE stack out of the firmware.
 """
 
 from __future__ import annotations
@@ -28,7 +32,8 @@ from pathlib import Path
 import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
-from esphome.components import http_request, sensor, web_server_base
+from esphome.components import esp32_ble, http_request, sensor, web_server_base
+from esphome.components.esp32 import get_esp32_variant
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import (
     CONF_ALPHA,
@@ -73,6 +78,8 @@ CloudReportingComponent = cloud_reporting_ns.class_(
 )
 dashboard_ns = ct002_ns.namespace("dashboard")
 DashboardComponent = dashboard_ns.class_("DashboardComponent", cg.Component)
+bluetooth_ns = ct002_ns.namespace("bluetooth")
+BluetoothComponent = bluetooth_ns.class_("BluetoothComponent", cg.Component)
 
 # Parent fields
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
@@ -849,6 +856,82 @@ def _resolve_dashboard(config):
     return config
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: bluetooth (a real CT's BLE interface for the Marstek app; opt-out)
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_BLUETOOTH = "bluetooth"
+CONF_ALLOW_WIFI_CHANGE = "allow_wifi_change"
+CONF_ALLOW_DIRECTION_CHANGE = "allow_direction_change"
+
+
+# No radio of its own: Bluetooth only through a companion chip
+# (esp32_hosted), which a config has to set up deliberately — so no default.
+_NO_DEFAULT_BLUETOOTH_VARIANTS = ("ESP32P4",)
+
+
+def _bluetooth_supported() -> bool:
+    """True on ESP32 variants with a Bluetooth radio of their own.
+
+    That is all but the S2 (esp32_ble refuses it) and the P4 (no radio).
+    """
+    if not CORE.is_esp32:
+        return False
+    try:
+        esp32_ble.validate_variant(None)
+        variant = get_esp32_variant()
+    except cv.Invalid:
+        return False
+    except KeyError:
+        # Variant not recorded (only outside a real config run): assume the
+        # classic ESP32, which has Bluetooth.
+        return True
+    return variant not in _NO_DEFAULT_BLUETOOTH_VARIANTS
+
+
+def _bluetooth_shorthand(value):
+    """`bluetooth:` and `bluetooth: true` mean "on"."""
+    if value is None or _dashboard_toggle(value) is True:
+        return {}
+    return value
+
+
+BLUETOOTH_SCHEMA = cv.All(
+    _bluetooth_shorthand,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(BluetoothComponent),
+            cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
+            # Off by default: the board answers the app's Wi-Fi step but
+            # stays on the YAML's networks, so a phone in Bluetooth range
+            # can't move it to another network. true applies what it sends.
+            cv.Optional(CONF_ALLOW_WIFI_CHANGE, default=False): cv.boolean,
+            # Off by default: reversing a phase's measured power changes what
+            # the batteries do, and any phone in range may ask for it. true
+            # lets the app's "Reverse Measurement Direction" apply (CT002).
+            cv.Optional(CONF_ALLOW_DIRECTION_CHANGE, default=False): cv.boolean,
+        }
+    ).extend(cv.COMPONENT_SCHEMA),
+    cv.only_on([PLATFORM_ESP32]),
+)
+
+
+def _resolve_bluetooth(config):
+    """Settle whether the device gets a Bluetooth interface at all.
+
+    Same shape as _resolve_dashboard: an absent key becomes the default block
+    where the hardware has Bluetooth, and only `bluetooth: false` removes it,
+    so the key is present exactly when the BLE stack is wanted.
+    """
+    if not isinstance(config, dict):
+        return config
+    if _dashboard_toggle(config.get(CONF_BLUETOOTH)) is False:
+        del config[CONF_BLUETOOTH]
+    elif CONF_BLUETOOTH not in config and _bluetooth_supported():
+        config[CONF_BLUETOOTH] = {}
+    return config
+
+
 def AUTO_LOAD(config):
     """Components pulled in on the user's behalf.
 
@@ -870,6 +953,8 @@ def AUTO_LOAD(config):
     loads = ["socket", "json", "md5"]
     if isinstance(config, dict) and CONF_DASHBOARD in config:
         loads.append("web_server_base")
+    if isinstance(config, dict) and CONF_BLUETOOTH in config:
+        loads.extend(["esp32_ble", "esp32_ble_server"])
     return loads
 
 
@@ -980,6 +1065,7 @@ def _astrameter_git_commit() -> str:
 
 CONFIG_SCHEMA = cv.All(
     _resolve_dashboard,
+    _resolve_bluetooth,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(CT002Component),
@@ -1023,6 +1109,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_MARSTEK_REGISTRATION): MARSTEK_REGISTRATION_SCHEMA,
             cv.Optional(CONF_CLOUD_REPORTING): CLOUD_REPORTING_SCHEMA,
             cv.Optional(CONF_DASHBOARD): DASHBOARD_SCHEMA,
+            cv.Optional(CONF_BLUETOOTH): BLUETOOTH_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_three_phase_sensors,
@@ -1157,6 +1244,8 @@ async def to_code(config):
         await _to_code_cloud_reporting(config, var)
     if CONF_DASHBOARD in config:
         await _to_code_dashboard(config, var)
+    if CONF_BLUETOOTH in config:
+        await _to_code_bluetooth(config, var)
 
 
 async def _to_code_mqtt_insights(config, ct002_var):
@@ -1287,3 +1376,29 @@ async def _to_code_dashboard(config, ct002_var):
     cg.add(var.set_git_commit(_astrameter_git_commit()))
     logger_config = CORE.config.get("logger") or {}
     cg.add(var.set_log_level(str(logger_config.get("level", ""))))
+
+
+async def _to_code_bluetooth(config, ct002_var):
+    """Codegen for the `bluetooth:` sub-block (on by default on ESP32).
+
+    The GATT service rides on esp32_ble_server, which AUTO_LOAD pulls in. The
+    component also registers for raw GATTS events, only to learn the MTU each
+    connection negotiates. configure_identity() runs in the generated setup
+    code after every ct002 setter above, so it sees the configured CT type and
+    MAC, and before esp32_ble brings the stack up, which is when the
+    advertised name is read.
+    """
+    sub = config[CONF_BLUETOOTH]
+    cg.add_define("USE_CT002_BLUETOOTH")
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+    ble = await cg.get_variable(sub[esp32_ble.CONF_BLE_ID])
+    cg.add(var.set_ble(ble))
+    if CONF_MARSTEK_REGISTRATION in config:
+        registration = await cg.get_variable(config[CONF_MARSTEK_REGISTRATION][CONF_ID])
+        cg.add(var.set_registration(registration))
+    cg.add(var.set_allow_wifi_change(sub[CONF_ALLOW_WIFI_CHANGE]))
+    cg.add(var.set_allow_direction_change(sub[CONF_ALLOW_DIRECTION_CHANGE]))
+    esp32_ble.register_gatts_event_handler(ble, var)
+    cg.add(var.configure_identity())
