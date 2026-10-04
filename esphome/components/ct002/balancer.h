@@ -128,9 +128,11 @@ inline constexpr float CEILING_AT_MARGIN_W = 25.0f;
 inline constexpr float CEILING_RELEASE_W = 30.0f;
 // A ceiling not confirmed for this long is forgotten.
 inline constexpr double CEILING_TTL_SECONDS = 600.0;
-// A battery pinned at a ceiling unconfirmed for this long is pushed past it
-// until it holds there (confirming it) or moves past it (dropping it).
+// A battery pinned at a ceiling that binds and has gone unconfirmed for this
+// long is pushed past it by at least CEILING_RETEST_PUSH_W until it holds there
+// (confirming it) or moves past it (dropping it); issue #704.
 inline constexpr double CEILING_RETEST_SECONDS = 60.0;
+inline constexpr float CEILING_RETEST_PUSH_W = 30.0f;
 
 // Device capabilities — the single source of truth for every device-type
 // decision (mirrors balancer.py device_capabilities). All downstream policy
@@ -602,6 +604,11 @@ class LoadBalancer {
   // _track_ceiling.
   void track_ceiling_(const std::string &consumer_id, BalancerConsumerState &state,
                       ConsumerMode mode, ReportMap &reports);
+  // The direction to push *consumer_id* past a ceiling due for a retest, or 0.
+  // Mirrors balancer.py _ceiling_retest.
+  int ceiling_retest_(const std::optional<std::string> &consumer_id, const ReportMap &reports,
+                      const std::unordered_map<std::string, float> &eff_part,
+                      float control_grid) const;
   // Learned ceilings of *ids* in direction *sign*, where one is known. Mirrors
   // balancer.py _ceilings.
   template<typename Ids>
@@ -701,7 +708,7 @@ class LoadBalancer {
       const std::unordered_set<std::string> &pinned);
   float balance_correction_(const std::string &consumer_id, const ReportMap &reports,
                             const std::unordered_map<std::string, float> &eff_part,
-                            float fair_share, bool retest_ceiling = false);
+                            float fair_share);
   bool concentration_pool_balanced_(const ReportMap &reports,
                                     const std::vector<const std::string *> &conc_ids);
   float pace_cap_(BalancerConsumerState &state, float reading, float reported, int sign,
