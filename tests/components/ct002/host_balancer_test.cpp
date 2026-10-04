@@ -18,6 +18,9 @@
 namespace {
 
 using esphome::ct002::BalancerConfig;
+using esphome::ct002::CEILING_RETEST_PUSH_W;
+using esphome::ct002::CEILING_RETEST_SECONDS;
+using esphome::ct002::CEILING_TTL_SECONDS;
 using esphome::ct002::ConsumerMode;
 using esphome::ct002::ConsumerModeKind;
 using esphome::ct002::ConsumerReport;
@@ -877,4 +880,100 @@ TEST(PowerCeilings, UnlimitedBatteryTakesTheWholeErrorOnceTheOthersAreCapped) {
   // Still pushed: that is what confirms the ceiling.
   EXPECT_NEAR(learned.at("a"), 200.0f, 0.5f);
   EXPECT_LT(run(false).at("c"), 150.0f);
+}
+
+// Issue #704: a battery that merely paused on its way up looks capped. Held at
+// that ceiling it would never be pushed again, so a ceiling due for a retest
+// pushes it past; it follows, and the ceiling is dropped. Mirrors
+// tests/test_balancer_power_ceilings.py.
+TEST(PowerCeilings, ACeilingDueForARetestIsPushedPastAndDropped) {
+  double now = 1000.0;
+  BalancerConfig cfg;
+  cfg.pace_base_step = 0.0f;
+  cfg.osc_damp_max = 0.0f;
+  cfg.grid_predict_trust = 0.0f;
+  cfg.import_trim_w = 0.0f;
+  LoadBalancer lb(cfg, 0.15, 20.0f, 0.995, 90.0f, 60.0f, true, [&now]() { return now; },
+                  []() {});
+  auto round = [&](float paused, float free_, float grid) {
+    ReportMap reports;
+    reports["a"] = ConsumerReport{"VNSE3", "A", paused, 1.0f, 1.0f, {}};
+    reports["c"] = ConsumerReport{"VNSE3", "A", free_, 1.0f, 1.0f, {}};
+    std::unordered_map<std::string, float> sent;
+    for (const auto &cid : {"a", "c"}) {
+      const auto out = lb.compute_target(cid, ConsumerMode{}, reports, grid, {}, {},
+                                         {grid, static_cast<float>(cid[0])});
+      sent[cid] = out[0] + out[1] + out[2];
+    }
+    now += 1.0;
+    return sent;
+  };
+  for (int i = 0; i < 7; i++) round(600.0f, 700.0f + 50.0f * i, 1200.0f);
+  const double learned_at = now;
+  std::unordered_map<std::string, float> sent;
+  // Fresh: held at the ceiling, the other battery not pulled down to it.
+  while (now < learned_at + CEILING_RETEST_SECONDS - 5.0) {
+    sent = round(600.0f, 1000.0f, 0.0f);
+    EXPECT_NEAR(sent.at("a"), 0.0f, 0.5f);
+    EXPECT_NEAR(sent.at("c"), 0.0f, 0.5f);
+  }
+  while (now < learned_at + CEILING_RETEST_SECONDS + 2.0) sent = round(600.0f, 1000.0f, 0.0f);
+  // Due: a small push past it, clear of a firmware deadband.
+  EXPECT_NEAR(sent.at("a"), CEILING_RETEST_PUSH_W, 0.5f);
+  EXPECT_NEAR(sent.at("c"), 0.0f, 0.5f);
+  sent = round(640.0f, 1000.0f, 0.0f);
+  EXPECT_GT(sent.at("a"), 0.0f);
+  EXPECT_LT(sent.at("c"), 0.0f);
+}
+
+// Both ways the retest used to be starved: fair distribution off (no balance
+// correction runs), and a charge-capped battery under deadband concentration
+// with the grid parked just to the import side. A real ceiling must stay
+// confirmed across several TTLs. Mirrors tests/test_balancer_power_ceilings.py.
+TEST(PowerCeilings, ARealCeilingSurvivesHoweverThePoolIsSteered) {
+  struct Case {
+    bool fair;
+    float power, free_, grid;
+  };
+  for (const Case &c : {Case{false, 600.0f, 1000.0f, 0.0f}, Case{true, -600.0f, -1000.0f, 8.0f}}) {
+    double now = 1000.0;
+    BalancerConfig cfg;
+    cfg.fair_distribution = c.fair;
+    cfg.pace_base_step = 0.0f;
+    cfg.osc_damp_max = 0.0f;
+    cfg.grid_predict_trust = 0.0f;
+    cfg.import_trim_w = 0.0f;
+    LoadBalancer lb(cfg, 0.15, 20.0f, 0.995, 90.0f, 60.0f, true, [&now]() { return now; },
+                    []() {});
+    const float sign = c.power > 0.0f ? 1.0f : -1.0f;
+    // The steer line names each consumer's learned ceilings as
+    // ceil=<discharge>/<charge>.
+    const std::string held = sign > 0.0f ? "ceil=600/-" : "ceil=-/600";
+    std::string last_a;
+    lb.set_steer_log_sink([&last_a](const std::string &line) {
+      if (line.find(" a:") != std::string::npos) last_a = line;
+    });
+    auto round = [&](float paused, float free_, float grid) {
+      ReportMap reports;
+      reports["a"] = ConsumerReport{"VNSE3", "A", paused, 1.0f, 1.0f, {}};
+      reports["c"] = ConsumerReport{"VNSE3", "A", free_, 1.0f, 1.0f, {}};
+      std::unordered_map<std::string, float> sent;
+      for (const auto &cid : {"a", "c"}) {
+        const auto out = lb.compute_target(cid, ConsumerMode{}, reports, grid, {}, {},
+                                           {grid, static_cast<float>(cid[0])});
+        sent[cid] = out[0] + out[1] + out[2];
+      }
+      now += 1.0;
+      return sent;
+    };
+    for (int i = 0; i < 7; i++)
+      round(c.power, sign * (700.0f + 50.0f * i), sign * 1200.0f);
+    bool pushed = false;
+    for (int i = 0; i < static_cast<int>(3 * CEILING_TTL_SECONDS); i++) {
+      const auto sent = round(c.power, c.free_, c.grid);
+      pushed = pushed || sent.at("a") * sign >= CEILING_RETEST_PUSH_W;
+      ASSERT_NE(last_a.find(held), std::string::npos) << "fair=" << c.fair << " " << last_a;
+    }
+    EXPECT_TRUE(pushed) << "fair=" << c.fair;
+  }
 }
