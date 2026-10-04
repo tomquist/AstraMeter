@@ -568,9 +568,9 @@ accepted as is.
   The board logs its free internal heap when Bluetooth comes up; if that runs
   low, `bluetooth: false` takes all of it back.
 - **Cloud registration name.** AstraMeter's cloud auto-registration sets
-  `bluetooth_name = MST-SMR_<suffix>` for both models. A real CT002 advertises as
-  `MST-TPM_…`, and the app's name table maps `MST-TPM_` to "CT002". The field is
-  only cosmetic in the app today, but a CT002 record should use `MST-TPM_`.
+  `bluetooth_name` to the name the board advertises: `MST-TPM_<suffix>` for a
+  CT002, `MST-SMR_<suffix>` for a CT003. A CT002 registered before that keeps
+  `MST-SMR_` in its record; the field is only cosmetic in the app today.
 - **Field testing.** The reply layouts follow the meter firmware and the app's
   parsers, and are covered by host tests. Adding the board, reconnecting after
   a restart and the live view have been tried with the Android app on an

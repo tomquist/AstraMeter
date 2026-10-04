@@ -108,6 +108,14 @@ std::string desired_name(const std::string &device_type) {
   return device_type == "ct002" ? "AstraMeter CT002" : "AstraMeter CT003";
 }
 
+// Real meters advertise as MST-TPM_ (CT002) or MST-SMR_ (CT003); the app
+// derives the model it shows from this prefix. Mirrors
+// marstek_api.py::_desired_bluetooth_name.
+std::string desired_bluetooth_name(const std::string &device_type, const std::string &mac) {
+  const std::string suffix = mac.size() >= 4 ? mac.substr(mac.size() - 4) : std::string("0000");
+  return (device_type == "ct002" ? "MST-TPM_" : "MST-SMR_") + suffix;
+}
+
 }  // namespace
 
 void MarstekRegistrationComponent::setup() {
@@ -292,10 +300,7 @@ void MarstekRegistrationComponent::tick_state_() {
       return;
     }
     case State::ADD_DEVICE: {
-      const std::string suffix = this->candidate_mac_.size() >= 4
-                                     ? this->candidate_mac_.substr(this->candidate_mac_.size() - 4)
-                                     : std::string("0000");
-      const std::string bt_name = "MST-SMR_" + suffix;
+      const std::string bt_name = desired_bluetooth_name(this->device_type_, this->candidate_mac_);
       const std::string url = this->build_url_(
           "/app/Solar/v2_add_device.php",
           {{"name", desired_name(this->device_type_)}, {"mailbox", this->mailbox_},
