@@ -102,6 +102,11 @@ def _fetch_token_and_devices(cfg: MarstekConfig) -> tuple[str, list[dict[str, An
     token_url = f"{cfg.base_url.rstrip('/')}/app/Solar/v2_get_device.php"
     token_resp = _http_get_json(token_url, {"mailbox": cfg.mailbox, "pwd": pwd_md5})
 
+    # New accounts return code=1 when no devices are bound yet.
+    # Treat this as a successful login with an empty device list.
+    if str(token_resp.get("code")) == "1" and token_resp.get("token"):
+        return token_resp["token"], []
+
     if str(token_resp.get("code")) != "2" or not token_resp.get("token"):
         code = token_resp.get("code")
         raw_msg = token_resp.get("msg")

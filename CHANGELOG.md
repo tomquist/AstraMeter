@@ -4,6 +4,8 @@
 
 - **Fixed** the Marstek app listing an auto-registered CT002 as a CT003, because the new device got the CT003's Bluetooth name; devices registered earlier keep working unchanged ([#710](https://github.com/tomquist/astrameter/pull/710)).
 
+- **Fixed** Marstek cloud auto-registration failing on a new Marstek account that has no devices yet, so AstraMeter can now create its CT there and it shows up in the Marstek app ([#712](https://github.com/tomquist/astrameter/pull/712)).
+
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 
 - **Fixed** the MQTT source and MQTT Insights never connecting, logging only "Operation timed out", on brokers that refuse clients without a client ID ([#701](https://github.com/tomquist/astrameter/issues/701), [#706](https://github.com/tomquist/astrameter/pull/706)).
