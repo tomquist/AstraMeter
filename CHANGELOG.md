@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** Marstek cloud auto-registration for new accounts without any bound devices. Accounts returning `code=1` with a valid token are now treated as having an empty device list, allowing the first managed CT device to be created.
+
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 
 - **Fixed** the MQTT source and MQTT Insights never connecting, logging only "Operation timed out", on brokers that refuse clients without a client ID ([#701](https://github.com/tomquist/astrameter/issues/701), [#706](https://github.com/tomquist/astrameter/pull/706)).
