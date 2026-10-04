@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Improved** download size: the Docker image shrinks from 88 MB to 34 MB and the Home Assistant add-on from 43 MB to 34 MB, while using no more memory. Images built on top of AstraMeter's no longer have a package manager (apt), so install extra tools in a separate build stage ([#705](https://github.com/tomquist/astrameter/pull/705)).
+
 - **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
 
 - **Fixed** the MQTT source and MQTT Insights never connecting, logging only "Operation timed out", on brokers that refuse clients without a client ID ([#701](https://github.com/tomquist/astrameter/issues/701), [#706](https://github.com/tomquist/astrameter/pull/706)).

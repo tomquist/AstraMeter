@@ -19,6 +19,12 @@ uv run ruff format . && uv run ruff check . && uv run mypy src/ && uv run pytest
 Each skill names the extra suite its area needs and how to get it running in a
 sandbox. Don't report a suite as skipped without trying.
 
+The Docker images run on a minimal hand-assembled filesystem, not a
+distribution: a new standard-library module, shared library or command-line
+tool may be missing there even though every unit test passes.
+`tests/test_image.py` catches that in CI; `CONTRIBUTING.md` (Docker images)
+says how to build the images and run it.
+
 ## Python ↔ ESPHome parity (REQUIRED)
 
 `esphome/components/ct002/` is a mechanical C++ mirror of the Python CT002

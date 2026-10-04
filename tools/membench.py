@@ -97,6 +97,11 @@ def cgroup_mem(container: str) -> float:
             "total_inactive_file",
         ),
         (
+            f"/sys/fs/cgroup/memory/system.slice/docker-{container}.scope",
+            "memory.usage_in_bytes",
+            "total_inactive_file",
+        ),
+        (
             f"/sys/fs/cgroup/system.slice/docker-{container}.scope",
             "memory.current",
             "inactive_file",
@@ -298,13 +303,20 @@ class Target:
                 ],
                 text=True,
             ).strip()  # fmt: skip
-            self.pid = int(
-                subprocess.check_output(
-                    ["docker", "inspect", "-f", "{{.State.Pid}}", self.container],
-                    text=True,
-                )
-            )
             self.proc = None
+            try:
+                self.pid = int(
+                    subprocess.check_output(
+                        ["docker", "inspect", "-f", "{{.State.Pid}}", self.container],
+                        text=True,
+                    )
+                )
+            except BaseException:
+                # Not yet registered for cleanup: remove the container here.
+                subprocess.run(
+                    ["docker", "rm", "-f", self.container], capture_output=True
+                )
+                raise
         else:
             wrapper = [str(HERE / "membench_traced.py")] if args.snap_at else []
             env = {**os.environ, **dict(kv.split("=", 1) for kv in args.env)}

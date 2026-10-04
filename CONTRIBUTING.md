@@ -45,6 +45,33 @@ uv run pytest
 
 CI runs the same (ruff format check, ruff check, mypy on `src/`, pytest with coverage on supported Python versions).
 
+## Docker images
+
+`Dockerfile` builds both images: the standalone one (default target) and the
+Home Assistant add-on (`--target addon`). They do not run on a distribution
+image but on a root filesystem the `rootfs` stage assembles: the Python
+interpreter, the standard library minus modules a daemon never imports
+(`sqlite3`, `curses`, `dbm`, `tkinter`, `idlelib`, …), exactly the shared
+libraries `ldd` reports, bash/curl/jq for `[SCRIPT]` sources, and busybox.
+
+So a change can pass every unit test and still fail in the image: an import of
+a module the image leaves out, a dependency linking a library it never copied,
+a tool a feature shells out to. `tests/test_image.py` runs
+`tests/image_smoke.py` inside both built images in CI (the `addon-container`
+job): it imports every module the app's source names (including imports
+inside functions), loads every power source, and exercises TLS, time zones,
+name resolution, native libraries and the script tools. When it fails, add the
+missing piece to the `rootfs` stage; when your change needs a new kind of
+runtime capability, add a check for it to `image_smoke.py`. To run it locally:
+
+```bash
+docker build -t astrameter:test .
+docker build --target addon -t astrameter-addon:test .
+uv run pytest tests/test_image.py tests/test_addon_container.py
+```
+
+`tools/membench.py --docker <image>` measures an image's memory.
+
 ## Adding a powermeter
 
 Follow the checklist in [`.agents/skills/add-powermeter/SKILL.md`](.agents/skills/add-powermeter/SKILL.md), using paths under `src/astrameter/` (e.g. `src/astrameter/powermeter/<module>.py`, `src/astrameter/config/config_loader.py`).

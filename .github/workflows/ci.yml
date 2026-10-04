@@ -179,7 +179,8 @@ jobs:
   # The add-on image, exercised the way the Supervisor starts it: the app
   # reads its configuration from the add-on options and the Supervisor API,
   # with no config file involved, so nothing but a real container run covers
-  # run.sh, the venv path and SUPERVISOR_TOKEN reaching the app.
+  # the image's launch command, the venv path and SUPERVISOR_TOKEN reaching
+  # the app. Both images also run tests/image_smoke.py from the inside.
   addon-container:
     needs: [ lint ]
     runs-on: ubuntu-latest
@@ -208,17 +209,29 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./ha_addon/Dockerfile
+          file: ./Dockerfile
+          target: addon
           platforms: linux/amd64
           load: true
           tags: astrameter-addon:test
-          build-args: |
-            BUILD_FROM=ghcr.io/hassio-addons/base:17.0.1
           cache-from: type=gha,scope=addon-container
           cache-to: type=gha,mode=max,scope=addon-container
 
-      - name: Run the add-on container tests
-        run: uv run pytest tests/test_addon_container.py -v
+      # Same build stages as the add-on, so this reuses its cached layers.
+      - name: Build the standalone image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: astrameter:test
+          cache-from: type=gha,scope=addon-container
+
+      # The images run on a minimal root filesystem: test_image.py checks from
+      # inside both that everything the code uses is there.
+      - name: Run the container tests
+        run: uv run pytest tests/test_addon_container.py tests/test_image.py -v
 
   # The dashboard bundle is a COMMITTED generated artifact (neither the Docker
   # build nor `esphome compile` has Node), so CI has to prove it still matches
@@ -674,9 +687,8 @@ jobs:
       platform: ${{ matrix.platform }}
       cache_scope: ${{ matrix.cache_scope }}
       context: .
-      dockerfile: ./ha_addon/Dockerfile
-      build-args: |
-        BUILD_FROM=ghcr.io/hassio-addons/base:17.0.1
+      dockerfile: ./Dockerfile
+      target: addon
       image-suffix: "-addon"
       digest-prefix: "digests-addon-"
       push: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
