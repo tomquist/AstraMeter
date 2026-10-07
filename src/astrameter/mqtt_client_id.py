@@ -14,5 +14,8 @@ def mqtt_client_id() -> str:
     (Mosquitto with ``allow_zero_length_clientid false``); aiomqtt then just
     times out. Random, so several clients and instances never kick each other
     off the broker, and 23 alphanumerics, the most MQTT 3.1.1 guarantees.
+    A client that publishes retained state keeps one across its reconnects,
+    so each new connection takes over from the one it replaces (see
+    ``MqttInsightsService``).
     """
     return "astrameter" + uuid.uuid4().hex[:13]

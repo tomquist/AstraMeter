@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a battery's Home Assistant entities staying unavailable until a restart since 2.3.1, after a network hiccup briefly dropped the battery and the MQTT connection at the same time ([#718](https://github.com/tomquist/astrameter/issues/718)).
+
 - **Fixed** a battery sometimes staying stuck below its share since 2.3.1 while the other carried the rest, letting their charge levels drift apart; a battery that only paused briefly is now back to sharing within a minute ([#704](https://github.com/tomquist/astrameter/issues/704), [#707](https://github.com/tomquist/astrameter/pull/707)).
 
 - **Fixed** the Marstek app listing an auto-registered CT002 as a CT003, because the new device got the CT003's Bluetooth name; devices registered earlier keep working unchanged ([#710](https://github.com/tomquist/astrameter/pull/710)).

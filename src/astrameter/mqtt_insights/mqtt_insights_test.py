@@ -1536,6 +1536,55 @@ async def test_availability_returns_online_after_a_battery_comes_back(
         await service.stop()
 
 
+def test_reconnects_reuse_one_client_identifier() -> None:
+    """Every connection a service makes presents the same identifier, and two
+    services never share one (issue #718)."""
+    service = _throttled_service(0.0)
+    first = service._client_args(None)["identifier"]
+    assert service._client_args(None)["identifier"] == first
+    assert _throttled_service(0.0)._client_args(None)["identifier"] != first
+
+
+@needs_mosquitto
+async def test_superseded_connection_cannot_overwrite_availability(
+    mqtt_broker: int,
+) -> None:
+    """A connection we gave up on must not land a stale "offline" (issue #718).
+
+    A stalled link makes the service reconnect while the broker still holds
+    the old connection open; its unsent bytes, a battery's eviction "offline"
+    among them, can arrive after the new connection has sent that battery's
+    "online".  Availability only goes out when it changes, so nothing would
+    correct it.  ``old`` stands for that connection: same identifier, still
+    open when the service connects, publishing afterwards.
+    """
+    port = mqtt_broker
+    service = _make_service(port)
+    base = service._config.base_topic
+    avail = f"{base}/ct002/dev1/consumer/consumer1/availability"
+
+    old = aiomqtt.Client(hostname="127.0.0.1", port=port, identifier=service._client_id)
+    await old.__aenter__()
+    await service.start()
+    try:
+        await service.wait_connected()
+        service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
+        await _poll(lambda: service._availability.get(avail) == b"online")
+        with contextlib.suppress(aiomqtt.MqttError):
+            await old.publish(avail, payload=b"offline", retain=True)
+        await asyncio.sleep(0.5)
+
+        received: list[Any] = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(avail)
+            await _collect_messages(sub, received, timeout=2)
+        assert [m.payload for m in received] == [b"online"]
+    finally:
+        await service.stop()
+        with contextlib.suppress(aiomqtt.MqttError):
+            await old.__aexit__(None, None, None)
+
+
 def _throttled_service(interval: float) -> MqttInsightsService:
     return MqttInsightsService(
         MqttInsightsConfig(broker="broker.invalid", state_throttle_interval=interval)
