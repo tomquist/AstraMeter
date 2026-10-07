@@ -192,6 +192,16 @@ class MqttInsightsService:
         self._queue: asyncio.Queue[_Event] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
         self._queue_dropped = 0
         self._task: asyncio.Task[None] | None = None
+        # One client identifier for every connection this service makes, so a
+        # reconnect takes the broker session over from the connection it
+        # replaces.  A fresh identifier each time left that older connection
+        # open on the broker: when a stalled link made us give up on it, its
+        # unsent bytes could still land after the new connection's, and a
+        # battery's eviction "offline" then overwrote the "online" sent once
+        # on its return — retained for good, since ``_availability`` says it
+        # already went out (issue #718).  The broker drops the superseded
+        # connection on takeover, so nothing it sends afterwards is applied.
+        self._client_id = mqtt_client_id()
         # Discovery already published this session, as (kind, key) — one set
         # so a new device family adds a kind instead of a sixth parallel set,
         # a sixth ``clear()`` and a sixth counter.
@@ -465,7 +475,7 @@ class MqttInsightsService:
             "username": cfg.username,
             "password": cfg.password,
             "tls_context": tls_context,
-            "identifier": mqtt_client_id(),
+            "identifier": self._client_id,
         }
 
     async def _announce(self, client: aiomqtt.Client) -> None:
