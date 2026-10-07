@@ -1165,6 +1165,108 @@ async def test_connects_to_broker_refusing_empty_client_id(
 
 
 @needs_mosquitto
+async def test_session_drop_cancels_the_old_sessions_loops(
+    mqtt_broker: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When one session loop ends, the others go with it before the reconnect.
+
+    A leftover ``_publish_loop`` would be first in line on the queue and lose
+    the first event after the reconnect on the dead client; a leftover
+    ``_marstek_broadcast_loop`` would keep polling on it forever.
+    """
+    monkeypatch.setattr("astrameter.mqtt_insights.service.RECONNECT_DELAY", 0)
+    port = mqtt_broker
+    global _test_counter
+    _test_counter += 1
+    service = MqttInsightsService(
+        MqttInsightsConfig(
+            broker="127.0.0.1",
+            port=port,
+            base_topic=f"test_insights_{_test_counter}",
+            ha_discovery=False,
+            marstek_mqtt_interval=0.05,
+        )
+    )
+    base = service._config.base_topic
+
+    sessions: list[list[asyncio.Task[Any]]] = []
+    session_loops = service._session_loops
+
+    def recording_session_loops(client: aiomqtt.Client) -> list[Any]:
+        tasks: list[asyncio.Task[Any]] = []
+        sessions.append(tasks)
+
+        async def track(loop: Any) -> None:
+            tasks.append(cast("asyncio.Task[Any]", asyncio.current_task()))
+            await loop
+
+        return [track(loop) for loop in session_loops(client)]
+
+    listen_commands = service._listen_commands
+
+    async def drop_first_session(client: aiomqtt.Client) -> None:
+        if len(sessions) == 1:
+            await asyncio.sleep(0.2)
+            raise aiomqtt.MqttError("forced drop")
+        await listen_commands(client)
+
+    monkeypatch.setattr(service, "_session_loops", recording_session_loops)
+    monkeypatch.setattr(service, "_listen_commands", drop_first_session)
+
+    await service.start()
+    try:
+        await _poll(lambda: len(sessions) == 2 and service.connected)
+
+        old_session = sessions[0]
+        # publish, commands and the Marstek broadcast loop.
+        assert len(old_session) == 3
+        assert all(task.done() for task in old_session)
+
+        received: list[Any] = []
+        async with aiomqtt.Client(hostname="127.0.0.1", port=port) as sub:
+            await sub.subscribe(f"{base}/ct002/+/consumer/+")
+            service.on_ct002_response("dev1", "consumer1", SAMPLE_CT002_DATA)
+            await _collect_messages(sub, received)
+
+        assert len(received) == 1
+        assert str(received[0].topic) == f"{base}/ct002/dev1/consumer/consumer1"
+        assert len(sessions) == 2
+    finally:
+        await service.stop()
+
+
+async def test_session_end_outlasts_a_swallowed_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before Python 3.12 ``asyncio.wait_for``, which aiomqtt's publish awaits,
+    can swallow a cancel and leave the loop parked on its next ``await``.  The
+    session cancels it again rather than waiting on it forever."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="broker.invalid"))
+    swallowed = 0
+
+    async def stubborn(client: aiomqtt.Client) -> None:
+        nonlocal swallowed
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            swallowed += 1
+        await asyncio.Event().wait()
+
+    async def drop(client: aiomqtt.Client) -> None:
+        await asyncio.sleep(0)
+        raise aiomqtt.MqttError("forced drop")
+
+    monkeypatch.setattr(service, "_announce", AsyncMock())
+    monkeypatch.setattr(
+        service, "_session_loops", lambda client: [stubborn(client), drop(client)]
+    )
+
+    with pytest.raises(aiomqtt.MqttError, match="forced drop"):
+        await asyncio.wait_for(service._serve_connection(mock.Mock()), timeout=5)
+    assert swallowed == 1
+
+
+@needs_mosquitto
 async def test_publishes_device_status(mqtt_broker: int) -> None:
     port = mqtt_broker
     service = _make_service(port)

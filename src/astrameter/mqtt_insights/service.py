@@ -515,12 +515,37 @@ class MqttInsightsService:
         return loops
 
     async def _serve_connection(self, client: aiomqtt.Client) -> None:
-        """Announce ourselves, then run the session loops until one ends."""
+        """Announce ourselves, then run the session loops until one ends.
+
+        The first loop to end takes the rest down with it: they are all bound
+        to *client*, and one left running past the reconnect would compete
+        with the new session — a stale ``_publish_loop`` is first in line on
+        ``_queue`` and would lose the next event on the dead client.  Not
+        ``TaskGroup`` (3.11+), and not ``gather``, which cancels nothing.
+        """
         await self._announce(client)
         self._connected.set()
+        tasks = [asyncio.create_task(loop) for loop in self._session_loops(client)]
         try:
-            await asyncio.gather(*self._session_loops(client))
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            # Re-raise the loop's own error (``MqttError`` on a drop) so
+            # ``_run`` picks its reconnect branch.
+            for task in tasks:
+                if task.done() and not task.cancelled():
+                    exc = task.exception()
+                    if exc is not None:
+                        raise exc
         finally:
+            # Cancel until each loop is really gone: before Python 3.12,
+            # ``asyncio.wait_for`` (which aiomqtt's publish awaits) swallows a
+            # cancel that lands as its inner future completes, and the loop
+            # carries on to park on its next ``await``.
+            pending = set(tasks)
+            while pending:
+                for task in pending:
+                    task.cancel()
+                _, pending = await asyncio.wait(pending, timeout=0.1)
+            await asyncio.gather(*tasks, return_exceptions=True)
             async with self._marstek_lock:
                 self._client = None
             await self._cancel_marstek_tasks()
