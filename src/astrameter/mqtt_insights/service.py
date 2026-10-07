@@ -536,8 +536,15 @@ class MqttInsightsService:
                     if exc is not None:
                         raise exc
         finally:
-            for task in tasks:
-                task.cancel()
+            # Cancel until each loop is really gone: before Python 3.12,
+            # ``asyncio.wait_for`` (which aiomqtt's publish awaits) swallows a
+            # cancel that lands as its inner future completes, and the loop
+            # carries on to park on its next ``await``.
+            pending = set(tasks)
+            while pending:
+                for task in pending:
+                    task.cancel()
+                _, pending = await asyncio.wait(pending, timeout=0.1)
             await asyncio.gather(*tasks, return_exceptions=True)
             async with self._marstek_lock:
                 self._client = None

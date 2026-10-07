@@ -1235,6 +1235,37 @@ async def test_session_drop_cancels_the_old_sessions_loops(
         await service.stop()
 
 
+async def test_session_end_outlasts_a_swallowed_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before Python 3.12 ``asyncio.wait_for``, which aiomqtt's publish awaits,
+    can swallow a cancel and leave the loop parked on its next ``await``.  The
+    session cancels it again rather than waiting on it forever."""
+    service = MqttInsightsService(MqttInsightsConfig(broker="broker.invalid"))
+    swallowed = 0
+
+    async def stubborn(client: aiomqtt.Client) -> None:
+        nonlocal swallowed
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            swallowed += 1
+        await asyncio.Event().wait()
+
+    async def drop(client: aiomqtt.Client) -> None:
+        await asyncio.sleep(0)
+        raise aiomqtt.MqttError("forced drop")
+
+    monkeypatch.setattr(service, "_announce", AsyncMock())
+    monkeypatch.setattr(
+        service, "_session_loops", lambda client: [stubborn(client), drop(client)]
+    )
+
+    with pytest.raises(aiomqtt.MqttError, match="forced drop"):
+        await asyncio.wait_for(service._serve_connection(mock.Mock()), timeout=5)
+    assert swallowed == 1
+
+
 @needs_mosquitto
 async def test_publishes_device_status(mqtt_broker: int) -> None:
     port = mqtt_broker
