@@ -1,0 +1,92 @@
+# AstraMeter for one Marstek Venus E 2.0 and one Venus E 3.0.
+# Grid source: Shelly Pro 3EM at 10.0.40.72.
+# Marstek Venus E 2.0 (MST_ACCP_V2) is reachable at 10.0.40.85.
+# Marstek Venus E 3.0 is reachable at 10.0.40.77.
+# FoxESS cloud connector at 10.0.40.69 is not part of the control loop.
+
+esphome:
+  name: astrameter-ct002
+  friendly_name: AstraMeter CT002
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source: github://tomquist/astrameter@2.3.1
+    components: [ct002]
+
+http_request:
+  useragent: esphome/astrameter
+  timeout: 5s
+  buffer_size_rx: 4096
+
+interval:
+  - interval: 1s
+    then:
+      - http_request.get:
+          url: http://10.0.40.72/rpc/EM.GetStatus?id=0
+          capture_response: true
+          max_response_buffer_size: 4096
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(grid_l1).publish_state(root["a_act_power"]);
+                    id(grid_l2).publish_state(root["b_act_power"]);
+                    id(grid_l3).publish_state(root["c_act_power"]);
+                    return true;
+                  });
+
+sensor:
+  - platform: template
+    id: grid_l1
+    name: Grid L1 Power
+    unit_of_measurement: W
+    device_class: power
+  - platform: template
+    id: grid_l2
+    name: Grid L2 Power
+    unit_of_measurement: W
+    device_class: power
+  - platform: template
+    id: grid_l3
+    name: Grid L3 Power
+    unit_of_measurement: W
+    device_class: power
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  ct_type: HME-4
+  active_control: true
+  filters:
+    deadband:
+      deadband: 20
+  balancer:
+    fair_distribution: true
+    balance_gain: 0.2
+    balance_deadband: 25
+    max_correction_per_step: 80
+    pace_base_step: 30
+    pace_max_step: 100
+    min_dc_output: 0
+    min_efficient_power: 150
+    efficiency_rotation_interval: 15min
+    probe_min_power: 80
+  saturation:
+    enabled: true
+  dashboard:
+    controls: false

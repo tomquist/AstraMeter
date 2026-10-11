@@ -1,6 +1,7 @@
 **/__pycache__/*
 *.py[cod]
 .venv/
+.esphome/
 *.egg-info/
 dist/
 build/
@@ -12,4 +13,5 @@ htmlcov/
 test-results.xml
 coverage.xml
 config.ini
+secrets.yaml
 .DS_Store
