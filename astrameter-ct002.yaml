@@ -67,6 +67,7 @@ sensor:
 
 ct002:
   id: ct002_main
+  ct_mac: "02b25069325f"
   power_sensor_l1: grid_l1
   power_sensor_l2: grid_l2
   power_sensor_l3: grid_l3
