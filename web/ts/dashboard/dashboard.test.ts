@@ -169,6 +169,10 @@ ok(
 ok(contribution({}) === undefined, "no report means no contribution");
 ok(railScale(-13, allConsumers(snapshot)) === 500, "rail scale rounds up past the peak");
 ok(railScale(undefined, []) === 100, "rail scale has a floor");
+ok(
+  railScale(10, [], [{ power_w: 1200 }]) === 1500,
+  "external batteries participate in the rail scale",
+);
 ok(pollInterval(snapshot) === 2000, "poll interval follows the backend");
 ok(
   pollInterval({ ...snapshot, capabilities: { poll_interval_ms: 1 } }) === 500,
@@ -1332,6 +1336,29 @@ ok(
   (phantomBatteries.match(/batt-figure/g) || []).length === 1,
   "only the real battery gets a power figure",
 );
+
+const externalHtml = renderToString(
+  h(
+    "div",
+    null,
+    ...view(
+      {
+        ...phantomState,
+        snapshot: {
+          ...phantomSnapshot,
+          external_batteries: [
+            { name: "FoxESS", power_w: -180, soc_pct: 34, mode: 0 },
+          ],
+        },
+      },
+      actions,
+      initialConfigState(),
+    ),
+  ),
+);
+has(externalHtml, "FoxESS · external · 34% · Self Use", "external battery metadata is shown");
+has(externalHtml, "contrib-fill external charge", "external charging has a striped rail");
+has(externalHtml, "+180 W", "charging is shown as reduced grid export");
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);

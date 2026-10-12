@@ -232,6 +232,15 @@ void write_consumer(JsonWriter &json, const ConsumerStatus &consumer) {
   json.end_object();
 }
 
+void write_external_battery(JsonWriter &json, const ExternalBatteryStatus &battery) {
+  json.begin_object();
+  json.set_if("name", battery.name);
+  json.set("power_w", battery.power_w, 1);
+  json.set("soc_pct", battery.soc_pct, 1);
+  if (battery.mode.has_value()) json.set("mode", static_cast<long long>(*battery.mode));
+  json.end_object();
+}
+
 // Mirrors serialize.py::_control_quality_to_wire.
 void write_control_quality(JsonWriter &json, const ControlQualitySnapshot &quality) {
   json.begin_object("control_quality");
@@ -457,6 +466,11 @@ std::string build_status_json(const StatusDocument &doc) {
   if (!doc.devices.empty()) {
     json.begin_array("devices");
     for (const auto &device : doc.devices) write_device(json, device);
+    json.end_array();
+  }
+  if (!doc.external_batteries.empty()) {
+    json.begin_array("external_batteries");
+    for (const auto &battery : doc.external_batteries) write_external_battery(json, battery);
     json.end_array();
   }
   if (doc.mqtt_insights.has_value()) write_integrations(json, *doc.mqtt_insights);

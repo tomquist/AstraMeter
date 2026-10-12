@@ -33,6 +33,7 @@
 
 #ifdef USE_CT002_DASHBOARD
 #include "esphome/core/helpers.h"
+#include "esphome/components/sensor/sensor.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #endif
 
@@ -48,6 +49,13 @@ namespace dashboard {
 
 class DashboardComponent : public Component, public AsyncWebHandler {
  public:
+  struct ExternalBatterySource {
+    std::string name;
+    sensor::Sensor *power;
+    sensor::Sensor *soc;
+    sensor::Sensor *mode;
+  };
+
   void setup() override;
   void loop() override;
   void dump_config() override;
@@ -76,6 +84,10 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   /// behind a reverse proxy — see `controls::is_allowed_host` for why a name
   /// is refused by default.
   void add_allowed_host(const std::string &host) { this->allowed_hosts_.push_back(host); }
+  void add_external_battery(const std::string &name, sensor::Sensor *power,
+                            sensor::Sensor *soc, sensor::Sensor *mode) {
+    this->external_batteries_.push_back({name, power, soc, mode});
+  }
 
   // NOLINTNEXTLINE(readability-identifier-naming)
   bool canHandle(AsyncWebServerRequest *request) const override;
@@ -112,6 +124,7 @@ class DashboardComponent : public Component, public AsyncWebHandler {
   std::string log_level_;
   bool controls_{false};
   std::vector<std::string> allowed_hosts_;
+  std::vector<ExternalBatterySource> external_batteries_;
 
   // Handover between the httpd task and the main loop. `document_` and the
   // write slot are only ever touched under `lock_`; `refresh_requested_` is a

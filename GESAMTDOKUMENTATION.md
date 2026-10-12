@@ -180,6 +180,12 @@ Das Laufzeit-Logging steht auf `INFO`. Dadurch bleiben Zustandswechsel und
 Fehler sichtbar, während die sekündlichen HTTP- und Sensor-Debugmeldungen das
 Dashboard nicht mehr füllen.
 
+Unter **Each battery's effect on the grid** erscheint FoxESS als schraffierte
+`external`-Spur mit Leistung, SOC und Betriebsart. Der Wert ist eine aus der
+FoxESS-Batterieleistung abgeleitete Netzwirkung. Er dient nur der Anzeige;
+FoxESS wird dadurch weder zum CT002-Consumer noch Teil des schnellen
+Marstek-Balancers.
+
 ## 9. Firmware warten und installieren
 
 Die produktive Konfiguration ist `astrameter-ct002.yaml`. WLAN-Zugangsdaten

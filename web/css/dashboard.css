@@ -372,6 +372,15 @@ main {
   background: var(--discharge);
 }
 
+.contrib-fill.external {
+  opacity: 0.75;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 5px,
+    rgb(255 255 255 / 45%) 5px 8px
+  );
+}
+
 .contrib-val {
   text-align: right;
   font-variant-numeric: tabular-nums;

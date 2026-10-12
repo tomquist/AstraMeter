@@ -438,6 +438,15 @@ void DashboardComponent::rebuild_() {
   doc.service.web_port = this->base_->get_port();
   doc.powermeters.push_back(this->ct002_->powermeter_status());
   doc.devices.push_back(this->ct002_->status_snapshot(wall));
+  for (const auto &source : this->external_batteries_) {
+    status::ExternalBatteryStatus battery;
+    battery.name = source.name;
+    if (source.power != nullptr && source.power->has_state()) battery.power_w = source.power->state;
+    if (source.soc != nullptr && source.soc->has_state()) battery.soc_pct = source.soc->state;
+    if (source.mode != nullptr && source.mode->has_state())
+      battery.mode = static_cast<int>(std::lround(source.mode->state));
+    doc.external_batteries.push_back(std::move(battery));
+  }
   if (this->mqtt_insights_ != nullptr) {
     doc.mqtt_insights = this->mqtt_insights_->status_snapshot();
   }

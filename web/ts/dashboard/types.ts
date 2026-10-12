@@ -167,6 +167,13 @@ export interface ShellyBatteryStatus {
   active?: boolean;
 }
 
+export interface ExternalBatteryStatus {
+  name?: string;
+  power_w?: number; // + discharge, − charge
+  soc_pct?: number;
+  mode?: number; // FoxESS: 0 Self Use, 2 Backup
+}
+
 export interface StatusSnapshot {
   schema_version: number;
   generated_at: string;
@@ -177,5 +184,6 @@ export interface StatusSnapshot {
   service?: ServiceInfo;
   powermeters?: PowermeterStatus[];
   devices?: DeviceStatus[];
+  external_batteries?: ExternalBatteryStatus[];
   integrations?: Record<string, any>;
 }

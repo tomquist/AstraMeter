@@ -5,6 +5,7 @@
 
 import type {
   ConsumerStatus,
+  ExternalBatteryStatus,
   DeviceStatus,
   PowermeterStatus,
   ShellyBatteryStatus,
@@ -215,11 +216,15 @@ export function contribution(consumer: ConsumerStatus): number | undefined {
 export function railScale(
   grid: number | undefined,
   consumers: ConsumerStatus[],
+  externalBatteries: ExternalBatteryStatus[] = [],
 ): number {
   const magnitudes = [Math.abs(grid ?? 0)];
   for (const c of consumers) {
     const value = contribution(c);
     if (value != null) magnitudes.push(Math.abs(value));
+  }
+  for (const battery of externalBatteries) {
+    if (battery.power_w != null) magnitudes.push(Math.abs(battery.power_w));
   }
   const peak = Math.max(...magnitudes, 1);
   // Round up to a friendly step so the axis labels are readable and the

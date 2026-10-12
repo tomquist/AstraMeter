@@ -710,6 +710,11 @@ CONF_PATH = "path"
 CONF_CONTROLS = "controls"
 CONF_ALLOWED_HOSTS = "allowed_hosts"
 CONF_WEB_SERVER_LINK = "web_server_link"
+CONF_EXTERNAL_BATTERIES = "external_batteries"
+CONF_NAME = "name"
+CONF_POWER_SENSOR = "power_sensor"
+CONF_SOC_SENSOR = "soc_sensor"
+CONF_MODE_SENSOR = "mode_sensor"
 
 # Where a default-on dashboard goes when `web_server:` already holds the root.
 DASHBOARD_ASIDE_PATH = "/astrameter"
@@ -813,6 +818,16 @@ DASHBOARD_OPTIONS_SCHEMA = cv.Schema(
         # Only bites when `web_server:` is configured, which is the only case
         # where the dashboard is not at the root and so needs pointing at.
         cv.Optional(CONF_WEB_SERVER_LINK, default=True): cv.boolean,
+        cv.Optional(CONF_EXTERNAL_BATTERIES, default=[]): cv.ensure_list(
+            cv.Schema(
+                {
+                    cv.Required(CONF_NAME): cv.string_strict,
+                    cv.Required(CONF_POWER_SENSOR): cv.use_id(sensor.Sensor),
+                    cv.Optional(CONF_SOC_SENSOR): cv.use_id(sensor.Sensor),
+                    cv.Optional(CONF_MODE_SENSOR): cv.use_id(sensor.Sensor),
+                }
+            )
+        ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -1269,6 +1284,19 @@ async def _to_code_dashboard(config, ct002_var):
     cg.add(var.set_controls(sub[CONF_CONTROLS]))
     for host in sub[CONF_ALLOWED_HOSTS]:
         cg.add(var.add_allowed_host(host))
+    for battery in sub[CONF_EXTERNAL_BATTERIES]:
+        power = await cg.get_variable(battery[CONF_POWER_SENSOR])
+        soc = (
+            await cg.get_variable(battery[CONF_SOC_SENSOR])
+            if CONF_SOC_SENSOR in battery
+            else cg.nullptr
+        )
+        mode = (
+            await cg.get_variable(battery[CONF_MODE_SENSOR])
+            if CONF_MODE_SENSOR in battery
+            else cg.nullptr
+        )
+        cg.add(var.add_external_battery(battery[CONF_NAME], power, soc, mode))
 
     # When MQTT Insights is configured too, the page shows that integration's
     # state — the same card the Python add-on's dashboard has.

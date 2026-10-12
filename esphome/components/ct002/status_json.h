@@ -133,6 +133,13 @@ struct ConsumerStatus {
   std::optional<BalancerConsumerSnapshot> balancer;
 };
 
+struct ExternalBatteryStatus {
+  std::string name;
+  std::optional<float> power_w;  ///< positive discharge, negative charge
+  std::optional<float> soc_pct;
+  std::optional<int> mode;
+};
+
 struct DeviceStatus {
   std::string device_id;
   std::string ct_type;
@@ -178,6 +185,7 @@ struct StatusDocument {
   ServiceStatus service;
   std::vector<PowermeterStatus> powermeters;
   std::vector<DeviceStatus> devices;
+  std::vector<ExternalBatteryStatus> external_batteries;
   /// Absent unless the `mqtt_insights:` sub-block is configured.
   std::optional<MqttInsightsStatus> mqtt_insights;
 };

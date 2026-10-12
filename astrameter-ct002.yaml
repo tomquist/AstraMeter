@@ -62,7 +62,7 @@ web_server:
   version: 3
 
 external_components:
-  - source: github://tomquist/astrameter@2.3.1
+  - source: esphome/components
     components: [ct002]
 
 http_request:
@@ -255,3 +255,8 @@ ct002:
     enabled: true
   dashboard:
     controls: false
+    external_batteries:
+      - name: FoxESS
+        power_sensor: foxess_battery_power
+        soc_sensor: foxess_battery_soc
+        mode_sensor: foxess_work_mode

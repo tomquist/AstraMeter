@@ -109,6 +109,13 @@ StatusDocument sample() {
 
   doc.devices.push_back(device);
 
+  ExternalBatteryStatus external;
+  external.name = "FoxESS";
+  external.power_w = -180.0f;
+  external.soc_pct = 34.0f;
+  external.mode = 0;
+  doc.external_batteries.push_back(external);
+
   MqttInsightsStatus insights;
   insights.connected = true;
   insights.broker = "192.168.1.10";
@@ -316,9 +323,17 @@ TEST(StatusJson, DropsSectionsWithNothingInThem) {
   const std::string json = build_status_json(doc);
   EXPECT_FALSE(contains(json, "powermeters"));
   EXPECT_FALSE(contains(json, "devices"));
+  EXPECT_FALSE(contains(json, "external_batteries"));
   // The three fields the schema guarantees survive an empty document.
   EXPECT_TRUE(contains(json, "\"schema_version\":1"));
   EXPECT_TRUE(contains(json, "\"capabilities\""));
+}
+
+TEST(StatusJson, WritesExternalBatteriesAsAnOptionalDisplaySection) {
+  const std::string json = build_status_json(sample());
+  EXPECT_TRUE(contains(
+      json,
+      "\"external_batteries\":[{\"name\":\"FoxESS\",\"power_w\":-180,\"soc_pct\":34,\"mode\":0}]"));
 }
 
 TEST(StatusJson, EscapesTextThatWouldBreakTheDocument) {

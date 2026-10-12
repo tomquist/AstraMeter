@@ -33,6 +33,9 @@ different generations; AstraMeter independently confirmed both consumers.
 - The ESPHome sensor page is available at `http://10.0.40.74/` and shows the
   FoxESS and Shelly values. The read-only AstraMeter dashboard is available at
   `http://10.0.40.74/astrameter` while that DHCP lease is unchanged.
+- The dashboard shows FoxESS as a striped external battery under **Each
+  battery's effect on the grid**, including SOC and work mode. This is a
+  display-only estimate and does not add FoxESS to CT002 balancing.
 - The Shelly endpoint `/rpc/EM.GetStatus?id=0` is read every second and all
   three phase values are received.
 - Both batteries poll approximately every 0.5-0.7 seconds and participate in

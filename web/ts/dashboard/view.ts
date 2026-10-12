@@ -38,6 +38,7 @@ import {
 } from "./model.js";
 import type {
   ConsumerStatus,
+  ExternalBatteryStatus,
   DeviceStatus,
   ShellyBatteryStatus,
   StatusSnapshot,
@@ -160,7 +161,8 @@ function balanceRail(state: AppState, offline: boolean): VNode {
   const snapshot = state.snapshot;
   const grid = gridTotal(snapshot);
   const consumers = reportingConsumers(snapshot).filter((c) => !c.expired);
-  const scale = railScale(grid, consumers);
+  const externalBatteries = snapshot?.external_batteries ?? [];
+  const scale = railScale(grid, consumers, externalBatteries);
 
   const importing = (grid ?? 0) > 0;
   const direction = grid == null ? "" : importing ? "import" : "export";
@@ -222,7 +224,7 @@ function balanceRail(state: AppState, offline: boolean): VNode {
         h("span", null, "0"),
         h("span", null, `import ${watts(scale) ?? ""} ▶`),
       ),
-      consumers.length
+      consumers.length || externalBatteries.length
         ? h(
             "div",
             { class: "contrib" },
@@ -236,6 +238,9 @@ function balanceRail(state: AppState, offline: boolean): VNode {
               "Each battery's effect on the grid",
             ),
             ...consumers.map((c) => contributionRow(c, fillStyle)),
+            ...externalBatteries.map((battery) =>
+              externalContributionRow(battery, fillStyle),
+            ),
           )
         : null,
       offline
@@ -249,6 +254,51 @@ function balanceRail(state: AppState, offline: boolean): VNode {
             ),
           )
         : null,
+    ),
+  );
+}
+
+function externalContributionRow(
+  battery: ExternalBatteryStatus,
+  fillStyle: (v: number | undefined, r: boolean) => string,
+): VNode {
+  const value = battery.power_w == null ? undefined : -battery.power_w;
+  const charging = (battery.power_w ?? 0) < 0;
+  const mode =
+    battery.mode == null
+      ? null
+      : battery.mode === 0
+        ? "Self Use"
+        : battery.mode === 2
+          ? "Backup"
+          : `Mode ${battery.mode}`;
+  const details = [
+    "external",
+    battery.soc_pct == null ? null : `${Math.round(battery.soc_pct)}%`,
+    mode,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return h(
+    "div",
+    { class: "contrib-row external", title: "External battery; estimated grid effect" },
+    h(
+      "span",
+      { class: "contrib-name" },
+      `${battery.name ?? "External battery"} · ${details}`,
+    ),
+    h(
+      "div",
+      { class: "contrib-track" },
+      h("div", {
+        class: `contrib-fill external ${charging ? "charge" : "discharge"}`,
+        style: fillStyle(value, true),
+      }),
+    ),
+    h(
+      "span",
+      { class: "contrib-val", title: charging ? "charging" : "discharging" },
+      signedWatts(value) ?? "—",
     ),
   );
 }
