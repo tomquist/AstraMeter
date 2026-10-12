@@ -1,6 +1,6 @@
 # AstraMeter deployment
 
-Stand: 11. Oktober 2026
+Stand: 12. Oktober 2026
 
 This deployment runs AstraMeter 2.3.1 on a dedicated ESP32 and presents one
 shared CT002 to two Marstek Venus E batteries. The Shelly Pro 3EM is the only
@@ -14,7 +14,7 @@ grid-power source used by the control loop.
 | Shelly Pro 3EM | `10.0.40.72` | Three-phase whole-house grid measurement |
 | Marstek Venus E 2.0 | `10.0.40.85`; CT consumer `009b08782ad6` | Controlled AC battery |
 | Marstek Venus E 3.0 | `10.0.40.77`; CT consumer `0c587b17db18` | Controlled AC battery |
-| FoxESS cloud connector | `10.0.40.69` | Not directly controlled by AstraMeter |
+| FoxESS H3-6.0-E | Modbus RTU slave `247`; cloud connector `10.0.40.69` | Read-only local monitoring; not controlled by AstraMeter |
 
 The registered shared CT is an HME-4/CT002 with MAC `02b25069325f`. Both
 Marstek batteries are configured in automatic mode and poll this CT. The app
@@ -32,6 +32,9 @@ different generations; AstraMeter independently confirmed both consumers.
   three phase values are received.
 - Both batteries poll approximately every 0.5-0.7 seconds and participate in
   balancing. Two consumers and a stable control verdict were observed.
+- The FoxESS H3-6.0-E answers read-only Modbus RTU requests at 9600 baud, 8N1,
+  slave address 247. Register 31000 returned plausible PV1 voltage and register
+  31038 returned 9% battery state of charge during commissioning.
 - One-time Marstek cloud registration succeeded. Cloud credentials are not
   referenced by the final YAML and are not compiled into the final firmware.
 
@@ -40,6 +43,27 @@ different generations; AstraMeter independently confirmed both consumers.
 The Shelly measures the complete grid connection, including FoxESS and both
 Marstek batteries. AstraMeter therefore controls only the residual grid flow;
 FoxESS power must not be added to the Shelly reading.
+
+## FoxESS Modbus wiring
+
+The ESP32 uses UART2 and a MAX485 module powered from 3.3 V:
+
+| ESP32 | MAX485 | Function |
+|---|---|---|
+| GPIO16 / RX2 | RO | Receive |
+| GPIO17 / TX2 | DI | Transmit |
+| GPIO5 | DE and /RE tied together | Direction control |
+| 3V3 | VCC | Module supply |
+| GND | GND | Common logic ground |
+
+MAX485 A and B connect to the inverter's separate RS485 pair. The FoxESS meter
+remains on its own connection, so it does not share this bus with the ESP32
+Modbus master. GPIO5 is an ESP32 strapping pin; the installed module allowed
+normal boot during commissioning, but this remains relevant when replacing the
+module. Running this nominally 5 V MAX485 module at 3.3 V is outside the chip's
+official supply specification, although the installed short link responded
+reliably during commissioning. Replace it with a MAX3485/SP3485 module if
+communication becomes unreliable.
 
 At demand below the configured `150 W` efficiency threshold, AstraMeter may
 intentionally run only one Marstek battery. At higher demand it can distribute
@@ -78,6 +102,3 @@ Use USB only when OTA is unavailable; verify the current COM port first.
    battery from FoxESS. If needed, introduce a small import safety margin only
    after measuring the behavior.
 4. Reserve the ESP32 address in DHCP if a stable dashboard address is wanted.
-
-Do not connect the photographed 5 V MAX485 module directly to ESP32 GPIOs. The
-FoxESS RS485/EW11 path is outside this deployment and remains unconfigured.

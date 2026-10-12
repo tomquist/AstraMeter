@@ -2,7 +2,8 @@
 # Grid source: Shelly Pro 3EM at 10.0.40.72.
 # Marstek Venus E 2.0 (MST_ACCP_V2) is reachable at 10.0.40.85.
 # Marstek Venus E 3.0 is reachable at 10.0.40.77.
-# FoxESS cloud connector at 10.0.40.69 is not part of the control loop.
+# FoxESS H3-6.0-E is monitored read-only over Modbus RTU.
+# Its cloud connector at 10.0.40.69 is not used for local Modbus.
 
 esphome:
   name: astrameter-ct002
@@ -14,6 +15,27 @@ esp32:
     type: esp-idf
 
 logger:
+
+uart:
+  id: foxess_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+modbus:
+  id: foxess_modbus
+  uart_id: foxess_uart
+  flow_control_pin: GPIO5
+  send_wait_time: 250ms
+
+modbus_controller:
+  - id: foxess_h3
+    address: 247
+    modbus_id: foxess_modbus
+    update_interval: 10s
 
 ota:
   - platform: esphome
@@ -49,6 +71,28 @@ interval:
                   });
 
 sensor:
+  - platform: modbus_controller
+    modbus_controller_id: foxess_h3
+    name: FoxESS PV1 Voltage
+    register_type: holding
+    address: 31000
+    value_type: U_WORD
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+  - platform: modbus_controller
+    modbus_controller_id: foxess_h3
+    name: FoxESS Battery State of Charge
+    register_type: holding
+    address: 31038
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+
   - platform: template
     id: grid_l1
     name: Grid L1 Power
