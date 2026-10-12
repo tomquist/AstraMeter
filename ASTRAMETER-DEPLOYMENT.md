@@ -26,8 +26,9 @@ different generations; AstraMeter independently confirmed both consumers.
 - ESPHome validation and compilation succeeded for board profile `esp32dev`.
 - The detected ESP32 flash size is 4 MB.
 - The production firmware uses about 52% of its application partition.
-- The dashboard is available at `http://10.0.40.74/` while that DHCP lease is
-  unchanged and is intentionally read-only.
+- The ESPHome sensor page is available at `http://10.0.40.74/` and shows the
+  FoxESS and Shelly values. The read-only AstraMeter dashboard is available at
+  `http://10.0.40.74/astrameter` while that DHCP lease is unchanged.
 - The Shelly endpoint `/rpc/EM.GetStatus?id=0` is read every second and all
   three phase values are received.
 - Both batteries poll approximately every 0.5-0.7 seconds and participate in
