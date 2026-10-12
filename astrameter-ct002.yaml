@@ -2,12 +2,14 @@
 # Grid source: Shelly Pro 3EM at 10.0.40.72.
 # Marstek Venus E 2.0 (MST_ACCP_V2) is reachable at 10.0.40.85.
 # Marstek Venus E 3.0 is reachable at 10.0.40.77.
-# FoxESS H3-6.0-E is monitored read-only over Modbus RTU.
+# FoxESS H3-6.0-E is connected over Modbus RTU.
 # Its cloud connector at 10.0.40.69 is not used for local Modbus.
 
 esphome:
   name: astrameter-ct002
   friendly_name: AstraMeter CT002
+  includes:
+    - foxess_priority.h
 
 esp32:
   board: esp32dev
@@ -15,6 +17,7 @@ esp32:
     type: esp-idf
 
 logger:
+  level: INFO
 
 uart:
   id: foxess_uart
@@ -37,6 +40,16 @@ modbus_controller:
     modbus_id: foxess_modbus
     update_interval: 10s
 
+output:
+  - platform: modbus_controller
+    id: foxess_work_mode_writer
+    modbus_controller_id: foxess_h3
+    address: 41000
+    register_type: holding
+    value_type: U_WORD
+    write_lambda: |-
+      return x >= 0.5f ? 2.0f : 0.0f;
+
 ota:
   - platform: esphome
 
@@ -57,6 +70,28 @@ http_request:
   timeout: 5s
   buffer_size_rx: 4096
 
+globals:
+  - id: shelly_raw_grid_total
+    type: float
+    restore_value: false
+    initial_value: "NAN"
+  - id: shelly_raw_updated_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: foxess_soc_updated_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: foxess_power_updated_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: foxess_mode_updated_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
 interval:
   - interval: 1s
     then:
@@ -68,11 +103,43 @@ interval:
             then:
               - lambda: |-
                   json::parse_json(body, [](JsonObject root) -> bool {
-                    id(grid_l1).publish_state(root["a_act_power"]);
-                    id(grid_l2).publish_state(root["b_act_power"]);
-                    id(grid_l3).publish_state(root["c_act_power"]);
+                    const float l1 = root["a_act_power"];
+                    const float l2 = root["b_act_power"];
+                    const float l3 = root["c_act_power"];
+                    const float total = l1 + l2 + l3;
+                    id(shelly_raw_grid_total) = total;
+                    id(shelly_raw_updated_ms) = millis();
+                    if (astra_foxess_priority.suppress_marstek_charge() && total < -20.0f) {
+                      id(grid_l1).publish_state(0.0f);
+                      id(grid_l2).publish_state(0.0f);
+                      id(grid_l3).publish_state(0.0f);
+                    } else {
+                      id(grid_l1).publish_state(l1);
+                      id(grid_l2).publish_state(l2);
+                      id(grid_l3).publish_state(l3);
+                    }
                     return true;
                   });
+  - interval: 10s
+    startup_delay: 20s
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          const bool stale = now - id(shelly_raw_updated_ms) > 30000 ||
+                             now - id(foxess_soc_updated_ms) > 60000 ||
+                             now - id(foxess_power_updated_ms) > 60000 ||
+                             now - id(foxess_mode_updated_ms) > 60000;
+          const int command = stale
+              ? astra_foxess_priority.tick(NAN, NAN, NAN, -1)
+              : astra_foxess_priority.tick(
+                    id(shelly_raw_grid_total), id(foxess_battery_soc).state,
+                    id(foxess_battery_power).state,
+                    static_cast<int>(lroundf(id(foxess_work_mode).state)));
+          if (command >= 0) {
+            ESP_LOGI("foxess_priority", "State: %s; setting FoxESS mode to %d",
+                     astra_foxess_priority.state_name(), command);
+            id(foxess_work_mode_writer).set_level(command == 2 ? 1.0f : 0.0f);
+          }
 
 sensor:
   - platform: modbus_controller
@@ -90,9 +157,51 @@ sensor:
   - platform: modbus_controller
     modbus_controller_id: foxess_h3
     name: FoxESS Battery State of Charge
+    id: foxess_battery_soc
     register_type: holding
     address: 31038
     value_type: U_WORD
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    on_value:
+      then:
+        - lambda: id(foxess_soc_updated_ms) = millis();
+
+  - platform: modbus_controller
+    modbus_controller_id: foxess_h3
+    name: FoxESS Battery Power
+    id: foxess_battery_power
+    register_type: holding
+    address: 31036
+    value_type: S_WORD
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    on_value:
+      then:
+        - lambda: id(foxess_power_updated_ms) = millis();
+
+  - platform: modbus_controller
+    modbus_controller_id: foxess_h3
+    name: FoxESS Work Mode
+    id: foxess_work_mode
+    register_type: holding
+    address: 41000
+    value_type: U_WORD
+    reuse_previous_range: false
+    on_value:
+      then:
+        - lambda: id(foxess_mode_updated_ms) = millis();
+
+  - platform: modbus_controller
+    modbus_controller_id: foxess_h3
+    name: FoxESS Minimum State of Charge on Grid
+    id: foxess_min_soc_on_grid
+    register_type: holding
+    address: 41011
+    value_type: U_WORD
+    reuse_previous_range: false
     unit_of_measurement: "%"
     device_class: battery
     state_class: measurement
@@ -112,6 +221,13 @@ sensor:
     name: Grid L3 Power
     unit_of_measurement: W
     device_class: power
+
+text_sensor:
+  - platform: template
+    name: ASTRA Storage Priority
+    update_interval: 10s
+    lambda: |-
+      return {astra_foxess_priority.state_name()};
 
 ct002:
   id: ct002_main

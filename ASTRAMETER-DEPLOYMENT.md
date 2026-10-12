@@ -14,7 +14,7 @@ grid-power source used by the control loop.
 | Shelly Pro 3EM | `10.0.40.72` | Three-phase whole-house grid measurement |
 | Marstek Venus E 2.0 | `10.0.40.85`; CT consumer `009b08782ad6` | Controlled AC battery |
 | Marstek Venus E 3.0 | `10.0.40.77`; CT consumer `0c587b17db18` | Controlled AC battery |
-| FoxESS H3-6.0-E | Modbus RTU slave `247`; cloud connector `10.0.40.69` | Read-only local monitoring; not controlled by AstraMeter |
+| FoxESS H3-6.0-E | Modbus RTU slave `247`; cloud connector `10.0.40.69` | Local monitoring and slow priority control |
 
 The registered shared CT is an HME-4/CT002 with MAC `02b25069325f`. Both
 Marstek batteries are configured in automatic mode and poll this CT. The app
@@ -33,9 +33,12 @@ different generations; AstraMeter independently confirmed both consumers.
   three phase values are received.
 - Both batteries poll approximately every 0.5-0.7 seconds and participate in
   balancing. Two consumers and a stable control verdict were observed.
-- The FoxESS H3-6.0-E answers read-only Modbus RTU requests at 9600 baud, 8N1,
-  slave address 247. Register 31000 returned plausible PV1 voltage and register
-  31038 returned 9% battery state of charge during commissioning.
+- The FoxESS H3-6.0-E answers Modbus RTU requests at 9600 baud, 8N1, slave
+  address 247. Register 31000 returned plausible PV1 voltage and register 31038
+  returned battery state of charge during commissioning.
+- A reversible write test changed work-mode register 41000 from Self Use (`0`)
+  to Backup (`2`) and back to Self Use. Readback confirmed both changes; minimum
+  state of charge on grid remained unchanged at 10%.
 - One-time Marstek cloud registration succeeded. Cloud credentials are not
   referenced by the final YAML and are not compiled into the final firmware.
 
@@ -44,6 +47,27 @@ different generations; AstraMeter independently confirmed both consumers.
 The Shelly measures the complete grid connection, including FoxESS and both
 Marstek batteries. AstraMeter therefore controls only the residual grid flow;
 FoxESS power must not be added to the Shelly reading.
+
+ASTRA coordinates the three batteries with a slow, latched state machine while
+the existing CT002 loop remains responsible for fast Marstek balancing:
+
+- Charging: FoxESS uses Self Use first. While its SOC is below 97%, export is
+  hidden from CT002 so the Marstek batteries cannot charge from FoxESS. After
+  97% SOC and two minutes of export above 150 W, Marstek charging is enabled.
+  A drop below 92% returns priority to FoxESS.
+- Discharging: FoxESS is held in Backup so the Marstek batteries discharge
+  first. Only after grid import stays above 300 W for three minutes is FoxESS
+  released to Self Use. Two minutes of renewed export starts a new charge
+  cycle.
+- Mode changes are checked by Modbus readback and retried twice. Invalid or
+  stale Shelly/FoxESS input, or a missing mode confirmation, stops further
+  automatic writes and leaves the raw Shelly values available to CT002.
+- ASTRA changes only FoxESS work mode 41000. It never changes the user's
+  minimum-SOC setting. The rollback is work mode Self Use (`0`).
+
+The ESPHome page shows the current state as `ASTRA Storage Priority`. Runtime
+logging is limited to `INFO`, so periodic HTTP and sensor debug traffic no
+longer fills the dashboard.
 
 ## FoxESS Modbus wiring
 
@@ -99,7 +123,6 @@ Use USB only when OTA is unavailable; verify the current COM port first.
    load and confirm that both react without oscillation.
 2. Confirm over a full charge/discharge cycle that grid import is positive and
    export is negative.
-3. Watch for material FoxESS overcompensation that could charge a Marstek
-   battery from FoxESS. If needed, introduce a small import safety margin only
-   after measuring the behavior.
+3. Confirm the 97%/92% charge hysteresis over a complete solar cycle and tune
+   it only if the FoxESS SOC reading proves materially delayed.
 4. Reserve the ESP32 address in DHCP if a stable dashboard address is wanted.
