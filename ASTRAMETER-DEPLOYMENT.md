@@ -2,6 +2,10 @@
 
 Stand: 12. Oktober 2026
 
+Die zusammenhängende Betriebs-, Architektur- und Fehlerdokumentation steht in
+[`GESAMTDOKUMENTATION.md`](GESAMTDOKUMENTATION.md). Diese Datei protokolliert
+ergänzend den konkreten Deployment- und Verifikationsstand.
+
 This deployment runs AstraMeter 2.3.1 on a dedicated ESP32 and presents one
 shared CT002 to two Marstek Venus E batteries. The Shelly Pro 3EM is the only
 grid-power source used by the control loop.
