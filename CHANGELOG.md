@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 2.3.1
 
 - **Fixed** a battery's Home Assistant entities staying unavailable until a restart since 2.3.1, after a network hiccup briefly dropped the battery and the MQTT connection at the same time ([#718](https://github.com/tomquist/astrameter/issues/718), [#719](https://github.com/tomquist/astrameter/pull/719)).
 

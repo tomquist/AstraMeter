@@ -1316,6 +1316,8 @@ class CT002:
         """Whether *request* names the CT MAC we are configured to answer for."""
         if not self.ct_mac:
             return True
+        if request.ct_mac in ("", "000000000000"):
+            return True
         return bool(request.ct_mac) and request.ct_mac.lower() == self.ct_mac.lower()
 
     async def _safe_handle_request(
