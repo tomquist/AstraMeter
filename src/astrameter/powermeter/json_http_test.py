@@ -56,3 +56,23 @@ async def test_headers_and_auth(mock_aiohttp_session: MagicMock) -> None:
         assert result == [50.0]
         mock_aiohttp_session.get.assert_called_once_with("http://localhost")
         await meter.stop()
+
+
+async def test_json_path_parsed_once_across_readings(
+    mock_aiohttp_session: MagicMock,
+) -> None:
+    """Parsing a path builds a whole PLY parser; every reading must reuse it."""
+    from astrameter.powermeter import json_http
+
+    json_http._compile.cache_clear()
+    mock_aiohttp_session.set_json({"p1": 100, "p2": 200})
+    with (
+        patch("aiohttp.ClientSession", return_value=mock_aiohttp_session),
+        patch.object(json_http, "parse", wraps=json_http.parse) as parse,
+    ):
+        meter = JsonHttpPowermeter("http://localhost", ["$.p1", "$.p2"])
+        await meter.start()
+        for _ in range(5):
+            assert await meter.get_powermeter_watts() == [100.0, 200.0]
+        await meter.stop()
+    assert parse.call_count == 2

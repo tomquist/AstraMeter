@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "esphome/core/component.h"
@@ -176,6 +177,7 @@ class CT002Component : public Component {
   void set_wifi_rssi(int v) { this->wifi_rssi_ = v; }
   void set_udp_port(uint16_t v) { this->udp_port_ = v; }
   void set_active_control(bool v) { this->active_control_ = v; }
+  void set_peakshaving_threshold(float threshold);
   void set_max_sensor_age_ms(uint32_t v) { this->max_sensor_age_ms_ = v; }
 #ifdef USE_CT002_TEST_HOOKS
   // Enable the test-control UDP server on this port. Only compiled when the
@@ -298,6 +300,7 @@ class CT002Component : public Component {
   // Used by mqtt_insights for the device-level "active_control" entity so
   // HA reflects the configured state instead of always reading "running".
   bool active_control() const { return this->active_control_; }
+  float peakshaving_threshold() const { return this->peakshaving_threshold_; }
   // Fixed TTL (seconds) after which a silent consumer is evicted from the
   // tracking map. When never called (the YAML default), eviction is adaptive
   // — ~2 missed poll cycles per consumer — matching Python's
@@ -418,6 +421,10 @@ class CT002Component : public Component {
   bool consumer_expired_(const Consumer &c, double now) const;
   std::vector<float> compute_smooth_target_(const std::vector<float> &values,
                                             const std::string &consumer_id);
+  // Caps household demand handed to the balancer at peakshaving_threshold_,
+  // and says whether the steered batteries should idle at 0 W (mirrors
+  // CT002._peakshaving in ct002.py).
+  std::pair<float, bool> peakshaving_(float total) const;
   // Monotonic seconds used for all time-gated logic (saturation, probe,
   // eviction, dedup, poll_interval). Instance method (not static) so the
   // test-hook mock clock can override it. Falls back to millis() in
@@ -435,6 +442,7 @@ class CT002Component : public Component {
   int wifi_rssi_{-50};
   uint16_t udp_port_{12345};
   bool active_control_{true};
+  float peakshaving_threshold_{0.0f};
   uint32_t max_sensor_age_ms_{30000};
   // Fixed eviction TTL for stale consumers, in seconds (Python:
   // consumer_ttl). Unset (default) = adaptive per-consumer TTL derived from

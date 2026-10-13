@@ -7,7 +7,7 @@ configuration:
     description: "The entity ID of the sensor(s) that provide the current power output. For multi-phase setups, enter multiple entity IDs separated by commas (e.g., 'sensor.phase1_out,sensor.phase2_out,sensor.phase3_out'). If you only have one sensor for both input and output, leave this empty."
   device_types:
     name: Emulated Devices
-    description: "Comma-separated list of devices to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new). Use ct002 or ct003 for multiple storage devices; use a Shelly type otherwise. The device type shellypro3em_old uses port 1010 (used up until B2500 firmware version 224). The device type shellypro3em_new uses the new port 2220 (used for B2500 firmware >=226). If you use shellypro3em, it will use shellypro3em_old and shellypro3em_new simultaneously for backwards compatibility."
+    description: "Comma-separated list of devices to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new). Use ct002 or ct003. The device type shellypro3em_old uses port 1010 (used up until B2500 firmware version 224). The device type shellypro3em_new uses the new port 2220 (used for B2500 firmware >=226). If you use shellypro3em, it will use shellypro3em_old and shellypro3em_new simultaneously for backwards compatibility."
   ct_mac:
     name: CT MAC Override
     description: "Optional MAC address of the emulated CT device (the CT MAC addressed in incoming requests). Leave empty to respond regardless of addressed CT MAC and mirror that addressed CT MAC in the response. If set, only requests addressed to this CT MAC are answered."
@@ -29,6 +29,9 @@ configuration:
   active_control:
     name: Active Control
     description: "When enabled (default), the emulator smooths the grid reading, splits the target across batteries and balances them. Disable for relay mode: the raw per-phase readings are forwarded and each battery decides on its own. Only applies to CT002/CT003 device types."
+  peakshaving_threshold:
+    name: Peak Shaving Threshold
+    description: "For tariffs that bill on peak demand (e.g. the Belgian capacity tariff): the batteries only cover net household demand above this many watts. Below it they stay idle instead of covering everyday load, while solar surplus still charges them. Set to 0 to disable (default); up to 10000. Also adjustable live from the dashboard or Home Assistant. Only applies to CT002/CT003 device types with active control."
   min_efficient_power:
     name: Min Efficient Power
     description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."

@@ -45,6 +45,16 @@ stack. Shared behavior lands on **both** sides in the same change;
   the topic, because the firmware's `MQTTClient::subscribe` callback is handed
   `(topic, payload)` with no retain flag. It needs no such cleanup anyway,
   having never published a press.
+
+  The device settings (`DEVICE_SETTINGS`: `active_control`,
+  `peakshaving_threshold`) share one retained topic, so neither stack ever
+  publishes one alone: every write — dashboard, or a single-field command from
+  Home Assistant — republishes all *persisted* settings at their current value
+  (`publish_device_setting` ↔ `mirror_device_setting`). A setting is persisted
+  once something writes it, so one only ever configured in a file is never
+  pinned on the broker. A command that already carries every persisted
+  setting at its current value is left alone, which is what stops our own
+  republish from looping.
 - **Configuration** — permanently waived. An ESPHome device's config is compiled
   into its firmware, so there is nothing for a dashboard to write; the page hides
   its Configuration tab when the backend reports no `config_mode`.

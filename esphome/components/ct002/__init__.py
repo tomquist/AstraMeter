@@ -83,6 +83,7 @@ CONF_CT_MAC = "ct_mac"
 CONF_WIFI_RSSI = "wifi_rssi"
 CONF_UDP_PORT = "udp_port"
 CONF_ACTIVE_CONTROL = "active_control"
+CONF_PEAKSHAVING_THRESHOLD = "peakshaving_threshold"
 CONF_MAX_SENSOR_AGE = "max_sensor_age"
 CONF_CONSUMER_TTL = "consumer_ttl"
 CONF_DEDUPE_WINDOW = "dedupe_window"
@@ -992,6 +993,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_WIFI_RSSI, default=-50): cv.int_range(min=-127, max=0),
             cv.Optional(CONF_UDP_PORT, default=12345): cv.port,
             cv.Optional(CONF_ACTIVE_CONTROL, default=True): cv.boolean,
+            cv.Optional(CONF_PEAKSHAVING_THRESHOLD, default=0.0): cv.float_range(
+                min=0.0, max=10000.0
+            ),
             cv.Optional(
                 CONF_MAX_SENSOR_AGE, default="30s"
             ): cv.positive_time_period_milliseconds,
@@ -1055,6 +1059,7 @@ async def to_code(config):
     cg.add(var.set_wifi_rssi(config[CONF_WIFI_RSSI]))
     cg.add(var.set_udp_port(config[CONF_UDP_PORT]))
     cg.add(var.set_active_control(config[CONF_ACTIVE_CONTROL]))
+    cg.add(var.set_peakshaving_threshold(config[CONF_PEAKSHAVING_THRESHOLD]))
     cg.add(var.set_max_sensor_age_ms(config[CONF_MAX_SENSOR_AGE].total_milliseconds))
     if CONF_CONSUMER_TTL in config:
         cg.add(

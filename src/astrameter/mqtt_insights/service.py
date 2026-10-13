@@ -5,21 +5,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import ssl
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-
-import aiomqtt
 
 from astrameter.config.logger import logger
 from astrameter.ct002.controls import (
     CONSUMER_CONTROLS_BY_FIELD,
+    DEVICE_SETTINGS,
     ControllableDevice,
     apply_device_control,
     is_device_button,
 )
+from astrameter.mqtt_client_id import mqtt_client_id
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
 from astrameter.version_info import get_version
 
@@ -35,6 +36,10 @@ from .discovery import (
 )
 
 if TYPE_CHECKING:
+    # Imported where it is used at run time instead: a setup without MQTT
+    # never needs aiomqtt and paho-mqtt resident.
+    import aiomqtt
+
     from astrameter.powermeter.base import Powermeter
 from .marstek_mqtt import (
     MarstekMqttBinding,
@@ -187,6 +192,16 @@ class MqttInsightsService:
         self._queue: asyncio.Queue[_Event] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
         self._queue_dropped = 0
         self._task: asyncio.Task[None] | None = None
+        # One client identifier for every connection this service makes, so a
+        # reconnect takes the broker session over from the connection it
+        # replaces.  A fresh identifier each time left that older connection
+        # open on the broker: when a stalled link made us give up on it, its
+        # unsent bytes could still land after the new connection's, and a
+        # battery's eviction "offline" then overwrote the "online" sent once
+        # on its return — retained for good, since ``_availability`` says it
+        # already went out (issue #718).  The broker drops the superseded
+        # connection on takeover, so nothing it sends afterwards is applied.
+        self._client_id = mqtt_client_id()
         # Discovery already published this session, as (kind, key) — one set
         # so a new device family adds a kind instead of a sixth parallel set,
         # a sixth ``clear()`` and a sixth counter.
@@ -206,6 +221,23 @@ class MqttInsightsService:
         # usually before the owning device has started and registered, so the
         # payload is kept here and replayed when the device registers.
         self._pending_consumer_commands: dict[str, dict[tuple[str, str], str]] = {}
+        # Device settings (active_control / peakshaving_threshold) that
+        # arrived before the device registered, replayed in register_device()
+        # like the consumer commands above.  A button press is not buffered:
+        # it is momentary and meaningless once delayed.
+        self._pending_device_commands: dict[str, dict[str, object]] = {}
+        # Devices whose buffered settings the broker no longer holds whole
+        # (a later message on the shared topic carried only some of them), so
+        # the replay has to publish them back.
+        self._pending_device_partial: set[str] = set()
+        # The device settings persisted on the retained command topic, by
+        # device id.  The settings share that one topic, so every write
+        # publishes all of these at their current value; a setting joins once
+        # anything writes it, so one only ever configured in the config file is
+        # never pinned on the broker.  Mirrors ``persisted_settings_`` in
+        # mqtt_insights.cpp.
+        self._persisted_settings: dict[str, set[str]] = {}
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._connected = asyncio.Event()
         # Marstek MQTT responder state — populated via register_marstek().
         self._marstek_bindings: dict[str, MarstekMqttBinding] = {}
@@ -253,9 +285,12 @@ class MqttInsightsService:
         that arrived before it registered."""
         self._devices[device_id] = device
         self._replay_consumer_commands(device_id)
+        self._replay_device_commands(device_id)
 
     def unregister_device(self, device_id: str) -> None:
         self._devices.pop(device_id, None)
+
+    # ── Marstek MQTT responder ────────────────────────────────────────
 
     @property
     def marstek_mqtt_enabled(self) -> bool:
@@ -267,6 +302,8 @@ class MqttInsightsService:
         If already connected, live-subscribes to the App topics; otherwise
         the ``_run`` loop picks up the new entry on the next (re)connect.
         """
+        import aiomqtt
+
         if not self._config.marstek_mqtt_enabled:
             return
         async with self._marstek_lock:
@@ -286,6 +323,8 @@ class MqttInsightsService:
                         await client.subscribe(topic)
 
     async def unregister_marstek(self, device_id: str) -> None:
+        import aiomqtt
+
         async with self._marstek_lock:
             binding = self._marstek_bindings.pop(device_id, None)
             self._marstek_get_values_failed.discard(device_id)
@@ -397,14 +436,17 @@ class MqttInsightsService:
             str(payload).encode(),
         )
 
-    async def publish_device_command(
-        self, device_id: str, payload: dict[str, Any]
-    ) -> None:
-        """Publish a retained device-level command (JSON object payload)."""
-        await self._publish_command(
-            device_command_topic(self._config.base_topic, device_id),
-            json.dumps(payload).encode(),
-        )
+    async def publish_device_setting(self, device_id: str, field: str) -> None:
+        """Persist device setting *field* on the retained command topic.
+
+        The device settings share that topic, so this publishes every
+        persisted one at its current value, not just *field*: publishing one
+        alone would drop the others from the broker's copy.
+        """
+        if self._client is None:
+            raise RuntimeError("MQTT Insights is not connected")
+        self._persisted_settings.setdefault(device_id, set()).add(field)
+        await self._publish_device_settings(device_id, self._client)
 
     async def _publish_command(self, topic: str, payload: bytes) -> None:
         client = self._client
@@ -433,6 +475,7 @@ class MqttInsightsService:
             "username": cfg.username,
             "password": cfg.password,
             "tls_context": tls_context,
+            "identifier": self._client_id,
         }
 
     async def _announce(self, client: aiomqtt.Client) -> None:
@@ -482,17 +525,44 @@ class MqttInsightsService:
         return loops
 
     async def _serve_connection(self, client: aiomqtt.Client) -> None:
-        """Announce ourselves, then run the session loops until one ends."""
+        """Announce ourselves, then run the session loops until one ends.
+
+        The first loop to end takes the rest down with it: they are all bound
+        to *client*, and one left running past the reconnect would compete
+        with the new session — a stale ``_publish_loop`` is first in line on
+        ``_queue`` and would lose the next event on the dead client.  Not
+        ``TaskGroup`` (3.11+), and not ``gather``, which cancels nothing.
+        """
         await self._announce(client)
         self._connected.set()
+        tasks = [asyncio.create_task(loop) for loop in self._session_loops(client)]
         try:
-            await asyncio.gather(*self._session_loops(client))
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            # Re-raise the loop's own error (``MqttError`` on a drop) so
+            # ``_run`` picks its reconnect branch.
+            for task in tasks:
+                if task.done() and not task.cancelled():
+                    exc = task.exception()
+                    if exc is not None:
+                        raise exc
         finally:
+            # Cancel until each loop is really gone: before Python 3.12,
+            # ``asyncio.wait_for`` (which aiomqtt's publish awaits) swallows a
+            # cancel that lands as its inner future completes, and the loop
+            # carries on to park on its next ``await``.
+            pending = set(tasks)
+            while pending:
+                for task in pending:
+                    task.cancel()
+                _, pending = await asyncio.wait(pending, timeout=0.1)
+            await asyncio.gather(*tasks, return_exceptions=True)
             async with self._marstek_lock:
                 self._client = None
             await self._cancel_marstek_tasks()
 
     async def _run(self) -> None:
+        import aiomqtt
+
         cfg = self._config
         tls_context = ssl.create_default_context() if cfg.tls else None
 
@@ -576,6 +646,8 @@ class MqttInsightsService:
 
     async def _publish_offline(self, tls_context: ssl.SSLContext | None) -> None:
         """Reconnect just long enough to retract the retained "online" status."""
+        import aiomqtt
+
         async with aiomqtt.Client(**self._client_args(tls_context)) as client:
             await client.publish(
                 system_status_topic(self._config.base_topic),
@@ -585,6 +657,8 @@ class MqttInsightsService:
             )
 
     async def _publish_loop(self, client: aiomqtt.Client) -> None:
+        import aiomqtt
+
         cfg = self._config
         base = cfg.base_topic
 
@@ -764,6 +838,7 @@ class MqttInsightsService:
         device_status = {
             "smooth_target": data.get("smooth_target", 0),
             "active_control": data.get("active_control", False),
+            "peakshaving_threshold": data.get("peakshaving_threshold", 0.0),
             "consumer_count": data.get("consumer_count", 0),
             "control_quality": data.get("control_quality", "idle"),
             # Null, not 0: the score is absent while the loop has nothing to
@@ -944,7 +1019,9 @@ class MqttInsightsService:
             retained = bool(message.retain)
             if retained and any(is_device_button(name) for name in cmd):
                 await self._drop_retained_button_press(client, topic_str, cmd)
-            self._handle_device_command(parsed.device_id, cmd, retained=retained)
+            await self._handle_device_command(
+                parsed.device_id, cmd, client, retained=retained
+            )
 
     def _handle_consumer_field_command(
         self, device_id: str, consumer_id: str, field: str, payload: str
@@ -1043,27 +1120,126 @@ class MqttInsightsService:
             return
         logger.info("Cleared a stale retained button press on %s", topic)
 
-    def _handle_device_command(
-        self, device_id: str, cmd: dict, *, retained: bool = False
+    async def _handle_device_command(
+        self,
+        device_id: str,
+        cmd: dict,
+        client: aiomqtt.Client,
+        *,
+        retained: bool = False,
     ) -> None:
         device = self._devices.get(device_id)
-        if device is None:
-            logger.debug("No device %s registered for %r", device_id, cmd)
-            return
-        names = []
         # A button is momentary: honour a live press, never a retained one the
         # broker replayed at subscribe time.
-        if cmd.get("force_rotation") is True and not retained:
-            names.append("force_rotation")
-        if "active_control" in cmd:
-            names.append("active_control")
-        for name in names:
-            try:
-                apply_device_control(device, name, cmd.get(name))
-            except ValueError as exc:
-                logger.warning("Rejected command for %s: %s", device_id, exc)
-            except Exception:
-                logger.exception("Applying %s to %s failed", name, device_id)
+        press = cmd.get("force_rotation") is True and not retained
+        settings = [name for name in DEVICE_SETTINGS if name in cmd]
+
+        if device is None:
+            # The broker redelivers retained commands right after we
+            # subscribe, usually before the owning device has registered.
+            pending = self._pending_device_commands.setdefault(device_id, {})
+            for name in settings:
+                pending[name] = cmd[name]
+            if pending.keys() <= cmd.keys():
+                self._pending_device_partial.discard(device_id)
+            else:
+                self._pending_device_partial.add(device_id)
+            logger.debug("No device %s registered for %r", device_id, cmd)
+            return
+
+        if press:
+            self._apply_device_control(device_id, device, "force_rotation", True)
+        persisted = self._persisted_settings.setdefault(device_id, set())
+        for name in settings:
+            if self._apply_device_control(device_id, device, name, cmd[name]):
+                persisted.add(name)
+
+        # Home Assistant writes one setting at a time onto the shared topic,
+        # which drops the others from the broker's copy; publish them all
+        # back.  Our own publish echoes back whole, which is what stops this
+        # from looping.
+        if not self._holds_device_settings(device, persisted, cmd):
+            await self._publish_device_settings(device_id, client)
+
+    @staticmethod
+    def _apply_device_control(
+        device_id: str, device: ControllableDevice, name: str, value: object
+    ) -> bool:
+        try:
+            apply_device_control(device, name, value)
+        except ValueError as exc:
+            logger.warning("Rejected command for %s: %s", device_id, exc)
+        except Exception:
+            logger.exception("Applying %s to %s failed", name, device_id)
+        else:
+            return True
+        return False
+
+    @staticmethod
+    def _holds_device_settings(
+        device: ControllableDevice, persisted: set[str], cmd: dict
+    ) -> bool:
+        """Whether *cmd* carries every persisted setting at its current value."""
+        for name in persisted:
+            current = getattr(device, name)
+            value = cmd.get(name)
+            if isinstance(current, bool) or isinstance(value, bool):
+                if value is not current:
+                    return False
+            elif not isinstance(value, int | float) or not math.isclose(
+                value, current, abs_tol=0.01
+            ):
+                return False
+        return True
+
+    async def _publish_device_settings(
+        self, device_id: str, client: aiomqtt.Client
+    ) -> None:
+        """Publish every persisted setting of *device_id* at its current value,
+        retained, as the one message on the device command topic."""
+        device = self._devices.get(device_id)
+        persisted = self._persisted_settings.get(device_id)
+        if device is None or not persisted:
+            return
+        payload = {
+            name: getattr(device, name) for name in DEVICE_SETTINGS if name in persisted
+        }
+        topic = device_command_topic(self._config.base_topic, device_id)
+        try:
+            await client.publish(
+                topic, payload=json.dumps(payload).encode(), qos=1, retain=True
+            )
+        except Exception:
+            logger.exception("Failed to publish device settings on %s", topic)
+
+    def _replay_device_commands(self, device_id: str) -> None:
+        """Apply the device settings that arrived before *device_id*
+        registered (the normal order on an app restart)."""
+        pending = self._pending_device_commands.pop(device_id, None)
+        partial = device_id in self._pending_device_partial
+        self._pending_device_partial.discard(device_id)
+        device = self._devices.get(device_id)
+        if not pending or device is None:
+            return
+        persisted = self._persisted_settings.setdefault(device_id, set())
+        for name, value in pending.items():
+            if self._apply_device_control(device_id, device, name, value):
+                persisted.add(name)
+        client = self._client
+        if partial and client is not None:
+            self._spawn(self._publish_device_settings(device_id, client))
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run *coro* in the background, keeping a reference until it ends."""
+        try:
+            task = asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            coro.close()
+            return
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    # ── Powermeter health ─────────────────────────────────────────────
 
     async def _powermeter_health_loop(self, client: aiomqtt.Client) -> None:
         """Publish a per-powermeter "Online" diagnostic sensor.
@@ -1235,6 +1411,8 @@ class MqttInsightsService:
         binding: MarstekMqttBinding,
         poll: MarstekPollContext,
     ) -> None:
+        import aiomqtt
+
         try:
             if poll.echo_cd == 4:
                 slaves = ""

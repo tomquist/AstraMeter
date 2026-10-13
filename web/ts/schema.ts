@@ -92,14 +92,14 @@ export const SHELLY_TYPES: Option[] = [
   { value: "3EMPro", label: "Shelly 3EM Pro" },
 ];
 
-// Device types AstraMeter can emulate (Python add-on). The shelly* family
-// emulates a single Shelly meter; ct002/ct003 emulate Marstek CT clamps and
-// are recommended when you run more than one battery.
+// Device types AstraMeter can emulate (Python add-on). ct002/ct003 emulate
+// Marstek CT clamps and are the recommended choice; the shelly* family
+// emulates a Shelly meter.
 export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "shellypro3em",
     label: "Shelly Pro 3EM",
-    help: "Best all-round choice for a single battery. Works with most Marstek firmware.",
+    help: "Works with most Marstek firmware.",
   },
   {
     value: "shellyemg3",
@@ -114,7 +114,7 @@ export const DEVICE_TYPES: DeviceType[] = [
   {
     value: "ct002",
     label: "Marstek CT002 (HME-4)",
-    help: "Marstek's CT meter. Recommended when you have two or more batteries that should share the load.",
+    help: "Marstek's CT meter. Recommended: AstraMeter gives each battery its own target and shares the load between them.",
   },
   {
     value: "ct003",
@@ -905,6 +905,7 @@ export const CT_BASIC: Field[] = [
 
 export const CT_ACTIVE: Field[] = [
   { key: "ACTIVE_CONTROL", ey: "active_control", label: "Active control", help: "On (default): the emulator smooths the reading, splits the target across batteries and balances them. Off: relay raw readings and let batteries decide.", type: "select", default: "", options: [{ value: "", label: "Default (on)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "PEAKSHAVING_THRESHOLD", ey: "peakshaving_threshold", label: "Peak shaving threshold (W)", help: "For tariffs that bill on peak demand: the batteries only cover net demand above this. Below it they stay idle instead of covering everyday load; solar surplus still charges them. 0 = off. Adjustable live from the dashboard or Home Assistant.", type: "number", placeholder: "0" },
 ];
 
 export const CT_BALANCER: Field[] = [

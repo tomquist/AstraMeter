@@ -64,6 +64,13 @@ UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
 POLL_INTERVAL_EMA_ALPHA = 0.3
 
+# Under peak shaving, how close to 0 W (W) every battery of a pool trading
+# power must already be before each is held at 0 W on its own (see
+# CT002._peakshaving).  Sized to what the shared correction leaves stuck: its
+# 0.2 balance gain split over a pair stays under the battery firmware's +-20 W
+# input deadband until the pair is ~200 W apart, i.e. ~100 W each way.
+PEAKSHAVING_IDLE_BAND_W = 100.0
+
 # Cross-talk aggregation buckets, mirroring the real CT (see
 # docs/ct002-ct003-protocol.md): one per phase, plus ``x`` for
 # unassigned/inspection ("0") reporters and ``ABC`` for combined-mode
@@ -407,6 +414,7 @@ class CT002Snapshot:
     started_at: float | None
     rev: int
     active_control: bool
+    peakshaving_threshold: float
     consumer_ttl: int | None
     dedupe_window: float
     debug_status: bool
@@ -437,6 +445,7 @@ class CT002:
         debug_status: bool = False,
         active_control: bool = True,
         balancer: BalancerConfig | None = None,
+        peakshaving_threshold: float = 0.0,
         saturation_detection: bool = True,
         saturation_alpha: float = 0.15,
         min_target_for_saturation: float = 20,
@@ -455,11 +464,13 @@ class CT002:
         self.consumer_ttl = consumer_ttl
         self.debug_status = debug_status
         self.active_control = active_control
+        self.peakshaving_threshold = 0.0
         self.before_send: (
             Callable[[tuple, CT002Request, str], Awaitable[list[float] | None]] | None
         ) = None
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
         self._device_id = device_id
+        self.set_peakshaving_threshold(peakshaving_threshold)
         self._consumers: dict[str, Consumer] = {}
         # User-set control state, kept per consumer id so it survives the
         # consumer's eviction (battery silent past its TTL) and is re-seeded
@@ -682,6 +693,29 @@ class CT002:
             self._device_id or "(default)",
         )
 
+    def set_peakshaving_threshold(self, threshold: float) -> None:
+        """Live-update the peak shaving threshold (W). Surfaced as the
+        device's "Peak Shaving Threshold" number entity in Home Assistant;
+        0 disables peak shaving. Takes effect on the next control cycle."""
+        if not math.isfinite(threshold) or threshold < 0:
+            logger.warning(
+                "Ignoring invalid peak shaving threshold %r for %s",
+                threshold,
+                self._device_id or "(default)",
+            )
+            return
+        if self.peakshaving_threshold == threshold:
+            return
+        self.peakshaving_threshold = threshold
+        if threshold > 0:
+            logger.info(
+                "Peak shaving threshold set to %.1fW for %s",
+                threshold,
+                self._device_id or "(default)",
+            )
+        else:
+            logger.info("Peak shaving disabled for %s", self._device_id or "(default)")
+
     def set_consumer_active(self, consumer_id: str, active: bool) -> None:
         consumer = self._get_consumer(consumer_id)
         if active:
@@ -810,6 +844,58 @@ class CT002:
             return ConsumerMode("manual", consumer.manual_target)
         return ConsumerMode("auto")
 
+    def _peakshaving(self, total: float) -> tuple[float, bool]:
+        """Apply peak shaving to the grid total handed to the balancer.
+
+        Returns that total and whether the steered batteries should each idle
+        at 0 W on their own: demand is above zero but not above
+        peakshaving_threshold, every steered battery is already within
+        PEAKSHAVING_IDLE_BAND_W of zero, and one is charging while another
+        discharges, i.e. they are trading power.  Everything else stays on the
+        shared correction: a wind-down still under way, because it compensates
+        for meter latency (a stale grid reading beside the batteries' fresh,
+        falling output can look like demand under the threshold when it is
+        not) and because units unwinding separately at different rates swing
+        the grid; and a residual all in one direction, because the shared
+        correction concentrates it on one battery where each battery's own
+        sub-deadband share would be ignored.
+
+        Demand is reconstructed as the grid reading plus what the batteries
+        the balancer steers are delivering right now, so a battery already
+        part-way into a discharge (or charge) is driven back to zero once
+        demand drops under the threshold instead of being frozen there.
+        Only those batteries count: a battery on a manual setpoint, paused,
+        opted out of control or gone silent is not ours to move, so its
+        output lowers demand the way solar does.  Counting it would ask the
+        steered batteries to cancel it out by charging from the grid.
+        """
+        if self.peakshaving_threshold <= 0:
+            return total, False
+        now = self._clock()
+        steered = [
+            parse_int(c.power, 0)
+            for c in self._consumers.values()
+            if c.timestamp > 0
+            and c.active
+            and c.participates
+            and not c.manual_enabled
+            and not self._consumer_expired(c, now)
+        ]
+        steered_power = sum(steered)
+        household_demand = total + steered_power
+        if household_demand <= 0:
+            return total, False
+        hold = (
+            household_demand <= self.peakshaving_threshold
+            and all(abs(p) <= PEAKSHAVING_IDLE_BAND_W for p in steered)
+            and min(steered, default=0) < 0 < max(steered, default=0)
+        )
+        return total - min(household_demand, self.peakshaving_threshold), hold
+
+    def _apply_peakshaving(self, total: float) -> float:
+        """The grid total peak shaving hands the balancer (see _peakshaving)."""
+        return self._peakshaving(total)[0]
+
     def _compute_smooth_target(
         self, values: list[float], consumer_id: str | None = None
     ) -> list[float]:
@@ -818,7 +904,7 @@ class CT002:
         if not self.active_control or not values:
             return values
 
-        total = sum(parse_int(v, 0) for v in values)
+        total: float = sum(parse_int(v, 0) for v in values)
         self._last_smooth_target = total
         sample_id = tuple(values)
         mode = self._consumer_mode(consumer_id)
@@ -835,6 +921,7 @@ class CT002:
             for cid, c in self._consumers.items()
             if c.timestamp > 0
         }
+        total, hold_at_zero = self._peakshaving(total)
         # A consumer that opted out via the request's "participate" flag is
         # treated as inactive: active control excludes it from the distribution
         # pool (it isn't driven), mirroring the aggregation exclusion above.
@@ -855,6 +942,7 @@ class CT002:
             inactive,
             manual,
             sample_id,
+            hold_at_zero=hold_at_zero,
         )
 
     def _collect_reports_by_phase(self) -> dict[str, PhaseBucket]:
@@ -979,6 +1067,7 @@ class CT002:
             started_at=self._started_at or None,
             rev=self._rev,
             active_control=self.active_control,
+            peakshaving_threshold=self.peakshaving_threshold,
             consumer_ttl=self.consumer_ttl,
             dedupe_window=self.dedupe_time_window,
             debug_status=self.debug_status,
@@ -1564,6 +1653,7 @@ class CT002:
             ),
             "min_dc_output": consumer.min_dc_output if consumer else None,
             "active_control": self.active_control,
+            "peakshaving_threshold": self.peakshaving_threshold,
             "efficiency_rotation": self._balancer.efficiency_rotation_enabled,
             "consumer_count": sum(
                 1 for c in self._consumers.values() if c.timestamp > 0

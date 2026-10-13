@@ -66,6 +66,19 @@ bool is_device_field(const std::string &field);
 /// no value, and nothing about it is worth mirroring onto a retained topic.
 bool is_device_button(const std::string &field);
 
+/// Upper bound of the peak shaving threshold, in W, on every surface — the
+/// dashboard, MQTT and the Home Assistant number entity. Mirrors
+/// PEAKSHAVING_THRESHOLD_MAX in `src/astrameter/ct002/controls.py`.
+constexpr float PEAKSHAVING_THRESHOLD_MAX = 10000.0f;
+
+/// Whether *field* is a device-wide setting that takes a number.
+bool is_device_number(const std::string &field);
+
+/// Validate a device-wide write, mirroring coerce_device_number: numeric
+/// settings must be a number inside their bounds. Returns an empty string on
+/// success, or the message to report back. Switches and buttons pass through.
+std::string coerce_device_control(const std::string &field, ControlValue &value);
+
 /// Validate and scale *value* for *field*, mirroring coerce_consumer_control.
 ///
 /// Returns an empty string on success (with *value* scaled to the unit the

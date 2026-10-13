@@ -27,6 +27,7 @@ from astrameter.ct002.controls import (
     CONSUMER_CONTROLS_BY_FIELD,
     apply_device_control,
     is_device_button,
+    is_device_number,
 )
 from astrameter.status.assets import dashboard_html
 from astrameter.status.config_mode import materialize_config
@@ -538,12 +539,17 @@ class WebServer:
         device_id = _required(body, "device_id")
         field = _required(body, "field")
         value = body.get("value", True)
+        # A numeric setting keeps its value as sent, so a missing or boolean
+        # one is refused like the firmware does; switches and buttons take
+        # anything truthy, as they always have.
+        if not is_device_number(field):
+            value = bool(value)
 
         device = self._device(device_id)
         if device is None:
             return error_response("Unknown device", status=404)
         try:
-            apply_device_control(device, field, bool(value))
+            apply_device_control(device, field, value)
         except KeyError:
             return error_response("Unknown field", status=404)
         except (AttributeError, ValueError) as exc:
@@ -567,7 +573,7 @@ class WebServer:
         if insights is not None and not is_device_button(field):
             await self._mirror_to_mqtt(
                 "device",
-                lambda: insights.publish_device_command(device_id, {field: value}),
+                lambda: insights.publish_device_setting(device_id, field),
             )
         return self._applied()
 

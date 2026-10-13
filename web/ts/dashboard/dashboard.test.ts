@@ -1129,6 +1129,7 @@ const controllable: StatusSnapshot = {
   devices: [
     {
       ...snapshot.devices![0],
+      control: { active_control: true, peakshaving_threshold_w: 2500 },
       balancer: { efficiency_rotation_enabled: true },
       consumers: [
         {
@@ -1204,6 +1205,28 @@ const overviewHtml = renderToString(
 );
 has(overviewHtml, "Force rotation", "force rotation is reachable");
 has(overviewHtml, "Active control", "active control is reachable");
+has(
+  overviewHtml,
+  'aria-label="Peak shaving threshold"',
+  "the peak shaving threshold is reachable",
+);
+has(overviewHtml, 'value="2500"', "the threshold box shows the current value");
+// A backend that does not report the threshold gets no box to write it with.
+const noThreshold: StatusSnapshot = {
+  ...controllable,
+  devices: [{ ...controllable.devices![0], control: { active_control: true } }],
+};
+lacks(
+  renderToString(
+    h(
+      "div",
+      null,
+      ...view({ ...ctrlState, tab: "overview", snapshot: noThreshold }, actions, initialConfigState()),
+    ),
+  ),
+  'aria-label="Peak shaving threshold"',
+  "no threshold box when the backend does not report one",
+);
 
 // Read-only deployments must offer none of it.
 const ro: AppState = {

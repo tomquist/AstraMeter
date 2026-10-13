@@ -154,6 +154,7 @@ class CtSettings:
     cloud_reporting_interval: float = 60.0
     # Active control / balancing.
     active_control: bool = True
+    peakshaving_threshold: float = 0.0
     fair_distribution: bool = True
     balance_gain: float = 0.2
     balance_deadband: int = 25

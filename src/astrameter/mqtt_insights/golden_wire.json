@@ -98,6 +98,23 @@
             "retain": true,
             "entity_category": "config"
           },
+          "peakshaving_threshold": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_peakshaving_threshold",
+            "name": "Peak Shaving Threshold",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0,
+            "max": 10000,
+            "step": 50,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.peakshaving_threshold | default(0) }}",
+            "command_topic": "am/ct002/dev1/set",
+            "command_template": "{\"peakshaving_threshold\": {{ value }}}",
+            "retain": true,
+            "entity_category": "config"
+          },
           "consumer_count": {
             "platform": "sensor",
             "unique_id": "astrameter_ct002_dev1_consumer_count",
@@ -211,6 +228,23 @@
             "payload_off": "OFF",
             "state_on": "True",
             "state_off": "False",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "peakshaving_threshold": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_peakshaving_threshold",
+            "name": "Peak Shaving Threshold",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0,
+            "max": 10000,
+            "step": 50,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/status",
+            "value_template": "{{ value_json.peakshaving_threshold | default(0) }}",
+            "command_topic": "am/ct002/dev1/set",
+            "command_template": "{\"peakshaving_threshold\": {{ value }}}",
             "retain": true,
             "entity_category": "config"
           },
@@ -1646,6 +1680,7 @@
       "payload": {
         "smooth_target": 500.0,
         "active_control": true,
+        "peakshaving_threshold": 0.0,
         "consumer_count": 2,
         "control_quality": "off_target",
         "control_quality_score": 41.5,
@@ -1669,6 +1704,7 @@
           "control_quality_in_band",
           "control_quality_score",
           "force_rotation",
+          "peakshaving_threshold",
           "smooth_target"
         ]
       },
@@ -1789,6 +1825,7 @@
       "payload": {
         "smooth_target": 500.0,
         "active_control": true,
+        "peakshaving_threshold": 0.0,
         "consumer_count": 2,
         "control_quality": "off_target",
         "control_quality_score": 41.5,
@@ -1846,6 +1883,7 @@
       "payload": {
         "smooth_target": 500.0,
         "active_control": true,
+        "peakshaving_threshold": 0.0,
         "consumer_count": 2,
         "control_quality": "off_target",
         "control_quality_score": 41.5,

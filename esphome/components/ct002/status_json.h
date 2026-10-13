@@ -142,6 +142,7 @@ struct DeviceStatus {
   bool running{false};
   std::optional<double> started_at;  ///< wall-clock epoch, if the clock synced
   bool active_control{true};
+  float peakshaving_threshold{0.0f};
   std::optional<uint32_t> consumer_ttl_s;
   float dedupe_window_s{0.0f};
   std::optional<std::array<float, 3>> grid;

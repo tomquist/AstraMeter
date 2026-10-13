@@ -132,6 +132,7 @@ def _build_ct002(
         consumer_ttl=ct.consumer_ttl,
         debug_status=debug_status,
         active_control=ct.active_control,
+        peakshaving_threshold=ct.peakshaving_threshold,
         balancer=_balancer_config(ct),
         saturation_detection=ct.saturation_detection,
         saturation_alpha=ct.saturation_alpha,

@@ -395,7 +395,7 @@ function deviceCard(
 
 /**
  * The device-wide controls the MQTT integration already exposes: the Active
- * Control switch and the Force Rotation button.
+ * Control switch, the Peak Shaving Threshold and the Force Rotation button.
  *
  * Rotation is only offered when the balancer says rotation is enabled —
  * pressing it otherwise does nothing, exactly as the MQTT button would.
@@ -432,6 +432,24 @@ function deviceControls(
       }),
       h("span", null, "Active control"),
     ),
+    // Only offered by a backend that reports the threshold, so an older
+    // firmware without the setting does not show a box that cannot write.
+    device.control?.peakshaving_threshold_w === undefined
+      ? null
+      : numberControl({
+          label: "Peak shaving threshold",
+          unit: "W",
+          value: pendingOr(
+            state,
+            `${deviceId}:peakshaving_threshold`,
+            device.control.peakshaving_threshold_w,
+          ),
+          min: 0,
+          max: 10000,
+          step: 50,
+          busy: Boolean(state.busy[`${deviceId}:peakshaving_threshold`]),
+          onCommit: (v) => actions.setDevice(deviceId, "peakshaving_threshold", v),
+        }),
     h(
       "button",
       {

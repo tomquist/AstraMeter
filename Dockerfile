@@ -32,6 +32,14 @@ WORKDIR /app
 
 COPY --from=builder /app /app
 
+# Neither the base image's standard library nor uv's install ship bytecode, and
+# PYTHONDONTWRITEBYTECODE stops it being cached, so every start would compile
+# every module from source: slower, and several MiB of compiler garbage the
+# process keeps resident. Compile once here instead; unchecked-hash pycs stay
+# valid whatever timestamps the layer copy leaves.
+RUN python -m compileall -q -j 0 --invalidation-mode unchecked-hash \
+    "$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')" /app/.venv
+
 RUN chown -R astra:astra /app
 
 ENV PATH="/app/.venv/bin:$PATH"

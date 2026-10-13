@@ -268,9 +268,8 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "Emulated device",
     group: DEVICE,
     help:
-      "Which meter AstraMeter pretends to be. ct002 or ct003 for Marstek " +
-      "batteries — the only types it can steer several of; a Shelly type " +
-      "otherwise. Comma-separated to emulate more than one.",
+      "Which meter AstraMeter pretends to be; ct002 or ct003 is " +
+      "recommended. Comma-separated to emulate more than one.",
   },
   ct_mac: {
     label: "CT MAC address",
@@ -288,6 +287,15 @@ export const OPTION_META: Record<string, OptionMeta> = {
     help:
       "Work out each battery's own target instead of relaying the raw grid " +
       "total and letting every battery react to it separately.",
+  },
+  peakshaving_threshold: {
+    label: "Peak shaving threshold (W)",
+    group: CONTROL,
+    help:
+      "For tariffs that bill on peak demand: the batteries only cover demand " +
+      "above this. Below it they stay idle instead of covering everyday load, " +
+      "while solar surplus still charges them. 0 turns it off.",
+    placeholder: "0",
   },
   fair_distribution: {
     label: "Share load between batteries",

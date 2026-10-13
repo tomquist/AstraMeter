@@ -86,13 +86,14 @@ for export). In the Home Assistant App, put it in `POWER_INPUT_ALIAS` (or
 import/export sensors can update at different moments and get read out of sync,
 which causes drift and oscillation. A single signed value avoids that.
 
-### Should I use Shelly emulation or CT002/CT003 for multiple batteries?
+### Should I use Shelly emulation or CT002/CT003?
 
-A: Prefer CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`) for multi-battery
-setups. With Shelly emulation, each battery reacts on its own, and they tend to
-fight each other — one charges while another discharges. The CT emulation
-coordinates one shared target across the fleet, so the load is spread more
-evenly and stays stable. See [CT002 / CT003 steering](ct002.md).
+A: CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`). Each battery reports its
+output back to the CT emulator, so AstraMeter steers it to its own target and
+spreads the load evenly across batteries. With Shelly emulation each battery
+reacts to the grid reading on its own, and several of them tend to fight each
+other — one charges while another discharges. See
+[CT002 / CT003 steering](ct002.md).
 
 ## Device and firmware specific
 

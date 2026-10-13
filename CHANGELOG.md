@@ -2,6 +2,27 @@
 
 ## 2.3.1
 
+- **Fixed** a battery's Home Assistant entities staying unavailable until a restart since 2.3.1, after a network hiccup briefly dropped the battery and the MQTT connection at the same time ([#718](https://github.com/tomquist/astrameter/issues/718), [#719](https://github.com/tomquist/astrameter/pull/719)).
+
+- **Fixed** a battery sometimes staying stuck below its share since 2.3.1 while the other carried the rest, letting their charge levels drift apart; a battery that only paused briefly is now back to sharing within a minute ([#704](https://github.com/tomquist/astrameter/issues/704), [#707](https://github.com/tomquist/astrameter/pull/707)).
+
+- **Fixed** the Marstek app listing an auto-registered CT002 as a CT003, because the new device got the CT003's Bluetooth name; devices registered earlier keep working unchanged ([#710](https://github.com/tomquist/astrameter/pull/710)).
+
+- **Fixed** Marstek cloud auto-registration failing on a new Marstek account that has no devices yet, so AstraMeter can now create its CT there and it shows up in the Marstek app ([#712](https://github.com/tomquist/astrameter/pull/712)).
+
+- **Improved** memory use: AstraMeter needs about a third less RAM and starts several times faster, because it now loads only the code for the power source and features you actually use ([#702](https://github.com/tomquist/astrameter/pull/702)).
+
+- **Fixed** the MQTT source and MQTT Insights never connecting, logging only "Operation timed out", on brokers that refuse clients without a client ID ([#701](https://github.com/tomquist/astrameter/issues/701), [#706](https://github.com/tomquist/astrameter/pull/706)).
+
+- **Fixed** SML meters steering on outdated readings, and staying offline after a dropped connection (such as one shared through ser2net) until AstraMeter was restarted ([#680](https://github.com/tomquist/astrameter/discussions/680), [#697](https://github.com/tomquist/astrameter/pull/697)).
+
+- **Fixed** SML meters read over a USB IR head never delivering a reading when their telegrams are long, such as signed EMH meters, logging only "failed to read SML frame" ([#680](https://github.com/tomquist/astrameter/discussions/680), [#689](https://github.com/tomquist/astrameter/pull/689)).
+
+- **Added** a peak shaving threshold for tariffs that bill on peak demand, such as Belgium's capacity tariff: batteries only cover demand above it and stay idle below it ([#690](https://github.com/tomquist/astrameter/pull/690), [#692](https://github.com/tomquist/astrameter/pull/692)).
+
+
+## 2.3.1
+
 - **Fixed** the Tibber Pulse source failing with `404 Not Found` after the Pulse Bridge updated to firmware 1798; it now also takes the readings the bridge pushes live, and polls only where the bridge can't push ([#685](https://github.com/tomquist/astrameter/issues/685), [#686](https://github.com/tomquist/astrameter/pull/686)).
 
 - **Added** the saturation probe window and stall timeout as Home Assistant add-on options, so a battery whose inverter is slow to wake from sleep is no longer passed over in the efficiency rotation ([#677](https://github.com/tomquist/astrameter/pull/677)).

@@ -37,6 +37,7 @@ DESTINATIONS = {
     "consumer_ttl": lambda ct002: ct002.consumer_ttl,
     "debug_status": lambda ct002: ct002.debug_status,
     "active_control": lambda ct002: ct002.active_control,
+    "peakshaving_threshold": lambda ct002: ct002.peakshaving_threshold,
     # Balancer configuration.
     "fair_distribution": lambda ct002: _cfg(ct002).fair_distribution,
     "balance_gain": lambda ct002: _cfg(ct002).balance_gain,

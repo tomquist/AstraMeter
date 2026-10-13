@@ -1,7 +1,7 @@
 [GENERAL]
-# Use ct002/ct003 for multiple storage devices; use shelly* types otherwise.
+# Use ct002/ct003.
 # Comma-separated list of device types to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50)
-DEVICE_TYPE = shellypro3em
+DEVICE_TYPE = ct002
 # Comma-separated list of device IDs (optional, auto-generated if not set)
 # DEVICE_IDS = shellypro3em-c59b15461a21
 # Skip initial powermeter test on startup
@@ -105,6 +105,13 @@ THROTTLE_INTERVAL = 0
 ## across batteries, and balances their load. When False, raw meter values are
 ## relayed and batteries decide on their own.
 # ACTIVE_CONTROL = True
+## --- Peak shaving ---
+## For tariffs that bill on peak demand (e.g. the Belgian capacity tariff):
+## the batteries only cover net demand above this many watts. Below it they
+## stay idle rather than covering everyday load, while solar surplus still
+## charges them. 0 disables it (default); 0-10000. Adjustable live from the
+## dashboard or Home Assistant. Needs ACTIVE_CONTROL.
+# PEAKSHAVING_THRESHOLD = 0
 
 ## --- Fair distribution (multi-battery balancing) ---
 ## Adjust each battery's target so they share the load evenly.

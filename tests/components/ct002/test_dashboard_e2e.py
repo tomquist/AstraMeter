@@ -19,7 +19,7 @@ from collections.abc import Iterator
 import pytest
 from test_shared_e2e import Backend, _running_esphome_backend
 
-from astrameter.ct002.controls import coerce_consumer_control
+from astrameter.ct002.controls import coerce_consumer_control, coerce_device_number
 
 pytestmark = pytest.mark.esphome_e2e
 
@@ -160,6 +160,26 @@ def test_efficiency_window_weight_round_trips_as_a_percentage(esphome: Backend) 
 def test_a_device_wide_write_lands_too(esphome: Backend) -> None:
     assert esphome.control("active_control", "false").startswith("ok")
     assert _device(esphome)["control"]["active_control"] is False
+
+
+def test_the_peakshaving_threshold_is_written_and_read_back(esphome: Backend) -> None:
+    assert _device(esphome)["control"]["peakshaving_threshold_w"] == 0
+    assert esphome.control("peakshaving_threshold", 2500).startswith("ok")
+    assert _device(esphome)["control"]["peakshaving_threshold_w"] == 2500
+
+
+@pytest.mark.parametrize("value", ["-1", "10001", "true"])
+def test_an_invalid_peakshaving_threshold_is_refused_like_python(
+    esphome: Backend, value
+) -> None:
+    reply = esphome.control("peakshaving_threshold", value)
+    assert reply.startswith("err ")
+    with pytest.raises(ValueError) as exc_info:
+        coerce_device_number(
+            "peakshaving_threshold", True if value == "true" else float(value)
+        )
+    assert str(exc_info.value) in reply
+    assert _device(esphome)["control"]["peakshaving_threshold_w"] == 0
 
 
 @pytest.mark.parametrize(

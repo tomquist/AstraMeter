@@ -17,6 +17,13 @@ COPY src/ src/
 
 RUN uv sync --frozen --no-dev --no-editable
 
+# uv installs no bytecode and PYTHONDONTWRITEBYTECODE stops it being cached, so
+# every start would compile each dependency from source: slower, and several
+# MiB of compiler garbage the process keeps resident. Alpine already ships the
+# standard library compiled. Unchecked-hash pycs stay valid whatever timestamps
+# the copy into the final stage leaves.
+RUN python3 -m compileall -q -j 0 --invalidation-mode unchecked-hash .venv
+
 FROM ${BUILD_FROM:-ghcr.io/hassio-addons/base:17.0.1}
 
 ARG GIT_COMMIT_SHA=

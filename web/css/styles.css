@@ -45,6 +45,7 @@
   --accent: #22d3ee; /* links, focus, the selected choice */
   --primary: #fbbf24; /* primary buttons: the amber of the logo's needle */
   --primary-hover: #fcd34d;
+  --charge: #10b981; /* the batteries in the wiring diagram: the logo's emerald */
 }
 
 * {
@@ -929,8 +930,9 @@ code {
 }
 .wire-node {
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-card);
+  border-radius: 10px;
+  background-color: var(--bg-card);
+  background-image: linear-gradient(180deg, rgba(148, 163, 184, 0.07), transparent 55%);
   padding: 14px;
   font-size: 13.5px;
   color: var(--muted);
@@ -940,16 +942,68 @@ code {
 .wire-node strong {
   display: block;
   color: var(--text);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  margin: 4px 0 4px;
+  margin: 12px 0 4px;
+}
+/* header row: what kind of thing this is, with an icon for it */
+.node-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.node-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+span.node-icon {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.25);
+}
+.node-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* the meter wears the amber of the logo's needle */
+.wire-meter span.node-icon {
+  color: var(--primary);
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.25);
 }
 .wire-kind {
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
+}
+.wire-meter .wire-kind {
+  color: var(--primary);
+}
+/* the batteries wear the emerald of the logo's energy arc */
+.wire-stack span.node-icon {
+  color: var(--charge);
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.28);
+}
+.wire-stack .wire-kind {
+  color: var(--charge);
 }
 .wire-core {
   border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.15),
+    0 12px 36px -12px rgba(34, 211, 238, 0.45);
 }
 .wire-core .wire-kind {
   color: var(--accent);
@@ -991,10 +1045,98 @@ code {
   border-left: 7px solid var(--tick);
   border-right: 0;
 }
+/* AstraMeter ↔ batteries: the target goes out on the upper wire, what each
+ * battery delivered comes back on the lower one */
+.wire-loop::before {
+  top: calc(50% - 5px);
+}
+.wire-loop::after {
+  top: calc(50% - 9px);
+}
+.wire-loop span {
+  bottom: calc(50% + 11px);
+}
+.wire-loop .wire-note {
+  bottom: auto;
+  top: calc(50% + 13px);
+}
+.wire-back {
+  position: absolute;
+  left: 6px;
+  right: 0;
+  top: calc(50% + 5px);
+  border-top: 1px solid var(--tick);
+}
+.wire-back::after {
+  /* arrowhead, pointing back at AstraMeter */
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: -5px;
+  border: 4.5px solid transparent;
+  border-right: 7px solid var(--tick);
+  border-left: 0;
+}
+/* one or more batteries: the node is drawn as a small stack */
+.wire-stack {
+  margin: 0 10px 10px 0;
+  box-shadow:
+    5px 5px 0 -1px var(--bg-card),
+    5px 5px 0 0 var(--border-strong),
+    10px 10px 0 -1px var(--bg-card),
+    10px 10px 0 0 var(--border-strong);
+}
+
+/* the batteries themselves, each at its own charge level */
+.cells {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.cells i {
+  position: relative;
+  width: 26px;
+  height: 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+.cells i::before {
+  /* charge */
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: calc((100% - 4px) * var(--lvl));
+  border-radius: 1px;
+  background: var(--charge);
+  opacity: 0.7;
+}
+.cells i::after {
+  /* terminal */
+  content: "";
+  position: absolute;
+  right: -4px;
+  top: 3px;
+  width: 3px;
+  height: 5px;
+  border-radius: 0 1px 1px 0;
+  background: var(--border-strong);
+}
+.cells i:nth-child(1) {
+  --lvl: 0.8;
+}
+.cells i:nth-child(2) {
+  --lvl: 0.55;
+}
+.cells i:nth-child(3) {
+  --lvl: 0.3;
+}
 
 /* data dots: a reading travels meter → AstraMeter, which lights up while it
- * handles it, then on to the batteries. Runs only once the diagram is drawn
- * (or straight away without the script), and pauses off screen. */
+ * handles it, then on to the batteries as a target, and the batteries report
+ * back what they delivered. Runs only once the diagram is drawn (or straight
+ * away without the script), and pauses off screen. */
 .pulse {
   display: none;
 }
@@ -1015,14 +1157,14 @@ code {
   /* longhands, so the per-wire animation-name below survives */
   .wiring:not(.draw) .pulse,
   .wiring.draw.in .pulse {
-    animation-duration: 3.2s;
+    animation-duration: 4s;
     animation-timing-function: linear;
     animation-delay: 1.3s;
     animation-iteration-count: infinite;
   }
   .wiring:not(.draw) .wire-core,
   .wiring.draw.in .wire-core {
-    animation: core-busy 3.2s ease 1.3s infinite;
+    animation: core-busy 4s ease 1.3s infinite;
   }
   .wiring > :nth-child(2) .pulse {
     animation-name: pulse-in;
@@ -1030,8 +1172,66 @@ code {
   .wiring > :nth-child(4) .pulse {
     animation-name: pulse-out;
   }
+  .wire-loop .pulse {
+    top: calc(50% - 8px);
+  }
+  .wire-loop .pulse-back {
+    top: calc(50% + 2px);
+  }
+  .wiring > :nth-child(4) .pulse-back {
+    animation-name: pulse-back;
+  }
+  /* a short comet trail behind each dot */
+  .pulse::after {
+    content: "";
+    position: absolute;
+    top: 2.5px;
+    right: 3px;
+    width: 24px;
+    height: 2px;
+    border-radius: 1px;
+    background: linear-gradient(to left, var(--accent), transparent);
+  }
+  .pulse-back::after {
+    right: auto;
+    left: 3px;
+    background: linear-gradient(to right, var(--accent), transparent);
+  }
+  /* a wire's label lights up while its dot travels */
+  /* longhands, so the per-label animation-name below survives */
+  .wiring:not(.draw) .wire-link span,
+  .wiring.draw.in .wire-link span {
+    animation-duration: 4s;
+    animation-timing-function: linear;
+    animation-delay: 1.3s;
+    animation-iteration-count: infinite;
+  }
+  .wiring > .wire-link:nth-child(2) span {
+    animation-name: label-in;
+  }
+  .wiring > .wire-link:nth-child(4) span {
+    animation-name: label-out;
+  }
+  .wiring > .wire-link:nth-child(4) .wire-note {
+    animation-name: label-back;
+  }
+  /* each battery blinks as its target arrives */
+  .wiring:not(.draw) .cells i,
+  .wiring.draw.in .cells i {
+    animation: cell-hit 4s ease 1.3s infinite;
+  }
+  .wiring:not(.draw) .cells i:nth-child(2),
+  .wiring.draw.in .cells i:nth-child(2) {
+    animation-delay: 1.38s;
+  }
+  .wiring:not(.draw) .cells i:nth-child(3),
+  .wiring.draw.in .cells i:nth-child(3) {
+    animation-delay: 1.46s;
+  }
   .wiring.paused .pulse,
-  .wiring.paused .wire-core {
+  .wiring.paused .wire-core,
+  .wiring.paused .wire-link span,
+  .wiring.paused .cells i {
     animation-play-state: paused;
   }
 }
@@ -1040,13 +1240,11 @@ code {
     left: 0;
     opacity: 0;
   }
-  5% {
+  4%,
+  26% {
     opacity: 1;
   }
-  34% {
-    opacity: 1;
-  }
-  38%,
+  30%,
   100% {
     left: calc(100% - 14px);
     opacity: 0;
@@ -1054,32 +1252,94 @@ code {
 }
 @keyframes pulse-out {
   0%,
-  54% {
+  44% {
     left: 0;
     opacity: 0;
   }
-  59% {
+  48%,
+  66% {
     opacity: 1;
   }
-  88% {
-    opacity: 1;
-  }
-  92%,
+  70%,
   100% {
     left: calc(100% - 14px);
     opacity: 0;
   }
 }
+@keyframes pulse-back {
+  0%,
+  72% {
+    left: calc(100% - 7px);
+    opacity: 0;
+  }
+  76%,
+  94% {
+    opacity: 1;
+  }
+  98%,
+  100% {
+    left: 7px;
+    opacity: 0;
+  }
+}
 @keyframes core-busy {
   0%,
-  36%,
-  60%,
-  100% {
-    background: var(--bg-card);
+  28%,
+  48%,
+  95% {
+    background-color: var(--bg-card);
   }
+  34%,
+  42%,
+  100% {
+    background-color: #10283a;
+  }
+}
+@keyframes label-in {
+  0%,
+  32%,
+  100% {
+    color: var(--muted);
+  }
+  6%,
+  26% {
+    color: var(--accent);
+  }
+}
+@keyframes label-out {
+  0%,
   44%,
-  52% {
-    background: #10283a;
+  72%,
+  100% {
+    color: var(--muted);
+  }
+  50%,
+  66% {
+    color: var(--accent);
+  }
+}
+@keyframes label-back {
+  0%,
+  72%,
+  100% {
+    color: var(--muted);
+  }
+  78%,
+  94% {
+    color: var(--accent);
+  }
+}
+@keyframes cell-hit {
+  0%,
+  69%,
+  80%,
+  100% {
+    border-color: var(--border-strong);
+    box-shadow: none;
+  }
+  72% {
+    border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
   }
 }
 
@@ -1088,11 +1348,11 @@ code {
     top: 0;
     opacity: 0;
   }
-  5%,
-  34% {
+  4%,
+  26% {
     opacity: 1;
   }
-  38%,
+  30%,
   100% {
     top: calc(100% - 14px);
     opacity: 0;
@@ -1100,17 +1360,33 @@ code {
 }
 @keyframes pulse-out-down {
   0%,
-  54% {
+  44% {
     top: 0;
     opacity: 0;
   }
-  59%,
-  88% {
+  48%,
+  66% {
     opacity: 1;
   }
-  92%,
+  70%,
   100% {
     top: calc(100% - 14px);
+    opacity: 0;
+  }
+}
+@keyframes pulse-back-up {
+  0%,
+  72% {
+    top: calc(100% - 7px);
+    opacity: 0;
+  }
+  76%,
+  94% {
+    opacity: 1;
+  }
+  98%,
+  100% {
+    top: 7px;
     opacity: 0;
   }
 }
@@ -1394,7 +1670,8 @@ main section[id] {
   /* the wiring diagram draws left to right: node, wire, arrowhead, next node */
   .wiring.draw > .wire-node,
   .wiring.draw .wire-link span,
-  .wiring.draw .wire-link::after {
+  .wiring.draw .wire-link::after,
+  .wiring.draw .wire-back {
     opacity: 0;
   }
   .wiring.draw .wire-link::before {
@@ -1437,6 +1714,12 @@ main section[id] {
   }
   .wiring.draw.in > :nth-child(5) {
     transition-delay: 1.1s;
+  }
+  /* then the reply travels back */
+  .wiring.draw.in .wire-back,
+  .wiring.draw.in .wire-loop .wire-note {
+    opacity: 1;
+    transition: opacity 0.35s ease 1.35s;
   }
 
   /* hover and open states ease rather than snap */
@@ -1507,6 +1790,64 @@ main section[id] {
   }
   .wiring > :nth-child(4) .pulse {
     animation-name: pulse-out-down;
+  }
+  .wire-loop {
+    height: 76px;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    padding-left: 48px;
+  }
+  .wire-loop::before {
+    top: 0;
+  }
+  .wire-loop::after {
+    top: auto;
+  }
+  .wire-loop .pulse {
+    top: 0;
+  }
+  .wire-loop span::before {
+    content: "↓ ";
+  }
+  .wire-loop .wire-note::before {
+    content: "↑ ";
+  }
+  .wire-back {
+    left: 32px;
+    right: auto;
+    top: 6px;
+    bottom: 0;
+    border-top: none;
+    border-left: 1px solid var(--tick);
+  }
+  .wire-back::after {
+    left: -5px;
+    top: -6px;
+    border: 4.5px solid transparent;
+    border-bottom: 7px solid var(--tick);
+    border-top: 0;
+  }
+  .wire-loop .pulse-back {
+    left: 29px;
+    top: 0;
+  }
+  .wiring > :nth-child(4) .pulse-back {
+    animation-name: pulse-back-up;
+  }
+  .pulse::after {
+    top: auto;
+    bottom: 3px;
+    right: auto;
+    left: 2.5px;
+    width: 2px;
+    height: 24px;
+    background: linear-gradient(to top, var(--accent), transparent);
+  }
+  .pulse-back::after {
+    bottom: auto;
+    top: 3px;
+    background: linear-gradient(to bottom, var(--accent), transparent);
   }
   .wire-link::after {
     left: 16px;

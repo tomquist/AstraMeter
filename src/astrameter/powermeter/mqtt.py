@@ -6,6 +6,8 @@ import ssl
 
 import aiomqtt
 
+from astrameter.mqtt_client_id import mqtt_client_id
+
 from .base import PushPowermeter, as_list
 from .json_http import extract_json_value
 
@@ -123,6 +125,7 @@ class MqttPowermeter(PushPowermeter):
             username=self.username,
             password=self.password,
             tls_context=tls_context,
+            identifier=mqtt_client_id(),
             keepalive=60,
         ) as client:
             logger.info("Connected to MQTT broker %s:%s", self.broker, self.port)

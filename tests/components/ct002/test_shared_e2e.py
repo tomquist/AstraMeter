@@ -150,6 +150,9 @@ class PythonBackend:
         # binary's `cfg consumer_ttl` control command (-1 = adaptive).
         self.ct002.consumer_ttl = seconds
 
+    def set_peakshaving_threshold(self, watts: float) -> None:
+        self.ct002.set_peakshaving_threshold(float(watts))
+
     def set_manual_target(self, cid: str, value: float) -> None:
         self.ct002.set_consumer_manual_target(cid, value)
 
@@ -222,6 +225,10 @@ class EsphomeBackend:
 
     def set_consumer_ttl(self, seconds: float | None) -> None:
         self._cmd(f"cfg consumer_ttl {-1 if seconds is None else seconds}")
+
+    def set_peakshaving_threshold(self, watts: float) -> None:
+        reply = self.control("peakshaving_threshold", watts)
+        assert reply.startswith("ok"), f"threshold write failed: {reply!r}"
 
     def set_manual_target(self, cid: str, value: float) -> None:
         self._cmd(f"set_manual_target {cid} {value}")
@@ -792,6 +799,66 @@ def test_manual_target_does_not_auto_enter_manual_mode(backend: Backend) -> None
     # Turning Auto Target off is what actually enters manual mode.
     backend.set_auto_target(cid, False)
     assert backend.dump()[cid]["manual_enabled"] is True
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_peakshaving_leaves_unsteered_batteries_alone(backend: Backend) -> None:
+    """Under the peak shaving threshold the steered battery holds at zero,
+    even while a battery on a manual target discharges: the manual one's
+    output lowers demand like solar, and is never cancelled out by charging
+    the steered one from the grid.  Above the threshold only the excess is
+    asked for."""
+    backend.set_clock(3000)
+    backend.set_active_control(True)
+    backend.set_peakshaving_threshold(500)
+
+    manual = "112233445500"
+    backend.set_grid(100)  # house 400 W, the manual battery covers 300 W
+    assert backend.poll(manual.upper(), "A", 300) is not None
+    backend.set_manual_target(manual, 300.0)
+    backend.set_auto_target(manual, False)
+
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("AABBCCDDEEFF", "A", 0)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == 0, (
+        f"[{backend.name}] steered battery should hold at 0 under the "
+        f"threshold, got {r[4]}"
+    )
+
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    backend.set_grid(900)  # 400 W above the threshold
+    r = backend.poll("AABBCCDDEEFF", "A", 0)
+    assert r is not None, f"[{backend.name}] no response"
+    assert 0 < int(r[4]) <= 400, (
+        f"[{backend.name}] only the excess over the threshold should be "
+        f"asked for, got {r[4]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_peakshaving_idles_each_battery_on_its_own(backend: Backend) -> None:
+    """Under the threshold, a pair left trading power (one charging from the
+    other) is wound to 0 W battery by battery, not handed shares of a
+    correction that nets to nothing."""
+    backend.set_clock(4000)
+    backend.set_active_control(True)
+    backend.set_peakshaving_threshold(500)
+    backend.set_grid(110)  # house 100 W plus the pair's net 10 W charge
+
+    assert backend.poll("112233445500", "A", -30) is not None
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("AABBCCDDEEFF", "A", 20)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == -20, (
+        f"[{backend.name}] the discharging unit should wind to 0, got {r[4]}"
+    )
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("112233445500", "A", -30)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == 30, (
+        f"[{backend.name}] the charging unit should wind to 0, got {r[4]}"
+    )
 
 
 # ── Direct dual-backend wire comparison ────────────────────────────────────

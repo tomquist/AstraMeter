@@ -150,6 +150,37 @@ test("device-wide active control and force rotation are reachable", async ({
     .toBe(true);
 });
 
+test("the peak shaving threshold writes through and refuses out-of-range values", async ({
+  page,
+}) => {
+  await page.goto(`${BASE_URL}#/overview`);
+  const threshold = page.locator('.controls [aria-label="Peak shaving threshold"]');
+  await expect(threshold).toBeVisible();
+
+  // A number, not a boolean: this write used to arrive as `true` and be
+  // refused, so the box looked settable and never was.
+  await threshold.fill("2500");
+  await threshold.dispatchEvent("change");
+  await expect
+    .poll(async () => (await statusSnapshot()).devices[0].control.peakshaving_threshold_w)
+    .toBe(2500);
+
+  await threshold.evaluate((el: HTMLInputElement) => {
+    el.value = "99999";
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await expect(page.locator(".banner.err")).toContainText(
+    "peakshaving_threshold must be between 0 and 10000",
+  );
+
+  // Back to off, so the tests sharing this stack steer as before.
+  await threshold.fill("0");
+  await threshold.dispatchEvent("change");
+  await expect
+    .poll(async () => (await statusSnapshot()).devices[0].control.peakshaving_threshold_w)
+    .toBe(0);
+});
+
 test("an in-flight write is not snapped back by the next poll", async ({ page }) => {
   // Regression: the poll re-rendered the switch from the server's *old*
   // value before the write landed, flipping it back under the user.
