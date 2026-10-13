@@ -48,6 +48,10 @@ constexpr float PEAKSHAVING_IDLE_BAND_W = 100.0f;
 // match between the two stacks.
 constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
 
+// The CT MAC a battery sends while it has no CT bound yet; answered like our
+// own MAC. Mirrors WILDCARD_CT_MAC in src/astrameter/ct002/ct002.py.
+constexpr const char *WILDCARD_CT_MAC = "000000000000";
+
 std::optional<float> ema_interval(std::optional<float> previous, float raw) {
   const auto round_tenth = [](float v) {
     return static_cast<float>(round_half_even(static_cast<double>(v) * 10.0)) / 10.0f;
@@ -569,7 +573,7 @@ bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) co
   if (this->ct_mac_.empty()) return true;
   if (fields.size() < 4) return false;
   std::string req(fields[3]);
-  if (req.empty() || req == "000000000000") return true;
+  if (req == WILDCARD_CT_MAC) return true;
   for (auto &c : req) c = static_cast<char>(std::tolower(c));
   std::string cfg(this->ct_mac_);
   for (auto &c : cfg) c = static_cast<char>(std::tolower(c));

@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from astrameter.ct002.protocol import build_payload, parse_request
 from astrameter.simulator.battery import BatterySimulator
 
 HERE = Path(__file__).parent
@@ -156,6 +157,35 @@ def test_battery_simulator_round_trip(running_binary: subprocess.Popen) -> None:
     assert len(fields) == 24, f"expected 24 fields, got {len(fields)}: {fields}"
     # ct_type and ct_mac come back as configured on the ct002 component.
     assert fields[0] == "HME-4", fields[0]
+    assert fields[1] == "112233445566", fields[1]
     # meter_dev_type/meter_mac echo the request.
     assert fields[2] == "HMG-50", fields[2]
     assert fields[3].lower() == "aabbccddeeff", fields[3]
+
+
+def _ask(ct_mac: str) -> list[str] | None:
+    """Send one request addressed to *ct_mac*; the reply's fields, or None."""
+    request = build_payload(["HMG-50", "AABBCCDDEEFF", "HME-4", ct_mac, "0", "0"])
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(1.0)
+        sock.sendto(request, ("127.0.0.1", 12345))
+        try:
+            data, _ = sock.recvfrom(1024)
+        except TimeoutError:
+            return None
+    fields, error = parse_request(data)
+    assert fields is not None, error
+    return fields
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_ct_mac_policy(running_binary: subprocess.Popen) -> None:
+    """test.host.yaml binds ct_mac 112233445566. Like a real CT, the binary
+    answers its own MAC and the unbound-battery probe 000000000000, replying
+    with its own MAC either way, and ignores any other CT MAC."""
+    for ct_mac in ("112233445566", "000000000000"):
+        fields = _ask(ct_mac)
+        assert fields is not None, f"no reply to a request for {ct_mac}"
+        assert fields[1] == "112233445566", fields
+    for ct_mac in ("", "aabbccddeeff"):
+        assert _ask(ct_mac) is None, f"answered a request for {ct_mac!r}"

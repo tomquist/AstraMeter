@@ -414,7 +414,7 @@ async def run_device(
                 ct,
                 device_id,
                 powermeters,
-                marstek_mac or ct.ct_mac,
+                marstek_mac or device.ct_mac,
                 insights is not None,
                 registry,
             )

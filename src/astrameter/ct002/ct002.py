@@ -64,6 +64,11 @@ UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
 POLL_INTERVAL_EMA_ALPHA = 0.3
 
+# The CT MAC a battery sends while it has no CT bound yet. A real CT answers
+# it as well as its own MAC, and always replies with its own MAC — which is
+# how the battery learns it (verified in CT002/CT003 firmware v116-v124).
+WILDCARD_CT_MAC = "000000000000"
+
 # Under peak shaving, how close to 0 W (W) every battery of a pool trading
 # power must already be before each is held at 0 W on its own (see
 # CT002._peakshaving).  Sized to what the shared correction leaves stuck: its
@@ -113,6 +118,16 @@ def normalize_phase(raw: object) -> str:
     """
     phase = str(raw).strip().upper() if raw else ""
     return phase if phase in STEERED_PHASES else "0"
+
+
+def normalize_ct_mac(raw: str) -> str:
+    """``CT_MAC`` as the battery stores it: lowercase hex, no separators.
+
+    The battery compares the MAC in our reply to its bound CT MAC byte for
+    byte, so ``AA:BB:CC:DD:EE:FF`` would never pair. Mirrors
+    ``_validate_ct_mac`` in esphome/components/ct002/__init__.py.
+    """
+    return raw.strip().replace(":", "").replace("-", "").lower()
 
 
 def _bucket_for_phase(phase: str) -> str:
@@ -457,7 +472,7 @@ class CT002:
         reset_fn: Callable[[], None] | None = None,
     ) -> None:
         self.udp_port = udp_port
-        self.ct_mac = ct_mac
+        self.ct_mac = normalize_ct_mac(ct_mac)
         self.ct_type = ct_type
         self.wifi_rssi = wifi_rssi
         self.dedupe_time_window = dedupe_time_window
@@ -1314,11 +1329,9 @@ class CT002:
 
     def _ct_mac_matches(self, request: CT002Request) -> bool:
         """Whether *request* names the CT MAC we are configured to answer for."""
-        if not self.ct_mac:
+        if not self.ct_mac or request.ct_mac == WILDCARD_CT_MAC:
             return True
-        if request.ct_mac in ("", "000000000000"):
-            return True
-        return bool(request.ct_mac) and request.ct_mac.lower() == self.ct_mac.lower()
+        return request.ct_mac.lower() == self.ct_mac
 
     async def _safe_handle_request(
         self, data: bytes, addr: tuple[str, int], transport: DatagramSink

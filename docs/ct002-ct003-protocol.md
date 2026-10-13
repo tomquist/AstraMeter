@@ -704,7 +704,25 @@ slv_ip=<ip>,slv_t=<type>,slv_p=<phase>,slv_id=<mac>;
 ## CT MAC behavior
 
 The CT responds when the request `hhm_mac_code` is the wildcard `000000000000`
-**or** matches the CT's own MAC. In AstraMeter: if `CT_MAC` is configured, the
-emulator only responds when the request `hhm_mac_code` matches `CT_MAC`; if
-`CT_MAC` is empty, it accepts requests for any CT MAC and echoes the request CT
-MAC back in responses.
+**or** matches the CT's own MAC, compared byte for byte. An empty
+`hhm_mac_code` does not parse, so the CT drops it. Either way the response
+carries the CT's **own** type and MAC, never the request's.
+
+A battery sends the wildcard while it has no CT bound and has not learned one
+yet. It accepts any response then, and puts that response's CT MAC into its
+next requests. Once a CT MAC is bound (set from the app over BLE or the
+cloud), it drops any response whose CT MAC is not byte‑for‑byte the bound one,
+so case and separators matter.
+
+> Verified in the CT002 (`HME-4` v120/v124) and CT003 (`HME-3`
+> v116/v117/v118/v122) images, and on the battery side in Venus E 3.0
+> (`VNSE3-0` v151) and Venus E 2.0 (`HMG-50` v156), from the firmware
+> archives cited above. The Venus E Mini (`VNSEM-0`), which needs the CT's own
+> MAC in the wildcard reply to pair, has no public image.
+
+In AstraMeter: if `CT_MAC` is configured, the emulator responds to the wildcard
+and to requests naming `CT_MAC` (case‑insensitively), always with `CT_MAC` in
+the response, and ignores every other CT MAC. `CT_MAC` is normalized to
+lowercase hex without separators, the form a battery stores. If `CT_MAC` is
+empty, it accepts requests for any CT MAC and echoes the request CT MAC back
+in responses.

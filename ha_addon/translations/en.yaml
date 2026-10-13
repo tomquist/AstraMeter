@@ -10,7 +10,7 @@ configuration:
     description: "Comma-separated list of devices to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new). Use ct002 or ct003. The device type shellypro3em_old uses port 1010 (used up until B2500 firmware version 224). The device type shellypro3em_new uses the new port 2220 (used for B2500 firmware >=226). If you use shellypro3em, it will use shellypro3em_old and shellypro3em_new simultaneously for backwards compatibility."
   ct_mac:
     name: CT MAC Override
-    description: "Optional MAC address of the emulated CT device (the CT MAC addressed in incoming requests). Leave empty to respond regardless of addressed CT MAC and mirror that addressed CT MAC in the response. If set, only requests addressed to this CT MAC are answered."
+    description: "Optional MAC address of the emulated CT device (the CT MAC addressed in incoming requests). Leave empty to respond regardless of addressed CT MAC and mirror that addressed CT MAC in the response. If set, only requests addressed to this CT MAC, or to 000000000000 from a battery that is not paired yet, are answered."
   throttle_interval:
     name: Throttling Interval
     description: "Minimum time interval (in seconds) between power meter readings. When set to 0, throttling is disabled for maximum performance. For slower data sources or to prevent control instability, set to 1-3 seconds. Supports decimal values (e.g., 1.5 for 1.5 seconds). Increase this value if you're seeing oscillations or instability with slow data sources."

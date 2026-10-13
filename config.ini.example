@@ -69,7 +69,8 @@ THROTTLE_INTERVAL = 0
 ## Note: CT003 can optionally use its own [CT003] section with the same keys.
 ## CT MAC (12 hex digits, from Marstek app).
 ## If empty, the emulator accepts any request CT MAC and echoes the request's
-## CT MAC in responses. If set, the emulator responds only to the configured MAC.
+## CT MAC in responses. If set, the emulator responds only to the configured MAC
+## and to an unpaired battery's 000000000000 probe, answering with its own MAC.
 # CT_MAC = 001122334455
 ## UDP port to bind for CT002/CT003 (default 12345).
 # UDP_PORT = 12345
