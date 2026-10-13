@@ -569,6 +569,7 @@ bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) co
   if (this->ct_mac_.empty()) return true;
   if (fields.size() < 4) return false;
   std::string req(fields[3]);
+  if (req.empty() || req == "000000000000") return true;
   for (auto &c : req) c = static_cast<char>(std::tolower(c));
   std::string cfg(this->ct_mac_);
   for (auto &c : cfg) c = static_cast<char>(std::tolower(c));
