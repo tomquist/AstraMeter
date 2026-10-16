@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** the config generator's ESPHome output ignoring the JSON path, login and broker credentials you entered for JSON-over-HTTP, MQTT, Tasmota and SML meters, so the generated YAML now reads the right value.
+
 - **Fixed** a Marstek Venus E Mini failing to pair with the emulated CT ("configuration failed" in the app) when `CT_MAC` is set, and a `CT_MAC` entered in uppercase or with colons never pairing ([#727](https://github.com/tomquist/astrameter/pull/727), [#728](https://github.com/tomquist/astrameter/pull/728)).
 
 - **Fixed** a battery's Home Assistant entities staying unavailable until a restart since 2.3.1, after a network hiccup briefly dropped the battery and the MQTT connection at the same time ([#718](https://github.com/tomquist/astrameter/issues/718), [#719](https://github.com/tomquist/astrameter/pull/719)).

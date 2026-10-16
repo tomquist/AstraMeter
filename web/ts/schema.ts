@@ -47,6 +47,10 @@ export interface EsphomeSpec {
   jsonRoot?: string;
   haEntity?: (f: Fields) => string;
   headersField?: string;
+  /** Field holding the JSONPath(s) the lambda reads, one per phase; replaces lambda1/lambda3 when set. */
+  jsonPathsField?: string;
+  /** [user, password] fields sent as an HTTP basic-auth header. */
+  basicAuthFields?: [string, string];
   warn?: string | ((f: Fields) => string | null);
 }
 
@@ -315,6 +319,13 @@ export function refossChannelIds(raw: FieldValue, fallback: number[]): number[] 
   return ids;
 }
 
+/** Tasmota takes its web login as query parameters, as the Python source sends it. */
+function tasmotaLogin(f: Fields): string {
+  const user = String(f.USER ?? "").trim();
+  if (!user) return "";
+  return `user=${encodeURIComponent(user)}&password=${encodeURIComponent(String(f.PASS ?? ""))}&`;
+}
+
 export const POWERMETERS: Powermeter[] = [
   {
     id: "shelly",
@@ -348,6 +359,10 @@ export const POWERMETERS: Powermeter[] = [
       lambda1: 'id(grid_l1).publish_state(root["apower"]);',
       lambda3:
         'id(grid_l1).publish_state(root["a_act_power"]);\n                    id(grid_l2).publish_state(root["b_act_power"]);\n                    id(grid_l3).publish_state(root["c_act_power"]);',
+      warn: (f) =>
+        String(f.USER ?? "").trim()
+          ? "ESPHome can't log in to a Shelly: its RPC API wants digest auth, which http_request doesn't speak. Remove the Shelly's login, or read it through MQTT or Home Assistant instead."
+          : null,
     },
   },
   {
@@ -372,7 +387,7 @@ export const POWERMETERS: Powermeter[] = [
       kind: "http",
       tier: "generic",
       note: "Polls /cm?cmnd=status 10. Adjust the prefix/label in the lambda to match your meter.",
-      url1: (f) => `http://${f.IP || "192.168.1.101"}/cm?cmnd=status%2010`,
+      url1: (f) => `http://${f.IP || "192.168.1.101"}/cm?${tasmotaLogin(f)}cmnd=status%2010`,
       lambda1: (f) =>
         `id(grid_l1).publish_state(root["${f.JSON_STATUS || "StatusSNS"}"]["${f.JSON_PAYLOAD_MQTT_PREFIX || "SML"}"]["${String(f.JSON_POWER_MQTT_LABEL || "Power").split(",")[0].trim()}"]);`,
     },
@@ -637,6 +652,8 @@ export const POWERMETERS: Powermeter[] = [
       url1: (f) => String(f.URL || "http://example.com/api"),
       lambda1: 'id(grid_l1).publish_state(root["power"]);',
       headersField: "HEADERS",
+      jsonPathsField: "JSON_PATHS",
+      basicAuthFields: ["USERNAME", "PASSWORD"],
     },
   },
   {
