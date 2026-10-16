@@ -331,10 +331,10 @@ function esphomeSensor(state: State): EsphomeSensor {
             : `No JSON path for ${id} — enter one per phase.`,
         );
       }
-      const value = lookup ? `return ${lookup}.as<float>();` : `return x["power"];  // TODO: ${path ? `read ${path}` : "set this phase's field"}`;
-      const action =
-        `${IND}${IND}${IND}${IND}- sensor.template.publish:\n${IND}${IND}${IND}${IND}${IND}${IND}id: ${id}\n` +
-        `${IND}${IND}${IND}${IND}${IND}${IND}state: !lambda |-\n${IND.repeat(7)}${value}`;
+      const publish = lookup
+        ? publishIfPresent(id, lookup)
+        : `id(${id}).publish_state(x["power"]);  // TODO: ${path ? `read ${path}` : "set this phase's field"}`;
+      const action = `${IND}${IND}${IND}${IND}- lambda: |-\n${IND.repeat(6)}${publish}`;
       byTopic.set(topic, [...(byTopic.get(topic) ?? []), action]);
     });
     const triggers = [...byTopic].map(
@@ -551,7 +551,7 @@ function jsonPathLambda(raw: string, ids: string[], warnings: string[], root = "
     .map((id, i) => {
       const path = paths[i] || "";
       const lookup = path ? jsonPathLookup(path, root) : null;
-      if (lookup) return `id(${id}).publish_state(${lookup}.as<float>());`;
+      if (lookup) return publishIfPresent(id, lookup);
       warnings.push(
         path
           ? `The JSON path "${path}" has no ESPHome equivalent — edit the ${id} lambda by hand.`
@@ -560,6 +560,13 @@ function jsonPathLambda(raw: string, ids: string[], warnings: string[], root = "
       return `id(${id}).publish_state(${root}["power"]);  // TODO: ${path ? `read ${path}` : "set this phase's field"}`;
     })
     .join(`\n${IND.repeat(11)}`);
+}
+
+// A missing member reads as null and .as<float>() turns that into 0 W, so a
+// message without the field is skipped — as the Python source drops it as a
+// bad reading — rather than published as zero.
+function publishIfPresent(id: string, lookup: string): string {
+  return `if (!${lookup}.isNull()) id(${id}).publish_state(${lookup}.as<float>());`;
 }
 
 // An HTTP basic-auth header value, encoded as UTF-8.
@@ -574,7 +581,11 @@ interface MqttBroker {
   port: string;
   username: string;
   password: string;
+  tls: boolean;
 }
+
+const MQTT_TLS_WARNING =
+  "MQTT over TLS: add your broker's CA certificate (PEM) to secrets.yaml as mqtt_ca_certificate — the device won't build or connect without it.";
 
 // The broker an MQTT section points at: its URI, else the separate keys — the
 // same precedence as the Python loader.
@@ -585,6 +596,7 @@ function mqttBroker(f: Fields, warnings: string[]): MqttBroker {
     port: String(f.PORT || "1883").trim(),
     username: isBlank(f.USERNAME) ? "" : String(f.USERNAME),
     password: isBlank(f.PASSWORD) ? "" : String(f.PASSWORD),
+    tls,
   };
   if (!isBlank(f.URI)) {
     try {
@@ -595,12 +607,13 @@ function mqttBroker(f: Fields, warnings: string[]): MqttBroker {
         port: uri.port || (tls ? "8883" : "1883"),
         username: decodeURIComponent(uri.username),
         password: decodeURIComponent(uri.password),
+        tls,
       };
     } catch {
       warnings.push(`The broker URI "${f.URI}" doesn't parse — use the broker/port fields instead.`);
     }
   }
-  if (tls) warnings.push("ESPHome's mqtt: needs a certificate_authority for TLS — add it to the mqtt: block by hand.");
+  if (broker.tls) warnings.push(MQTT_TLS_WARNING);
   return broker;
 }
 
@@ -608,6 +621,10 @@ function mqttBlock(b: MqttBroker): string {
   const lines = ["mqtt:", `${IND}broker: ${b.broker}`, `${IND}port: ${b.port}`];
   if (b.username) lines.push(`${IND}username: ${quoteYaml(b.username)}`);
   if (b.password) lines.push(`${IND}password: ${quoteYaml(b.password)}`);
+  // ESPHome only speaks TLS with a CA to check the broker against. Reading it
+  // from a secret keeps the login from going out in plain text: the config
+  // doesn't validate until the CA is there.
+  if (b.tls) lines.push(`${IND}certificate_authority: !secret mqtt_ca_certificate`);
   return lines.join("\n");
 }
 
@@ -746,16 +763,26 @@ export function generateEsphome(state: State): string {
   const wantMarstek = state.marstek && state.marstek.enabled;
   const wantCloud = ((state.ct && state.ct.fields) || {}).CLOUD_REPORTING === "True";
   const pm0 = getPowermeter(meter.type);
-  if (wantInsights && pm0 && pm0.esphome && pm0.esphome.kind === "mqtt") {
-    const mf0 = state.mqttInsights.fields || {};
+  const meterIsMqtt = !!(pm0 && pm0.esphome && pm0.esphome.kind === "mqtt");
+  const mf0 = (state.mqttInsights && state.mqttInsights.fields) || {};
+  const insightsBroker: MqttBroker = {
+    broker: String(mf0.BROKER || "192.168.1.10").trim(),
+    port: String(mf0.PORT || "1883").trim(),
+    username: isBlank(mf0.USERNAME) ? "" : String(mf0.USERNAME),
+    password: isBlank(mf0.PASSWORD) ? "" : String(mf0.PASSWORD),
+    tls: mf0.TLS === true || mf0.TLS === "true" || mf0.TLS === "1",
+  };
+  if (wantInsights && meterIsMqtt) {
     const mb = mqttBroker(meter.fields || {}, []);
-    const sameBroker = String(mf0.BROKER || "192.168.1.10").trim() === mb.broker;
-    const samePort = String(mf0.PORT || "1883").trim() === mb.port;
-    if (!sameBroker || !samePort) {
+    const sameBroker = insightsBroker.broker === mb.broker && insightsBroker.port === mb.port;
+    const sameLogin = insightsBroker.username === mb.username && insightsBroker.password === mb.password;
+    if (!sameBroker || !sameLogin) {
       warnings.push(
-        "MQTT Insights and the MQTT meter must use the same broker (ESPHome has one mqtt: block). The meter's broker/port below is used for both.",
+        "MQTT Insights and the MQTT meter must use the same broker (ESPHome has one mqtt: block). The meter's broker, port and login below are used for both, so Insights publishes as the meter's user.",
       );
     }
+  } else if (wantInsights && insightsBroker.tls) {
+    warnings.push(MQTT_TLS_WARNING);
   }
 
   const out: string[] = [];
@@ -791,18 +818,7 @@ export function generateEsphome(state: State): string {
   // mqtt_insights needs a top-level mqtt: block. If the meter itself is MQTT,
   // its block (broker, login, JSON handlers) wins — the data source is what
   // matters — and Insights reuses it; otherwise fall back to the Insights broker.
-  const meterIsMqtt = !!(pm0 && pm0.esphome && pm0.esphome.kind === "mqtt");
-  if (wantInsights && !meterIsMqtt) {
-    const mf = state.mqttInsights.fields || {};
-    out.push(
-      mqttBlock({
-        broker: String(mf.BROKER || "192.168.1.10").trim(),
-        port: String(mf.PORT || "1883").trim(),
-        username: isBlank(mf.USERNAME) ? "" : String(mf.USERNAME),
-        password: isBlank(mf.PASSWORD) ? "" : String(mf.PASSWORD),
-      }),
-    );
-  }
+  if (wantInsights && !meterIsMqtt) out.push(mqttBlock(insightsBroker));
   // ESPHome allows only one top-level http_request:. An HTTP-polled meter
   // already emits one (with useragent + RX buffer); marstek_registration and
   // cloud_reporting also need one (with a longer 20s timeout). When both apply,

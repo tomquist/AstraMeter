@@ -447,7 +447,11 @@ const eyJsonPath = generateEsphome({
   meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", JSON_PATHS: "$.state['grid power'][0]", USERNAME: "me", PASSWORD: "pw" }, tuning: {} }],
   ct: { fields: {} },
 });
-has(eyJsonPath, 'id(grid_l1).publish_state(root["state"]["grid power"][0].as<float>());', "esp/json_http: JSON path becomes the lambda lookup");
+has(
+  eyJsonPath,
+  'if (!root["state"]["grid power"][0].isNull()) id(grid_l1).publish_state(root["state"]["grid power"][0].as<float>());',
+  "esp/json_http: JSON path becomes the lambda lookup, skipped when the field is missing",
+);
 lacks(eyJsonPath, 'root["power"]', "esp/json_http: no placeholder field once a path is set");
 has(eyJsonPath, "          request_headers:\n            Authorization: Basic bWU6cHc=", "esp/json_http: login sent as a basic-auth header");
 
@@ -481,7 +485,11 @@ const eyMqttJson = generateEsphome({
 has(eyMqttJson, 'mqtt:\n  broker: 10.0.0.2\n  port: 1883\n  username: "u"\n  password: "p\\"w"', "esp/mqtt: broker login");
 has(eyMqttJson, "  on_json_message:\n    - topic: tele/sml/SENSOR\n      then:", "esp/mqtt: one topic shared by all three paths");
 ok((eyMqttJson.match(/- topic:/g) || []).length === 1, "esp/mqtt: a shared topic gets one trigger");
-has(eyMqttJson, "            id: grid_l3\n            state: !lambda |-\n              return x[\"SML\"][\"L3\"].as<float>();", "esp/mqtt: per-phase JSON lookup");
+has(
+  eyMqttJson,
+  '        - lambda: |-\n            if (!x["SML"]["L3"].isNull()) id(grid_l3).publish_state(x["SML"]["L3"].as<float>());',
+  "esp/mqtt: per-phase JSON lookup, skipped when the field is missing",
+);
 lacks(eyMqttJson, "mqtt_subscribe", "esp/mqtt: JSON payloads don't use mqtt_subscribe");
 
 const eyMqttUri = generateEsphome({
@@ -489,11 +497,41 @@ const eyMqttUri = generateEsphome({
   esphome: {},
   meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "ignored", URI: "mqtt://a%40b:secret@broker.lan:1884", TOPIC: "p" }, tuning: {} }],
   ct: { fields: {} },
-  mqttInsights: { enabled: true, fields: { BROKER: "broker.lan", PORT: "1884" } },
+  mqttInsights: { enabled: true, fields: { BROKER: "broker.lan", PORT: "1884", USERNAME: "a@b", PASSWORD: "secret" } },
 });
 has(eyMqttUri, 'broker: broker.lan\n  port: 1884\n  username: "a@b"\n  password: "secret"', "esp/mqtt: URI wins over the separate keys");
 ok((eyMqttUri.match(/^mqtt:/gm) || []).length === 1, "esp/mqtt+insights: one mqtt block");
-lacks(eyMqttUri, "must use the same broker", "esp/mqtt+insights: URI broker matches Insights");
+lacks(eyMqttUri, "must use the same broker", "esp/mqtt+insights: URI broker and login match Insights");
+lacks(eyMqttUri, "certificate_authority", "esp/mqtt: no CA without TLS");
+
+const eyMqttOtherLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "10.0.0.2", USERNAME: "reader", TOPIC: "p" }, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "10.0.0.2", USERNAME: "writer" } },
+});
+has(eyMqttOtherLogin, "Insights publishes as the meter's user", "esp/mqtt+insights: a different login on the same broker warns");
+
+const eyMqttTls = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "mqtt", phases: 1, fields: { URI: "mqtts://u:p@broker.lan", TOPIC: "p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyMqttTls, "  port: 8883\n", "esp/mqtt: mqtts defaults to 8883");
+has(eyMqttTls, "  certificate_authority: !secret mqtt_ca_certificate", "esp/mqtt: TLS needs the broker CA");
+has(eyMqttTls, "# ⚠ MQTT over TLS", "esp/mqtt: TLS tells the user where the CA goes");
+
+const eyInsightsTls = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "homeassistant", phases: 1, fields: {}, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "10.0.0.3", USERNAME: "ins", PASSWORD: "pw", TLS: true } },
+});
+has(eyInsightsTls, "  certificate_authority: !secret mqtt_ca_certificate", "esp/insights: TLS needs the broker CA");
+has(eyInsightsTls, "# ⚠ MQTT over TLS", "esp/insights: TLS tells the user where the CA goes");
 
 const eyInsightsLogin = generateEsphome({
   target: "esphome",
