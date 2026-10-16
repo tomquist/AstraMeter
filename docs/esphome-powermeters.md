@@ -664,7 +664,7 @@ interval:
     then:
       - http_request.get:
           url: http://example.com/api
-          headers:
+          request_headers:
             Authorization: Bearer token
           capture_response: true
           on_response:

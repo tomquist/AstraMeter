@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** the config generator's ESPHome output ignoring the JSON path, login and broker credentials you entered for JSON-over-HTTP, MQTT, Tasmota and SML meters, so the generated YAML now reads the right value.
+- **Fixed** the config generator's ESPHome output ignoring the JSON path, login and broker credentials entered for JSON-over-HTTP, MQTT, Tasmota and SML meters, and emitting extra HTTP headers that current ESPHome rejects.
 
 - **Fixed** a Marstek Venus E Mini failing to pair with the emulated CT ("configuration failed" in the app) when `CT_MAC` is set, and a `CT_MAC` entered in uppercase or with colons never pairing ([#727](https://github.com/tomquist/astrameter/pull/727), [#728](https://github.com/tomquist/astrameter/pull/728)).
 

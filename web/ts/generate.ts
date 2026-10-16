@@ -492,7 +492,7 @@ function esphomeSensor(state: State): EsphomeSensor {
       }
     }
     const headerLines = headers.length
-      ? `\n${IND}${IND}${IND}${IND}${IND}headers:\n` +
+      ? `\n${IND}${IND}${IND}${IND}${IND}request_headers:\n` +
         headers.map(([k, v]) => `${IND}${IND}${IND}${IND}${IND}${IND}${k}: ${v}`).join("\n")
       : "";
     const interval =

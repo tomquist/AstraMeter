@@ -373,7 +373,7 @@ const eyJsonHeaders = generateEsphome({
   meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", HEADERS: "Authorization: Bearer t; X-Env: prod" }, tuning: {} }],
   ct: { fields: {} },
 });
-has(eyJsonHeaders, "headers:", "esp/json_http: headersField emits a headers block");
+has(eyJsonHeaders, "request_headers:", "esp/json_http: headersField emits a request_headers block (ESPHome renamed headers)");
 has(eyJsonHeaders, "Authorization: Bearer t", "esp/json_http: first header");
 has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
 // The url/capture_response/on_response keys must be nested *under* the
@@ -382,7 +382,7 @@ has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
 has(eyJsonHeaders, "      - http_request.get:\n          url: http://x/api", "esp/json_http: url nested under http_request.get");
 has(eyJsonHeaders, "          capture_response: true", "esp/json_http: capture_response nested under action");
 has(eyJsonHeaders, "          on_response:", "esp/json_http: on_response nested under action");
-has(eyJsonHeaders, "          headers:", "esp/json_http: headers nested under action");
+has(eyJsonHeaders, "          request_headers:", "esp/json_http: headers nested under action");
 // Large JSON responses (e.g. the Fronius Solar API) overflow ESPHome's small
 // default receive buffer and truncate the body, so json::parse_json fails.
 // Enlarge the buffer on both the client and the per-request action (issue #534).
@@ -449,7 +449,7 @@ const eyJsonPath = generateEsphome({
 });
 has(eyJsonPath, 'id(grid_l1).publish_state(root["state"]["grid power"][0].as<float>());', "esp/json_http: JSON path becomes the lambda lookup");
 lacks(eyJsonPath, 'root["power"]', "esp/json_http: no placeholder field once a path is set");
-has(eyJsonPath, "          headers:\n            Authorization: Basic bWU6cHc=", "esp/json_http: login sent as a basic-auth header");
+has(eyJsonPath, "          request_headers:\n            Authorization: Basic bWU6cHc=", "esp/json_http: login sent as a basic-auth header");
 
 const eyJsonPath3 = generateEsphome({
   target: "esphome",
