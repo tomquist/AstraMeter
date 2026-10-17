@@ -881,3 +881,28 @@ def test_read_all_configs_wait_for_next_message_section_override() -> None:
     # Section order is preserved by configparser, so SCRIPT_1 (override=false)
     # is first and SCRIPT_2 (inherits global true) is second.
     assert [wait for _, _, wait in powermeters] == [False, True]
+
+
+@pytest.mark.parametrize(("throttle", "max_age"), [(0.0, 5.0), (3.0, 8.0), (-5.0, 5.0)])
+def test_shared_reading_ages_out_with_the_throttle(
+    throttle: float, max_age: float
+) -> None:
+    """Passive readers may reuse a reading for as long as the throttle holds
+    control reads back; a negative interval means no throttle, not a reading
+    reused for ever."""
+    from dataclasses import replace
+
+    from astrameter.config.config_loader import apply_signal_wrappers
+    from astrameter.config.settings import SignalSettings
+    from astrameter.powermeter.script import Script
+    from astrameter.powermeter.wrappers.base import PowermeterWrapper
+    from astrameter.powermeter.wrappers.last_reading import LastReadingPowermeter
+
+    signal = replace(SignalSettings(), throttle_interval=throttle)
+    node = apply_signal_wrappers(Script('echo "100"'), "SCRIPT_1", signal)
+    while isinstance(node, PowermeterWrapper) and not isinstance(
+        node, LastReadingPowermeter
+    ):
+        node = node.wrapped_powermeter
+    assert isinstance(node, LastReadingPowermeter)
+    assert node.max_age == max_age

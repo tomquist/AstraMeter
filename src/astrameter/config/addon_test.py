@@ -12,6 +12,7 @@ from astrameter.config.settings import CtSettings, GeneralSettings
 from astrameter.powermeter import HomeAssistant, ThrottledPowermeter
 from astrameter.powermeter.wrappers.base import PowermeterWrapper
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
+from astrameter.powermeter.wrappers.last_reading import LastReadingPowermeter
 
 
 class FakeSupervisor(addon.SupervisorClient):
@@ -174,7 +175,9 @@ def test_single_power_entity_is_read_directly() -> None:
     cfg = config(BASE_OPTIONS)
     meter = cfg.powermeters(cfg.general())[0][0]
     assert isinstance(meter, HealthTrackingPowermeter)
-    source = meter.wrapped_powermeter
+    shared = meter.wrapped_powermeter
+    assert isinstance(shared, LastReadingPowermeter)
+    source = shared.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     assert source.power_calculate is False
     assert source.current_power_entity == ["sensor.current_power_in"]
@@ -183,10 +186,12 @@ def test_single_power_entity_is_read_directly() -> None:
 
 
 def _inner_source(cfg: addon.AddonAppConfig) -> HomeAssistant:
-    """The Home Assistant source under the health wrapper the loader adds."""
+    """The Home Assistant source under the wrappers the loader always adds."""
     meter = cfg.powermeters(cfg.general())[0][0]
     assert isinstance(meter, HealthTrackingPowermeter)
-    source = meter.wrapped_powermeter
+    shared = meter.wrapped_powermeter
+    assert isinstance(shared, LastReadingPowermeter)
+    source = shared.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     return source
 
@@ -244,6 +249,7 @@ def test_power_source_is_conditioned_by_the_options() -> None:
         "HampelPowermeter",
         "ThrottledPowermeter",
         "TransformedPowermeter",
+        "LastReadingPowermeter",
     ]
 
 
