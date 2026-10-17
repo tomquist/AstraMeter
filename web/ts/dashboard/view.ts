@@ -24,6 +24,7 @@ import {
   gridTotal,
   hasReported,
   health,
+  inPhaseOrder,
   meterHealth,
   overallHealth,
   pendingOr,
@@ -159,7 +160,10 @@ function card(title: string | null, ...body: VChild[]): VNode {
 function balanceRail(state: AppState, offline: boolean): VNode {
   const snapshot = state.snapshot;
   const grid = gridTotal(snapshot);
-  const consumers = reportingConsumers(snapshot).filter((c) => !c.expired);
+  const consumers = inPhaseOrder(
+    reportingConsumers(snapshot).filter((c) => !c.expired),
+    state.phases,
+  );
   const scale = railScale(grid, consumers);
 
   const importing = (grid ?? 0) > 0;
@@ -517,7 +521,7 @@ function batteries(state: AppState, actions: Actions): VChild[] {
       h(
         "div",
         { class: "grid" },
-        ...(device.consumers || []).map((c) =>
+        ...inPhaseOrder(device.consumers || [], state.phases).map((c) =>
           batteryCard(device, c, writable, state, actions),
         ),
       ),

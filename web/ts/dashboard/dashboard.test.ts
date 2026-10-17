@@ -21,11 +21,13 @@ import {
   contribution,
   gridTotal,
   hasReported,
+  inPhaseOrder,
   initialState,
   meterHealth,
   overallHealth,
   pollInterval,
   railScale,
+  rememberPhases,
   reportingConsumers,
   type AppState,
 } from "./model.js";
@@ -1354,6 +1356,77 @@ lacks(
 ok(
   (phantomBatteries.match(/batt-figure/g) || []).length === 1,
   "only the real battery gets a power figure",
+);
+
+// ── batteries are listed by phase (issue #724) ──
+// One battery per leg, in the MAC order both backends send: A, C, B.
+const legs = (phaseOfSecond: string): StatusSnapshot => ({
+  schema_version: 1,
+  generated_at: "2026-08-01T12:00:00+00:00",
+  capabilities: { config_mode: "standalone", controls: true, poll_interval_ms: 2000 },
+  devices: [
+    {
+      id: "ct002",
+      kind: "ct002",
+      running: true,
+      consumers: [
+        { consumer_id: "02b250000001", phase: "A", reported_power_w: 100 },
+        { consumer_id: "02b250000002", phase: "C", reported_power_w: 200 },
+        { consumer_id: "02b250000003", phase: phaseOfSecond, reported_power_w: 300 },
+      ],
+    },
+  ],
+});
+const order = (html: string) =>
+  ["·0001", "·0003", "·0002"]
+    .map((tail) => html.indexOf(tail))
+    .every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1]));
+
+const ids = (consumers: { consumer_id?: string }[]) =>
+  consumers.map((c) => c.consumer_id?.slice(-1)).join("");
+ok(
+  ids(
+    inPhaseOrder(
+      [
+        { consumer_id: "1", phase: "0" },
+        { consumer_id: "2", phase: "D" },
+        { consumer_id: "3", phase: "B" },
+        { consumer_id: "4" },
+        { consumer_id: "5", phase: "A" },
+        { consumer_id: "6", phase: "B" },
+      ],
+      {},
+    ),
+  ) === "536214",
+  "legs in order, then all phases, then unassigned; ties keep MAC order",
+);
+
+const legsState: AppState = { ...initialState(), snapshot: legs("B"), connection: "live" };
+const render = (state: AppState) =>
+  renderToString(h("div", null, ...view(state, actions, initialConfigState())));
+ok(order(render(legsState)), "the overview rail lists the batteries A, B, C");
+ok(
+  order(render({ ...legsState, tab: "batteries" })),
+  "the Batteries tab lists them A, B, C",
+);
+
+// The B battery re-runs phase detection and reports itself unassigned for
+// the sweep. Its card stays where it was rather than moving to the end.
+const remembered: Record<string, string> = {};
+rememberPhases(remembered, legs("B"));
+rememberPhases(remembered, legs("0"));
+ok(
+  order(render({ ...legsState, snapshot: legs("0"), tab: "batteries", phases: remembered })),
+  "a battery in phase detection keeps its place",
+);
+has(
+  render({ ...legsState, snapshot: legs("0"), tab: "batteries", phases: remembered }),
+  "<dt>Phase</dt><dd>Unassigned</dd>",
+  "while still showing the phase it reports",
+);
+ok(
+  !order(render({ ...legsState, snapshot: legs("0"), tab: "batteries" })),
+  "without a remembered phase it is listed last",
 );
 
 if (failures) {
