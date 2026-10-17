@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724)).
+- **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724), [#733](https://github.com/tomquist/astrameter/pull/733)).
 
 - **Fixed** the config generator's ESPHome output ignoring the JSON path, login and broker credentials entered for JSON-over-HTTP, MQTT, Tasmota and SML meters, and emitting extra HTTP headers that current ESPHome rejects ([#729](https://github.com/tomquist/astrameter/issues/729), [#731](https://github.com/tomquist/astrameter/pull/731)).
 
