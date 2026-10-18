@@ -112,7 +112,8 @@ def test_resolve_device_config_shellypro3em_old_gets_shelly_id() -> None:
     assert device_ids == ["shellypro3em-ec4609c439c1"]
 
 
-def test_resolve_device_config_shellypro3em_expands_to_old_and_new() -> None:
+def test_resolve_device_config_shellypro3em_is_one_device() -> None:
+    """Issue #734: both ports are one emulator, so one id, one dashboard card."""
     device_types, device_ids = _resolve("shellypro3em")
-    assert device_types == ["shellypro3em_old", "shellypro3em_new"]
-    assert device_ids == ["shellypro3em-ec4609c439c1", "shellypro3em-ec4609c439c1"]
+    assert device_types == ["shellypro3em"]
+    assert device_ids == ["shellypro3em-ec4609c439c1"]

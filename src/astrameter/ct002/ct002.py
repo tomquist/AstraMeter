@@ -883,9 +883,10 @@ class CT002:
         part-way into a discharge (or charge) is driven back to zero once
         demand drops under the threshold instead of being frozen there.
         Only those batteries count: a battery on a manual setpoint, paused,
-        opted out of control or gone silent is not ours to move, so its
-        output lowers demand the way solar does.  Counting it would ask the
-        steered batteries to cancel it out by charging from the grid.
+        opted out of control, still detecting its phase or gone silent is not
+        ours to move, so its output lowers demand the way solar does.
+        Counting it would ask the steered batteries to cancel it out by
+        charging from the grid.
         """
         if self.peakshaving_threshold <= 0:
             return total, False
@@ -894,6 +895,7 @@ class CT002:
             parse_int(c.power, 0)
             for c in self._consumers.values()
             if c.timestamp > 0
+            and c.phase in STEERED_PHASES
             and c.active
             and c.participates
             and not c.manual_enabled
@@ -910,6 +912,29 @@ class CT002:
         )
         return total - min(household_demand, self.peakshaving_threshold), hold
 
+    def _probe_output(self) -> float:
+        """What batteries still detecting their phase report they put out.
+
+        To find its phase a battery steps its own output and watches which
+        phase of the reading follows; the steered batteries must not cancel
+        that step, or it never shows (docs/ct002-ct003-protocol.md,
+        "Battery-side phase detection").  So active control steers on the grid
+        as it would read without them, which also keeps their output out of
+        what peak shaving counts as demand.  A battery reports its output while
+        detecting: a Venus in Auto or AI mode, a B2500 always; one reporting 0
+        adds nothing.
+        """
+        now = self._clock()
+        return float(
+            sum(
+                parse_int(c.power, 0)
+                for c in self._consumers.values()
+                if c.timestamp > 0
+                and c.phase not in STEERED_PHASES
+                and not self._consumer_expired(c, now)
+            )
+        )
+
     def _apply_peakshaving(self, total: float) -> float:
         """The grid total peak shaving hands the balancer (see _peakshaving)."""
         return self._peakshaving(total)[0]
@@ -923,10 +948,17 @@ class CT002:
             return values
 
         total: float = sum(parse_int(v, 0) for v in values)
+        total += self._probe_output()
         self._last_smooth_target = total
         sample_id = tuple(values)
         mode = self._consumer_mode(consumer_id)
 
+        # The pool holds only the batteries we steer. One still detecting its
+        # phase (phase "0") is answered with the raw reading, never a target,
+        # so counting it would hand it a share it never takes and pull the
+        # steered batteries toward its output: with one stuck at 0 W, an
+        # HMG-50 next to it covered only about three quarters of the load
+        # (issue #732).
         reports = {
             cid: ConsumerReport(
                 phase=c.phase,
@@ -937,7 +969,7 @@ class CT002:
                 min_dc_output=c.min_dc_output,
             )
             for cid, c in self._consumers.items()
-            if c.timestamp > 0
+            if c.timestamp > 0 and c.phase in STEERED_PHASES
         }
         total, hold_at_zero = self._peakshaving(total)
         # A consumer that opted out via the request's "participate" flag is
@@ -1389,8 +1421,10 @@ class CT002:
         """Keep the meter's conditioning filters out of an inspection sweep.
 
         A battery that polls with phase ``'0'`` has taken itself off the CT and
-        is sweeping its own output — up to full discharge, then full charge —
-        to watch the CT reading follow.  Those kilowatt swings are real, and
+        is stepping its own output by up to 2000 W in one direction to see
+        which phase of the CT reading follows (the probe described under
+        "Battery-side phase detection" in docs/ct002-ct003-protocol.md).
+        Those kilowatt swings are real, and
         seeing them is the entire point of the sweep, but to a rolling-median
         filter they look exactly like the meter glitches it exists to reject:
         with ``HAMPEL_WINDOW`` set, the emulator answers the whole sweep with
@@ -1521,6 +1555,21 @@ class CT002:
             self.set_consumer_value(consumer_id, updated)
 
         raw_values, values, meter_failed = self._resolve_target(request, meter_failed)
+        if meter_failed and request.in_inspection_mode:
+            # A battery detecting its phase compares every reading it accepts
+            # with the baseline it took before probing, so the zero hold would
+            # read as a move on every phase that carried load: an HMG-50 gives
+            # up, a Venus can store the wrong phase (or D). Without a reply it
+            # keeps its last real reading and simply waits or times out and
+            # retries (docs/ct002-ct003-protocol.md, "Battery-side phase
+            # detection").
+            logger.debug(
+                "CT002 not answering %s during phase detection: meter unavailable",
+                request.addr,
+            )
+            self._last_meter_failed = True
+            self._rev += 1
+            return
         if not request.in_inspection_mode:
             self._record_instructed_power(request, values)
 
@@ -1578,10 +1627,11 @@ class CT002:
         On a meter failure the target is a literal ``[0, 0, 0]`` *hold*, not a
         reading: the CT002 instruction is a delta
         (``new_target = current_power + grid_field``), so re-issuing one derived
-        from a frozen reading winds the battery up in active control, and feeds
-        frozen per-phase values into a phase self-diagnosis in inspection mode
-        (issue #403).  The ESPHome component does the same when its sensor ages
-        out (see esphome/components/ct002/ct002.cpp).
+        from a frozen reading winds the battery up in active control (issue
+        #403).  A battery detecting its phase gets neither: :meth:`_serve` does
+        not answer it, since it would read the hold as a move.  The ESPHome
+        component does the same when its sensor ages out (see
+        esphome/components/ct002/ct002.cpp).
         """
         values: list[float] = [0.0, 0.0, 0.0]
         stored = None if meter_failed else self._get_consumer_value(request.consumer_id)

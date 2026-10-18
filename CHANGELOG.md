@@ -4,6 +4,10 @@
 
 - **Added** a Marstek CT002 / CT003 power source (`[MARSTEK_METER]`), so AstraMeter can read the Marstek CT you already own and steer your batteries itself. Pair the batteries with AstraMeter's CT instead of the real one ([#737](https://github.com/tomquist/astrameter/pull/737)).
 
+- **Fixed** the dashboard reporting "No batteries polling" with the default Shelly Pro 3EM emulation while a battery was polling it on port 1010; both ports now show as one emulator listing every battery ([#734](https://github.com/tomquist/astrameter/issues/734), [#736](https://github.com/tomquist/astrameter/pull/736)).
+
+- **Fixed** batteries failing to find their phase next to batteries AstraMeter steers or while the meter briefly dropped out, and a battery still on phase `0` holding back the steered ones ([#732](https://github.com/tomquist/astrameter/issues/732), [#735](https://github.com/tomquist/astrameter/pull/735)).
+
 - **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724), [#733](https://github.com/tomquist/astrameter/pull/733)).
 
 - **Fixed** the config generator's ESPHome output ignoring the JSON path, login and broker credentials entered for JSON-over-HTTP, MQTT, Tasmota and SML meters, and emitting extra HTTP headers that current ESPHome rejects ([#729](https://github.com/tomquist/astrameter/issues/729), [#731](https://github.com/tomquist/astrameter/pull/731)).

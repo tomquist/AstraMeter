@@ -49,27 +49,28 @@ class DeviceType:
     """One emulated device type.
 
     *ct_type* is the CT protocol type a CT002/CT003 emulator announces, and is
-    empty for the Shelly emulations; *udp_port* is the port a Shelly emulation
-    listens on, which the battery firmware picks by device type; *id_prefix*
-    starts the device id generated when the user did not name one.
+    empty for the Shelly emulations; *udp_ports* are the ports a Shelly
+    emulation listens on, which the battery firmware picks by device type;
+    *id_prefix* starts the device id generated when the user did not name one.
     """
 
     ct_type: str = ""
-    udp_port: int | None = None
+    udp_ports: tuple[int, ...] = ()
     id_prefix: str = ""
 
 
 #: Every ``DEVICE_TYPE`` the app accepts, in the order the command line offers
-#: them. ``shellypro3em`` has no port of its own: it is expanded into the
-#: ``_old``/``_new`` pair before a device is built (see ``_resolve_device_config``).
+#: them. ``shellypro3em`` is one emulator on both of the ports its ``_old`` and
+#: ``_new`` variants serve alone, since battery firmware generations disagree
+#: on which port to poll.
 DEVICE_TYPES: dict[str, DeviceType] = {
     "ct002": DeviceType(ct_type="HME-4"),
     "ct003": DeviceType(ct_type="HME-3"),
-    "shellypro3em": DeviceType(id_prefix="shellypro3em"),
-    "shellyemg3": DeviceType(udp_port=2222, id_prefix="shellyemg3"),
-    "shellyproem50": DeviceType(udp_port=2223, id_prefix="shellyproem50"),
-    "shellypro3em_old": DeviceType(udp_port=1010, id_prefix="shellypro3em"),
-    "shellypro3em_new": DeviceType(udp_port=2220, id_prefix="shellypro3em"),
+    "shellypro3em": DeviceType(udp_ports=(1010, 2220), id_prefix="shellypro3em"),
+    "shellyemg3": DeviceType(udp_ports=(2222,), id_prefix="shellyemg3"),
+    "shellyproem50": DeviceType(udp_ports=(2223,), id_prefix="shellyproem50"),
+    "shellypro3em_old": DeviceType(udp_ports=(1010,), id_prefix="shellypro3em"),
+    "shellypro3em_new": DeviceType(udp_ports=(2220,), id_prefix="shellypro3em"),
 }
 
 #: The CT emulator types, in ``DEVICE_TYPES`` order.

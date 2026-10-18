@@ -199,23 +199,26 @@ def test_a_shelly_device_reaches_the_wire_with_its_batteries() -> None:
 
     device = Shelly(
         [],
-        udp_port=2220,
+        udp_ports=[1010, 2220],
         device_id="sh-1",
-        device_type="shellypro3em_new",
+        device_type="shellypro3em",
     )
-    device._track_battery_seen(("10.0.0.31", 1010))
+    device._track_battery_seen(("10.0.0.31", 54321), 1010)
     registry = _registry()
     registry.register_device("sh-1", "shellypro3em", device)
 
+    # Issue #734: one device for both ports, so a battery polling either one
+    # is listed rather than lost behind a second emulator sharing the id.
     (wire,) = registry.snapshot(ingress=False)["devices"]
     assert wire["kind"] == "shelly"
     assert wire["device_id"] == "sh-1"
-    assert wire["udp_port"] == 2220
+    assert wire["udp_ports"] == [1010, 2220]
     # Names and units match the rest of the document, not the raw dataclass:
     # an ISO timestamp and an explicitly-united duration.
     assert wire["inactive_timeout_s"] == 120
     (battery,) = wire["batteries"]
     assert battery["ip"] == "10.0.0.31"
+    assert battery["udp_port"] == 1010
     assert battery["last_seen_at"].startswith("20")
     assert isinstance(battery["last_seen_age_s"], float)
     assert battery["active"] is True
@@ -569,7 +572,9 @@ async def _everything() -> StatusRegistry:
     registry = _registry()
     registry.register_device("ct-1", "ct002", _ct())
 
-    shelly = Shelly([], udp_port=2220, device_id="sh-1", device_type="shellypro3em_new")
+    shelly = Shelly(
+        [], udp_ports=[2220], device_id="sh-1", device_type="shellypro3em_new"
+    )
     shelly._track_battery_seen(("10.0.0.31", 1010))
     registry.register_device("sh-1", "shellypro3em", shelly)
 
