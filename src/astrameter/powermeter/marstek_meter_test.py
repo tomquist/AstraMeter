@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import cast
 
 import pytest
 
@@ -217,8 +218,9 @@ class _FakeCt(asyncio.DatagramProtocol):
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        assert isinstance(transport, asyncio.DatagramTransport)
-        self.transport = transport
+        # A cast, not an isinstance check: before Python 3.12 the selector
+        # loop's UDP transport is not a DatagramTransport subclass.
+        self.transport = cast(asyncio.DatagramTransport, transport)
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         fields, _ = parse_request(data)
