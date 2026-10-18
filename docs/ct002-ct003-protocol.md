@@ -84,9 +84,13 @@ ASCII wire field.
   **inspection mode** a device uses while it is still determining which phase it is on.
 - The emulator:
   - **Responds** to the request (so the device can continue its phase detection),
-  - **Does not** add an unassigned/inspection reporter's power to a committed‑phase aggregate, and
+  - **Does not** add an unassigned/inspection reporter's power to a committed‑phase aggregate,
   - **Resets the meter's conditioning wrappers** (Hampel window, EMA, deadband) on every
-    inspection poll and once more when the probe ends — see below.
+    inspection poll and once more when the probe ends — see below, and
+  - **Does not answer** it while the meter is unavailable: the zero hold steered
+    batteries get would read as a move to its phase detection, so it keeps its last
+    real reading instead (see
+    [Battery-side phase detection](#battery-side-phase-detection)).
 - Inspection is **not** only a startup state: a Venus on firmware 1.50 was observed
   re‑running it roughly every 35 minutes. The routine is a *probe* — the battery takes
   itself off the CT, steps its own output by up to 2000 W in one direction and watches
