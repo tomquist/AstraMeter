@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a battery that keeps reporting phase `0` (still detecting its phase, as a Venus E Mini does) holding back the batteries AstraMeter steers, leaving about a quarter of the load on the grid ([#732](https://github.com/tomquist/astrameter/issues/732)).
+
 - **Fixed** a battery detecting its phase while the meter briefly dropped out ending up with no phase or a wrong one, such as `D`; it now waits for the meter instead ([#732](https://github.com/tomquist/astrameter/issues/732)).
 
 - **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724), [#733](https://github.com/tomquist/astrameter/pull/733)).

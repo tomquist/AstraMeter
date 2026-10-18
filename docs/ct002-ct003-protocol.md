@@ -85,6 +85,9 @@ ASCII wire field.
 - The emulator:
   - **Responds** to the request (so the device can continue its phase detection),
   - **Does not** add an unassigned/inspection reporter's power to a committed‑phase aggregate,
+  - **Leaves it out of the steering pool** under active control: it is answered with the
+    raw reading, never a target, so it takes no share and is no reference the steered
+    batteries are balanced toward (issue #732),
   - **Resets the meter's conditioning wrappers** (Hampel window, EMA, deadband) on every
     inspection poll and once more when the probe ends — see below, and
   - **Does not answer** it while the meter is unavailable: the zero hold steered

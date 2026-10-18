@@ -880,9 +880,10 @@ class CT002:
         part-way into a discharge (or charge) is driven back to zero once
         demand drops under the threshold instead of being frozen there.
         Only those batteries count: a battery on a manual setpoint, paused,
-        opted out of control or gone silent is not ours to move, so its
-        output lowers demand the way solar does.  Counting it would ask the
-        steered batteries to cancel it out by charging from the grid.
+        opted out of control, still detecting its phase or gone silent is not
+        ours to move, so its output lowers demand the way solar does.
+        Counting it would ask the steered batteries to cancel it out by
+        charging from the grid.
         """
         if self.peakshaving_threshold <= 0:
             return total, False
@@ -891,6 +892,7 @@ class CT002:
             parse_int(c.power, 0)
             for c in self._consumers.values()
             if c.timestamp > 0
+            and c.phase in STEERED_PHASES
             and c.active
             and c.participates
             and not c.manual_enabled
@@ -924,6 +926,12 @@ class CT002:
         sample_id = tuple(values)
         mode = self._consumer_mode(consumer_id)
 
+        # The pool holds only the batteries we steer. One still detecting its
+        # phase (phase "0") is answered with the raw reading, never a target,
+        # so counting it would hand it a share it never takes and pull the
+        # steered batteries toward its output: with one stuck at 0 W, an
+        # HMG-50 next to it covered only about three quarters of the load
+        # (issue #732).
         reports = {
             cid: ConsumerReport(
                 phase=c.phase,
@@ -934,7 +942,7 @@ class CT002:
                 min_dc_output=c.min_dc_output,
             )
             for cid, c in self._consumers.items()
-            if c.timestamp > 0
+            if c.timestamp > 0 and c.phase in STEERED_PHASES
         }
         total, hold_at_zero = self._peakshaving(total)
         # A consumer that opted out via the request's "participate" flag is

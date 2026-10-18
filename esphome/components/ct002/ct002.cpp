@@ -592,9 +592,13 @@ bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) co
 }
 
 ReportMap CT002Component::collect_reports_for_balancer_() const {
+  // Only the batteries we steer: one still detecting its phase (phase "0") is
+  // answered with the raw reading, never a target, so counting it would hand
+  // it a share it never takes and pull the steered batteries toward its output
+  // (issue #732). Mirrors ct002.py _compute_smooth_target.
   ReportMap out;
   for (const auto &kv : this->consumers_) {
-    if (kv.second.timestamp > 0.0) {
+    if (kv.second.timestamp > 0.0 && is_steered_phase(kv.second.phase)) {
       ConsumerReport r;
       r.device_type = kv.second.device_type;
       r.phase = kv.second.phase;
@@ -703,9 +707,10 @@ std::pair<float, bool> CT002Component::peakshaving_(float total) const {
   // CT002._peakshaving.
   if (this->peakshaving_threshold_ <= 0.0f) return {total, false};
   // Only the batteries the balancer steers count toward demand: one on a
-  // manual setpoint, paused, opted out or gone silent is not ours to move, so
-  // its output lowers demand the way solar does. Counting it would have the
-  // steered batteries cancel it out by charging from the grid.
+  // manual setpoint, paused, opted out, still detecting its phase or gone
+  // silent is not ours to move, so its output lowers demand the way solar does.
+  // Counting it would have the steered batteries cancel it out by charging from
+  // the grid.
   const double now = this->now_seconds_();
   float steered_power = 0.0f;
   bool any_charging = false;
@@ -713,7 +718,9 @@ std::pair<float, bool> CT002Component::peakshaving_(float total) const {
   bool all_near_zero = true;
   for (const auto &kv : this->consumers_) {
     const auto &c = kv.second;
-    if (c.timestamp <= 0.0 || !c.active || !c.participates || c.manual_enabled) continue;
+    if (c.timestamp <= 0.0 || !is_steered_phase(c.phase) || !c.active || !c.participates ||
+        c.manual_enabled)
+      continue;
     if (this->consumer_expired_(c, now)) continue;
     steered_power += c.power;
     any_charging = any_charging || c.power < 0.0f;

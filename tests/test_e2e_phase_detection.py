@@ -367,3 +367,47 @@ async def test_ct003(device: str, total_only: bool, expected: str) -> None:
         await _settle_and_check_grid(h)
     finally:
         await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("steered", DEVICES)
+@pytest.mark.parametrize(("ct_type", "total_only"), [(CT_TYPE, False), ("HME-3", True)])
+async def test_battery_stuck_in_detection_does_not_hold_back_the_steered_one(
+    steered: str, ct_type: str, total_only: bool
+) -> None:
+    """Issue #732: one battery never finds its phase and idles at ~0 W.
+
+    Its charge gate is closed (at 30 % SoC detection needs the charge flag), so
+    it keeps reporting phase 0. The battery next to it must still cover the
+    whole load: counted in the steering pool, the idle one was handed a share
+    and pulled its neighbour toward 0 W, leaving about a quarter of the load on
+    the grid. The CT003 / total-only variant is the reporter's setup.
+    """
+    h = _Harness(
+        [
+            {
+                "mac": "24215EDB1931",
+                "phase": "A",
+                "stored_phase": "A",
+                "meter_dev_type": steered,
+            },
+            {
+                "mac": "CCC837B39DBE",
+                "phase": "A",
+                "meter_dev_type": "VNSE3-0",
+                "initial_soc": 0.3,
+            },
+        ],
+        base_load=[600.0, 0.0, 0.0],
+        ct_type=ct_type,
+        total_only=total_only,
+    )
+    h.batteries[1].charge_allowed = False
+    await h.start()
+    try:
+        await h.step(150)
+        assert h.phases() == ["A", "0"]
+        assert abs(h.batteries[1].current_power) < 1
+        assert abs(sum(h.grid())) < 30, h.grid()
+    finally:
+        await h.stop()

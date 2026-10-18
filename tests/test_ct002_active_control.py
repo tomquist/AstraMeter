@@ -55,6 +55,21 @@ class TestActiveControl:
         assert out[1] == 100
         assert out[2] == 0
 
+    def test_battery_detecting_its_phase_is_not_in_the_pool(self) -> None:
+        """Issue #732: a battery reporting phase 0 takes no share and is no
+        balancing reference, so its neighbour gets the whole correction."""
+        alone = _ct002(active_control=True)
+        alone._update_consumer_report("a", "A", 76)
+        expected = alone._compute_smooth_target([282, 0, 0], "a")
+
+        device = _ct002(active_control=True)
+        device._update_consumer_report("a", "A", 76)
+        device._update_consumer_report("mini", "0", 1)
+        out = device._compute_smooth_target([282, 0, 0], "a")
+
+        assert out == expected
+        assert out[0] == 282
+
     def test_single_phase_input_runs_balancer(self) -> None:
         # 1-phase configurations supply a single grid reading; the balancer
         # collapses values to a scalar internally, so it must still run
