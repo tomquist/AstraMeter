@@ -5,7 +5,7 @@ import contextlib
 import dataclasses
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,10 +56,13 @@ class ShellyBatterySnapshot:
 
     ``last_seen_at`` is a wall-clock epoch, ages and intervals seconds.
     ``poll_interval`` is the EMA-smoothed cadence and stays ``None`` until a
-    battery has been seen twice.
+    battery has been seen twice.  ``udp_port`` is the port its last poll
+    arrived on, which tells the firmware generations apart on a multi-port
+    emulator.
     """
 
     ip: str
+    udp_port: int
     last_seen_at: float
     last_seen_age: float
     poll_interval: float | None
@@ -73,7 +76,7 @@ class ShellySnapshot:
 
     device_id: str
     device_type: str
-    udp_port: int
+    udp_ports: tuple[int, ...]
     running: bool
     started_at: float | None
     inactive_timeout: int
@@ -81,20 +84,33 @@ class ShellySnapshot:
 
 
 class Shelly:
+    """One emulated Shelly, answering on every port in *udp_ports*.
+
+    The Pro 3EM is served on two ports at once because battery firmware
+    generations look for it on different ones; it is still one meter with one
+    device id, so it is one emulator rather than a pair that would collide on
+    that id.  Liveness is tracked per battery IP, while dedupe and in-flight
+    coalescing are per IP *and* port, as they were when each port had an
+    emulator of its own.
+    """
+
     def __init__(
         self,
         powermeters: list[ConfiguredPowermeter],
-        udp_port: int,
+        udp_ports: Sequence[int],
         device_id: str,
         dedupe_time_window: float = 0.0,
         device_type: str = "",
     ) -> None:
-        self._udp_port = udp_port
+        if not udp_ports:
+            raise ValueError("A Shelly emulator needs at least one UDP port")
+        self._udp_ports = tuple(udp_ports)
         self._device_id = device_id
         self._device_type = device_type
         self._powermeters = powermeters
-        self._server: UdpServer | None = None
+        self._servers: list[UdpServer] = []
         self._battery_last_seen: dict[str, float] = {}
+        self._battery_port: dict[str, int] = {}
         self._battery_poll_interval: dict[str, float] = {}
         self._inactive_batteries: set[str] = set()
         # Batteries with a request handler currently parked between the meter
@@ -108,11 +124,11 @@ class Shelly:
         # times before the plant can reflect its response, which winds the
         # battery past target exactly like a burst of deltas.  A single
         # in-flight handler per battery answers per reading; duplicates drop.
-        self._inflight_batteries: set[str] = set()
+        self._inflight_batteries: set[tuple[str, int]] = set()
         self._stopped = asyncio.Event()
         self._inactive_check_task: asyncio.Task[None] | None = None
         self._dedupe_time_window = max(0.0, dedupe_time_window)
-        self._dedup: RequestDeduplicator[str] = RequestDeduplicator(
+        self._dedup: RequestDeduplicator[tuple[str, int]] = RequestDeduplicator(
             self._dedupe_time_window
         )
         self.event_listener: Callable[[str, str, dict[str, Any]], None] | None = None
@@ -179,8 +195,11 @@ class Shelly:
             },
         }
 
-    def _track_battery_seen(self, addr: tuple[str, int]) -> float | None:
+    def _track_battery_seen(
+        self, addr: tuple[str, int], local_port: int | None = None
+    ) -> float | None:
         battery_ip = addr[0]
+        port = self._udp_ports[0] if local_port is None else local_port
         now = time.time()
 
         first_seen = battery_ip not in self._battery_last_seen
@@ -202,19 +221,20 @@ class Shelly:
             poll_interval = self._battery_poll_interval[battery_ip]
 
         self._battery_last_seen[battery_ip] = now
+        self._battery_port[battery_ip] = port
         if was_inactive:
             self._inactive_batteries.remove(battery_ip)
 
         if first_seen:
             logger.info(
                 "Battery detected on Shelly UDP port %s: %s",
-                self._udp_port,
+                port,
                 battery_ip,
             )
         elif was_inactive:
             logger.info(
                 "Battery reconnected on Shelly UDP port %s after inactivity: %s",
-                self._udp_port,
+                port,
                 battery_ip,
             )
 
@@ -235,7 +255,7 @@ class Shelly:
         for battery_ip in newly_inactive_batteries:
             logger.info(
                 "Battery inactive on Shelly UDP port %s for >= %ss: %s",
-                self._udp_port,
+                self._battery_port.get(battery_ip, self._udp_ports[0]),
                 BATTERY_INACTIVE_TIMEOUT_SECONDS,
                 battery_ip,
             )
@@ -252,20 +272,31 @@ class Shelly:
             )
 
     async def _safe_handle_request(
-        self, data: bytes, addr: tuple[str, int], transport: DatagramSink
+        self,
+        data: bytes,
+        addr: tuple[str, int],
+        transport: DatagramSink,
+        local_port: int,
     ) -> None:
         try:
-            await self._handle_request(data, addr, transport)
+            await self._handle_request(data, addr, transport, local_port)
         except Exception:
             logger.exception("Error handling Shelly request from %s", addr)
 
     async def _handle_request(
-        self, data: bytes, addr: tuple[str, int], transport: DatagramSink
+        self,
+        data: bytes,
+        addr: tuple[str, int],
+        transport: DatagramSink,
+        local_port: int | None = None,
     ) -> None:
+        """Answer one poll that arrived on *local_port* (default: the first)."""
         battery_ip = addr[0]
-        poll_interval = self._track_battery_seen(addr)
+        port = self._udp_ports[0] if local_port is None else local_port
+        key = (battery_ip, port)
+        poll_interval = self._track_battery_seen(addr, port)
 
-        if not self._dedup.should_process(battery_ip):
+        if not self._dedup.should_process(key):
             logger.debug("Ignoring request from %s due to dedupe window", addr)
             return
 
@@ -287,7 +318,7 @@ class Shelly:
         # _track_battery_seen above already refreshed the liveness and
         # poll-interval state, and the in-flight handler sends the one response
         # for the next reading.
-        if battery_ip in self._inflight_batteries:
+        if key in self._inflight_batteries:
             logger.debug(
                 "Coalescing Shelly poll from %s: a handler is already awaiting "
                 "the next meter reading; dropping this duplicate to avoid a "
@@ -296,7 +327,7 @@ class Shelly:
             )
             return
 
-        self._inflight_batteries.add(battery_ip)
+        self._inflight_batteries.add(key)
         try:
             try:
                 powers = await read_fresh(configured)
@@ -338,7 +369,7 @@ class Shelly:
                 },
             )
         finally:
-            self._inflight_batteries.discard(battery_ip)
+            self._inflight_batteries.discard(key)
 
     def _response_for(
         self, request: dict[str, Any], powers: list[float]
@@ -365,18 +396,55 @@ class Shelly:
         except asyncio.CancelledError:
             pass
 
+    async def _serve(self, port: int) -> UdpServer:
+        """Bind *port*, tagging each datagram with the port it arrived on."""
+        local_port = port
+
+        async def handle(
+            data: bytes, addr: tuple[str, int], transport: DatagramSink
+        ) -> None:
+            await self._safe_handle_request(data, addr, transport, local_port)
+
+        server = await UdpServer.serve(port, handle)
+        # Rebinding the closure's cell: port 0 resolves only once bound.
+        local_port = server.port or port
+        return server
+
     async def start(self) -> None:
-        self._server = await UdpServer.serve(self._udp_port, self._safe_handle_request)
+        """Listen on every configured port that can be bound.
+
+        A port that fails (1010 needs privileges an unprivileged container
+        lacks, see the FAQ) is logged and skipped so the others keep serving;
+        only when none binds does the emulator fail to start.
+        """
+        bound: list[int] = []
+        error: OSError | None = None
+        for port in self._udp_ports:
+            try:
+                server = await self._serve(port)
+            except OSError as exc:
+                logger.error(
+                    "Shelly emulator could not listen on UDP port %s: %s", port, exc
+                )
+                error = exc
+                continue
+            self._servers.append(server)
+            bound.append(server.port or port)
+        if not bound:
+            assert error is not None
+            raise error
+        self._udp_ports = tuple(bound)
         self._stopped.clear()
         self._inactive_check_task = asyncio.create_task(self._inactive_check_loop())
-        self._udp_port = self._server.port or self._udp_port
         self._started_at = time.time()
         self._running = True
-        logger.info("Shelly emulator listening on UDP port %s", self._udp_port)
+        for port in bound:
+            logger.info("Shelly emulator listening on UDP port %s", port)
 
     @property
-    def udp_port(self) -> int:
-        return self._udp_port
+    def udp_ports(self) -> tuple[int, ...]:
+        """The ports served — after :meth:`start`, only those actually bound."""
+        return self._udp_ports
 
     def status_snapshot(self) -> ShellySnapshot:
         """Immutable view of the emulator for the status API.
@@ -390,18 +458,19 @@ class Shelly:
         return ShellySnapshot(
             device_id=self._device_id,
             device_type=self._device_type,
-            udp_port=self._udp_port,
+            udp_ports=self._udp_ports,
             running=self._running,
             started_at=self._started_at or None,
             inactive_timeout=BATTERY_INACTIVE_TIMEOUT_SECONDS,
             batteries=tuple(
                 ShellyBatterySnapshot(
                     ip=ip,
+                    udp_port=self._battery_port.get(ip, self._udp_ports[0]),
                     last_seen_at=last_seen,
                     last_seen_age=max(0.0, now - last_seen),
                     poll_interval=self._battery_poll_interval.get(ip),
                     active=ip not in self._inactive_batteries,
-                    in_flight=ip in self._inflight_batteries,
+                    in_flight=any(key[0] == ip for key in self._inflight_batteries),
                 )
                 # Sorted so a battery keeps its list position across polls.
                 for ip, last_seen in sorted(self._battery_last_seen.items())
@@ -417,8 +486,8 @@ class Shelly:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._inactive_check_task
             self._inactive_check_task = None
-        if self._server:
-            await self._server.close()
-            self._server = None
+        for server in self._servers:
+            await server.close()
+        self._servers = []
         self._running = False
         self._stopped.set()

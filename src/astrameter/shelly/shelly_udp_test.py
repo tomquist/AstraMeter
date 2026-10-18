@@ -70,7 +70,7 @@ async def test_dedupe_window_drops_rapid_duplicates() -> None:
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
     shelly = Shelly(
         [ConfiguredPowermeter(dummy, cf, False)],
-        udp_port=0,
+        udp_ports=[0],
         device_id="test",
         dedupe_time_window=10.0,
     )
@@ -111,9 +111,11 @@ async def test_concurrent_polls_from_one_battery_coalesce_over_udp() -> None:
     pm = ThrottledPowermeter(dummy, throttle_interval=0.3)
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
 
-    shelly = Shelly([ConfiguredPowermeter(pm, cf, True)], udp_port=0, device_id="test")
+    shelly = Shelly(
+        [ConfiguredPowermeter(pm, cf, True)], udp_ports=[0], device_id="test"
+    )
     await shelly.start()
-    port = shelly.udp_port
+    (port,) = shelly.udp_ports
     assert port != 0, "Shelly should have bound to an actual port"
     try:
         # Prime the throttle so the burst parks on the throttle window rather
@@ -150,7 +152,9 @@ async def test_concurrent_polls_coalesce_to_a_single_response() -> None:
     goes out when the reading lands — not a four-deep burst."""
     pm = GatedPowermeter()
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-    shelly = Shelly([ConfiguredPowermeter(pm, cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly(
+        [ConfiguredPowermeter(pm, cf, False)], udp_ports=[0], device_id="test"
+    )
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
@@ -177,7 +181,9 @@ async def test_coalescing_is_per_battery() -> None:
     get their own response; one does not suppress the other."""
     pm = GatedPowermeter()
     cf = ClientFilter([IPv4Network("127.0.0.0/8")])
-    shelly = Shelly([ConfiguredPowermeter(pm, cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly(
+        [ConfiguredPowermeter(pm, cf, False)], udp_ports=[0], device_id="test"
+    )
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
@@ -204,7 +210,9 @@ async def test_poll_answered_again_after_burst_coalesced() -> None:
     pm = GatedPowermeter()
     pm.gate.set()  # reads resolve immediately
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
-    shelly = Shelly([ConfiguredPowermeter(pm, cf, False)], udp_port=0, device_id="test")
+    shelly = Shelly(
+        [ConfiguredPowermeter(pm, cf, False)], udp_ports=[0], device_id="test"
+    )
     transport = _FakeTransport()
     req = json.dumps(
         {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
@@ -225,7 +233,7 @@ async def test_inflight_flag_cleared_when_meter_read_fails() -> None:
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
     shelly = Shelly(
         [ConfiguredPowermeter(FailingPowermeter(), cf, False)],
-        udp_port=0,
+        udp_ports=[0],
         device_id="test",
     )
     transport = _FakeTransport()
@@ -247,7 +255,7 @@ async def _drive_failing_read(
     cf = ClientFilter([IPv4Network("127.0.0.1/32")])
     shelly = Shelly(
         [ConfiguredPowermeter(FailingPowermeter(), cf, False)],
-        udp_port=0,
+        udp_ports=[0],
         device_id="test",
     )
     transport = _FakeTransport()
@@ -318,3 +326,95 @@ class _ClientProtocol(asyncio.DatagramProtocol):
     def error_received(self, exc: Exception) -> None:
         if not self.received.done():
             self.received.set_exception(exc)
+
+
+async def test_one_emulator_answers_on_every_port() -> None:
+    """Issue #734: the Pro 3EM serves both firmware generations' ports from one
+    emulator, and records which port each battery polls."""
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly(
+        [ConfiguredPowermeter(DummyPowermeter(), cf, False)],
+        udp_ports=[0, 0],
+        device_id="test",
+    )
+    await shelly.start()
+    try:
+        first, second = shelly.udp_ports
+        assert 0 not in (first, second) and first != second
+        assert await _send_req(second, 7) == 7
+        (battery,) = shelly.status_snapshot().batteries
+        assert battery.udp_port == second
+        assert await _send_req(first, 8) == 8
+        (battery,) = shelly.status_snapshot().batteries
+        assert battery.udp_port == first
+    finally:
+        await shelly.stop()
+
+
+async def test_a_port_that_cannot_bind_does_not_stop_the_others(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unprivileged container cannot bind 1010; 2220 must still serve."""
+    taken = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    taken.bind(("0.0.0.0", 0))
+    busy = taken.getsockname()[1]
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly(
+        [ConfiguredPowermeter(DummyPowermeter(), cf, False)],
+        udp_ports=[busy, 0],
+        device_id="test",
+    )
+    try:
+        with caplog.at_level(logging.ERROR, logger="astrameter"):
+            await shelly.start()
+        try:
+            (port,) = shelly.udp_ports
+            assert port not in (0, busy)
+            assert shelly.status_snapshot().udp_ports == (port,)
+            assert await _send_req(port, 3) == 3
+            assert any(str(busy) in r.getMessage() for r in caplog.records)
+        finally:
+            await shelly.stop()
+    finally:
+        taken.close()
+
+
+async def test_start_fails_when_no_port_binds() -> None:
+    taken = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    taken.bind(("0.0.0.0", 0))
+    try:
+        shelly = Shelly([], udp_ports=[taken.getsockname()[1]], device_id="test")
+        with pytest.raises(OSError):
+            await shelly.start()
+        assert shelly.status_snapshot().running is False
+    finally:
+        taken.close()
+
+
+async def test_dedupe_and_coalescing_are_per_port() -> None:
+    """A battery polling both ports keeps an answer on each, as it did when
+    each port had an emulator of its own."""
+    pm = GatedPowermeter()
+    cf = ClientFilter([IPv4Network("127.0.0.1/32")])
+    shelly = Shelly(
+        [ConfiguredPowermeter(pm, cf, False)],
+        udp_ports=[1010, 2220],
+        device_id="test",
+        dedupe_time_window=10.0,
+    )
+    transport = _FakeTransport()
+    req = json.dumps(
+        {"id": 1, "src": "cli", "method": "EM.GetStatus", "params": {"id": 0}}
+    ).encode()
+    handlers = [
+        asyncio.create_task(
+            shelly._handle_request(req, ("127.0.0.1", 5000), transport, port)
+        )
+        for port in (1010, 2220)
+    ]
+    await asyncio.sleep(0.05)
+    pm.gate.set()
+    await asyncio.gather(*handlers)
+
+    assert len(transport.sent) == 2
+    assert [b.ip for b in shelly.status_snapshot().batteries] == ["127.0.0.1"]
