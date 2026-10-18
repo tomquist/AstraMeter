@@ -633,8 +633,8 @@ a battery type name, so a CT cannot treat one model differently by name.
 
 > Read out of the archived Control images: HMG-50 (Venus E 2.0) v156 and
 > VNSE3-0 (Venus E 3.0) v151 disassembled, the B2500 `HMJ-2` v110 routine read
-> separately (below). VNSA-0 and VNSD-0 were not disassembled. The simulator
-> reimplements the Venus routines in
+> separately (below). VNSD-0 (Venus D) v151 was compared with VNSE3-0 v151
+> (below); VNSA-0 was not. The simulator reimplements the Venus routines in
 > `src/astrameter/simulator/phase_detection.py`, which lists the code sites.
 
 ### The phase byte
@@ -747,6 +747,30 @@ accepts. In particular:
   reacts to its own phase;
 - a substitute value counts like a measurement: an all-zero reply reads as a
   move on every phase whose baseline was at least the threshold away from zero.
+
+### Venus D (VNSD-0 v151)
+
+The detection routine (`0x08032114`), the CT reply parser and the MQTT
+`seq_check`/`rechrg_seq` handler are the VNSE3-0 v151 code, instruction for
+instruction; the only differences are some fields of one structure that sit a
+byte lower. What differs is the power setter both detection and steering go
+through (`0x0800a968`; VNSE3-0 `0x0800a48c`), which on the Venus D applies two
+PV rules first:
+
+- **Charging gives way to PV** (`0x08008bfc`). Once a PV input delivers more
+  than 10 W, AC charging is cut so that PV plus AC charging stays within the
+  charge limit (the BMS limit, at most 2500 W); if PV alone reaches it, the
+  battery does not charge from AC at all.
+- **Surplus feed-in** (`0x08009ab0`, logged as "余电上网中"). With the battery
+  full (set at 100 %, held down to 95 %), a PV input above 14 V and a setting
+  on (`0x2001769c+0x16`, not identified), the output never drops below the PV
+  power plus 10 W.
+
+Detection sets its zero and its probe through this setter, but its threshold
+stays half the configured power `P`. So on a Venus D a charge probe (50 % SoC
+or less) fails once PV leaves less than `P` / 2 of AC charging, and a probe
+during surplus feed-in fails once the PV power plus 10 W is more than `P` / 2.
+Nothing in a CT reply changes either rule.
 
 ### B2500 (HMJ-2 v110)
 

@@ -47,6 +47,20 @@ WILDCARD_CT_MAC = "000000000000"
 # six failures per reconnect cycle, four cycles (HMG-50 0x08023cae-0x08023cc6).
 METER_OFFLINE_AFTER_FAILURES = 24
 
+# The Venus D's power setter (VNSD-0 v151 0x0800a968), which detection and
+# steering both go through, adds two PV rules the Venus E 3.0's (VNSE3-0
+# 0x0800a48c) does not have. Charging gives way to PV (0x08008bfc): once a PV
+# input delivers more than 10 W, AC charging is cut to what the charge limit,
+# itself capped at 2500 W, leaves after PV. Surplus feed-in ("余电上网中",
+# 0x08009ab0): with the battery full, PV present and a setting on, the output
+# never drops below the PV power plus 10 W.
+VENUS_D_PV_PRESENT_W = 10
+VENUS_D_CHARGE_CAP_W = 2500
+VENUS_D_FEED_IN_MARGIN_W = 10
+# Feed-in starts at 100 % and holds down to 95 % (0x08009b08 / 0x08009b18).
+VENUS_D_FEED_IN_ON_PCT = 100
+VENUS_D_FEED_IN_HOLD_PCT = 95
+
 
 class BatterySimulator:
     def __init__(
@@ -77,6 +91,7 @@ class BatterySimulator:
         phase_detection: bool = False,
         stored_phase: str | None = None,
         sum_all_phases: bool = True,
+        surplus_feed_in: bool = False,
     ) -> None:
         if phase not in PHASE_FIELD_INDEX:
             raise ValueError(
@@ -145,6 +160,10 @@ class BatterySimulator:
         # VNSE3-0 0x200174f0+0x67): the factory default 1 steers on the total,
         # 0 on the battery's own phase. Only read with phase detection on.
         self.sum_all_phases = sum_all_phases
+        # Venus D only, with phase detection on: the app setting that allows
+        # surplus feed-in (which one is not known; 0x2001769c+0x16).
+        self.surplus_feed_in = surplus_feed_in
+        self._feed_in_active = False
         # BMS gate flags the detector checks (inferred meaning, see
         # :mod:`phase_detection`).
         self.charge_allowed = True
@@ -297,6 +316,26 @@ class BatterySimulator:
     def _is_hmg50_type(self) -> bool:
         return self.meter_dev_type.upper().startswith("HMG")
 
+    def _is_venus_d(self) -> bool:
+        return self.meter_dev_type.upper().startswith("VNSD")
+
+    def _venus_d_output(self, command: float) -> float:
+        """Apply the Venus D's PV rules to a power command (see
+        ``VENUS_D_*``). The firmware sums four PV inputs and tests each one;
+        the simulator has a single DC input and treats it as their sum."""
+        pv = int(self._dc_input_power)
+        if command < 0 and pv > VENUS_D_PV_PRESENT_W:
+            room = pv - min(self.max_charge_power, VENUS_D_CHARGE_CAP_W)
+            command = 0.0 if room >= 0 else max(command, float(room))
+        soc_pct = int(self._soc * 100)
+        if not (self.surplus_feed_in and pv > 0) or soc_pct < VENUS_D_FEED_IN_HOLD_PCT:
+            self._feed_in_active = False
+        elif soc_pct >= VENUS_D_FEED_IN_ON_PCT:
+            self._feed_in_active = True
+        if self._feed_in_active:
+            command = max(command, float(pv + VENUS_D_FEED_IN_MARGIN_W))
+        return command
+
     @property
     def dc_input_power(self) -> float:
         return self._dc_input_power
@@ -307,6 +346,8 @@ class BatterySimulator:
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
+        if self._detector is not None and self._is_venus_d():
+            new_target = self._venus_d_output(new_target)
         self._requested_target = new_target
         if self.power_update_delay_ticks <= 0:
             self._target_power = new_target

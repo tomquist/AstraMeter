@@ -66,9 +66,13 @@ meaning), and the identity of the Venus probe power ``P`` (a configured power
 word, ``0x2000012b + 4``), which the simulator takes to be the discharge limit.
 The HMG-50 meter-code-1 path (the "no model suffix" fallback, see
 :mod:`firmware_steering`) runs a different comparison and is not modelled:
-AstraMeter always announces ``HME-3`` or ``HME-4``. VNSA-0 and VNSD-0 were not
-disassembled; they are assumed to match VNSE3-0, as their steering does. The
-B2500 (HMJ) runs a different routine, documented in the protocol notes and not
+AstraMeter always announces ``HME-3`` or ``HME-4``. VNSD-0 v151 was compared
+with VNSE3-0 v151 instruction by instruction: the detection routine
+(0x08032114), the CT reply parser and the MQTT handler are the same code, only
+some fields of one structure sit a byte lower. Its power setter adds two PV
+rules, modelled in :class:`~astrameter.simulator.battery.BatterySimulator`
+(``VENUS_D_*``). VNSA-0 was not compared and is assumed to match. The B2500
+(HMJ) runs a different routine, documented in the protocol notes and not
 modelled here.
 """
 

@@ -171,3 +171,77 @@ def test_without_detection_the_old_inspection_count_applies() -> None:
     assert b.reported_phase == "0"
     b._request_count = 2
     assert b.reported_phase == "B"
+
+
+def _venus_d(**kwargs: Any) -> BatterySimulator:
+    defaults: dict[str, Any] = {
+        "meter_dev_type": "VNSD-0",
+        "max_dc_input": 2500,
+        "max_charge_power": 800,
+        "initial_soc": 0.4,
+    }
+    defaults.update(kwargs)
+    return _battery(**defaults)
+
+
+def test_venus_d_charging_gives_way_to_pv() -> None:
+    b = _venus_d(dc_input_power=600)
+    b._apply_ct_derived_target(-800.0)
+    assert b.target_power == -200.0  # PV fills 600 W of the 800 W limit
+    b.dc_input_power = 900
+    b._apply_ct_derived_target(-800.0)
+    assert b.target_power == 0.0  # PV alone covers the limit
+    b.dc_input_power = 10  # not above 10 W: no PV as far as the rule goes
+    b._apply_ct_derived_target(-800.0)
+    assert b.target_power == -800.0
+    b._apply_ct_derived_target(500.0)
+    assert b.target_power == 500.0  # discharging is left alone
+
+
+def test_venus_d_charge_cap_is_2500_w() -> None:
+    b = _venus_d(max_charge_power=3000, dc_input_power=1000)
+    b._apply_ct_derived_target(-3000.0)
+    assert b.target_power == -1500.0
+
+
+def test_pv_rules_are_venus_d_only_and_need_firmware_mode() -> None:
+    for b in (
+        _venus_d(meter_dev_type="VNSE3-0", dc_input_power=600),
+        _venus_d(phase_detection=False, dc_input_power=600),
+    ):
+        b._apply_ct_derived_target(-800.0)
+        assert b.target_power == -800.0
+
+
+def test_venus_d_surplus_feed_in_floors_the_output() -> None:
+    b = _venus_d(surplus_feed_in=True, initial_soc=1.0, dc_input_power=300)
+    b._apply_ct_derived_target(0.0)
+    assert b.target_power == 310.0
+    b._apply_ct_derived_target(800.0)
+    assert b.target_power == 800.0
+    b.soc = 0.96  # holds down to 95 %
+    b._apply_ct_derived_target(0.0)
+    assert b.target_power == 310.0
+    b.soc = 0.94
+    b._apply_ct_derived_target(0.0)
+    assert b.target_power == 0.0
+    b.soc = 0.97  # below 100 % it does not start again
+    b._apply_ct_derived_target(0.0)
+    assert b.target_power == 0.0
+
+
+def test_venus_d_feed_in_needs_the_setting() -> None:
+    b = _venus_d(initial_soc=1.0, dc_input_power=300)
+    b._apply_ct_derived_target(0.0)
+    assert b.target_power == 0.0
+
+
+def test_venus_d_charge_probe_shrinks_with_pv() -> None:
+    # Below 50 % the probe charges at the configured power; with 600 W of PV
+    # only 200 W of it reaches the AC side, under the 400 W threshold.
+    b = _venus_d(dc_input_power=600)
+    b._receive_firmware(_reply(info_idx=1))
+    for _ in range(60):  # past the 3 s baseline
+        b._advance(0.1)
+    assert b.detector is not None and not b.detector.steering
+    assert b.target_power == -200.0
