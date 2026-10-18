@@ -458,13 +458,13 @@ const shellySnapshot: StatusSnapshot = {
     {
       kind: "shelly",
       device_id: "shellypro3em-ec4609c439c1",
-      device_type: "shellypro3em_new",
-      udp_port: 2220,
+      device_type: "shellypro3em",
+      udp_ports: [1010, 2220],
       running: true,
       inactive_timeout_s: 120,
       batteries: [
-        { ip: "10.0.0.31", last_seen_age_s: 2.1, poll_interval_s: 1.0, active: true },
-        { ip: "10.0.0.32", last_seen_age_s: 3.4, poll_interval_s: 1.1, active: true },
+        { ip: "10.0.0.31", udp_port: 1010, last_seen_age_s: 2.1, poll_interval_s: 1.0, active: true },
+        { ip: "10.0.0.32", udp_port: 2220, last_seen_age_s: 3.4, poll_interval_s: 1.1, active: true },
       ],
     },
   ],
@@ -487,7 +487,9 @@ ok(
 const shellyHtml = renderToString(
   h("div", null, ...view(shellyState, actions, initialConfigState())),
 );
-has(shellyHtml, "shellypro3em_new emulator", "the Shelly emulator gets its own card");
+has(shellyHtml, "shellypro3em emulator", "the Shelly emulator gets its own card");
+has(shellyHtml, "UDP 1010 · 2220", "one card names every port it serves");
+lacks(shellyHtml, "No batteries polling", "issue #734: a battery on either port counts");
 has(shellyHtml, "Batteries polling", "the card says how many batteries poll it");
 has(shellyHtml, "+849 W", "the hero shows the grid reading rather than a dash");
 lacks(shellyHtml, "Waiting for a grid reading", "the hero is not left empty");
@@ -499,6 +501,7 @@ const shellyBatteriesHtml = renderToString(
 );
 has(shellyBatteriesHtml, "10.0.0.31", "each polling battery is listed by address");
 has(shellyBatteriesHtml, "Polls every", "with the cadence it polls at");
+has(shellyBatteriesHtml, "UDP 1010", "and the port it polls, which tells firmware generations apart");
 // A Shelly emulator steers nothing, so offering per-battery controls would
 // promise writes the device cannot make.
 lacks(shellyBatteriesHtml, ">Controls<", "no steering controls for a Shelly battery");

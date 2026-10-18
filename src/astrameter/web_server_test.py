@@ -874,7 +874,7 @@ async def test_consumer_write_to_a_device_without_that_control_is_404(
     from astrameter.shelly import Shelly
 
     registry = _registry(tmp_path, direct_access=True, allow_write=True)
-    shelly = Shelly(powermeters=[], udp_port=2222, device_id="shelly-1")
+    shelly = Shelly(powermeters=[], udp_ports=[2222], device_id="shelly-1")
     registry.register_device("shelly-1", "shellyemg3", shelly)
     client = await _client(registry)
     response = await client.post(

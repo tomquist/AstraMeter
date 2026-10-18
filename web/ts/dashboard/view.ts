@@ -557,7 +557,7 @@ function shellyCard(device: DeviceStatus, offline: boolean): VNode {
             : health("warn", "No batteries polling"),
       ),
       h("span", { style: "flex:1" }),
-      h("span", { class: "mono" }, `UDP ${device.udp_port ?? "—"}`),
+      h("span", { class: "mono" }, `UDP ${(device.udp_ports || []).join(" · ") || "—"}`),
     ),
     h(
       "dl",
@@ -593,6 +593,7 @@ function shellyBatteryCard(battery: ShellyBatteryStatus): VNode {
       { class: "kv" },
       ...row("Last seen", ago(battery.last_seen_age_s)),
       ...row("Polls every", seconds(battery.poll_interval_s)),
+      ...row("Polls on", battery.udp_port == null ? null : `UDP ${battery.udp_port}`),
     ),
   );
 }
