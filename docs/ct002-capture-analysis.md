@@ -74,7 +74,7 @@ Now resolved (see [ct002-ct003-protocol.md](ct002-ct003-protocol.md#response-fie
 - The numeric layout is fixed: 4 phase/total powers, 4 "active" counts, signed
   RSSI, an 8‑bit wrapping `info_idx`, a 10‑value charge/discharge block (an
   unassigned `x` bucket, phases A/B/C, and a combined `ABC` bucket), and (CT003
-  only) 4 trailing tariff energy registers.
+  and the newer CT002, `TPM2-0`, only) 4 trailing tariff energy registers.
 - `v1..v3` are the per‑phase powers and `v4` is the total — as suspected here.
 - The `chrg`/`dchrg` block is signed 16‑bit, so it saturates at ±32767 W.
 

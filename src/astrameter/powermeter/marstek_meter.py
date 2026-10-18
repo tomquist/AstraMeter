@@ -258,13 +258,22 @@ class MarstekMeter(PushPowermeter):
         if self._ct_mac and ct_mac != self._ct_mac:
             logger.debug("Marstek meter: ignoring reply from CT %s", ct_mac)
             return
+        # Strictly: parse_int would read a garbled field as a fresh 0 W.
+        try:
+            phases = [float(int(v)) for v in fields[_PHASE_FIELDS]]
+        except ValueError:
+            logger.debug(
+                "Marstek meter: ignoring reply with phase powers %s",
+                fields[_PHASE_FIELDS],
+            )
+            return
 
         if not self._ct_mac or not self._ct_type:
             logger.info("Marstek meter: found %s CT %s at %s", ct_type, ct_mac, self.ip)
         self._ct_mac = ct_mac
         self._ct_type = ct_type
         self._track_other_batteries(fields)
-        self.values = [float(parse_int(v)) for v in fields[_PHASE_FIELDS]]
+        self.values = phases
         self._last_reply_monotonic = self._clock()
         self._silent_since = None
         self._message_event.set()

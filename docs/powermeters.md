@@ -493,7 +493,9 @@ IP = 192.168.1.50
 
 The reading is per phase (L1, L2, L3). AstraMeter polls as a battery that has
 not picked a phase and is not taking part, so the CT counts it in no phase and
-any battery still using the CT directly sees no difference.
+the phase totals other batteries see don't change. It does take one of the
+CT's battery slots (15 on a current `HME-4` CT002, 9 on a CT003). Once they
+are all taken, whichever arrives last, AstraMeter or a battery, gets no reply.
 
 **Pair every battery with AstraMeter's CT, not the real one.** A battery that
 still uses the real CT steers itself, and AstraMeter steers it too; AstraMeter

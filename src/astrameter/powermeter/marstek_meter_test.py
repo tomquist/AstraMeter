@@ -103,6 +103,17 @@ def test_ignores_another_ct_once_one_is_known() -> None:
     assert meter.values == [1.0, 2.0, 3.0]
 
 
+@pytest.mark.parametrize("bad", ["", "12a", "1.5"])
+def test_a_garbled_phase_power_is_no_reading(bad: str) -> None:
+    meter = _meter()
+    fields, _ = parse_request(_reply())
+    assert fields is not None
+    fields[5] = bad
+    meter._handle_reply(bytes(build_payload(fields)))
+    assert meter.values is None
+    assert meter.stream_online() is False
+
+
 @pytest.mark.parametrize(
     "ct_mac",
     [
