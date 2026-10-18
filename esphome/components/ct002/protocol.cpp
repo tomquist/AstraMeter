@@ -153,5 +153,14 @@ std::optional<std::vector<std::string>> parse_request(const uint8_t *data, size_
   return fields;
 }
 
+bool is_reader_mac(const std::string &mac) {
+  const std::string prefix(READER_MAC_PREFIX);
+  if (mac.size() < prefix.size()) return false;
+  for (size_t i = 0; i < prefix.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(mac[i])) != prefix[i]) return false;
+  }
+  return true;
+}
+
 }  // namespace ct002
 }  // namespace esphome

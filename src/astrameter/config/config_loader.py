@@ -47,6 +47,7 @@ TQ_EM_SECTION = "TQ_EM"
 HOMEWIZARD_SECTION = "HOMEWIZARD"
 ENVOY_SECTION = "ENVOY"
 SMA_ENERGY_METER_SECTION = "SMA_ENERGY_METER"
+MARSTEK_METER_SECTION = "MARSTEK_METER"
 FRITZ_SECTION = "FRITZ"
 FRONIUS_SECTION = "FRONIUS"
 REFOSS_SECTION = "REFOSS"
@@ -799,6 +800,29 @@ def create_sma_energy_meter_powermeter(
     )
 
 
+def create_marstek_meter_powermeter(
+    section: str, config: configparser.ConfigParser
+) -> Powermeter:
+    from astrameter.powermeter.marstek_meter import MarstekMeter
+
+    return MarstekMeter(
+        config.get(section, "IP", fallback=""),
+        **_declared(
+            config,
+            section,
+            mac=("MAC", str),
+            ct_type=("TYPE", str),
+            poll_interval=("POLL_INTERVAL", float),
+        ),
+        # The emulated CTs' own MACs: a reply naming one came from AstraMeter.
+        own_ct_macs=[
+            config.get(ct, "CT_MAC", fallback="")
+            for ct in ("CT002", "CT003")
+            if config.has_section(ct)
+        ],
+    )
+
+
 def create_fritz_powermeter(
     section: str, config: configparser.ConfigParser
 ) -> Powermeter:
@@ -893,6 +917,7 @@ _FACTORIES: list[tuple[str, PowermeterFactory | None]] = sorted(
         (HOMEWIZARD_SECTION, create_homewizard_powermeter),
         (ENVOY_SECTION, create_envoy_powermeter),
         (SMA_ENERGY_METER_SECTION, create_sma_energy_meter_powermeter),
+        (MARSTEK_METER_SECTION, create_marstek_meter_powermeter),
         (FRITZ_SECTION, create_fritz_powermeter),
         (FRONIUS_SECTION, create_fronius_powermeter),
         (REFOSS_SECTION, create_refoss_powermeter),

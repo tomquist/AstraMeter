@@ -372,6 +372,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         PORT={"type": "integer"},
         SERIAL_NUMBER={"type": "integer"},
     ),
+    "MARSTEK_METER": _pm(POLL_INTERVAL={"type": "float"}),
     "FRITZ": _pm(
         PASSWORD={"type": "password"},
         HTTPS={"type": "boolean"},

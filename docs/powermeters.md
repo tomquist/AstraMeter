@@ -35,6 +35,7 @@ Powermeters](configuration.md#multiple-powermeters).
 - [HomeWizard](#homewizard)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway)
 - [SMA Energy Meter](#sma-energy-meter)
+- [Marstek CT002 / CT003](#marstek-ct002--ct003)
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250)
 - [Fronius Smart Meter](#fronius-smart-meter)
 - [Refoss / Meross energy monitor](#refoss--meross-energy-monitor)
@@ -462,6 +463,46 @@ SERIAL_NUMBER = 0
 # INTERFACE = 192.168.1.10
 # THROTTLE_INTERVAL = 0
 ```
+
+## Marstek CT002 / CT003
+
+Reads grid power from a real Marstek CT002 or CT003 meter, over the same UDP
+protocol the batteries use. Use it when you already own a Marstek CT and want
+AstraMeter to steer the batteries instead of the CT: AstraMeter reads the CT,
+and the batteries are paired with AstraMeter's emulated CT.
+
+```ini
+[MARSTEK_METER]
+IP = 192.168.1.50
+# MAC = aabbccddeeff
+# TYPE = HME-4
+# POLL_INTERVAL = 1
+```
+
+- `IP`: the CT's address. Give it a fixed address in your router.
+- `MAC` (optional): the CT's MAC, as the Marstek app shows it. Left out,
+  AstraMeter learns it from the CT's first reply.
+- `TYPE` (optional): `HME-4` for the original CT002, `TPM2-0` for the newer
+  CT002 (TPM2-100CT), `HME-3` for the CT003. Left out, AstraMeter tries each
+  until the CT answers.
+- `POLL_INTERVAL` (optional, seconds, default 1): how often to ask. A CT
+  answers about twice a second in total, shared by everything polling it, so
+  polling faster gains nothing.
+
+The reading is per phase (L1, L2, L3). AstraMeter polls as a battery that has
+not picked a phase and is not taking part, so the CT counts it in no phase and
+any battery still using the CT directly sees no difference.
+
+**Pair every battery with AstraMeter's CT, not the real one.** A battery that
+still uses the real CT steers itself, and AstraMeter steers it too; AstraMeter
+logs a warning when the CT reports such a battery. The emulated CT needs its
+own MAC: set `CT_MAC` under `[CT002]`/`[CT003]` to something other than the
+real CT's MAC, or let the Marstek account integration register one. Both CTs
+answer a battery that has no CT bound yet, so check in the Marstek app which
+CT each battery ended up with.
+
+AstraMeter never reads itself: it refuses an `IP` that belongs to the machine
+it runs on, and a reply that comes from an AstraMeter emulated CT.
 
 ## FRITZ!Smart Energy 250
 

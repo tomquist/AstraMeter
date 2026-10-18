@@ -152,7 +152,10 @@ to it.
 
 > **AstraMeter's emulator is more lenient** on both stacks. It checks only
 > `hhm_mac_code` (see [CT MAC behavior](#ct-mac-behavior)), answers any
-> `hhm_dev_type`, and has no slot limit.
+> `hhm_dev_type`, and has no slot limit. The one request it drops is
+> AstraMeter's own: the `[MARSTEK_METER]` source polls a real CT as a battery
+> whose MAC starts with `02a57e`, and the emulator never answers that MAC, so
+> the source can't end up reading an emulator's output.
 
 ### Phase handling and inspection mode
 

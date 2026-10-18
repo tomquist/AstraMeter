@@ -729,6 +729,21 @@ export const POWERMETERS: Powermeter[] = [
     esphome: { kind: "unsupported", tier: "unsupported", note: "There is no ESPHome component for SMA Speedwire yet. Use the Python add-on for this meter." },
   },
   {
+    id: "marstek_meter",
+    label: "Marstek CT002 / CT003",
+    section: "MARSTEK_METER",
+    blurb: "A real Marstek CT002 or CT003, read over the UDP protocol the batteries use. Pair the batteries with AstraMeter's CT instead of this one.",
+    docPython: "docs/powermeters.md#marstek-ct002--ct003",
+    docEsphome: "docs/esphome-powermeters.md#marstek-ct002--ct003",
+    fields: [
+      { key: "IP", label: "CT IP address", type: "text", placeholder: "192.168.1.50", required: true, help: "The CT's address. Give it a fixed address in your router." },
+      { key: "MAC", label: "CT MAC", type: "text", placeholder: "(learned from the CT)", advanced: true, help: "The CT's MAC as the Marstek app shows it. Leave blank to learn it from the CT's first reply." },
+      { key: "TYPE", label: "CT type", type: "select", default: "", options: [{ value: "", label: "Detect" }, { value: "HME-4", label: "HME-4 (CT002)" }, { value: "TPM2-0", label: "TPM2-0 (newer CT002, TPM2-100CT)" }, { value: "HME-3", label: "HME-3 (CT003)" }], advanced: true, help: "Leave on Detect: each type is tried until the CT answers." },
+      { key: "POLL_INTERVAL", label: "Poll interval (seconds)", type: "number", default: "1", placeholder: "1", advanced: true, help: "How often to ask the CT. It answers about twice a second in total, so faster gains nothing." },
+    ],
+    esphome: { kind: "unsupported", tier: "unsupported", note: "There is no ESPHome component that reads a real Marstek CT yet. Use the Python add-on for this meter." },
+  },
+  {
     id: "fritz",
     label: "FRITZ!Smart Energy 250",
     section: "FRITZ",

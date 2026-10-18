@@ -37,6 +37,7 @@ from .protocol import (
     build_payload,
     calculate_checksum,
     compute_length,
+    is_reader_mac,
     parse_int,
     parse_request,
 )
@@ -1435,6 +1436,14 @@ class CT002:
             return None
 
         request = CT002Request.from_fields(fields, addr)
+        if is_reader_mac(request.meter_mac):
+            logger.debug(
+                "Ignoring CT002 request from %s: it is AstraMeter's own meter "
+                "reader (battery MAC %s), which must read a real CT",
+                addr,
+                request.meter_mac,
+            )
+            return None
         if not self._ct_mac_matches(request):
             logger.debug(
                 "Ignoring CT002 request from %s due to CT MAC mismatch (req=%s, cfg=%s)",

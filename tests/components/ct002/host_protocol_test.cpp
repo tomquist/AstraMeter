@@ -11,6 +11,7 @@
 namespace {
 
 using esphome::ct002::build_payload;
+using esphome::ct002::is_reader_mac;
 using esphome::ct002::parse_request;
 using esphome::ct002::RESPONSE_LABEL_COUNT;
 
@@ -63,6 +64,14 @@ TEST(ProtocolChecksumSpaceTolerance, AcceptsSpaceHighNibble) {
 
 TEST(ProtocolResponseLabels, CountIs24) {
   EXPECT_EQ(RESPONSE_LABEL_COUNT, 24u);
+}
+
+TEST(ProtocolReaderMac, MatchesThePrefixCaseInsensitively) {
+  EXPECT_TRUE(is_reader_mac("02a57e123456"));
+  EXPECT_TRUE(is_reader_mac("02A57E123456"));
+  EXPECT_FALSE(is_reader_mac("02a57"));
+  EXPECT_FALSE(is_reader_mac("aabbccddeeff"));
+  EXPECT_FALSE(is_reader_mac(""));
 }
 
 TEST(ProtocolParseRequest, RejectsCorruptedChecksum) {

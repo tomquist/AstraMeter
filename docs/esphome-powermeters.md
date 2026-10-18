@@ -66,6 +66,7 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 - [HomeWizard](#homewizard) — 🟠 Alternate (local v1 HTTP, or native P1)
 - [Enphase Envoy (IQ Gateway)](#enphase-envoy-iq-gateway) — 🔴 Not yet available
 - [SMA Energy Meter](#sma-energy-meter) — 🔴 Not yet available
+- [Marstek CT002 / CT003](#marstek-ct002--ct003) — 🔴 Not yet available
 - [FRITZ!Smart Energy 250](#fritzsmart-energy-250) — 🟠 Alternate (via Home Assistant)
 - [Fronius Smart Meter](#fronius-smart-meter) — 🔵 Generic
 - [Refoss / Meross energy monitor](#refoss--meross-energy-monitor) — 🔵 Generic
@@ -946,6 +947,23 @@ network interface and parses the Speedwire datagram (per-phase
 Python implementation in `src/astrameter/powermeter/sma_energy_meter.py`, and the
 protocol as implemented by [sma2mqtt](https://github.com/vindolin/sma2mqtt) and
 [SMA-Speedwire](https://github.com/J0B10/SMA-Speedwire).
+
+## Marstek CT002 / CT003
+
+**Tier: 🔴 Not yet available.** There is no ESPHome component that reads a
+real Marstek CT yet. The Python `[MARSTEK_METER]` source polls the CT on UDP
+port 12345 the way a battery does: phase `0`, power `0`, `participate = 0`,
+the CT's type, and its MAC or the wildcard `000000000000`. It takes
+`A/B/C_phase_power` from the reply. The protocol is documented in
+[ct002-ct003-protocol.md](ct002-ct003-protocol.md).
+
+*To implement:* a sensor platform on the ESP that sends that request from its
+own port (the CT replies to the request's source port, so it never collides
+with `ct002:` on 12345) and parses the reply with the `ct002` component's
+existing `parse_request`. It must keep the same guards: announce a battery MAC
+starting with `02a57e` (the `ct002:` emulator drops those) and refuse replies
+naming the emulator's own `ct_mac`. Reference:
+`src/astrameter/powermeter/marstek_meter.py`.
 
 ## FRITZ!Smart Energy 250
 

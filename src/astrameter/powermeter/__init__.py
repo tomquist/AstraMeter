@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from .homewizard import HomeWizardPowermeter
     from .iobroker import IoBroker
     from .json_http import JsonHttpPowermeter
+    from .marstek_meter import MarstekMeter
     from .modbus import ModbusPowermeter
     from .mqtt import MqttPowermeter
     from .refoss import Refoss
@@ -65,6 +66,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "HomeWizardPowermeter": (".homewizard", "HomeWizardPowermeter"),
     "IoBroker": (".iobroker", "IoBroker"),
     "JsonHttpPowermeter": (".json_http", "JsonHttpPowermeter"),
+    "MarstekMeter": (".marstek_meter", "MarstekMeter"),
     "ModbusPowermeter": (".modbus", "ModbusPowermeter"),
     "MqttPowermeter": (".mqtt", "MqttPowermeter"),
     "Refoss": (".refoss", "Refoss"),
@@ -114,6 +116,7 @@ __all__ = [
     "HomeWizardPowermeter",
     "IoBroker",
     "JsonHttpPowermeter",
+    "MarstekMeter",
     "ModbusPowermeter",
     "MqttPowermeter",
     "PidPowermeter",

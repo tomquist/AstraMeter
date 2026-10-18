@@ -315,6 +315,11 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   }
   const auto &fields = *parsed;
   if (fields.size() < 4) return;
+  if (is_reader_mac(fields[1])) {
+    ESP_LOGD(TAG, "Ignoring CT002 request from %s: it is AstraMeter's own meter reader (%s)",
+             addr_ip.c_str(), fields[1].c_str());
+    return;
+  }
   if (!this->validate_ct_mac_(fields)) return;
 
   const std::string meter_mac = fields[1];
