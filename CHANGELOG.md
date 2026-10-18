@@ -4,11 +4,7 @@
 
 - **Fixed** the dashboard reporting "No batteries polling" with the default Shelly Pro 3EM emulation while a battery was polling it on port 1010; both ports now show as one emulator listing every battery ([#734](https://github.com/tomquist/astrameter/issues/734), [#736](https://github.com/tomquist/astrameter/pull/736)).
 
-- **Fixed** a battery searching for its phase failing to find it when another battery AstraMeter steers cancelled the power step it tests with, leaving it stuck on phase `0` ([#732](https://github.com/tomquist/astrameter/issues/732), [#735](https://github.com/tomquist/astrameter/pull/735)).
-
-- **Fixed** a battery that keeps reporting phase `0` (still detecting its phase) holding back the batteries AstraMeter steers, leaving about a quarter of the load on the grid ([#732](https://github.com/tomquist/astrameter/issues/732), [#735](https://github.com/tomquist/astrameter/pull/735)).
-
-- **Fixed** a battery detecting its phase while the meter briefly dropped out ending up with no phase or a wrong one, such as `D`; it now waits for the meter instead ([#732](https://github.com/tomquist/astrameter/issues/732), [#735](https://github.com/tomquist/astrameter/pull/735)).
+- **Fixed** batteries failing to find their phase next to batteries AstraMeter steers or while the meter briefly dropped out, and a battery still on phase `0` holding back the steered ones ([#732](https://github.com/tomquist/astrameter/issues/732), [#735](https://github.com/tomquist/astrameter/pull/735)).
 
 - **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724), [#733](https://github.com/tomquist/astrameter/pull/733)).
 
