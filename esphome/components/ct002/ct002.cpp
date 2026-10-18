@@ -696,6 +696,26 @@ void CT002Component::set_peakshaving_threshold(float threshold) {
   }
 }
 
+float CT002Component::probe_output_() const {
+  // What batteries still detecting their phase report they put out. To find
+  // its phase a battery steps its own output and watches which phase of the
+  // reading follows; the steered batteries must not cancel that step, or it
+  // never shows (docs/ct002-ct003-protocol.md, "Battery-side phase
+  // detection"). So active control steers on the grid as it would read
+  // without them. A battery reports its output while detecting (a Venus in
+  // Auto or AI mode, a B2500 always); one reporting 0 adds nothing. Mirrors
+  // ct002.py _probe_output.
+  const double now = this->now_seconds_();
+  float sum = 0.0f;
+  for (const auto &kv : this->consumers_) {
+    const auto &c = kv.second;
+    if (c.timestamp <= 0.0 || is_steered_phase(c.phase)) continue;
+    if (this->consumer_expired_(c, now)) continue;
+    sum += c.power;
+  }
+  return sum;
+}
+
 std::pair<float, bool> CT002Component::peakshaving_(float total) const {
   // Returns the grid total handed to the balancer and whether the steered
   // batteries should each idle at 0 W on their own: demand above zero but not
@@ -766,10 +786,11 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   }
   float grid_total = 0.0f;
   for (float v : values) grid_total += v;
-  // smooth_target mirrors Python's _last_smooth_target (ct002.py:361-362):
-  // the total INPUT grid power (post-filter, pre-balancer), NOT the sum of
-  // the balancer's per-phase output targets. mqtt_insights publishes this
-  // as the device-level smooth_target sensor.
+  grid_total += this->probe_output_();
+  // smooth_target mirrors Python's _last_smooth_target: the total INPUT grid
+  // power (post-filter, pre-balancer, with any phase-detection probe added
+  // back), NOT the sum of the balancer's per-phase output targets.
+  // mqtt_insights publishes this as the device-level smooth_target sensor.
   this->last_smooth_target_ = grid_total;
   const auto shaved = this->peakshaving_(grid_total);
   auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, shaved.first,

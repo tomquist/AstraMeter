@@ -88,6 +88,9 @@ ASCII wire field.
   - **Leaves it out of the steering pool** under active control: it is answered with the
     raw reading, never a target, so it takes no share and is no reference the steered
     batteries are balanced toward (issue #732),
+  - **Adds its reported power back** onto the grid value active control steers on, so
+    the steered batteries do not cancel its detection probe (see
+    [Battery-side phase detection](#battery-side-phase-detection)),
   - **Resets the meter's conditioning wrappers** (Hampel window, EMA, deadband) on every
     inspection poll and once more when the probe ends — see below, and
   - **Does not answer** it while the meter is unavailable: the zero hold steered
@@ -693,6 +696,27 @@ A battery that fails detection therefore reports phase `0`, holds about 0 W
 and never steers, until it is rebooted (a boot with no stored phase starts
 detection again) or one of the triggers above fires.
 
+### What a battery reports while detecting
+
+Detection leaves the work mode alone, so the request's power field keeps doing
+what it always does:
+
+- **HMG-50 / VNSE3-0**: in work mode Auto (0) or AI (5) — or with one internal
+  flag set — the power field carries a status value; in Manual (1) or Passive
+  (3) it is 0. On the HMG-50 that value is the one a debug print labels
+  "发出功率" (sent / output power), next to "设置功率" (set power) and
+  "实际功率" (actual power); on the VNSE3-0 it is the status word the steering
+  also reads as the unit's own output.
+- **B2500 (HMJ-2 v110)**: always the sum of its two DC output channels — the
+  fields its runtime report calls `g1` and `g2`, which hm2mqtt shows as the
+  output powers — with no mode condition.
+
+A real device confirms it: in the issue #652 log a Venus E 3.0 on firmware 1.50
+polled phase `0` reporting 0 W for about five seconds, then 232, 1603, 1941 and
+1993 W, held 1993–1994 W, and came back on phase A. A battery whose firmware
+reports something else (the Venus E Mini sends 1 W throughout) gives an
+emulator nothing to go on.
+
 ### What a reply must satisfy (HMG-50 parser)
 
 A reading only reaches the detector — or the steering — when the reply is
@@ -715,7 +739,9 @@ Everything a battery sees during detection is the phase fields of the replies it
 accepts. In particular:
 
 - the battery's own probe has to show up on its phase within the timeout, by at
-  least the threshold (half the capped power window);
+  least the threshold (half the capped power window). Batteries that steer on
+  the same grid see the probe as a load change and cancel it unless told
+  otherwise; the slower the probe ramps, the less of it ever shows;
 - no other phase may move by as much meanwhile. A real CT reports only the
   meter, so another battery on another phase moves that phase only when it
   reacts to its own phase;

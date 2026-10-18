@@ -909,6 +909,29 @@ class CT002:
         )
         return total - min(household_demand, self.peakshaving_threshold), hold
 
+    def _probe_output(self) -> float:
+        """What batteries still detecting their phase report they put out.
+
+        To find its phase a battery steps its own output and watches which
+        phase of the reading follows; the steered batteries must not cancel
+        that step, or it never shows (docs/ct002-ct003-protocol.md,
+        "Battery-side phase detection").  So active control steers on the grid
+        as it would read without them, which also keeps their output out of
+        what peak shaving counts as demand.  A battery reports its output while
+        detecting: a Venus in Auto or AI mode, a B2500 always; one reporting 0
+        adds nothing.
+        """
+        now = self._clock()
+        return float(
+            sum(
+                parse_int(c.power, 0)
+                for c in self._consumers.values()
+                if c.timestamp > 0
+                and c.phase not in STEERED_PHASES
+                and not self._consumer_expired(c, now)
+            )
+        )
+
     def _apply_peakshaving(self, total: float) -> float:
         """The grid total peak shaving hands the balancer (see _peakshaving)."""
         return self._peakshaving(total)[0]
@@ -922,6 +945,7 @@ class CT002:
             return values
 
         total: float = sum(parse_int(v, 0) for v in values)
+        total += self._probe_output()
         self._last_smooth_target = total
         sample_id = tuple(values)
         mode = self._consumer_mode(consumer_id)

@@ -64,11 +64,29 @@ class TestActiveControl:
 
         device = _ct002(active_control=True)
         device._update_consumer_report("a", "A", 76)
-        device._update_consumer_report("mini", "0", 1)
+        # Stuck at 0 W, so the probe compensation adds nothing here.
+        device._update_consumer_report("stuck", "0", 0)
         out = device._compute_smooth_target([282, 0, 0], "a")
 
         assert out == expected
         assert out[0] == 282
+
+    def test_a_detection_probe_is_not_cancelled(self) -> None:
+        """A battery probing for its phase reports its output; the steered
+        battery is steered on the grid as it would read without that probe,
+        so it does not cancel it (docs/ct002-ct003-protocol.md,
+        "Battery-side phase detection")."""
+        alone = _ct002(active_control=True)
+        alone._update_consumer_report("a", "A", 76)
+        expected = alone._compute_smooth_target([282, 0, 0], "a")
+
+        device = _ct002(active_control=True)
+        device._update_consumer_report("a", "A", 76)
+        # Probing at 800 W: the meter reads 800 W lower than without it.
+        device._update_consumer_report("probe", "0", 800)
+        out = device._compute_smooth_target([282 - 800, 0, 0], "a")
+
+        assert out == expected
 
     def test_single_phase_input_runs_balancer(self) -> None:
         # 1-phase configurations supply a single grid reading; the balancer

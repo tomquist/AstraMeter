@@ -411,3 +411,51 @@ async def test_battery_stuck_in_detection_does_not_hold_back_the_steered_one(
         assert abs(sum(h.grid())) < 30, h.grid()
     finally:
         await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize(
+    ("neighbour", "wired", "delay_ticks"), [("A", "A", 0), ("A", "B", 2)]
+)
+async def test_slow_probe_next_to_a_steering_battery(
+    device: str, neighbour: str, wired: str, delay_ticks: int
+) -> None:
+    """A probe that ramps slowly (50 W/s) is not cancelled by a neighbour.
+
+    AstraMeter sees the probe as a grid change; steering the neighbour against
+    it kept the probing battery's phase from ever moving by the threshold (same
+    phase), or moved the neighbour's own phase too (another phase, HMG-50 gives
+    up), and detection failed three times. The steered batteries now steer on
+    the grid without the probe the detecting battery reports.
+    """
+    phys = {"ramp_rate": 50.0, "power_update_delay_ticks": delay_ticks}
+    h = _Harness(
+        [
+            {
+                "mac": "24215EDB1931",
+                "phase": neighbour,
+                "stored_phase": neighbour,
+                "meter_dev_type": "HMG-50",
+                "max_discharge_power": 2500,
+                "max_charge_power": 2500,
+                **phys,
+            },
+            {
+                "mac": "CCC837B39DBE",
+                "phase": wired,
+                "meter_dev_type": device,
+                "boot_at": 60.0,
+                **phys,
+            },
+        ],
+        base_load=[600.0, 300.0, 0.0],
+    )
+    await h.start()
+    try:
+        await h.step(60)
+        await h.run_until_detected(400)
+        assert h.phases() == [neighbour, wired]
+        assert h.batteries[1].detector.attempts == 0, "needed a retry"
+    finally:
+        await h.stop()

@@ -425,6 +425,10 @@ class CT002Component : public Component {
   // and says whether the steered batteries should idle at 0 W (mirrors
   // CT002._peakshaving in ct002.py).
   std::pair<float, bool> peakshaving_(float total) const;
+  // Sum of the power reported by batteries still detecting their phase, added
+  // back onto the grid active control steers on so the steered batteries do
+  // not cancel a detection probe (mirrors CT002._probe_output in ct002.py).
+  float probe_output_() const;
   // Monotonic seconds used for all time-gated logic (saturation, probe,
   // eviction, dedup, poll_interval). Instance method (not static) so the
   // test-hook mock clock can override it. Falls back to millis() in
