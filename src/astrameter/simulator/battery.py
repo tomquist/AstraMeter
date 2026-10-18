@@ -434,7 +434,7 @@ class BatterySimulator:
             )
             transport.sendto(payload)
             data = await asyncio.wait_for(proto.received, timeout=2.0)
-        except (TimeoutError, OSError) as exc:
+        except (asyncio.TimeoutError, TimeoutError, OSError) as exc:
             logger.debug("Battery %s: request failed: %s", self.mac, exc)
             self._note_failed_poll()
             return None
