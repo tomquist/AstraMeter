@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** a Marstek CT002 / CT003 power source (`[MARSTEK_METER]`), so AstraMeter can read the Marstek CT you already own and steer your batteries itself. Pair the batteries with AstraMeter's CT instead of the real one.
+- **Added** a Marstek CT002 / CT003 power source (`[MARSTEK_METER]`), so AstraMeter can read the Marstek CT you already own and steer your batteries itself. Pair the batteries with AstraMeter's CT instead of the real one ([#737](https://github.com/tomquist/astrameter/pull/737)).
 
 - **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724), [#733](https://github.com/tomquist/astrameter/pull/733)).
 
