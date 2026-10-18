@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** the dashboard reporting "No batteries polling" with the default Shelly Pro 3EM emulation while a battery was polling it on port 1010; both ports now show as one emulator listing every battery ([#734](https://github.com/tomquist/astrameter/issues/734)).
+- **Fixed** the dashboard reporting "No batteries polling" with the default Shelly Pro 3EM emulation while a battery was polling it on port 1010; both ports now show as one emulator listing every battery ([#734](https://github.com/tomquist/astrameter/issues/734), [#736](https://github.com/tomquist/astrameter/pull/736)).
 
 - **Improved** the dashboard to list batteries by phase, A to C, on the Overview and Batteries tabs, instead of an order unrelated to how they are wired ([#724](https://github.com/tomquist/astrameter/issues/724), [#733](https://github.com/tomquist/astrameter/pull/733)).
 
