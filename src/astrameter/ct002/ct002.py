@@ -1385,8 +1385,10 @@ class CT002:
         """Keep the meter's conditioning filters out of an inspection sweep.
 
         A battery that polls with phase ``'0'`` has taken itself off the CT and
-        is sweeping its own output — up to full discharge, then full charge —
-        to watch the CT reading follow.  Those kilowatt swings are real, and
+        is stepping its own output by up to 2000 W in one direction to see
+        which phase of the CT reading follows (the probe described under
+        "Battery-side phase detection" in docs/ct002-ct003-protocol.md).
+        Those kilowatt swings are real, and
         seeing them is the entire point of the sweep, but to a rolling-median
         filter they look exactly like the meter glitches it exists to reject:
         with ``HAMPEL_WINDOW`` set, the emulator answers the whole sweep with

@@ -86,15 +86,16 @@ ASCII wire field.
   - **Responds** to the request (so the device can continue its phase detection),
   - **Does not** add an unassigned/inspection reporter's power to a committed‑phase aggregate, and
   - **Resets the meter's conditioning wrappers** (Hampel window, EMA, deadband) on every
-    inspection poll and once more when the sweep ends — see below.
+    inspection poll and once more when the probe ends — see below.
 - Inspection is **not** only a startup state: a Venus on firmware 1.50 was observed
-  re‑running it roughly every 35 minutes. The routine is a *sweep* — the battery takes
-  itself off the CT and drives its own output to nearly full discharge and then nearly
-  full charge (~20 s) to watch the CT reading follow. That grid swing is real, and it is
-  the whole point, so a rolling‑median filter must not reject it as a spike. Such a
-  filter would answer the sweep with a frozen pre‑sweep reading, then reject the true
-  readings that come back, steering the battery against an inverted grid sign once the
-  sweep ends (issue #652).
+  re‑running it roughly every 35 minutes. The routine is a *probe* — the battery takes
+  itself off the CT, steps its own output by up to 2000 W in one direction and watches
+  which phase of the CT reading follows; see
+  [Battery-side phase detection](#battery-side-phase-detection). That grid swing is real,
+  and it is the whole point, so a rolling‑median filter must not reject it as a spike.
+  Such a filter would answer the probe with a frozen pre‑probe reading, then reject the
+  true readings that come back, steering the battery against an inverted grid sign once
+  it commits its phase (issue #652).
 - The `participate` flag (field 7) is an additional, explicit gate: even a fully phase‑committed reporter
   is **excluded from aggregation** when it sends `0`.
 
@@ -301,10 +302,12 @@ command in three steps:
    - a separate "sum all phases" config flag overrides this to add
      `A + B + C + ABC` (whole‑home total).
 
-   The `x`/unassigned bucket is always carried alongside so the device still
-   reacts while it is still detecting its phase. This is the consumer side of
-   the [phase selection](#phase-selection-and-the-combined-abc-mode): phase `D`
-   is exactly "read the combined bucket".
+   The `x`/unassigned bucket is parsed alongside, but a device that is still
+   detecting its phase does not steer at all (see
+   [Battery-side phase detection](#battery-side-phase-detection)). This is the
+   consumer side of the
+   [phase selection](#phase-selection-and-the-combined-abc-mode): phase `D` is
+   exactly "read the combined bucket".
 3. **Regulate** with a closed loop (detailed below). The storage keeps an
    inverter power **setpoint** and, each step, nudges it toward driving the
    selected grid value to zero (self‑consumption) — it does **not** copy the
@@ -609,6 +612,140 @@ nulls the grid rather than drooping:
 ```text
 output: 26 43 60 77 94 111 127 144 161 178 195 212 229 246 263 280 297 -> 297 (hold, grid≈3)
 ```
+
+## Battery-side phase detection
+
+A battery works out which phase it is wired to by itself. The CT plays no part
+beyond answering: CT003 (`HME-3` v116–v122) parses the request with
+`%hd|%10[^|]|%30[^|]|%8[^|]|%13[^|]|%c|%hd|%hhu` and stores the phase character
+it is sent; its slave list reports it back as `slv_p=%c`. No CT image contains
+a battery type name, so a CT cannot treat one model differently by name.
+
+> Read out of the archived Control images: HMG-50 (Venus E 2.0) v156 and
+> VNSE3-0 (Venus E 3.0) v151 disassembled, the B2500 `HMJ-2` v110 routine read
+> separately (below). VNSA-0 and VNSD-0 were not disassembled. The simulator
+> reimplements the Venus routines in
+> `src/astrameter/simulator/phase_detection.py`, which lists the code sites.
+
+### The phase byte
+
+The battery stores its phase as a byte: 1–3 = A–C, 4 = D (combined), 0 =
+unset, 5 = detection failed. The request builder sends `A`/`B`/`C`/`D` for 1–4
+and `0` for everything else. **While the byte is 0 or 5 the regular steering
+does not run at all**: the meter-task loop returns before the integrator, so
+the battery only does what the detector commands. Phase 5 is never saved.
+
+### When detection runs
+
+- At boot, when no phase is stored.
+- When the meter type or the CT MAC is changed, over BLE or MQTT.
+- On an MQTT `seq_check` command.
+
+`rechrg_seq=N` (MQTT, also over BLE) sets the phase directly and ends any
+detection. The triggers were read on the HMG-50 only, and none of them runs on
+a timer there; what re-ran detection about every 35 minutes on a Venus with
+firmware 1.50 (issue #652) is not known.
+
+### One attempt (HMG-50 and Venus)
+
+Each pass of the meter-task loop runs the detector. The loop wakes on every
+accepted CT reply and otherwise after 100 ms (HMG-50) / 30 ms (VNSE3-0), and
+re-evaluates the **last accepted reading** each time. All timers count whole
+seconds.
+
+| step | HMG-50 v156 | VNSE3-0 v151 |
+|---|---|---|
+| Gate, checked first on every pass | above 50 % SoC one BMS flag must be set, at or below another; otherwise nothing happens, no timer runs | same |
+| 1. Zero | output to 0 W (0.01 W) | output to 0 W |
+| 2. Baseline | on the next pass: the last reading's A, B, C and total | after 3 s |
+| 3. Probe | +2000 W (discharge) above 50 % SoC, −2000 W at or below | ± the configured power `P`, same rule; meter type 10 always charges |
+| Threshold | min(upper power window, 2000) / 2; a negative window reads as 0 | min(`P`, 2000) / 2 |
+| A phase *moved* when | threshold ≤ \|reading − baseline\| ≤ 2500 W | threshold ≤ \|reading − baseline\| |
+| Decision | move counter == 2 on a pass with a move | move counter ≥ 2 on a pass with a move |
+| One phase moved | that phase | that phase |
+| Several moved | phase 5, detection **ends, no retry** | the highest-numbered phase that moved |
+| No phase moved, total did | phase D, only for CT003 (and meter codes 5–9) and only while all three phase readings are exactly 0 | phase D, every meter type but 0, 1, 13 |
+| Timeout from probe start | 20 s; 40 s for CT003 | 20 s; 40 s for CT003 and a few others; 60 s for one |
+| On timeout | phase 5, output 0, retry after 60 s | same |
+| After 3 attempts | detection stops for good, phase stays 5 | same |
+
+The move counter counts phases, not readings, and every pass re-reads the same
+reading. So one reading that shows exactly one phase moved decides on the next
+pass, 100 ms later at most. A reading where two phases moved adds 2 at once:
+the HMG-50 then ends with phase 5 and the Venus picks the higher phase. On the
+HMG-50, a counter that passes 2 without hitting it exactly cannot decide any
+more, and the attempt can only time out.
+
+The two gate flags are BMS words the firmware tests: one above 50 % SoC, the
+other at or below. Pairing them with the probe direction suggests "discharge
+allowed" and "charge allowed", but that meaning is inferred. Likewise `P` is a
+configured power word of unconfirmed meaning (the simulator uses the discharge
+limit).
+
+A battery that fails detection therefore reports phase `0`, holds about 0 W
+and never steers, until it is rebooted (a boot with no stored phase starts
+detection again) or one of the triggers above fires.
+
+### What a reply must satisfy (HMG-50 parser)
+
+A reading only reaches the detector — or the steering — when the reply is
+accepted:
+
+- its CT type (field 1) equals the type the battery requested; any other is
+  rejected;
+- once a CT MAC is bound, field 2 must equal it (see [CT MAC behavior](#ct-mac-behavior));
+- `info_idx` (field 14) must change: a non-zero value equal to the previous
+  reply's is accepted but brings **no new reading**.
+
+Each rejected reply or missed poll counts as a failure. After about 24 in a row
+(six per reconnect cycle, four cycles) the meter is marked offline. Offline,
+the HMG-50 holds 0 W; the VNSE3-0 holds 0 W, zeroes its integrator and skips
+detection.
+
+### What this means for an emulator
+
+Everything a battery sees during detection is the phase fields of the replies it
+accepts. In particular:
+
+- the battery's own probe has to show up on its phase within the timeout, by at
+  least the threshold (half the capped power window);
+- no other phase may move by as much meanwhile. A real CT reports only the
+  meter, so another battery on another phase moves that phase only when it
+  reacts to its own phase;
+- a substitute value counts like a measurement: an all-zero reply reads as a
+  move on every phase whose baseline was at least the threshold away from zero.
+
+### B2500 (HMJ-2 v110)
+
+The B2500 runs its own routine inside its operating state machine
+(`0x08017c44`, state byte at `0x2000815a`); the phase is stored as an ASCII
+character (`0x2000eb22`). `seq_check` writes `0` and enters state 5;
+`rechrg_seq=N` writes `'@' + N`; a configuration reset writes `0`.
+
+- **State 5**: outputs off. If a phase is stored or CT mode is off, back to
+  normal (state 4); otherwise wait 20 s (meter type `HME-1`), 11 s
+  (Ecotracker) or 1 s, then state 7.
+- **State 7**: snapshot the per-phase readings (and the total, for meter types
+  Shelly Pro 3EM, `HME-3`, Ecotracker), switch the DC outputs on at half the
+  configured output power each (the second only when both are in use), then
+  state 8.
+- **State 8**: while neither channel is producing (below 500 on its current
+  field) the baseline keeps being re-taken. After 2 s (inverters with id
+  5000–5499) or 5 s, compare: the threshold is 60 % of the output the producing
+  channels are set to (a flat 50 W for `HME-1`). For CT002 each of A, B, C is
+  compared; for CT003, Shelly Pro 3EM and Ecotracker only the total, which can
+  only yield phase D. Exactly one move: that phase is saved, state 4. Two or
+  more: outputs off, state 11. None before a configured timeout: outputs off,
+  state 9.
+- States 9 and 11 hold; no retry was found.
+
+Meter types (`0x2000eb28`): 0 `HME-1`, 1 Shelly Pro 3EM, 3 `HME-4`, 4 `HME-3`,
+5 Shelly EM Gen3, 6 Shelly Pro EM50, 7 Ecotracker. The configured output power
+(capped at 800 W) and the timeout (capped at 360, unit not confirmed) are
+settings whose defaults were not
+found, and neither were the meaning of the "producing" field and a check that
+sends states 7 and 8 to state 11, so the B2500 routine is not in the simulator
+yet.
 
 ## Active vs. relay control (AstraMeter)
 
