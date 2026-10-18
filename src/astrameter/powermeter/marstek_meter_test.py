@@ -147,6 +147,42 @@ async def test_a_stale_reading_is_an_outage() -> None:
         await meter.get_powermeter_watts()
 
 
+class _SentRequests:
+    def __init__(self) -> None:
+        self.requests: list[bytes] = []
+
+    def sendto(self, data: bytes) -> None:
+        self.requests.append(data)
+
+
+async def test_a_waiting_reader_asks_at_once_but_no_faster_than_the_ct_answers() -> (
+    None
+):
+    clock = _Clock()
+    meter = _meter(clock=clock)
+    sent = _SentRequests()
+    meter._transport = sent  # type: ignore[assignment]
+
+    first = asyncio.create_task(meter.wait_for_next_message(timeout=1))
+    await asyncio.sleep(0)
+    assert len(sent.requests) == 1
+
+    clock.now += 0.4
+    second = asyncio.create_task(meter.wait_for_next_message(timeout=1))
+    await asyncio.sleep(0)
+    assert len(sent.requests) == 1, "asked again within the CT's pause"
+
+    meter._handle_reply(_reply())
+    await asyncio.gather(first, second)
+
+    clock.now += 0.5
+    third = asyncio.create_task(meter.wait_for_next_message(timeout=1))
+    await asyncio.sleep(0)
+    assert len(sent.requests) == 2
+    meter._handle_reply(_reply())
+    await third
+
+
 def test_warns_once_about_batteries_still_on_the_real_ct(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

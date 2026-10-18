@@ -485,9 +485,11 @@ IP = 192.168.1.50
 - `TYPE` (optional): `HME-4` for the original CT002, `TPM2-0` for the newer
   CT002 (TPM2-100CT), `HME-3` for the CT003. Left out, AstraMeter tries each
   until the CT answers.
-- `POLL_INTERVAL` (optional, seconds, default 1): how often to ask. A CT
-  answers about twice a second in total, shared by everything polling it, so
-  polling faster gains nothing.
+- `POLL_INTERVAL` (optional, seconds, default 1): how often AstraMeter asks
+  the CT in the background. That keeps the reading and its online status
+  current while no battery is polling. A battery waiting for a fresh reading
+  makes AstraMeter ask straight away, at most every 0.5 s, so this interval
+  doesn't slow the batteries down.
 
 The reading is per phase (L1, L2, L3). AstraMeter polls as a battery that has
 not picked a phase and is not taking part, so the CT counts it in no phase and

@@ -52,6 +52,11 @@ READER_DEVICE_TYPE = "VNSE3-0"
 
 DEFAULT_POLL_INTERVAL = 1.0
 
+# The least time between a request and one sent early for a waiting reader: the
+# pause a current CT takes after each reply, so readers can't ask faster than
+# it answers.
+KICK_MIN_INTERVAL_SECONDS = 0.5
+
 # Seconds without a reply before the last reading counts as stale.  A current
 # CT answers about twice a second in total, shared by everything polling it.
 DEFAULT_MAX_AGE_SECONDS = 10.0
@@ -131,6 +136,7 @@ class MarstekMeter(PushPowermeter):
         self._clock = clock or time.monotonic
         self.values: list[float] | None = None
         self._last_reply_monotonic: float | None = None
+        self._last_request_monotonic: float | None = None
         self._attempt = 0
         self._paired_elsewhere = 0
         self._refused_self = False
@@ -201,6 +207,17 @@ class MarstekMeter(PushPowermeter):
     def _send_request(self) -> None:
         if self._transport is not None:
             self._transport.sendto(self.build_request())
+            self._last_request_monotonic = self._clock()
+
+    async def wait_for_next_message(self, timeout: float = 5) -> None:
+        # Ask now rather than at the next tick, so a reader waiting for a fresh
+        # reading gets it as soon as the CT replies.  A request while ours is
+        # still unanswered costs the CT nothing (a slot gets one reply however
+        # often it asks); the interval keeps the rest at the CT's own pace.
+        last = self._last_request_monotonic
+        if last is None or self._clock() - last >= KICK_MIN_INTERVAL_SECONDS:
+            self._send_request()
+        await super().wait_for_next_message(timeout)
 
     def _warn_if_silent(self) -> None:
         if self._silent_since is None:

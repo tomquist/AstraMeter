@@ -449,7 +449,8 @@ THROTTLE_INTERVAL = 0
 ## HME-4 (CT002), TPM2-0 (newer CT002, TPM2-100CT) or HME-3 (CT003);
 ## optional, tried in turn until the CT answers
 # TYPE = HME-4
-## Seconds between polls (optional)
+## Seconds between background polls (optional); a battery waiting for a
+## reading makes AstraMeter ask at once
 # POLL_INTERVAL = 1
 
 # [FRITZ]

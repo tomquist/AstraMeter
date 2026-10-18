@@ -739,7 +739,7 @@ export const POWERMETERS: Powermeter[] = [
       { key: "IP", label: "CT IP address", type: "text", placeholder: "192.168.1.50", required: true, help: "The CT's address. Give it a fixed address in your router." },
       { key: "MAC", label: "CT MAC", type: "text", placeholder: "(learned from the CT)", advanced: true, help: "The CT's MAC as the Marstek app shows it. Leave blank to learn it from the CT's first reply." },
       { key: "TYPE", label: "CT type", type: "select", default: "", options: [{ value: "", label: "Detect" }, { value: "HME-4", label: "HME-4 (CT002)" }, { value: "TPM2-0", label: "TPM2-0 (newer CT002, TPM2-100CT)" }, { value: "HME-3", label: "HME-3 (CT003)" }], advanced: true, help: "Leave on Detect: each type is tried until the CT answers." },
-      { key: "POLL_INTERVAL", label: "Poll interval (seconds)", type: "number", default: "1", placeholder: "1", advanced: true, help: "How often to ask the CT. It answers about twice a second in total, so faster gains nothing." },
+      { key: "POLL_INTERVAL", label: "Poll interval (seconds)", type: "number", default: "1", placeholder: "1", advanced: true, help: "How often to ask the CT in the background. A battery waiting for a reading makes AstraMeter ask at once, so this doesn't slow steering." },
     ],
     esphome: { kind: "unsupported", tier: "unsupported", note: "There is no ESPHome component that reads a real Marstek CT yet. Use the Python add-on for this meter." },
   },
