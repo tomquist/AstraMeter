@@ -97,8 +97,16 @@ def test_no_steering_without_a_phase() -> None:
     assert b.target_power == pytest.approx(0.01)  # the detector's zero, no steering
 
 
-def test_steering_uses_the_detected_phase_field() -> None:
+def test_sum_all_phases_steers_on_the_total() -> None:
     b = _battery(stored_phase="A", phase="C")
+    # The total (field 8) is what counts, split by every bucket's count.
+    for i in (1, 2):
+        b._receive_firmware(_reply(a=0, b=0, c=500, info_idx=i))
+    assert b.target_power > 0
+
+
+def test_steering_uses_the_detected_phase_field() -> None:
+    b = _battery(stored_phase="A", phase="C", sum_all_phases=False)
     b._receive_firmware(_reply(a=0, b=0, c=500, info_idx=1))
     b._receive_firmware(_reply(a=0, b=0, c=500, info_idx=2))
     assert b.target_power == 0  # A reads 0: nothing to do, C is ignored

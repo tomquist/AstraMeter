@@ -3,8 +3,9 @@
 The batteries run the firmware's own phase detection
 (:mod:`astrameter.simulator.phase_detection`) against the CT002 emulator over
 real UDP: they start with no stored phase, report ``0``, probe, and must settle
-on the phase the simulated meter has them wired to. This is the baseline the
-harder scenarios build on.
+on the phase the simulated meter has them wired to, in the situations a real
+install puts them in: next to a battery that already steers, behind a meter
+that fails or updates slowly, at low charge, and on a CT003.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from astrameter.simulator.powermeter_sim import PowermeterSimulator
 pytestmark = pytest.mark.esphome_e2e
 
 CT_TYPE = "HME-4"  # what the ESPHome e2e binary announces
+DEVICES = ["HMG-50", "VNSE3-0"]
 
 
 @pytest.fixture(params=["python", "esphome"], autouse=True)
@@ -42,30 +44,59 @@ def _free_udp_port() -> int:
 
 
 class _Harness:
-    """Batteries, a three-phase meter and the emulator, on a mock clock."""
+    """Batteries, a three-phase meter and the emulator, on a mock clock.
 
-    def __init__(self, batteries: list[dict], base_load: list[float]) -> None:
+    Each battery spec is passed to :class:`BatterySimulator`, except
+    ``boot_at``: the battery stays silent until the clock has run that many
+    seconds. ``meter_ok`` makes the meter fail (the Python emulator's
+    ``before_send`` raises; the ESPHome sensor goes stale), ``meter_period``
+    makes it deliver a new reading only every so many seconds, and
+    ``total_only`` makes it report the three-phase total on phase A, as a
+    meter without per-phase values does.
+    """
+
+    def __init__(
+        self,
+        batteries: list[dict],
+        base_load: list[float],
+        *,
+        ct_type: str = CT_TYPE,
+        meter_period: float = 0.0,
+        total_only: bool = False,
+    ) -> None:
         self.backend = be.ACTIVE_BACKEND
+        if self.backend == "esphome" and ct_type != CT_TYPE:
+            pytest.skip(f"the ESPHome e2e binary announces {CT_TYPE} only")
         self._esphome = EsphomeSim() if self.backend == "esphome" else None
         port = E2E_UDP_PORT if self._esphome is not None else _free_udp_port()
         self.clock = HarnessClock(
             on_change=self._esphome.set_clock if self._esphome is not None else None
         )
-        self.batteries = [
-            BatterySimulator(
-                ct_mac="000000000000",
-                ct_port=port,
-                ct_dev_type=CT_TYPE,
-                initial_soc=0.8,
-                poll_interval=1.0,
-                startup_delay=0.0,
-                ramp_rate=400.0,
-                min_power_threshold=5.0,
-                phase_detection=True,
-                **spec,
-            )
-            for spec in batteries
-        ]
+        self._t0 = self.clock()
+        self._boot_at: dict[str, float] = {}
+        self.batteries = []
+        for spec in batteries:
+            spec = dict(spec)
+            boot_at = float(spec.pop("boot_at", 0.0))
+            defaults = {
+                "ct_mac": "000000000000",
+                "ct_port": port,
+                "ct_dev_type": ct_type,
+                "initial_soc": 0.8,
+                "poll_interval": 1.0,
+                "startup_delay": 0.0,
+                "ramp_rate": 400.0,
+                "min_power_threshold": 5.0,
+                "phase_detection": True,
+            }
+            b = BatterySimulator(**{**defaults, **spec})
+            self._boot_at[b.mac] = boot_at
+            self.batteries.append(b)
+        self.meter_ok = True
+        self.meter_period = meter_period
+        self.total_only = total_only
+        self._reading: list[float] | None = None
+        self._reading_at = 0.0
         self.load = LoadModel(base_load=base_load, base_noise=0.0, loads=[])
         self.meter = PowermeterSimulator(
             batteries=self.batteries, load_model=self.load, port=0
@@ -74,21 +105,37 @@ class _Harness:
         if self._esphome is None:
             self.ct002 = CT002(
                 udp_port=port,
-                ct_type=CT_TYPE,
+                ct_type=ct_type,
                 active_control=True,
                 clock=self.clock,
                 consumer_ttl=100000,
             )
 
             async def before_send(_addr, _request=None, _consumer_id=None):
-                return self.grid()
+                if not self.meter_ok:
+                    raise ValueError("meter unavailable (test)")
+                return self.reading()
 
             self.ct002.before_send = before_send
         self._scheduler = PollScheduler(self.batteries, self.clock, self._step_one)
 
     def grid(self) -> list[float]:
+        """The true per-phase grid power."""
         g = self.meter.compute_grid()
         return [g["phase_a"], g["phase_b"], g["phase_c"]]
+
+    def reading(self) -> list[float]:
+        """What the meter reports: the grid, held for ``meter_period`` and
+        folded onto phase A when ``total_only``."""
+        now = self.clock()
+        if self._reading is None or now - self._reading_at >= self.meter_period:
+            g = self.grid()
+            self._reading = [sum(g), 0.0, 0.0] if self.total_only else g
+            self._reading_at = now
+        return list(self._reading)
+
+    def elapsed(self) -> float:
+        return self.clock() - self._t0
 
     async def start(self) -> None:
         if self.ct002 is not None:
@@ -106,15 +153,30 @@ class _Harness:
             self._esphome.stop()
 
     async def _step_one(self, b: BatterySimulator) -> None:
+        if self.elapsed() < self._boot_at[b.mac]:
+            return
         if self._esphome is None:
             await b.step(b.poll_interval)
             return
         b._advance(b.poll_interval)
-        self._esphome.set_grid(*self.grid())
+        if self.meter_ok:
+            self._esphome.set_grid(*self.reading())
+        else:
+            self._esphome.sensor_stale()
         await b._send_request()
 
     async def step(self, n: int = 1) -> None:
         await self._scheduler.step(n)
+
+    async def run_until_detected(self, max_steps: int = 120) -> None:
+        """Step until no battery is detecting any more (or *max_steps*)."""
+        for _ in range(max_steps):
+            if all(not b.detector.active for b in self.batteries):
+                return
+            await self.step()
+
+    def phases(self) -> list[str]:
+        return [b.reported_phase for b in self.batteries]
 
 
 @pytest.mark.timeout(60)
@@ -137,5 +199,171 @@ async def test_single_battery_detects_its_phase(device: str, wired: str) -> None
         # And it steers from there: the three-phase total is held near zero.
         await h.step(40)
         assert abs(sum(h.grid())) < 30
+    finally:
+        await h.stop()
+
+
+async def _settle_and_check_grid(h: _Harness, steps: int = 60) -> None:
+    """After detection the batteries steer the three-phase total to ~0."""
+    await h.step(steps)
+    assert abs(sum(h.grid())) < 50, h.grid()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize(("steering", "wired"), [("A", "C"), ("C", "B"), ("A", "A")])
+async def test_detects_next_to_a_steering_battery(
+    device: str, steering: str, wired: str
+) -> None:
+    """A battery joins one that already steers, on another phase or its own.
+
+    The steering battery reacts to the newcomer's probe; with a real CT only a
+    battery on the probed phase would.
+    """
+    h = _Harness(
+        [
+            {
+                "mac": "24215EDB1931",
+                "phase": steering,
+                "stored_phase": steering,
+                "meter_dev_type": device,
+            },
+            {
+                "mac": "ACD929A74B20",
+                "phase": wired,
+                "meter_dev_type": device,
+                "boot_at": 30.0,
+            },
+        ],
+        base_load=[400.0, 200.0, 300.0],
+    )
+    await h.start()
+    try:
+        await h.step(30)
+        await h.run_until_detected(300)
+        assert h.phases() == [steering, wired]
+    finally:
+        await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("outage_s", [1, 5])
+async def test_meter_outage_during_probe(device: str, outage_s: int) -> None:
+    """The meter drops out while the battery probes, then comes back."""
+    h = _Harness(
+        [{"mac": "24215EDB1931", "phase": "B", "meter_dev_type": device}],
+        base_load=[300.0, 200.0, 150.0],
+    )
+    await h.start()
+    try:
+        b = h.batteries[0]
+        for _ in range(30):
+            await h.step()
+            if b.detector._probing or not b.detector.active:
+                break
+        assert b.detector._probing, "probe never started"
+        h.meter_ok = False
+        await h.step(outage_s)
+        h.meter_ok = True
+        await h.run_until_detected(400)
+        assert h.phases() == ["B"]
+        await _settle_and_check_grid(h)
+    finally:
+        await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+async def test_meter_not_ready_at_startup(device: str) -> None:
+    """The emulator answers before its meter has delivered anything.
+
+    Phase A carries more than the detection threshold, so a baseline taken
+    from a substitute reading would see A move when the real one arrives.
+    """
+    h = _Harness(
+        [{"mac": "24215EDB1931", "phase": "C", "meter_dev_type": device}],
+        base_load=[700.0, 0.0, 50.0],
+    )
+    h.meter_ok = False
+    await h.start()
+    try:
+        await h.step(5)
+        h.meter_ok = True
+        await h.run_until_detected(400)
+        assert h.phases() == ["C"]
+        await _settle_and_check_grid(h)
+    finally:
+        await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("period", [5.0, 10.0])
+async def test_slow_meter(device: str, period: float) -> None:
+    """A meter that delivers a reading only every few seconds."""
+    h = _Harness(
+        [{"mac": "24215EDB1931", "phase": "B", "meter_dev_type": device}],
+        base_load=[300.0, 200.0, 150.0],
+        meter_period=period,
+    )
+    await h.start()
+    try:
+        await h.run_until_detected(400)
+        assert h.phases() == ["B"]
+    finally:
+        await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+async def test_low_charge_probes_by_charging(device: str) -> None:
+    """At or below 50 % the probe charges instead of discharging."""
+    h = _Harness(
+        [
+            {
+                "mac": "24215EDB1931",
+                "phase": "A",
+                "meter_dev_type": device,
+                "initial_soc": 0.3,
+            }
+        ],
+        base_load=[300.0, 200.0, 150.0],
+    )
+    await h.start()
+    try:
+        b = h.batteries[0]
+        lowest = 0.0
+        for _ in range(400):
+            if not b.detector.active:
+                break
+            await h.step()
+            lowest = min(lowest, b.target_power)
+        assert lowest < 0, "the probe should charge"
+        assert h.phases() == ["A"]
+    finally:
+        await h.stop()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize(("total_only", "expected"), [(False, "B"), (True, "A")])
+async def test_ct003(device: str, total_only: bool, expected: str) -> None:
+    """CT003, with a per-phase meter and with a total-only one.
+
+    A total-only meter puts everything on phase A, so A is what any battery
+    can detect there, wherever it is wired.
+    """
+    h = _Harness(
+        [{"mac": "24215EDB1931", "phase": "B", "meter_dev_type": device}],
+        base_load=[300.0, 200.0, 150.0],
+        ct_type="HME-3",
+        total_only=total_only,
+    )
+    await h.start()
+    try:
+        await h.run_until_detected(400)
+        assert h.phases() == [expected]
+        await _settle_and_check_grid(h)
     finally:
         await h.stop()

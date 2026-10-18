@@ -401,6 +401,16 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
       break;
     }
   }
+  if (!meter_ok && in_inspection_mode) {
+    // A battery detecting its phase compares every reading it accepts with the
+    // baseline it took before probing, so the zero hold would read as a move on
+    // every phase that carried load: an HMG-50 gives up, a Venus can store the
+    // wrong phase (or D). Without a reply it keeps its last real reading and
+    // waits or times out and retries. Mirrors ct002.py _serve.
+    ESP_LOGD(TAG, "Not answering %s during phase detection: meter unavailable",
+             addr_ip.c_str());
+    return;
+  }
   if (!meter_ok) values = {0.0f, 0.0f, 0.0f};
   while (values.size() < 3) values.push_back(0.0f);
   values.resize(3);

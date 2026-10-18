@@ -76,6 +76,7 @@ class BatterySimulator:
         min_channel_output: int = MIN_CHANNEL_OUTPUT_W,
         phase_detection: bool = False,
         stored_phase: str | None = None,
+        sum_all_phases: bool = True,
     ) -> None:
         if phase not in PHASE_FIELD_INDEX:
             raise ValueError(
@@ -140,6 +141,10 @@ class BatterySimulator:
             if phase_detection
             else None
         )
+        # The "sum all phases" setting (``dchrg_t``; HMG-50 config +0x71,
+        # VNSE3-0 0x200174f0+0x67): the factory default 1 steers on the total,
+        # 0 on the battery's own phase. Only read with phase detection on.
+        self.sum_all_phases = sum_all_phases
         # BMS gate flags the detector checks (inferred meaning, see
         # :mod:`phase_detection`).
         self.charge_allowed = True
@@ -513,9 +518,15 @@ class BatterySimulator:
             self._steer_firmware(fields)
 
     def _steer_firmware(self, fields: list[str]) -> None:
-        """Steer on the reading the stored phase selects: the phase's own power
-        field for A/B/C, ``total_power`` for D (HMG-50 0x0802330c, VNSE3-0
-        0x0802e954)."""
+        """Steer on the reading the firmware selects (HMG-50 0x080232c8,
+        VNSE3-0 0x0802e954).
+
+        With "sum all phases" set — the factory default, ``dchrg_t`` = 1 — the
+        battery steers on ``total_power`` and divides it by the sum of all four
+        ``*_chrg_nb`` counts (bucket select, HMG-50 0x080055ea). Without it, it
+        steers on its own phase's power field and count, or the total and
+        ``ABC_chrg_nb`` for phase D.
+        """
         assert self._detector is not None
         phase = self._detector.phase
 
@@ -525,8 +536,13 @@ class BatterySimulator:
             except (IndexError, ValueError):
                 return 0
 
-        # Power: A/B/C_phase_power or total_power; count: A/B/C_chrg_nb or
-        # ABC_chrg_nb (bucket select at HMG-50 0x0800556c).
+        if self.sum_all_phases:
+            self._handle_ct_response(
+                fields,
+                grid_reading=field(7),
+                phase_count=sum(field(i) for i in range(8, 12)),
+            )
+            return
         self._handle_ct_response(
             fields,
             grid_reading=field(3 + phase if phase < 4 else 7),

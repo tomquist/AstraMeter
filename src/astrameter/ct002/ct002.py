@@ -1511,6 +1511,21 @@ class CT002:
             self.set_consumer_value(consumer_id, updated)
 
         raw_values, values, meter_failed = self._resolve_target(request, meter_failed)
+        if meter_failed and request.in_inspection_mode:
+            # A battery detecting its phase compares every reading it accepts
+            # with the baseline it took before probing, so the zero hold would
+            # read as a move on every phase that carried load: an HMG-50 gives
+            # up, a Venus can store the wrong phase (or D). Without a reply it
+            # keeps its last real reading and simply waits or times out and
+            # retries (docs/ct002-ct003-protocol.md, "Battery-side phase
+            # detection").
+            logger.debug(
+                "CT002 not answering %s during phase detection: meter unavailable",
+                request.addr,
+            )
+            self._last_meter_failed = True
+            self._rev += 1
+            return
         if not request.in_inspection_mode:
             self._record_instructed_power(request, values)
 
@@ -1568,10 +1583,11 @@ class CT002:
         On a meter failure the target is a literal ``[0, 0, 0]`` *hold*, not a
         reading: the CT002 instruction is a delta
         (``new_target = current_power + grid_field``), so re-issuing one derived
-        from a frozen reading winds the battery up in active control, and feeds
-        frozen per-phase values into a phase self-diagnosis in inspection mode
-        (issue #403).  The ESPHome component does the same when its sensor ages
-        out (see esphome/components/ct002/ct002.cpp).
+        from a frozen reading winds the battery up in active control (issue
+        #403).  A battery detecting its phase gets neither: :meth:`_serve` does
+        not answer it, since it would read the hold as a move.  The ESPHome
+        component does the same when its sensor ages out (see
+        esphome/components/ct002/ct002.cpp).
         """
         values: list[float] = [0.0, 0.0, 0.0]
         stored = None if meter_failed else self._get_consumer_value(request.consumer_id)
