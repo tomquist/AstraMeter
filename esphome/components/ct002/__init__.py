@@ -1001,9 +1001,9 @@ CONFIG_SCHEMA = cv.All(
             ): cv.positive_time_period_milliseconds,
             # Fixed TTL after which a silent consumer is evicted. Unset
             # (default) = adaptive eviction (~2 missed poll cycles per
-            # consumer, like the real CT), matching Python's consumer_ttl
-            # default. Set a fixed value if your network has long polling
-            # gaps.
+            # consumer; the real CT waits 30-60 s), matching Python's
+            # consumer_ttl default. Set a fixed value if your network has long
+            # polling gaps.
             cv.Optional(CONF_CONSUMER_TTL): cv.positive_time_period_seconds,
             # Drop repeat polls from the same battery within this window.
             # 0 (default) disables dedup, matching Python's

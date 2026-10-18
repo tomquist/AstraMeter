@@ -145,7 +145,7 @@ class CtSettings:
     udp_port: int = DEFAULT_CT_UDP_PORT
     wifi_rssi: int = -50
     dedupe_time_window: float = 0.0
-    #: ``None`` = adaptive eviction (~2 missed poll cycles, like the real CT).
+    #: ``None`` = adaptive eviction (~2 missed poll cycles; the real CT waits 30-60 s).
     consumer_ttl: int | None = None
     debug_status: bool = False
     # Opt-in HTTP cloud reporting (hamedata.com).

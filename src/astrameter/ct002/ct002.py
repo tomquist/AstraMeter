@@ -82,9 +82,11 @@ PEAKSHAVING_IDLE_BAND_W = 100.0
 # (phase "D") reporters.
 PHASE_BUCKETS = ("x", "A", "B", "C", "ABC")
 
-# Default eviction policy (``consumer_ttl=None``): the real CT clears a slave
-# slot that missed roughly 1-2 of its own poll cycles, so by default a
-# consumer expires after missing ~2 cycles of its observed cadence.  The floor
+# Default eviction policy (``consumer_ttl=None``): a consumer expires after
+# missing ~2 cycles of its observed cadence.  That is much stricter than the
+# real CT, which keeps a silent battery's slot for 30-60 s (it ages slots in
+# 30 s steps, docs/ct002-ct003-protocol.md); issue #462 chose it while the CT
+# was still believed to evict after ~1-2 polls.  The floor
 # keeps a transient EMA dip (e.g. a burst of retransmits) from evicting a live
 # battery, and the fallback covers a consumer whose cadence is still unknown
 # (only one poll seen).  Issue #462.
@@ -454,7 +456,7 @@ class CT002:
         wifi_rssi: int = -50,
         dedupe_time_window: float = 0.0,
         # None (default) = adaptive eviction: a consumer expires after missing
-        # ~2 of its own poll cycles, like the real CT.  A number = fixed TTL
+        # ~2 of its own poll cycles (the real CT waits 30-60 s).  A number = fixed TTL
         # in seconds (set CONSUMER_TTL to get this).
         consumer_ttl: int | None = None,
         debug_status: bool = False,
@@ -799,8 +801,8 @@ class CT002:
         """Seconds of silence after which *consumer* counts as gone.
 
         A configured ``consumer_ttl`` is used verbatim; otherwise the TTL
-        adapts to the consumer's observed poll cadence (~2 missed cycles,
-        like the real CT — see the ADAPTIVE_TTL_* constants).
+        adapts to the consumer's observed poll cadence (~2 missed cycles —
+        see the ADAPTIVE_TTL_* constants).
         """
         if self.consumer_ttl is not None:
             return float(self.consumer_ttl)
@@ -972,10 +974,11 @@ class CT002:
             # the forwarded count.
             if not consumer.participates:
                 continue
-            # The real CT clears a slot that missed ~1-2 poll cycles before
-            # aggregating, so a battery that drops off the network stops being
-            # counted almost immediately.  Mirror that per response here; the
-            # cleanup loop removes the entry shortly after (issue #462).
+            # Skip a consumer past its TTL per response, so a battery that
+            # drops off the network stops being counted at poll granularity
+            # rather than at the next cleanup pass, which removes the entry
+            # shortly after (issue #462).  The real CT is slower here: it
+            # ages its slots in 30 s steps.
             if self._consumer_expired(consumer, now):
                 continue
             bucket = _bucket_for_phase(consumer.phase)

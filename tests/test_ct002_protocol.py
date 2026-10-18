@@ -779,7 +779,7 @@ class _StepClock:
 
 def test_adaptive_ttl_evicts_after_two_missed_poll_cycles() -> None:
     """Default (consumer_ttl=None): a consumer expires after missing ~2 of
-    its own poll cycles, like the real CT."""
+    its own poll cycles."""
     clock = _StepClock()
     device = CT002(clock=clock)
     device._update_consumer_report("a", "A", 100)
