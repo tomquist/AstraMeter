@@ -23,8 +23,7 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="session")
-def mqtt_broker() -> Iterator[int]:
+def _run_mosquitto(extra_config: str = "") -> Iterator[int]:
     if shutil.which("mosquitto") is None:
         pytest.skip("mosquitto not installed")
     port = find_free_port()
@@ -32,6 +31,7 @@ def mqtt_broker() -> Iterator[int]:
     config_path = Path(tmpdir) / "mosquitto.conf"
     config_path.write_text(
         f"listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\n"
+        + extra_config
     )
     proc = subprocess.Popen(
         ["mosquitto", "-c", str(config_path)],
@@ -59,3 +59,14 @@ def mqtt_broker() -> Iterator[int]:
         proc.kill()
         proc.wait()
     shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def mqtt_broker() -> Iterator[int]:
+    yield from _run_mosquitto()
+
+
+@pytest.fixture(scope="session")
+def strict_mqtt_broker() -> Iterator[int]:
+    """A broker that refuses an empty client identifier, as some setups do."""
+    yield from _run_mosquitto("allow_zero_length_clientid false\n")

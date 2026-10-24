@@ -1,3 +1,4 @@
+import functools
 import json
 import logging
 from typing import Any
@@ -13,8 +14,16 @@ from .http_client import HttpPowermeter
 logger = logging.getLogger("astrameter")
 
 
+@functools.lru_cache(maxsize=64)
+def _compile(path: str) -> Any:
+    """*path* parsed once. jsonpath-ng builds a fresh PLY parser per ``parse``
+    call (~10 ms and ~0.5 MiB of short-lived objects), far too much to repeat
+    for every reading of every phase."""
+    return parse(path)
+
+
 def extract_json_value(data: Any, path: str) -> float:
-    match = parse(path).find(data)
+    match = _compile(path).find(data)
     if not match:
         raise ValueError("No match found for the JSON path")
     value = match[0].value

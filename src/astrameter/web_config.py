@@ -14,8 +14,6 @@ import tempfile
 import threading
 from collections import OrderedDict
 
-from configupdater import ConfigUpdater
-
 from astrameter.config.config_loader import (
     new_config_parser,
     read_all_powermeter_configs,
@@ -166,6 +164,9 @@ def write_config_from_dict(config_path: str, sections: dict, order: list) -> Non
     _validate_config_payload(sections, order)
     write_order = list(order) + [s for s in sections if s not in order]
 
+    # Loaded on the first save only: most processes never write the file.
+    from configupdater import ConfigUpdater
+
     with _CONFIG_WRITE_LOCK:
         updater = ConfigUpdater()
         updater.optionxform = str  # type: ignore[assignment]  # preserve key case
@@ -278,6 +279,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "CONSUMER_TTL": {"type": "integer"},
         "DEBUG_STATUS": {"type": "boolean"},
         "ACTIVE_CONTROL": {"type": "boolean"},
+        "PEAKSHAVING_THRESHOLD": {"type": "float", "min": 0, "max": 10000},
         "FAIR_DISTRIBUTION": {"type": "boolean"},
         "BALANCE_GAIN": {"type": "float"},
         "BALANCE_DEADBAND": {"type": "integer"},
@@ -370,6 +372,7 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         PORT={"type": "integer"},
         SERIAL_NUMBER={"type": "integer"},
     ),
+    "MARSTEK_METER": _pm(POLL_INTERVAL={"type": "float"}),
     "FRITZ": _pm(
         PASSWORD={"type": "password"},
         HTTPS={"type": "boolean"},

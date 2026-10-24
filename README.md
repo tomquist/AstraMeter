@@ -32,17 +32,15 @@ net-zero grid exchange.
 
 It does this by emulating one or more of these devices:
 
-- **CT002 / CT003** (Marstek's native CT protocol) — use this for **multiple**
-  storage devices. It coordinates one shared target across the whole fleet.
+- **CT002 / CT003** (Marstek's native CT protocol) — recommended. AstraMeter
+  gives each storage device its own target and shares the load between them.
 - **Shelly Pro 3EM** — uses port 1010 (B2500 firmware up to v224) and port 2220
   (B2500 firmware v226+). To pick one port, use `shellypro3em_old` (1010) or
   `shellypro3em_new` (2220).
 - **Shelly EM gen3**
 - **Shelly Pro EM50**
 
-> **Which device type?** Use **CT002**/**CT003** when you steer **multiple**
-> storage devices. Otherwise use a **Shelly** type (`shellypro3em`,
-> `shellyemg3`, `shellyproem50`, …). See
+> **Which device type?** Use **CT002**/**CT003**. See
 > [CT002 / CT003 steering](docs/ct002.md) and the
 > [Configuration reference](docs/configuration.md).
 
@@ -79,8 +77,8 @@ component, see **[docs/esphome-powermeters.md](docs/esphome-powermeters.md)**.
 
 Supported sources include: Shelly, Tasmota, Shrdzm, Emlog, ioBroker, Home
 Assistant, VZLogger, ESPHome (Http-Polling or native API), AMIS Reader, Modbus (TCP/UDP), MQTT, JSON HTTP, TQ
-Energy Manager, HomeWizard, Enphase Envoy, SMA Energy Meter, FRITZ!Smart Energy
-250, Fronius Smart Meter, Refoss / Meross energy monitors, Tibber Pulse, Script,
+Energy Manager, HomeWizard, Enphase Envoy, SMA Energy Meter, Marstek CT002 /
+CT003, FRITZ!Smart Energy 250, Fronius Smart Meter, Refoss / Meross energy monitors, Tibber Pulse, Script,
 and SML.
 
 ## Configuration
@@ -94,8 +92,8 @@ then read the reference docs as needed:
 - **[Powermeter sources](docs/powermeters.md)** — the `config.ini` section for
   each supported meter.
 - **[CT002 / CT003 steering](docs/ct002.md)** — the CT emulator, active control,
-  multi-battery balancing, efficiency optimization, and Marstek cloud
-  registration.
+  peak shaving, multi-battery balancing, efficiency optimization, and Marstek
+  cloud registration.
 - **[Live status dashboard](docs/dashboard.md)** — the built-in web UI. It shows
   live grid and per-battery state, and lets you edit your configuration in the
   browser. It is on by default in the Home Assistant add-on and in Docker or

@@ -135,6 +135,8 @@ export interface DeviceStatus {
   started_at?: string;
   control?: {
     active_control?: boolean;
+    /** Peak shaving threshold in W; 0 means off. */
+    peakshaving_threshold_w?: number;
     consumer_ttl_s?: number;
     dedupe_window_s?: number;
     debug_status?: boolean;
@@ -155,12 +157,16 @@ export interface DeviceStatus {
   orphan_overrides?: Record<string, any>[];
   // Shelly only. A Shelly emulator steers nothing, so its batteries carry
   // liveness rather than power: it serves the meter reading and they poll it.
+  // The Pro 3EM listens on two ports, one per battery firmware generation.
+  udp_ports?: number[];
   batteries?: ShellyBatteryStatus[];
   inactive_timeout_s?: number;
 }
 
 export interface ShellyBatteryStatus {
   ip?: string;
+  /** The port its last poll arrived on. */
+  udp_port?: number;
   last_seen_at?: string;
   last_seen_age_s?: number;
   poll_interval_s?: number;

@@ -181,6 +181,8 @@ declarative, so you rarely touch `ts/generate.ts`:
 
 - per-meter ESP warning → `esphome.warn` (string, or `(f) => string|null`)
 - HTTP request headers → `esphome.headersField: "FIELD_KEY"`
+- HTTP basic auth → `esphome.basicAuthFields: ["USER_KEY", "PASS_KEY"]`
+- a JSONPath field read in place of `lambda1`/`lambda3` → `esphome.jsonPathsField: "FIELD_KEY"`
 - a `homeassistant`-kind source that names its own entity → `esphome.haEntity: (f) => "sensor.x"`
 - MQTT 3-phase key renames → top-level `phaseListKeys: { topic, jsonPath }`
 

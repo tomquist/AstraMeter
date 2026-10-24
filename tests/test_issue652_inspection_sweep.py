@@ -1,8 +1,9 @@
 """Regression for issue #652 — a Hampel-filtered CT sits out the sweep.
 
 A Venus on firmware 1.50 re-runs its CT inspection every ~35 minutes: it polls
-with phase ``'0'``, takes itself off the CT and sweeps its own output to nearly
-full discharge and then nearly full charge, watching the CT reading follow.
+with phase ``'0'``, takes itself off the CT and steps its own output by up to
+2000 W in one direction, watching which phase of the CT reading follows (see
+"Battery-side phase detection" in ``docs/ct002-ct003-protocol.md``).
 
 With ``HAMPEL_WINDOW`` set, the reporter's log showed the emulator answering
 that whole sweep with the *frozen* pre-sweep reading (+34 W while the house was

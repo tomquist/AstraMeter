@@ -13,6 +13,16 @@ inline constexpr uint8_t STX = 0x02;
 inline constexpr uint8_t ETX = 0x03;
 inline constexpr char SEPARATOR = '|';
 
+// The battery MAC prefix AstraMeter's [MARSTEK_METER] reader announces when it
+// polls a real CT. The emulator drops every request carrying it, so a reader
+// never reads values derived from its own readings. Mirrors READER_MAC_PREFIX
+// in src/astrameter/ct002/protocol.py.
+inline constexpr const char *READER_MAC_PREFIX = "02a57e";
+
+// Whether `mac` is the battery MAC of an AstraMeter meter reader
+// (case-insensitive prefix match). Mirrors protocol.py is_reader_mac.
+bool is_reader_mac(const std::string &mac);
+
 // Indexed by ResponseField; the C++ port keeps the label list in the same
 // order as the Python source so cross-talk and balancer code that uses
 // positional access (e.g. response[15] = A_chrg_power) maps 1:1.

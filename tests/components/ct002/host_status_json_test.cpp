@@ -55,6 +55,7 @@ StatusDocument sample() {
   device.running = true;
   device.started_at = 1717232339.0;
   device.active_control = true;
+  device.peakshaving_threshold = 2500.0f;
   device.dedupe_window_s = 0.25f;
   device.grid = std::array<float, 3>{12.0f, 0.0f, -3.5f};
   device.grid_total_w = 8.5f;
@@ -186,6 +187,8 @@ TEST(StatusJson, CarriesTheDeviceAndItsGrid) {
   EXPECT_TRUE(contains(json, "\"l3_w\":-3.5"));
   EXPECT_TRUE(contains(json, "\"grid_total_w\":8.5"));
   EXPECT_TRUE(contains(json, "\"sample_at\":\"2024-06-01T09:59:59+00:00\""));
+  // Same name and unit as the Python document's control block.
+  EXPECT_TRUE(contains(json, "\"active_control\":true,\"peakshaving_threshold_w\":2500"));
 }
 
 TEST(StatusJson, NamesEveryPhaseBucket) {

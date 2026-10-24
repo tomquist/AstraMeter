@@ -203,6 +203,7 @@ const HA_ADDON_METER_FIELDS = new Set([
 // the Home Assistant target.
 const HA_ADDON_CT_FIELDS = new Set([
   "CT_MAC",
+  "PEAKSHAVING_THRESHOLD",
   "MIN_EFFICIENT_POWER",
   "EFFICIENCY_ROTATION_INTERVAL",
   "CLOUD_REPORTING",
@@ -320,7 +321,7 @@ function deviceCard(): HTMLElement {
   // (user-controlled) is used only as a membership filter, not rendered.
   const selectedHelp = DEVICE_TYPES.filter((d) => g.deviceTypes.includes(d.value)).map((d) => el("li", { html: `<strong>${d.label}:</strong> ${d.help}` }));
 
-  return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. Two or more batteries that should share load → keep CT002. A single battery → Shelly Pro 3EM works too.", [
+  return card(2, "Which meter should AstraMeter pretend to be?", "Your battery talks to a power meter it trusts. AstraMeter impersonates one. Keep CT002.", [
     el("div", { class: "pill-row" }, typeButtons),
     el("ul", { class: "pill-help" }, selectedHelp),
     el("details", { class: "adv" }, [

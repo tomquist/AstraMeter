@@ -44,6 +44,7 @@ status::DeviceStatus CT002Component::status_snapshot(double wall_now) const {
   out.running = this->socket_ != nullptr;
   out.started_at = wall_time_for(wall_now, static_cast<double>(::esphome::millis()) / 1000.0);
   out.active_control = this->active_control_;
+  out.peakshaving_threshold = this->peakshaving_threshold_;
   out.consumer_ttl_s = this->consumer_ttl_seconds_;
   out.dedupe_window_s = static_cast<float>(this->dedupe_window_ms_) / 1000.0f;
 
@@ -215,6 +216,9 @@ bool apply_device_control(CT002Component *ct002, const std::string &field,
                           const controls::ControlValue &value) {
   if (field == "active_control") {
     ct002->set_active_control(value.is_bool ? value.flag : value.number != 0.0f);
+  } else if (field == "peakshaving_threshold") {
+    if (value.is_bool) return false;
+    ct002->set_peakshaving_threshold(value.number);
   } else if (field == "force_rotation") {
     ct002->force_balancer_rotation();
   } else {

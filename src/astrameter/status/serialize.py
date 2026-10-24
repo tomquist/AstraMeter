@@ -332,6 +332,9 @@ def ct002_to_wire(device: CT002Snapshot) -> dict[str, Any]:
             "control": compact(
                 {
                     "active_control": device.active_control,
+                    "peakshaving_threshold_w": round_or_none(
+                        device.peakshaving_threshold
+                    ),
                     "consumer_ttl_s": device.consumer_ttl,
                     "dedupe_window_s": round_or_none(device.dedupe_window),
                     "debug_status": device.debug_status,
@@ -389,7 +392,7 @@ def shelly_to_wire(device: ShellySnapshot) -> dict[str, Any]:
             "kind": "shelly",
             "device_id": device.device_id or None,
             "device_type": device.device_type or None,
-            "udp_port": device.udp_port,
+            "udp_ports": list(device.udp_ports),
             "running": device.running,
             "started_at": iso(device.started_at),
             "inactive_timeout_s": device.inactive_timeout,
@@ -397,6 +400,7 @@ def shelly_to_wire(device: ShellySnapshot) -> dict[str, Any]:
                 compact(
                     {
                         "ip": battery.ip,
+                        "udp_port": battery.udp_port,
                         "last_seen_at": iso(battery.last_seen_at),
                         "last_seen_age_s": round_or_none(battery.last_seen_age),
                         "poll_interval_s": round_or_none(battery.poll_interval),

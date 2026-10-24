@@ -9,6 +9,19 @@ STX = 0x02
 ETX = 0x03
 SEPARATOR = "|"
 
+# The battery MAC prefix AstraMeter's own [MARSTEK_METER] reader announces when
+# it polls a real CT: locally administered, so no Marstek device uses it.  The
+# emulator drops every request carrying it, so a reader pointed at an
+# AstraMeter (this one or another) never reads values derived from its own
+# readings.
+READER_MAC_PREFIX = "02a57e"
+
+
+def is_reader_mac(mac: str) -> bool:
+    """Whether *mac* is the battery MAC of an AstraMeter meter reader."""
+    return mac.lower().startswith(READER_MAC_PREFIX)
+
+
 RESPONSE_LABELS = [
     "meter_dev_type",
     "meter_mac_code",

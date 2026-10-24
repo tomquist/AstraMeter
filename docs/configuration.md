@@ -33,9 +33,9 @@ that apply to the whole app and to every powermeter. For one specific area, see:
 
 ```ini
 [GENERAL]
-# Use ct002/ct003 for multiple storage devices; use shelly* types otherwise.
+# Use ct002/ct003.
 # Comma-separated list of device types to emulate (ct002, ct003, shellypro3em, shellyemg3, shellyproem50, shellypro3em_old, shellypro3em_new)
-DEVICE_TYPE = shellypro3em
+DEVICE_TYPE = ct002
 # Optional: comma-separated device IDs, same order as DEVICE_TYPE (auto-generated if omitted). Use for stable IDs across reinstalls or to match an existing device.
 #DEVICE_IDS = shellypro3em-c59b15461a21
 # Skip initial powermeter test on startup

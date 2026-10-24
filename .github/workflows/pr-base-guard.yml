@@ -1,18 +1,17 @@
 name: PR base guard
 
-# Retargets feature work opened against `main` onto `develop` (CONTRIBUTING.md
-# explains why they land there in the first place).
-#
-# `pull_request_target`, not `pull_request`, because fork pull requests get a
-# read-only token and could not retarget themselves. It only calls the API —
-# the PR's code is never checked out.
+# Retargets external feature work opened against main onto develop, then checks
+# that every PR into develop is free of main-only release history. The workflow
+# uses pull_request_target so its code always comes from the trusted default
+# branch; contributor code is fetched only as Git objects and never executed.
 
 on:
   pull_request_target:
     types: [opened, reopened, edited, synchronize]
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
+  contents: read
   pull-requests: write
 
 concurrency:
@@ -20,23 +19,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  base-branch:
+  base-and-history:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v8
+      - name: Retarget external feature work
+        id: policy
+        uses: actions/github-script@v8
         with:
           script: |
             const pr = context.payload.pull_request;
+            const target = 'develop';
 
-            // Maintainers target main deliberately — release merges, hotfixes,
+            if (pr.base.ref !== 'main') {
+              core.setOutput('check-history', 'true');
+              return;
+            }
+
+            // Maintainers target main deliberately for releases, hotfixes and
             // repairs to CI that only take effect on the default branch.
             const maintainer = ['OWNER', 'MEMBER', 'COLLABORATOR'];
             if (maintainer.includes(pr.author_association)) {
               core.info(`Opened by ${pr.author_association} — base left alone.`);
+              core.setOutput('check-history', 'false');
               return;
             }
 
-            const target = 'develop';
             core.info(`Retargeting #${pr.number} from main onto ${target}.`);
             try {
               await github.rest.pulls.update({
@@ -58,6 +65,7 @@ jobs:
                   'button next to the pull request title.',
                 ].join('\n'),
               });
+              core.setOutput('check-history', 'false');
               core.setFailed(`Could not retarget onto ${target}: ${error.message}`);
               return;
             }
@@ -70,15 +78,56 @@ jobs:
                 'lands — `main` only ever receives releases, and GitHub offers it ' +
                 'as the base by default, so this is nothing you did wrong.',
                 '',
-                'If you branched off `main`, the diff above now carries commits ' +
-                `that are not yours. Please rebase onto \`${target}\`:`,
-                '',
-                '```sh',
-                'git fetch origin',
-                `git rebase --onto origin/${target} origin/main`,
-                'git push --force-with-lease',
-                '```',
-                '',
-                'If you branched off `develop` to begin with, there is nothing to do.',
+                'If you branched off `main`, the history check below explains how ' +
+                `to rebase your own commits onto \`${target}\`.`,
               ].join('\n'),
             });
+            core.setOutput('check-history', 'true');
+
+      - name: Checkout trusted default branch
+        if: steps.policy.outputs.check-history == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch and verify immutable PR history
+        if: steps.policy.outputs.check-history == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            +refs/heads/develop:refs/remotes/origin/develop
+          git fetch --no-tags origin \
+            "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+
+          actual_head=$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head")
+          if [ "$actual_head" != "$EXPECTED_HEAD" ]; then
+            echo "::error::PR head changed while the history guard was starting; rerun the check."
+            exit 1
+          fi
+
+      - name: Reject main-only history
+        if: steps.policy.outputs.check-history == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          scripts/check_pr_history.sh \
+            "$HEAD_SHA" \
+            origin/develop \
+            origin/main \
+            "$HEAD_REF" \
+            "$HEAD_REPO" \
+            "$BASE_REPO" \
+            "$AUTHOR_LOGIN" \
+            "$AUTHOR_TYPE" \
+            "$AUTHOR_ASSOCIATION"

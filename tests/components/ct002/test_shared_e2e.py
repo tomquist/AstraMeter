@@ -150,6 +150,9 @@ class PythonBackend:
         # binary's `cfg consumer_ttl` control command (-1 = adaptive).
         self.ct002.consumer_ttl = seconds
 
+    def set_peakshaving_threshold(self, watts: float) -> None:
+        self.ct002.set_peakshaving_threshold(float(watts))
+
     def set_manual_target(self, cid: str, value: float) -> None:
         self.ct002.set_consumer_manual_target(cid, value)
 
@@ -222,6 +225,10 @@ class EsphomeBackend:
 
     def set_consumer_ttl(self, seconds: float | None) -> None:
         self._cmd(f"cfg consumer_ttl {-1 if seconds is None else seconds}")
+
+    def set_peakshaving_threshold(self, watts: float) -> None:
+        reply = self.control("peakshaving_threshold", watts)
+        assert reply.startswith("ok"), f"threshold write failed: {reply!r}"
 
     def set_manual_target(self, cid: str, value: float) -> None:
         self._cmd(f"set_manual_target {cid} {value}")
@@ -680,6 +687,21 @@ def test_inspection_reporter_lands_in_x_bucket(backend: Backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
+def test_ignores_astrameter_meter_reader(backend: Backend) -> None:
+    """A poll from AstraMeter's own [MARSTEK_METER] reader (battery MAC prefix
+    02a57e) gets no reply on either stack, so a reader pointed at an emulator
+    never reads values derived from its own readings."""
+    backend.set_clock(16500)
+    backend.set_grid(300)
+    assert backend.poll("02A57E123456", "0", 0) is None, (
+        f"[{backend.name}] answered AstraMeter's own meter reader"
+    )
+    assert backend.poll("B9B9B9B9B9B9", "A", 0) is not None, (
+        f"[{backend.name}] no response to an ordinary battery"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
 def test_combined_phase_d_lands_in_abc_bucket(backend: Backend) -> None:
     """A combined-mode (phase 'D') reporter populates the ABC bucket and
     ABC_chrg_nb instead of phase A (issue #460)."""
@@ -794,6 +816,66 @@ def test_manual_target_does_not_auto_enter_manual_mode(backend: Backend) -> None
     assert backend.dump()[cid]["manual_enabled"] is True
 
 
+@pytest.mark.timeout(30, func_only=True)
+def test_peakshaving_leaves_unsteered_batteries_alone(backend: Backend) -> None:
+    """Under the peak shaving threshold the steered battery holds at zero,
+    even while a battery on a manual target discharges: the manual one's
+    output lowers demand like solar, and is never cancelled out by charging
+    the steered one from the grid.  Above the threshold only the excess is
+    asked for."""
+    backend.set_clock(3000)
+    backend.set_active_control(True)
+    backend.set_peakshaving_threshold(500)
+
+    manual = "112233445500"
+    backend.set_grid(100)  # house 400 W, the manual battery covers 300 W
+    assert backend.poll(manual.upper(), "A", 300) is not None
+    backend.set_manual_target(manual, 300.0)
+    backend.set_auto_target(manual, False)
+
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("AABBCCDDEEFF", "A", 0)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == 0, (
+        f"[{backend.name}] steered battery should hold at 0 under the "
+        f"threshold, got {r[4]}"
+    )
+
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    backend.set_grid(900)  # 400 W above the threshold
+    r = backend.poll("AABBCCDDEEFF", "A", 0)
+    assert r is not None, f"[{backend.name}] no response"
+    assert 0 < int(r[4]) <= 400, (
+        f"[{backend.name}] only the excess over the threshold should be "
+        f"asked for, got {r[4]}"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
+def test_peakshaving_idles_each_battery_on_its_own(backend: Backend) -> None:
+    """Under the threshold, a pair left trading power (one charging from the
+    other) is wound to 0 W battery by battery, not handed shares of a
+    correction that nets to nothing."""
+    backend.set_clock(4000)
+    backend.set_active_control(True)
+    backend.set_peakshaving_threshold(500)
+    backend.set_grid(110)  # house 100 W plus the pair's net 10 W charge
+
+    assert backend.poll("112233445500", "A", -30) is not None
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("AABBCCDDEEFF", "A", 20)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == -20, (
+        f"[{backend.name}] the discharging unit should wind to 0, got {r[4]}"
+    )
+    backend.advance_clock(DEDUPE_WINDOW_S + 5)
+    r = backend.poll("112233445500", "A", -30)
+    assert r is not None, f"[{backend.name}] no response"
+    assert int(r[4]) == 30, (
+        f"[{backend.name}] the charging unit should wind to 0, got {r[4]}"
+    )
+
+
 # ── Direct dual-backend wire comparison ────────────────────────────────────
 #
 # The strongest parity guard: drive the *same* randomized poll sequence
@@ -890,7 +972,8 @@ def test_python_esphome_wire_identical() -> None:
 @pytest.mark.timeout(60, func_only=True)
 def test_meter_unavailable_zero_delta_parity() -> None:
     """Both stacks respond with a zero-delta hold when the grid meter is
-    unavailable (issue #403).
+    unavailable (issue #403), and do not answer a battery that is detecting
+    its phase at all: it would read the hold as a move.
 
     Python's powermeter hook raises (the HomeAssistant/HomeWizard staleness
     error); ESPHome's sensor is back-dated past its freshness window so
@@ -943,6 +1026,12 @@ def test_meter_unavailable_zero_delta_parity() -> None:
 
                 r_py = py.poll(mac, phase, reported)
                 r_esp = esp.poll(mac, phase, reported)
+                if phase == "0":
+                    assert r_py is None and r_esp is None, (
+                        f"step {step}: a stack answered a phase-detecting "
+                        f"battery (python={r_py}, esphome={r_esp})"
+                    )
+                    continue
                 assert r_py is not None and r_esp is not None, (
                     f"step {step}: a stack failed to answer "
                     f"(python={r_py is not None}, esphome={r_esp is not None})"

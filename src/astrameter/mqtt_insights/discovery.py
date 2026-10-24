@@ -6,7 +6,10 @@ import re
 from functools import partial
 
 from astrameter.ct002.balancer import CONTROL_QUALITY_STATES, _needs_dc_output_floor
-from astrameter.ct002.controls import CONSUMER_CONTROLS_BY_FIELD
+from astrameter.ct002.controls import (
+    CONSUMER_CONTROLS_BY_FIELD,
+    PEAKSHAVING_THRESHOLD_MAX,
+)
 from astrameter.version_info import get_git_commit_sha
 
 from .topics import (
@@ -541,6 +544,23 @@ def build_ct002_device_discovery(
             "payload_off": "OFF",
             "state_on": "True",
             "state_off": "False",
+            "retain": True,
+            "entity_category": "config",
+        },
+        "peakshaving_threshold": {
+            "platform": "number",
+            "unique_id": f"{uid_prefix}_peakshaving_threshold",
+            "name": "Peak Shaving Threshold",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0,
+            "max": int(PEAKSHAVING_THRESHOLD_MAX),
+            "step": 50,
+            "mode": "box",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.peakshaving_threshold | default(0) }}",
+            "command_topic": device_command_topic(base_topic, device_id),
+            "command_template": '{"peakshaving_threshold": {{ value }}}',
             "retain": True,
             "entity_category": "config",
         },

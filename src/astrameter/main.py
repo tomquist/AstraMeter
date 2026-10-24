@@ -132,6 +132,7 @@ def _build_ct002(
         consumer_ttl=ct.consumer_ttl,
         debug_status=debug_status,
         active_control=ct.active_control,
+        peakshaving_threshold=ct.peakshaving_threshold,
         balancer=_balancer_config(ct),
         saturation_detection=ct.saturation_detection,
         saturation_alpha=ct.saturation_alpha,
@@ -229,16 +230,16 @@ def _build_device(
 
         device.before_send = update_readings
         return device
-    udp_port = (
-        DEVICE_TYPES[device_type].udp_port if device_type in DEVICE_TYPES else None
+    udp_ports = (
+        DEVICE_TYPES[device_type].udp_ports if device_type in DEVICE_TYPES else ()
     )
-    if udp_port is not None:
+    if udp_ports:
         logger.debug("Shelly settings: device id %s, type %s", device_id, device_type)
         return Shelly(
             powermeters=powermeters,
             device_id=device_id,
             device_type=device_type,
-            udp_port=udp_port,
+            udp_ports=udp_ports,
             dedupe_time_window=general.dedupe_time_window,
         )
     raise ValueError(f"Unsupported device type: {device_type}")
@@ -413,7 +414,7 @@ async def run_device(
                 ct,
                 device_id,
                 powermeters,
-                marstek_mac or ct.ct_mac,
+                marstek_mac or device.ct_mac,
                 insights is not None,
                 registry,
             )
@@ -626,12 +627,6 @@ def _resolve_device_config(
             device_ids.append(f"{prefix}-ec4609c439c{len(device_ids) + 1}")
         else:
             device_ids.append(f"device-{len(device_ids) + 1}")
-
-    if "shellypro3em" in device_types:
-        shellypro3em_index = device_types.index("shellypro3em")
-        device_types[shellypro3em_index] = "shellypro3em_old"
-        device_types.append("shellypro3em_new")
-        device_ids.append(device_ids[shellypro3em_index])
 
     ct_ports = [
         config.ct(device_type).udp_port

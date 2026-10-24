@@ -24,3 +24,5 @@ sensor:
 ct002:
   id: ct002_main
   power_sensor_l1: grid_l1
+  # A bound CT, so test_host_e2e.py can check which requests it answers.
+  ct_mac: "112233445566"

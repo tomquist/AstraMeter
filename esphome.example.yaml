@@ -34,7 +34,7 @@ wifi:
   password: !secret wifi_password
 
 external_components:
-  - source: github://tomquist/astrameter@2.3.1
+  - source: github://tomquist/astrameter@2.4.0
     components: [ct002]
 
 # Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
@@ -102,11 +102,14 @@ ct002:
   # wifi_rssi: -50                 # RSSI value reported back in CT002 replies
   # active_control: true           # true → balancer steers batteries to zero;
   #                                # false → forward raw grid readings as-is
+  # peakshaving_threshold: 0       # >0 → batteries only cover net demand
+  #                                # above this many W (capacity tariffs)
   # max_sensor_age: 30s            # treat the input as 0 if no sensor update
   #                                # arrives within this window
   # consumer_ttl: 120s             # fixed eviction window for a silent battery;
   #                                # unset (default) adapts to each battery's
-  #                                # poll rate (~2 missed polls, like the real CT)
+  #                                # poll rate (~2 missed polls; the real CT
+  #                                # waits 30-60s)
   # dedupe_window: 0s              # 0 = off; >0 drops duplicate polls from the
   #                                # same battery within the window
 

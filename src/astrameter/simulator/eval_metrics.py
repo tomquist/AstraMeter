@@ -1,7 +1,12 @@
 """Per-scenario metrics computed from the samples a run records: reaction
 (settle time), oscillation (overshoot, hunting), energy (grid exchange the
 pack could have covered) and the cost regret against a perfect-foresight
-battery, plus the downsampled chart traces stored alongside them."""
+battery, plus the downsampled chart traces stored alongside them.
+
+Every tracking metric measures the grid against the *policy target*: 0 W for
+self-consumption, and under peak shaving the grid the threshold policy asks
+for (see :func:`_policy_target`), so a battery deliberately left idle below
+the threshold is not scored as a tracking error."""
 
 from __future__ import annotations
 
@@ -41,6 +46,9 @@ _MAX_SAMPLE_GAP_S = 5.0
 RETAIL_CT_PER_KWH = 30.0
 FEEDIN_CT_PER_KWH = 8.0
 
+# Capacity tariffs bill the highest mean grid import over any quarter-hour.
+PEAK_WINDOW_S = 900.0
+
 # Points each trace is downsampled to for the charts. Base and head share the
 # count so the two lines align by index regardless of poll cadence.
 GRAPH_POINTS = 1800
@@ -58,13 +66,38 @@ def _percentile(values: Sequence[float], pct: float) -> float:
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def _settle_time(samples: list[_Sample], start: float, end: float) -> float | None:
-    """Seconds from *start* until |grid| stays inside SETTLE_BAND_W for
+def _policy_target(threshold: float, net_w: float) -> float:
+    """The grid (W) the controller is asked to hold for a net house demand.
+
+    0 for self-consumption.  Under peak shaving (*threshold* > 0) the batteries
+    only cover demand above the threshold and charge from surplus, so the grid
+    should carry the demand itself up to the threshold, and nothing on surplus.
+    """
+    if threshold <= 0:
+        return 0.0
+    return min(max(net_w, 0.0), threshold)
+
+
+Error = Callable[[_Sample], float]
+
+
+def _tracking_error(scenario: Scenario) -> Error:
+    """Per-sample distance of the grid from its policy target (W)."""
+    threshold = scenario.peakshaving_threshold
+    if threshold <= 0:
+        return lambda s: s.grid
+    return lambda s: s.grid - _policy_target(threshold, s.consumption)
+
+
+def _settle_time(
+    samples: list[_Sample], start: float, end: float, err: Error
+) -> float | None:
+    """Seconds from *start* until the error stays inside SETTLE_BAND_W for
     SETTLE_HOLD_S, or ``None`` if it never settles inside the window."""
     window = [s for s in samples if start <= s.t <= end]
     candidate: float | None = None
     for s in window:
-        if abs(s.grid) < SETTLE_BAND_W:
+        if abs(err(s)) < SETTLE_BAND_W:
             if candidate is None:
                 candidate = s.t
             if s.t - candidate >= SETTLE_HOLD_S:
@@ -98,7 +131,8 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
     controller is benchmarked against.
 
     One lossless aggregate battery (summed capacity and power limits) picks its
-    net AC output each step to zero the grid when it can, otherwise to store or
+    net AC output each step to bring the grid to its policy target when it can
+    (zero, or under peak shaving the threshold policy), otherwise to store or
     shed the residual. DC-input solar enters the cells directly, offsetting the
     grid first and passing through to export once the pack is full. Under a
     flat tariff with ``retail >= feed-in`` this greedy dispatch is optimal, so
@@ -112,6 +146,7 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
     max_charge = sum(s.max_charge_power for s in specs)
     max_discharge = sum(s.max_discharge_power for s in specs)
     energy_wh = sum(s.initial_soc * s.capacity_wh for s in specs)
+    threshold = scenario.peakshaving_threshold
     import_wh = export_wh = 0.0
     for prev, _cur, dt in _intervals(samples):
         h = dt / 3600.0
@@ -123,7 +158,8 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
         lo = max(-max_charge, dc - (cap_wh - energy_wh) / h)
         if lo > hi:  # DC inflow exceeds what a full pack can shed via the inverter
             lo = hi  # → curtail the excess (output at the cap)
-        p = min(max(net, lo), hi)  # zero the grid if feasible, else store/shed
+        # Reach the target if feasible, else store/shed.
+        p = min(max(net - _policy_target(threshold, net), lo), hi)
         energy_wh = max(0.0, min(cap_wh, energy_wh + (dc - p) * h))
         grid = net - p
         if grid > 0:
@@ -143,7 +179,10 @@ class _EventResponse(NamedTuple):
 
 
 def _event_response(
-    scenario: Scenario, samples: list[_Sample], marks: list[tuple[float, str]]
+    scenario: Scenario,
+    samples: list[_Sample],
+    marks: list[tuple[float, str]],
+    err: Error,
 ) -> _EventResponse:
     """Settling time and overshoot per labeled event.
 
@@ -164,22 +203,22 @@ def _event_response(
         window = [s for s in samples if t0 <= s.t <= t_end]
         if not window:
             continue
-        e0 = window[0].grid
+        e0 = err(window[0])
         if abs(e0) < SETTLE_BAND_W:
             continue
         measured += 1
         sign = 1.0 if e0 > 0 else -1.0
-        settle = _settle_time(samples, t0, t_end)
+        settle = _settle_time(samples, t0, t_end, err)
         if settle is None:
             unsettled += 1
             settle_times.append(t_end - t0)
         else:
             settle_times.append(settle)
-        overshoots.append(max(0.0, max(-sign * s.grid for s in window)))
+        overshoots.append(max(0.0, max(-sign * err(s) for s in window)))
     return _EventResponse(settle_times, overshoots, unsettled, measured)
 
 
-def _band_crossings(samples: list[_Sample]) -> int:
+def _band_crossings(samples: list[_Sample], err: Error) -> int:
     """Times the grid swung clean through the deadband from one side to the other.
 
     The band is the hysteresis: brushing it does not count, only reaching the
@@ -188,21 +227,24 @@ def _band_crossings(samples: list[_Sample]) -> int:
     crossings = 0
     state = 0
     for s in samples:
-        if s.grid > OSC_BAND_W:
+        e = err(s)
+        if e > OSC_BAND_W:
             if state == -1:
                 crossings += 1
             state = 1
-        elif s.grid < -OSC_BAND_W:
+        elif e < -OSC_BAND_W:
             if state == 1:
                 crossings += 1
             state = -1
     return crossings
 
 
-def _steady_rms(samples: list[_Sample], marks: list[tuple[float, str]]) -> float:
+def _steady_rms(
+    samples: list[_Sample], marks: list[tuple[float, str]], err: Error
+) -> float:
     """RMS grid error outside the post-event transients — hunting, not reaction."""
     steady = [
-        s.grid
+        err(s)
         for s in samples
         if not any(t0 <= s.t < t0 + STEADY_EXCLUDE_S for t0, _ in marks)
     ]
@@ -222,15 +264,17 @@ class _Integrals(NamedTuple):
     avoidable_export_wh: float
 
 
-def _time_weighted(scenario: Scenario, samples: list[_Sample]) -> _Integrals:
+def _time_weighted(
+    scenario: Scenario, samples: list[_Sample], err: Error
+) -> _Integrals:
     """Integrate tracking error, share imbalance, effort and grid energy over time.
 
     ``grid_rms`` is the whole-run L2 tracking error, transients included, whose
     effort partner is ``battery_travel_w``.  ``share_imbalance`` is the watts
     misallocated within each phase group of >=2 batteries (the sum of
     ``|power_i - fair share|``), 0 by construction with one battery per phase.
-    Grid energy is split into what was exchanged and the part of it the pack
-    still had the headroom and the charge (or the room) to have covered.
+    Grid energy is split into what was exchanged and the part of the error the
+    pack still had the headroom and the charge (or the room) to have covered.
     """
     specs = scenario.batteries
     phase_groups: dict[str, list[int]] = {}
@@ -242,8 +286,9 @@ def _time_weighted(scenario: Scenario, samples: list[_Sample]) -> _Integrals:
     travel_w = 0.0
     grid_sq_dt = abs_grid_dt = total_dt = imbalance_dt = 0.0
     for prev, cur, dt in _intervals(samples):
-        grid_sq_dt += prev.grid * prev.grid * dt
-        abs_grid_dt += abs(prev.grid) * dt
+        e = err(prev)
+        grid_sq_dt += e * e * dt
+        abs_grid_dt += abs(e) * dt
         total_dt += dt
         for grp in balance_groups:
             fair = sum(prev.powers[i] for i in grp) / len(grp)
@@ -251,25 +296,26 @@ def _time_weighted(scenario: Scenario, samples: list[_Sample]) -> _Integrals:
         wh = prev.grid * dt / 3600.0
         if wh > 0:
             import_wh += wh
-            # Import is avoidable while any battery still has discharge
-            # headroom and charge in the pack.
-            if any(
-                prev.socs[i] > SOC_EMPTY
-                and prev.powers[i] < specs[i].max_discharge_power - HEADROOM_MARGIN_W
-                for i in range(len(specs))
-            ):
-                avoid_import_wh += wh
         else:
             export_wh += -wh
-            # Export is avoidable while any AC-chargeable battery has charge
-            # headroom and room in the pack.
-            if any(
-                specs[i].ac_chargeable
-                and prev.socs[i] < SOC_FULL
-                and prev.powers[i] > -specs[i].max_charge_power + HEADROOM_MARGIN_W
-                for i in range(len(specs))
-            ):
-                avoid_export_wh += -wh
+        # Grid above its target is avoidable while any battery still has
+        # discharge headroom and charge in the pack; below it, while any
+        # AC-chargeable battery has charge headroom and room in the pack.
+        # With a 0 W target these are plain import and export.
+        err_wh = e * dt / 3600.0
+        if err_wh > 0 and any(
+            prev.socs[i] > SOC_EMPTY
+            and prev.powers[i] < specs[i].max_discharge_power - HEADROOM_MARGIN_W
+            for i in range(len(specs))
+        ):
+            avoid_import_wh += err_wh
+        elif err_wh < 0 and any(
+            specs[i].ac_chargeable
+            and prev.socs[i] < SOC_FULL
+            and prev.powers[i] > -specs[i].max_charge_power + HEADROOM_MARGIN_W
+            for i in range(len(specs))
+        ):
+            avoid_export_wh += -err_wh
         travel_w += sum(abs(cur.powers[i] - prev.powers[i]) for i in range(len(specs)))
 
     def per_second(total: float) -> float:
@@ -298,14 +344,15 @@ def _compute_metrics(
     marks: list[tuple[float, str]],
 ) -> dict:
     duration_h = scenario.duration_s / 3600.0
-    events = _event_response(scenario, samples, marks)
-    integrals = _time_weighted(scenario, samples)
+    err = _tracking_error(scenario)
+    events = _event_response(scenario, samples, marks, err)
+    integrals = _time_weighted(scenario, samples, err)
 
     # Sustained oscillation amplitude: the robust peak-to-peak swing (p95 - p5)
     # over the whole run. Non-zero for any continuous hunting, which the
     # step-response metrics (only fired by labeled steps) read as 0; percentiles
     # keep a single brief transient from dominating.
-    all_grid = [s.grid for s in samples]
+    all_grid = [err(s) for s in samples]
     grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
 
     # Money: the bill for the residual grid minus the perfect-foresight bill.
@@ -334,10 +381,10 @@ def _compute_metrics(
         "overshoot_max_w": round(max(events.overshoots), 1)
         if events.overshoots
         else 0.0,
-        "band_crossings_per_h": round(_band_crossings(samples) / duration_h, 2),
+        "band_crossings_per_h": round(_band_crossings(samples, err) / duration_h, 2),
         "grid_p2p_w": round(grid_p2p, 1),
         "grid_rms_w": round(integrals.grid_rms, 1),
-        "steady_rms_w": round(_steady_rms(samples, marks), 1),
+        "steady_rms_w": round(_steady_rms(samples, marks, err), 1),
         "mean_abs_grid_w": round(integrals.mean_abs_grid, 1),
         "share_imbalance_w": round(integrals.share_imbalance, 1),
         "import_wh": round(integrals.import_wh, 1),
@@ -348,6 +395,37 @@ def _compute_metrics(
         "oracle_cost_ct": round(oracle_cost, 2),
         "cost_regret_ct": round(cost_regret, 2),
         "battery_travel_w_per_h": round(integrals.battery_travel_w / duration_h, 0),
+        **_peak_metrics(scenario, samples),
+    }
+
+
+def _peak_metrics(scenario: Scenario, samples: list[_Sample]) -> dict:
+    """What a capacity tariff bills; 0 for a scenario without peak shaving.
+
+    ``peak_qh_over_w`` is how far the highest quarter-hour mean import rose
+    above the threshold: the billed peak the batteries were there to prevent.
+    ``peak_excess_wh`` is all energy imported above the threshold, which also
+    catches brief excursions a quarter-hour mean averages away.  The scenario
+    sizes its pack to cover every peak, so both are 0 when steered perfectly.
+    """
+    threshold = scenario.peakshaving_threshold
+    if threshold <= 0:
+        return {"peak_qh_over_w": 0.0, "peak_excess_wh": 0.0}
+    excess_wh = 0.0
+    quarter_import: dict[int, float] = {}
+    quarter_dt: dict[int, float] = {}
+    for prev, _cur, dt in _intervals(samples):
+        excess_wh += max(0.0, prev.grid - threshold) * dt / 3600.0
+        k = int(prev.t // PEAK_WINDOW_S)
+        quarter_import[k] = quarter_import.get(k, 0.0) + max(0.0, prev.grid) * dt
+        quarter_dt[k] = quarter_dt.get(k, 0.0) + dt
+    peak = max(
+        (quarter_import[k] / quarter_dt[k] for k in quarter_dt if quarter_dt[k] > 0),
+        default=0.0,
+    )
+    return {
+        "peak_qh_over_w": round(max(0.0, peak - threshold), 1),
+        "peak_excess_wh": round(excess_wh, 1),
     }
 
 

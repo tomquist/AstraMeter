@@ -4,15 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astrameter"
-version = "2.3.1"
+version = "2.4.0"
 description = "Power-meter monitoring for Marstek battery inverters (formerly b2500-meter)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
 dependencies = [
     "aiohttp>=3.14.3",
-    "requests",
-    "urllib3>=2.6.3,<3",
     "aiomqtt>=2.0.0,<3",
     "jsonpath-ng",
     "pymodbus==3.6.5",

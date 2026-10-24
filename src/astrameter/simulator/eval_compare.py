@@ -12,6 +12,7 @@ from .eval_metrics import (
     EVENT_WINDOW_S,
     FEEDIN_CT_PER_KWH,
     OSC_BAND_W,
+    PEAK_WINDOW_S,
     RETAIL_CT_PER_KWH,
     SETTLE_BAND_W,
     SETTLE_HOLD_S,
@@ -35,6 +36,9 @@ _REPORT_METRICS = [
     "avoidable_export_wh",
     "cost_regret_ct",
     "battery_travel_w_per_h",
+    # Peak shaving scenarios only; 0 everywhere else.
+    "peak_qh_over_w",
+    "peak_excess_wh",
 ]
 
 # Relative weights for the priority verdict, encoding what a self-consumption
@@ -44,6 +48,9 @@ _REPORT_METRICS = [
 # (issue #523) are cycle life; settle time merely enables the rest.
 _METRIC_WEIGHTS: dict[str, float] = {
     "cost_regret_ct": 4.0,
+    # The billed peak is what peak shaving exists to prevent.
+    "peak_qh_over_w": 4.0,
+    "peak_excess_wh": 2.0,
     "avoidable_import_wh": 4.0,
     "avoidable_export_wh": 1.0,
     "overshoot_max_w": 3.0,
@@ -65,7 +72,9 @@ _METRIC_WEIGHTS: dict[str, float] = {
 # self-consumption for stability. Overshoot flips the grid sign (worse than no
 # battery); band crossings and peak-to-peak are sustained hunting; avoidable
 # import is self-consumption missed at the retail tariff and free to fix; cost
-# regret is real money lost whichever component moved. Avoidable export is
+# regret is real money lost whichever component moved; a quarter-hour peak over
+# the threshold is the capacity-tariff bill peak shaving exists to prevent.
+# Avoidable export is
 # deliberately not one: it conflates over-discharge with the legitimate choice
 # to export rather than pay a charge round-trip, and misses DC-only packs.
 _GUARDRAIL_METRICS = (
@@ -74,6 +83,7 @@ _GUARDRAIL_METRICS = (
     "grid_p2p_w",
     "avoidable_import_wh",
     "cost_regret_ct",
+    "peak_qh_over_w",
 )
 _GUARDRAIL_TOLERANCE = 0.05
 
@@ -163,6 +173,19 @@ _METRIC_GLOSSARY = [
         "battery_travel_w_per_h",
         "Total absolute change in battery setpoints per hour (W/h) — control "
         "effort / actuator wear; lower is smoother.",
+    ),
+    (
+        "peak_qh_over_w",
+        f"Peak shaving only: how far the highest {PEAK_WINDOW_S / 60:g}-minute "
+        f"mean grid import rose above the threshold (W) — the peak a capacity "
+        f"tariff bills. The scenario's pack can cover every peak, so 0 is "
+        f"reachable; 0 for scenarios without peak shaving.",
+    ),
+    (
+        "peak_excess_wh",
+        "Peak shaving only: all energy imported above the threshold (Wh), "
+        "including brief excursions a quarter-hour mean averages away; 0 "
+        "without peak shaving.",
     ),
 ]
 
@@ -490,8 +513,10 @@ def render_markdown_compare(
         out.append(f"**Priority: {_priority_summary(base_agg, head_agg)}.**")
         out.append("")
     out += [
-        "Lower is better for every metric. See "
-        "`src/astrameter/simulator/eval_metrics.py` for definitions.",
+        "Lower is better for every metric. Tracking metrics measure the grid "
+        "against its target: 0 W, or under peak shaving what the threshold "
+        "asks for. See `src/astrameter/simulator/eval_metrics.py` for "
+        "definitions.",
         "",
     ]
     caption = _seeds_caption(base, head)

@@ -1,0 +1,199 @@
+name: Steering eval comment
+
+# Posts the steering-eval comparison from CI's steering-eval-compare job as a
+# sticky PR comment. It lives apart from CI because a pull_request run from a
+# fork only gets a read-only token; a workflow_run run gets a write token in
+# this repository's context instead.
+#
+# That token must never meet code from the PR. Nothing here checks out or runs
+# anything: it downloads CI's steering-eval-data artifact, reads two files from
+# it as data and calls the API. Everything in the artifact came from a run of
+# the PR's own ci.yml, so it's untrusted: the recorded PR number is only used
+# when that PR's current head is the commit CI ran on.
+#
+# GitHub only runs workflow_run workflows from the default branch (main), so
+# edits here take effect at the next release.
+
+on:
+  workflow_run:
+    workflows: [ "CI Pipeline" ]
+    types: [ completed ]
+
+permissions: {}
+
+concurrency:
+  group: steering-eval-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  post:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      # The gate skipping the eval, or CI failing before the compare job ran,
+      # both leave no steering-eval-data artifact: then there's nothing to post.
+      - name: Find the steering-eval artifacts
+        id: find
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runId = context.payload.workflow_run.id;
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {...context.repo, run_id: runId, per_page: 100});
+            // A re-run attempt uploads again under the same name; take the
+            // newest.
+            const newest = name => artifacts
+              .filter(a => a.name === name && !a.expired)
+              .sort((a, b) => b.id - a.id)[0];
+            const data = newest('steering-eval-data');
+            if (!data) {
+              core.info('No steering-eval-data artifact on this run; nothing to post.');
+              return;
+            }
+            core.setOutput('data-id', String(data.id));
+            // The same per-artifact page the upload step's artifact-url output
+            // points at (login-required, valid until the artifact expires).
+            // Built here from the API rather than taken from the artifact, so
+            // it can only ever point at this repository's own run.
+            const report = newest('steering-eval-report.html');
+            if (report) {
+              core.setOutput('report-url',
+                `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+                `/actions/runs/${runId}/artifacts/${report.id}`);
+            }
+
+      - name: Download steering-eval-data
+        if: steps.find.outputs.data-id != ''
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ steps.find.outputs.data-id }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/steering-eval-data
+
+      - name: Post sticky PR comment
+        if: steps.find.outputs.data-id != ''
+        uses: actions/github-script@v8
+        env:
+          DATA_DIR: ${{ runner.temp }}/steering-eval-data
+          REPORT_URL: ${{ steps.find.outputs.report-url }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const marker = '<!-- steering-eval -->';
+            // GitHub rejects comment bodies over 65536 characters; stay under
+            // with room to spare (JS lengths count UTF-16 units, never fewer
+            // than GitHub's characters).
+            const maxBody = 65000;
+            const maxRead = 1024 * 1024;
+            const run = context.payload.workflow_run;
+
+            // Read a regular file from the artifact (which download-artifact
+            // may or may not have nested in a directory named after it),
+            // refusing symlinks and anything oversized.
+            function readData(name) {
+              const dirs = [process.env.DATA_DIR,
+                            path.join(process.env.DATA_DIR, 'steering-eval-data')];
+              for (const dir of dirs) {
+                const file = path.join(dir, name);
+                let st;
+                try { st = fs.lstatSync(file); } catch { continue; }
+                if (!st.isFile()) throw new Error(`${name} is not a regular file`);
+                const fd = fs.openSync(file, 'r');
+                try {
+                  const buf = Buffer.alloc(Math.min(st.size, maxRead));
+                  const n = fs.readSync(fd, buf, 0, buf.length, 0);
+                  return buf.subarray(0, n).toString('utf8');
+                } finally {
+                  fs.closeSync(fd);
+                }
+              }
+              return null;
+            }
+
+            if (run.event !== 'pull_request') {
+              core.info(`Triggering run was a ${run.event} event; nothing to post.`);
+              return;
+            }
+            const identityRaw = readData('pr.json');
+            const table = readData('steering-eval-comment.md');
+            if (identityRaw === null || table === null) {
+              core.info('Artifact has no pr.json or steering-eval-comment.md; nothing to post.');
+              return;
+            }
+
+            let identity;
+            try { identity = JSON.parse(identityRaw); } catch {
+              core.setFailed('pr.json is not valid JSON; refusing to post.');
+              return;
+            }
+            const number = identity && identity.number;
+            if (typeof number !== 'string' || !/^[1-9][0-9]{0,9}$/.test(number)) {
+              core.setFailed('pr.json has no plain PR number; refusing to post.');
+              return;
+            }
+            const issueNumber = Number(number);
+            if (identity.head_sha !== run.head_sha) {
+              core.setFailed(`pr.json names head ${identity.head_sha}, but CI ran on ${run.head_sha}; refusing to post.`);
+              return;
+            }
+
+            let pr;
+            try {
+              ({data: pr} = await github.rest.pulls.get({
+                ...context.repo, pull_number: issueNumber}));
+            } catch (e) {
+              core.setFailed(`PR #${issueNumber} not found in this repository (${e.message}); refusing to post.`);
+              return;
+            }
+            const headRepo = pr.head.repo && pr.head.repo.full_name;
+            const runRepo = run.head_repository && run.head_repository.full_name;
+            if (pr.head.sha !== run.head_sha || !headRepo || headRepo !== runRepo) {
+              // Also the benign case of a push landing after this CI run: the
+              // run for the new head will post instead.
+              core.warning(`PR #${issueNumber} head is ${headRepo}@${pr.head.sha}, but CI ran on ${runRepo}@${run.head_sha}; not posting.`);
+              return;
+            }
+
+            const reportUrl = process.env.REPORT_URL;
+            const link = reportUrl
+              ? `\n\n📊 [**Open the interactive report**](${reportUrl}) — ` +
+                `\`steering-eval-report.html\`, a single self-contained file ` +
+                `(opens in-browser; download it if your browser blocks inline ` +
+                `scripts).\n`
+              : '';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${run.id}`;
+            const notice = `\n\n…truncated; the full comparison is in the [CI run's job summary](${runUrl}).\n`;
+            // A stray marker in the table would make this comment's own
+            // lookup ambiguous; the marker belongs at the very start only.
+            let content = table.split(marker).join('');
+            const room = maxBody - marker.length - 1 - link.length;
+            if (content.length > room) {
+              let cut = room - notice.length;
+              // Don't leave half a surrogate pair behind.
+              const code = content.charCodeAt(cut - 1);
+              if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+              content = content.slice(0, cut) + notice;
+            }
+            const body = marker + '\n' + content + link;
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {...context.repo, issue_number: issueNumber, per_page: 100});
+            const existing = comments.find(
+              c => c.user && c.user.login === 'github-actions[bot]' &&
+                   c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                ...context.repo, comment_id: existing.id, body});
+              core.info(`Updated comment ${existing.id} on PR #${issueNumber}.`);
+            } else {
+              const {data: created} = await github.rest.issues.createComment({
+                ...context.repo, issue_number: issueNumber, body});
+              core.info(`Created comment ${created.id} on PR #${issueNumber}.`);
+            }

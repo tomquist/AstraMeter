@@ -33,7 +33,7 @@ def _shelly() -> Shelly:
     cf = ClientFilter([IPv4Network("127.0.0.0/8")])
     return Shelly(
         [ConfiguredPowermeter(DummyPowermeter(), cf, False)],
-        udp_port=1010,
+        udp_ports=[1010],
         device_id="test",
         device_type="shellypro3em_old",
     )
@@ -53,7 +53,7 @@ async def test_status_snapshot_reports_registered_battery() -> None:
     snap = shelly.status_snapshot()
     assert snap.device_id == "test"
     assert snap.device_type == "shellypro3em_old"
-    assert snap.udp_port == 1010
+    assert snap.udp_ports == (1010,)
     assert snap.running is False  # never started
     assert snap.inactive_timeout == BATTERY_INACTIVE_TIMEOUT_SECONDS == 120
 
@@ -67,7 +67,7 @@ async def test_status_snapshot_reports_registered_battery() -> None:
 
     # A second poll establishes the cadence and the parked-handler flag shows.
     await shelly._handle_request(REQUEST, ("127.0.0.1", 54322), transport)
-    shelly._inflight_batteries.add("127.0.0.1")
+    shelly._inflight_batteries.add(("127.0.0.1", 1010))
     (battery,) = shelly.status_snapshot().batteries
     assert battery.poll_interval is not None
     assert battery.in_flight is True
@@ -108,7 +108,7 @@ async def test_status_snapshot_is_detached_from_the_device() -> None:
 
 
 async def test_running_tracks_start_and_stop() -> None:
-    shelly = Shelly([], udp_port=0, device_id="test")
+    shelly = Shelly([], udp_ports=[0], device_id="test")
     assert shelly.status_snapshot().started_at is None
 
     await shelly.start()
@@ -116,7 +116,7 @@ async def test_running_tracks_start_and_stop() -> None:
         snap = shelly.status_snapshot()
         assert snap.running is True
         assert snap.started_at is not None
-        assert snap.udp_port == shelly.udp_port != 0
+        assert snap.udp_ports == shelly.udp_ports != (0,)
     finally:
         await shelly.stop()
     assert shelly.status_snapshot().running is False
