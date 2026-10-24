@@ -66,7 +66,9 @@ You can install and run AstraMeter in several ways:
 | **ESPHome on an ESP32** | A dedicated board, no server | [docs/installation/esphome.md](docs/installation/esphome.md) |
 
 Once AstraMeter is running, switch your Marstek battery to "Self-Adaptation"
-mode to turn on the powermeter functionality.
+mode to turn on the powermeter functionality. On an ESP32, first add the board
+in the Marstek app like a real CT, over Bluetooth: see
+[Add the board to the Marstek app](docs/installation/esphome.md#add-the-board-to-the-marstek-app).
 
 ## Supported power meter sources
 
@@ -118,6 +120,8 @@ the full emulator and balancer end-to-end without any real devices.
   protocol used by Marstek storage systems.
 - **[Marstek MQTT & HTTP protocol](docs/marstek-mqtt-http.md)** — the cloud/app
   protocol.
+- **[CT002/CT003 Bluetooth protocol](docs/ct002-ct003-ble.md)** — how the
+  Marstek app onboards a meter over BLE, and the meter's BLE command set.
 - **[Contributing](CONTRIBUTING.md)** — development workflow and the
   Python ↔ ESPHome parity rules.
 

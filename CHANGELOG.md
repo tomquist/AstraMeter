@@ -2,6 +2,7 @@
 
 ## Next
 
+- **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).
 
 ## 2.4.0
 
