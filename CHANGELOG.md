@@ -2,6 +2,9 @@
 
 ## Next
 
+
+## 2.4.0
+
 - **Added** a Marstek CT002 / CT003 power source (`[MARSTEK_METER]`), so AstraMeter can read the Marstek CT you already own and steer your batteries itself. Pair the batteries with AstraMeter's CT instead of the real one ([#737](https://github.com/tomquist/astrameter/pull/737)).
 
 - **Fixed** the dashboard reporting "No batteries polling" with the default Shelly Pro 3EM emulation while a battery was polling it on port 1010; both ports now show as one emulator listing every battery ([#734](https://github.com/tomquist/astrameter/issues/734), [#736](https://github.com/tomquist/astrameter/pull/736)).
