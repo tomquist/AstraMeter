@@ -59,13 +59,19 @@ function el(tag: string, props: ElProps = {}, children: ElChild | ElChild[] = []
 // Bluetooth, where the Marstek app adds the board itself and the cloud login
 // stays off unless asked for. Applied only when one of its inputs changes, so
 // a box the user set by hand stays as they left it.
-let registrationSetByHand = false;
-
 function registrationByDefault(): boolean {
   // An ESPHome build always emulates a CT; the device types are the Python target's.
   const hasCt = state.target === "esphome" || hasCtType(state.general.deviceTypes);
   return hasCt && !(state.target === "esphome" && state.general.esphomeBluetooth);
 }
+
+// Whether the box was set by hand. Saved state doesn't record it, so a loaded
+// project counts as hand-set where its box differs from the default.
+function registrationDiffersFromDefault(): boolean {
+  return state.marstek.enabled !== registrationByDefault();
+}
+
+let registrationSetByHand = registrationDiffersFromDefault();
 
 // For the target and Bluetooth switches, which only change whether the cloud
 // login is the way to add the CT: a choice the user made stands.
@@ -856,7 +862,7 @@ function loadProject(file: File): void {
   reader.onload = () => {
     try {
       state = migrate(safeParse(reader.result as string));
-      registrationSetByHand = false;
+      registrationSetByHand = registrationDiffersFromDefault();
       rerenderAll();
       toast("Project loaded");
     } catch {
@@ -882,7 +888,7 @@ function shareLink(): void {
 function resetProject(): void {
   if (!confirm("Start over? This clears everything you've entered.")) return;
   state = defaultState();
-  registrationSetByHand = false;
+  registrationSetByHand = registrationDiffersFromDefault();
   rerenderAll();
 }
 
