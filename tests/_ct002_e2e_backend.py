@@ -195,6 +195,11 @@ class EsphomeSim:
     def set_dedupe(self, ms: int) -> None:
         self._cmd(f"dedupe {ms}")
 
+    def sensor_stale(self) -> None:
+        """Make the next read report the grid sensor unavailable (the
+        meter-outage path); the next ``set_grid`` restores it."""
+        self._cmd("sensor_stale")
+
     def set_cfg(self, key: str, value: float) -> None:
         self._cmd(f"cfg {key} {value}")
 

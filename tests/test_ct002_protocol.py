@@ -563,18 +563,28 @@ async def test_handle_request_holds_with_zero_delta_when_before_send_fails() -> 
     assert device._consumers["aabbccddeeff"].last_instructed_power == 250.0
 
 
-async def test_handle_request_inspection_mode_holds_when_before_send_fails() -> None:
-    """A phase self-diagnosis poll (inspection marker) while the meter is down
-    must not be fed the frozen per-phase reading — feeding stale data is what
-    corrupts the Venus phase detection in #403."""
+async def test_handle_request_inspection_mode_not_answered_when_before_send_fails() -> (
+    None
+):
+    """A battery detecting its phase gets no reply while the meter is down.
+
+    It compares every reading it accepts with its pre-probe baseline, so the
+    zero hold would read as a move on every loaded phase (an HMG-50 gives up, a
+    Venus can store a wrong phase); without a reply it keeps its last real
+    reading. See "Battery-side phase detection" in docs/ct002-ct003-protocol.md.
+    """
     device = CT002(ct_mac="112233445566", active_control=True)
     await _seed_good_reading(device, "AABBCCDDEEFF")
 
-    fields = await _drive_and_capture(
-        device, "AABBCCDDEEFF", "0", 0, before_send=_raise_stale
+    transport = _CaptureTransport()
+    device.before_send = _raise_stale
+    request = build_payload(
+        ["HMG-50", "AABBCCDDEEFF", "HME-4", "112233445566", "0", "0"]
     )
+    await device._handle_request(request, ("1.1.1.1", 12345), transport)
 
-    assert fields[4:7] == ["0", "0", "0"], fields[4:7]
+    assert transport.sent is None
+    assert device.status_snapshot().meter_failed
 
 
 async def test_handle_request_uses_cache_when_before_send_returns_none() -> None:
@@ -779,7 +789,7 @@ class _StepClock:
 
 def test_adaptive_ttl_evicts_after_two_missed_poll_cycles() -> None:
     """Default (consumer_ttl=None): a consumer expires after missing ~2 of
-    its own poll cycles, like the real CT."""
+    its own poll cycles."""
     clock = _StepClock()
     device = CT002(clock=clock)
     device._update_consumer_report("a", "A", 100)

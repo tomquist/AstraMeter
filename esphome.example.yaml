@@ -108,7 +108,8 @@ ct002:
   #                                # arrives within this window
   # consumer_ttl: 120s             # fixed eviction window for a silent battery;
   #                                # unset (default) adapts to each battery's
-  #                                # poll rate (~2 missed polls, like the real CT)
+  #                                # poll rate (~2 missed polls; the real CT
+  #                                # waits 30-60s)
   # dedupe_window: 0s              # 0 = off; >0 drops duplicate polls from the
   #                                # same battery within the window
 

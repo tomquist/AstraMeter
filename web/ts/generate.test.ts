@@ -373,7 +373,7 @@ const eyJsonHeaders = generateEsphome({
   meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", HEADERS: "Authorization: Bearer t; X-Env: prod" }, tuning: {} }],
   ct: { fields: {} },
 });
-has(eyJsonHeaders, "headers:", "esp/json_http: headersField emits a headers block");
+has(eyJsonHeaders, "request_headers:", "esp/json_http: headersField emits a request_headers block (ESPHome renamed headers)");
 has(eyJsonHeaders, "Authorization: Bearer t", "esp/json_http: first header");
 has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
 // The url/capture_response/on_response keys must be nested *under* the
@@ -382,7 +382,7 @@ has(eyJsonHeaders, "X-Env: prod", "esp/json_http: second header");
 has(eyJsonHeaders, "      - http_request.get:\n          url: http://x/api", "esp/json_http: url nested under http_request.get");
 has(eyJsonHeaders, "          capture_response: true", "esp/json_http: capture_response nested under action");
 has(eyJsonHeaders, "          on_response:", "esp/json_http: on_response nested under action");
-has(eyJsonHeaders, "          headers:", "esp/json_http: headers nested under action");
+has(eyJsonHeaders, "          request_headers:", "esp/json_http: headers nested under action");
 // Large JSON responses (e.g. the Fronius Solar API) overflow ESPHome's small
 // default receive buffer and truncate the body, so json::parse_json fails.
 // Enlarge the buffer on both the client and the per-request action (issue #534).
@@ -428,6 +428,135 @@ const eySml = generateEsphome({
 });
 has(eySml, "platform: sml", "esp/sml: sml sensor");
 has(eySml, 'obis_code: "1-0:16.7.0"', "esp/sml: default obis");
+
+const eySmlObis = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "sml", phases: 3, fields: { OBIS_POWER_L1: "0100240700ff", OBIS_POWER_L2: "1-0:56.7.0", OBIS_POWER_L3: "nope" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eySmlObis, 'obis_code: "1-0:36.7.0"', "esp/sml: 12-hex OBIS converted to A-B:C.D.E");
+has(eySmlObis, 'obis_code: "1-0:56.7.0"', "esp/sml: OBIS already in ESPHome form passes through");
+has(eySmlObis, 'obis_code: "1-0:76.7.0"', "esp/sml: malformed OBIS falls back to the default");
+has(eySmlObis, '# ⚠ The OBIS code "nope"', "esp/sml: malformed OBIS warns");
+
+// ── ESPHome: fields the form offers must reach the YAML (issue #729) ─────────
+const eyJsonPath = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", JSON_PATHS: "$.state['grid power'][0]", USERNAME: "me", PASSWORD: "pw" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(
+  eyJsonPath,
+  'if (!root["state"]["grid power"][0].isNull()) id(grid_l1).publish_state(root["state"]["grid power"][0].as<float>());',
+  "esp/json_http: JSON path becomes the lambda lookup, skipped when the field is missing",
+);
+lacks(eyJsonPath, 'root["power"]', "esp/json_http: no placeholder field once a path is set");
+has(eyJsonPath, "          request_headers:\n            Authorization: Basic bWU6cHc=", "esp/json_http: login sent as a basic-auth header");
+
+const eyJsonPath3 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 3, fields: { URL: "http://x/api", JSON_PATHS: "$.l1, l2, $.l3.split(' ')[0]" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyJsonPath3, 'id(grid_l1).publish_state(root["l1"].as<float>());', "esp/json_http 3ph: L1 path");
+has(eyJsonPath3, 'id(grid_l2).publish_state(root["l2"].as<float>());', "esp/json_http 3ph: L2 path without $");
+has(eyJsonPath3, "power_sensor_l3: grid_l3", "esp/json_http 3ph: three phases on ct002");
+has(eyJsonPath3, "# ⚠ The JSON path \"$.l3.split(' ')[0]\" has no ESPHome equivalent", "esp/json_http 3ph: untranslatable path warns");
+lacks(eyJsonPath3, "illustrative", "esp/json_http 3ph: paths are the user's, not a guess");
+
+const eyJsonAuthHeader = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", USERNAME: "me", HEADERS: "Authorization: Bearer t" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyJsonAuthHeader, "Basic ", "esp/json_http: an explicit Authorization header wins over the login");
+has(eyJsonAuthHeader, "# ⚠ Both a login and an Authorization header", "esp/json_http: the ignored login is called out");
+
+const eyMqttJson = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "mqtt", phases: 3, fields: { BROKER: "10.0.0.2", USERNAME: "u", PASSWORD: "p\"w", TOPIC: "tele/sml/SENSOR", JSON_PATH: "$.SML.L1, $.SML.L2, $.SML.L3" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyMqttJson, 'mqtt:\n  broker: 10.0.0.2\n  port: 1883\n  username: "u"\n  password: "p\\"w"', "esp/mqtt: broker login");
+has(eyMqttJson, "  on_json_message:\n    - topic: tele/sml/SENSOR\n      then:", "esp/mqtt: one topic shared by all three paths");
+ok((eyMqttJson.match(/- topic:/g) || []).length === 1, "esp/mqtt: a shared topic gets one trigger");
+has(
+  eyMqttJson,
+  '        - lambda: |-\n            if (!x["SML"]["L3"].isNull()) id(grid_l3).publish_state(x["SML"]["L3"].as<float>());',
+  "esp/mqtt: per-phase JSON lookup, skipped when the field is missing",
+);
+lacks(eyMqttJson, "mqtt_subscribe", "esp/mqtt: JSON payloads don't use mqtt_subscribe");
+
+const eyMqttUri = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "ignored", URI: "mqtt://a%40b:secret@broker.lan:1884", TOPIC: "p" }, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "broker.lan", PORT: "1884", USERNAME: "a@b", PASSWORD: "secret" } },
+});
+has(eyMqttUri, 'broker: broker.lan\n  port: 1884\n  username: "a@b"\n  password: "secret"', "esp/mqtt: URI wins over the separate keys");
+ok((eyMqttUri.match(/^mqtt:/gm) || []).length === 1, "esp/mqtt+insights: one mqtt block");
+lacks(eyMqttUri, "must use the same broker", "esp/mqtt+insights: URI broker and login match Insights");
+lacks(eyMqttUri, "certificate_authority", "esp/mqtt: no CA without TLS");
+
+const eyMqttOtherLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "mqtt", phases: 1, fields: { BROKER: "10.0.0.2", USERNAME: "reader", TOPIC: "p" }, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "10.0.0.2", USERNAME: "writer" } },
+});
+has(eyMqttOtherLogin, "Insights publishes as the meter's user", "esp/mqtt+insights: a different login on the same broker warns");
+
+const eyMqttTls = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "mqtt", phases: 1, fields: { URI: "mqtts://u:p@broker.lan", TOPIC: "p" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyMqttTls, "  port: 8883\n", "esp/mqtt: mqtts defaults to 8883");
+has(eyMqttTls, "  certificate_authority: !secret mqtt_ca_certificate", "esp/mqtt: TLS needs the broker CA");
+has(eyMqttTls, "# ⚠ MQTT over TLS", "esp/mqtt: TLS tells the user where the CA goes");
+
+const eyInsightsTls = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "homeassistant", phases: 1, fields: {}, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "10.0.0.3", USERNAME: "ins", PASSWORD: "pw", TLS: true } },
+});
+has(eyInsightsTls, "  certificate_authority: !secret mqtt_ca_certificate", "esp/insights: TLS needs the broker CA");
+has(eyInsightsTls, "# ⚠ MQTT over TLS", "esp/insights: TLS tells the user where the CA goes");
+
+const eyInsightsLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "homeassistant", phases: 1, fields: {}, tuning: {} }],
+  ct: { fields: {} },
+  mqttInsights: { enabled: true, fields: { BROKER: "10.0.0.3", USERNAME: "ins", PASSWORD: "pw" } },
+});
+has(eyInsightsLogin, 'mqtt:\n  broker: 10.0.0.3\n  port: 1883\n  username: "ins"\n  password: "pw"', "esp/insights: broker login");
+
+const eyTasmotaLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "tasmota", phases: 1, fields: { IP: "10.0.0.4", USER: "admin", PASS: "a&b" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyTasmotaLogin, "url: http://10.0.0.4/cm?user=admin&password=a%26b&cmnd=status%2010", "esp/tasmota: login in the query string");
+
+const eyShellyLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "shelly", phases: 1, fields: { IP: "10.0.0.5", USER: "admin", PASS: "pw" }, tuning: {} }],
+  ct: { fields: {} },
+});
+has(eyShellyLogin, "# ⚠ ESPHome can't log in to a Shelly", "esp/shelly: a login warns instead of vanishing");
 
 // ── ESPHome: Tibber Pulse (our tibber_pulse component) ──────────────────────
 const eyTibber1 = generateEsphome({

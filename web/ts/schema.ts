@@ -47,6 +47,10 @@ export interface EsphomeSpec {
   jsonRoot?: string;
   haEntity?: (f: Fields) => string;
   headersField?: string;
+  /** Field holding the JSONPath(s) the lambda reads, one per phase; replaces lambda1/lambda3 when set. */
+  jsonPathsField?: string;
+  /** [user, password] fields sent as an HTTP basic-auth header. */
+  basicAuthFields?: [string, string];
   warn?: string | ((f: Fields) => string | null);
 }
 
@@ -315,6 +319,13 @@ export function refossChannelIds(raw: FieldValue, fallback: number[]): number[] 
   return ids;
 }
 
+/** Tasmota takes its web login as query parameters, as the Python source sends it. */
+function tasmotaLogin(f: Fields): string {
+  const user = String(f.USER ?? "").trim();
+  if (!user) return "";
+  return `user=${encodeURIComponent(user)}&password=${encodeURIComponent(String(f.PASS ?? ""))}&`;
+}
+
 export const POWERMETERS: Powermeter[] = [
   {
     id: "shelly",
@@ -348,6 +359,10 @@ export const POWERMETERS: Powermeter[] = [
       lambda1: 'id(grid_l1).publish_state(root["apower"]);',
       lambda3:
         'id(grid_l1).publish_state(root["a_act_power"]);\n                    id(grid_l2).publish_state(root["b_act_power"]);\n                    id(grid_l3).publish_state(root["c_act_power"]);',
+      warn: (f) =>
+        String(f.USER ?? "").trim()
+          ? "ESPHome can't log in to a Shelly: its RPC API wants digest auth, which http_request doesn't speak. Remove the Shelly's login, or read it through MQTT or Home Assistant instead."
+          : null,
     },
   },
   {
@@ -372,7 +387,7 @@ export const POWERMETERS: Powermeter[] = [
       kind: "http",
       tier: "generic",
       note: "Polls /cm?cmnd=status 10. Adjust the prefix/label in the lambda to match your meter.",
-      url1: (f) => `http://${f.IP || "192.168.1.101"}/cm?cmnd=status%2010`,
+      url1: (f) => `http://${f.IP || "192.168.1.101"}/cm?${tasmotaLogin(f)}cmnd=status%2010`,
       lambda1: (f) =>
         `id(grid_l1).publish_state(root["${f.JSON_STATUS || "StatusSNS"}"]["${f.JSON_PAYLOAD_MQTT_PREFIX || "SML"}"]["${String(f.JSON_POWER_MQTT_LABEL || "Power").split(",")[0].trim()}"]);`,
     },
@@ -637,6 +652,8 @@ export const POWERMETERS: Powermeter[] = [
       url1: (f) => String(f.URL || "http://example.com/api"),
       lambda1: 'id(grid_l1).publish_state(root["power"]);',
       headersField: "HEADERS",
+      jsonPathsField: "JSON_PATHS",
+      basicAuthFields: ["USERNAME", "PASSWORD"],
     },
   },
   {
@@ -710,6 +727,21 @@ export const POWERMETERS: Powermeter[] = [
       { key: "INTERFACE", label: "Bind interface IP", type: "text", placeholder: "(all interfaces)", advanced: true, help: "Optional: bind to a specific network interface IP." },
     ],
     esphome: { kind: "unsupported", tier: "unsupported", note: "There is no ESPHome component for SMA Speedwire yet. Use the Python add-on for this meter." },
+  },
+  {
+    id: "marstek_meter",
+    label: "Marstek CT002 / CT003",
+    section: "MARSTEK_METER",
+    blurb: "A real Marstek CT002 or CT003, read over the UDP protocol the batteries use. Pair the batteries with AstraMeter's CT instead of this one.",
+    docPython: "docs/powermeters.md#marstek-ct002--ct003",
+    docEsphome: "docs/esphome-powermeters.md#marstek-ct002--ct003",
+    fields: [
+      { key: "IP", label: "CT IP address", type: "text", placeholder: "192.168.1.50", required: true, help: "The CT's address. Give it a fixed address in your router." },
+      { key: "MAC", label: "CT MAC", type: "text", placeholder: "(learned from the CT)", advanced: true, help: "The CT's MAC as the Marstek app shows it. Leave blank to learn it from the CT's first reply." },
+      { key: "TYPE", label: "CT type", type: "select", default: "", options: [{ value: "", label: "Detect" }, { value: "HME-4", label: "HME-4 (CT002)" }, { value: "TPM2-0", label: "TPM2-0 (newer CT002, TPM2-100CT)" }, { value: "HME-3", label: "HME-3 (CT003)" }], advanced: true, help: "Leave on Detect: each type is tried until the CT answers." },
+      { key: "POLL_INTERVAL", label: "Poll interval (seconds)", type: "number", default: "1", placeholder: "1", advanced: true, help: "How often to ask the CT in the background. A battery waiting for a reading makes AstraMeter ask at once, so this doesn't slow steering." },
+    ],
+    esphome: { kind: "unsupported", tier: "unsupported", note: "There is no ESPHome component that reads a real Marstek CT yet. Use the Python add-on for this meter." },
   },
   {
     id: "fritz",
@@ -899,7 +931,7 @@ export const CT_BASIC: Field[] = [
   { key: "CT_MAC", ey: "ct_mac", label: "CT MAC", help: "12 hex digits from the Marstek app. Leave blank to answer any battery and mirror its MAC.", type: "text", placeholder: "(blank = any)" },
   { key: "UDP_PORT", ey: "udp_port", label: "UDP port", help: "Port the emulator listens on. Default 12345.", type: "number", placeholder: "12345" },
   { key: "WIFI_RSSI", ey: "wifi_rssi", label: "Reported WiFi RSSI", help: "Signal strength reported back to the battery. Default -50.", type: "number", placeholder: "-50" },
-  { key: "CONSUMER_TTL", ey: "consumer_ttl", label: "Consumer TTL (seconds)", help: "Forget a battery this long after it goes silent. Blank (default) adapts to each battery's poll rate (~2 missed polls, like the real CT); set a number for a fixed window.", type: "number", placeholder: "(adaptive)" },
+  { key: "CONSUMER_TTL", ey: "consumer_ttl", label: "Consumer TTL (seconds)", help: "Forget a battery this long after it goes silent. Blank (default) adapts to each battery's poll rate (~2 missed polls); set a number for a fixed window, e.g. 60 to match the real CT.", type: "number", placeholder: "(adaptive)" },
   { key: "DEDUPE_TIME_WINDOW", ey: "dedupe_window", label: "Dedupe window (seconds)", help: "Drop duplicate polls from the same battery within this window. 0 = off.", type: "number", placeholder: "0" },
 ];
 

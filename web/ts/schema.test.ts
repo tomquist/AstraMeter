@@ -37,7 +37,7 @@ const FIELD_PROPS = new Set(["key", "label", "help", "type", "default", "placeho
 const PM_PROPS = new Set(["id", "label", "section", "esphomeOnly", "blurb", "docPython", "docEsphome", "fields", "esphome", "phaseListKeys", "phaseFlagKey", "phaseChannelsValue"]);
 const ESP_KINDS = new Set(["homeassistant", "mqtt", "sml", "dsmr", "modbus", "http", "tibber_pulse", "unsupported"]);
 const ESP_TIERS = new Set(["native", "generic", "alternate", "unsupported"]);
-const ESP_PROPS = new Set(["kind", "tier", "note", "url1", "url3", "lambda1", "lambda3", "jsonRoot", "haEntity", "headersField", "warn"]);
+const ESP_PROPS = new Set(["kind", "tier", "note", "url1", "url3", "lambda1", "lambda3", "jsonRoot", "haEntity", "headersField", "jsonPathsField", "basicAuthFields", "warn"]);
 
 // Validate one field descriptor (used by meters and the shared option groups).
 function validateField(field, where) {
@@ -111,6 +111,12 @@ for (const pm of POWERMETERS) {
     }
     if (esp.headersField !== undefined) {
       check(fieldKeys.has(esp.headersField), `${where}: esphome.headersField "${esp.headersField}" must name a real field`);
+    }
+    if (esp.jsonPathsField !== undefined) {
+      check(fieldKeys.has(esp.jsonPathsField), `${where}: esphome.jsonPathsField "${esp.jsonPathsField}" must name a real field`);
+    }
+    for (const key of esp.basicAuthFields ?? []) {
+      check(fieldKeys.has(key), `${where}: esphome.basicAuthFields "${key}" must name a real field`);
     }
   }
 

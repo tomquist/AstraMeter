@@ -687,6 +687,21 @@ def test_inspection_reporter_lands_in_x_bucket(backend: Backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
+def test_ignores_astrameter_meter_reader(backend: Backend) -> None:
+    """A poll from AstraMeter's own [MARSTEK_METER] reader (battery MAC prefix
+    02a57e) gets no reply on either stack, so a reader pointed at an emulator
+    never reads values derived from its own readings."""
+    backend.set_clock(16500)
+    backend.set_grid(300)
+    assert backend.poll("02A57E123456", "0", 0) is None, (
+        f"[{backend.name}] answered AstraMeter's own meter reader"
+    )
+    assert backend.poll("B9B9B9B9B9B9", "A", 0) is not None, (
+        f"[{backend.name}] no response to an ordinary battery"
+    )
+
+
+@pytest.mark.timeout(30, func_only=True)
 def test_combined_phase_d_lands_in_abc_bucket(backend: Backend) -> None:
     """A combined-mode (phase 'D') reporter populates the ABC bucket and
     ABC_chrg_nb instead of phase A (issue #460)."""
@@ -957,7 +972,8 @@ def test_python_esphome_wire_identical() -> None:
 @pytest.mark.timeout(60, func_only=True)
 def test_meter_unavailable_zero_delta_parity() -> None:
     """Both stacks respond with a zero-delta hold when the grid meter is
-    unavailable (issue #403).
+    unavailable (issue #403), and do not answer a battery that is detecting
+    its phase at all: it would read the hold as a move.
 
     Python's powermeter hook raises (the HomeAssistant/HomeWizard staleness
     error); ESPHome's sensor is back-dated past its freshness window so
@@ -1010,6 +1026,12 @@ def test_meter_unavailable_zero_delta_parity() -> None:
 
                 r_py = py.poll(mac, phase, reported)
                 r_esp = esp.poll(mac, phase, reported)
+                if phase == "0":
+                    assert r_py is None and r_esp is None, (
+                        f"step {step}: a stack answered a phase-detecting "
+                        f"battery (python={r_py}, esphome={r_esp})"
+                    )
+                    continue
                 assert r_py is not None and r_esp is not None, (
                     f"step {step}: a stack failed to answer "
                     f"(python={r_py is not None}, esphome={r_esp is not None})"

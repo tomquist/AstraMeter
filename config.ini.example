@@ -69,7 +69,8 @@ THROTTLE_INTERVAL = 0
 ## Note: CT003 can optionally use its own [CT003] section with the same keys.
 ## CT MAC (12 hex digits, from Marstek app).
 ## If empty, the emulator accepts any request CT MAC and echoes the request's
-## CT MAC in responses. If set, the emulator responds only to the configured MAC.
+## CT MAC in responses. If set, the emulator responds only to the configured MAC
+## and to an unpaired battery's 000000000000 probe, answering with its own MAC.
 # CT_MAC = 001122334455
 ## UDP port to bind for CT002/CT003 (default 12345).
 # UDP_PORT = 12345
@@ -80,7 +81,7 @@ THROTTLE_INTERVAL = 0
 # DEDUPE_TIME_WINDOW = 0
 ## Forget consumers after this many seconds without updates (multi-consumer support).
 ## Unset (default): adaptive — a battery is dropped after missing ~2 of its own
-## poll cycles (min 5s), like the real CT. Set a number for a fixed window.
+## poll cycles (min 5s). Set a number for a fixed window; the real CT waits 30-60s.
 # CONSUMER_TTL = 120
 ## Log concise status (phase consumption + consumer charge/discharge) on each request when enabled
 # DEBUG_STATUS = False
@@ -438,6 +439,19 @@ THROTTLE_INTERVAL = 0
 # INTERFACE =
 ## Per-powermeter throttling override (optional)
 # THROTTLE_INTERVAL = 0
+
+# [MARSTEK_METER]
+## A real Marstek CT002 / CT003, read over the UDP protocol the batteries use.
+## Pair the batteries with AstraMeter's CT, not this one.
+# IP = 192.168.1.50
+## The CT's MAC (optional; learned from its first reply)
+# MAC = aabbccddeeff
+## HME-4 (CT002), TPM2-0 (newer CT002, TPM2-100CT) or HME-3 (CT003);
+## optional, tried in turn until the CT answers
+# TYPE = HME-4
+## Seconds between background polls (optional); a battery waiting for a
+## reading makes AstraMeter ask at once
+# POLL_INTERVAL = 1
 
 # [FRITZ]
 ## AVM FRITZ!Smart Energy 250 smart-meter read head, via the FRITZ!Box

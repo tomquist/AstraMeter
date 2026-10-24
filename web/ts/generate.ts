@@ -305,16 +305,43 @@ function esphomeSensor(state: State): EsphomeSensor {
   }
 
   if (esp.kind === "mqtt") {
-    const broker = f.BROKER || "192.168.1.10";
-    const port = f.PORT || "1883";
-    topBlocks.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
-    const topics = splitPhases(f.TOPIC || "home/powermeter", phases);
-    if (!isBlank(f.JSON_PATH)) {
-      warnings.push("JSON payloads need an on_json_message handler; see docs/esphome-powermeters.md for the template-sensor pattern.");
+    const broker = mqttBroker(f, warnings);
+    if (isBlank(f.JSON_PATH)) {
+      const topics = splitPhases(f.TOPIC || "home/powermeter", phases).map((t) => t || "home/powermeter");
+      topBlocks.push(mqttBlock(broker));
+      const sensors = ids.map((id, i) => {
+        return `${IND}- platform: mqtt_subscribe\n${IND}${IND}id: ${id}\n${IND}${IND}topic: ${topics[i]}\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(i)}`;
+      });
+      return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
     }
-    const sensors = ids.map((id, i) => {
-      return `${IND}- platform: mqtt_subscribe\n${IND}${IND}id: ${id}\n${IND}${IND}topic: ${topics[i] || "home/powermeter"}\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(i)}`;
+    // mqtt_subscribe only takes a bare number, so a JSON payload goes through
+    // on_json_message into template sensors, one trigger per distinct topic.
+    // Like the Python source, one topic or one path is shared by every phase.
+    const rawTopics = String(f.TOPIC || "home/powermeter").split(",").map((t) => t.trim());
+    const rawPaths = String(f.JSON_PATH).split(",").map((p) => p.trim());
+    const byTopic = new Map<string, string[]>();
+    ids.forEach((id, i) => {
+      const topic = (rawTopics.length === 1 ? rawTopics[0] : rawTopics[i]) || "home/powermeter";
+      const path = (rawPaths.length === 1 ? rawPaths[0] : rawPaths[i]) || "";
+      const lookup = path ? jsonPathLookup(path, "x") : null;
+      if (!lookup) {
+        warnings.push(
+          path
+            ? `The JSON path "${path}" has no ESPHome equivalent — edit the ${id} lambda by hand.`
+            : `No JSON path for ${id} — enter one per phase.`,
+        );
+      }
+      const publish = lookup
+        ? publishIfPresent(id, lookup)
+        : `id(${id}).publish_state(x["power"]);  // TODO: ${path ? `read ${path}` : "set this phase's field"}`;
+      const action = `${IND}${IND}${IND}${IND}- lambda: |-\n${IND.repeat(6)}${publish}`;
+      byTopic.set(topic, [...(byTopic.get(topic) ?? []), action]);
     });
+    const triggers = [...byTopic].map(
+      ([topic, actions]) => `${IND}${IND}- topic: ${topic}\n${IND}${IND}${IND}then:\n${actions.join("\n")}`,
+    );
+    topBlocks.push(`${mqttBlock(broker)}\n${IND}on_json_message:\n${triggers.join("\n")}`);
+    const sensors = ids.map((id, i) => templateSensor(id) + phaseFilterBlock(i));
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases, warnings };
   }
 
@@ -323,7 +350,14 @@ function esphomeSensor(state: State): EsphomeSensor {
       `uart:\n${IND}id: uart_bus\n${IND}rx_pin: GPIO16\n${IND}baud_rate: 9600\n${IND}data_bits: 8\n${IND}parity: NONE\n${IND}stop_bits: 1`,
     );
     topBlocks.push(`sml:\n${IND}id: mysml\n${IND}uart_id: uart_bus`);
-    const obis = phases === 3 ? ["1-0:36.7.0", "1-0:56.7.0", "1-0:76.7.0"] : ["1-0:16.7.0"];
+    const obis =
+      phases === 3
+        ? [
+            esphomeObis(f.OBIS_POWER_L1, "1-0:36.7.0", warnings),
+            esphomeObis(f.OBIS_POWER_L2, "1-0:56.7.0", warnings),
+            esphomeObis(f.OBIS_POWER_L3, "1-0:76.7.0", warnings),
+          ]
+        : [esphomeObis(f.OBIS_POWER_CURRENT, "1-0:16.7.0", warnings)];
     const sensors = ids.map((id, i) => {
       return `${IND}- platform: sml\n${IND}${IND}id: ${id}\n${IND}${IND}sml_id: mysml\n${IND}${IND}obis_code: "${obis[i]}"\n${IND}${IND}unit_of_measurement: W${phaseFilterBlock(i)}`;
     });
@@ -422,32 +456,45 @@ function esphomeSensor(state: State): EsphomeSensor {
     topBlocks.push(
       `http_request:\n${IND}useragent: esphome/astrameter\n${IND}timeout: 5s\n${IND}buffer_size_rx: ${RX_BUFFER}`,
     );
-    const use3 = phases === 3 && esp.url3;
+    const fromPaths = esp.jsonPathsField !== undefined && !isBlank(f[esp.jsonPathsField]);
+    const use3 = phases === 3 && (esp.url3 || fromPaths);
     const sensors = (use3 ? ids : ["grid_l1"]).map((id, i) => templateSensor(id) + phaseFilterBlock(i));
-    const url = use3 ? esp.url3!(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
-    const lambdaBody = use3
-      ? typeof esp.lambda3 === "function"
-        ? esp.lambda3(f)
-        : esp.lambda3
-      : typeof esp.lambda1 === "function"
-        ? esp.lambda1(f)
-        : esp.lambda1;
+    const url = use3 && esp.url3 ? esp.url3(f) : (esp.url1 ? esp.url1(f) : "http://example.com/api");
+    const lambdaBody = fromPaths
+      ? jsonPathLambda(String(f[esp.jsonPathsField!]), use3 ? ids : ["grid_l1"], warnings)
+      : use3
+        ? typeof esp.lambda3 === "function"
+          ? esp.lambda3(f)
+          : esp.lambda3
+        : typeof esp.lambda1 === "function"
+          ? esp.lambda1(f)
+          : esp.lambda1;
     const jsonRoot = esp.jsonRoot || "JsonObject root";
-    const headerLines =
+    const headers: [string, string][] =
       esp.headersField && !isBlank(f[esp.headersField])
-        ? `\n${IND}${IND}${IND}${IND}${IND}headers:\n` +
-          String(f[esp.headersField])
+        ? String(f[esp.headersField])
             .split(";")
             .map((h) => h.trim())
             .filter(Boolean)
             .map((h) => {
               const idx = h.indexOf(":");
-              const k = idx >= 0 ? h.slice(0, idx).trim() : h;
-              const v = idx >= 0 ? h.slice(idx + 1).trim() : "";
-              return `${IND}${IND}${IND}${IND}${IND}${IND}${k}: ${v}`;
+              return idx >= 0 ? [h.slice(0, idx).trim(), h.slice(idx + 1).trim()] : [h, ""];
             })
-            .join("\n")
-        : "";
+        : [];
+    if (esp.basicAuthFields) {
+      const [user, pass] = esp.basicAuthFields.map((key) => (isBlank(f[key]) ? "" : String(f[key])));
+      if (user || pass) {
+        if (headers.some(([k]) => k.toLowerCase() === "authorization")) {
+          warnings.push("Both a login and an Authorization header are set; the header is sent and the login is ignored.");
+        } else {
+          headers.push(["Authorization", basicAuth(user, pass)]);
+        }
+      }
+    }
+    const headerLines = headers.length
+      ? `\n${IND}${IND}${IND}${IND}${IND}request_headers:\n` +
+        headers.map(([k, v]) => `${IND}${IND}${IND}${IND}${IND}${IND}${k}: ${v}`).join("\n")
+      : "";
     const interval =
       `interval:\n${IND}- interval: 1s\n${IND}${IND}then:\n${IND}${IND}${IND}- http_request.get:\n` +
       `${IND}${IND}${IND}${IND}${IND}url: ${url}${headerLines}\n` +
@@ -458,7 +505,7 @@ function esphomeSensor(state: State): EsphomeSensor {
       `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}return true;\n` +
       `${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}${IND}});`;
     topBlocks.push(interval);
-    if (use3) warnings.push("Three-phase HTTP support is illustrative — confirm the JSON field names for your meter.");
+    if (use3 && !fromPaths) warnings.push("Three-phase HTTP support is illustrative — confirm the JSON field names for your meter.");
     return { topBlocks, sensorBlock: "sensor:\n" + sensors.join("\n"), phases: use3 ? 3 : 1, warnings };
   }
 
@@ -474,6 +521,125 @@ function splitPhases(value: unknown, phases: number): string[] {
   const parts = String(value).split(",").map((s) => s.trim());
   if (phases === 1) return [parts[0] || String(value)];
   return [parts[0] || "", parts[1] || "", parts[2] || ""];
+}
+
+// A JSONPath as the Python source reads it, turned into an ArduinoJson lookup
+// for an ESPHome lambda. Only plain member/index chains translate: wildcards,
+// filters and jsonpath-ng extensions such as .split() have no equivalent, so
+// those return null.
+export function jsonPathLookup(path: string, root: string): string | null {
+  let rest = path.trim();
+  if (rest.startsWith("$")) rest = rest.slice(1);
+  else if (rest && !rest.startsWith(".") && !rest.startsWith("[")) rest = "." + rest;
+  const step = /^(?:\.([A-Za-z_@][\w@-]*)|\[\s*(\d+)\s*\]|\[\s*'([^']*)'\s*\]|\[\s*"([^"]*)"\s*\])/;
+  let out = root;
+  while (rest) {
+    const m = step.exec(rest);
+    if (!m) return null;
+    out += m[2] !== undefined ? `[${m[2]}]` : `[${JSON.stringify(m[1] ?? m[3] ?? m[4])}]`;
+    rest = rest.slice(m[0].length);
+  }
+  return out === root ? null : out;
+}
+
+// Publish one comma-separated JSONPath per sensor id. A path that can't be
+// translated, or a phase left without one, gets a placeholder and a warning
+// rather than silently reading the wrong field.
+function jsonPathLambda(raw: string, ids: string[], warnings: string[], root = "root"): string {
+  const paths = raw.split(",").map((s) => s.trim());
+  return ids
+    .map((id, i) => {
+      const path = paths[i] || "";
+      const lookup = path ? jsonPathLookup(path, root) : null;
+      if (lookup) return publishIfPresent(id, lookup);
+      warnings.push(
+        path
+          ? `The JSON path "${path}" has no ESPHome equivalent — edit the ${id} lambda by hand.`
+          : `No JSON path for ${id} — enter one per phase.`,
+      );
+      return `id(${id}).publish_state(${root}["power"]);  // TODO: ${path ? `read ${path}` : "set this phase's field"}`;
+    })
+    .join(`\n${IND.repeat(11)}`);
+}
+
+// A missing member reads as null and .as<float>() turns that into 0 W, so a
+// message without the field is skipped — as the Python source drops it as a
+// bad reading — rather than published as zero.
+function publishIfPresent(id: string, lookup: string): string {
+  return `if (!${lookup}.isNull()) id(${id}).publish_state(${lookup}.as<float>());`;
+}
+
+// An HTTP basic-auth header value, encoded as UTF-8.
+function basicAuth(user: string, pass: string): string {
+  let bin = "";
+  for (const b of new TextEncoder().encode(`${user}:${pass}`)) bin += String.fromCharCode(b);
+  return `Basic ${btoa(bin)}`;
+}
+
+interface MqttBroker {
+  broker: string;
+  port: string;
+  username: string;
+  password: string;
+  tls: boolean;
+}
+
+const MQTT_TLS_WARNING =
+  "MQTT over TLS: add your broker's CA certificate (PEM) to secrets.yaml as mqtt_ca_certificate — the device won't build or connect without it.";
+
+// The broker an MQTT section points at: its URI, else the separate keys — the
+// same precedence as the Python loader.
+function mqttBroker(f: Fields, warnings: string[]): MqttBroker {
+  let tls = f.TLS === true || f.TLS === "true" || f.TLS === "True";
+  let broker: MqttBroker = {
+    broker: String(f.BROKER || "192.168.1.10").trim(),
+    port: String(f.PORT || "1883").trim(),
+    username: isBlank(f.USERNAME) ? "" : String(f.USERNAME),
+    password: isBlank(f.PASSWORD) ? "" : String(f.PASSWORD),
+    tls,
+  };
+  if (!isBlank(f.URI)) {
+    try {
+      const uri = new URL(String(f.URI).trim());
+      tls = uri.protocol === "mqtts:";
+      broker = {
+        broker: uri.hostname,
+        port: uri.port || (tls ? "8883" : "1883"),
+        username: decodeURIComponent(uri.username),
+        password: decodeURIComponent(uri.password),
+        tls,
+      };
+    } catch {
+      warnings.push(`The broker URI "${f.URI}" doesn't parse — use the broker/port fields instead.`);
+    }
+  }
+  if (broker.tls) warnings.push(MQTT_TLS_WARNING);
+  return broker;
+}
+
+function mqttBlock(b: MqttBroker): string {
+  const lines = ["mqtt:", `${IND}broker: ${b.broker}`, `${IND}port: ${b.port}`];
+  if (b.username) lines.push(`${IND}username: ${quoteYaml(b.username)}`);
+  if (b.password) lines.push(`${IND}password: ${quoteYaml(b.password)}`);
+  // ESPHome only speaks TLS with a CA to check the broker against. Reading it
+  // from a secret keeps the login from going out in plain text: the config
+  // doesn't validate until the CA is there.
+  if (b.tls) lines.push(`${IND}certificate_authority: !secret mqtt_ca_certificate`);
+  return lines.join("\n");
+}
+
+// The Python sources take a 12-hex OBIS code (0100100700ff); ESPHome's sml
+// platform wants it as A-B:C.D.E (1-0:16.7.0).
+function esphomeObis(raw: FieldValue, fallback: string, warnings: string[]): string {
+  if (isBlank(raw)) return fallback;
+  const code = String(raw).trim();
+  if (/^\d+-\d+:\d+\.\d+\.\d+$/.test(code)) return code;
+  if (!/^[0-9a-f]{12}$/i.test(code)) {
+    warnings.push(`The OBIS code "${code}" isn't 12 hex digits — using ${fallback}.`);
+    return fallback;
+  }
+  const [a, b, c, d, e] = (code.match(/../g) ?? []).map((byte) => parseInt(byte, 16));
+  return `${a}-${b}:${c}.${d}.${e}`;
 }
 
 function modbusValueType(dataType: unknown): string {
@@ -597,16 +763,26 @@ export function generateEsphome(state: State): string {
   const wantMarstek = state.marstek && state.marstek.enabled;
   const wantCloud = ((state.ct && state.ct.fields) || {}).CLOUD_REPORTING === "True";
   const pm0 = getPowermeter(meter.type);
-  if (wantInsights && pm0 && pm0.esphome && pm0.esphome.kind === "mqtt") {
-    const mf0 = state.mqttInsights.fields || {};
-    const mFields = meter.fields || {};
-    const sameBroker = (mf0.BROKER || "") === (mFields.BROKER || "");
-    const samePort = (String(mf0.PORT || "1883")) === (String(mFields.PORT || "1883"));
-    if (!sameBroker || !samePort) {
+  const meterIsMqtt = !!(pm0 && pm0.esphome && pm0.esphome.kind === "mqtt");
+  const mf0 = (state.mqttInsights && state.mqttInsights.fields) || {};
+  const insightsBroker: MqttBroker = {
+    broker: String(mf0.BROKER || "192.168.1.10").trim(),
+    port: String(mf0.PORT || "1883").trim(),
+    username: isBlank(mf0.USERNAME) ? "" : String(mf0.USERNAME),
+    password: isBlank(mf0.PASSWORD) ? "" : String(mf0.PASSWORD),
+    tls: mf0.TLS === true || mf0.TLS === "true" || mf0.TLS === "1",
+  };
+  if (wantInsights && meterIsMqtt) {
+    const mb = mqttBroker(meter.fields || {}, []);
+    const sameBroker = insightsBroker.broker === mb.broker && insightsBroker.port === mb.port;
+    const sameLogin = insightsBroker.username === mb.username && insightsBroker.password === mb.password;
+    if (!sameBroker || !sameLogin) {
       warnings.push(
-        "MQTT Insights and the MQTT meter must use the same broker (ESPHome has one mqtt: block). The meter's broker/port below is used for both.",
+        "MQTT Insights and the MQTT meter must use the same broker (ESPHome has one mqtt: block). The meter's broker, port and login below are used for both, so Insights publishes as the meter's user.",
       );
     }
+  } else if (wantInsights && insightsBroker.tls) {
+    warnings.push(MQTT_TLS_WARNING);
   }
 
   const out: string[] = [];
@@ -640,16 +816,9 @@ export function generateEsphome(state: State): string {
   out.push(`external_components:\n${IND}- source: ${esphomeSource()}\n${IND}${IND}components: [${components}]`);
 
   // mqtt_insights needs a top-level mqtt: block. If the meter itself is MQTT,
-  // its broker wins (the data source is what matters) and Insights reuses it;
-  // otherwise fall back to the Insights broker.
-  if (wantInsights) {
-    const mf = state.mqttInsights.fields || {};
-    const useMeter = pm0 && pm0.esphome && pm0.esphome.kind === "mqtt";
-    const mFields = (meter.fields || {});
-    const broker = (useMeter && mFields.BROKER) || mf.BROKER || "192.168.1.10";
-    const port = (useMeter && mFields.PORT) || mf.PORT || "1883";
-    out.push(`mqtt:\n${IND}broker: ${broker}\n${IND}port: ${port}`);
-  }
+  // its block (broker, login, JSON handlers) wins — the data source is what
+  // matters — and Insights reuses it; otherwise fall back to the Insights broker.
+  if (wantInsights && !meterIsMqtt) out.push(mqttBlock(insightsBroker));
   // ESPHome allows only one top-level http_request:. An HTTP-polled meter
   // already emits one (with useragent + RX buffer); marstek_registration and
   // cloud_reporting also need one (with a longer 20s timeout). When both apply,
@@ -664,11 +833,8 @@ export function generateEsphome(state: State): string {
     }
   }
 
-  // top blocks from the sensor (api/mqtt/uart/etc.) — de-dup api/mqtt if already added
-  for (const b of topBlocks) {
-    if (wantInsights && b.startsWith("mqtt:")) continue;
-    out.push(b);
-  }
+  // top blocks from the sensor (api/mqtt/uart/etc.)
+  for (const b of topBlocks) out.push(b);
   out.push(sensorBlock);
 
   // ct002: block

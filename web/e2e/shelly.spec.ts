@@ -88,6 +88,8 @@ test("the batteries tab lists who is polling, and how often", async ({ page }) =
   await expect(battery).toContainText("Polling");
   await expect(battery).toContainText("Last seen");
   await expect(battery).toContainText("Polls every");
+  await expect(battery).toContainText("Polls on");
+  await expect(battery).toContainText("UDP 2222");
 });
 
 test("every tab renders without a page error", async ({ page }) => {

@@ -64,8 +64,9 @@ enum PhaseBucket : size_t {
 };
 
 // Default eviction policy (no consumer_ttl configured): a consumer expires
-// after missing ~2 of its own poll cycles, like the real CT. Mirrors
-// Python's ADAPTIVE_TTL_* constants (see ct002.py / issue #462).
+// after missing ~2 of its own poll cycles, much sooner than the real CT's
+// 30-60 s. Mirrors Python's ADAPTIVE_TTL_* constants (see ct002.py / issue
+// #462).
 constexpr double ADAPTIVE_TTL_POLL_MULTIPLIER = 2.0;
 constexpr double ADAPTIVE_TTL_MIN_SECONDS = 5.0;
 constexpr double ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0;
@@ -437,6 +438,10 @@ class CT002Component : public Component {
   // and says whether the steered batteries should idle at 0 W (mirrors
   // CT002._peakshaving in ct002.py).
   std::pair<float, bool> peakshaving_(float total) const;
+  // Sum of the power reported by batteries still detecting their phase, added
+  // back onto the grid active control steers on so the steered batteries do
+  // not cancel a detection probe (mirrors CT002._probe_output in ct002.py).
+  float probe_output_() const;
   // Monotonic seconds used for all time-gated logic (saturation, probe,
   // eviction, dedup, poll_interval). Instance method (not static) so the
   // test-hook mock clock can override it. Falls back to millis() in
@@ -461,7 +466,7 @@ class CT002Component : public Component {
   // consumer_ttl). Unset (default) = adaptive per-consumer TTL derived from
   // the observed poll cadence — see consumer_ttl_for_(). The cleanup loop
   // runs every 5s; aggregation additionally skips expired consumers per
-  // response so counts shrink at poll granularity, like the real CT.
+  // response so counts shrink at poll granularity.
   std::optional<uint32_t> consumer_ttl_seconds_{};
   uint32_t dedupe_window_ms_{0};
   // Last-accepted-poll timestamp (monotonic seconds) per consumer_id,

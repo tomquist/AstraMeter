@@ -6,6 +6,7 @@ import { PollTransport, TransportError, type Transport } from "./transport.js";
 import {
   initialState,
   pollInterval,
+  rememberPhases,
   type AppState,
   type Tab,
 } from "./model.js";
@@ -306,6 +307,7 @@ async function poll(): Promise<void> {
       // body, and re-recording the last value would draw a flat line across
       // a stretch where nothing was actually measured.
       recordSnapshot(state.history, snapshot);
+      rememberPhases(state.phases, snapshot);
     }
     state.connection = "live";
     state.failures = 0;

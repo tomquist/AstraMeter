@@ -41,6 +41,16 @@ export interface AppState {
    * backend keeps no history (see history.ts).
    */
   history: SeriesHistory;
+  /**
+   * The last phase each battery was assigned, keyed by consumer id.
+   *
+   * Batteries are listed in phase order, and a battery re-running its phase
+   * detection reports itself unassigned for the length of the sweep. Sorting
+   * on that would move its card to the end and back, and the reconciler
+   * matches cards by position, so an open disclosure or a half-typed value
+   * would land on the battery that slid into the slot.
+   */
+  phases: Record<string, string>;
 }
 
 export function initialState(): AppState {
@@ -55,6 +65,7 @@ export function initialState(): AppState {
     busy: {},
     pending: {},
     history: {},
+    phases: {},
   };
 }
 
@@ -138,6 +149,39 @@ export function reportingConsumers(
   snapshot: StatusSnapshot | null,
 ): ConsumerStatus[] {
   return allConsumers(snapshot).filter(hasReported);
+}
+
+/** The order batteries are listed in: the three legs, then all phases. */
+const PHASE_ORDER = ["A", "B", "C", "D"];
+
+/** Remember each battery's phase while it has one; see `AppState.phases`. */
+export function rememberPhases(
+  phases: Record<string, string>,
+  snapshot: StatusSnapshot | null,
+): void {
+  for (const consumer of allConsumers(snapshot)) {
+    const { consumer_id: id, phase } = consumer;
+    if (id && phase && PHASE_ORDER.includes(phase)) phases[id] = phase;
+  }
+}
+
+/**
+ * Batteries in phase order, A to C, then all-phase ones, then unassigned.
+ *
+ * Both backends send them sorted by MAC, which puts a battery per leg in an
+ * order that means nothing on the panel. The sort is stable, so batteries
+ * sharing a phase keep that order between themselves.
+ */
+export function inPhaseOrder(
+  consumers: ConsumerStatus[],
+  phases: Record<string, string>,
+): ConsumerStatus[] {
+  const rank = (c: ConsumerStatus) => {
+    const phase = (c.consumer_id && phases[c.consumer_id]) || c.phase || "";
+    const index = PHASE_ORDER.indexOf(phase);
+    return index < 0 ? PHASE_ORDER.length : index;
+  };
+  return [...consumers].sort((a, b) => rank(a) - rank(b));
 }
 
 /** Devices that actually steer batteries (CT002/CT003). */

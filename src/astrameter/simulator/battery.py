@@ -17,6 +17,12 @@ from astrameter.ct002.balancer import device_capabilities
 
 from .b2500_steering import MIN_CHANNEL_OUTPUT_W, B2500SteeringController
 from .firmware_steering import FirmwareSteeringController
+from .phase_detection import (
+    DetectorInputs,
+    PhaseDetector,
+    make_phase_detector,
+    meter_code_for,
+)
 from .venus_integer_steering import (
     DEADBAND_HMG50_W,
     DEADBAND_W,
@@ -30,6 +36,30 @@ logger = logging.getLogger("astra_sim.battery")
 # Phase letters a battery can sit on, mapped to the index of its power field in
 # ``protocol.RESPONSE_LABELS`` (``A_phase_power`` at 4).
 PHASE_FIELD_INDEX: dict[str, int] = {"A": 4, "B": 5, "C": 6}
+
+# Phase bytes a battery can store, as ``rechrg_seq`` numbers them.
+STORED_PHASES: dict[str, int] = {"A": 1, "B": 2, "C": 3, "D": 4}
+
+# The CT MAC a battery with no CT bound sends; it then accepts any reply.
+WILDCARD_CT_MAC = "000000000000"
+
+# Consecutive failed polls after which the meter task marks the meter offline:
+# six failures per reconnect cycle, four cycles (HMG-50 0x08023cae-0x08023cc6).
+METER_OFFLINE_AFTER_FAILURES = 24
+
+# The Venus D's power setter (VNSD-0 v151 0x0800a968), which detection and
+# steering both go through, adds two PV rules the Venus E 3.0's (VNSE3-0
+# 0x0800a48c) does not have. Charging gives way to PV (0x08008bfc): once a PV
+# input delivers more than 10 W, AC charging is cut to what the charge limit,
+# itself capped at 2500 W, leaves after PV. Surplus feed-in ("余电上网中",
+# 0x08009ab0): with the battery full, PV present and a setting on, the output
+# never drops below the PV power plus 10 W.
+VENUS_D_PV_PRESENT_W = 10
+VENUS_D_CHARGE_CAP_W = 2500
+VENUS_D_FEED_IN_MARGIN_W = 10
+# Feed-in starts at 100 % and holds down to 95 % (0x08009b08 / 0x08009b18).
+VENUS_D_FEED_IN_ON_PCT = 100
+VENUS_D_FEED_IN_HOLD_PCT = 95
 
 
 class BatterySimulator:
@@ -58,10 +88,19 @@ class BatterySimulator:
         participates: bool = True,
         initial_power: float = 0.0,
         min_channel_output: int = MIN_CHANNEL_OUTPUT_W,
+        phase_detection: bool = False,
+        stored_phase: str | None = None,
+        sum_all_phases: bool = True,
+        surplus_feed_in: bool = False,
     ) -> None:
         if phase not in PHASE_FIELD_INDEX:
             raise ValueError(
                 f"Invalid phase {phase!r}, must be one of {list(PHASE_FIELD_INDEX)}"
+            )
+        if stored_phase is not None and stored_phase not in STORED_PHASES:
+            raise ValueError(
+                f"Invalid stored_phase {stored_phase!r}, "
+                f"must be one of {list(STORED_PHASES)}"
             )
 
         self.mac = mac.upper()
@@ -99,6 +138,48 @@ class BatterySimulator:
         # keeps a strong reference to them (asyncio tasks are weakly
         # referenced and would otherwise be collectable mid-flight).
         self._poll_tasks: set[asyncio.Task] = set()
+
+        # Firmware phase detection (see :mod:`phase_detection`). Off, the battery
+        # reports ``inspection_count`` polls as phase ``0`` and then *phase*, as
+        # before. On, *phase* is only where the battery is wired — what the
+        # simulated meter sees — and the phase it reports and steers on is the
+        # one it detects (or *stored_phase*, a phase it already has stored). The
+        # battery then also handles CT replies the way the firmware does: it
+        # rejects a reply naming another CT type or (once bound) another CT
+        # MAC, takes no new reading from one repeating ``info_idx``, holds 0 W
+        # while the meter is offline, and steers only once it has a phase.
+        self._detector: PhaseDetector | None = (
+            make_phase_detector(
+                self.meter_dev_type,
+                STORED_PHASES[stored_phase] if stored_phase else 0,
+            )
+            if phase_detection
+            else None
+        )
+        # The "sum all phases" setting (``dchrg_t``; HMG-50 config +0x71,
+        # VNSE3-0 0x200174f0+0x67): the factory default 1 steers on the total,
+        # 0 on the battery's own phase. Only read with phase detection on.
+        self.sum_all_phases = sum_all_phases
+        # Venus D only, with phase detection on: the app setting that allows
+        # surplus feed-in (which one is not known; 0x2001769c+0x16).
+        self.surplus_feed_in = surplus_feed_in
+        self._feed_in_active = False
+        # BMS gate flags the detector checks (inferred meaning, see
+        # :mod:`phase_detection`).
+        self.charge_allowed = True
+        self.discharge_allowed = True
+        self._fw_time = 0.0
+        self._fw_next_tick = 0.0
+        self._readings: tuple[int, int, int, int] = (0, 0, 0, 0)
+        self._meter_online = False
+        self._failed_polls = 0
+        self._last_info_idx = 0
+        # HMG-50: parsed from each accepted reply's CT type; Venus: configured.
+        self._meter_code = (
+            0
+            if self._is_hmg50_type()
+            else meter_code_for(self.meter_dev_type, self.ct_dev_type)
+        )
 
         # Self-consumption control law, run on the grid value read back from the
         # CT. This ramp controller is the fallback: the Venus/HMG-50 and the
@@ -209,6 +290,53 @@ class BatterySimulator:
         return self._target_power
 
     @property
+    def detector(self) -> PhaseDetector | None:
+        """The firmware phase detector, when phase detection is on."""
+        return self._detector
+
+    @property
+    def reported_phase(self) -> str:
+        """The phase character this battery puts in its next request."""
+        if self._detector is not None:
+            return self._detector.phase_char
+        return "0" if self._request_count < self.inspection_count else self.phase
+
+    @property
+    def meter_online(self) -> bool:
+        return self._meter_online
+
+    def start_phase_detection(self) -> None:
+        """Re-run phase detection, as a CT-MAC or meter-type change or the
+        app's ``seq_check`` does. The output drops to 0 at once."""
+        if self._detector is None:
+            raise RuntimeError("phase detection is not enabled for this battery")
+        self._detector.start()
+        self._apply_ct_derived_target(self._detector.zero_w)
+
+    def _is_hmg50_type(self) -> bool:
+        return self.meter_dev_type.upper().startswith("HMG")
+
+    def _is_venus_d(self) -> bool:
+        return self.meter_dev_type.upper().startswith("VNSD")
+
+    def _venus_d_output(self, command: float) -> float:
+        """Apply the Venus D's PV rules to a power command (see
+        ``VENUS_D_*``). The firmware sums four PV inputs and tests each one;
+        the simulator has a single DC input and treats it as their sum."""
+        pv = int(self._dc_input_power)
+        if command < 0 and pv > VENUS_D_PV_PRESENT_W:
+            room = pv - min(self.max_charge_power, VENUS_D_CHARGE_CAP_W)
+            command = 0.0 if room >= 0 else max(command, float(room))
+        soc_pct = int(self._soc * 100)
+        if not (self.surplus_feed_in and pv > 0) or soc_pct < VENUS_D_FEED_IN_HOLD_PCT:
+            self._feed_in_active = False
+        elif soc_pct >= VENUS_D_FEED_IN_ON_PCT:
+            self._feed_in_active = True
+        if self._feed_in_active:
+            command = max(command, float(pv + VENUS_D_FEED_IN_MARGIN_W))
+        return command
+
+    @property
     def dc_input_power(self) -> float:
         return self._dc_input_power
 
@@ -218,6 +346,8 @@ class BatterySimulator:
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
+        if self._detector is not None and self._is_venus_d():
+            new_target = self._venus_d_output(new_target)
         self._requested_target = new_target
         if self.power_update_delay_ticks <= 0:
             self._target_power = new_target
@@ -305,7 +435,7 @@ class BatterySimulator:
 
     def _request_fields(self) -> list[str]:
         """Build the CT002 request fields for this poll."""
-        phase_field = "0" if self._request_count < self.inspection_count else self.phase
+        phase_field = self.reported_phase
         fields = [
             self.meter_dev_type,
             self.mac,
@@ -345,8 +475,9 @@ class BatterySimulator:
             )
             transport.sendto(payload)
             data = await asyncio.wait_for(proto.received, timeout=2.0)
-        except (TimeoutError, OSError) as exc:
+        except (asyncio.TimeoutError, TimeoutError, OSError) as exc:
             logger.debug("Battery %s: request failed: %s", self.mac, exc)
+            self._note_failed_poll()
             return None
         finally:
             if transport is not None:
@@ -355,7 +486,12 @@ class BatterySimulator:
         response_fields, err = protocol.parse_request(data)
         if response_fields is None:
             logger.debug("Battery %s: bad response: %s", self.mac, err)
+            self._note_failed_poll()
             return None
+
+        if self._detector is not None:
+            self._receive_firmware(response_fields)
+            return response_fields
 
         # Hand parsed response off to the deterministic helper so it can
         # also be unit-tested without UDP I/O.
@@ -364,7 +500,142 @@ class BatterySimulator:
 
         return response_fields
 
-    def _handle_ct_response(self, response_fields: list[str]) -> None:
+    # -- firmware reply handling (phase detection on) ------------------------
+
+    def _note_failed_poll(self) -> None:
+        if self._detector is None:
+            return
+        self._failed_polls += 1
+        if self._failed_polls >= METER_OFFLINE_AFTER_FAILURES:
+            self._meter_online = False
+
+    def _accept_reply(self, fields: list[str]) -> int:
+        """Classify a reply as the HMG-50 parser does (0x08026464).
+
+        ``0``: rejected — another CT type than the one requested (0x08026718),
+        or another CT MAC than the bound one (0x08026b24). ``2``: accepted but
+        ``info_idx`` repeats the previous reply's and is non-zero
+        (0x08026ba6), so no new reading. ``1``: a new reading.
+        """
+        if len(fields) < 14 or fields[0] != self.ct_dev_type:
+            return 0
+        if self.ct_mac not in ("", WILDCARD_CT_MAC) and fields[1] != self.ct_mac:
+            return 0
+        try:
+            info_idx = int(fields[13]) & 0xFF
+        except ValueError:
+            info_idx = 0
+        repeated = info_idx == self._last_info_idx
+        self._last_info_idx = info_idx
+        if repeated and info_idx != 0:
+            return 2
+        return 1
+
+    def _receive_firmware(self, fields: list[str]) -> None:
+        """Take one CT reply the way the firmware does, then run the loop pass
+        its arrival wakes."""
+        verdict = self._accept_reply(fields)
+        if verdict == 0:
+            self._note_failed_poll()
+            return
+        self._failed_polls = 0
+        self._meter_online = True
+        if verdict == 2:
+            return
+        if self._is_hmg50_type():
+            self._meter_code = meter_code_for(self.meter_dev_type, fields[0])
+
+        def field(idx: int) -> int:
+            try:
+                return int(fields[idx])
+            except (IndexError, ValueError):
+                return 0
+
+        self._readings = (field(4), field(5), field(6), field(7))
+        self._detector_pass(self._fw_time)
+        self._fw_next_tick = self._fw_time + self._loop_period()
+        assert self._detector is not None
+        if self._detector.steering:
+            self._steer_firmware(fields)
+
+    def _steer_firmware(self, fields: list[str]) -> None:
+        """Steer on the reading the firmware selects (HMG-50 0x080232c8,
+        VNSE3-0 0x0802e954).
+
+        With "sum all phases" set — the factory default, ``dchrg_t`` = 1 — the
+        battery steers on ``total_power`` and divides it by the sum of all four
+        ``*_chrg_nb`` counts (bucket select, HMG-50 0x080055ea). Without it, it
+        steers on its own phase's power field and count, or the total and
+        ``ABC_chrg_nb`` for phase D.
+        """
+        assert self._detector is not None
+        phase = self._detector.phase
+
+        def field(idx: int) -> int:
+            try:
+                return int(fields[idx])
+            except (IndexError, ValueError):
+                return 0
+
+        if self.sum_all_phases:
+            self._handle_ct_response(
+                fields,
+                grid_reading=field(7),
+                phase_count=sum(field(i) for i in range(8, 12)),
+            )
+            return
+        self._handle_ct_response(
+            fields,
+            grid_reading=field(3 + phase if phase < 4 else 7),
+            phase_count=field(7 + phase if phase < 4 else 11),
+        )
+
+    def _loop_period(self) -> float:
+        assert self._detector is not None
+        return self._detector.loop_period_s
+
+    def _detector_pass(self, now: float) -> None:
+        assert self._detector is not None
+        result = self._detector.tick(
+            DetectorInputs(
+                now=now,
+                readings=self._readings,
+                soc_pct=int(self._soc * 100),
+                meter_online=self._meter_online,
+                meter_code=self._meter_code,
+                window_w=(
+                    float(self.max_discharge_power)
+                    if self.discharge_allowed or not self._is_hmg50_type()
+                    else 0.0
+                ),
+                charge_allowed=self.charge_allowed,
+                discharge_allowed=self.discharge_allowed,
+            )
+        )
+        if result.reset_setpoint and self._venus_steering is not None:
+            self._venus_steering.setpoint = 0
+        if result.command is not None:
+            self._apply_ct_derived_target(result.command)
+
+    def _run_detector_loop(self, dt: float) -> None:
+        """The loop passes that fall inside the next *dt* seconds: one per
+        queue-wait timeout when no CT reply wakes it earlier."""
+        if self._detector is None:
+            return
+        end = self._fw_time + dt
+        period = self._loop_period()
+        while self._fw_next_tick <= end:
+            self._detector_pass(self._fw_next_tick)
+            self._fw_next_tick += period
+        self._fw_time = end
+
+    def _handle_ct_response(
+        self,
+        response_fields: list[str],
+        *,
+        grid_reading: int | None = None,
+        phase_count: int | None = None,
+    ) -> None:
         """Derive the new AC target from the grid value read back from the CT.
 
         The grid value (sum of the per-phase power fields, positive = importing)
@@ -387,6 +658,10 @@ class BatterySimulator:
         chasing the full residual. This matters in relay mode / against a real
         CT; AstraMeter's active-control emulator distributes per-battery targets
         itself and reports a count of 1, so the split is a no-op there.
+
+        *grid_reading* and *phase_count* override the values read from the
+        reply, for a caller that selects them itself (firmware phase detection
+        steers on its detected phase's bucket, not the wired one).
         """
 
         def field(idx: int) -> int:
@@ -395,14 +670,16 @@ class BatterySimulator:
             except (IndexError, ValueError, TypeError):
                 return 0
 
-        grid_reading = field(4) + field(5) + field(6)
+        if grid_reading is None:
+            grid_reading = field(4) + field(5) + field(6)
 
         if self._b2500 is not None:
             self._steer_b2500_output(grid_reading)
             return
 
         # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
-        phase_count = field(8 + "ABC".index(self.phase))
+        if phase_count is None:
+            phase_count = field(8 + "ABC".index(self.phase))
 
         if self._venus_steering is not None:
             # Venus A / D / E: integer integrator behind its own gate, positive
@@ -467,6 +744,7 @@ class BatterySimulator:
         """Advance the simulated plant by *dt* seconds (no I/O)."""
         self._step_index += 1
         self._drain_pending_power_targets()
+        self._run_detector_loop(dt)
         self._update_power(dt)
         self._update_soc(dt)
 
@@ -533,6 +811,7 @@ class BatterySimulator:
         return {
             "mac": self.mac,
             "phase": self.phase,
+            "reported_phase": self.reported_phase,
             "power": round(self._current_power),
             "target": round(self._requested_target),
             "applied_target": round(self._target_power),

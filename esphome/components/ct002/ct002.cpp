@@ -48,6 +48,10 @@ constexpr float PEAKSHAVING_IDLE_BAND_W = 100.0f;
 // match between the two stacks.
 constexpr float POLL_INTERVAL_EMA_ALPHA = 0.3f;
 
+// The CT MAC a battery sends while it has no CT bound yet; answered like our
+// own MAC. Mirrors WILDCARD_CT_MAC in src/astrameter/ct002/ct002.py.
+constexpr const char *WILDCARD_CT_MAC = "000000000000";
+
 std::optional<float> ema_interval(std::optional<float> previous, float raw) {
   const auto round_tenth = [](float v) {
     return static_cast<float>(round_half_even(static_cast<double>(v) * 10.0)) / 10.0f;
@@ -327,6 +331,11 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
   }
   const auto &fields = *parsed;
   if (fields.size() < 4) return;
+  if (is_reader_mac(fields[1])) {
+    ESP_LOGD(TAG, "Ignoring CT002 request from %s: it is AstraMeter's own meter reader (%s)",
+             addr_ip.c_str(), fields[1].c_str());
+    return;
+  }
   if (!this->validate_ct_mac_(fields)) return;
 
   const std::string meter_mac = fields[1];
@@ -413,6 +422,16 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
       break;
     }
   }
+  if (!meter_ok && in_inspection_mode) {
+    // A battery detecting its phase compares every reading it accepts with the
+    // baseline it took before probing, so the zero hold would read as a move on
+    // every phase that carried load: an HMG-50 gives up, a Venus can store the
+    // wrong phase (or D). Without a reply it keeps its last real reading and
+    // waits or times out and retries. Mirrors ct002.py _serve.
+    ESP_LOGD(TAG, "Not answering %s during phase detection: meter unavailable",
+             addr_ip.c_str());
+    return;
+  }
   if (!meter_ok) values = {0.0f, 0.0f, 0.0f};
   while (values.size() < 3) values.push_back(0.0f);
   values.resize(3);
@@ -470,8 +489,9 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 // Keep the meter's conditioning filters out of an inspection sweep.
 //
 // A battery that polls with phase "0" has taken itself off the CT and is
-// sweeping its own output -- up to full discharge, then full charge -- to watch
-// the CT reading follow. Those kilowatt swings are real, and seeing them is the
+// stepping its own output by up to 2000 W in one direction to see which phase
+// of the CT reading follows (docs/ct002-ct003-protocol.md, "Battery-side phase
+// detection"). Those kilowatt swings are real, and seeing them is the
 // entire point of the sweep, but to a rolling-median filter they look exactly
 // like the meter glitches it exists to reject: with hampel: set, the emulator
 // answers the whole sweep with the frozen pre-sweep reading, so the battery is
@@ -585,6 +605,7 @@ bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) co
   if (this->ct_mac_.empty()) return true;
   if (fields.size() < 4) return false;
   std::string req(fields[3]);
+  if (req == WILDCARD_CT_MAC) return true;
   for (auto &c : req) c = static_cast<char>(std::tolower(c));
   std::string cfg(this->ct_mac_);
   for (auto &c : cfg) c = static_cast<char>(std::tolower(c));
@@ -592,9 +613,13 @@ bool CT002Component::validate_ct_mac_(const std::vector<std::string> &fields) co
 }
 
 ReportMap CT002Component::collect_reports_for_balancer_() const {
+  // Only the batteries we steer: one still detecting its phase (phase "0") is
+  // answered with the raw reading, never a target, so counting it would hand
+  // it a share it never takes and pull the steered batteries toward its output
+  // (issue #732). Mirrors ct002.py _compute_smooth_target.
   ReportMap out;
   for (const auto &kv : this->consumers_) {
-    if (kv.second.timestamp > 0.0) {
+    if (kv.second.timestamp > 0.0 && is_steered_phase(kv.second.phase)) {
       ConsumerReport r;
       r.device_type = kv.second.device_type;
       r.phase = kv.second.phase;
@@ -629,10 +654,10 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
     // Respect the request's "participate" flag: a battery that opted out (7th
     // field == 0) is not aggregated into the per-phase buckets or the count.
     if (!c.participates) continue;
-    // The real CT clears a slot that missed ~1-2 poll cycles before
-    // aggregating, so a battery that drops off the network stops being
-    // counted almost immediately. Mirror that per response here; the cleanup
-    // interval removes the entry shortly after (issue #462).
+    // Skip a consumer past its TTL per response, so a battery that drops off
+    // the network stops being counted at poll granularity rather than at the
+    // next cleanup interval, which removes the entry shortly after (issue
+    // #462). The real CT is slower here: it ages its slots in 30 s steps.
     if (this->consumer_expired_(c, now)) continue;
     const size_t idx = bucket_index_for_phase(c.phase);
     // Count every battery reporting into the bucket (regardless of power) so
@@ -692,6 +717,26 @@ void CT002Component::set_peakshaving_threshold(float threshold) {
   }
 }
 
+float CT002Component::probe_output_() const {
+  // What batteries still detecting their phase report they put out. To find
+  // its phase a battery steps its own output and watches which phase of the
+  // reading follows; the steered batteries must not cancel that step, or it
+  // never shows (docs/ct002-ct003-protocol.md, "Battery-side phase
+  // detection"). So active control steers on the grid as it would read
+  // without them. A battery reports its output while detecting (a Venus in
+  // Auto or AI mode, a B2500 always); one reporting 0 adds nothing. Mirrors
+  // ct002.py _probe_output.
+  const double now = this->now_seconds_();
+  float sum = 0.0f;
+  for (const auto &kv : this->consumers_) {
+    const auto &c = kv.second;
+    if (c.timestamp <= 0.0 || is_steered_phase(c.phase)) continue;
+    if (this->consumer_expired_(c, now)) continue;
+    sum += c.power;
+  }
+  return sum;
+}
+
 std::pair<float, bool> CT002Component::peakshaving_(float total) const {
   // Returns the grid total handed to the balancer and whether the steered
   // batteries should each idle at 0 W on their own: demand above zero but not
@@ -703,9 +748,10 @@ std::pair<float, bool> CT002Component::peakshaving_(float total) const {
   // CT002._peakshaving.
   if (this->peakshaving_threshold_ <= 0.0f) return {total, false};
   // Only the batteries the balancer steers count toward demand: one on a
-  // manual setpoint, paused, opted out or gone silent is not ours to move, so
-  // its output lowers demand the way solar does. Counting it would have the
-  // steered batteries cancel it out by charging from the grid.
+  // manual setpoint, paused, opted out, still detecting its phase or gone
+  // silent is not ours to move, so its output lowers demand the way solar does.
+  // Counting it would have the steered batteries cancel it out by charging from
+  // the grid.
   const double now = this->now_seconds_();
   float steered_power = 0.0f;
   bool any_charging = false;
@@ -713,7 +759,9 @@ std::pair<float, bool> CT002Component::peakshaving_(float total) const {
   bool all_near_zero = true;
   for (const auto &kv : this->consumers_) {
     const auto &c = kv.second;
-    if (c.timestamp <= 0.0 || !c.active || !c.participates || c.manual_enabled) continue;
+    if (c.timestamp <= 0.0 || !is_steered_phase(c.phase) || !c.active || !c.participates ||
+        c.manual_enabled)
+      continue;
     if (this->consumer_expired_(c, now)) continue;
     steered_power += c.power;
     any_charging = any_charging || c.power < 0.0f;
@@ -759,10 +807,11 @@ std::vector<float> CT002Component::compute_smooth_target_(const std::vector<floa
   }
   float grid_total = 0.0f;
   for (float v : values) grid_total += v;
-  // smooth_target mirrors Python's _last_smooth_target (ct002.py:361-362):
-  // the total INPUT grid power (post-filter, pre-balancer), NOT the sum of
-  // the balancer's per-phase output targets. mqtt_insights publishes this
-  // as the device-level smooth_target sensor.
+  grid_total += this->probe_output_();
+  // smooth_target mirrors Python's _last_smooth_target: the total INPUT grid
+  // power (post-filter, pre-balancer, with any phase-detection probe added
+  // back), NOT the sum of the balancer's per-phase output targets.
+  // mqtt_insights publishes this as the device-level smooth_target sensor.
   this->last_smooth_target_ = grid_total;
   const auto shaved = this->peakshaving_(grid_total);
   auto out_arr = this->balancer_->compute_target(consumer_id, mode, reports, shaved.first,

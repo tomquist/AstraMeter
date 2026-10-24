@@ -16,6 +16,7 @@ from astrameter.config.config_loader import (
     create_homewizard_powermeter,
     create_iobroker_powermeter,
     create_json_http_powermeter,
+    create_marstek_meter_powermeter,
     create_modbus_powermeter,
     create_mqtt_powermeter,
     create_powermeter,
@@ -39,6 +40,7 @@ from astrameter.powermeter import (
     FritzSmartEnergy,
     Fronius,
     HomeAssistant,
+    MarstekMeter,
     MqttPowermeter,
     Powermeter,
     Refoss,
@@ -546,6 +548,34 @@ def test_create_homewizard_powermeter() -> None:
     except Exception as e:
         if "Connection" not in str(e) and "timed out" not in str(e):
             raise
+
+
+def test_create_marstek_meter_powermeter() -> None:
+    """IP, MAC, TYPE and POLL_INTERVAL reach the reader, and so do the
+    emulated CTs' own MACs, which it must never read."""
+    config = configparser.ConfigParser()
+    config["CT002"] = {"CT_MAC": "02:b2:50:00:00:01"}
+    config["MARSTEK_METER"] = {
+        "IP": "192.168.1.50",
+        "MAC": "AA:BB:CC:DD:EE:FF",
+        "TYPE": "TPM2-0",
+        "POLL_INTERVAL": "2",
+    }
+    pm = create_marstek_meter_powermeter("MARSTEK_METER", config)
+    assert isinstance(pm, MarstekMeter)
+    assert pm.ip == "192.168.1.50"
+    assert pm._ct_mac == "aabbccddeeff"
+    assert pm._ct_type == "TPM2-0"
+    assert pm._poll_interval == 2.0
+    assert pm._own_ct_macs == {"02b250000001"}
+
+
+def test_create_marstek_meter_powermeter_defaults_to_detection() -> None:
+    config = configparser.ConfigParser()
+    config["MARSTEK_METER"] = {"IP": "192.168.1.50"}
+    pm = create_marstek_meter_powermeter("MARSTEK_METER", config)
+    assert isinstance(pm, MarstekMeter)
+    assert (pm._ct_mac, pm._ct_type, pm._own_ct_macs) == ("", "", set())
 
 
 def test_create_fritz_powermeter() -> None:

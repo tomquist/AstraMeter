@@ -112,7 +112,8 @@ def distinct_settings() -> CtSettings:
         elif isinstance(default, float):
             values[field.name] = 0.1001 + index / 10000
         elif isinstance(default, str):
-            values[field.name] = f"value-{index}"
+            # Lowercase, no separators: CT002 normalizes ct_mac to that form.
+            values[field.name] = f"value{index}"
         elif default is None:  # consumer_ttl
             values[field.name] = 1000 + index
     return replace(CtSettings(), **values)

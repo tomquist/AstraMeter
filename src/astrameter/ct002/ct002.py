@@ -37,6 +37,7 @@ from .protocol import (
     build_payload,
     calculate_checksum,
     compute_length,
+    is_reader_mac,
     parse_int,
     parse_request,
 )
@@ -64,6 +65,11 @@ UDP_PORT = 12345
 CLEANUP_INTERVAL_SECONDS = 5
 POLL_INTERVAL_EMA_ALPHA = 0.3
 
+# The CT MAC a battery sends while it has no CT bound yet. A real CT answers
+# it as well as its own MAC, and always replies with its own MAC — which is
+# how the battery learns it (verified in CT002/CT003 firmware v116-v124).
+WILDCARD_CT_MAC = "000000000000"
+
 # Under peak shaving, how close to 0 W (W) every battery of a pool trading
 # power must already be before each is held at 0 W on its own (see
 # CT002._peakshaving).  Sized to what the shared correction leaves stuck: its
@@ -77,9 +83,11 @@ PEAKSHAVING_IDLE_BAND_W = 100.0
 # (phase "D") reporters.
 PHASE_BUCKETS = ("x", "A", "B", "C", "ABC")
 
-# Default eviction policy (``consumer_ttl=None``): the real CT clears a slave
-# slot that missed roughly 1-2 of its own poll cycles, so by default a
-# consumer expires after missing ~2 cycles of its observed cadence.  The floor
+# Default eviction policy (``consumer_ttl=None``): a consumer expires after
+# missing ~2 cycles of its observed cadence.  That is much stricter than the
+# real CT, which keeps a silent battery's slot for 30-60 s (it ages slots in
+# 30 s steps, docs/ct002-ct003-protocol.md); issue #462 chose it while the CT
+# was still believed to evict after ~1-2 polls.  The floor
 # keeps a transient EMA dip (e.g. a burst of retransmits) from evicting a live
 # battery, and the fallback covers a consumer whose cadence is still unknown
 # (only one poll seen).  Issue #462.
@@ -113,6 +121,16 @@ def normalize_phase(raw: object) -> str:
     """
     phase = str(raw).strip().upper() if raw else ""
     return phase if phase in STEERED_PHASES else "0"
+
+
+def normalize_ct_mac(raw: str) -> str:
+    """``CT_MAC`` as the battery stores it: lowercase hex, no separators.
+
+    The battery compares the MAC in our reply to its bound CT MAC byte for
+    byte, so ``AA:BB:CC:DD:EE:FF`` would never pair. Mirrors
+    ``_validate_ct_mac`` in esphome/components/ct002/__init__.py.
+    """
+    return raw.strip().replace(":", "").replace("-", "").lower()
 
 
 def _bucket_for_phase(phase: str) -> str:
@@ -439,7 +457,7 @@ class CT002:
         wifi_rssi: int = -50,
         dedupe_time_window: float = 0.0,
         # None (default) = adaptive eviction: a consumer expires after missing
-        # ~2 of its own poll cycles, like the real CT.  A number = fixed TTL
+        # ~2 of its own poll cycles (the real CT waits 30-60 s).  A number = fixed TTL
         # in seconds (set CONSUMER_TTL to get this).
         consumer_ttl: int | None = None,
         debug_status: bool = False,
@@ -457,7 +475,7 @@ class CT002:
         reset_fn: Callable[[], None] | None = None,
     ) -> None:
         self.udp_port = udp_port
-        self.ct_mac = ct_mac
+        self.ct_mac = normalize_ct_mac(ct_mac)
         self.ct_type = ct_type
         self.wifi_rssi = wifi_rssi
         self.dedupe_time_window = dedupe_time_window
@@ -784,8 +802,8 @@ class CT002:
         """Seconds of silence after which *consumer* counts as gone.
 
         A configured ``consumer_ttl`` is used verbatim; otherwise the TTL
-        adapts to the consumer's observed poll cadence (~2 missed cycles,
-        like the real CT — see the ADAPTIVE_TTL_* constants).
+        adapts to the consumer's observed poll cadence (~2 missed cycles —
+        see the ADAPTIVE_TTL_* constants).
         """
         if self.consumer_ttl is not None:
             return float(self.consumer_ttl)
@@ -865,9 +883,10 @@ class CT002:
         part-way into a discharge (or charge) is driven back to zero once
         demand drops under the threshold instead of being frozen there.
         Only those batteries count: a battery on a manual setpoint, paused,
-        opted out of control or gone silent is not ours to move, so its
-        output lowers demand the way solar does.  Counting it would ask the
-        steered batteries to cancel it out by charging from the grid.
+        opted out of control, still detecting its phase or gone silent is not
+        ours to move, so its output lowers demand the way solar does.
+        Counting it would ask the steered batteries to cancel it out by
+        charging from the grid.
         """
         if self.peakshaving_threshold <= 0:
             return total, False
@@ -876,6 +895,7 @@ class CT002:
             parse_int(c.power, 0)
             for c in self._consumers.values()
             if c.timestamp > 0
+            and c.phase in STEERED_PHASES
             and c.active
             and c.participates
             and not c.manual_enabled
@@ -892,6 +912,29 @@ class CT002:
         )
         return total - min(household_demand, self.peakshaving_threshold), hold
 
+    def _probe_output(self) -> float:
+        """What batteries still detecting their phase report they put out.
+
+        To find its phase a battery steps its own output and watches which
+        phase of the reading follows; the steered batteries must not cancel
+        that step, or it never shows (docs/ct002-ct003-protocol.md,
+        "Battery-side phase detection").  So active control steers on the grid
+        as it would read without them, which also keeps their output out of
+        what peak shaving counts as demand.  A battery reports its output while
+        detecting: a Venus in Auto or AI mode, a B2500 always; one reporting 0
+        adds nothing.
+        """
+        now = self._clock()
+        return float(
+            sum(
+                parse_int(c.power, 0)
+                for c in self._consumers.values()
+                if c.timestamp > 0
+                and c.phase not in STEERED_PHASES
+                and not self._consumer_expired(c, now)
+            )
+        )
+
     def _apply_peakshaving(self, total: float) -> float:
         """The grid total peak shaving hands the balancer (see _peakshaving)."""
         return self._peakshaving(total)[0]
@@ -905,10 +948,17 @@ class CT002:
             return values
 
         total: float = sum(parse_int(v, 0) for v in values)
+        total += self._probe_output()
         self._last_smooth_target = total
         sample_id = tuple(values)
         mode = self._consumer_mode(consumer_id)
 
+        # The pool holds only the batteries we steer. One still detecting its
+        # phase (phase "0") is answered with the raw reading, never a target,
+        # so counting it would hand it a share it never takes and pull the
+        # steered batteries toward its output: with one stuck at 0 W, an
+        # HMG-50 next to it covered only about three quarters of the load
+        # (issue #732).
         reports = {
             cid: ConsumerReport(
                 phase=c.phase,
@@ -919,7 +969,7 @@ class CT002:
                 min_dc_output=c.min_dc_output,
             )
             for cid, c in self._consumers.items()
-            if c.timestamp > 0
+            if c.timestamp > 0 and c.phase in STEERED_PHASES
         }
         total, hold_at_zero = self._peakshaving(total)
         # A consumer that opted out via the request's "participate" flag is
@@ -957,10 +1007,11 @@ class CT002:
             # the forwarded count.
             if not consumer.participates:
                 continue
-            # The real CT clears a slot that missed ~1-2 poll cycles before
-            # aggregating, so a battery that drops off the network stops being
-            # counted almost immediately.  Mirror that per response here; the
-            # cleanup loop removes the entry shortly after (issue #462).
+            # Skip a consumer past its TTL per response, so a battery that
+            # drops off the network stops being counted at poll granularity
+            # rather than at the next cleanup pass, which removes the entry
+            # shortly after (issue #462).  The real CT is slower here: it
+            # ages its slots in 30 s steps.
             if self._consumer_expired(consumer, now):
                 continue
             bucket = _bucket_for_phase(consumer.phase)
@@ -1314,9 +1365,9 @@ class CT002:
 
     def _ct_mac_matches(self, request: CT002Request) -> bool:
         """Whether *request* names the CT MAC we are configured to answer for."""
-        if not self.ct_mac:
+        if not self.ct_mac or request.ct_mac == WILDCARD_CT_MAC:
             return True
-        return bool(request.ct_mac) and request.ct_mac.lower() == self.ct_mac.lower()
+        return request.ct_mac.lower() == self.ct_mac
 
     async def _safe_handle_request(
         self, data: bytes, addr: tuple[str, int], transport: DatagramSink
@@ -1370,8 +1421,10 @@ class CT002:
         """Keep the meter's conditioning filters out of an inspection sweep.
 
         A battery that polls with phase ``'0'`` has taken itself off the CT and
-        is sweeping its own output — up to full discharge, then full charge —
-        to watch the CT reading follow.  Those kilowatt swings are real, and
+        is stepping its own output by up to 2000 W in one direction to see
+        which phase of the CT reading follows (the probe described under
+        "Battery-side phase detection" in docs/ct002-ct003-protocol.md).
+        Those kilowatt swings are real, and
         seeing them is the entire point of the sweep, but to a rolling-median
         filter they look exactly like the meter glitches it exists to reject:
         with ``HAMPEL_WINDOW`` set, the emulator answers the whole sweep with
@@ -1417,6 +1470,14 @@ class CT002:
             return None
 
         request = CT002Request.from_fields(fields, addr)
+        if is_reader_mac(request.meter_mac):
+            logger.debug(
+                "Ignoring CT002 request from %s: it is AstraMeter's own meter "
+                "reader (battery MAC %s), which must read a real CT",
+                addr,
+                request.meter_mac,
+            )
+            return None
         if not self._ct_mac_matches(request):
             logger.debug(
                 "Ignoring CT002 request from %s due to CT MAC mismatch (req=%s, cfg=%s)",
@@ -1494,6 +1555,21 @@ class CT002:
             self.set_consumer_value(consumer_id, updated)
 
         raw_values, values, meter_failed = self._resolve_target(request, meter_failed)
+        if meter_failed and request.in_inspection_mode:
+            # A battery detecting its phase compares every reading it accepts
+            # with the baseline it took before probing, so the zero hold would
+            # read as a move on every phase that carried load: an HMG-50 gives
+            # up, a Venus can store the wrong phase (or D). Without a reply it
+            # keeps its last real reading and simply waits or times out and
+            # retries (docs/ct002-ct003-protocol.md, "Battery-side phase
+            # detection").
+            logger.debug(
+                "CT002 not answering %s during phase detection: meter unavailable",
+                request.addr,
+            )
+            self._last_meter_failed = True
+            self._rev += 1
+            return
         if not request.in_inspection_mode:
             self._record_instructed_power(request, values)
 
@@ -1551,10 +1627,11 @@ class CT002:
         On a meter failure the target is a literal ``[0, 0, 0]`` *hold*, not a
         reading: the CT002 instruction is a delta
         (``new_target = current_power + grid_field``), so re-issuing one derived
-        from a frozen reading winds the battery up in active control, and feeds
-        frozen per-phase values into a phase self-diagnosis in inspection mode
-        (issue #403).  The ESPHome component does the same when its sensor ages
-        out (see esphome/components/ct002/ct002.cpp).
+        from a frozen reading winds the battery up in active control (issue
+        #403).  A battery detecting its phase gets neither: :meth:`_serve` does
+        not answer it, since it would read the hold as a move.  The ESPHome
+        component does the same when its sensor ages out (see
+        esphome/components/ct002/ct002.cpp).
         """
         values: list[float] = [0.0, 0.0, 0.0]
         stored = None if meter_failed else self._get_consumer_value(request.consumer_id)

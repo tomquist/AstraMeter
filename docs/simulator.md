@@ -272,3 +272,11 @@ network:
 - When solar exceeds consumption, the grid goes negative (export) and the
   batteries charge
 - Batteries track SOC and saturate at 0%/100%
+- Batteries report phase `0` for their first poll and their configured phase
+  after that. Built with `BatterySimulator(phase_detection=True)` (the Python
+  API the end-to-end tests use; not in the JSON config yet), they instead run
+  the firmware's own phase detection, described under "Battery-side phase
+  detection" in [ct002-ct003-protocol.md](ct002-ct003-protocol.md). A
+  Venus D (`VNSD-0`) in that mode also applies its PV rules to every power
+  command: charging gives way to the DC input, and with `surplus_feed_in=True`
+  a full battery never outputs less than the DC input plus 10 W
