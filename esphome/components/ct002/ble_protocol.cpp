@@ -124,9 +124,9 @@ std::string managed_id(const std::array<uint8_t, 6> &chip_mac) {
     h ^= b;
     h *= 16777619u;
   }
-  static const char HEX[] = "0123456789abcdef";
+  static const char HEX_DIGITS[] = "0123456789abcdef";
   std::string id(MANAGED_ID_PREFIX);
-  for (int shift = 20; shift >= 0; shift -= 4) id.push_back(HEX[(h >> shift) & 0x0F]);
+  for (int shift = 20; shift >= 0; shift -= 4) id.push_back(HEX_DIGITS[(h >> shift) & 0x0F]);
   return id;
 }
 
