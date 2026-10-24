@@ -59,7 +59,10 @@ export interface State {
   };
   meters: Meter[];
   ct: { fields: Fields };
-  marstek: { enabled: boolean; fields: Fields };
+  // setByHand: the generator's mark that the user set `enabled` themselves,
+  // so a change of target or Bluetooth leaves it alone. Absent in projects
+  // saved before the mark existed.
+  marstek: { enabled: boolean; fields: Fields; setByHand?: boolean };
   mqttInsights: { enabled: boolean; fields: Fields };
   esphome: {
     name: string;
@@ -219,7 +222,11 @@ export function migrate(s: any): State {
     })(),
     esphome: { ...d.esphome, ...(s.esphome || {}) },
     ct: { fields: asObject(s.ct && s.ct.fields) },
-    marstek: { enabled: !!(s.marstek && s.marstek.enabled), fields: asObject(s.marstek && s.marstek.fields) },
+    marstek: {
+      enabled: !!(s.marstek && s.marstek.enabled),
+      fields: asObject(s.marstek && s.marstek.fields),
+      ...(s.marstek && typeof s.marstek.setByHand === "boolean" ? { setByHand: s.marstek.setByHand } : {}),
+    },
     mqttInsights: { enabled: !!(s.mqttInsights && s.mqttInsights.enabled), fields: asObject(s.mqttInsights && s.mqttInsights.fields) },
     meters,
   };

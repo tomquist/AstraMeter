@@ -65,18 +65,21 @@ function registrationByDefault(): boolean {
   return hasCt && !(state.target === "esphome" && state.general.esphomeBluetooth);
 }
 
-// Whether the box was set by hand. Saved state doesn't record it, so a loaded
-// project counts as hand-set where its box differs from the default.
-function registrationDiffersFromDefault(): boolean {
-  return state.marstek.enabled !== registrationByDefault();
+// Whether the box was set by hand, kept in the project so it survives a reload.
+// A project saved before the mark existed counts as hand-set where its box
+// differs from the default.
+function settleRegistrationMark(): void {
+  if (state.marstek.setByHand === undefined) {
+    state.marstek.setByHand = state.marstek.enabled !== registrationByDefault();
+  }
 }
 
-let registrationSetByHand = registrationDiffersFromDefault();
+settleRegistrationMark();
 
 // For the target and Bluetooth switches, which only change whether the cloud
 // login is the way to add the CT: a choice the user made stands.
 function followRegistrationDefault(): void {
-  if (!registrationSetByHand) state.marstek.enabled = registrationByDefault();
+  if (!state.marstek.setByHand) state.marstek.enabled = registrationByDefault();
 }
 
 // ── generic field renderer ───────────────────────────────────────────────────
@@ -343,7 +346,7 @@ function deviceCard(): HTMLElement {
           const hasCt = hasCtType(g.deviceTypes);
           if (hasCt !== hadCt) {
             state.marstek.enabled = registrationByDefault();
-            registrationSetByHand = false;
+            state.marstek.setByHand = false;
             state.mqttInsights.enabled = hasCt;
           }
           rerenderAll();
@@ -578,7 +581,7 @@ function extrasCard(): HTMLElement {
   const marstekBody = [
     fieldControl({ key: "enabled", label: "Auto-register a managed CT device in the Marstek cloud", help: marstekHelp, type: "checkbox" }, m, {
       structural: true,
-      onChange: () => (registrationSetByHand = true),
+      onChange: () => (state.marstek.setByHand = true),
     }),
   ];
   if (m.enabled) marstekBody.push(el("div", { class: "field-grid" }, marstekFields.map((fl) => fieldControl(fl, m.fields, {}))));
@@ -862,7 +865,7 @@ function loadProject(file: File): void {
   reader.onload = () => {
     try {
       state = migrate(safeParse(reader.result as string));
-      registrationSetByHand = registrationDiffersFromDefault();
+      settleRegistrationMark();
       rerenderAll();
       toast("Project loaded");
     } catch {
@@ -888,7 +891,7 @@ function shareLink(): void {
 function resetProject(): void {
   if (!confirm("Start over? This clears everything you've entered.")) return;
   state = defaultState();
-  registrationSetByHand = registrationDiffersFromDefault();
+  settleRegistrationMark();
   rerenderAll();
 }
 
