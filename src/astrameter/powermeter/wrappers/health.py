@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from astrameter.powermeter.base import Powermeter
 
 from .base import PowermeterWrapper
+from .last_reading import LastReadingPowermeter, probe_passive_read
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -58,6 +59,15 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         # Last successful processed read, so the health loop can publish the
         # most recent readings without issuing an extra read.
         self._last_values: list[float] | None = None
+        # The wrapper that serves passive reads from the control loop's last
+        # read, if the chain has one: such a read is only news about the
+        # meter when it made the source answer.
+        node: Powermeter = wrapped_powermeter
+        while isinstance(node, PowermeterWrapper) and not isinstance(
+            node, LastReadingPowermeter
+        ):
+            node = node.wrapped_powermeter
+        self._last_reading = node if isinstance(node, LastReadingPowermeter) else None
 
     @property
     def last_attempt(self) -> float | None:
@@ -85,7 +95,10 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         pipeline: list[str] = []
         node: Powermeter = self.wrapped_powermeter
         while isinstance(node, PowermeterWrapper):
-            pipeline.append(type(node).__name__)
+            # Not a filter: it only shares the source's reading with passive
+            # readers, so the dashboard's pipeline leaves it out.
+            if not isinstance(node, LastReadingPowermeter):
+                pipeline.append(type(node).__name__)
             node = node.wrapped_powermeter
         return PowermeterHealth(
             name=self.name,
@@ -105,8 +118,26 @@ class HealthTrackingPowermeter(PowermeterWrapper):
         self._last_values = list(result)
         return result
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        return await self._tracked(self.wrapped_powermeter.get_powermeter_watts_raw)
+    async def get_passive_watts(self) -> list[float]:
+        if self._last_reading is None or self.stream_online() is not None:
+            return await self._tracked(self.wrapped_powermeter.get_passive_watts)
+        # A reading served from the cache was already recorded by the read
+        # that fetched it, and reads that finished while this one waited may
+        # have recorded something newer; recording it again could mark a
+        # meter that has failed since as healthy. Only an answer this call got
+        # from the source is news, and a failure always comes from the source.
+        attempt = self._clock()
+        with probe_passive_read() as probe:
+            try:
+                result = await self.wrapped_powermeter.get_passive_watts()
+            except Exception:
+                self._last_attempt = attempt
+                self._last_outcome_ok = False
+                raise
+        if probe.reached_source:
+            self._last_attempt = attempt
+            self._last_outcome_ok = bool(result)
+        return result
 
     async def _tracked(self, fn: Callable[[], Awaitable[list[float]]]) -> list[float]:
         self._last_attempt = self._clock()

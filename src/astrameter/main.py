@@ -65,10 +65,16 @@ async def read_ct_powermeter(
     return three_phases(await read_fresh(configured))
 
 
-async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
-    """Raw three-phase reading from the meter that serves every client (or the
-    first one), waiting briefly for a fresh push so an idle meter cannot pin
-    the caller."""
+async def _passive_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
+    """Three-phase reading over the passive route, for callers that only
+    report it (the Marstek responder, cloud reporting).
+
+    Reads the meter that serves every client (or the first one) through
+    :meth:`~astrameter.powermeter.Powermeter.get_passive_watts`, so it reuses
+    the reading the batteries' polls last fetched and reads a polled meter only
+    when none did recently. Waits briefly for a fresh push first, so an idle
+    push meter cannot pin the caller.
+    """
     chosen = next(
         (c.powermeter for c in powermeters if c.client_filter.matches("0.0.0.0")), None
     )
@@ -80,7 +86,7 @@ async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[flo
         await asyncio.wait_for(
             chosen.wait_for_next_message(), timeout=FRESH_READING_TIMEOUT_S
         )
-    return [float(v) for v in three_phases(await chosen.get_powermeter_watts_raw())]
+    return [float(v) for v in three_phases(await chosen.get_passive_watts())]
 
 
 async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter) -> None:
@@ -269,7 +275,7 @@ async def _bind_marstek_responder(
             device_id=device_id,
             ct_type=device.ct_type,
             mac=marstek_mac,
-            get_values=lambda: _read_grid_phases(powermeters),
+            get_values=lambda: _passive_grid_phases(powermeters),
             get_connected_slave_count=device.reporting_consumer_count,
             get_cd4_slave_csv=lambda: format_cd4_slave_csv(
                 device.reporting_consumer_rows()
@@ -342,7 +348,7 @@ def _start_cloud_reporting(
 
     async def gather() -> CtMeasurement:
         return _ct_measurement(
-            device, await _read_grid_phases(powermeters), mqtt_connected
+            device, await _passive_grid_phases(powermeters), mqtt_connected
         )
 
     reporter = CloudReporter(
