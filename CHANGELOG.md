@@ -1,6 +1,6 @@
 # Changelog
 
-## Next
+## 2.4.0
 
 - **Added** a Marstek CT002 / CT003 power source (`[MARSTEK_METER]`), so AstraMeter can read the Marstek CT you already own and steer your batteries itself. Pair the batteries with AstraMeter's CT instead of the real one ([#737](https://github.com/tomquist/astrameter/pull/737)).
 

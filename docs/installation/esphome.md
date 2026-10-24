@@ -17,7 +17,7 @@ Point `power_sensor_l1` at any ESPHome sensor that reports grid power:
 
 ```yaml
 external_components:
-  - source: github://tomquist/astrameter@2.3.1
+  - source: github://tomquist/astrameter@2.4.0
     components: [ct002]
 
 sensor:
