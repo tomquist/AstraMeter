@@ -557,10 +557,12 @@ accepted as is.
   without pairing: anyone nearby can read its live data and restart it with
   `0x06`/`0x09`. Moving it to another Wi-Fi network takes
   `allow_wifi_change: true`, which is off by default; `bluetooth: false`
-  removes the stack altogether.
+  removes this interface (Bluetooth itself stays if another component, such as
+  `esp32_improv`, uses it).
 - **Wi-Fi power saving.** ESP-IDF needs Wi-Fi modem sleep while Bluetooth runs.
-  ESPHome's ESP32 default (`power_save_mode: light`) is fine; a config that
-  sets `power_save_mode: none` should turn Bluetooth off.
+  ESPHome's ESP32 default (`power_save_mode: light`) is fine. The board does not
+  turn Bluetooth off for `power_save_mode: none`: remove that setting, or set
+  `bluetooth: false`.
 - **Resources.** On an `esp32dev` build the BLE stack adds about 350 KB of flash
   and 20 KB of static RAM, plus the heap Bluedroid allocates at runtime. The
   test builds that combine it with the dashboard, MQTT and HTTPS still use at
