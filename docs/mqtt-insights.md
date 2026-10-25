@@ -333,10 +333,12 @@ client has the same controls:
   batteries matters; `0` parks a battery at 0 W while leaving it in the pool. Tune
   it while watching the batteries — the change takes effect on the next control
   cycle. A battery weighted lighter than another rests at exactly 0 W while its
-  share is below `BALANCE_DEADBAND`, rather than trickling a few watts, and
-  rejoins once the others are full, empty or at their limit. Weights of `10` and
-  `0.1` therefore make one battery the priority and the other an overflow; swap
-  them from an automation to alternate which battery goes first.
+  share is below `BALANCE_DEADBAND`, rather than trickling a few watts. It rejoins
+  as soon as its share reaches that, or at once when a heavier battery is full,
+  empty or at its limit. With weights of `10` and `0.1` its share stays that
+  small until the other battery cannot take more, so one battery is the priority
+  and the other an overflow; swap them from an automation to alternate which
+  battery goes first.
 - **Efficiency Window Weight** — how much of the **efficiency rotation** each
   battery takes when demand is low and the balancer runs only some batteries to
   keep them efficient. `100 %` is neutral. `0 %` skips a battery: it is parked

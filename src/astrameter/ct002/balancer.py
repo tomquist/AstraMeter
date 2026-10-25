@@ -2257,10 +2257,10 @@ class LoadBalancer:
             return False
         if not any(reports[cid].weight > report.weight for cid in pool):
             return False
-        for cid in reports:
+        for cid in pool:
             state = self._consumers.get(cid)
             if (
-                cid != consumer_id
+                reports[cid].weight > report.weight
                 and state is not None
                 and state.saturation_score >= STANDBY_RELEASE_SATURATION
             ):

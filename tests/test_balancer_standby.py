@@ -157,3 +157,18 @@ def test_no_standby_without_fair_distribution() -> None:
     lb = _balancer(clock, fair_distribution=False)
     sent = _round(lb, clock, _reports(-1252, -64), -10)
     assert sent[OVERFLOW] != pytest.approx(64)
+
+
+def test_only_a_heavier_battery_that_stopped_following_releases_standby() -> None:
+    # A parked battery (weight 0) still carrying a saturation score from before
+    # it was parked cannot take a share, so it must not hold the overflow out
+    # of standby.
+    parked = "cccccccccccc"
+    clock = _Clock()
+    lb = _balancer(clock)
+    reports = _reports(-1252, -64)
+    reports[parked] = ConsumerReport(device_type="VNSE3", phase="A", power=0, weight=0)
+    _round(lb, clock, reports, -10)
+    lb._consumers[parked].saturation_score = 1.0
+    sent = _round(lb, clock, reports, -10)
+    assert sent[OVERFLOW] == pytest.approx(64)

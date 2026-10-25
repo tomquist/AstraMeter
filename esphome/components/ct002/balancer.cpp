@@ -1232,9 +1232,9 @@ bool LoadBalancer::standby_(const std::string &consumer_id, const ReportMap &rep
     }
   }
   if (!lighter) return false;
-  for (const auto &r : reports) {
-    if (r.first == consumer_id) continue;
-    auto it = this->consumers_.find(r.first);
+  for (const auto &cid : pool) {
+    if (reports.at(cid).weight <= self.weight) continue;
+    auto it = this->consumers_.find(cid);
     if (it != this->consumers_.end() &&
         it->second.saturation_score >= STANDBY_RELEASE_SATURATION)
       return false;
