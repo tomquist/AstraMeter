@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** cloud reporting sending reports the Marstek cloud could not place: they now carry the time slot, date, energy totals and charge/discharge split the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds.
+- **Fixed** cloud reporting sending reports the Marstek cloud could not place: they now carry the time slot, date, energy totals and charge/discharge split the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds ([#744](https://github.com/tomquist/astrameter/pull/744)).
 
 - **Fixed** the Marstek app and cloud reporting sending extra requests to a polled power meter, such as a Shelly or an HTTP source, on top of the batteries' own polls; they now reuse the batteries' latest reading ([#698](https://github.com/tomquist/astrameter/pull/698)).
 
