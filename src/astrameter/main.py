@@ -294,7 +294,11 @@ def _ct_measurement(
     device: CT002, phases: list[float], mqtt_connected: bool
 ) -> CtMeasurement:
     """What a real CT reports to the cloud: the grid phases plus the charge and
-    discharge power aggregated per phase bucket."""
+    discharge power aggregated per phase bucket.
+
+    A real CT fills ``c*`` from the buckets it sends as the UDP response's
+    ``*_dchrg_power`` and ``d*`` from its ``*_chrg_power``.
+    """
     ap, bp, cp = (round(p) for p in phases)
     buckets = device.reporting_phase_buckets()
 
@@ -313,16 +317,16 @@ def _ct_measurement(
         slv=device.reporting_consumer_count(),
         udp=1,
         mqtt=1 if mqtt_connected else 0,
-        cz=charge("x"),
-        ca=charge("A"),
-        cb=charge("B"),
-        cc=charge("C"),
-        cd=charge("ABC"),
-        dz=discharge("x"),
-        da=discharge("A"),
-        db=discharge("B"),
-        dc=discharge("C"),
-        dd=discharge("ABC"),
+        cz=discharge("x"),
+        ca=discharge("A"),
+        cb=discharge("B"),
+        cc=discharge("C"),
+        cd=discharge("ABC"),
+        dz=charge("x"),
+        da=charge("A"),
+        db=charge("B"),
+        dc=charge("C"),
+        dd=charge("ABC"),
     )
 
 

@@ -124,7 +124,7 @@ configuration:
     description: "Host to report to. Leave empty for the default eu.hamedata.com (other regions swap the host)."
   cloud_reporting_interval:
     name: Cloud Reporting Interval
-    description: "Seconds between reports (default 60). Tune to match a real device's cadence."
+    description: "Seconds to wait after an accepted report before the next one (default 300, what a real CT waits)."
   power_offset:
     name: Power Offset
     description: "Optional. Added to each power value after the multiplier is applied. Single value (e.g. -50) or a comma-separated list (one per phase, e.g. -50,-30,-40). Leave empty to disable."

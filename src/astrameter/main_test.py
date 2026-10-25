@@ -1,6 +1,8 @@
 import argparse
 from dataclasses import replace
 from ipaddress import IPv4Network
+from types import SimpleNamespace
+from typing import cast
 
 from astrameter.config.config_loader import (
     ClientFilter,
@@ -9,7 +11,9 @@ from astrameter.config.config_loader import (
 )
 from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.settings import ConfiguredPowermeter, SignalSettings
+from astrameter.ct002.ct002 import CT002, PhaseBucket
 from astrameter.main import (
+    _ct_measurement,
     _passive_grid_phases,
     _resolve_device_config,
     read_ct_powermeter,
@@ -40,6 +44,25 @@ class _StubPowermeter(Powermeter):
         self._wait_calls.append(timeout)
         if self._wait_raises is not None:
             raise self._wait_raises
+
+
+def test_cloud_measurement_maps_buckets_like_a_real_ct() -> None:
+    """A real CT fills the cloud's ``c*`` fields from the buckets it sends as
+    ``*_dchrg_power`` over UDP and ``d*`` from ``*_chrg_power``."""
+    buckets = {
+        name: PhaseBucket(chrg_power=-10 * (i + 1), dchrg_power=10 * (i + 1))
+        for i, name in enumerate(("x", "A", "B", "C", "ABC"))
+    }
+    device = SimpleNamespace(
+        reporting_phase_buckets=lambda: buckets,
+        reporting_consumer_count=lambda: 2,
+        wifi_rssi=-60,
+    )
+    m = _ct_measurement(cast(CT002, device), [100.4, -50.0, 0.0], True)
+    assert (m.ap, m.bp, m.cp, m.dp) == (100, -50, 0, 50)
+    assert (m.cz, m.ca, m.cb, m.cc, m.cd) == (10, 20, 30, 40, 50)
+    assert (m.dz, m.da, m.db, m.dc, m.dd) == (-10, -20, -30, -40, -50)
+    assert (m.rssi, m.slv, m.udp, m.mqtt) == (-60, 2, 1, 1)
 
 
 _LOCAL = ClientFilter([IPv4Network("127.0.0.1/32")])

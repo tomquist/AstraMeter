@@ -7,10 +7,10 @@ control protocol between the CT and the batteries is separate — see
 [ct002-ct003-protocol.md](ct002-ct003-protocol.md).
 
 Both models speak the same MQTT protocol **and both report to the HTTP cloud**
-(`setCtReporting` + `getDateInfoeu.php`). The report **field set differs by
-model** (see §6): the `HME-4` clamp adds instantaneous voltage/current and uses
-32-bit energy; the `HME-3` smart-meter reader uses 64-bit energy and leaves out
-voltage/current.
+(`setCtReporting` + `getDateInfoeu.php`) on their newest firmware. The report
+**field set differs by model** (see §6): the `HME-4` clamp adds instantaneous
+voltage/current and uses 32-bit energy; the `HME-3` smart-meter reader uses
+64-bit energy and leaves out voltage/current.
 
 ## 1. MQTT connection
 
@@ -175,12 +175,34 @@ phase‑1 connected, wiring, etc.).
 
 **Both** the CT002 (`HME-4`) and CT003 (`HME-3`) report to the Marstek cloud over
 plain **HTTP GET** — no TLS, no token or signature. The device is identified only
-by the cleartext `id`/`aid` query params. The Wi‑Fi module does it in three AT
+by the cleartext `id`/`uid` query params. The Wi‑Fi module does it in three AT
 steps (`AT+QHTTPCFG="url",…` → `AT+QHTTPGET=60` → `AT+QHTTPREAD=60`). There are
 two endpoints, both under `eu.hamedata.com` (the EU‑region host; other regions
 presumably swap the host).
 
-### 6.1 Status report — `setCtReporting`
+Only the newest public images do it: `HME-4` **v124** and `HME-3` **v122**.
+`HME-4` v120 and `HME-3` v116–v118 carry neither URL. Everything below was read
+from those two images (same archives and load address as in
+[ct002-ct003-protocol.md](ct002-ct003-protocol.md)); both run the same code.
+
+### 6.1 The reporting cycle
+
+The main loop calls one state machine whenever Wi‑Fi is up. Each step is one
+blocking HTTP GET, and the state survives a Wi‑Fi drop:
+
+1. **Handshake** — `getDateInfoeu.php` (§6.3). Until the module reports HTTP
+   200 the step repeats on the next pass. On success the CT parses the server
+   time out of the body, rolls its energy registers forward (§6.4) and moves on.
+2. **Report** — `setCtReporting` (§6.2), repeated until it gets HTTP 200. A
+   retry reuses the server time from step 1; it does not handshake again.
+3. **Wait** — 300 ticks of its seconds counter (a 2 kHz timer divided down),
+   so **300 s**, then back to step 1.
+
+So a real CT sends one handshake and one report about every five minutes, plus
+whatever the requests themselves take. The response body of `setCtReporting` is
+read but not used.
+
+### 6.2 Status report — `setCtReporting`
 
 The query string **depends on the model**. The exact templates:
 
@@ -203,24 +225,36 @@ GET http://eu.hamedata.com/prod/api/v1/setCtReporting
 
 | field | meaning |
 |-------|---------|
-| `id` | device id (MAC) |
-| `eled`, `elet` | cumulative energy registers — import/export style totals (`HME-4`: 32‑bit; `HME-3`: 64‑bit) |
-| `ap`, `bp`, `cp`, `dp` | per‑phase power for phases A/B/C and **D** (the combined/合相 bucket) |
-| `rssi` | Wi‑Fi RSSI |
-| `slv` | connected battery count |
-| `udp`, `mqtt` | UDP / MQTT link state flags |
-| `timeNo` | monotonic sequence / time number |
-| `date` | `Y-M-D` |
-| `va,vb,vc` | *(HME-4 only)* per‑phase voltage |
-| `ia,ib,ic` | *(HME-4 only)* per‑phase current (2 decimals, A) |
-| `cz,ca,cb,cc,cd` | charge power: combined‑unassigned (`z`) + phases A/B/C/D |
-| `dz,da,db,dc,dd` | discharge power: combined‑unassigned (`z`) + phases A/B/C/D |
+| `id` | device id (MAC), the same `id` as in the handshake and the MQTT topics |
+| `eled` | energy since the start of the server's **day**, in **0.1 Wh** (§6.4) |
+| `elet` | energy since the start of the server's **hour**, in **0.1 Wh** (§6.4) |
+| `ap`, `bp`, `cp` | phase A/B/C power (W) — the runtime frame's `pwr_a/b/c` |
+| `dp` | total power (W) — the runtime frame's `pwr_t` |
+| `rssi` | Wi‑Fi RSSI (`wif_r`) |
+| `slv` | connected battery count (`slv_n`) |
+| `udp` | `1` once the module has opened the UDP service |
+| `mqtt` | `1` while the cloud MQTT connection is up |
+| `timeNo` | the **10‑minute slot** of the server's day: `(hour × 60 + minute) / 10`, `0`–`143` |
+| `date` | the server's date, `Y-MM-DD` |
+| `va,vb,vc` | *(HME-4 only)* per‑phase voltage (V, truncated) |
+| `ia,ib,ic` | *(HME-4 only)* per‑phase current (A, 2 decimals) |
+| `cz,ca,cb,cc,cd` | the UDP response's `x`/`A`/`B`/`C`/`ABC` **`_dchrg_power`** (fields 20–24) |
+| `dz,da,db,dc,dd` | the UDP response's `x`/`A`/`B`/`C`/`ABC` **`_chrg_power`** (fields 15–19) |
 
-The `cz/ca/cb/cc/cd` and `dz/da/db/dc/dd` groups mirror the UDP response's
-`x`/`A`/`B`/`C`/`ABC` charge/discharge buckets (`z`↔`x`, `d`↔`ABC`). This is
-where the cloud gets the per‑phase power and energy history the app shows. The
-`HME-4` also feeds the cloud its clamp‑measured voltage/current. The `HME-3`
-reads a smart meter rather than a clamp, so it sends only the energy registers.
+`timeNo` and `date` come from the **handshake's server time**, not from a local
+clock. Both images compute `timeNo` with the same helper.
+
+The bucket fields are read from the very struct the UDP response is built from,
+so by position `c*` is what goes out over UDP as `*_dchrg_power` and `d*` what
+goes out as `*_chrg_power` — the letters do not mean charge/discharge in the UDP
+naming.
+
+**Power sign.** The `HME-4` converts its float powers with an unsigned 16‑bit
+cast (`__aeabi_f2uiz`, which ignores the sign, then `uxth`), so `ap`–`dp` go out
+as **magnitudes**: an export of 150 W is `ap=150`. The UDP response and the
+runtime frame keep the sign. The `HME-3` takes its powers as signed integers
+from the meter (import − export when the meter reports both), so they stay
+signed.
 
 > **`HME-3` quirk:** the on‑wire URL is **missing an `&`** between
 > `slv=%d` and `udp=%d` (`…&slv=%dudp=%d…`), so the slave count and udp flag run
@@ -228,44 +262,63 @@ reads a smart meter rather than a clamp, so it sends only the energy registers.
 > the `HME-3` byte‑for‑byte should reproduce the quirk; a tolerant server should
 > parse `slv` as everything up to `udp=`.
 
-**Cadence.** This is a **timer‑driven, repeating** push: each report carries an
-incrementing `timeNo` and a `date`, so it is scheduled, not event‑driven. The
-exact interval between reports is **not documented** here. To get the real
-cadence, **measure it from the device** — the gap between successive
-`setCtReporting` GETs to `eu.hamedata.com` in a DNS/HTTP capture is the ground
-truth.
-
-### 6.2 Config / time fetch — `getDateInfoeu.php`
+### 6.3 Handshake — `getDateInfoeu.php`
 
 ```text
 GET http://eu.hamedata.com/app/neng/getDateInfoeu.php?uid=%s&fcv=%s&aid=%s&sv=%d
 ```
-A one‑shot handshake the device runs before reporting. The response body is just
-the server's wall‑clock time (`_YYYY_MM_DD_HH_MM_SS_…`), but **the call is also a
-device upsert**: empirically the server writes `aid`→the device record's **`type`**
-and `sv`→its **`version`**. The param names mislead — `aid` is the model and `sv`
-the firmware version, not an account id or a settings version. `uid` = device id
-(MAC), `fcv` = a firmware build stamp. (`hamedata.com` is also the OTA download
-host.)
+Both images fill it from the same variables as the MQTT runtime frame:
+
+| param | value | runtime frame |
+|-------|-------|---------------|
+| `uid` | device id (MAC) | topic id |
+| `fcv` | Wi‑Fi module firmware string | `fc4_v` |
+| `aid` | model, `HME-4` / `HME-3` | — |
+| `sv` | the CT firmware version, a constant: `124` (`HME-4`), `122` (`HME-3`) | `ver_v` |
+
+The response body is the server's wall‑clock time, which the CT scans with
+`_%hu_%hhu_%hhu_%hhu_%hhu_%hhu_` (year, month, day, hour, minute, second). The
+call is also a **device upsert**: empirically the server writes `aid`→the device
+record's **`type`** and `sv`→its **`version`**. (`hamedata.com` is also the OTA
+download host.)
 
 > ⚠️ Because this endpoint **overwrites `type`/`version`**, wrong values corrupt
 > the device record — a non‑model `type`, for example, makes the Marstek app fall
 > back to a generic, default‑locale device card. AstraMeter therefore sends the
-> CT model (`HME-4`/`HME-3`) as `aid` and the managed firmware version (`121`, the
-> value [§6.1] registration uses) as `sv`, so the handshake *re‑asserts* the
-> record rather than clobbering it.
+> CT model as `aid` and, as `sv`, the version a reporting CT of that model runs.
 
-### 6.3 What's needed to replicate, and the open unknowns
+### 6.4 Energy registers — `eled` / `elet`
+
+At every successful handshake the CT reads one cumulative energy value `E` in
+0.1 Wh and updates two registers:
+
+```text
+eled += E − E_prev;  elet += E − E_prev;  E_prev = E
+if server hour ≠ hour of the previous handshake: elet = 0
+if server day  ≠ day  of the previous handshake: eled = 0
+```
+
+So `eled` is the energy since the first handshake of the server's day and
+`elet` since the first handshake of its hour; the gain of the interval that
+crosses the boundary is dropped. The source of `E` differs:
+
+- `HME-4` sums its metering chip's three per‑phase import counters minus the
+  three export counters — **net** energy. It keeps whole kWh and hundredths and
+  computes `kWh × 10000 + hundredths × 100`.
+- `HME-3` reads the smart meter's SML entry for **OBIS 1‑0:1.8.0** (import)
+  whose unit is Wh, applies the scaler and multiplies by 10.
+
+### 6.5 What's needed to replicate, and the open unknowns
 
 Because it's a plaintext GET with no signing, reproducing the requests is
-mechanical. What blocks a cloud the real backend will *accept* is identity and
-semantics, not crypto:
+mechanical. What blocks a cloud the real backend will *accept* is identity, not
+crypto:
 
 - **The report `id` (MAC)** must be a device the cloud already knows. The binding
   to an account comes from having registered/paired that device; `setCtReporting`
   itself carries no account id.
-- **Field units/scaling/sign** and the **report cadence** are not documented
-  here. A single DNS‑redirect + HTTP‑proxy capture of a real CT yields them.
+- Still unknown: what the server answers to `setCtReporting`, and which time
+  zone the handshake's server time is in (the CT just uses it).
 
 ## 7. CT002 vs CT003 summary
 
@@ -274,7 +327,7 @@ semantics, not crypto:
 | MQTT (8883, mutual TLS, both topic prefixes) | yes | yes |
 | `cd` command set | yes | yes |
 | runtime‑info frame | shorter, ends `…slv_n,cur_d` | longer, `eng_t` + `com_t…udp_v` diagnostics |
-| HTTP cloud reporting | **yes** — `setCtReporting` **with** `va/vb/vc`+`ia/ib/ic`, 32‑bit energy | **yes** — `setCtReporting` 64‑bit energy, no V/I, missing‑`&` quirk |
+| HTTP cloud reporting (v124 / v122) | **yes** — `setCtReporting` **with** `va/vb/vc`+`ia/ib/ic`, 32‑bit energy, power magnitudes | **yes** — `setCtReporting` 64‑bit energy, no V/I, signed power, missing‑`&` quirk |
 
 ## 8. Relation to AstraMeter
 
@@ -291,16 +344,20 @@ to fully replicate a real CT.
 **HTTP cloud reporting is implemented as an opt‑in feature** (§6) on **both**
 stacks. In Python, set `CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]`
 section; on ESPHome, add a `cloud_reporting:` sub‑block under `ct002:` (it needs
-an `http_request:` block). Either way AstraMeter runs the same
-handshake‑then‑periodic‑`setCtReporting` flow a real CT does, and picks the
-`HME-4`/`HME-3` field layout from the emulated `ct_type`. It fills the fields
-AstraMeter knows (per‑phase power, the charge/discharge buckets, RSSI, slave
-count, link flags) and zero‑fills what it doesn't measure (cumulative energy, and
-V/I on `HME-4`). The reported `id` is the CT's MAC. When a Marstek account is
-configured (the `[MARSTEK]` section, or the ESPHome `marstek_registration:`
-block), it uses the MAC of the device AstraMeter registers there — the id the
-cloud already knows; otherwise it uses the configured `CT_MAC` / `ct_mac`. The
-model and firmware version the handshake re‑asserts (§6.2) are derived
-automatically, so there is no account‑id knob to set; just tune the interval to
-the cadence you measure. The web config generator produces all three forms
+an `http_request:` block). Either way AstraMeter runs the cycle of §6.1 —
+handshake, report, a 300 s wait (the interval option) — retrying a failed step
+after 60 s, and picks the `HME-4`/`HME-3` field layout and power sign from the
+emulated `ct_type`. `timeNo` and `date` come from the handshake's server time
+(the local clock only when the body carries none). It fills the fields
+AstraMeter knows (per‑phase power, the bucket fields, RSSI, slave count, link
+flags) and zero‑fills V/I on `HME-4`. Having no energy counter, it integrates
+the grid power it samples every 10 s into one — net for `HME-4`, import only for
+`HME-3` — and keeps `eled`/`elet` from it as in §6.4. The reported `id` is the
+CT's MAC. When a Marstek account is configured (the `[MARSTEK]` section, or the
+ESPHome `marstek_registration:` block), it uses the MAC of the device AstraMeter
+registers there — the id the cloud already knows; otherwise it uses the
+configured `CT_MAC` / `ct_mac`. An ESP32 the app added over Bluetooth, with no
+`ct_mac`, reports as that CT. The model and firmware version the handshake
+re‑asserts (§6.3) are derived automatically, so there is no account‑id knob to
+set. The web config generator produces all three forms
 (config.ini, the add‑on options, the ESPHome sub‑block). See `config.ini.example`.

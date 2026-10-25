@@ -152,7 +152,7 @@ class CtSettings:
     # Opt-in HTTP cloud reporting (hamedata.com).
     cloud_reporting: bool = False
     cloud_reporting_host: str = "eu.hamedata.com"
-    cloud_reporting_interval: float = 60.0
+    cloud_reporting_interval: float = 300.0
     # Active control / balancing.
     active_control: bool = True
     peakshaving_threshold: float = 0.0
