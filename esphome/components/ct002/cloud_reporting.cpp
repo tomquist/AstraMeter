@@ -42,7 +42,7 @@ void CloudReportingComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "CT002 cloud reporting:");
   ESP_LOGCONFIG(TAG, "  host: %s", this->host_.c_str());
   ESP_LOGCONFIG(TAG, "  id: %s",
-                this->device_id_.empty() ? "(pending — from ct_mac)" : this->device_id_.c_str());
+                this->device_id_.empty() ? "(pending — from the CT MAC)" : this->device_id_.c_str());
   // uint32_t is `long unsigned` on xtensa, so %u needs the cast to match
   // (lossless — both are 32 bits here and on the host build).
   ESP_LOGCONFIG(TAG, "  interval: %u ms", static_cast<unsigned>(this->interval_ms_));
@@ -168,11 +168,15 @@ void CloudReportingComponent::retry_later_() { this->next_attempt_ms_ = millis()
 
 void CloudReportingComponent::loop() {
   if (this->state_ == State::FATAL) return;
-  // Resolve the reporting id lazily — ct002.ct_mac may be populated by
-  // marstek_registration after our setup(). Wait until a MAC is available.
-  if (this->device_id_.empty()) {
-    this->device_id_ = this->ct002_->ct_mac();
-    if (this->device_id_.empty()) return;
+  // The reported id is the CT the cloud knows: ct_mac, or the ID the app added
+  // over Bluetooth while ct_mac is unset. marstek_registration may set ct_mac
+  // after our setup(), and a new id is another device, so it gets its own
+  // handshake. Wait until there is one.
+  const std::string &id = this->ct002_->app_mac();
+  if (id.empty()) return;
+  if (id != this->device_id_) {
+    this->device_id_ = id;
+    this->state_ = State::WAIT_FOR_NETWORK;
   }
   const uint32_t now = millis();
   if (static_cast<int32_t>(now - this->next_sample_ms_) >= 0) {

@@ -356,7 +356,8 @@ the grid power it samples every 10 s into one — net for `HME-4`, import only f
 CT's MAC. When a Marstek account is configured (the `[MARSTEK]` section, or the
 ESPHome `marstek_registration:` block), it uses the MAC of the device AstraMeter
 registers there — the id the cloud already knows; otherwise it uses the
-configured `CT_MAC` / `ct_mac`. The model and firmware version the handshake
+configured `CT_MAC` / `ct_mac`. An ESP32 the app added over Bluetooth, with no
+`ct_mac`, reports as that CT. The model and firmware version the handshake
 re‑asserts (§6.3) are derived automatically, so there is no account‑id knob to
 set. The web config generator produces all three forms
 (config.ini, the add‑on options, the ESPHome sub‑block). See `config.ini.example`.

@@ -73,7 +73,9 @@ stack. Shared behavior lands on **both** sides in the same change;
   sets them: `set_phase_reversal` (the app's per-phase current-direction
   reversal, applied in `ct002.cpp`'s sensor-callback cache) and
   `set_app_mac_fallback` (the Bluetooth ID, which `app_mac()` hands
-  `mqtt_insights`' App topics while `ct_mac` is unset; UDP still mirrors).
+  `mqtt_insights`' App topics and the `cloud_reporting` id while `ct_mac` is
+  unset; UDP still mirrors). `cloud_reporting` follows a later change of that
+  id with a new handshake, where Python fixes it at startup.
 
 ## What the firmware constrains
 

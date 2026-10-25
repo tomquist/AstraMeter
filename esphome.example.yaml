@@ -266,7 +266,8 @@ ct002:
   # the top-level `http_request:` block above. The cloud only stores
   # reports for a device id it already knows; the reported id is the CT's
   # MAC (ct_mac — the registered device's MAC when marstek_registration is
-  # configured). The model and firmware version are sent automatically.
+  # configured, or the CT the app added over Bluetooth when neither is set).
+  # The model and firmware version are sent automatically.
   # cloud_reporting:
   #   host: eu.hamedata.com
   #   interval: 300s
