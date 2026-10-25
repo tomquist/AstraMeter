@@ -214,3 +214,35 @@ async def test_passive_read_served_while_waiting_keeps_a_later_failure() -> None
         await failing
     assert await passive == [100.0]
     assert pm.last_outcome_ok is False
+
+
+@pytest.mark.parametrize("passive_fails", [False, True])
+async def test_slow_passive_read_does_not_backdate_a_newer_attempt(
+    passive_fails: bool,
+) -> None:
+    """A passive read that reads the source can outlast a battery read that
+    started after it; finishing last must not move the recorded attempt back
+    to when the passive read started, or the meter looks idle for longer than
+    it is and the health loop probes it again."""
+    clock = _FakeClock()
+    source = _PerReadSource()
+    pm, _ = _shared(source, clock)
+
+    passive = asyncio.create_task(pm.get_passive_watts())
+    await asyncio.sleep(0)
+    clock.advance(1.0)
+    control = asyncio.create_task(pm.get_powermeter_watts())
+    await asyncio.sleep(0)
+
+    source.finish(1, [200.0])
+    assert await control == [200.0]
+    assert pm.last_attempt == 1.0
+
+    if passive_fails:
+        source.fail(0, OSError("timeout"))
+        with pytest.raises(OSError):
+            await passive
+    else:
+        source.finish(0, [100.0])
+        assert await passive == [100.0]
+    assert pm.last_attempt == 1.0
