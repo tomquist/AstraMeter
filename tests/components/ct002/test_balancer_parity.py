@@ -169,15 +169,16 @@ class PyDriver:
             reports = {}
             i = 6
             for _ in range(n):
-                rc, dev, phase, power, md, eww = parts[i : i + 6]
+                rc, dev, phase, power, md, eww, weight = parts[i : i + 7]
                 reports[rc] = ConsumerReport(
                     device_type=dev,
                     phase=phase,
                     power=int(power),
+                    weight=float(weight),
                     min_dc_output=None if float(md) < 0 else float(md),
                     efficiency_window_weight=float(eww),
                 )
-                i += 6
+                i += 7
             res = self.balancer.compute_target(
                 cid,
                 ConsumerMode(mode, float(manual)),
@@ -267,10 +268,11 @@ def _report(
     dev: str = "HMA-2",
     min_dc: float = -1.0,
     eff_weight: float = 1.0,
+    weight: float = 1.0,
 ) -> str:
     # min_dc < 0 encodes "unset" (inherit global / None). The efficiency-window
-    # weight token is always emitted (default 1.0 = neutral).
-    return f"{cid} {dev} {phase} {power} {min_dc} {eff_weight}"
+    # and distribution weight tokens are always emitted (default 1.0 = neutral).
+    return f"{cid} {dev} {phase} {power} {min_dc} {eff_weight} {weight}"
 
 
 def _target(
@@ -567,6 +569,54 @@ def _scenario_power_ceilings() -> list[str]:
     return lines
 
 
+def _scenario_standby() -> list[str]:
+    """A priority battery and a 0.1-weight overflow (discussion #741).
+
+    The overflow starts stalled at a small charge and must be sent to 0 W; the
+    priority unit then runs into its charge ceiling, which both stacks learn,
+    and the overflow takes the rest.  A swing to load turns the shares around,
+    and a priority unit that stops following lets the overflow back in.  A
+    DC-only light unit never idles this way.
+    """
+    lines = ["cfg 1 0 900 0.4 0.15 20 90 1 0 0 0", "clock 5000"]
+
+    def pool(a: int, b: int, dev_b: str = "VNSE3") -> list[str]:
+        return [
+            _report("a", "A", a, "VNSE3", weight=10.0),
+            _report("b", "A", b, dev_b, weight=0.1),
+        ]
+
+    def tick(a: int, b: int, grid: float, dev_b: str = "VNSE3") -> None:
+        for cid in ("a", "b"):
+            lines.append(_target(cid, pool(a, b, dev_b), grid=grid))
+            lines.append(f"last {cid}")
+            lines.append(f"sat {cid}")
+        lines.append("advance 1")
+
+    # Stalled overflow under a modest surplus.
+    for _ in range(3):
+        tick(-1252, -64, -10)
+    # The priority unit holds at 2500 W charge while the surplus grows.
+    for _ in range(10):
+        tick(-2500, 0, -1000)
+    tick(-2500, -600, -400)
+    # Swing to load: the overflow is discharging nothing it should.
+    for _ in range(3):
+        tick(300, -600, 900)
+    # The priority unit stops following (full) under a surplus.
+    for _ in range(12):
+        tick(0, 0, -800)
+    # A DC-only light unit.
+    for _ in range(3):
+        tick(400, 60, -20, dev_b="HMA-2")
+    return lines
+
+
+def test_parity_standby(harness: Path) -> None:
+    lines = _scenario_standby()
+    _compare("standby", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
 def test_parity_power_ceilings(harness: Path) -> None:
     lines = _scenario_power_ceilings()
     _compare("power_ceilings", lines, _run_cpp(harness, lines), _run_py(lines))
@@ -662,6 +712,11 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     # Per-consumer efficiency-window weight: mostly neutral, sometimes parked (0)
     # or partial, to exercise the weight-driven sink/rotation across stacks.
     eff_weights = {cid: rng.choice([1.0, 1.0, 1.0, 0.0, 0.5, 0.25]) for cid in cids}
+    # Distribution weights, drawn from their own generator so the streams the
+    # draws above produce stay as they were: mostly neutral, sometimes a
+    # priority / overflow split (standby) or a parked unit.
+    wrng = random.Random(seed + 1_000_000)
+    weights = {cid: wrng.choice([1.0, 1.0, 1.0, 10.0, 0.1, 0.5, 0.0]) for cid in cids}
     for _ in range(n_polls):
         grid = rng.choice([-901, -300, -150, -1, 0, 1, 100, 300, 450, 901, 1500])
         powers = {cid: rng.choice([-200, -50, 0, 0, 50, 200]) for cid in cids}
@@ -673,6 +728,7 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
                 devs[cid],
                 overrides[cid],
                 eff_weights[cid],
+                weights[cid],
             )
             for cid in cids
         ]

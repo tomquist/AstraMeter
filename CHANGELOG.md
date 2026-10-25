@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** a battery given a much lower Distribution Weight trickling a few dozen watts, or charging from the other battery after a load drops; it now rests at 0 W until the other is full, empty or at its limit ([#741](https://github.com/tomquist/astrameter/discussions/741)).
+
 - **Fixed** the Marstek app and cloud reporting sending extra requests to a polled power meter, such as a Shelly or an HTTP source, on top of the batteries' own polls; they now reuse the batteries' latest reading ([#698](https://github.com/tomquist/astrameter/pull/698)).
 
 ## 2.4.0

@@ -1200,6 +1200,58 @@ BalancerSnapshot LoadBalancer::status_snapshot() const {
 // Auto-target pipeline
 // -------------------------------------------------------------------------
 
+// A battery weighted lighter than another in the pool idles at 0 W while its
+// weight-proportional share of what the pool should output (its output plus the
+// grid error, water-filled against the learned ceilings) is under the balance
+// deadband: balancing would leave it wherever it stalled inside the firmware
+// deadband, and pull it back too slowly on a swing from load to surplus
+// (discussion #741). Equal weights never qualify. A heavier battery that stopped
+// following lets it back in at once; a DC-only battery never qualifies. Mirrors
+// balancer.py _standby.
+bool LoadBalancer::standby_(const std::string &consumer_id, const ReportMap &reports,
+                            float control_grid,
+                            const std::unordered_map<std::string, float> &eff_part) const {
+  const auto &cfg = this->cfg_;
+  if (!cfg.fair_distribution || cfg.balance_deadband <= 0.0f) return false;
+  auto self_it = reports.find(consumer_id);
+  if (self_it == reports.end()) return false;
+  const ConsumerReport &self = self_it->second;
+  if (!is_ac_chargeable(self.device_type)) return false;
+  std::vector<std::string> pool;
+  for (const auto &r : reports) {
+    auto it = eff_part.find(r.first);
+    const float part = it != eff_part.end() ? it->second : 0.0f;
+    if (part > 0.1f && r.second.weight > 0.0f) pool.push_back(r.first);
+  }
+  if (std::find(pool.begin(), pool.end(), consumer_id) == pool.end()) return false;
+  bool lighter = false;
+  for (const auto &cid : pool) {
+    if (reports.at(cid).weight > self.weight) {
+      lighter = true;
+      break;
+    }
+  }
+  if (!lighter) return false;
+  for (const auto &r : reports) {
+    if (r.first == consumer_id) continue;
+    auto it = this->consumers_.find(r.first);
+    if (it != this->consumers_.end() &&
+        it->second.saturation_score >= STANDBY_RELEASE_SATURATION)
+      return false;
+  }
+  float pool_output = 0.0f;
+  std::unordered_map<std::string, float> weights;
+  for (const auto &cid : pool) {
+    const auto &rep = reports.at(cid);
+    pool_output += rep.power;
+    weights[cid] = rep.weight;
+  }
+  const float intended = pool_output + control_grid;
+  const float share = capped_weighted_share(
+      intended, weights, pool, this->ceilings_(pool, sign_of(intended)), &consumer_id);
+  return std::fabs(share) < cfg.balance_deadband;
+}
+
 // This consumer's slice of the grid imbalance, in W. Two terms, kept apart
 // deliberately. The *tracking* term is its share of the grid error and carries
 // the grid's sign by construction; the *balancing* term equalizes output across
@@ -1379,6 +1431,9 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     auto it = faded_adjustments.find(*consumer_id);
     if (it != faded_adjustments.end() && it->second == 0.0f)
       return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
+  }
+  if (consumer_id && this->standby_(*consumer_id, reports, control_grid, eff_part)) {
+    return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
   }
 
   float residual =
