@@ -106,7 +106,7 @@ int CloudReportingComponent::http_get_(const std::string &url, std::string *body
     ESP_LOGW(TAG, "HTTP GET failed: %s", endpoint.c_str());
     return -1;
   }
-  const int status = container->status_code;
+  int status = container->status_code;
   ESP_LOGD(TAG, "HTTP %d from %s", status, endpoint.c_str());
   if (body != nullptr) {
     body->clear();
@@ -120,8 +120,13 @@ int CloudReportingComponent::http_get_(const std::string &url, std::string *body
       // Capture bytes_read BEFORE end() — some backends invalidate the
       // container's counters once end() runs.
       const size_t bytes_read = container->get_bytes_read();
-      if (result.status == http_request::HttpReadStatus::OK)
+      if (result.status == http_request::HttpReadStatus::OK) {
         body->assign(reinterpret_cast<const char *>(buf.data()), bytes_read);
+      } else {
+        // A response we could not read never completed, as on the Python side.
+        ESP_LOGW(TAG, "HTTP read failed: %s", endpoint.c_str());
+        status = -1;
+      }
     }
   }
   container->end();
@@ -137,7 +142,8 @@ bool CloudReportingComponent::handshake_() {
   const int status = this->http_get_(build_get_date_info_url(this->host_, this->device_id_, this->fcv_,
                                                              this->ct002_->ct_type(), this->sv_or_default_()),
                                      &body);
-  if (status < 200 || status >= 300) return false;
+  // Both images wait for the module's `+QHTTPGET: 0,200`: only 200 counts.
+  if (status != 200) return false;
   if (!parse_server_time(body, &this->server_time_)) {
     ESP_LOGD(TAG, "Handshake carried no server time; using local time");
     this->server_time_ = this->local_time_();
@@ -155,7 +161,7 @@ bool CloudReportingComponent::report_() {
   const int status =
       this->http_get_(build_set_ct_reporting_url(this->host_, this->ct002_->ct_type(), this->device_id_,
                                                  t.time_no(), t.year, t.month, t.day, m));
-  return status >= 200 && status < 300;
+  return status == 200;
 }
 
 void CloudReportingComponent::retry_later_() { this->next_attempt_ms_ = millis() + this->retry_ms_; }

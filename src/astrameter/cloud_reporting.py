@@ -308,7 +308,8 @@ async def aiohttp_get(url: str, *, timeout: float = 10.0) -> HttpResponse | None
 
 
 def _ok(resp: HttpResponse | None) -> bool:
-    return resp is not None and 200 <= resp.status < 300
+    # Both images wait for the module's ``+QHTTPGET: 0,200``: only 200 counts.
+    return resp is not None and resp.status == 200
 
 
 @dataclass
@@ -334,7 +335,7 @@ class CloudReporterSnapshot:
     device id in the query string (``uid``/``id``), so a URL here would leak
     identity into every status response.  ``report_count`` counts *attempts*
     that reached the HTTP seam and ``fail_count`` the subset of those that did
-    not come back ``2xx``; ``last_report_at`` and ``last_http_status`` are the
+    not come back ``200``; ``last_report_at`` and ``last_http_status`` are the
     wall-clock time and outcome of the same, most recent attempt.
     """
 
@@ -458,8 +459,8 @@ class CloudReporter:
         self._last_status = resp.status if resp is not None else None
         self._last_report_at = self._clock()
         self._report_count += 1
-        # `None` is the seam's "the request never completed"; anything outside
-        # 2xx is the cloud rejecting the report. Both count as a failure.
+        # `None` is the seam's "the request never completed"; anything but
+        # 200 is the cloud rejecting the report. Both count as a failure.
         ok = _ok(resp)
         if not ok:
             self._fail_count += 1

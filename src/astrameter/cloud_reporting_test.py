@@ -227,9 +227,13 @@ async def test_reporter_falls_back_to_local_time_without_server_time() -> None:
 
 
 async def test_failed_handshake_keeps_counters() -> None:
-    cloud = _FakeCloud([HttpResponse(503, _TIME_BODY), None])
+    cloud = _FakeCloud(
+        [HttpResponse(503, _TIME_BODY), None, HttpResponse(204, _TIME_BODY)]
+    )
     reporter = _reporter(cloud)
     assert not await reporter._handshake()
+    assert not await reporter._handshake()
+    # Only 200 counts, as on a real CT.
     assert not await reporter._handshake()
     assert reporter._server_time is None
 
