@@ -1,20 +1,23 @@
 // AstraMeter Marstek HTTP cloud-reporting component.
 //
 // Mirrors src/astrameter/cloud_reporting.py adapted for ESPHome. A real CT002
-// (`HME-4`) / CT003 (`HME-3`) periodically reports to the Marstek cloud
-// (hamedata.com) over plain HTTP GET — no TLS, no token/signature; the device is
-// identified only by the cleartext `id`/`aid` query params. The flow:
+// (`HME-4`) / CT003 (`HME-3`) on its newest firmware (v124 / v122) reports to
+// the Marstek cloud (hamedata.com) over plain HTTP GET — no TLS, no
+// token/signature; the device is identified only by the cleartext `id`/`uid`
+// query params. Every cycle:
 //
-//   1. a one-shot handshake `getDateInfoeu.php` (uid/fcv/aid/sv), then
-//   2. a timer-driven `setCtReporting` GET with live grid power, the per-bucket
-//      charge/discharge split, link state and an incrementing `timeNo`.
+//   1. a handshake `getDateInfoeu.php` (uid/fcv/aid/sv), whose body is the
+//      server's wall-clock time; on success the day/hour energy registers roll
+//      forward against it, then
+//   2. a `setCtReporting` GET, retried until the cloud answers, with `timeNo` =
+//      the 10-minute slot of the server's day and `date` = the server's date,
+//   3. a 300 s wait, then back to the handshake.
 //
-// The pure URL builders live in cloud_reporting_url.{h,cpp} (no ESPHome deps) so
-// the wire format is host-testable. This component runs the
-// handshake-then-report flow as a loop()-driven state machine (like
-// marstek_registration) so the watchdog stays fed between HTTP calls. It is
-// gated by USE_CT002_CLOUD_REPORTING (set from _to_code_cloud_reporting in
-// ct002/__init__.py) because it needs http_request.
+// The pure helpers live in cloud_reporting_url.{h,cpp} (no ESPHome deps) so
+// the wire format is host-testable. This component runs the cycle as a
+// loop()-driven state machine (like marstek_registration) so the watchdog stays
+// fed between HTTP calls. It is gated by USE_CT002_CLOUD_REPORTING (set from
+// _to_code_cloud_reporting in ct002/__init__.py) because it needs http_request.
 #pragma once
 
 #include <cstdint>
@@ -56,20 +59,29 @@ class CloudReportingComponent : public Component {
 
  protected:
   enum class State {
-    WAIT_FOR_NETWORK,  // hold until the network is up.
-    HANDSHAKE,         // one-shot getDateInfo.
-    REPORT,            // periodic setCtReporting.
+    WAIT_FOR_NETWORK,  // hold until the network is first up.
+    HANDSHAKE,         // getDateInfo, retried until it answers.
+    REPORT,            // setCtReporting, retried until it answers.
+    WAIT,              // the interval after an accepted report.
     FATAL,             // misconfigured (no ct002/http). Stop.
   };
 
   bool network_ready_() const;
   // Gather the current measurement from the bound CT002 component.
   CtMeasurement gather_() const;
-  // Best-effort wall-clock (epoch + Y/M/D) for `timeNo`/`date`; falls back to
-  // the epoch (1970-01-01) when no time source has synced.
-  void now_(int64_t *epoch, int *year, int *month, int *day) const;
-  // Perform one plain-HTTP GET, ignoring the body (logs the status).
-  void http_get_(const std::string &url);
+  // Feed the current grid power into the energy register.
+  void sample_energy_(const CtMeasurement &m);
+  // Wall-clock fallback for a handshake that carried no server time; the epoch
+  // (1970-01-01) when no time source has synced.
+  ServerTime local_time_() const;
+  // Perform one plain-HTTP GET. Returns the status (-1 when the request never
+  // completed) and, when *body* is set, up to 512 bytes of the response.
+  int http_get_(const std::string &url, std::string *body = nullptr);
+  bool handshake_();
+  bool report_();
+  // Stay in the current state until `retry_ms` from now.
+  void retry_later_();
+  int sv_or_default_() const;
 
   // Configuration.
   ct002::CT002Component *ct002_{nullptr};
@@ -80,13 +92,25 @@ class CloudReportingComponent : public Component {
   std::string device_id_;
   std::string fcv_{"202409090159"};
   // Sent as `sv` in the handshake, which the cloud writes into the device's
-  // `version` field; defaults to the managed registration version (121).
-  int sv_{121};
-  uint32_t interval_ms_{60000};
+  // `version` field. Negative = the firmware version a reporting CT of the
+  // configured model runs (reporting_firmware_version).
+  int sv_{-1};
+  uint32_t interval_ms_{300000};
+  // A real CT retries on its next main-loop pass, bounded by the Wi-Fi
+  // module's 60 s HTTP timeout. Mirrors RETRY_SECONDS.
+  uint32_t retry_ms_{60000};
+  // How often the grid power is sampled into the energy register.
+  uint32_t sample_ms_{10000};
 
   // State.
   State state_{State::WAIT_FOR_NETWORK};
-  uint32_t next_report_ms_{0};
+  uint32_t next_attempt_ms_{0};
+  uint32_t next_sample_ms_{0};
+  EnergyIntegrator energy_;
+  EnergyCounters counters_;
+  // The server time from the last handshake; every report until the next
+  // handshake (retries included) carries it, as on a real CT.
+  ServerTime server_time_;
 };
 
 }  // namespace cloud_reporting

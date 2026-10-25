@@ -620,7 +620,7 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "Cloud interval (s)",
     group: CLOUD,
     help: "How often a report is sent.",
-    placeholder: "60",
+    placeholder: "300",
   },
 
   // ── add-on and dashboard ──

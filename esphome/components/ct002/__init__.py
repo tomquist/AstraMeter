@@ -689,11 +689,13 @@ CLOUD_REPORTING_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_HOST, default="eu.hamedata.com"): cv.string_strict,
             cv.Optional(CONF_FCV, default="202409090159"): cv.string_strict,
-            # getDateInfo writes sv -> the cloud record's version field, so it
-            # defaults to the version managed devices are registered with (121).
-            cv.Optional(CONF_SV, default=121): cv.int_,
+            # getDateInfo writes sv -> the cloud record's version field. Unset,
+            # it is the firmware version a cloud-reporting CT of the configured
+            # model runs (HME-4 v124, HME-3 v122), as a real one sends.
+            cv.Optional(CONF_SV): cv.int_range(min=0),
+            # A real CT waits 300 s after an accepted report.
             cv.Optional(
-                CONF_INTERVAL, default="60s"
+                CONF_INTERVAL, default="300s"
             ): cv.positive_time_period_milliseconds,
         }
     ),
@@ -1232,9 +1234,10 @@ async def _to_code_cloud_reporting(config, ct002_var):
     """Codegen for the optional `cloud_reporting:` sub-block.
 
     Mirrors src/astrameter/cloud_reporting.py: a loop()-driven state machine
-    that runs the getDateInfo handshake once, then periodically GETs
-    setCtReporting with live CT data. Plain HTTP via the http_request
-    component; reads grid/bucket data from the parent ct002 via set_ct002().
+    that runs the getDateInfo handshake, GETs setCtReporting with live CT data
+    and waits the interval, the cycle a real CT runs. Plain HTTP via the
+    http_request component; reads grid/bucket data from the parent ct002 via
+    set_ct002().
     """
     sub = config[CONF_CLOUD_REPORTING]
     # Gate the cloud_reporting runtime .cpp on this define — the URL builders
@@ -1250,7 +1253,8 @@ async def _to_code_cloud_reporting(config, ct002_var):
 
     cg.add(var.set_host(sub[CONF_HOST]))
     cg.add(var.set_fcv(sub[CONF_FCV]))
-    cg.add(var.set_sv(sub[CONF_SV]))
+    if CONF_SV in sub:
+        cg.add(var.set_sv(sub[CONF_SV]))
     cg.add(var.set_interval_ms(int(sub[CONF_INTERVAL].total_milliseconds)))
 
 
