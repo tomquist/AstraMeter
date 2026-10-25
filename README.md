@@ -114,6 +114,8 @@ the full emulator and balancer end-to-end without any real devices.
 
 - **[FAQ & troubleshooting](docs/faq.md)** — setup problems, firmware
   requirements, oscillation/yo-yo fixes, and more.
+- **[B2500 minimum output](docs/b2500-minimum-output.md)** — the lowest power a
+  B2500 delivers, depending on the inverter selected in the Marstek app.
 - **[CT002/CT003 UDP protocol](docs/ct002-ct003-protocol.md)** — the wire
   protocol used by Marstek storage systems.
 - **[Marstek MQTT & HTTP protocol](docs/marstek-mqtt-http.md)** — the cloud/app
