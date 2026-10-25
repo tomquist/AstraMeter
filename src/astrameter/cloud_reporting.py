@@ -108,7 +108,7 @@ def parse_server_time(body: str) -> ServerTime | None:
     year, month, day, hour, minute, second = (int(g) for g in match.groups())
     try:
         datetime.datetime(year, month, day, hour, minute, second)
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
     return ServerTime(year, month, day, hour, minute, second)
 

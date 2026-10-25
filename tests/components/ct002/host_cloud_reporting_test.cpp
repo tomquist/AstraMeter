@@ -109,6 +109,7 @@ TEST(CloudReportingTime, ParsesServerTime) {
   EXPECT_FALSE(parse_server_time("", &t));
   EXPECT_FALSE(parse_server_time("<html>error</html>", &t));
   EXPECT_FALSE(parse_server_time("_2026_13_40_25_61_00_", &t));
+  EXPECT_FALSE(parse_server_time("_99999999999999999999_1_1_0_0_0_", &t));
 }
 
 TEST(CloudReportingTime, TimeNoIsTenMinuteSlotOfDay) {

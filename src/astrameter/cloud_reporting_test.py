@@ -126,6 +126,7 @@ def test_parse_server_time() -> None:
     assert parse_server_time("") is None
     assert parse_server_time("<html>error</html>") is None
     assert parse_server_time("_2026_13_40_25_61_00_") is None
+    assert parse_server_time("_99999999999999999999_1_1_0_0_0_") is None
 
 
 @pytest.mark.parametrize(
