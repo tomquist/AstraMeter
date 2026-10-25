@@ -499,12 +499,7 @@ void MarstekRegistrationComponent::persist_mac_(const std::string &mac) {
 
 void MarstekRegistrationComponent::open_prefs_() {
   if (this->prefs_open_) return;
-  // A stable preferences slot. The hash combines the prefs type id with the
-  // configured ct_type so changing device_type forces a fresh registration
-  // (HME-3 and HME-4 records aren't interchangeable).
-  uint32_t hash = PREFS_TYPE_ID;
-  for (char c : this->device_type_) hash = hash * 33 + static_cast<uint8_t>(c);
-  this->pref_ = global_preferences->make_preference<StoredMac>(hash, /*in_flash=*/true);
+  this->pref_ = global_preferences->make_preference<StoredMac>(prefs_key(this->device_type_), /*in_flash=*/true);
   this->prefs_open_ = true;
 }
 
@@ -515,13 +510,7 @@ std::string MarstekRegistrationComponent::saved_mac() {
 }
 
 std::string MarstekRegistrationComponent::load_persisted_mac_() {
-  StoredMac s{};
-  if (!this->pref_.load(&s)) return {};
-  if (s.valid != 0xA5) return {};
-  s.mac_hex[sizeof(s.mac_hex) - 1] = '\0';
-  std::string mac(s.mac_hex);
-  if (mac.size() != 12) return {};
-  return to_lower_str(mac);
+  return to_lower_str(read_saved_mac(this->pref_));
 }
 
 void MarstekRegistrationComponent::apply_mac_(const std::string &mac) {

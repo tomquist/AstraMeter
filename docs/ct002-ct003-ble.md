@@ -449,9 +449,9 @@ three equal:
   before Bluetooth starts. It has to be a unicast MAC (lowest bit of the first
   byte clear), which AstraMeter's own `02b250…` MACs are; otherwise the board
   warns at boot that the app won't be able to reconnect.
-- Without `ct_mac`, the board makes up an ID like the ones cloud
-  registration assigns: `02b250` followed by six hex digits hashed from the
-  chip's own MAC. It is the same on every boot, also after erasing the flash,
+- Without `ct_mac` or a registration (below), the board makes up an ID like
+  the ones cloud registration assigns: `02b250` followed by six hex digits
+  hashed from the chip's own MAC. It is the same on every boot, also after erasing the flash,
   and the radio takes it as its Bluetooth address. The shared prefix is how
   [hame-relay](https://github.com/tomquist/hame-relay) tells an AstraMeter CT
   from a real one, and `mqtt_insights:` answers the app's MQTT polls under
@@ -475,6 +475,11 @@ board restarts once, a few seconds after registering, to take it as its
 address. With `force_reregister: true` the board does neither and warns
 instead, as it does when some other change of `ct_mac` after boot leaves the
 address behind; set `ct_mac` in the YAML then.
+
+The saved MAC outlives the block: a board whose `marstek_registration:` was
+removed from the YAML, and that has no `ct_mac`, still takes the MAC it
+registered for its `ct_type` as the ID instead of making one up, so the app
+keeps finding the registered CT. Erasing the flash forgets it.
 
 ### Wi-Fi from the app
 

@@ -19,9 +19,7 @@
 #ifdef USE_NETWORK
 #include "esphome/components/network/util.h"
 #endif
-#ifdef USE_CT002_MARSTEK_REGISTRATION
 #include "marstek_registration.h"
-#endif
 #ifdef USE_WIFI
 #include "esphome/components/wifi/wifi_component.h"
 #endif
@@ -81,6 +79,16 @@ void BluetoothComponent::configure_identity() {
     }
   }
 #endif
+  if (configured.empty() && this->registration_ == nullptr) {
+    // A registration whose block has since left the YAML still saved its MAC;
+    // keep it, so the app keeps finding the CT it registered.
+    const std::string device_type = this->model_ == ble::Model::CT003 ? "ct003" : "ct002";
+    const std::string saved = ble::normalize_id(marstek_registration::leftover_saved_mac(device_type));
+    if (!saved.empty()) {
+      configured = saved;
+      this->address_from_registration_ = true;
+    }
+  }
   if (configured.empty()) {
     // The same prefix registration assigns, so hame-relay recognises the CT
     // the app adds, and stable, so the app finds it again after a restart.

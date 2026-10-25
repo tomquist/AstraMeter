@@ -125,7 +125,9 @@ ct002:
 
 Keep the `marstek_registration:` block afterwards: it doesn't contact the
 cloud again, but it is what applies the saved MAC on every boot. To drop the
-credentials from the YAML, set `ct_mac:` to the MAC from the log first.
+credentials from the YAML, set `ct_mac:` to the MAC from the log first. With
+Bluetooth on, a board whose block is removed keeps the saved MAC as its
+Bluetooth address, so the app still finds the registered CT.
 
 With Bluetooth on as well, the board restarts once after its first
 registration so its Bluetooth address matches the registered CT; the app then

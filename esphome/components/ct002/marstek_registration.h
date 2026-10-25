@@ -75,6 +75,35 @@ struct StoredMac {
 // ESPHome ecosystem; ours just needs to be unique-per-component.
 inline constexpr uint32_t PREFS_TYPE_ID = 0xC70021A5;
 
+// The slot a registration saves its MAC in, one per device type, so changing
+// device_type forces a fresh registration (HME-3 and HME-4 records aren't
+// interchangeable).
+inline uint32_t prefs_key(const std::string &device_type) {
+  uint32_t hash = PREFS_TYPE_ID;
+  for (char c : device_type) hash = hash * 33 + static_cast<uint8_t>(c);
+  return hash;
+}
+
+// The MAC saved in that slot, as stored, or "" when there is none.
+inline std::string read_saved_mac(ESPPreferenceObject &pref) {
+  StoredMac s{};
+  if (!pref.load(&s)) return {};
+  if (s.valid != 0xA5) return {};
+  s.mac_hex[sizeof(s.mac_hex) - 1] = '\0';
+  std::string mac(s.mac_hex);
+  if (mac.size() != 12) return {};
+  return mac;
+}
+
+// The MAC a registration saved on this board for device_type, even when the
+// marstek_registration block has since been removed from the YAML: the
+// Bluetooth address follows it, so the app keeps finding the registered CT.
+inline std::string leftover_saved_mac(const std::string &device_type) {
+  if (global_preferences == nullptr) return {};
+  ESPPreferenceObject pref = global_preferences->make_preference<StoredMac>(prefs_key(device_type), /*in_flash=*/true);
+  return read_saved_mac(pref);
+}
+
 class MarstekRegistrationComponent : public Component {
  public:
   void setup() override;
