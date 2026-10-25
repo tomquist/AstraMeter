@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** answers to the Marstek app's CT002 **Diagnose** on the ESP32 build: it passes while the board receives meter readings, and fails once they stop, instead of ending in a communication error.
+
 - **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).
 
 - **Fixed** cloud reporting sending reports the Marstek cloud could not place: they now carry the time slot, date, energy totals and charge/discharge split the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds ([#744](https://github.com/tomquist/astrameter/pull/744)).

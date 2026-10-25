@@ -270,9 +270,19 @@ void BluetoothComponent::loop() {
 }
 
 void BluetoothComponent::process_frame_(const ble::Frame &frame) {
-  ble::Result result = this->responder_.handle(frame, this->snapshot_());
+  const ble::Snapshot snapshot = this->snapshot_();
+  ble::Result result = this->responder_.handle(frame, snapshot);
   ESP_LOGD(TAG, "Command 0x%02X (%u payload bytes) -> %u reply bytes", frame.cmd,
            static_cast<unsigned>(frame.payload.size()), static_cast<unsigned>(result.reply.size()));
+
+  // The app's Diagnose starts with the voltage check.
+  if (frame.cmd == ble::CMD_VOLTAGE_CHECK && !result.reply.empty()) {
+    if (snapshot.meter_live) {
+      ESP_LOGI(TAG, "App ran the CT diagnostics; the meter delivers readings, so they pass");
+    } else {
+      ESP_LOGW(TAG, "App ran the CT diagnostics; no meter reading within max_sensor_age, so they fail");
+    }
+  }
 
   if (result.wifi.has_value()) {
     if (this->wifi_changes_allowed_) {
@@ -386,6 +396,9 @@ ble::Snapshot BluetoothComponent::snapshot_() const {
   s.direction_change_allowed = this->direction_changes_allowed_;
   const std::vector<float> watts = this->ct002_->latest_grid_power();
   for (size_t i = 0; i < s.phase_w.size() && i < watts.size(); ++i) s.phase_w[i] = watts[i];
+  // The dashboard's "meter failed" condition, inverted.
+  const optional<uint32_t> freshest = this->ct002_->freshest_sensor_age_ms();
+  s.meter_live = freshest.has_value() && *freshest <= this->ct002_->max_sensor_age_ms();
 #ifdef USE_NETWORK
   // Wi-Fi or Ethernet: a board on a cable is just as online, and reporting
   // it as down would have the app push Wi-Fi credentials at it.

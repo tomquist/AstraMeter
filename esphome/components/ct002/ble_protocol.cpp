@@ -242,6 +242,41 @@ Result Responder::handle(const Frame &frame, const Snapshot &s) {
       result.reply = build_frame(CMD_LINKED_BATTERIES, text_bytes(linked_batteries_text(s.batteries, room)));
       break;
     }
+    case CMD_VOLTAGE_CHECK: {
+      // Phases A-C in whole volts, then the result. The meter ignores the
+      // request payload.
+      if (s.model != Model::CT002) break;
+      const int16_t volts = s.meter_live ? DIAG_NOMINAL_VOLTAGE_V : 0;
+      std::vector<uint8_t> p(7, 0);
+      put_le16(p, 0, volts);
+      put_le16(p, 2, volts);
+      put_le16(p, 4, volts);
+      p[6] = s.meter_live ? DIAG_VOLTAGE_PASS : DIAG_VOLTAGE_FAIL;
+      result.reply = build_frame(CMD_VOLTAGE_CHECK, p);
+      break;
+    }
+    case CMD_FREQUENCY_CHECK: {
+      // Frequency in 0.01 Hz, then the result.
+      if (s.model != Model::CT002) break;
+      std::vector<uint8_t> p(3, 0);
+      put_le16(p, 0, s.meter_live ? DIAG_NOMINAL_FREQUENCY_CENTI_HZ : 0);
+      p[2] = s.meter_live ? DIAG_FREQUENCY_PASS : DIAG_FREQUENCY_FAIL;
+      result.reply = build_frame(CMD_FREQUENCY_CHECK, p);
+      break;
+    }
+    case CMD_PHASE_ANGLE_CHECK: {
+      // The three angles between the phase voltages in whole degrees, then the
+      // result.
+      if (s.model != Model::CT002) break;
+      const int16_t degrees = s.meter_live ? DIAG_NOMINAL_PHASE_ANGLE_DEG : 0;
+      std::vector<uint8_t> p(7, 0);
+      put_le16(p, 0, degrees);
+      put_le16(p, 2, degrees);
+      put_le16(p, 4, degrees);
+      p[6] = s.meter_live ? DIAG_PHASE_ANGLE_PASS : DIAG_PHASE_ANGLE_FAIL;
+      result.reply = build_frame(CMD_PHASE_ANGLE_CHECK, p);
+      break;
+    }
     case CMD_ACTIVE_POWER: {
       if (s.model != Model::CT002) break;
       std::vector<uint8_t> p(6, 0);

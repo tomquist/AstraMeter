@@ -39,9 +39,27 @@ enum Command : uint8_t {
   CMD_READ_SSID = 0x08,
   CMD_REBOOT = 0x09,
   CMD_LINKED_BATTERIES = 0x12,
+  CMD_VOLTAGE_CHECK = 0x13,
+  CMD_FREQUENCY_CHECK = 0x14,
+  CMD_PHASE_ANGLE_CHECK = 0x15,
   CMD_ACTIVE_POWER = 0x16,
   CMD_SET_DIRECTION = 0x17,
 };
+
+// The CT002 diagnostics (CMD_VOLTAGE_CHECK .. CMD_ACTIVE_POWER) measure the
+// grid. The board measures none of it, so it reports a healthy grid while the
+// meter delivers readings and a dead one while it doesn't. The result codes
+// are the meter's: voltage and frequency report 1 for a pass, the phase angle
+// 0, and the app reads them the same way.
+inline constexpr uint16_t DIAG_NOMINAL_VOLTAGE_V = 230;
+inline constexpr uint16_t DIAG_NOMINAL_FREQUENCY_CENTI_HZ = 5000;
+inline constexpr uint16_t DIAG_NOMINAL_PHASE_ANGLE_DEG = 120;
+inline constexpr uint8_t DIAG_VOLTAGE_PASS = 1;
+inline constexpr uint8_t DIAG_VOLTAGE_FAIL = 0;
+inline constexpr uint8_t DIAG_FREQUENCY_PASS = 1;
+inline constexpr uint8_t DIAG_FREQUENCY_FAIL = 0;
+inline constexpr uint8_t DIAG_PHASE_ANGLE_PASS = 0;
+inline constexpr uint8_t DIAG_PHASE_ANGLE_FAIL = 3;
 
 // CMD_SET_DIRECTION payload: which phases have their measured power reversed,
 // bit 0 = L1/A, bit 1 = L2/B, bit 2 = L3/C. The meter ignores larger values.
@@ -133,6 +151,9 @@ struct Snapshot {
   std::string ct_type{"HME-4"};
   std::string device_id;  // 12 lowercase hex characters
   std::array<float, 3> phase_w{0.0f, 0.0f, 0.0f};
+  // The meter delivered a reading within max_sensor_age: what the CT002
+  // diagnostics report as a healthy grid.
+  bool meter_live{false};
   // Network up (Wi-Fi or Ethernet): what the app reads as "Wi-Fi connected".
   bool wifi_connected{false};
   int rssi_dbm{0};   // only meaningful on Wi-Fi

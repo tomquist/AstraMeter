@@ -159,6 +159,7 @@ class CT002Component : public Component {
     }
     return freshest;
   }
+  uint32_t max_sensor_age_ms() const { return this->max_sensor_age_ms_; }
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   // Configuration setters (called from to_code()).
