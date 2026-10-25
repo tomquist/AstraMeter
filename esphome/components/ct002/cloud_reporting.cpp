@@ -42,7 +42,7 @@ void CloudReportingComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "CT002 cloud reporting:");
   ESP_LOGCONFIG(TAG, "  host: %s", this->host_.c_str());
   ESP_LOGCONFIG(TAG, "  id: %s",
-                this->device_id_.empty() ? "(pending — from the CT MAC)" : this->device_id_.c_str());
+                this->device_id_.empty() ? "(pending — ct_mac, or the Bluetooth ID)" : this->device_id_.c_str());
   // uint32_t is `long unsigned` on xtensa, so %u needs the cast to match
   // (lossless — both are 32 bits here and on the host build).
   ESP_LOGCONFIG(TAG, "  interval: %u ms", static_cast<unsigned>(this->interval_ms_));
