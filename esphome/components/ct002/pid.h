@@ -10,12 +10,13 @@ namespace ct002 {
 
 enum class PidMode { BIAS, REPLACE };
 
-// PID controller that steers the reported power toward zero (grid balance).
+// PID controller in the reported-power path.
 // Mirrors src/astrameter/powermeter/wrappers/pid.py.
 //
 // Error convention: error = -measurement. Positive grid import produces a
-// negative error, causing the PID to reduce the reported value and motivate
-// the storage device to cover the import. Output is clamped to
+// negative error, so the PID reduces the reported value. In bias mode with P
+// only the device receives (1 - Kp) x the reading, i.e. the PID lowers the
+// gain of the device's own control loop. Output is clamped to
 // [-output_max, +output_max]; the integral term has anti-windup (paused
 // while output is saturated, unless the integral is unwinding).
 class PidPowermeter : public PowermeterWrapper {

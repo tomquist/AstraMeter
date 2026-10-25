@@ -445,20 +445,20 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "PID proportional",
     group: FILTERS,
     help:
-      "Layers a net-zero PID controller on top of the meter reading. 0 is " +
-      "off; 0.5 is a safe start with a single battery.",
+      "Makes the battery react less strongly to each reading. 0 is off; " +
+      "use 0–1 and start at 0.5. Not needed with active control.",
     placeholder: "0",
   },
   pid_ki: {
     label: "PID integral",
     group: FILTERS,
-    help: "Integral gain. Usually left at 0 — it risks winding up.",
+    help: "Leave at 0 — above 0 it gradually pushes the grid away from zero.",
     placeholder: "0",
   },
   pid_kd: {
     label: "PID derivative",
     group: FILTERS,
-    help: "Derivative gain. Usually left at 0 — it is noisy on a real meter.",
+    help: "Leave at 0 — it tends to make swinging worse.",
     placeholder: "0",
   },
   pid_output_max: {
@@ -471,8 +471,8 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "PID mode",
     group: FILTERS,
     help:
-      "bias adds the PID's output to the meter reading (recommended); " +
-      "replace steers on the PID output alone.",
+      "Leave at bias. replace sends only the PID's output, which makes " +
+      "the battery react the wrong way.",
   },
 
   // ── balancer tuning ──

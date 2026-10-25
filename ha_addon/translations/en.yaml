@@ -154,16 +154,16 @@ configuration:
     description: "Optional. Smallest spike (in watts) that may be rejected, so tiny fluctuations on a steady signal are never filtered. Try 50. Leave empty or 0 for no floor. Only used when Hampel Window is set."
   pid_kp:
     name: PID Proportional Gain (Kp)
-    description: "Optional. Enables a PID controller that steers grid power toward zero. Start at 0.5 (stable between 0 and 1). Leave empty or 0 to disable PID."
+    description: "Optional. Makes the battery react less strongly to each reading, which can calm a battery that swings back and forth. Use a value between 0 and 1; start at 0.5. Leave empty or 0 to disable. Not needed with CT002/CT003 active control."
   pid_ki:
     name: PID Integral Gain (Ki)
-    description: "Optional. Integral gain for the PID controller. Usually leave empty (0) to avoid wind-up. Only used when PID Proportional Gain is set."
+    description: "Optional. Leave empty (0): any value above 0 gradually pushes the grid away from zero. Only used when PID Proportional Gain is set."
   pid_kd:
     name: PID Derivative Gain (Kd)
-    description: "Optional. Derivative gain for the PID controller. Usually leave empty (0) - it tends to be noisy on real meters. Only used when PID Proportional Gain is set."
+    description: "Optional. Leave empty (0): it tends to make swinging worse. Only used when PID Proportional Gain is set."
   pid_output_max:
     name: PID Output Limit (W)
     description: "Optional. Caps the PID adjustment to plus/minus this many watts. Default 800. Only used when PID Proportional Gain is set."
   pid_mode:
     name: PID Mode
-    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."
+    description: "Optional. Leave at 'bias' (the default). 'replace' sends the battery only the PID adjustment, which makes it react the wrong way. Only used when PID Proportional Gain is set."
