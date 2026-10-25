@@ -1,0 +1,41 @@
+esphome:
+  name: ct002-bluetooth-esp32-ard
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+
+# Another component on the same GATT server: Bluetooth Wi-Fi provisioning.
+# Proves the CT service and Improv's coexist on esp32_ble_server.
+esp32_improv:
+  authorizer: none
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  # A CT003 with no ct_mac: the BLE identity falls back to the board's own
+  # MAC and the device advertises as MST-SMR_xxxx with the 42-byte status
+  # layout. Bluetooth is on by default; spelled out here for the reader.
+  ct_type: HME-3
+  bluetooth: true
+  dashboard: false

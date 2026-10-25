@@ -75,6 +75,35 @@ struct StoredMac {
 // ESPHome ecosystem; ours just needs to be unique-per-component.
 inline constexpr uint32_t PREFS_TYPE_ID = 0xC70021A5;
 
+// The slot a registration saves its MAC in, one per device type, so changing
+// device_type forces a fresh registration (HME-3 and HME-4 records aren't
+// interchangeable).
+inline uint32_t prefs_key(const std::string &device_type) {
+  uint32_t hash = PREFS_TYPE_ID;
+  for (char c : device_type) hash = hash * 33 + static_cast<uint8_t>(c);
+  return hash;
+}
+
+// The MAC saved in that slot, as stored, or "" when there is none.
+inline std::string read_saved_mac(ESPPreferenceObject &pref) {
+  StoredMac s{};
+  if (!pref.load(&s)) return {};
+  if (s.valid != 0xA5) return {};
+  s.mac_hex[sizeof(s.mac_hex) - 1] = '\0';
+  std::string mac(s.mac_hex);
+  if (mac.size() != 12) return {};
+  return mac;
+}
+
+// The MAC a registration saved on this board for device_type, even when the
+// marstek_registration block has since been removed from the YAML: the
+// Bluetooth address follows it, so the app keeps finding the registered CT.
+inline std::string leftover_saved_mac(const std::string &device_type) {
+  if (global_preferences == nullptr) return {};
+  ESPPreferenceObject pref = global_preferences->make_preference<StoredMac>(prefs_key(device_type), /*in_flash=*/true);
+  return read_saved_mac(pref);
+}
+
 class MarstekRegistrationComponent : public Component {
  public:
   void setup() override;
@@ -94,6 +123,12 @@ class MarstekRegistrationComponent : public Component {
   void set_device_type(const std::string &v) { this->device_type_ = v; }
   void set_retry_interval_ms(uint32_t v) { this->retry_interval_ms_ = v; }
   void set_force_reregister(bool v) { this->force_reregister_ = v; }
+
+  // The MAC an earlier boot registered and saved, or "" when there is none
+  // yet or force_reregister is set. Safe to call before setup(): preferences
+  // are up before any component starts, and the Bluetooth component reads
+  // this then, while the radio can still take it as its address.
+  std::string saved_mac();
 
  protected:
   // State machine. Mirrors the linear flow in
@@ -153,6 +188,8 @@ class MarstekRegistrationComponent : public Component {
   // Persist on success. Mirrors the implicit "remember next boot" from
   // a successful config_loader run on the Python side.
   void persist_mac_(const std::string &mac);
+  // Bind pref_ to this device type's slot; once, from setup() or saved_mac().
+  void open_prefs_();
   // Returns the MAC loaded from prefs at setup(), or "" if none.
   std::string load_persisted_mac_();
 
@@ -187,6 +224,7 @@ class MarstekRegistrationComponent : public Component {
   uint32_t backoff_deadline_ms_{0};
   uint32_t last_attempt_ms_{0};
   ESPPreferenceObject pref_;
+  bool prefs_open_{false};
   std::string applied_mac_;
 };
 

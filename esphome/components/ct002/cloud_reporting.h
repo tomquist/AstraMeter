@@ -87,8 +87,8 @@ class CloudReportingComponent : public Component {
   ct002::CT002Component *ct002_{nullptr};
   http_request::HttpRequestComponent *http_{nullptr};
   std::string host_{"eu.hamedata.com"};
-  // The reported id is the CT MAC, resolved lazily in loop() from
-  // ct002_->ct_mac() (marstek_registration may set it after our setup()).
+  // The reported id is the CT MAC, followed in loop() from ct002_->app_mac()
+  // (marstek_registration may set it after our setup()).
   std::string device_id_;
   std::string fcv_{"202409090159"};
   // Sent as `sv` in the handshake, which the cloud writes into the device's
