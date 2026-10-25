@@ -73,6 +73,14 @@ CtMeasurement CloudReportingComponent::gather_() const {
   m.slv = static_cast<int>(this->ct002_->connected_slave_count());
   m.udp = 1;
   m.mqtt = 0;
+  // HME-4 only (the URL builder leaves them out for HME-3): the optional
+  // voltage sensors, truncated to whole volts as the meter does, and 0 for a
+  // phase without a fresh reading. Current stays 0; AstraMeter has none.
+  int *const volts[3] = {&m.va, &m.vb, &m.vc};
+  for (uint8_t i = 0; i < 3; ++i) {
+    const optional<float> v = this->ct002_->grid_voltage(i);
+    *volts[i] = v.has_value() ? static_cast<int>(*v) : 0;
+  }
   // A real CT fills c* from the buckets it sends as the UDP response's
   // *_dchrg_power and d* from its *_chrg_power.
   const CT002Component::PhaseBucketPowers b = this->ct002_->reporting_phase_buckets();

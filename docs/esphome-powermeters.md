@@ -36,6 +36,42 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 > `json`, and lambda APIs differ slightly between releases, so check the linked
 > component docs for the exact syntax on your version.
 
+### Optional: grid voltage and frequency
+
+A real CT002 also measures each phase's voltage and the grid frequency.
+AstraMeter doesn't steer on them, but it reports them where a real meter
+would when you point `ct002:` at sensors for them. Unlike the sections below,
+this is not a complete config: add these sensors and keys to the one you
+already have for your meter.
+
+```yaml
+sensor:
+  - platform: homeassistant
+    id: grid_v_l1
+    entity_id: sensor.grid_voltage_l1
+    unit_of_measurement: V
+  - platform: homeassistant
+    id: grid_hz
+    entity_id: sensor.grid_frequency
+    unit_of_measurement: Hz
+
+ct002:
+  power_sensor_l1: grid_l1
+  voltage_sensor_l1: grid_v_l1     # also voltage_sensor_l2 / _l3
+  frequency_sensor: grid_hz
+```
+
+- **The Marstek app's CT002 Diagnose** (over Bluetooth) checks the voltages
+  against 210–240 V and the frequency against 45–55 Hz, as the meter does. A
+  phase or the frequency without a sensor, or without a reading within
+  `max_sensor_age`, reports 230 V or 50.00 Hz, which pass. Diagnose fails
+  whenever the power sensors have no fresh reading.
+- **Cloud reporting** (CT002) sends the voltages as `va`/`vb`/`vc`, and `0`
+  for a phase without a fresh reading.
+
+The sensors must report V and Hz; a declared unit such as `mV` or `kHz` fails
+config validation. They are all optional and independent of each other.
+
 ## Support legend
 
 | Tier | Meaning |

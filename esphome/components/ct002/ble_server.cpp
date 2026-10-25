@@ -270,9 +270,30 @@ void BluetoothComponent::loop() {
 }
 
 void BluetoothComponent::process_frame_(const ble::Frame &frame) {
-  ble::Result result = this->responder_.handle(frame, this->snapshot_());
+  const ble::Snapshot snapshot = this->snapshot_();
+  ble::Result result = this->responder_.handle(frame, snapshot);
   ESP_LOGD(TAG, "Command 0x%02X (%u payload bytes) -> %u reply bytes", frame.cmd,
            static_cast<unsigned>(frame.payload.size()), static_cast<unsigned>(result.reply.size()));
+
+  // The app's Diagnose: say how each check went, from the result byte the
+  // reply carries (the last payload byte, before the XOR).
+  const char *check = frame.cmd == ble::CMD_VOLTAGE_CHECK     ? "voltage"
+                      : frame.cmd == ble::CMD_FREQUENCY_CHECK ? "frequency"
+                      : frame.cmd == ble::CMD_PHASE_ANGLE_CHECK ? "phase angle"
+                                                                : nullptr;
+  if (check != nullptr && result.reply.size() >= ble::FRAME_OVERHEAD + 1) {
+    const uint8_t code = result.reply[result.reply.size() - 2];
+    const uint8_t pass_code = frame.cmd == ble::CMD_PHASE_ANGLE_CHECK ? ble::DIAG_PHASE_ANGLE_PASS
+                              : frame.cmd == ble::CMD_FREQUENCY_CHECK ? ble::DIAG_FREQUENCY_PASS
+                                                                      : ble::DIAG_VOLTAGE_PASS;
+    if (code == pass_code) {
+      ESP_LOGI(TAG, "App's CT diagnostics: %s check passed", check);
+    } else if (!snapshot.meter_live) {
+      ESP_LOGW(TAG, "App's CT diagnostics: %s check failed (no meter reading within max_sensor_age)", check);
+    } else {
+      ESP_LOGW(TAG, "App's CT diagnostics: %s check failed (sensor reading outside the meter's range)", check);
+    }
+  }
 
   if (result.wifi.has_value()) {
     if (this->wifi_changes_allowed_) {
@@ -386,6 +407,15 @@ ble::Snapshot BluetoothComponent::snapshot_() const {
   s.direction_change_allowed = this->direction_changes_allowed_;
   const std::vector<float> watts = this->ct002_->latest_grid_power();
   for (size_t i = 0; i < s.phase_w.size() && i < watts.size(); ++i) s.phase_w[i] = watts[i];
+  // The dashboard's "meter failed" condition, inverted.
+  const optional<uint32_t> freshest = this->ct002_->freshest_sensor_age_ms();
+  s.meter_live = freshest.has_value() && *freshest <= this->ct002_->max_sensor_age_ms();
+  for (uint8_t i = 0; i < 3; ++i) {
+    const optional<float> volts = this->ct002_->grid_voltage(i);
+    if (volts.has_value()) s.voltage_v[i] = *volts;
+  }
+  const optional<float> hz = this->ct002_->grid_frequency();
+  if (hz.has_value()) s.frequency_hz = *hz;
 #ifdef USE_NETWORK
   // Wi-Fi or Ethernet: a board on a cable is just as online, and reporting
   // it as down would have the app push Wi-Fi credentials at it.
