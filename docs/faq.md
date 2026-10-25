@@ -86,6 +86,17 @@ for export). In the Home Assistant App, put it in `POWER_INPUT_ALIAS` (or
 import/export sensors can update at different moments and get read out of sync,
 which causes drift and oscillation. A single signed value avoids that.
 
+### My battery keeps exporting a few watts. Can I avoid that?
+
+A: Your battery aims for 0 W on the grid, but it never lands exactly there, so
+some of the time a few watts go out. To keep it on the import side instead, set
+a small negative `POWER_OFFSET` — see
+[Keeping a small import margin](configuration.md#keeping-a-small-import-margin).
+It can't prevent the brief export right after a large load switches off, while
+the battery is still turning down. Nor can it prevent export while the battery
+is full or already charging as fast as it can: AstraMeter has no control over
+your solar panels.
+
 ### Should I use Shelly emulation or CT002/CT003?
 
 A: CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`). Each battery reports its
@@ -181,11 +192,13 @@ change, watch how the battery behaves for a few minutes before moving on:
    `MAX_SMOOTH_STEP` to around `40`–`60`, so the reported power moves in gentle
    steps instead of jumping.
 
-If it still swings after that, the most effective option is the
-**[PID Controller](configuration.md#pid-controller)** — a smart helper that
-gently nudges the reading toward zero and calms down a battery that tends to
-over- or under-react. To get started, just set `PID_KP = 0.5` and
-`PID_MODE = bias`, and leave the other `PID_*` settings alone. A few more
+If it still swings after that, try the
+**[PID Controller](configuration.md#pid-controller)** with just `PID_KP = 0.5`,
+and leave the other `PID_*` settings at their defaults. It makes the battery
+react less strongly to each reading, which often stops the swinging. This
+helps when the battery reacts to the readings itself (Shelly emulation, or
+CT002/CT003 with `ACTIVE_CONTROL = false`); with active control on, leave the
+PID off. A few more
 optional filters (including one that throws out occasional bad spikes) are
 described under
 [Per-powermeter options](configuration.md#per-powermeter-options) if you want to

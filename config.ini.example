@@ -545,25 +545,25 @@ THROTTLE_INTERVAL = 0
 # OBIS_POWER_L2 = 0100380700ff
 # OBIS_POWER_L3 = 01004c0700ff
 
-## --- PID controller (grid-balance feedback loop) ---
-## When PID_KP > 0, a Proportional-Integral-Derivative controller is layered
-## on top of the configured powermeter.  It uses the measured grid power as its
-## process variable and steers the reported value toward zero (net-zero grid).
+## --- PID controller (optional) ---
+## Despite the name, this does not steer the grid to zero by itself: the
+## battery (or CT002/CT003 active control) does. With only PID_KP set, the
+## battery receives the reading scaled down to (1 - PID_KP) of its real value
+## (the PID never changes it by more than PID_OUTPUT_MAX), so it reacts less
+## strongly. That can calm a battery that overshoots and swings back and forth
+## (Shelly emulation, or CT002/CT003 with ACTIVE_CONTROL = false). With
+## active control on, leave it off. See docs/configuration.md#pid-controller.
 ##
-## Recommended starting point (P-only, bias mode):
-##   PID_KP         = 0.5   # gain; 0.5 is a safe start for one storage device
-##   PID_KI         = 0     # integral — usually not needed; risks windup
-##   PID_KD         = 0     # derivative — noisy on real meters; leave at 0
-##   PID_OUTPUT_MAX = 800   # cap the PID output at ± 800 W
-##   PID_MODE       = bias  # add PID output to raw reading (alternative: replace)
+##   PID_KP         = 0.5   # 0 = off; use 0 < Kp < 1. At 1 the battery stops
+##                          # reacting to readings up to PID_OUTPUT_MAX;
+##                          # above 1 it reacts the wrong way
+##   PID_KI         = 0     # leave at 0: above 0 the grid drifts to +/- PID_OUTPUT_MAX
+##   PID_KD         = 0     # leave at 0: tends to make swinging worse
+##   PID_OUTPUT_MAX = 800   # most the PID may change the reading by, in W
+##   PID_MODE       = bias  # leave at bias: replace makes the battery react the wrong way
 ##
-## In bias mode the PID and the storage device's own closed-loop controller
-## act together; the system is stable for 0 < Kp < 1.
-## In replace mode the PID output replaces the raw reading entirely.
-##
-## To keep a small import safety buffer (prevent accidental export), combine
-## with a negative POWER_OFFSET applied before the PID:
-##   POWER_OFFSET   = -20   # bias 20 W toward import
+## To keep a small import margin instead of exporting a few watts, use a
+## negative POWER_OFFSET (no PID needed), e.g. POWER_OFFSET = -20.
 ##
 ## Parameters can be set globally in [GENERAL] or per powermeter section.
 ## Per-section values override the global ones.

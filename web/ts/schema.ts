@@ -229,7 +229,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_KP",
     label: "PID proportional gain (Kp)",
-    help: "0 = PID off. Set >0 to layer a net-zero controller on top of the meter. 0.5 is a safe start (single battery).",
+    help: "0 = off. Makes the battery react less strongly to each reading (use 0–1; start at 0.5). Not needed with CT002/CT003 active control.",
     type: "number",
     default: "",
     placeholder: "0",
@@ -237,7 +237,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_KI",
     label: "PID integral gain (Ki)",
-    help: "Usually leave at 0 — it risks integral wind-up.",
+    help: "Leave at 0 — above 0 it gradually pushes the grid away from zero.",
     type: "number",
     default: "",
     placeholder: "0",
@@ -246,7 +246,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_KD",
     label: "PID derivative gain (Kd)",
-    help: "Leave at 0 — noisy on real meters.",
+    help: "Leave at 0 — it tends to make swinging worse.",
     type: "number",
     default: "",
     placeholder: "0",
@@ -264,7 +264,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_MODE",
     label: "PID mode",
-    help: "bias adds the PID output to the reading (recommended). replace uses only the PID output.",
+    help: "Leave at bias. replace sends only the PID output, which makes the battery react the wrong way.",
     type: "select",
     default: "",
     options: [

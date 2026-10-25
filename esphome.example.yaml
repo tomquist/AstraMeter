@@ -135,17 +135,17 @@ ct002:
   #     max_step: 0                # 0 = no per-step clamp; e.g. 200 to cap
   #   deadband:
   #     deadband: 0                # 0 = off; e.g. 10 zeros out |sum| < 10 W
-  #   # PID is an ALTERNATIVE controller — do NOT combine it with
-  #   # active_control/balancer (two controllers fight; the PID integral
-  #   # winds up and, in bias mode, can invert the sign sent to the
-  #   # battery). Use it only with active_control: false. Disabled here
-  #   # (kp/ki/kd = 0 → zero output → pass-through in bias mode).
+  #   # PID: makes the battery react less strongly to each reading
+  #   # (it receives (1 - kp) x the real value, until the correction
+  #   # reaches output_max). Only useful with active_control: false,
+  #   # to calm a battery that swings back and forth.
+  #   # See docs/configuration.md#pid-controller.
   #   pid:
-  #     kp: 0.0                    # >0 enables; 0.5 is a sane start
-  #     ki: 0.0
-  #     kd: 0.0
+  #     kp: 0.0                    # 0 = no effect; use 0 < kp < 1, start at 0.5
+  #     ki: 0.0                    # leave at 0: above 0 the grid drifts to +/- output_max
+  #     kd: 0.0                    # leave at 0: tends to make swinging worse
   #     output_max: 800
-  #     mode: bias                 # bias or replace
+  #     mode: bias                 # leave at bias: replace makes the battery react the wrong way
 
   # Multi-battery load balancer tuning. Runs by default with these values
   # whenever active_control is true; omit/leave commented for a single
