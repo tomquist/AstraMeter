@@ -356,8 +356,12 @@ A: Use one of these device types:
 ### Do I need a Marstek account, and how does "AstraMeter CT002" get into the app?
 
 A: You need the account only if you don't own a real Marstek CT. The Marstek
-app only lets you select a CT that is registered to your account, so
-AstraMeter can register a virtual CT there:
+app only lets you select a CT that is registered to your account. On an ESP32
+with Bluetooth, the app adds the board to your account itself when you tap
+**+** (see
+[Add the board to the Marstek app](installation/esphome.md#add-the-board-to-the-marstek-app)),
+so AstraMeter needs no login. Otherwise AstraMeter can register a virtual CT
+there:
 
 - Home Assistant App: enable **Auto-register Managed CT Device (Marstek)** and
   enter your Marstek email address and password.
@@ -370,8 +374,8 @@ Use the account your battery belongs to. At startup the log shows
 `Managed fake CT registration completed`, or a message that the device already
 exists. Then select the CT as described in
 [My Marstek device can't find the emulated powermeter](#my-marstek-device-cant-find-the-emulated-powermeter-what-could-be-wrong).
-The virtual CT doesn't appear in a Bluetooth search, and the CT list always
-shows it as offline. After registration you only need the credentials for live
+A virtual CT registered by the add-on or Docker doesn't appear in a Bluetooth
+search, and the CT list always shows it as offline. After registration you only need the credentials for live
 values in the Marstek app through hame-relay (see
 [The Marstek app shows the meter offline](#the-marstek-app-shows-the-meter-offline-or-shows-values-that-dont-match-my-meter)).
 
@@ -835,7 +839,10 @@ A: With CT002/CT003 this is expected:
   so only that battery shows real values. In relay mode
   (`ACTIVE_CONTROL = False`) all batteries receive the raw reading.
 
-To see live grid power in the Marstek app, register the CT with the
+On an ESP32 with Bluetooth, the app shows the board's live grid power over
+Bluetooth while your phone is nearby (see
+[Add the board to the Marstek app](installation/esphome.md#add-the-board-to-the-marstek-app)).
+To see live grid power in the Marstek app away from the board, register the CT with the
 `[MARSTEK]` section and connect `[MQTT_INSIGHTS]` to the broker that
 [hame-relay](https://github.com/tomquist/hame-relay) (1.3.5 or later) uses.
 AstraMeter then answers the app's requests. See
