@@ -1,37 +1,42 @@
 """Opt-in Marstek HTTP cloud reporting (``hamedata.com``).
 
-A real CT002 (``HME-4``) / CT003 (``HME-3``) periodically reports to the Marstek
-cloud over **plain HTTP GET** (no TLS, no token/signature — the device is
-identified only by the cleartext ``id``/``aid`` query params). It:
+A real CT002 (``HME-4``) / CT003 (``HME-3``) reports to the Marstek cloud over
+**plain HTTP GET** (no TLS, no token/signature — the device is identified only
+by the cleartext ``id``/``uid`` query params). Only the newest firmware does it
+(``HME-4`` v124, ``HME-3`` v122; the older images have no such code). Read from
+those images, every cycle of its reporting state machine:
 
-1. runs a one-shot **handshake** ``getDateInfoeu.php`` (``uid``/``fcv``/``aid``/
-   ``sv``) — really a device upsert that writes ``aid``→the record's ``type``
-   and ``sv``→its ``version``, so we send the CT model and firmware version,
-   then
-2. sends a **timer-driven** ``setCtReporting`` GET carrying the live grid power,
-   the per-bucket charge/discharge split, link state and an incrementing
-   ``timeNo``.
+1. runs the **handshake** ``getDateInfoeu.php`` (``uid``/``fcv``/``aid``/``sv``
+   = device id, Wi-Fi module version, model, firmware version) — a device
+   upsert whose response body is the server's wall-clock time
+   (``_YYYY_MM_DD_HH_MM_SS_``). On success it rolls its day/hour energy
+   registers forward against that server time, then
+2. sends ``setCtReporting``, retrying until the cloud answers, with ``timeNo``
+   = the 10-minute slot of the server's day and ``date`` = the server's date,
+3. waits 300 s and starts over at the handshake.
 
 The two URL templates here match what each model sends on the wire (see
 ``docs/marstek-mqtt-http.md``). The field **set is model-dependent**: ``HME-4``
 (a clamp) also sends instantaneous voltage / current (``va/vb/vc``, ``ia/ib/ic``)
-and 32-bit energy; ``HME-3`` (a smart-meter reader) sends 64-bit energy and
-**no** V/I, and has an on-wire quirk — a missing ``&`` between ``slv`` and
-``udp`` (``…&slv=<n>udp=<n>…``) — which we reproduce so the request matches a
-real device.
+and 32-bit energy, and puts its per-phase powers through an unsigned 16-bit
+cast, so they go out as magnitudes; ``HME-3`` (a smart-meter reader) sends
+signed powers, 64-bit energy and **no** V/I, and has an on-wire quirk — a
+missing ``&`` between ``slv`` and ``udp`` (``…&slv=<n>udp=<n>…``) — which we
+reproduce so the request matches a real device.
 
 This is **opt-in** and best-effort: reporting failures are logged and never
-disturb the UDP control loop. Several values a real device measures are not
-available to AstraMeter (cumulative energy, and V/I on ``HME-4``); those default
-to ``0`` unless supplied. The exact real-world report **cadence** and the server
-**response contract** are not known — see the docs.
+disturb the UDP control loop. AstraMeter has no energy register, so it
+integrates the grid power it reads into one; V/I on ``HME-4`` default to ``0``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime
 import logging
+import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -39,29 +44,137 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "eu.hamedata.com"
-# Default build stamp sent as ``fcv`` in the handshake (matches DEFAULT_FC4_V).
+# Default build stamp sent as ``fcv`` in the handshake (matches DEFAULT_FC4_V):
+# a real CT sends the same Wi-Fi module version it reports as ``fc4_v``.
 DEFAULT_FCV = "202409090159"
-# Firmware version sent as ``sv`` in the handshake. ``getDateInfoeu.php`` is a
-# device check-in that **writes** its ``sv`` into the cloud record's ``version``
-# field (and its ``aid`` into ``type``), so we send the same version AstraMeter
-# registers managed devices with (``marstek_api._add_device``'s ``version=121``)
-# to *re-assert* the record rather than clobber it with a bogus value.
-DEFAULT_REPORTING_VERSION = 121
-# No real-world cadence is documented; default to a conservative 60 s and let the
-# operator tune it (a capture of a real device is the ground truth — see docs).
-DEFAULT_INTERVAL_SECONDS = 60.0
+# A real CT sends its own firmware version as ``sv``, which the cloud writes into
+# the device record's ``version``. Only these versions report to the cloud at
+# all, so they are the ones a reporting CT claims.
+REPORTING_FIRMWARE_VERSIONS = {"HME-4": 124, "HME-3": 122}
+# Both images wait 300 s (their seconds tick) after a report the cloud accepted
+# before starting the next handshake.
+DEFAULT_INTERVAL_SECONDS = 300.0
+# A real CT retries a failed handshake or report on its next main-loop pass,
+# bounded only by the Wi-Fi module's 60 s HTTP timeout. Wait that long instead
+# of hammering a cloud that keeps rejecting us.
+RETRY_SECONDS = 60.0
+# How often the grid power is sampled into the energy register between reports.
+DEFAULT_SAMPLE_SECONDS = 10.0
+# ``eled``/``elet`` are in 0.1 Wh: HME-3 scales its meter's Wh reading by 10,
+# HME-4 counts kWh in units of 10 000. One watt for one second is 1/360 of that.
+_WATT_SECONDS_PER_UNIT = 360.0
+
+# The handshake response, as both images scan it: ``_%hu_%hhu_%hhu_%hhu_%hhu_%hhu_``.
+_SERVER_TIME_RE = re.compile(r"_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)_")
+
+
+def reporting_firmware_version(ct_type: str) -> int:
+    """The firmware version a cloud-reporting CT of *ct_type* sends as ``sv``."""
+    return REPORTING_FIRMWARE_VERSIONS.get(
+        ct_type, REPORTING_FIRMWARE_VERSIONS["HME-4"]
+    )
+
+
+@dataclass(frozen=True)
+class ServerTime:
+    """Wall-clock time as the handshake response gives it (the server's zone)."""
+
+    year: int
+    month: int
+    day: int
+    hour: int
+    minute: int
+    second: int = 0
+
+    @property
+    def time_no(self) -> int:
+        """The ``timeNo`` a CT reports: the 10-minute slot of the day (0-143)."""
+        return (self.hour * 60 + self.minute) // 10
+
+    @property
+    def date(self) -> datetime.date:
+        return datetime.date(self.year, self.month, self.day)
+
+    @classmethod
+    def from_datetime(cls, dt: datetime.datetime) -> ServerTime:
+        return cls(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+
+
+def parse_server_time(body: str) -> ServerTime | None:
+    """Parse the handshake response body, or ``None`` if it carries no time."""
+    match = _SERVER_TIME_RE.search(body)
+    if match is None:
+        return None
+    year, month, day, hour, minute, second = (int(g) for g in match.groups())
+    try:
+        datetime.datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+    return ServerTime(year, month, day, hour, minute, second)
+
+
+class EnergyIntegrator:
+    """Integrates sampled grid power (W) into an energy register (0.1 Wh).
+
+    Each sample's power is held until the next one (a left Riemann sum), the
+    way a meter's pulse counter would have seen it.
+    """
+
+    def __init__(self) -> None:
+        self._total = 0.0
+        self._last: tuple[float, float] | None = None
+
+    def sample(self, now_s: float, power_w: float) -> None:
+        if self._last is not None:
+            last_s, last_w = self._last
+            if now_s > last_s:
+                self._total += last_w * (now_s - last_s) / _WATT_SECONDS_PER_UNIT
+        self._last = (now_s, power_w)
+
+    @property
+    def total(self) -> int:
+        return int(self._total)
+
+
+class EnergyCounters:
+    """The ``eled``/``elet`` registers: energy since the start of the day/hour.
+
+    Mirrors the handshake step of both images: add what the energy register
+    gained since the last handshake to both, then clear ``elet`` when the
+    server's hour changed and ``eled`` when its day did.
+    """
+
+    def __init__(self) -> None:
+        self.eled = 0
+        self.elet = 0
+        self._last_total = 0
+        self._hour: int | None = None
+        self._day: int | None = None
+
+    def update(self, total: int, now: ServerTime) -> None:
+        delta = total - self._last_total
+        self.eled += delta
+        self.elet += delta
+        self._last_total = total
+        if now.hour != self._hour:
+            self.elet = 0
+        if now.day != self._day:
+            self.eled = 0
+        self._hour = now.hour
+        self._day = now.day
 
 
 @dataclass(frozen=True)
 class CtMeasurement:
     """The live values a CT puts in a ``setCtReporting`` GET.
 
-    Powers are watts. ``c*`` are the **charge** buckets and ``d*`` the
-    **discharge** buckets, in the CT's ``x``/``A``/``B``/``C``/``ABC`` order
-    (``z``↔``x`` unassigned, ``d``↔``ABC`` combined) — identical to the UDP
-    response's ``*_chrg_power`` / ``*_dchrg_power`` split. ``va/vb/vc`` (volts)
-    and ``ia/ib/ic`` (amps) are ``HME-4`` only; ``eled``/``elet`` are cumulative
-    energy registers (``HME-3`` carries them as 64-bit).
+    Powers are watts, signed (import positive); the URL builder applies the
+    model's wire cast. ``c*`` and ``d*`` are the bucket fields in the CT's
+    ``x``/``A``/``B``/``C``/``ABC`` order (``z``↔``x`` unassigned, ``d``↔``ABC``
+    combined): ``c*`` carries the UDP response's ``*_dchrg_power`` and ``d*`` its
+    ``*_chrg_power``, which is where both images read them from. ``va/vb/vc``
+    (volts) and ``ia/ib/ic`` (amps) are ``HME-4`` only; ``eled``/``elet`` are
+    the day/hour energy registers in 0.1 Wh (``HME-3`` carries them as 64-bit).
     """
 
     ap: int = 0
@@ -99,17 +212,22 @@ def build_get_date_info_url(host: str, *, uid: str, fcv: str, aid: str, sv: int)
     models. Identity params are percent-encoded for safety (a real device sends
     plain hex MACs, which are unaffected).
 
-    Despite the param names, this endpoint is a **device upsert**: empirically
-    the server stores ``aid``→the device record's ``type`` and ``sv``→its
-    ``version`` (the response body is just server time). Callers therefore pass
-    the CT model as ``aid`` and the firmware version as ``sv`` so the record is
-    re-asserted, not corrupted — see ``CloudReporter._handshake``.
+    Both images fill it from the same values as their MQTT runtime frame:
+    ``uid`` the device id, ``fcv`` the Wi-Fi module version (``fc4_v``), ``aid``
+    the model and ``sv`` the firmware version (``ver_v``). The server stores
+    ``aid``→the device record's ``type`` and ``sv``→its ``version``.
     """
     return (
         f"http://{host}/app/neng/getDateInfoeu.php"
         f"?uid={quote(uid, safe='')}&fcv={quote(fcv, safe='')}"
         f"&aid={quote(aid, safe='')}&sv={int(sv)}"
     )
+
+
+def _hme4_power(watts: int) -> int:
+    # HME-4 converts its float power with an unsigned 16-bit cast whose float
+    # conversion ignores the sign, so the cloud gets the magnitude.
+    return abs(int(watts)) & 0xFFFF
 
 
 def build_set_ct_reporting_url(
@@ -124,17 +242,21 @@ def build_set_ct_reporting_url(
     """Build the ``setCtReporting`` GET for *ct_type* (``HME-4`` or ``HME-3``).
 
     Builds the model-specific template field-for-field, including the model
-    differences (``HME-4`` adds ``va/vb/vc``/``ia/ib/ic``; ``HME-3`` uses 64-bit
-    energy, omits V/I, and keeps the missing-``&`` ``slv``/``udp`` quirk).
+    differences (``HME-4`` adds ``va/vb/vc``/``ia/ib/ic`` and sends power
+    magnitudes; ``HME-3`` uses 64-bit energy, omits V/I, and keeps the
+    missing-``&`` ``slv``/``udp`` quirk).
     """
     base = f"http://{host}/prod/api/v1/setCtReporting"
     did = quote(device_id, safe="")
+    hme3 = ct_type == "HME-3"
+    power = int if hme3 else _hme4_power
     head = (
         f"?id={did}&eled={int(m.eled)}&elet={int(m.elet)}"
-        f"&ap={int(m.ap)}&bp={int(m.bp)}&cp={int(m.cp)}&dp={int(m.dp)}&rssi={int(m.rssi)}"
+        f"&ap={power(m.ap)}&bp={power(m.bp)}&cp={power(m.cp)}&dp={power(m.dp)}"
+        f"&rssi={int(m.rssi)}"
     )
     # Quirk: HME-3 omits the '&' between slv and udp; HME-4 includes it.
-    if ct_type == "HME-3":
+    if hme3:
         link = f"&slv={int(m.slv)}udp={int(m.udp)}&mqtt={int(m.mqtt)}"
     else:
         link = f"&slv={int(m.slv)}&udp={int(m.udp)}&mqtt={int(m.mqtt)}"
@@ -143,7 +265,7 @@ def build_set_ct_reporting_url(
     vi = (
         f"&va={int(m.va)}&vb={int(m.vb)}&vc={int(m.vc)}"
         f"&ia={m.ia:.2f}&ib={m.ib:.2f}&ic={m.ic:.2f}"
-        if ct_type != "HME-3"
+        if not hme3
         else ""
     )
     buckets = (
@@ -153,13 +275,22 @@ def build_set_ct_reporting_url(
     return base + head + link + when + vi + buckets
 
 
-# An injectable async GET: returns the HTTP status (or ``None`` on error). Kept as
-# a seam so the reporter is testable without a real network / aiohttp.
-HttpGet = Callable[[str], Awaitable[int | None]]
+@dataclass(frozen=True)
+class HttpResponse:
+    status: int
+    body: str
 
 
-async def aiohttp_get(url: str, *, timeout: float = 10.0) -> int | None:
-    """Default :data:`HttpGet`: a plain HTTP GET via aiohttp, returning the status."""
+# An injectable async GET: returns the response (or ``None`` on error). Kept as a
+# seam so the reporter is testable without a real network / aiohttp.
+HttpGet = Callable[[str], Awaitable[HttpResponse | None]]
+
+# Both images read the response into a 512-byte buffer.
+_MAX_BODY_BYTES = 512
+
+
+async def aiohttp_get(url: str, *, timeout: float = 10.0) -> HttpResponse | None:
+    """Default :data:`HttpGet`: a plain HTTP GET via aiohttp."""
     import aiohttp
 
     try:
@@ -167,11 +298,17 @@ async def aiohttp_get(url: str, *, timeout: float = 10.0) -> int | None:
             aiohttp.ClientSession() as session,
             session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
         ):
-            await resp.read()
-            return resp.status
+            body = await resp.read()
+            return HttpResponse(
+                resp.status, body[:_MAX_BODY_BYTES].decode("utf-8", errors="replace")
+            )
     except Exception as exc:
         logger.debug("cloud reporting GET failed: %s", exc)
         return None
+
+
+def _ok(resp: HttpResponse | None) -> bool:
+    return resp is not None and 200 <= resp.status < 300
 
 
 @dataclass
@@ -182,8 +319,11 @@ class CloudReporterConfig:
     device_id: str
     host: str = DEFAULT_HOST
     fcv: str = DEFAULT_FCV
-    sv: int = DEFAULT_REPORTING_VERSION
+    # ``None`` sends the firmware version a reporting CT of ``ct_type`` runs.
+    sv: int | None = None
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
+    retry_seconds: float = RETRY_SECONDS
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +349,7 @@ class CloudReporterSnapshot:
 
 
 class CloudReporter:
-    """Runs the handshake + periodic ``setCtReporting`` push a real CT does."""
+    """Runs the handshake → report → wait cycle a real CT does."""
 
     def __init__(
         self,
@@ -218,11 +358,18 @@ class CloudReporter:
         *,
         http_get: HttpGet | None = None,
         clock: Callable[[], datetime.datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._cfg = config
         self._gather = gather
         self._http_get = http_get or aiohttp_get
         self._clock = clock or (lambda: datetime.datetime.now())
+        self._monotonic = monotonic or time.monotonic
+        self._energy = EnergyIntegrator()
+        self._counters = EnergyCounters()
+        # The server time from the last handshake; every report until the next
+        # handshake (retries included) carries it, as on a real CT.
+        self._server_time: ServerTime | None = None
         # Read-only status surface (see status_snapshot).  Reporting is
         # best-effort and failures are only logged at debug, so these counters
         # are the operator's only evidence that the cloud is rejecting us.
@@ -230,6 +377,12 @@ class CloudReporter:
         self._last_report_at: datetime.datetime | None = None
         self._report_count = 0
         self._fail_count = 0
+
+    @property
+    def _sv(self) -> int:
+        if self._cfg.sv is not None:
+            return self._cfg.sv
+        return reporting_firmware_version(self._cfg.ct_type)
 
     def status_snapshot(self) -> CloudReporterSnapshot:
         """Immutable view of this reporter for the status API.
@@ -249,49 +402,92 @@ class CloudReporter:
             fail_count=self._fail_count,
         )
 
-    async def _handshake(self) -> None:
-        # The handshake's `aid`/`sv` params are not an account id / settings
-        # version (the names mislead): the server writes `aid`→the device's
-        # `type` and `sv`→its `version`. So we send the CT model and the managed
-        # firmware version to keep the cloud record correct.
+    def _integrate(self, m: CtMeasurement) -> None:
+        # HME-4 nets its per-phase import and export registers; HME-3 reads the
+        # meter's import register (OBIS 1.8.0), which only counts import.
+        power = m.dp if self._cfg.ct_type != "HME-3" else max(m.dp, 0)
+        self._energy.sample(self._monotonic(), power)
+
+    async def _sample_energy(self) -> None:
+        try:
+            self._integrate(await self._gather())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("cloud energy sample failed", exc_info=True)
+
+    async def _handshake(self) -> bool:
+        """Run ``getDateInfo``; on success adopt its server time and roll the
+        energy registers forward. Returns whether the cloud answered."""
+        await self._sample_energy()
         url = build_get_date_info_url(
             self._cfg.host,
             uid=self._cfg.device_id,
             fcv=self._cfg.fcv,
             aid=self._cfg.ct_type,
-            sv=self._cfg.sv,
+            sv=self._sv,
         )
-        status = await self._http_get(url)
-        logger.debug("cloud handshake getDateInfo -> %s", status)
+        resp = await self._http_get(url)
+        logger.debug("cloud handshake getDateInfo -> %s", resp.status if resp else None)
+        if resp is None or not _ok(resp):
+            return False
+        server_time = parse_server_time(resp.body)
+        if server_time is None:
+            logger.debug("cloud handshake carried no server time; using local time")
+            server_time = ServerTime.from_datetime(self._clock())
+        self._server_time = server_time
+        self._counters.update(self._energy.total, server_time)
+        return True
 
-    async def _report_once(self) -> None:
+    async def _report_once(self) -> bool:
+        """Send one ``setCtReporting``. Returns whether the cloud accepted it."""
         m = await self._gather()
-        # `timeNo` is the device's "time number"; epoch seconds is a monotonic
-        # stand-in (its exact meaning isn't known).
-        now = self._clock()
+        self._integrate(m)
+        server_time = self._server_time or ServerTime.from_datetime(self._clock())
         url = build_set_ct_reporting_url(
             self._cfg.host,
             self._cfg.ct_type,
             device_id=self._cfg.device_id,
-            time_no=int(now.timestamp()),
-            date=now.date(),
-            m=m,
+            time_no=server_time.time_no,
+            date=server_time.date,
+            m=dataclasses.replace(
+                m, eled=self._counters.eled, elet=self._counters.elet
+            ),
         )
-        status = await self._http_get(url)
-        self._last_status = status
-        self._last_report_at = now
+        resp = await self._http_get(url)
+        self._last_status = resp.status if resp is not None else None
+        self._last_report_at = self._clock()
         self._report_count += 1
         # `None` is the seam's "the request never completed"; anything outside
         # 2xx is the cloud rejecting the report. Both count as a failure.
-        if status is None or not 200 <= status < 300:
+        ok = _ok(resp)
+        if not ok:
             self._fail_count += 1
-        logger.debug("cloud setCtReporting -> %s", status)
+        logger.debug("cloud setCtReporting -> %s", self._last_status)
+        return ok
+
+    async def _idle(self, seconds: float) -> None:
+        """Wait *seconds*, sampling the grid into the energy register meanwhile."""
+        deadline = self._monotonic() + seconds
+        while (remaining := deadline - self._monotonic()) > 0:
+            await asyncio.sleep(min(self._cfg.sample_seconds, remaining))
+            await self._sample_energy()
+
+    async def _attempt(self, step: Callable[[], Awaitable[bool]], name: str) -> bool:
+        try:
+            return await step()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("cloud %s failed", name, exc_info=True)
+            return False
 
     async def run(self) -> None:
-        """Handshake once, then push ``setCtReporting`` every ``interval_seconds``.
+        """Handshake, report, wait ``interval_seconds``; repeat until cancelled.
 
-        Runs until cancelled. Individual report failures are swallowed (logged at
-        debug) so a flaky cloud never stalls the emulator.
+        A failed handshake or report is retried after ``retry_seconds``, the
+        report without a new handshake, as a real CT does. Failures are only
+        logged (at debug) so a flaky cloud never stalls the emulator.
         """
         logger.info(
             "Cloud reporting enabled for %s as id=%s -> %s (every %.0fs)",
@@ -300,15 +496,10 @@ class CloudReporter:
             self._cfg.host,
             self._cfg.interval_seconds,
         )
-        try:
-            await self._handshake()
-        except Exception:
-            logger.debug("cloud handshake failed", exc_info=True)
         while True:
-            try:
-                await self._report_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("cloud report failed", exc_info=True)
-            await asyncio.sleep(self._cfg.interval_seconds)
+            if not await self._attempt(self._handshake, "handshake"):
+                await self._idle(self._cfg.retry_seconds)
+                continue
+            while not await self._attempt(self._report_once, "report"):
+                await self._idle(self._cfg.retry_seconds)
+            await self._idle(self._cfg.interval_seconds)

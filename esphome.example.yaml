@@ -247,4 +247,4 @@ ct002:
   # configured). The model and firmware version are sent automatically.
   # cloud_reporting:
   #   host: eu.hamedata.com
-  #   interval: 60s
+  #   interval: 300s

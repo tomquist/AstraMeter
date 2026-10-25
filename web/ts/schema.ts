@@ -990,7 +990,7 @@ export const CT_SATURATION: Field[] = [
 export const CT_CLOUD: Field[] = [
   { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for a device id it already knows from pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured).", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "CLOUD_REPORTING_HOST", label: "Reporting host", help: "Host to report to. Blank uses the default eu.hamedata.com (other regions swap the host).", type: "text", placeholder: "eu.hamedata.com" },
-  { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds between reports. Default 60; tune to match a real device's cadence.", type: "number", placeholder: "60" },
+  { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds to wait after an accepted report before the next one. Default 300, what a real CT waits.", type: "number", placeholder: "300" },
 ];
 
 export const MARSTEK_FIELDS: Field[] = [

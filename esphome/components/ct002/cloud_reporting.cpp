@@ -5,6 +5,7 @@
 // present in YAML (it needs http_request). The pure URL builders it calls live
 // in cloud_reporting_url.cpp and are always compiled (covered by the host test).
 
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <vector>
@@ -49,14 +50,16 @@ void CloudReportingComponent::dump_config() {
 
 bool CloudReportingComponent::network_ready_() const { return network::is_connected(); }
 
-void CloudReportingComponent::now_(int64_t *epoch, int *year, int *month, int *day) const {
+ServerTime CloudReportingComponent::local_time_() const {
   const std::time_t t = std::time(nullptr);
-  *epoch = static_cast<int64_t>(t);
   std::tm tm_buf{};
   gmtime_r(&t, &tm_buf);
-  *year = tm_buf.tm_year + 1900;
-  *month = tm_buf.tm_mon + 1;
-  *day = tm_buf.tm_mday;
+  return ServerTime{tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                    tm_buf.tm_hour,        tm_buf.tm_min,      tm_buf.tm_sec};
+}
+
+int CloudReportingComponent::sv_or_default_() const {
+  return this->sv_ >= 0 ? this->sv_ : reporting_firmware_version(this->ct002_->ct_type());
 }
 
 CtMeasurement CloudReportingComponent::gather_() const {
@@ -70,33 +73,92 @@ CtMeasurement CloudReportingComponent::gather_() const {
   m.slv = static_cast<int>(this->ct002_->connected_slave_count());
   m.udp = 1;
   m.mqtt = 0;
+  // A real CT fills c* from the buckets it sends as the UDP response's
+  // *_dchrg_power and d* from its *_chrg_power.
   const CT002Component::PhaseBucketPowers b = this->ct002_->reporting_phase_buckets();
-  m.cz = static_cast<int>(lroundf(b.chrg_power[BUCKET_X]));
-  m.ca = static_cast<int>(lroundf(b.chrg_power[BUCKET_A]));
-  m.cb = static_cast<int>(lroundf(b.chrg_power[BUCKET_B]));
-  m.cc = static_cast<int>(lroundf(b.chrg_power[BUCKET_C]));
-  m.cd = static_cast<int>(lroundf(b.chrg_power[BUCKET_ABC]));
-  m.dz = static_cast<int>(lroundf(b.dchrg_power[BUCKET_X]));
-  m.da = static_cast<int>(lroundf(b.dchrg_power[BUCKET_A]));
-  m.db = static_cast<int>(lroundf(b.dchrg_power[BUCKET_B]));
-  m.dc = static_cast<int>(lroundf(b.dchrg_power[BUCKET_C]));
-  m.dd = static_cast<int>(lroundf(b.dchrg_power[BUCKET_ABC]));
+  m.cz = static_cast<int>(lroundf(b.dchrg_power[BUCKET_X]));
+  m.ca = static_cast<int>(lroundf(b.dchrg_power[BUCKET_A]));
+  m.cb = static_cast<int>(lroundf(b.dchrg_power[BUCKET_B]));
+  m.cc = static_cast<int>(lroundf(b.dchrg_power[BUCKET_C]));
+  m.cd = static_cast<int>(lroundf(b.dchrg_power[BUCKET_ABC]));
+  m.dz = static_cast<int>(lroundf(b.chrg_power[BUCKET_X]));
+  m.da = static_cast<int>(lroundf(b.chrg_power[BUCKET_A]));
+  m.db = static_cast<int>(lroundf(b.chrg_power[BUCKET_B]));
+  m.dc = static_cast<int>(lroundf(b.chrg_power[BUCKET_C]));
+  m.dd = static_cast<int>(lroundf(b.chrg_power[BUCKET_ABC]));
   return m;
 }
 
-void CloudReportingComponent::http_get_(const std::string &url) {
+void CloudReportingComponent::sample_energy_(const CtMeasurement &m) {
+  // HME-4 nets its per-phase import and export registers; HME-3 reads the
+  // meter's import register (OBIS 1.8.0), which only counts import.
+  const int power = this->ct002_->ct_type() == "HME-3" ? std::max(m.dp, 0) : m.dp;
+  this->energy_.sample(millis(), static_cast<float>(power));
+}
+
+int CloudReportingComponent::http_get_(const std::string &url, std::string *body) {
   // Log only the endpoint (path before '?') — the query string carries the
-  // device id/account id and telemetry, which shouldn't land in device logs.
+  // device id and telemetry, which shouldn't land in device logs.
   const std::string endpoint = url.substr(0, url.find('?'));
   std::vector<http_request::Header> headers = {{"User-Agent", "Dart/2.19 (dart:io)"}};
   auto container = this->http_->get(url, headers);
   if (container == nullptr) {
     ESP_LOGW(TAG, "HTTP GET failed: %s", endpoint.c_str());
-    return;
+    return -1;
   }
-  ESP_LOGD(TAG, "HTTP %d from %s", container->status_code, endpoint.c_str());
+  const int status = container->status_code;
+  ESP_LOGD(TAG, "HTTP %d from %s", status, endpoint.c_str());
+  if (body != nullptr) {
+    body->clear();
+    // Both images read the response into a 512-byte buffer.
+    constexpr size_t MAX_BODY = 512;
+    std::vector<uint8_t> buf(
+        std::min<size_t>(container->content_length ? container->content_length : MAX_BODY, MAX_BODY));
+    if (!buf.empty()) {
+      auto result = http_request::http_read_fully(container.get(), buf.data(), buf.size(),
+                                                  /*chunk_size=*/buf.size(), this->http_->get_timeout());
+      // Capture bytes_read BEFORE end() — some backends invalidate the
+      // container's counters once end() runs.
+      const size_t bytes_read = container->get_bytes_read();
+      if (result.status == http_request::HttpReadStatus::OK)
+        body->assign(reinterpret_cast<const char *>(buf.data()), bytes_read);
+    }
+  }
   container->end();
+  return status;
 }
+
+bool CloudReportingComponent::handshake_() {
+  this->sample_energy_(this->gather_());
+  // getDateInfo is a device upsert: the server writes `aid`->the record's
+  // `type` and `sv`->its `version`. Send the CT model and the firmware version
+  // a reporting CT runs, as a real one does.
+  std::string body;
+  const int status = this->http_get_(build_get_date_info_url(this->host_, this->device_id_, this->fcv_,
+                                                             this->ct002_->ct_type(), this->sv_or_default_()),
+                                     &body);
+  if (status < 200 || status >= 300) return false;
+  if (!parse_server_time(body, &this->server_time_)) {
+    ESP_LOGD(TAG, "Handshake carried no server time; using local time");
+    this->server_time_ = this->local_time_();
+  }
+  this->counters_.update(this->energy_.total(), this->server_time_);
+  return true;
+}
+
+bool CloudReportingComponent::report_() {
+  CtMeasurement m = this->gather_();
+  this->sample_energy_(m);
+  m.eled = this->counters_.eled();
+  m.elet = this->counters_.elet();
+  const ServerTime &t = this->server_time_;
+  const int status =
+      this->http_get_(build_set_ct_reporting_url(this->host_, this->ct002_->ct_type(), this->device_id_,
+                                                 t.time_no(), t.year, t.month, t.day, m));
+  return status >= 200 && status < 300;
+}
+
+void CloudReportingComponent::retry_later_() { this->next_attempt_ms_ = millis() + this->retry_ms_; }
 
 void CloudReportingComponent::loop() {
   if (this->state_ == State::FATAL) return;
@@ -106,32 +168,40 @@ void CloudReportingComponent::loop() {
     this->device_id_ = this->ct002_->ct_mac();
     if (this->device_id_.empty()) return;
   }
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - this->next_sample_ms_) >= 0) {
+    this->next_sample_ms_ = now + this->sample_ms_;
+    this->sample_energy_(this->gather_());
+  }
+  // A real CT runs its reporting step only while Wi-Fi is up, keeping its state
+  // across a drop.
+  if (!this->network_ready_()) return;
   if (this->state_ == State::WAIT_FOR_NETWORK) {
-    if (!this->network_ready_()) return;
     this->state_ = State::HANDSHAKE;
+    this->next_attempt_ms_ = now;
   }
-  if (this->state_ == State::HANDSHAKE) {
-    // getDateInfo is a device upsert: the server writes `aid`->the record's
-    // `type` and `sv`->its `version`. Send the CT model and managed firmware
-    // version so the handshake re-asserts the record instead of corrupting it.
-    this->http_get_(build_get_date_info_url(this->host_, this->device_id_, this->fcv_,
-                                            this->ct002_->ct_type(), this->sv_));
-    this->state_ = State::REPORT;
-    this->next_report_ms_ = millis();  // first report right away.
-  }
-  if (this->state_ == State::REPORT) {
-    if (!this->network_ready_()) {
-      this->state_ = State::WAIT_FOR_NETWORK;
-      return;
-    }
-    if (static_cast<int32_t>(millis() - this->next_report_ms_) < 0) return;
-    this->next_report_ms_ = millis() + this->interval_ms_;
-    int64_t epoch;
-    int y, mo, d;
-    this->now_(&epoch, &y, &mo, &d);
-    const CtMeasurement m = this->gather_();
-    this->http_get_(build_set_ct_reporting_url(this->host_, this->ct002_->ct_type(),
-                                               this->device_id_, epoch, y, mo, d, m));
+  if (static_cast<int32_t>(now - this->next_attempt_ms_) < 0) return;
+  switch (this->state_) {
+    case State::HANDSHAKE:
+      if (this->handshake_()) {
+        this->state_ = State::REPORT;  // report right away.
+      } else {
+        this->retry_later_();
+      }
+      break;
+    case State::REPORT:
+      if (this->report_()) {
+        this->state_ = State::WAIT;
+        this->next_attempt_ms_ = millis() + this->interval_ms_;
+      } else {
+        this->retry_later_();
+      }
+      break;
+    case State::WAIT:
+      this->state_ = State::HANDSHAKE;
+      break;
+    default:
+      break;
   }
 }
 
