@@ -275,12 +275,23 @@ void BluetoothComponent::process_frame_(const ble::Frame &frame) {
   ESP_LOGD(TAG, "Command 0x%02X (%u payload bytes) -> %u reply bytes", frame.cmd,
            static_cast<unsigned>(frame.payload.size()), static_cast<unsigned>(result.reply.size()));
 
-  // The app's Diagnose starts with the voltage check.
-  if (frame.cmd == ble::CMD_VOLTAGE_CHECK && !result.reply.empty()) {
-    if (snapshot.meter_live) {
-      ESP_LOGI(TAG, "App ran the CT diagnostics; the meter delivers readings, so they pass");
+  // The app's Diagnose: say how each check went, from the result byte the
+  // reply carries (the last payload byte, before the XOR).
+  const char *check = frame.cmd == ble::CMD_VOLTAGE_CHECK     ? "voltage"
+                      : frame.cmd == ble::CMD_FREQUENCY_CHECK ? "frequency"
+                      : frame.cmd == ble::CMD_PHASE_ANGLE_CHECK ? "phase angle"
+                                                                : nullptr;
+  if (check != nullptr && result.reply.size() >= ble::FRAME_OVERHEAD + 1) {
+    const uint8_t code = result.reply[result.reply.size() - 2];
+    const uint8_t pass_code = frame.cmd == ble::CMD_PHASE_ANGLE_CHECK ? ble::DIAG_PHASE_ANGLE_PASS
+                              : frame.cmd == ble::CMD_FREQUENCY_CHECK ? ble::DIAG_FREQUENCY_PASS
+                                                                      : ble::DIAG_VOLTAGE_PASS;
+    if (code == pass_code) {
+      ESP_LOGI(TAG, "App's CT diagnostics: %s check passed", check);
+    } else if (!snapshot.meter_live) {
+      ESP_LOGW(TAG, "App's CT diagnostics: %s check failed (no meter reading within max_sensor_age)", check);
     } else {
-      ESP_LOGW(TAG, "App ran the CT diagnostics; no meter reading within max_sensor_age, so they fail");
+      ESP_LOGW(TAG, "App's CT diagnostics: %s check failed (sensor reading outside the meter's range)", check);
     }
   }
 

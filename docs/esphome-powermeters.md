@@ -40,7 +40,9 @@ Running the Python add-on instead? See [powermeters.md](powermeters.md).
 
 A real CT002 also measures each phase's voltage and the grid frequency.
 AstraMeter doesn't steer on them, but it reports them where a real meter
-would when you point `ct002:` at sensors for them:
+would when you point `ct002:` at sensors for them. Unlike the sections below,
+this is not a complete config: add these sensors and keys to the one you
+already have for your meter.
 
 ```yaml
 sensor:
