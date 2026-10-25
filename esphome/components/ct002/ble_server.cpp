@@ -399,6 +399,12 @@ ble::Snapshot BluetoothComponent::snapshot_() const {
   // The dashboard's "meter failed" condition, inverted.
   const optional<uint32_t> freshest = this->ct002_->freshest_sensor_age_ms();
   s.meter_live = freshest.has_value() && *freshest <= this->ct002_->max_sensor_age_ms();
+  for (uint8_t i = 0; i < 3; ++i) {
+    const optional<float> volts = this->ct002_->grid_voltage(i);
+    if (volts.has_value()) s.voltage_v[i] = *volts;
+  }
+  const optional<float> hz = this->ct002_->grid_frequency();
+  if (hz.has_value()) s.frequency_hz = *hz;
 #ifdef USE_NETWORK
   // Wi-Fi or Ethernet: a board on a cable is just as online, and reporting
   // it as down would have the app push Wi-Fi credentials at it.

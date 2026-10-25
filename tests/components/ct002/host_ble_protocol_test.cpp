@@ -368,6 +368,57 @@ TEST(BleDiagnostics, ChecksFailWithoutAMeterReading) {
   EXPECT_EQ(a[10], 3);
 }
 
+TEST(BleDiagnostics, ReportsTheVoltageSensorsAndFallsBackPerPhase) {
+  // L1 has a sensor, L2/L3 don't: the reading for L1, a passing 230 V for the
+  // rest, and the meter's 210-240 V rule on what goes out.
+  Responder responder;
+  Snapshot s = diagnose_snapshot(true);
+  s.voltage_v[0] = 233.6f;
+  const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  ASSERT_EQ(f.size(), 12u);
+  EXPECT_EQ(le16(f, 4), 234);
+  EXPECT_EQ(le16(f, 6), 230);
+  EXPECT_EQ(le16(f, 8), 230);
+  EXPECT_EQ(f[10], 1);
+}
+
+TEST(BleDiagnostics, AVoltageOutsideTheMetersRangeFails) {
+  Responder responder;
+  Snapshot s = diagnose_snapshot(true);
+  s.voltage_v = {229.0f, 244.0f, 231.0f};
+  const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 6), 244);
+  EXPECT_EQ(f[10], 0);
+  s.voltage_v = {210.0f, 240.0f, 225.0f};  // the bounds pass
+  EXPECT_EQ(responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply[10], 1);
+}
+
+TEST(BleDiagnostics, ReportsTheFrequencySensorWithTheMetersRange) {
+  Responder responder;
+  Snapshot s = diagnose_snapshot(true);
+  s.frequency_hz = 49.97f;
+  auto f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 4), 4997);
+  EXPECT_EQ(f[6], 1);
+  s.frequency_hz = 55.01f;
+  f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 4), 5501);
+  EXPECT_EQ(f[6], 0);
+}
+
+TEST(BleDiagnostics, SensorReadingsDontPassWithoutTheMeter) {
+  Responder responder;
+  Snapshot s = diagnose_snapshot(false);
+  s.voltage_v = {230.0f, 230.0f, 230.0f};
+  s.frequency_hz = 50.0f;
+  const auto v = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(v, 4), 0);
+  EXPECT_EQ(v[10], 0);
+  const auto f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 4), 0);
+  EXPECT_EQ(f[6], 0);
+}
+
 TEST(BleDiagnostics, VoltageCheckIgnoresTheRequestPayload) {
   Responder responder;
   const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {}), diagnose_snapshot(true)).reply;

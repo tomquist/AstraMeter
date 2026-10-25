@@ -19,6 +19,11 @@ template<typename T> T clamp_round(float value) {
   return static_cast<T>(rounded);
 }
 
+void put_le16u(std::vector<uint8_t> &out, size_t at, uint16_t value) {
+  out[at] = static_cast<uint8_t>(value & 0xFF);
+  out[at + 1] = static_cast<uint8_t>(value >> 8);
+}
+
 void put_le16(std::vector<uint8_t> &out, size_t at, int16_t value) {
   const auto u = static_cast<uint16_t>(value);
   out[at] = static_cast<uint8_t>(u & 0xFF);
@@ -243,24 +248,35 @@ Result Responder::handle(const Frame &frame, const Snapshot &s) {
       break;
     }
     case CMD_VOLTAGE_CHECK: {
-      // Phases A-C in whole volts, then the result. The meter ignores the
-      // request payload.
+      // Phases A-C in whole volts, then the result: a pass when every phase
+      // is within 210-240 V. The meter ignores the request payload.
       if (s.model != Model::CT002) break;
-      const int16_t volts = s.meter_live ? DIAG_NOMINAL_VOLTAGE_V : 0;
       std::vector<uint8_t> p(7, 0);
-      put_le16(p, 0, volts);
-      put_le16(p, 2, volts);
-      put_le16(p, 4, volts);
-      p[6] = s.meter_live ? DIAG_VOLTAGE_PASS : DIAG_VOLTAGE_FAIL;
+      bool pass = s.meter_live;
+      for (size_t i = 0; i < 3; ++i) {
+        uint16_t volts = 0;
+        if (s.meter_live) {
+          volts = s.voltage_v[i].has_value() ? clamp_round<uint16_t>(*s.voltage_v[i]) : DIAG_NOMINAL_VOLTAGE_V;
+        }
+        pass = pass && volts >= DIAG_VOLTAGE_MIN_V && volts <= DIAG_VOLTAGE_MAX_V;
+        put_le16u(p, 2 * i, volts);
+      }
+      p[6] = pass ? DIAG_VOLTAGE_PASS : DIAG_VOLTAGE_FAIL;
       result.reply = build_frame(CMD_VOLTAGE_CHECK, p);
       break;
     }
     case CMD_FREQUENCY_CHECK: {
-      // Frequency in 0.01 Hz, then the result.
+      // Frequency in 0.01 Hz, then the result: a pass within 45.00-55.00 Hz.
       if (s.model != Model::CT002) break;
+      uint16_t centi_hz = 0;
+      if (s.meter_live) {
+        centi_hz = s.frequency_hz.has_value() ? clamp_round<uint16_t>(*s.frequency_hz * 100.0f)
+                                              : DIAG_NOMINAL_FREQUENCY_CENTI_HZ;
+      }
+      const bool pass = s.meter_live && centi_hz >= DIAG_FREQUENCY_MIN_CENTI_HZ && centi_hz <= DIAG_FREQUENCY_MAX_CENTI_HZ;
       std::vector<uint8_t> p(3, 0);
-      put_le16(p, 0, s.meter_live ? DIAG_NOMINAL_FREQUENCY_CENTI_HZ : 0);
-      p[2] = s.meter_live ? DIAG_FREQUENCY_PASS : DIAG_FREQUENCY_FAIL;
+      put_le16u(p, 0, centi_hz);
+      p[2] = pass ? DIAG_FREQUENCY_PASS : DIAG_FREQUENCY_FAIL;
       result.reply = build_frame(CMD_FREQUENCY_CHECK, p);
       break;
     }
@@ -268,11 +284,11 @@ Result Responder::handle(const Frame &frame, const Snapshot &s) {
       // The three angles between the phase voltages in whole degrees, then the
       // result.
       if (s.model != Model::CT002) break;
-      const int16_t degrees = s.meter_live ? DIAG_NOMINAL_PHASE_ANGLE_DEG : 0;
+      const uint16_t degrees = s.meter_live ? DIAG_NOMINAL_PHASE_ANGLE_DEG : 0;
       std::vector<uint8_t> p(7, 0);
-      put_le16(p, 0, degrees);
-      put_le16(p, 2, degrees);
-      put_le16(p, 4, degrees);
+      put_le16u(p, 0, degrees);
+      put_le16u(p, 2, degrees);
+      put_le16u(p, 4, degrees);
       p[6] = s.meter_live ? DIAG_PHASE_ANGLE_PASS : DIAG_PHASE_ANGLE_FAIL;
       result.reply = build_frame(CMD_PHASE_ANGLE_CHECK, p);
       break;

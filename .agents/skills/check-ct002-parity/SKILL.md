@@ -76,6 +76,12 @@ stack. Shared behavior lands on **both** sides in the same change;
   `mqtt_insights`' App topics and the `cloud_reporting` id while `ct_mac` is
   unset; UDP still mirrors). `cloud_reporting` follows a later change of that
   id with a new handshake, where Python fixes it at startup.
+- **Grid voltage and frequency inputs are ESPHome-only.** `voltage_sensor_l1`–`l3`
+  and `frequency_sensor` on `ct002:` cache readings in `CT002Component`
+  (`grid_voltage()` / `grid_frequency()`, fresh within `max_sensor_age`) for
+  the Bluetooth diagnostics and the CT002 cloud report's `va`/`vb`/`vc`. A
+  Python powermeter delivers power only, so Python's cloud report keeps
+  sending `0` there; nothing to mirror until it can read voltage.
 
 ## What the firmware constrains
 

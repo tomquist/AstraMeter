@@ -47,12 +47,17 @@ enum Command : uint8_t {
 };
 
 // The CT002 diagnostics (CMD_VOLTAGE_CHECK .. CMD_ACTIVE_POWER) measure the
-// grid. The board measures none of it, so it reports a healthy grid while the
-// meter delivers readings and a dead one while it doesn't. The result codes
-// are the meter's: voltage and frequency report 1 for a pass, the phase angle
-// 0, and the app reads them the same way.
+// grid. While the meter delivers readings, the board reports the optional
+// voltage and frequency sensors, and a healthy value for whatever it has no
+// reading of; while the meter doesn't, it reports a dead grid. The pass ranges
+// and result codes are the meter's: voltage and frequency report 1 for a pass,
+// the phase angle 0, and the app reads them the same way.
 inline constexpr uint16_t DIAG_NOMINAL_VOLTAGE_V = 230;
+inline constexpr uint16_t DIAG_VOLTAGE_MIN_V = 210;
+inline constexpr uint16_t DIAG_VOLTAGE_MAX_V = 240;
 inline constexpr uint16_t DIAG_NOMINAL_FREQUENCY_CENTI_HZ = 5000;
+inline constexpr uint16_t DIAG_FREQUENCY_MIN_CENTI_HZ = 4500;
+inline constexpr uint16_t DIAG_FREQUENCY_MAX_CENTI_HZ = 5500;
 inline constexpr uint16_t DIAG_NOMINAL_PHASE_ANGLE_DEG = 120;
 inline constexpr uint8_t DIAG_VOLTAGE_PASS = 1;
 inline constexpr uint8_t DIAG_VOLTAGE_FAIL = 0;
@@ -152,8 +157,12 @@ struct Snapshot {
   std::string device_id;  // 12 lowercase hex characters
   std::array<float, 3> phase_w{0.0f, 0.0f, 0.0f};
   // The meter delivered a reading within max_sensor_age: what the CT002
-  // diagnostics report as a healthy grid.
+  // diagnostics need to report a live grid at all.
   bool meter_live{false};
+  // Readings of the optional voltage (per phase) and frequency sensors,
+  // empty without a sensor or a reading within max_sensor_age.
+  std::array<std::optional<float>, 3> voltage_v{};
+  std::optional<float> frequency_hz{};
   // Network up (Wi-Fi or Ethernet): what the app reads as "Wi-Fi connected".
   bool wifi_connected{false};
   int rssi_dbm{0};   // only meaningful on Wi-Fi

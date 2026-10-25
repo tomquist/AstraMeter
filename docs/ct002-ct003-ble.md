@@ -547,7 +547,7 @@ from the start is better fixed on the sensor, for example with
 | `0x08` read SSID | The network the app sent during the current connection, otherwise the one the board is connected to |
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
-| `0x13`–`0x15` diagnostics (CT002) | A healthy grid (230 V on every phase, 50.00 Hz, 120° between phases) with passing results while the meter delivers readings, so the app's Diagnose passes; zeros with failing results once no reading has arrived within `max_sensor_age`, as a meter without input reports. AstraMeter measures none of these values |
+| `0x13`–`0x15` diagnostics (CT002) | While the meter delivers readings: the optional `voltage_sensor_l1`–`l3` and `frequency_sensor` readings, judged by the meter's ranges, and 230 V, 50.00 Hz and 120° between phases for whatever has no sensor or no fresh reading, so Diagnose passes. Once no power reading has arrived within `max_sensor_age`: zeros with failing results, as a meter without input reports (see [grid voltage and frequency](esphome-powermeters.md#optional-grid-voltage-and-frequency)) |
 | `0x16` active power (CT002) | The three phase powers |
 | `0x17` direction (CT002) | With `allow_direction_change: true`: applies values 0–7 (bits 0–2) and answers with the bits in effect (see [above](#reversing-a-phase-from-the-app)); otherwise no answer |
 

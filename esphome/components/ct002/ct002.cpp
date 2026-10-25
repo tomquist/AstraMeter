@@ -208,6 +208,23 @@ void CT002Component::setup() {
     this->power_sensor_l2_->add_on_state_callback([cache](float v) { cache(1, v); });
   if (this->power_sensor_l3_ != nullptr)
     this->power_sensor_l3_->add_on_state_callback([cache](float v) { cache(2, v); });
+  // The optional grid readings: like the power cache, NaN never counts as a
+  // reading, so an outage ages out instead of being reported.
+  for (size_t i = 0; i < 3; ++i) {
+    if (this->voltage_sensors_[i] == nullptr) continue;
+    this->voltage_sensors_[i]->add_on_state_callback([this, i](float v) {
+      if (!std::isfinite(v)) return;
+      this->voltage_values_[i] = v;
+      this->voltage_stamp_ms_[i] = ::esphome::millis();
+    });
+  }
+  if (this->frequency_sensor_ != nullptr) {
+    this->frequency_sensor_->add_on_state_callback([this](float v) {
+      if (!std::isfinite(v)) return;
+      this->frequency_value_ = v;
+      this->frequency_stamp_ms_ = ::esphome::millis();
+    });
+  }
 
   // Build the filter pipeline. Order matches Python config_loader.py:
   // SensorBacked → Hampel → Smoothed → Deadband → PID.
@@ -949,6 +966,10 @@ void CT002Component::dump_config() {
                     static_cast<unsigned>(i + 1), this->unit_scale_[i]);
     }
   }
+  for (uint8_t i = 0; i < 3; ++i) {
+    if (this->voltage_sensors_[i] != nullptr) ESP_LOGCONFIG(TAG, "  L%u Voltage Sensor: yes", static_cast<unsigned>(i + 1));
+  }
+  if (this->frequency_sensor_ != nullptr) ESP_LOGCONFIG(TAG, "  Frequency Sensor: yes");
   ESP_LOGCONFIG(TAG, "  Reporting Consumers: %u", static_cast<unsigned>(this->reporting_consumer_count()));
 }
 
