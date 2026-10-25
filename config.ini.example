@@ -548,14 +548,15 @@ THROTTLE_INTERVAL = 0
 ## --- PID controller (optional) ---
 ## Despite the name, this does not steer the grid to zero by itself: the
 ## battery (or CT002/CT003 active control) does. With only PID_KP set, the
-## battery receives the reading scaled down to (1 - PID_KP) of its real value,
-## so it reacts less strongly. That can calm a battery that overshoots and
-## swings back and forth (Shelly emulation, or CT002/CT003 with
-## ACTIVE_CONTROL = false). With active control on, leave it off.
-## See docs/configuration.md#pid-controller.
+## battery receives the reading scaled down to (1 - PID_KP) of its real value
+## (the PID never changes it by more than PID_OUTPUT_MAX), so it reacts less
+## strongly. That can calm a battery that overshoots and swings back and forth
+## (Shelly emulation, or CT002/CT003 with ACTIVE_CONTROL = false). With
+## active control on, leave it off. See docs/configuration.md#pid-controller.
 ##
 ##   PID_KP         = 0.5   # 0 = off; use 0 < Kp < 1. At 1 the battery stops
-##                          # reacting; above 1 it reacts the wrong way
+##                          # reacting to readings up to PID_OUTPUT_MAX;
+##                          # above 1 it reacts the wrong way
 ##   PID_KI         = 0     # leave at 0: above 0 the grid drifts to +/- PID_OUTPUT_MAX
 ##   PID_KD         = 0     # leave at 0: tends to make swinging worse
 ##   PID_OUTPUT_MAX = 800   # most the PID may change the reading by, in W

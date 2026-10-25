@@ -15,10 +15,10 @@ enum class PidMode { BIAS, REPLACE };
 //
 // Error convention: error = -measurement. Positive grid import produces a
 // negative error, so the PID reduces the reported value. In bias mode with P
-// only the device receives (1 - Kp) x the reading, i.e. the PID lowers the
-// gain of the device's own control loop. Output is clamped to
-// [-output_max, +output_max]; the integral term has anti-windup (paused
-// while output is saturated, unless the integral is unwinding).
+// only the device receives (1 - Kp) x the reading (until the output clamp),
+// i.e. the PID lowers the gain of the device's own control loop. Output is
+// clamped to [-output_max, +output_max]; the integral term has anti-windup
+// (paused while output is saturated, unless the integral is unwinding).
 class PidPowermeter : public PowermeterWrapper {
  public:
   PidPowermeter(Powermeter *wrapped, float kp, float ki, float kd, float output_max,

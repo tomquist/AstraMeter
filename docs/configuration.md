@@ -179,7 +179,10 @@ the PID changes is **how strongly the battery reacts** to each reading.
 
 With only `PID_KP` set, the battery receives the reading scaled down to
 `(1 − PID_KP)` of its real value. With `PID_KP = 0.5`, 400 W of grid import
-reaches the battery as 200 W, so it corrects half as much at each step.
+reaches the battery as 200 W, so it corrects half as much at each step. The PID
+never changes the reading by more than `PID_OUTPUT_MAX` (800 W by default). With
+`PID_KP = 0.5` that limit is reached at 1,600 W; a larger reading reaches the
+battery 800 W lower than it really is.
 
 **When it helps:** your battery overshoots and swings back and forth, because
 it reacts too strongly to each reading. This mostly happens with a slow or
@@ -198,7 +201,7 @@ section value overrides the global one:
 
 | Parameter | What to set | Default |
 |-----------|-------------|---------|
-| `PID_KP` | `0` turns the PID off. Use a value between 0 and 1; start with `0.5`. Higher values calm the battery more but make it slower. At `1` the battery stops reacting at all, and above `1` it reacts in the opposite direction. | `0` (off) |
+| `PID_KP` | `0` turns the PID off. Use a value between 0 and 1; start with `0.5`. Higher values calm the battery more but make it slower. At `1` the battery stops reacting (except to the part of a reading beyond `PID_OUTPUT_MAX`), and above `1` it reacts in the opposite direction. | `0` (off) |
 | `PID_KI` | Leave at `0`. Any value above 0 gradually pushes the grid away from zero, until it sits at about `PID_OUTPUT_MAX` of import or export. | `0` |
 | `PID_KD` | Leave at `0`. It answers every sudden change in the reading with a spike, which tends to make swinging worse. | `0` |
 | `PID_OUTPUT_MAX` | The most the PID may change the reading by, in watts. | `800` |

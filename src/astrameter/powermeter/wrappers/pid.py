@@ -13,9 +13,10 @@ class PidPowermeter(PowermeterWrapper):
     import produces a negative output. The output is split equally across
     phases and either added to the raw reading (``mode="bias"``) or reported
     in its place (``mode="replace"``). In bias mode with P only, the device
-    receives ``(1 - Kp)`` times the reading: the PID lowers the gain of the
-    device's own control loop rather than adding a correction toward zero,
-    which helps only a device that over-reacts, and only for ``0 < Kp < 1``.
+    receives ``(1 - Kp)`` times the reading (until the output clamp): the PID
+    lowers the gain of the device's own control loop rather than adding a
+    correction toward zero, which helps only a device that over-reacts, and
+    only for ``0 < Kp < 1``.
 
     The integral term is clamped so the total output stays within
     ``[-output_max, +output_max]`` and stops accumulating while saturated.

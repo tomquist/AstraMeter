@@ -92,8 +92,10 @@ A: Your battery aims for 0 W on the grid, but it never lands exactly there, so
 some of the time a few watts go out. To keep it on the import side instead, set
 a small negative `POWER_OFFSET` — see
 [Keeping a small import margin](configuration.md#keeping-a-small-import-margin).
-Export while the battery is full, or already charging as fast as it can, can't
-be avoided this way: AstraMeter has no control over your solar panels.
+It can't prevent the brief export right after a large load switches off, while
+the battery is still turning down. Nor can it prevent export while the battery
+is full or already charging as fast as it can: AstraMeter has no control over
+your solar panels.
 
 ### Should I use Shelly emulation or CT002/CT003?
 
