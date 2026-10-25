@@ -136,9 +136,10 @@ ct002:
   #   deadband:
   #     deadband: 0                # 0 = off; e.g. 10 zeros out |sum| < 10 W
   #   # PID: makes the battery react less strongly to each reading
-  #   # (it receives (1 - kp) x the real value). Only useful with
-  #   # active_control: false, to calm a battery that swings back and
-  #   # forth. See docs/configuration.md#pid-controller.
+  #   # (it receives (1 - kp) x the real value, until the correction
+  #   # reaches output_max). Only useful with active_control: false,
+  #   # to calm a battery that swings back and forth.
+  #   # See docs/configuration.md#pid-controller.
   #   pid:
   #     kp: 0.0                    # 0 = no effect; use 0 < kp < 1, start at 0.5
   #     ki: 0.0                    # leave at 0: above 0 the grid drifts to +/- output_max

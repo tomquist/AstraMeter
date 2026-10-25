@@ -195,7 +195,7 @@ change, watch how the battery behaves for a few minutes before moving on:
 If it still swings after that, try the
 **[PID Controller](configuration.md#pid-controller)** with just `PID_KP = 0.5`,
 and leave the other `PID_*` settings at their defaults. It makes the battery
-react half as strongly to each reading, which often stops the swinging. This
+react less strongly to each reading, which often stops the swinging. This
 helps when the battery reacts to the readings itself (Shelly emulation, or
 CT002/CT003 with `ACTIVE_CONTROL = false`); with active control on, leave the
 PID off. A few more
