@@ -630,11 +630,12 @@ value.
 
 Choose a value within these limits:
 
-- With two or more B2500, use at least `80`, or at least `40` if you selected
-  a Marstek inverter for every B2500 in the Marstek app (see
-  [My B2500 stays at 0 W](#my-b2500-stays-at-0-w-or-doesnt-cover-a-small-base-load)).
-  With `0`, a small load is split into shares below the B2500's minimum, none
-  of the batteries start, and you import the whole load.
+- With two or more B2500, use at least the B2500's minimum output from
+  [B2500 minimum output](b2500-minimum-output.md): `80` in most setups, `40`
+  with a Marstek model or the TSUN Tsol-MP3000 selected in the Marstek app,
+  and half that for batteries grouped in the app. If your batteries have
+  different minimums, use the highest. With `0`, a small load is split into shares below the
+  B2500's minimum, none of the batteries start, and you import the whole load.
 - Use at most one battery's maximum power divided by 2.4, for example 330 for
   an 800 W battery. This applies to charging too. With a higher value, the
   running battery reaches its limit before the next one starts, and the rest
@@ -650,11 +651,12 @@ A: This is a limit of the B2500. Each of its two outputs has a minimum power,
 and the battery won't deliver less. The minimum depends on the micro-inverter
 you selected for the battery in the Marstek app:
 
-- With a non-Marstek inverter selected, each output needs at least 40 W, so a
+- With most inverter models selected, each output needs at least 40 W, so a
   B2500 with both outputs connected needs 80 W.
-- With a Marstek inverter selected, for example MST-MI0800W, each output needs
-  at least 20 W, so the battery needs 40 W. The B2500 only checks which model
-  is selected, so this also works when a different inverter is connected.
+- With a Marstek model selected, for example MST-MI0800W, or the TSUN
+  Tsol-MP3000, each output needs at least 20 W, so the battery needs 40 W. The
+  B2500 only checks which model is selected, so this also works when a
+  different inverter is connected.
   Users report that some inverters, such as Hoymiles HMS, don't run reliably
   at 20 W per input.
 
@@ -667,17 +669,19 @@ power from the grid. These steps help:
 - If your inverter runs at 20 W per input, select a Marstek inverter in the
   app.
 - With several B2500, set `MIN_EFFICIENT_POWER` to at least the battery's
-  minimum, `80` or `40`. A small load then goes to one battery instead of being
+  minimum. A small load then goes to one battery instead of being
   split into shares too small for any battery to start (see
   [My second battery never starts](#my-second-battery-never-starts-or-only-some-of-my-batteries-run)).
 - Use AstraMeter 2.3.0 or later. Older versions could leave a B2500 at 0 W
   permanently after sending it a command that was too small.
 
 Grouping B2500 batteries in the Marstek app (parallel mode) doesn't lower the
-minimum. It is meant for setups where each B2500 feeds a shared inverter
-through only one output. It switches the second output off and halves the
-battery's maximum power, for example to 400 W. Don't group batteries that have
-both outputs connected.
+minimum of an output. It is meant for setups where each B2500 feeds a shared
+inverter through only one output. It switches the second output off and
+halves the battery's maximum power, for example to 400 W. Because a grouped
+battery uses only one output, it needs half the minimum: 40 W, or 20 W with a
+Marstek model or the TSUN Tsol-MP3000 selected. Don't group batteries that have both outputs
+connected.
 
 ### My B2500's inverter switches off during solar surplus. What does MIN_DC_OUTPUT do?
 
@@ -686,9 +690,10 @@ B2500 discharge at least this much power, so its inverter never drops to 0 W
 and switches off. Venus and Jupiter batteries have their own inverter and
 ignore this setting. The power you set is exported during surplus.
 
-- Set it to at least the battery's minimum power: 80 W, or 40 W if a Marstek
-  inverter is selected in the Marstek app (see
-  [My B2500 stays at 0 W](#my-b2500-stays-at-0-w-or-doesnt-cover-a-small-base-load)).
+- Set it to at least the battery's minimum output from
+  [B2500 minimum output](b2500-minimum-output.md): 80 W in most setups, 40 W
+  with a Marstek model or the TSUN Tsol-MP3000 selected in the Marstek app,
+  and half that for batteries grouped in the app.
   When a battery's share is lower, AstraMeter sends exactly this value. A value
   below the battery's minimum keeps it near 0 W.
 - To set a different value for one battery, use its **Min DC Output** entity
