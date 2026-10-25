@@ -131,19 +131,20 @@ class HealthTrackingPowermeter(PowermeterWrapper):
             try:
                 result = await self.wrapped_powermeter.get_passive_watts()
             except Exception:
-                self._record_attempt(attempt)
-                self._last_outcome_ok = False
+                self._record_attempt(attempt, ok=False)
                 raise
         if probe.reached_source:
-            self._record_attempt(attempt)
-            self._last_outcome_ok = bool(result)
+            self._record_attempt(attempt, ok=bool(result))
         return result
 
-    def _record_attempt(self, attempt: float) -> None:
+    def _record_attempt(self, attempt: float, *, ok: bool) -> None:
         # A slow passive read can finish after a battery read that started
-        # later; keep the later start so the meter does not look idle.
-        if self._last_attempt is None or attempt > self._last_attempt:
+        # later. That read is the newer fact about the meter: keep its start
+        # and its outcome together, so the meter neither looks idle nor takes
+        # on the stale read's outcome.
+        if self._last_attempt is None or attempt >= self._last_attempt:
             self._last_attempt = attempt
+            self._last_outcome_ok = ok
 
     async def _tracked(self, fn: Callable[[], Awaitable[list[float]]]) -> list[float]:
         self._last_attempt = self._clock()
