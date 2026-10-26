@@ -272,8 +272,8 @@ which app screens send the command, where known.
 | `0x27` | ✓ | ✓ | sample count, 1–30 | per-phase power history, see [`0x27` / `0x28`](#0x27--0x28--power-history) | never sent by the app |
 | `0x28` | ✓ | ✓ | sample count, 1–30 | total power history | never sent by the app |
 | `0x29` | ✓ | ✓ | ASCII text | none; updates the FC41D Wi-Fi module's firmware, see [`0x29`](#0x29--fc41d-firmware-update) | never sent by the app |
-| `0x50` | ✓ | ✓ | sub-command byte + data | sub-command dependent | not sent by the CT screens; sets the MQTT topic id, see [`0x50` / `0x51`](#0x50--0x51--custom-mqtt-topic-id) |
-| `0x51` | ✓ | ✓ | sub-command byte | sub-command dependent | not sent by the CT screens; reads the MQTT topic id |
+| `0x50` | ✓ | ✓ | sub-command byte + data | sub-command dependent | MQTT topic setup, CT002 from v122 and CT003 from v120: sets the topic id, see [`0x50` / `0x51`](#0x50--0x51--custom-mqtt-topic-id) |
+| `0x51` | ✓ | ✓ | sub-command byte | sub-command dependent | MQTT topic setup: reads the topic id back |
 
 Any other command byte, for example `0x07`, `0x0a`–`0x0f` or (on CT002)
 `0x11`, is ignored without a reply.
@@ -512,6 +512,26 @@ a sub-command.
 
 The MQTT client id stays `mst_<mac>` either way. The CT002 v124 and CT003
 v122 handlers are the same; the topic use was traced on the CT002.
+
+**What the app does with it.** The app sends this family to a CT002 from
+firmware 122 and a CT003 from 120. When it sets up MQTT for such a meter and
+holds no matching id for it, it generates one from parts of the MAC and random
+characters, writes it with `50 0A <id>`, retrying on a timeout, and records
+with the cloud that the id is set. From then on it talks to the meter on
+`marstek_energy/<type>/{App,device}/<id>/ctrl`. When it can't get an id onto
+the meter, it falls back to the topic it derives from the MAC.
+
+The app knows two more slots that the meters don't implement:
+
+- `50 0B` / `51 0D` / `50 0D 02`: a second id.
+- `50 0C` / `51 0E` / `50 0D 03`: a third-party MQTT broker. The `50 0C`
+  payload is a mode flag, URL, port, user name, password and an id, joined by
+  `<.,.>`. On that broker the meter's topic would be
+  `marstek/<type>/device/<id>/ctrl`.
+
+The app compares a `51` reply as text with what it expects, so `00` reads as
+"not set". There is no MQTT command for any of this; setting an id needs
+Bluetooth.
 
 ### Not covered
 
