@@ -957,6 +957,71 @@ def build_scenarios() -> dict[str, Scenario]:
             ct_kwargs={**_EFF_MODE, "min_efficient_power": 1200.0},
         )
     )
+    # Efficiency mode with two of three batteries empty from the start, under
+    # the default 15-minute rotation: every rotation can hand the slot to an
+    # empty battery, which must not leave the load on the grid (issue #230).
+    add(
+        Scenario(
+            name="empty_heads_rotation/eff",
+            description="Three Venus, two empty, MIN_EFFICIENT_POWER 750 with the "
+            "default rotation: household steps",
+            batteries=[
+                replace(_VENUS, initial_soc=0.0),
+                replace(_VENUS, initial_soc=0.0),
+                _VENUS,
+            ],
+            duration_s=dur_steps,
+            loads=list(_HOUSEHOLD_LOADS),
+            build_events=lambda rng: _household_steps(rng, dur_steps),
+            ct_kwargs={**_EFF_MODE, "min_efficient_power": 750.0},
+        )
+    )
+    # A steady load on a noiseless, slow meter, so the controller sees the
+    # same reading poll after poll, while the active battery runs empty
+    # mid-run: anything that only re-decides on a changed reading must still
+    # hand the load over.
+    add(
+        Scenario(
+            name="repeating_meter_empty_head/eff",
+            description="Two Venus, MIN_EFFICIENT_POWER 500, a steady 400 W on a "
+            "noiseless 10 s meter; the active battery empties after ~20 min",
+            batteries=[
+                replace(_VENUS, capacity_wh=300.0, initial_soc=0.5),
+                _VENUS,
+            ],
+            duration_s=dur_steps,
+            base_load=[400.0, 0.0, 0.0],
+            base_noise=0.0,
+            build_events=_unscripted,
+            ct_kwargs={**_EFF_MODE, "min_efficient_power": 500.0},
+            meter_interval_s=10.0,
+        )
+    )
+    # Primary/backup again, but a strong morning surplus first fills the
+    # primary (past its 2500 W charge limit at the peak) and it then serves the
+    # afternoon, hob included: the backup must take only the surplus the
+    # primary cannot, then only the load past the primary's 800 W.
+    add(
+        Scenario(
+            name="priority_fill_then_serve",
+            description="Primary/backup Venus E pair (window 1/0, MIN_EFFICIENT_POWER "
+            "2500): solar in the first half fills the primary, which then serves "
+            "household + hob",
+            batteries=[
+                replace(venus_e, capacity_wh=2048.0, initial_soc=0.75),
+                replace(venus_e, efficiency_window_weight=0.0),
+            ],
+            duration_s=dur_solar,
+            base_load=[400.0, 0.0, 0.0],
+            loads=[*_HOUSEHOLD_LOADS, Load("hob", 3000.0, "A")],
+            build_events=lambda rng: (
+                _household_steps(rng, dur_solar)
+                + _solar_day(dur_solar / 2, 2 * solar_peak_house)
+                + _hob_sessions(rng, dur_solar)
+            ),
+            ct_kwargs=dict(prio_mode),
+        )
+    )
     add_modes(
         "mixed_cadence",
         "Slow-polling V2 (3.1 s) + fast V3 (0.45 s)",
