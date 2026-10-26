@@ -298,15 +298,16 @@ day, hour, minute, second). A live answer looks like
 `_2026_10_26_09_15_48_04_0_0_0`: that request was sent at 08:15:47 UTC, so the
 time is UTC+1, which was Europe/Berlin then and also the time zone of that
 device record. The four trailing fields stayed the same across calls; what they
-mean is not known, and the CT ignores them. The
-call is also a **device upsert**: empirically the server writes `aid`→the device
-record's **`type`** and `sv`→its **`version`**. (`hamedata.com` is also the OTA
+mean is not known, and the CT ignores them. (`hamedata.com` is also the OTA
 download host.)
 
-> ⚠️ Because this endpoint **overwrites `type`/`version`**, wrong values corrupt
-> the device record — a non‑model `type`, for example, makes the Marstek app fall
-> back to a generic, default‑locale device card. AstraMeter therefore sends the
-> CT model as `aid` and, as `sv`, the version a reporting CT of that model runs.
+The handshake does **not** set the device record's `version`. A registered
+`HME-4` record whose `version` was `148` kept it after handshakes sending
+`sv=124`. That `148` was what AstraMeter's MQTT responder then sent as
+`ver_v`; it now sends the firmware version, as a real CT does. Earlier notes said the call also writes `aid` into the record's
+`type`, so that a non‑model `aid` turns the Marstek app's device card into a
+generic one. That part has not been re‑checked, so AstraMeter still sends the
+CT model as `aid`, and as `sv` the version a reporting CT of that model runs.
 
 ### 6.4 Energy registers — `eled` / `elet`
 
@@ -383,6 +384,7 @@ ESPHome `marstek_registration:` block), it uses the MAC of the device AstraMeter
 registers there — the id the cloud already knows; otherwise it uses the
 configured `CT_MAC` / `ct_mac`. An ESP32 the app added over Bluetooth, with no
 `ct_mac`, reports as that CT. The model and firmware version the handshake
-re‑asserts (§6.3) are derived automatically, so there is no account‑id knob to
-set. The web config generator produces all three forms
+sends (§6.3) are derived automatically, so there is no account‑id knob to set.
+On an ESP32 the requests run on a background task, so a slow cloud never holds
+up the replies to the batteries. The web config generator produces all three forms
 (config.ini, the add‑on options, the ESPHome sub‑block). See `config.ini.example`.

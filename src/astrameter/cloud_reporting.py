@@ -7,8 +7,8 @@ by the cleartext ``id``/``uid`` query params). Only the newest firmware does it
 those images, every cycle of its reporting state machine:
 
 1. runs the **handshake** ``getDateInfoeu.php`` (``uid``/``fcv``/``aid``/``sv``
-   = device id, Wi-Fi module version, model, firmware version) — a device
-   upsert whose response body is the server's wall-clock time
+   = device id, Wi-Fi module version, model, firmware version), whose
+   response body is the server's wall-clock time
    (``_YYYY_MM_DD_HH_MM_SS_``). On success it rolls its day/hour energy
    registers forward against that server time, then
 2. sends ``setCtReporting``, retrying until the cloud answers, with ``timeNo``
@@ -51,9 +51,8 @@ DEFAULT_HOST = "eu.hamedata.com"
 # Default build stamp sent as ``fcv`` in the handshake (matches DEFAULT_FC4_V):
 # a real CT sends the same Wi-Fi module version it reports as ``fc4_v``.
 DEFAULT_FCV = "202409090159"
-# A real CT sends its own firmware version as ``sv``, which the cloud writes into
-# the device record's ``version``. Only these versions report to the cloud at
-# all, so they are the ones a reporting CT claims.
+# A real CT sends its own firmware version as ``sv``. Only these versions report
+# to the cloud at all, so they are the ones a reporting CT claims.
 REPORTING_FIRMWARE_VERSIONS = {"HME-4": 124, "HME-3": 122}
 # Both images wait 300 s (their seconds tick) after a report the cloud accepted
 # before starting the next handshake.
@@ -218,8 +217,8 @@ def build_get_date_info_url(host: str, *, uid: str, fcv: str, aid: str, sv: int)
 
     Both images fill it from the same values as their MQTT runtime frame:
     ``uid`` the device id, ``fcv`` the Wi-Fi module version (``fc4_v``), ``aid``
-    the model and ``sv`` the firmware version (``ver_v``). The server stores
-    ``aid``→the device record's ``type`` and ``sv``→its ``version``.
+    the model and ``sv`` the firmware version (``ver_v``). The device record's
+    ``version`` does not follow ``sv``; see ``docs/marstek-mqtt-http.md`` §6.3.
     """
     return (
         f"http://{host}/app/neng/getDateInfoeu.php"

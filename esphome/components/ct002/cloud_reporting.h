@@ -15,8 +15,9 @@
 //
 // The pure helpers live in cloud_reporting_url.{h,cpp} (no ESPHome deps) so
 // the wire format is host-testable. This component runs the cycle as a
-// loop()-driven state machine (like marstek_registration) so the watchdog stays
-// fed between HTTP calls. It is gated by USE_CT002_CLOUD_REPORTING (set from
+// loop()-driven state machine. On ESP32 each GET runs on a worker task
+// (cloud_http_slot.h hands it over), because a request takes up to seconds
+// and the main loop is what answers the batteries. It is gated by USE_CT002_CLOUD_REPORTING (set from
 // _to_code_cloud_reporting in ct002/__init__.py) because it needs http_request.
 #pragma once
 
@@ -30,6 +31,14 @@
 #include "esphome/components/http_request/http_request.h"
 #endif
 
+#include "esphome/core/helpers.h"
+
+#ifdef USE_ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
+#include "cloud_http_slot.h"
 #include "cloud_reporting_url.h"
 #include "ct002.h"
 
@@ -74,11 +83,20 @@ class CloudReportingComponent : public Component {
   // Wall-clock fallback for a handshake that carried no server time; the epoch
   // (1970-01-01) when no time source has synced.
   ServerTime local_time_() const;
-  // Perform one plain-HTTP GET. Returns the status (-1 when the request never
-  // completed) and, when *body* is set, up to 512 bytes of the response.
-  int http_get_(const std::string &url, std::string *body = nullptr);
-  bool handshake_();
-  bool report_();
+  // Start one plain-HTTP GET of *url*; its result arrives through
+  // poll_get_(). On ESP32 it runs on the worker task, elsewhere right away.
+  void start_get_(const std::string &url, bool want_body);
+  bool poll_get_(HttpResult *out);
+#ifdef USE_ESP32
+  static void worker_main_(void *arg);
+#else
+  HttpResult http_get_(const std::string &url, bool want_body);
+#endif
+  void start_handshake_();
+  bool finish_handshake_(const HttpResult &r);
+  void start_report_();
+  // Act on the result of the GET the current state started.
+  void finish_step_(const HttpResult &r);
   // Stay in the current state until `retry_ms` from now.
   void retry_later_();
   int sv_or_default_() const;
@@ -91,9 +109,8 @@ class CloudReportingComponent : public Component {
   // (marstek_registration may set it after our setup()).
   std::string device_id_;
   std::string fcv_{"202409090159"};
-  // Sent as `sv` in the handshake, which the cloud writes into the device's
-  // `version` field. Negative = the firmware version a reporting CT of the
-  // configured model runs (reporting_firmware_version).
+  // Sent as `sv` in the handshake. Negative = the firmware version a reporting
+  // CT of the configured model runs (reporting_firmware_version).
   int sv_{-1};
   uint32_t interval_ms_{300000};
   // A real CT retries on its next main-loop pass, bounded by the Wi-Fi
@@ -111,6 +128,18 @@ class CloudReportingComponent : public Component {
   // The server time from the last handshake; every report until the next
   // handshake (retries included) carries it, as on a real CT.
   ServerTime server_time_;
+  // The GET in flight, and its endpoint (path before '?') for the log.
+  bool in_flight_{false};
+  std::string endpoint_;
+  // Each wait is logged once, so a silent log can't hide what it waits for.
+  bool logged_id_wait_{false};
+  bool logged_network_wait_{false};
+  HttpSlot slot_;
+  Mutex slot_mutex_;
+  uint32_t timeout_ms_{4500};
+#ifdef USE_ESP32
+  TaskHandle_t worker_{nullptr};
+#endif
 };
 
 }  // namespace cloud_reporting
