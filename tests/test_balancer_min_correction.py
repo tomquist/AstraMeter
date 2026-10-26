@@ -76,3 +76,8 @@ def test_no_floor_without_a_deadband() -> None:
 def test_the_step_cap_still_wins() -> None:
     sent = _sent(_balancer(max_correction_per_step=10), -1252, -64, 0)
     assert sent == pytest.approx(10, abs=0.5)
+
+
+def test_zero_gain_still_means_no_balancing() -> None:
+    sent = _sent(_balancer(balance_gain=0), -1252, -64, 0)
+    assert sent == pytest.approx(0, abs=0.5)

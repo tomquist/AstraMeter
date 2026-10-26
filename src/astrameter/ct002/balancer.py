@@ -2780,9 +2780,10 @@ class LoadBalancer:
         # A correction smaller than the deadband would land inside the
         # firmware's own input deadband and be ignored, leaving the battery
         # stalled tens of watts off its share for good (discussion #741), so
-        # send at least that much, never more than the imbalance itself.
+        # send at least that much, never more than the imbalance itself.  A
+        # zero gain still means no balancing at all.
         floor = min(cfg.balance_deadband, err_abs)
-        if abs(correction) < floor:
+        if gain != 0 and abs(correction) < floor:
             correction = floor if error > 0 else -floor
         if cfg.max_correction_per_step > 0:
             cap = cfg.max_correction_per_step
