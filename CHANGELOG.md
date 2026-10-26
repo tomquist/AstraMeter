@@ -6,7 +6,7 @@
 
 - **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).
 
-- **Fixed** cloud reporting showing twice the real grid power in the Marstek app's device list; reports now also carry the time slot, date and energy totals the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds ([#744](https://github.com/tomquist/astrameter/pull/744)).
+- **Fixed** cloud reporting showing twice the real grid power in the Marstek app's device list; reports now also carry the time slot, date and energy totals the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds ([#744](https://github.com/tomquist/astrameter/pull/744), [#747](https://github.com/tomquist/astrameter/pull/747)).
 
 - **Fixed** the Marstek app and cloud reporting sending extra requests to a polled power meter, such as a Shelly or an HTTP source, on top of the batteries' own polls; they now reuse the batteries' latest reading ([#698](https://github.com/tomquist/astrameter/pull/698)).
 
