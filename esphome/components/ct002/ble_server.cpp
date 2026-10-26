@@ -281,6 +281,19 @@ void BluetoothComponent::process_frame_(const ble::Frame &frame) {
                       : frame.cmd == ble::CMD_FREQUENCY_CHECK ? "frequency"
                       : frame.cmd == ble::CMD_PHASE_ANGLE_CHECK ? "phase angle"
                                                                 : nullptr;
+  // Unanswered, as on the meter, but which server the app's account is on
+  // tells a cloud_reporting host that doesn't match it.
+  if (frame.cmd == ble::CMD_SET_SERVER_REGION) {
+    const std::optional<ble::ServerRegion> region =
+        frame.payload.empty() ? std::nullopt : ble::server_region(frame.payload[0]);
+    if (region.has_value()) {
+      ESP_LOGD(TAG, "App's account is on the %s server (%s)", region->name, region->host);
+    } else {
+      ESP_LOGD(TAG, "App sent an unknown server region (%u payload bytes, first 0x%02X)",
+               static_cast<unsigned>(frame.payload.size()), frame.payload.empty() ? 0 : frame.payload[0]);
+    }
+  }
+
   if (check != nullptr && result.reply.size() >= ble::FRAME_OVERHEAD + 1) {
     const uint8_t code = result.reply[result.reply.size() - 2];
     const uint8_t pass_code = frame.cmd == ble::CMD_PHASE_ANGLE_CHECK ? ble::DIAG_PHASE_ANGLE_PASS

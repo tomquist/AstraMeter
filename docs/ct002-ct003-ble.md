@@ -253,6 +253,7 @@ which app screens send the command, where known.
 
 | CMD | CT002 | CT003 | Request payload | Reply | Sent by |
 |---|---|---|---|---|---|
+| `0x02` | – | – | region byte | none | every device page: the account's server region, see [`0x02`](#0x02--server-region) |
 | `0x03` | ✓ | ✓ | `01` | binary status, see [`0x03`](#0x03--status) | onboarding, CT screens |
 | `0x04` | ✓ | ✓ | `01` | ASCII identity, see [`0x04`](#0x04--identity) | onboarding |
 | `0x05` | ✓ | ✓ | `ssid<.,.>password` (UTF-8) | 1-byte acknowledgement | Wi-Fi setup |
@@ -273,6 +274,29 @@ which app screens send the command, where known.
 
 Any other command byte, for example `0x07`, `0x0a`–`0x0f` or (on CT002)
 `0x11`, is ignored without a reply.
+
+### `0x02` — server region
+
+The app's shared device page sends this to every device it opens, so a CT
+gets it too, two or three times per visit among the `0x03` and `0x12`
+requests. The one payload byte names the cloud server region the account is
+on; an EU account sends `73 06 23 02 00 54`. It is meant for batteries and
+inverters. The meter ignores it, and the app sends it once without waiting
+for an answer.
+
+| Byte | App region | Host (API and MQTT broker) |
+|---|---|---|
+| `0x00` | EU | `eu.hamedata.com` |
+| `0x02` | China, Hong Kong/Macau, or any other region | `us.hamedata.com` |
+| `0x03` | test | `eu-dev.hamedata.com` |
+| `0x04` | pre-release | `eu-staging.hamedata.com` |
+
+- `0x03` and `0x04` go only to Venus models. Every other device, a CT
+  included, gets `0x00` for the test and pre-release servers too, so a CT only
+  ever sees `0x00` or `0x02`.
+- The app never sends `0x01`. The US host is reached through `0x02`.
+- Venus models get the same values over MQTT instead while MQTT is connected,
+  as decimal text in `cd=12,ht=<n>`.
 
 ### `0x03` — status
 
@@ -541,6 +565,7 @@ from the start is better fixed on the sensor, for example with
 
 | Command | Answer |
 |---|---|
+| `0x02` server region | No answer, as on the meter. The board logs the region and the host the app reads the account from; `cloud_reporting` sends to `eu.hamedata.com` unless its `host` is set |
 | `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. The CT002's byte 22 reports the reversed phases. |
 | `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
 | `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`, and the board tries the network only with `allow_wifi_change: true` (see [Wi-Fi from the app](#wi-fi-from-the-app)) |

@@ -9,6 +9,7 @@
 #include <limits>
 #include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -499,11 +500,32 @@ TEST(BleReset, ResetAndRebootRestartWithoutReplying) {
 
 TEST(BleUnknown, UnhandledCommandsGetNoReply) {
   Responder responder;
-  for (uint8_t cmd : {0x07, 0x10, 0x11, 0x17, 0x50, 0x51}) {
+  for (uint8_t cmd : {0x02, 0x07, 0x10, 0x11, 0x17, 0x50, 0x51}) {
     const auto result = responder.handle(request(cmd, {0x01}), ct002_snapshot());
     EXPECT_TRUE(result.reply.empty()) << "cmd 0x" << std::hex << int(cmd);
     EXPECT_EQ(result.action, Action::NONE);
   }
+}
+
+TEST(BleServerRegion, MapsEveryByteTheAppSendsToItsHost) {
+  // What the app sends for an EU account.
+  EXPECT_EQ(build_frame(CMD_SET_SERVER_REGION, {0x00}), bytes({0x73, 0x06, 0x23, 0x02, 0x00, 0x54}));
+  const std::pair<uint8_t, const char *> hosts[] = {
+      {0x00, "eu.hamedata.com"},
+      {0x02, "us.hamedata.com"},
+      {0x03, "eu-dev.hamedata.com"},
+      {0x04, "eu-staging.hamedata.com"},
+  };
+  for (const auto &[code, host] : hosts) {
+    const auto region = server_region(code);
+    ASSERT_TRUE(region.has_value()) << "code " << int(code);
+    EXPECT_STREQ(region->host, host);
+  }
+  EXPECT_STREQ(server_region(0x00)->name, "EU");
+}
+
+TEST(BleServerRegion, BytesTheAppNeverSendsAreUnknown) {
+  for (uint8_t code : {0x01, 0x05, 0xff}) EXPECT_FALSE(server_region(code).has_value()) << "code " << int(code);
 }
 
 // ── Reassembly across writes ────────────────────────────────────────────

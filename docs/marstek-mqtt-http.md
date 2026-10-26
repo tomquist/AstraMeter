@@ -177,8 +177,11 @@ phase‑1 connected, wiring, etc.).
 plain **HTTP GET** — no TLS, no token or signature. The device is identified only
 by the cleartext `id`/`uid` query params. The Wi‑Fi module does it in three AT
 steps (`AT+QHTTPCFG="url",…` → `AT+QHTTPGET=60` → `AT+QHTTPREAD=60`). There are
-two endpoints, both under `eu.hamedata.com` (the EU‑region host; other regions
-presumably swap the host).
+two endpoints, both under `eu.hamedata.com`, the app's EU‑region host. The app
+keeps accounts in China, Hong Kong/Macau and the rest of the world on
+`us.hamedata.com`, and tells devices
+which over Bluetooth, a command the meter ignores (see
+[`0x02`](ct002-ct003-ble.md#0x02--server-region)).
 
 Only the newest public images do it: `HME-4` **v124** and `HME-3` **v122**.
 `HME-4` v120 and `HME-3` v116–v118 carry neither URL. Everything below was read
