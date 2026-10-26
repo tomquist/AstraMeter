@@ -54,9 +54,11 @@ The headline metric is **`cost_regret_ct`**: the controller's electricity bill
 (eurocents, asymmetric tariff — import at `RETAIL_CT_PER_KWH`, export at
 `FEEDIN_CT_PER_KWH`) minus what a perfect-foresight optimal battery would have
 paid on the same load (`_oracle_cost_ct`, a lossless greedy aggregate battery,
-provably optimal under a flat tariff). It is the one ungameable "money left on
-the table" number: 0 means it matched the optimum, and the irreducible cost when
-the pack saturates is subtracted out, so regret is purely controllable loss.
+provably optimal under a flat tariff). Energy either side still holds when the
+run ends is credited at the feed-in tariff, so storing a surplus scores the same
+as exporting it, not worse. It is the one ungameable "money left on the table"
+number: 0 means it matched the optimum, and the irreducible cost when the pack
+saturates is subtracted out, so regret is purely controllable loss.
 
 Every tracking metric measures the grid against its **policy target**
 (`_policy_target`): 0 W, except in a peak shaving scenario (`peak_shaving`,

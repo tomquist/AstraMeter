@@ -127,8 +127,13 @@ def _grid_cost_ct(import_wh: float, export_wh: float) -> float:
 
 
 def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
+    """Cost (eurocents) of a perfect-foresight dispatch; see :func:`_oracle_dispatch`."""
+    return _oracle_dispatch(scenario, samples)[0]
+
+
+def _oracle_dispatch(scenario: Scenario, samples: list[_Sample]) -> tuple[float, float]:
     """Cost (eurocents) of a perfect-foresight dispatch, the floor the
-    controller is benchmarked against.
+    controller is benchmarked against, and the energy (Wh) it ends holding.
 
     One lossless aggregate battery (summed capacity and power limits) picks its
     net AC output each step to bring the grid to its policy target when it can
@@ -166,7 +171,17 @@ def _oracle_cost_ct(scenario: Scenario, samples: list[_Sample]) -> float:
             import_wh += grid * h
         else:
             export_wh += -grid * h
-    return _grid_cost_ct(import_wh, export_wh)
+    return _grid_cost_ct(import_wh, export_wh), energy_wh
+
+
+def _stored_wh(scenario: Scenario, samples: list[_Sample]) -> float:
+    """Energy (Wh) the fleet holds at the end of the run."""
+    if not samples:
+        return sum(s.initial_soc * s.capacity_wh for s in scenario.batteries)
+    return sum(
+        soc * spec.capacity_wh
+        for soc, spec in zip(samples[-1].socs, scenario.batteries, strict=True)
+    )
 
 
 class _EventResponse(NamedTuple):
@@ -356,11 +371,17 @@ def _compute_metrics(
     grid_p2p = _percentile(all_grid, 0.95) - _percentile(all_grid, 0.05)
 
     # Money: the bill for the residual grid minus the perfect-foresight bill.
-    # The oracle is a true lower bound, so the clamp only absorbs the
+    # Energy either side still holds at the end is credited at the feed-in
+    # tariff, the least it is worth, so storing a surplus scores the same as
+    # exporting it rather than worse, and charging from the grid still costs.
+    # The oracle stays a true lower bound, so the clamp only absorbs the
     # per-phase-routing slack of the three-phase scenario.
     grid_cost = _grid_cost_ct(integrals.import_wh, integrals.export_wh)
-    oracle_cost = _oracle_cost_ct(scenario, samples)
-    cost_regret = max(0.0, grid_cost - oracle_cost)
+    oracle_cost, oracle_stored_wh = _oracle_dispatch(scenario, samples)
+    stored_credit = (
+        FEEDIN_CT_PER_KWH * (_stored_wh(scenario, samples) - oracle_stored_wh) / 1000.0
+    )
+    cost_regret = max(0.0, grid_cost - oracle_cost - stored_credit)
 
     # SoC extremes let a scenario verify it drove the pack into saturation
     # (not in the metric tables; for tests and context).

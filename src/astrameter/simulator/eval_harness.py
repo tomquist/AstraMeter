@@ -200,6 +200,15 @@ async def run_scenario(
         ]
 
     ct002.before_send = before_send
+    for spec, battery in zip(scenario.batteries, batteries, strict=True):
+        if spec.distribution_weight != 1.0:
+            ct002.set_consumer_distribution_weight(
+                battery.mac.lower(), spec.distribution_weight
+            )
+        if spec.efficiency_window_weight != 1.0:
+            ct002.set_consumer_efficiency_window_weight(
+                battery.mac.lower(), spec.efficiency_window_weight
+            )
     await _start_ct002(ct002, batteries)
     try:
         # Event-driven schedule: each battery polls on its own cadence
