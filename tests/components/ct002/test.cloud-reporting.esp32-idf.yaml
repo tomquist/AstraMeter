@@ -1,0 +1,54 @@
+esphome:
+  name: ct002-cloud-reporting-esp32-idf
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+
+external_components:
+  - source:
+      type: local
+      path: ../../../esphome/components
+    components: [ct002]
+
+http_request:
+  timeout: 20s
+  verify_ssl: false
+
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+    update_interval: 1s
+  # Optional grid readings: reported as va (cloud reporting) and by the
+  # Bluetooth diagnostics, which is on by default here.
+  - platform: template
+    id: grid_voltage_l1
+    unit_of_measurement: V
+    lambda: 'return 231.0f;'
+    update_interval: 5s
+  - platform: template
+    id: grid_frequency
+    unit_of_measurement: Hz
+    lambda: 'return 50.02f;'
+    update_interval: 5s
+
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  voltage_sensor_l1: grid_voltage_l1
+  frequency_sensor: grid_frequency
+  ct_type: HME-4
+  ct_mac: "02b25012abcd"
+  udp_port: 12345
+  cloud_reporting:
+    host: eu.hamedata.com
+    interval: 300s

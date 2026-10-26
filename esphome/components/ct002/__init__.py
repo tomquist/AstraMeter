@@ -734,9 +734,9 @@ CLOUD_REPORTING_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_HOST, default="eu.hamedata.com"): cv.string_strict,
             cv.Optional(CONF_FCV, default="202409090159"): cv.string_strict,
-            # getDateInfo writes sv -> the cloud record's version field. Unset,
-            # it is the firmware version a cloud-reporting CT of the configured
-            # model runs (HME-4 v124, HME-3 v122), as a real one sends.
+            # The firmware version sent as `sv` in the handshake. Unset, it is
+            # the one a cloud-reporting CT of the configured model runs (HME-4
+            # v124, HME-3 v122), as a real one sends.
             cv.Optional(CONF_SV): cv.int_range(min=0),
             # A real CT waits 300 s after an accepted report.
             cv.Optional(

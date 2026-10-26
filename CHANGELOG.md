@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** the ESP32 build briefly ignoring the batteries every five minutes while cloud reporting was on, because each report held up the meter for a few seconds; it now reports in the background.
+
 - **Added** answers to the Marstek app's CT002 **Diagnose** on the ESP32 build: it passes while the board receives meter readings, and fails once they stop, instead of ending in a communication error. To report your real grid voltage and frequency, there and in cloud reporting, set `voltage_sensor_l1`–`l3` and `frequency_sensor` under `ct002:` ([#746](https://github.com/tomquist/astrameter/pull/746)).
 
 - **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).

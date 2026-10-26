@@ -70,6 +70,7 @@ HOST_GTESTS = [
     "host_controls_test",
     "host_ble_protocol_test",
     "host_write_slot_test",
+    "host_cloud_http_slot_test",
 ]
 
 
