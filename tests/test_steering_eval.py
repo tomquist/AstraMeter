@@ -33,6 +33,7 @@ from astrameter.simulator.eval_metrics import (
     GRAPH_POINTS,
     PEAK_WINDOW_S,
     RETAIL_CT_PER_KWH,
+    _compute_metrics,
     _grid_cost_ct,
     _oracle_cost_ct,
     _peak_metrics,
@@ -122,6 +123,40 @@ def test_oracle_credits_dc_input_solar() -> None:
         _steady_samples(500.0, 3600.0, dc_w=500.0),
     )
     assert cost == pytest.approx(0.0, abs=1e-6)
+
+
+def test_regret_does_not_penalize_storing_a_surplus() -> None:
+    # Two controllers waste the same 150 Wh of stored energy on the morning
+    # load, then meet a 500 Wh surplus: one exports it, the other stores it.
+    # Storing must not score worse than exporting just because the run ends
+    # before the stored energy is used.
+    spec = BatterySpec(
+        max_discharge_power=800,
+        max_charge_power=2500,
+        capacity_wh=2000.0,
+        initial_soc=0.5,
+    )
+    sc = _one_battery_scenario(spec, 3600.0)
+
+    def run(store: bool) -> float:
+        samples = []
+        for i in range(3601):
+            net = 300.0 if i < 1800 else -1000.0
+            charged = 0.0 if i < 1800 or not store else (i - 1800) * 1000.0 / 3600.0
+            grid = net if i < 1800 or not store else 0.0
+            samples.append(
+                _Sample(
+                    t=float(i),
+                    grid=grid,
+                    consumption=net,
+                    powers=(0.0 if i < 1800 or not store else -1000.0,),
+                    socs=(0.5 + charged / 2000.0,),
+                )
+            )
+        return _compute_metrics(sc, 1, samples, [])["cost_regret_ct"]
+
+    assert run(store=True) == pytest.approx(run(store=False), abs=0.02)
+    assert run(store=True) > 0  # the wasted morning energy still counts
 
 
 def _tiny_scenario() -> Scenario:

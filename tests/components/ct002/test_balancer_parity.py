@@ -572,11 +572,10 @@ def _scenario_power_ceilings() -> list[str]:
 def _scenario_skewed_weights() -> list[str]:
     """Distribution weights of 10 and 0.1 (discussion #741).
 
-    The light unit starts stalled tens of watts off its share and must be
-    corrected by more than the firmware deadband; the heavy unit then runs
-    into its charge ceiling, which both stacks learn, and the light one takes
-    the rest.  A swing to load turns the shares around, the heavy unit then
-    stops following, and a DC-only light unit closes the scenario.
+    The light unit starts tens of watts off its share; the heavy unit then
+    runs into its charge ceiling, which both stacks learn, and the light one
+    takes the rest.  A swing to load turns the shares around, the heavy unit
+    then stops following, and a DC-only light unit closes the scenario.
     """
     lines = ["cfg 1 0 900 0.4 0.15 20 90 1 0 0 0", "clock 5000"]
 

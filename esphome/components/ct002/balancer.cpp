@@ -1892,15 +1892,6 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
     gain = gain * (1.0f + boost);
   }
   float correction = gain * error;
-  // The deadband check above decided this imbalance is worth correcting. A
-  // correction smaller than the deadband would land inside the firmware's own
-  // input deadband and be ignored, leaving the battery stalled tens of watts off
-  // its share for good (discussion #741), so send at least that much, never
-  // more than the imbalance itself. A zero gain still means no balancing at all.
-  // Mirrors balancer.py.
-  const float floor_w = std::min(cfg.balance_deadband, err_abs);
-  if (gain != 0.0f && std::fabs(correction) < floor_w)
-    correction = error > 0.0f ? floor_w : -floor_w;
   if (cfg.max_correction_per_step > 0.0f) {
     const float cap = cfg.max_correction_per_step;
     correction = std::max(-cap, std::min(cap, correction));

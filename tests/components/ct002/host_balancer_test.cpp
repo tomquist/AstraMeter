@@ -226,25 +226,6 @@ TEST(LoadBalancer, AutoSplitHonoursDistributionWeight) {
   EXPECT_FLOAT_EQ(b_out[0], 200.0f);
 }
 
-// An imbalance worth correcting is corrected by at least the balance deadband,
-// never by a step the firmware ignores (discussion #741). Mirrors
-// tests/test_balancer_min_correction.py.
-TEST(LoadBalancer, BalanceCorrectionIsAtLeastTheDeadband) {
-  BalancerConfig cfg;
-  cfg.pace_base_step = 0.0f;
-  cfg.osc_damp_max = 0.0f;
-  cfg.grid_predict_trust = 0.0f;
-  cfg.import_trim_w = 0.0f;
-  cfg.concentrate_deadband = 0.0f;
-  auto b = make_balancer(cfg);
-  ReportMap reports;
-  // 64 W charging against a share of about 13 W: the gain alone would send ~12 W.
-  reports["a"] = ConsumerReport{"VNSE3", "A", -1252.0f, 10.0f};
-  reports["b"] = ConsumerReport{"VNSE3", "A", -64.0f, 0.1f};
-  const auto out = b.compute_target("b", ConsumerMode{}, reports, 0.0f, {}, {}, {});
-  EXPECT_NEAR(out[0] + out[1] + out[2], 25.0f, 0.5f);
-}
-
 TEST(LoadBalancer, ZeroWeightTakesNoShare) {
   BalancerConfig cfg;
   cfg.fair_distribution = false;

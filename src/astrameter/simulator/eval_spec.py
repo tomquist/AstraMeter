@@ -36,6 +36,10 @@ class BatterySpec:
     # charge). Non-zero models a system already in motion, which the firmware
     # input deadband treats differently from rest.
     initial_power: float = 0.0
+    # Per-battery user controls (1.0 = neutral): Distribution Weight and
+    # Efficiency Window Weight.
+    distribution_weight: float = 1.0
+    efficiency_window_weight: float = 1.0
 
     @property
     def ac_chargeable(self) -> bool:

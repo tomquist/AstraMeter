@@ -870,6 +870,93 @@ def build_scenarios() -> dict[str, Scenario]:
             _household_steps(rng, dur_steps) + _hob_sessions(rng, dur_steps)
         ),
     )
+    # Priority order (discussion #741): one battery takes what it can, the
+    # others only the overflow.
+    # Venus E as shipped: 2500 W charge, 800 W discharge, fast V3 poll.
+    venus_e = BatterySpec(
+        device_type="VNSE3-0", poll_interval=0.45, max_discharge_power=800
+    )
+    prio_mode = {"min_efficient_power": 2500.0, "efficiency_rotation_interval": 86400.0}
+    # Primary/backup: the primary (window 1) takes everything it can, the
+    # backup (window 0) only the overflow.  The primary is small and starts
+    # low, so it empties mid-run and the backup must take over, then refills
+    # first from the midday surplus.
+    add(
+        Scenario(
+            name="priority_pair",
+            description="Primary/backup Venus E pair (window 1/0, MIN_EFFICIENT_POWER "
+            "2500): household + hob + solar; the primary empties mid-run",
+            batteries=[
+                replace(venus_e, capacity_wh=2048.0, initial_soc=0.35),
+                replace(venus_e, efficiency_window_weight=0.0),
+            ],
+            duration_s=dur_solar,
+            base_load=[400.0, 0.0, 0.0],
+            loads=[*_HOUSEHOLD_LOADS, Load("hob", 3000.0, "A")],
+            build_events=lambda rng: (
+                _household_and_solar(rng, dur_solar, solar_peak_house)
+                + _hob_sessions(rng, dur_solar)
+            ),
+            ct_kwargs=dict(prio_mode),
+        )
+    )
+    # The same fleet steered by the Distribution Weight cascade (10 / 0.1).
+    add(
+        Scenario(
+            name="weighted_cascade/fair",
+            description="Venus E pair, Distribution Weight 10 / 0.1 (the weight "
+            "cascade): household + hob + solar",
+            batteries=[
+                replace(
+                    venus_e,
+                    capacity_wh=2048.0,
+                    initial_soc=0.35,
+                    distribution_weight=10.0,
+                ),
+                replace(venus_e, distribution_weight=0.1),
+            ],
+            duration_s=dur_solar,
+            base_load=[400.0, 0.0, 0.0],
+            loads=[*_HOUSEHOLD_LOADS, Load("hob", 3000.0, "A")],
+            build_events=lambda rng: (
+                _household_and_solar(rng, dur_solar, solar_peak_house)
+                + _hob_sessions(rng, dur_solar)
+            ),
+        )
+    )
+    # Efficiency concentration at a high floor on the issue #655 fleet (three
+    # batteries, two phases): the active set must not leave the hob's demand
+    # on the grid while another battery idles.
+    add(
+        Scenario(
+            name="mixed_power_limits/eff1200",
+            description="mixed_power_limits at MIN_EFFICIENT_POWER 1200",
+            batteries=[_VENUS_800, _VENUS_800, _VENUS_2500],
+            duration_s=dur_steps,
+            loads=[*_HOUSEHOLD_LOADS, Load("hob", 3000.0, "A")],
+            build_events=lambda rng: (
+                _household_steps(rng, dur_steps) + _hob_sessions(rng, dur_steps)
+            ),
+            ct_kwargs={**_EFF_MODE, "min_efficient_power": 1200.0},
+        )
+    )
+    # A DC-only B2500 listed first so it holds the single slot, beside a Venus
+    # E: under the midday surplus only the Venus can absorb.
+    add(
+        Scenario(
+            name="b2500_head_venus/eff1200",
+            description="B2500 (800 W) + Venus E, MIN_EFFICIENT_POWER 1200, "
+            "household + solar: the B2500 holds the slot under surplus",
+            batteries=[replace(_B2500, phase="A"), venus_e],
+            duration_s=dur_solar,
+            base_load=[400.0, 0.0, 0.0],
+            loads=list(_HOUSEHOLD_LOADS),
+            build_events=lambda rng: _household_and_solar(
+                rng, dur_solar, solar_peak_house
+            ),
+            ct_kwargs={**_EFF_MODE, "min_efficient_power": 1200.0},
+        )
+    )
     add_modes(
         "mixed_cadence",
         "Slow-polling V2 (3.1 s) + fast V3 (0.45 s)",

@@ -774,12 +774,7 @@ class TestConcentrateDeadband:
 
     def test_disabled_splits_the_correction(self) -> None:
         lb = self._lb(concentrate_deadband=0)  # explicitly off
-        # The balanced pool concentration would act on (see below), so only the
-        # switch differs; an imbalanced one is equalized, not split.
-        reports = {
-            "a": ConsumerReport(device_type="HMG-50", phase="A", power=160),
-            "b": ConsumerReport(device_type="HMG-50", phase="A", power=140),
-        }
+        reports = self._reports()
         a = self._target(lb, "a", reports, 30)
         b = self._target(lb, "b", reports, 30)
         assert a > 0 and b > 0
