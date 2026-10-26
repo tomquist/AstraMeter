@@ -271,8 +271,9 @@ which app screens send the command, where known.
 | `0x18` | – | ✓ | ignored | none | never sent to a meter; the CT003 accepts it and does nothing, see [`0x18`](#0x18--not-a-meter-command) |
 | `0x27` | ✓ | ✓ | sample count, 1–30 | per-phase power history, see [`0x27` / `0x28`](#0x27--0x28--power-history) | never sent by the app |
 | `0x28` | ✓ | ✓ | sample count, 1–30 | total power history | never sent by the app |
-| `0x29` | ✓ | ✓ | ASCII text | none; updates the Wi-Fi module, see [`0x29`](#0x29--wi-fi-module-update) | never sent by the app |
-| `0x50`, `0x51` | ✓ | ✓ | sub-command byte + data | – | probably firmware-update / module control |
+| `0x29` | ✓ | ✓ | ASCII text | none; updates the FC41D Wi-Fi module's firmware, see [`0x29`](#0x29--fc41d-firmware-update) | never sent by the app |
+| `0x50` | ✓ | ✓ | sub-command byte + data | sub-command dependent | not sent by the CT screens; sets the MQTT topic id, see [`0x50` / `0x51`](#0x50--0x51--custom-mqtt-topic-id) |
+| `0x51` | ✓ | ✓ | sub-command byte | sub-command dependent | not sent by the CT screens; reads the MQTT topic id |
 
 Any other command byte, for example `0x07`, `0x0a`–`0x0f` or (on CT002)
 `0x11`, is ignored without a reply.
@@ -476,17 +477,44 @@ On the CT002 the MQTT equivalents are `cd=29,p1=<n>` and `cd=30,p1=<n>`.
 They answer with the same samples as decimal text, `p1=[…],p2=[…],p3=[…]` and
 `p1=[…]`. The app never sends either command.
 
-### `0x29` — Wi-Fi module update
+### `0x29` — FC41D firmware update
 
-The payload is passed to the Wi-Fi module as `AT+QWLANOTA=<payload>`, the
-module's command to update its own firmware over the air. When the module
-reports success, the meter restarts. There is no reply. The app never sends it.
+Both meters talk to the cloud through a Quectel FC41D Wi-Fi/Bluetooth module,
+and `0x29` updates that module's firmware, not the meter's. The meter passes
+the payload to the module as `AT+QWLANOTA=<payload>`, the module's
+over-the-air update command. In Quectel's command set its argument is where to
+download the new firmware from. When the module reports success, the meter
+logs `fc41d upgrade reset` and restarts. There is no reply.
+
+Nothing else in either image starts this update, neither an MQTT command nor
+the meter itself, and the app never sends `0x29`. So nothing updates the
+module of a meter in the field. The meter reads the module's version with
+`AT+QVERSION`, presumably the `fc_ver` it reports over Bluetooth, `fc4_v` over
+MQTT and `fcv` in the cloud handshake. The meter's own firmware updates by a
+different route.
+
+### `0x50` / `0x51` — custom MQTT topic id
+
+These set and read an id that replaces the one in the meter's MQTT topics,
+`<prefix>/<type>/App/<id>/ctrl` and `<prefix>/<type>/device/<id>/ctrl`.
+Without one, the meter derives the id from its MAC. The first payload byte is
+a sub-command.
+
+| Request | What the meter does | Reply payload |
+|---|---|---|
+| `50 0A <id>` | Saves `<id>` (6–32 bytes) to flash as the topic id. If connected to the broker, it reconnects so the id takes effect. | `<id>` echoed as text, or `00` for a bad length |
+| `50 0D 01` | Clears the saved id and saves that. If connected, it reconnects with the derived id. | `01` |
+| `50 0D 02`, `50 0D 03` | Nothing. | `01` |
+| `50 0D <other>` | Nothing. | `00` |
+| `50 0B`, `50 0C`, `50 <other>` | Nothing. | none |
+| `51 0C` | Reads the saved id. | the id as text, or `00` when none is set |
+| `51 0D`, `51 0E`, `51 <other>` | Nothing. | `00` |
+
+The MQTT client id stays `mst_<mac>` either way. The CT002 v124 and CT003
+v122 handlers are the same; the topic use was traced on the CT002.
 
 ### Not covered
 
-- **`0x50`, `0x51`.** The meter handles these, but their payloads were not
-  decoded. They take a sub-command byte and look like firmware-update and
-  module-control functions.
 - **Other frame families.** The app also has frames that start with `0xAA`,
   `0x21` or `0xA8`. These are bootloader and OTA transfers for other Marstek
   devices; the meters don't use them.
