@@ -46,6 +46,22 @@ enum Command : uint8_t {
   CMD_SET_DIRECTION = 0x17,
 };
 
+// Sent by the app's shared device page to every device, a CT included: the
+// account's cloud server region, one byte. The app expects no reply, and a
+// meter sends none.
+inline constexpr uint8_t CMD_SET_SERVER_REGION = 0x02;
+
+// What a CMD_SET_SERVER_REGION byte selects: the app's region name and the
+// API host the app uses for that region.
+struct ServerRegion {
+  const char *name;
+  const char *host;
+};
+
+// The region for a CMD_SET_SERVER_REGION byte, or nullopt for one the app
+// never sends.
+std::optional<ServerRegion> server_region(uint8_t code);
+
 // The CT002 diagnostics (CMD_VOLTAGE_CHECK .. CMD_ACTIVE_POWER) measure the
 // grid. While the meter delivers readings, the board reports the optional
 // voltage and frequency sensors, and a healthy value for whatever it has no

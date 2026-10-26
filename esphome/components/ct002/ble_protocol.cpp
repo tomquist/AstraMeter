@@ -59,6 +59,23 @@ std::vector<uint8_t> text_bytes(const std::string &text) { return {text.begin(),
 
 Model model_for_type(const std::string &ct_type) { return ct_type == "HME-3" ? Model::CT003 : Model::CT002; }
 
+std::optional<ServerRegion> server_region(uint8_t code) {
+  switch (code) {
+    case 0x00:
+      // Also what a CT gets for the test and pre-release servers: the app
+      // sends 0x03/0x04 only to Venus models.
+      return ServerRegion{"EU", "eu.hamedata.com"};
+    case 0x02:
+      return ServerRegion{"China, Hong Kong/Macau or other", "us.hamedata.com"};
+    case 0x03:
+      return ServerRegion{"test", "eu-dev.hamedata.com"};
+    case 0x04:
+      return ServerRegion{"pre-release", "eu-staging.hamedata.com"};
+    default:
+      return std::nullopt;
+  }
+}
+
 uint8_t xor_checksum(const uint8_t *data, size_t len) {
   uint8_t x = 0;
   for (size_t i = 0; i < len; ++i) x ^= data[i];

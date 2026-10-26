@@ -253,13 +253,14 @@ which app screens send the command, where known.
 
 | CMD | CT002 | CT003 | Request payload | Reply | Sent by |
 |---|---|---|---|---|---|
+| `0x02` | – | – | region byte | none | every device page: the account's server region, see [`0x02`](#0x02--server-region) |
 | `0x03` | ✓ | ✓ | `01` | binary status, see [`0x03`](#0x03--status) | onboarding, CT screens |
 | `0x04` | ✓ | ✓ | `01` | ASCII identity, see [`0x04`](#0x04--identity) | onboarding |
 | `0x05` | ✓ | ✓ | `ssid<.,.>password` (UTF-8) | 1-byte acknowledgement | Wi-Fi setup |
 | `0x06` | ✓ | ✓ | `01` | none (clears config, reboots) | probably "factory reset", see below |
 | `0x08` | ✓ | ✓ | `01` | SSID as ASCII | Wi-Fi setup |
 | `0x09` | ✓ | ✓ | `01` | none (reboots) | probably "hardware reset", see below |
-| `0x10` | ✓ | – | `01` | – | not sent by the CT screens |
+| `0x10` | ✓ | – | ignored | 1-byte result | never sent by the app; zero-offset calibration, see [`0x10`](#0x10--ct002-zero-offset-calibration) |
 | `0x11` | – | ✓ | 4 bytes | 1-byte result | CT003 meter configuration |
 | `0x12` | ✓ | ✓ | `00` | ASCII list of linked batteries, see [`0x12`](#0x12--linked-batteries) | CT screens |
 | `0x13` | ✓ | – | ignored | 3 × uint16 + 1 byte | CT002 diagnostics (voltage) |
@@ -267,12 +268,40 @@ which app screens send the command, where known.
 | `0x15` | ✓ | – | `01` | 3 × uint16 + 1 byte | CT002 diagnostics (voltage phase angle) |
 | `0x16` | ✓ | – | `01` | 3 × int16 | CT002 diagnostics (active power) |
 | `0x17` | ✓ | – | direction bits | the bits in effect | CT002 current-direction reverse |
-| `0x18` | – | ✓ | – | – | unknown |
-| `0x27`–`0x29` | ✓ | ✓ | – | – | unknown |
-| `0x50`, `0x51` | ✓ | ✓ | sub-command byte + data | – | probably firmware-update / module control |
+| `0x18` | – | ✓ | ignored | none | never sent to a meter; the CT003 accepts it and does nothing, see [`0x18`](#0x18--not-a-meter-command) |
+| `0x27` | ✓ | ✓ | sample count, 1–30 | per-phase power history, see [`0x27` / `0x28`](#0x27--0x28--power-history) | never sent by the app |
+| `0x28` | ✓ | ✓ | sample count, 1–30 | total power history | never sent by the app |
+| `0x29` | ✓ | ✓ | ASCII text | none; updates the FC41D Wi-Fi module's firmware, see [`0x29`](#0x29--fc41d-firmware-update) | never sent by the app |
+| `0x50` | ✓ | ✓ | sub-command byte + data | sub-command dependent | MQTT topic setup, CT002 from v122 and CT003 from v120: sets the topic id, see [`0x50` / `0x51`](#0x50--0x51--custom-mqtt-topic-id) |
+| `0x51` | ✓ | ✓ | sub-command byte | sub-command dependent | MQTT topic setup: reads the topic id back |
 
 Any other command byte, for example `0x07`, `0x0a`–`0x0f` or (on CT002)
 `0x11`, is ignored without a reply.
+
+### `0x02` — server region
+
+The app's shared device page sends this to every device it opens, so a CT
+gets it too, two or three times per visit among the `0x03` and `0x12`
+requests. The one payload byte names the cloud server region the account is
+on; an EU account sends `73 06 23 02 00 54`. It is meant for batteries and
+inverters. The meter ignores it, and the app neither waits for an answer nor
+retries.
+
+| Byte | App region | App API host |
+|---|---|---|
+| `0x00` | EU | `eu.hamedata.com` |
+| `0x02` | China, Hong Kong/Macau, or any other region | `us.hamedata.com` |
+| `0x03` | test | `eu-dev.hamedata.com` |
+| `0x04` | pre-release | `eu-staging.hamedata.com` |
+
+- `0x03` and `0x04` go only to Venus models. Every other device, a CT
+  included, gets `0x00` for the test and pre-release servers too, so a CT only
+  ever sees `0x00` or `0x02`.
+- The app never sends `0x01`. The US host is reached through `0x02`.
+- Venus models get the same values over MQTT instead while MQTT is connected,
+  as decimal text in `cd=12,ht=<n>`.
+- The hosts are the app's API servers. The app also lists brokers under the
+  same names, but a meter ignores this byte, so its broker doesn't follow it.
 
 ### `0x03` — status
 
@@ -413,11 +442,101 @@ diagnosis, retry?", with no upload.
   reads the current setting from byte 22 of the status reply. The MQTT
   equivalent is `cd=5,dir=<bits>`.
 
+### `0x10` — CT002 zero-offset calibration
+
+`0x10` zeroes the metering chip's per-phase offsets. The meter clears the
+three offset registers, then averages 500 raw readings of each phase. If any
+reading is too large, meaning a load is connected, it stops there and leaves
+the offsets cleared. Otherwise it writes the average back as the new offset.
+It ignores the request payload. The reply is one byte: `1` when it
+calibrated, `0` when it stopped. The CT003 has no `0x10`. The app never sends
+it.
+
+### `0x18` — not a meter command
+
+The CT003's command handling has a case for `0x18` that does nothing: no
+reply, no change. The CT002 has none. The app never sends `0x18` to a meter.
+It's the "pair with this CT" command the app sends to Venus and Marstek-SE
+batteries, carrying the chosen CT's MAC and type (on a Venus over MQTT,
+`cd=18,meter=<CT MAC>`). Jupiter batteries use `0x15` for it, B2500 batteries
+`0x31`.
+
+### `0x27` / `0x28` — power history
+
+The CT002 keeps the last 30 seconds of power, one sample a second in whole
+watts: each phase and the total. The CT003 answers both commands in the same
+format; what feeds its samples was not traced. The request payload is one
+byte: how many samples to return, 1 to 30. The reply payload holds one list
+per series, newest sample first: the byte `[` (`0x5B`), n samples as
+little-endian `int16`, then `]` (`0x5D`). Lists are separated by `,`
+(`0x2C`).
+
+- `0x27` returns the three phases, `[…],[…],[…]`.
+- `0x28` returns the total, `[…]`.
+- A count of 0 or above 30 gets a one-byte `00` instead.
+
+On the CT002 the MQTT equivalents are `cd=29,p1=<n>` and `cd=30,p1=<n>`.
+They answer with the same samples as decimal text, `p1=[…],p2=[…],p3=[…]` and
+`p1=[…]`. The app never sends either command.
+
+### `0x29` — FC41D firmware update
+
+Both meters talk to the cloud through a Quectel FC41D Wi-Fi/Bluetooth module,
+and `0x29` updates that module's firmware, not the meter's. The meter passes
+the payload to the module as `AT+QWLANOTA=<payload>`, the module's
+over-the-air update command. In Quectel's command set its argument is where to
+download the new firmware from. When the module reports success, the meter
+logs `fc41d upgrade reset` and restarts. There is no reply.
+
+Nothing else in either image starts this update, neither an MQTT command nor
+the meter itself, and the app never sends `0x29`. So nothing updates the
+module of a meter in the field. The meter reads the module's version with
+`AT+QVERSION`, presumably the `fc_ver` it reports over Bluetooth, `fc4_v` over
+MQTT and `fcv` in the cloud handshake. The meter's own firmware updates by a
+different route.
+
+### `0x50` / `0x51` — custom MQTT topic id
+
+These set and read an id that replaces the one in the meter's MQTT topics,
+`<prefix>/<type>/App/<id>/ctrl` and `<prefix>/<type>/device/<id>/ctrl`.
+Without one, the meter derives the id from its MAC. The first payload byte is
+a sub-command.
+
+| Request | What the meter does | Reply payload |
+|---|---|---|
+| `50 0A <id>` | Saves `<id>` (6–32 bytes) to flash as the topic id. If connected to the broker, it reconnects so the id takes effect. | `<id>` echoed as text, or `00` for a bad length |
+| `50 0D 01` | Clears the saved id and saves that. If connected, it reconnects with the derived id. | `01` |
+| `50 0D 02`, `50 0D 03` | Nothing. | `01` |
+| `50 0D <other>` | Nothing. | `00` |
+| `50 0B`, `50 0C`, `50 <other>` | Nothing. | none |
+| `51 0C` | Reads the saved id. | the id as text, or `00` when none is set |
+| `51 0D`, `51 0E`, `51 <other>` | Nothing. | `00` |
+
+The MQTT client id stays `mst_<mac>` either way. The CT002 v124 and CT003
+v122 handlers are the same; the topic use was traced on the CT002.
+
+**What the app does with it.** The app sends this family to a CT002 from
+firmware 122 and a CT003 from 120. When it sets up MQTT for such a meter and
+holds no matching id for it, it generates one from parts of the MAC and random
+characters, writes it with `50 0A <id>`, retrying on a timeout, and records
+with the cloud that the id is set. From then on it talks to the meter on
+`marstek_energy/<type>/{App,device}/<id>/ctrl`. When it can't get an id onto
+the meter, it falls back to the topic it derives from the MAC.
+
+The app knows two more slots that the meters don't implement:
+
+- `50 0B` / `51 0D` / `50 0D 02`: a second id.
+- `50 0C` / `51 0E` / `50 0D 03`: a third-party MQTT broker. The `50 0C`
+  payload is a mode flag, URL, port, user name, password and an id, joined by
+  `<.,.>`. On that broker the meter's topic would be
+  `marstek/<type>/device/<id>/ctrl`.
+
+The app compares a `51` reply as text with what it expects, so `00` reads as
+"not set". There is no MQTT command for any of this; setting an id needs
+Bluetooth.
+
 ### Not covered
 
-- **`0x10`, `0x18`, `0x27`–`0x29`, `0x50`, `0x51`.** The meter handles
-  these, but their payloads were not decoded. `0x50` and `0x51` take a
-  sub-command byte and look like firmware-update and module-control functions.
 - **Other frame families.** The app also has frames that start with `0xAA`,
   `0x21` or `0xA8`. These are bootloader and OTA transfers for other Marstek
   devices; the meters don't use them.
@@ -541,6 +660,7 @@ from the start is better fixed on the sensor, for example with
 
 | Command | Answer |
 |---|---|
+| `0x02` server region | No answer, as on the meter. The board logs the region and the host the app reads the account from; `cloud_reporting` sends to `eu.hamedata.com` unless its `host` is set |
 | `0x03` status | Live per-phase and total grid power: the raw readings of the configured sensors, as in the Marstek MQTT reply and cloud reporting. The connection byte is set while the board is online over Wi-Fi or Ethernet; RSSI is the Wi-Fi signal (`0` on Ethernet). The CT002 voltage fields and the CT003 energy counter are `0`, as AstraMeter has neither. The CT002's byte 22 reports the reversed phases. |
 | `0x04` identity | `type=<ct_type>,id=<id>,mac=<id>,dev_ver=124` (CT002) or `122` (CT003), `fc_ver=202409090159` |
 | `0x05` set Wi-Fi | Acknowledged; the network name is remembered for `0x08`, and the board tries the network only with `allow_wifi_change: true` (see [Wi-Fi from the app](#wi-fi-from-the-app)) |
